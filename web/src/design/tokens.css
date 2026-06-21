@@ -1,0 +1,139 @@
+/*
+ * Design tokens — ported 1:1 from docs/mockups/index.html :root.
+ * State colors map directly to the session.State enum:
+ *   active   -> --active   (StateActive)
+ *   idle     -> --idle     (StateIdle)
+ *   snapshot -> --frozen   (StateSnapshot, "frozen" in the UI)
+ *   resume   -> --resume   (restore/thaw transition)
+ */
+:root {
+  --ink: #0b1116;
+  --ink-2: #0e151b;
+  --surface: #131d24;
+  --surface-2: #18242c;
+  --surface-3: #1e2c35;
+  --line: #26333d;
+  --line-2: #324250;
+  --text: #e8eff4;
+  --text-dim: #9dacb7;
+  --text-faint: #5e6e79;
+
+  /* state colors */
+  --active: #ffb43a;
+  --active-soft: #3a2b12;
+  --idle: #c9a24b;
+  --idle-soft: #2b2614;
+  --frozen: #7fcdea;
+  --frozen-soft: #13313d;
+  --resume: #56c2f2;
+
+  --ok: #5fd08a;
+  --danger: #f2616b;
+
+  --rail: 64px;
+  --maxw: 1240px;
+  --r: 14px;
+  --r-sm: 9px;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+body {
+  background: var(--ink);
+  color: var(--text);
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: 0.005em;
+  -webkit-font-smoothing: antialiased;
+}
+.mono {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+}
+button {
+  font-family: inherit;
+  color: inherit;
+  cursor: pointer;
+  border: 0;
+  background: none;
+}
+a {
+  color: inherit;
+  text-decoration: none;
+}
+::selection {
+  background: rgba(255, 180, 58, 0.28);
+}
+:focus-visible {
+  outline: 2px solid var(--frozen);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.eyebrow {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+h1 {
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 600;
+  font-size: 30px;
+  letter-spacing: -0.02em;
+  margin: 6px 0 0;
+}
+.sub {
+  color: var(--text-dim);
+  font-size: 13.5px;
+  margin-top: 4px;
+  max-width: 52ch;
+}
+
+/* buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 16px;
+  height: 40px;
+  border-radius: 11px;
+  font-weight: 600;
+  font-size: 13.5px;
+  transition: 0.18s var(--ease);
+  white-space: nowrap;
+}
+.btn-primary {
+  background: var(--active);
+  color: #1c1404;
+  box-shadow: 0 6px 22px -8px rgba(255, 180, 58, 0.6);
+}
+.btn-primary:hover {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+}
+.btn-ghost {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+}
+.btn-ghost:hover {
+  border-color: var(--line-2);
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition-duration: 0.01ms !important;
+  }
+}

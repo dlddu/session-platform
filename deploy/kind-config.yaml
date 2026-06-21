@@ -1,0 +1,12 @@
+# kind cluster for local / CI integration of the happy path.
+#   kind create cluster --config deploy/kind-config.yaml
+#
+# NOTE(criu): real CRIU checkpoint/restore needs a CRIU-capable node runtime
+# and the ContainerCheckpoint feature gate (alpha). This config does NOT enable
+# it — the CRIU path stays gated off here. See docs/criu-verification.md.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: session-platform
+nodes:
+  - role: control-plane
+  - role: worker

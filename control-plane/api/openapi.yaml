@@ -1,0 +1,196 @@
+openapi: 3.0.3
+info:
+  title: session-platform control plane API
+  version: 0.1.0
+  description: >
+    REST surface the SPA uses to create, list and operate sessions. Each
+    session maps 1:1 to a dedicated data plane pod (AC-A2). State-dependent
+    behaviour (read/write dispatch, snapshot/restore) is currently stubbed; see
+    TODO(policy) markers in the implementation.
+servers:
+  - url: /api/v1
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe
+      operationId: health
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+  /sessions:
+    get:
+      summary: List sessions
+      operationId: listSessions
+      responses:
+        "200":
+          description: All sessions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items: { $ref: "#/components/schemas/Session" }
+    post:
+      summary: Create a session (provisions a dedicated pod, goes active)
+      operationId: createSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateSessionRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /sessions/{id}:
+    get:
+      summary: Get a single session
+      operationId: getSession
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: The session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /sessions/{id}/read:
+    post:
+      summary: Read from a session (state-branched, AC-C2)
+      operationId: readSession
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: Read result with the branch that served it
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReadResult" }
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /sessions/{id}/write:
+    post:
+      summary: Write to a session (state-branched, AC-C3)
+      operationId: writeSession
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WriteRequest" }
+      responses:
+        "200":
+          description: Write result with the branch that served it
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WriteResult" }
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /sessions/{id}/switch:
+    post:
+      summary: Switch to a session, restoring from snapshot if needed (AC-C4)
+      operationId: switchSession
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: The now-active session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: Concurrent state change
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+components:
+  parameters:
+    SessionId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+  schemas:
+    State:
+      type: string
+      enum: [active, idle, snapshot]
+    Checkpoint:
+      type: object
+      properties:
+        ref: { type: string }
+        sizeBytes: { type: integer, format: int64 }
+        createdAt: { type: string, format: date-time }
+        reclaimed: { type: string }
+    Session:
+      type: object
+      required: [id, name, state, region, createdAt, lastAccess]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        state: { $ref: "#/components/schemas/State" }
+        pod: { type: string }
+        region: { type: string }
+        createdAt: { type: string, format: date-time }
+        lastAccess: { type: string, format: date-time }
+        checkpoint: { $ref: "#/components/schemas/Checkpoint" }
+    CreateSessionRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        region: { type: string }
+    WriteRequest:
+      type: object
+      properties:
+        payload: { type: string }
+    ReadResult:
+      type: object
+      properties:
+        session: { $ref: "#/components/schemas/Session" }
+        path:
+          type: string
+          description: which state branch served the read
+        payload: { type: string }
+    WriteResult:
+      type: object
+      properties:
+        session: { $ref: "#/components/schemas/Session" }
+        path:
+          type: string
+          description: which state branch served the write
+    Error:
+      type: object
+      properties:
+        error: { type: string }

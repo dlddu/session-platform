@@ -1,0 +1,6 @@
+**/node_modules
+web/dist
+control-plane/bin
+control-plane/internal/static/dist/assets
+.git
+**/*.log
