@@ -12,7 +12,11 @@ on:
       - "control-plane/**"
       - "web/**"
       - ".github/workflows/docker-build-push.yaml"
-  workflow_dispatch:
+  pull_request:
+    paths:
+      - "control-plane/**"
+      - "web/**"
+      - ".github/workflows/docker-build-push.yaml"
 
 jobs:
   build-and-push:
