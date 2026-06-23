@@ -38,6 +38,7 @@ export function NewSession() {
           <span>Name</span>
           <input
             autoFocus
+            data-testid="new-session-name"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="api-gateway-dev"
@@ -48,7 +49,12 @@ export function NewSession() {
           <button type="button" className="btn btn-ghost" onClick={close} disabled={busy}>
             Cancel
           </button>
-          <button type="submit" className="btn btn-primary" disabled={busy || !name.trim()}>
+          <button
+            type="submit"
+            data-testid="new-session-submit"
+            className="btn btn-primary"
+            disabled={busy || !name.trim()}
+          >
             {busy ? "Provisioning…" : "Create"}
           </button>
         </div>

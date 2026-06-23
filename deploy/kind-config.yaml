@@ -1,6 +1,12 @@
 # kind cluster for local / CI integration of the happy path.
 #   kind create cluster --config deploy/kind-config.yaml
 #
+# SUT reachability (e2e): the control-plane Service is a NodePort on 30080
+# (see deploy/control-plane.yaml). The extraPortMapping below forwards host
+# :8080 -> node :30080 so the e2e suites reach the deployed SUT at
+# http://localhost:8080 without a background port-forward. This lives in
+# deploy/ only; production k8s/ keeps a ClusterIP Service.
+#
 # NOTE(criu): real CRIU checkpoint/restore needs a CRIU-capable node runtime
 # and the ContainerCheckpoint feature gate (alpha). This config does NOT enable
 # it — the CRIU path stays gated off here. See docs/criu-verification.md.
@@ -9,4 +15,8 @@ apiVersion: kind.x-k8s.io/v1alpha4
 name: session-platform
 nodes:
   - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8080
+        protocol: TCP
   - role: worker

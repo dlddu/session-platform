@@ -81,7 +81,7 @@ export function Workspace() {
           <div className="console-bar">
             <span>console · {sess.id}</span>
           </div>
-          <div className="term">
+          <div className="term" data-testid="ws-log">
             {log.length === 0 && (
               <div style={{ color: "var(--text-faint)" }}>
                 // run a read / write / switch to exercise the stub endpoints
@@ -95,18 +95,18 @@ export function Workspace() {
 
         <div>
           <div className={"lc-state" + (frozen ? " frozen" : "")}>
-            <span className="big">{sess.state}</span>
+            <span className="big" data-testid="ws-state">{sess.state}</span>
           </div>
           <div className="panel">
             <h4>Actions</h4>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <button className="btn btn-ghost" onClick={doRead}>
+              <button className="btn btn-ghost" data-testid="ws-read" onClick={doRead}>
                 Read (AC-C2)
               </button>
-              <button className="btn btn-ghost" onClick={doWrite}>
+              <button className="btn btn-ghost" data-testid="ws-write" onClick={doWrite}>
                 Write (AC-C3)
               </button>
-              <button className="btn btn-ghost" onClick={doSwitch}>
+              <button className="btn btn-ghost" data-testid="ws-switch" onClick={doSwitch}>
                 Switch (AC-C4)
               </button>
             </div>
