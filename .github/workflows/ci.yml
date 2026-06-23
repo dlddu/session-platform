@@ -53,12 +53,13 @@ jobs:
         run: docker build -f control-plane/Dockerfile -t session-platform/control-plane:ci .
 
   integration:
-    name: integration (opt-in, happy path)
+    name: integration (happy path)
     runs-on: ubuntu-latest
-    # Opt-in: runs on demand or when explicitly enabled. The real job will spin
-    # up kind + Redis (deploy/) first; today it runs the tagged harness with
-    # stub adapters. CRIU scenarios stay skipped (see docs/criu-verification.md).
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    # In-process happy-path harness (build tag `integration`): mounts the API
+    # handlers over the in-memory stub adapters, so there is no external infra
+    # and it runs on every PR alongside the unit tests. The deployed kind-SUT
+    # version of these scenarios lives in e2e.yml. CRIU scenarios stay skipped
+    # unless CRIU_ENABLED=1 (see docs/criu-verification.md).
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

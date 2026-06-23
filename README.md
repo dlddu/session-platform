@@ -107,8 +107,8 @@ gitignored.
 ## CI
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs lint + unit (Go),
-typecheck + build (web), and the combined image build on every PR. The
-integration job is opt-in (`workflow_dispatch`).
+typecheck + build (web), the in-process integration harness, and the combined
+image build on every PR.
 
 [`.github/workflows/e2e.yml`](.github/workflows/e2e.yml) runs the kind-based
 e2e suites (Go API + Playwright) on PRs touching `control-plane/`, `web/`,
