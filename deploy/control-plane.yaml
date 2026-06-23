@@ -41,12 +41,17 @@ spec:
             requests: { cpu: "100m", memory: "128Mi" }
             limits: { cpu: "500m", memory: "512Mi" }
 ---
+# NodePort (deploy/ only) so the e2e suites reach the SUT through the kind
+# extraPortMapping (host :8080 -> node :30080). Production k8s/service.yaml
+# keeps a ClusterIP Service fronted by the cluster ingress.
 apiVersion: v1
 kind: Service
 metadata:
   name: control-plane
 spec:
+  type: NodePort
   selector: { app: control-plane }
   ports:
     - port: 80
       targetPort: 8080
+      nodePort: 30080

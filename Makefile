@@ -8,7 +8,7 @@ BIN         := $(CP_DIR)/bin/control-plane
 
 .DEFAULT_GOAL := build
 
-.PHONY: build web embed control-plane run dev test test-unit test-integration lint fmt docker clean tidy
+.PHONY: build web embed control-plane run dev test test-unit test-integration lint fmt docker clean tidy e2e-up e2e-down e2e-api e2e-web e2e
 
 ## build: web -> embed -> control-plane binary
 build: control-plane
@@ -45,10 +45,30 @@ test: test-unit lint
 test-unit:
 	cd $(CP_DIR) && go test ./...
 
-## test-integration: opt-in happy-path integration harness (kind + Redis).
+## test-integration: opt-in happy-path integration harness (in-process stubs).
 ## Skips CRIU scenarios unless CRIU_ENABLED=1 and a verified runtime exist.
 test-integration:
 	cd $(CP_DIR) && go test -tags=integration ./...
+
+## e2e-up: bring up the kind-based SUT (deployed stub control-plane + Redis)
+## reachable at http://localhost:8080. Idempotent (skips create if it exists).
+e2e-up:
+	./scripts/e2e/up.sh
+
+## e2e-down: delete the kind e2e cluster.
+e2e-down:
+	./scripts/e2e/down.sh
+
+## e2e-api: run the Go API e2e suite against the running SUT (needs `e2e-up`).
+e2e-api:
+	cd $(CP_DIR) && go test -tags=e2e ./test/...
+
+## e2e-web: run the Playwright browser e2e suite against the running SUT.
+e2e-web:
+	cd $(WEB_DIR) && (test -d node_modules || npm install) && npx playwright test
+
+## e2e: run both e2e suites against an already-up SUT (api then web).
+e2e: e2e-api e2e-web
 
 ## lint: go vet + gofmt check + web typecheck
 lint:

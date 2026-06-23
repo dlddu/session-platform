@@ -36,7 +36,7 @@ export function Sessions() {
             a checkpoint and hand their compute back.
           </div>
         </div>
-        <Link to="/new" className="btn btn-primary">
+        <Link to="/new" className="btn btn-primary" data-testid="new-session-link">
           + New session
         </Link>
       </div>
@@ -70,6 +70,8 @@ export function Sessions() {
           <button
             key={s.id}
             className="card"
+            data-testid="session-card"
+            data-session-id={s.id}
             data-state={s.state}
             onClick={() =>
               navigate(s.state === "snapshot" ? `/restore/${s.id}` : `/session/${s.id}`)

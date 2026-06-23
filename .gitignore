@@ -7,6 +7,12 @@ web/dist/
 web/tsconfig.tsbuildinfo
 *.log
 
+# --- Playwright (web e2e) ---
+web/test-results/
+web/playwright-report/
+web/blob-report/
+web/playwright/.cache/
+
 # --- embedded SPA build output ---
 # The placeholder control-plane/internal/static/dist/index.html is tracked so
 # `go build` works; the real built assets (and regenerated index.html) are

@@ -54,7 +54,7 @@ the deferred real implementations.
 
 ## Prerequisites
 
-Go 1.24+, Node 22+, (optional) Docker, kind.
+Go 1.24+, Node 22+, (optional, for the image build & e2e) Docker, kind, kubectl.
 
 ## Build & run
 
@@ -86,16 +86,34 @@ gitignored.
 ## Testing
 
 - **Unit** (`make test-unit`): API handlers + service manager with stub adapters.
-- **Integration** (`make test-integration`, build tag `integration`): happy-path
-  scenarios from `docs/test/architecture.md`. The real harness will bring up
-  kind + Redis from `deploy/`; CRIU scenarios stay skipped until a verified
-  runtime exists.
+- **Integration** (`make test-integration`, build tag `integration`): the
+  happy-path scenarios from `docs/test/architecture.md` driven **in-process**
+  (handlers mounted in a test server) with the stub adapters.
+- **E2E** (kind-deployed SUT): builds the combined image, loads it into a kind
+  cluster (`deploy/`), and runs a Go API suite + a Playwright browser suite
+  against the deployed control-plane (reachable at `http://localhost:8080` via a
+  NodePort). Scope is the α stub happy path (create/list/get/switch·read·write);
+  the B-path (idle → snapshot → restore) and real pod/Redis/CRIU assertions are
+  seeded as documented skips. Details and the deferred-seed ↔ scenario map:
+  [`docs/test/e2e.md`](docs/test/e2e.md).
+
+  ```bash
+  make e2e-up                                          # kind + build + deploy, SUT on :8080
+  (cd control-plane && go test -tags=e2e ./test/...)   # API e2e
+  (cd web && npx playwright test)                      # browser e2e (J1, J3, smoke)
+  make e2e-down                                         # tear down
+  ```
 
 ## CI
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs lint + unit (Go),
-typecheck + build (web), and the combined image build on every PR. The
-integration job is opt-in (`workflow_dispatch`).
+typecheck + build (web), the in-process integration harness, and the combined
+image build on every PR.
+
+[`.github/workflows/e2e.yml`](.github/workflows/e2e.yml) runs the kind-based
+e2e suites (Go API + Playwright) on PRs touching `control-plane/`, `web/`,
+`deploy/`, `scripts/e2e/`, or `Makefile`, and on demand (`workflow_dispatch`);
+Playwright reports/traces upload as artifacts.
 
 ## Deployment
 
