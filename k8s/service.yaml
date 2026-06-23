@@ -1,0 +1,15 @@
+# Exposes the control plane (API + SPA) inside the cluster on port 80. The
+# Traefik IngressRoute in flux-cd-apps (apps/session-platform/ingress-route.yaml)
+# routes external traffic to this Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: control-plane
+spec:
+  selector:
+    app: control-plane
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+      name: http

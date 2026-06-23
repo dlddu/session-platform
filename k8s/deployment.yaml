@@ -1,0 +1,60 @@
+# Control plane Deployment. Serves the REST API (/api/v1) and the embedded SPA
+# on one port (8080), orchestrating data plane pods (AC-A1). In this scaffolding
+# the orchestrator is a stub, so no pod-management RBAC is wired yet.
+#
+# The image is published by .github/workflows/docker-build-push.yaml. The
+# namespace is created by flux-cd-apps (cluster/session-platform.yaml) with the
+# external-secrets/github label, which provisions the `ghcr` pull secret used
+# below. The `gitops-repository` pod annotation is injected by Flux.
+#
+# TODO(rbac): when the k8s adapter drives real pods, add a ServiceAccount +
+# Role/RoleBinding granting pods create/delete in the session namespace.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-plane
+  labels:
+    app: control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: control-plane
+  template:
+    metadata:
+      labels:
+        app: control-plane
+    spec:
+      containers:
+        - name: control-plane
+          image: ghcr.io/dlddu/session-platform:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: CP_ADDR
+              value: ":8080"
+            - name: REDIS_ADDR
+              value: "redis:6379"
+            - name: SESSION_NAMESPACE
+              value: "sessions"
+            - name: CRIU_ENABLED
+              value: "false" # gated off until a verified runtime exists
+          readinessProbe:
+            httpGet:
+              path: /api/v1/healthz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/v1/healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

@@ -96,3 +96,18 @@ gitignored.
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs lint + unit (Go),
 typecheck + build (web), and the combined image build on every PR. The
 integration job is opt-in (`workflow_dispatch`).
+
+## Deployment
+
+The cluster runs this via GitOps (Flux) from the `flux-cd-apps` repo.
+
+- [`.github/workflows/docker-build-push.yaml`](.github/workflows/docker-build-push.yaml)
+  publishes the combined control-plane image to
+  `ghcr.io/dlddu/session-platform:latest` on every push to `main` that touches
+  `control-plane/` or `web/`.
+- [`k8s/`](k8s/) holds the cluster manifests Flux applies: the `control-plane`
+  Deployment + Service (port 80 → 8080) and the `redis` backing store. The
+  namespace, ingress, and VPA live on the cluster side in `flux-cd-apps`.
+
+The [`deploy/`](deploy/) directory remains the local `kind` setup for the
+integration harness; `k8s/` is the deployed-cluster source of truth.
