@@ -2,10 +2,15 @@ import { NavLink, Outlet } from "react-router-dom";
 import { ToastProvider } from "./Toast";
 import "./shell.css";
 
-// AppShell = 64px rail + main viewport, ported from docs/mockups shell.
+// AppShell = main viewport + 64px bottom rail, ported from docs/mockups shell.
 export function AppShell() {
   return (
     <div className="app">
+      <div className="viewport">
+        <ToastProvider>
+          <Outlet />
+        </ToastProvider>
+      </div>
       <nav className="rail" aria-label="Primary">
         <div className="mark" title="Session Pods">
           <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
@@ -33,11 +38,6 @@ export function AppShell() {
           JD
         </div>
       </nav>
-      <div className="viewport">
-        <ToastProvider>
-          <Outlet />
-        </ToastProvider>
-      </div>
     </div>
   );
 }
