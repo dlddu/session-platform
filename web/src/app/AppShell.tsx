@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
+import { ToastProvider } from "./Toast";
 import "./shell.css";
 
 // AppShell = 64px rail + main viewport, ported from docs/mockups shell.
@@ -33,7 +34,9 @@ export function AppShell() {
         </div>
       </nav>
       <div className="viewport">
-        <Outlet />
+        <ToastProvider>
+          <Outlet />
+        </ToastProvider>
       </div>
     </div>
   );

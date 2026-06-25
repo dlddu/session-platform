@@ -140,7 +140,8 @@
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--line);
-  transition: transform 0.22s var(--ease), border-color 0.22s var(--ease);
+  transition: transform 0.22s var(--ease), border-color 0.22s var(--ease),
+    box-shadow 0.22s var(--ease);
   text-align: left;
   display: block;
   width: 100%;
@@ -225,9 +226,302 @@
   box-shadow: 0 0 8px rgba(127, 205, 234, 0.6);
 }
 
+.card-foot .pod {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.card-foot svg {
+  width: 12px;
+  height: 12px;
+  opacity: 0.8;
+}
+.btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ---------- summary reclaim chip ---------- */
+.chip.reclaim {
+  margin-left: auto;
+  border-style: dashed;
+  border-color: var(--line-2);
+  background: transparent;
+}
+.chip.reclaim .ic {
+  color: var(--frozen);
+  display: grid;
+  place-items: center;
+}
+.reclaim-lab {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* ---------- vitals (active) ---------- */
+.vit {
+  display: flex;
+  gap: 18px;
+  align-items: flex-end;
+}
+.vit .m {
+  flex: 1;
+  min-width: 0;
+}
+.vit .m .lab {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.vit .m .val {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 18px;
+  font-weight: 500;
+  margin-top: 2px;
+  line-height: 1;
+}
+.vit .m .val small {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-weight: 400;
+}
+.vit .m .val.val-empty {
+  color: var(--text-faint);
+}
+.bar {
+  height: 4px;
+  border-radius: 3px;
+  background: var(--ink-2);
+  margin-top: 9px;
+  overflow: hidden;
+}
+.bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.6s var(--ease);
+}
+.bar i.active {
+  background: linear-gradient(90deg, #ff9a2e, #ffc766);
+}
+.bar i.idle {
+  background: var(--idle);
+  opacity: 0.8;
+}
+
+/* ---------- active card glow ---------- */
+.card[data-state="active"] {
+  box-shadow: 0 0 0 1px rgba(255, 180, 58, 0.07),
+    0 18px 40px -28px rgba(255, 180, 58, 0.35);
+}
+.card[data-state="active"]:hover {
+  box-shadow: 0 0 0 1px rgba(255, 180, 58, 0.16),
+    0 22px 46px -24px rgba(255, 180, 58, 0.45);
+}
+.card[data-state="active"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    120% 80% at 90% -10%,
+    rgba(255, 180, 58, 0.1),
+    transparent 60%
+  );
+}
+.badge.active .led {
+  animation: breathe 2.6s var(--ease) infinite;
+}
+
+/* ---------- idle freeze ring ---------- */
+.freeze {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 2px;
+}
+.ring {
+  --p: 0;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 46px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: conic-gradient(var(--idle) calc(var(--p) * 1%), var(--ink-2) 0);
+  position: relative;
+}
+.ring::before {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: var(--surface);
+}
+.ring b {
+  position: relative;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  color: var(--idle);
+  letter-spacing: 0.02em;
+}
+.freeze .txt .t {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 15px;
+  color: var(--idle);
+}
+.freeze .txt .d {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 2px;
+}
+
+/* ---------- snapshot / frozen treatment ---------- */
 .card[data-state="snapshot"] {
   background: linear-gradient(160deg, #16242c, #101c23);
   border-color: #22414e;
+}
+.card[data-state="snapshot"] .frost {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.9;
+  background: radial-gradient(
+      80% 60% at 20% 0%,
+      rgba(127, 205, 234, 0.16),
+      transparent 55%
+    ),
+    radial-gradient(70% 70% at 100% 100%, rgba(86, 194, 242, 0.1), transparent 60%),
+    repeating-linear-gradient(58deg, rgba(127, 205, 234, 0.05) 0 2px, transparent 2px 9px),
+    repeating-linear-gradient(-58deg, rgba(127, 205, 234, 0.045) 0 2px, transparent 2px 11px);
+  mix-blend-mode: screen;
+}
+.card[data-state="snapshot"] .shimmer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    110deg,
+    transparent 30%,
+    rgba(190, 232, 247, 0.14) 48%,
+    transparent 62%
+  );
+  background-size: 240% 100%;
+  animation: shimmer 6.5s linear infinite;
+}
+.card[data-state="snapshot"] .c-name,
+.card[data-state="snapshot"] .c-id {
+  position: relative;
+}
+.snap-body {
+  position: relative;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+.crystal {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  color: var(--frozen);
+  opacity: 0.9;
+  filter: drop-shadow(0 0 10px rgba(127, 205, 234, 0.4));
+}
+.snap-meta .row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 2px;
+}
+.snap-meta .k {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  flex: 0 0 84px;
+}
+.snap-meta .v {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 13px;
+  color: var(--frozen);
+}
+.snap-hint {
+  position: relative;
+  margin-top: 14px;
+  font-size: 11.5px;
+  color: #6f93a3;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* ---------- toast ---------- */
+.toast-wrap {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  pointer-events: none;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: 11px;
+  padding: 11px 16px;
+  font-size: 13px;
+  box-shadow: 0 18px 40px -16px rgba(0, 0, 0, 0.7);
+  transform: translateY(14px);
+  opacity: 0;
+  transition: 0.32s var(--ease);
+}
+.toast.in {
+  transform: none;
+  opacity: 1;
+}
+.toast .ic {
+  display: grid;
+  place-items: center;
+}
+.toast.ok .ic {
+  color: var(--ok);
+}
+.toast.frozen .ic {
+  color: var(--frozen);
+}
+.toast.warm .ic {
+  color: var(--active);
+}
+
+/* ---------- card animations ---------- */
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.35);
+    opacity: 0.55;
+  }
+}
+@keyframes shimmer {
+  0% {
+    background-position: 140% 0;
+  }
+  100% {
+    background-position: -140% 0;
+  }
 }
 
 /* ---------- generic panels / workspace ---------- */
