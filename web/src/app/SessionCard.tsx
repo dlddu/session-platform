@@ -149,7 +149,6 @@ export function SessionCard({ s, now }: { s: Session; now: number }) {
             <PodIcon size={12} /> pod/{s.pod}
           </span>
         )}
-        <span style={{ marginLeft: "auto" }}>{s.region}</span>
       </div>
     </button>
   );

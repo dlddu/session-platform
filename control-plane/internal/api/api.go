@@ -34,8 +34,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 // ---- request/response DTOs ----
 
 type createReq struct {
-	Name   string `json:"name"`
-	Region string `json:"region,omitempty"`
+	Name string `json:"name"`
 }
 
 type writeReq struct {
@@ -69,7 +68,7 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, session.ErrInvalidInput)
 		return
 	}
-	sess, err := a.mgr.Create(r.Context(), session.CreateRequest{Name: req.Name, Region: req.Region})
+	sess, err := a.mgr.Create(r.Context(), session.CreateRequest{Name: req.Name})
 	if err != nil {
 		writeErr(w, err)
 		return

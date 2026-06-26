@@ -70,7 +70,7 @@ export function Workspace() {
         <div>
           <h1>{sess.name}</h1>
           <div className="c-id">
-            session/{sess.id} · {sess.pod ? `pod/${sess.pod}` : "pod reclaimed"} · {sess.region}
+            session/{sess.id} · {sess.pod ? `pod/${sess.pod}` : "pod reclaimed"}
           </div>
         </div>
         <StateBadge state={sess.state} />

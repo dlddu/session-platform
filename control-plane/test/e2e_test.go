@@ -43,7 +43,6 @@ type session struct {
 	Name       string `json:"name"`
 	State      string `json:"state"`
 	Pod        string `json:"pod"`
-	Region     string `json:"region"`
 	CreatedAt  string `json:"createdAt"`
 	LastAccess string `json:"lastAccess"`
 }
@@ -134,9 +133,6 @@ func TestCreateSession_ActiveWithPod(t *testing.T) {
 	}
 	if s.Pod == "" {
 		t.Fatal("expected a dedicated pod name (AC-A1/A2)")
-	}
-	if s.Region == "" {
-		t.Fatal("expected a region")
 	}
 }
 

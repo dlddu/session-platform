@@ -41,7 +41,7 @@ func harness(t *testing.T) (*httptest.Server, *service.Service) {
 	orch := k8s.NewStubOrchestrator("sessions")
 	store := redis.NewStubStore(os.Getenv("REDIS_ADDR"))
 	ckpt := criu.NewStubCheckpointer(os.Getenv("CRIU_ENABLED") == "1")
-	svc := service.New(orch, store, ckpt, "us-east-1")
+	svc := service.New(orch, store, ckpt)
 
 	mux := http.NewServeMux()
 	api.New(svc).Routes(mux)

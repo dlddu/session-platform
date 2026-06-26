@@ -14,7 +14,6 @@ export interface Session {
   name: string;
   state: State;
   pod?: string;
-  region: string;
   createdAt: string;
   lastAccess: string;
   checkpoint?: Checkpoint;
@@ -22,7 +21,6 @@ export interface Session {
 
 export interface CreateSessionRequest {
   name: string;
-  region?: string;
 }
 
 export interface ReadResult {
