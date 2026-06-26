@@ -2,23 +2,120 @@
 
 package e2e_test
 
-import "testing"
+import (
+	"context"
+	"fmt"
+	"os"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+)
 
 // This file seeds the *deferred* e2e scenarios — the ones blocked on real
 // adapters or lifecycle triggers that the α stub SUT cannot exercise. Each test
-// skips with its blocking precondition and the AC it will verify, so a future
-// PR that introduces the real adapter/trigger fills in the body and removes the
-// t.Skip. Running the suite then surfaces each as "skipped" with the reason.
+// still blocked skips with its precondition and the AC it will verify; the ones
+// whose precondition has landed (the real client-go PodOrchestrator) are filled
+// and assert directly against the cluster API.
 //
 // The mapping from these placeholders to the documented scenarios/ACs lives in
 // docs/test/e2e.md.
 
+// sessionNamespace is where the deployed control plane provisions its data plane
+// pods — the same namespace it runs in (default in the kind deploy/). Overridable
+// for clusters that place the control plane elsewhere.
+func sessionNamespace() string {
+	if v := os.Getenv("E2E_SESSION_NAMESPACE"); v != "" {
+		return v
+	}
+	return "default"
+}
+
+// kubeClient builds a client for the cluster the SUT runs in, from the ambient
+// kubeconfig (kind writes one) or the in-cluster config. It reports ok=false
+// when neither is available, so a run pointed at a non-cluster SUT skips rather
+// than fails.
+func kubeClient(t *testing.T) (kubernetes.Interface, bool) {
+	t.Helper()
+	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{}).ClientConfig()
+	if err != nil {
+		if cfg, err = rest.InClusterConfig(); err != nil {
+			return nil, false
+		}
+	}
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, false
+	}
+	return cs, true
+}
+
+// getPodEventually fetches a pod, tolerating brief API eventual-consistency.
+// Create returns only after the pod is Ready, so it should already exist.
+func getPodEventually(t *testing.T, cs kubernetes.Interface, ns, name string) *corev1.Pod {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	var lastErr error
+	for {
+		pod, err := cs.CoreV1().Pods(ns).Get(context.Background(), name, metav1.GetOptions{})
+		if err == nil {
+			return pod
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			t.Fatalf("pod %s/%s not found within timeout: %v", ns, name, lastErr)
+			return nil
+		}
+		time.Sleep(time.Second)
+	}
+}
+
 // AC-A1/A2 (real pod): the deployed control-plane creates a dedicated Pod object
-// per session in the session namespace, 1:1.
-// Blocked on: a real client-go PodOrchestrator — today the orchestrator is an
-// in-memory stub, so the pod name is synthetic and no Pod object exists to assert.
+// per session in the session namespace, 1:1 (architecture scenarios 1·2). Filled
+// now that the real client-go PodOrchestrator backs the SUT — the API's returned
+// pod name corresponds to an actual Pod object labelled to its session.
 func TestDeferred_RealPodProvisioned(t *testing.T) {
-	t.Skip("deferred: needs the real client-go PodOrchestrator to assert a Pod object exists 1:1 (AC-A1/A2); fill when the k8s adapter lands")
+	cs, ok := kubeClient(t)
+	if !ok {
+		t.Skip("no kube API access (kubeconfig/in-cluster) — real-pod assertion needs the deployed cluster")
+	}
+	ns := sessionNamespace()
+
+	// Scenario 1: one session => one Pod object, labelled 1:1 to the session.
+	s := createSession(t, uniqueName(t))
+	if s.Pod == "" {
+		t.Fatal("API returned an empty pod name for a created session (AC-A1/A2)")
+	}
+	pod := getPodEventually(t, cs, ns, s.Pod)
+	if got := pod.Labels["session-id"]; got != s.ID {
+		t.Fatalf("pod %s session-id label=%q want %q (AC-A2 1:1)", s.Pod, got, s.ID)
+	}
+
+	// Scenario 2: N sessions => N unique Pods, each labelled to its own session.
+	const n = 3
+	seen := map[string]string{} // pod name -> session id
+	for i := 0; i < n; i++ {
+		si := createSession(t, fmt.Sprintf("%s-%d", uniqueName(t), i))
+		if si.Pod == "" {
+			t.Fatalf("session %s has no pod", si.ID)
+		}
+		if prev, dup := seen[si.Pod]; dup {
+			t.Fatalf("pod %q shared by sessions %s and %s (AC-A2 violated)", si.Pod, prev, si.ID)
+		}
+		seen[si.Pod] = si.ID
+		p := getPodEventually(t, cs, ns, si.Pod)
+		if got := p.Labels["session-id"]; got != si.ID {
+			t.Fatalf("pod %s session-id label=%q want %q", si.Pod, got, si.ID)
+		}
+	}
+	if len(seen) != n {
+		t.Fatalf("expected %d unique pods, got %d", n, len(seen))
+	}
 }
 
 // AC-A3 (real pod): terminating/snapshotting a session deletes its Pod and

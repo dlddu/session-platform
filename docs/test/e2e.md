@@ -4,11 +4,12 @@
 `deploy/`로 **kind 클러스터에 배포된 control-plane(SUT)** 를 대상으로 API와 브라우저
 양쪽에서 해피패스를 종단 검증한다.
 
-> **충실도 = α (스텁 레벨)**: 어댑터는 모두 인메모리 스텁이므로 생성된 세션은 항상
-> `active`로 머문다. 검증 범위는 **생성/목록/조회/switch·read·write 해피패스**다.
-> B-path(idle → snapshot → restore)와 실 pod/Redis/CRIU 단언은 범위 밖이며, 단계 5의
-> **deferred 시드**(skip)로 골격만 남겨 둔다 — 실 어댑터/트리거가 들어오면 skip을 지우며
-> 채운다.
+> **충실도**: PodOrchestrator는 실 client-go 구현이라 세션 생성 시 **진짜 Pod 오브젝트**가
+> 1:1로 기동된다(클러스터에 배포된 SUT 기준). StateStore(Redis)·Checkpointer(CRIU)는 아직
+> 인메모리 스텁이고 idle→snapshot 트리거가 없으므로 생성된 세션은 여전히 `active`로 머문다.
+> 검증 범위는 **생성/목록/조회/switch·read·write 해피패스 + 실 Pod 단언(AC-A1/A2)**이다.
+> B-path(idle → snapshot → restore)와 Redis/CRIU 단언은 범위 밖이며, 단계 5의 **deferred
+> 시드**(skip)로 골격만 남겨 둔다 — 해당 어댑터/트리거가 들어오면 skip을 지우며 채운다.
 
 ## 빠른 실행 (로컬)
 
@@ -49,6 +50,7 @@ PR에서 돈다.
 | --- | --- | --- |
 | healthz 200 / `{"status":"ok"}` | go API | — |
 | 생성 → `active` + 전용 pod, 3건 → 고유 pod 3개 | go API | A1, A2 |
+| 생성된 세션의 pod 이름 = 실 Pod 오브젝트(라벨 `session-id` 1:1), N건 → 고유 Pod N개 | go API (`TestDeferred_RealPodProvisioned`) | A1, A2 |
 | 목록 포함 / 단건 조회 일치 | go API | V5 |
 | active 세션 switch = no-op | go API | C4 |
 | active read(`path:"active"`+payload) / write(`path:"active"`) | go API | C2, C3 |
@@ -63,8 +65,8 @@ PR에서 돈다.
 
 | 시드 (테스트) | 스위트 | 문서 시나리오 / 여정 | AC | 막힌 이유 (선결조건) |
 | --- | --- | --- | --- | --- |
-| `TestDeferred_RealPodProvisioned` | go | architecture 시나리오 1·2 | A1, A2 | 실 client-go PodOrchestrator (Pod 오브젝트 단언) |
-| `TestDeferred_RealPodReclaimed` | go | architecture 시나리오 3 | A3 | 실 client-go PodOrchestrator (Pod 삭제·자원 회수) |
+| ~~`TestDeferred_RealPodProvisioned`~~ → **채움** | go | architecture 시나리오 1·2 | A1, A2 | (해소: 실 client-go PodOrchestrator 적용 — 위 커버 표로 이동) |
+| `TestDeferred_RealPodReclaimed` | go | architecture 시나리오 3 | A3 | terminate/snapshot 경로 + Pod 삭제·자원 회수 단언 |
 | `TestDeferred_IdleToSnapshot` | go | lifecycle 시나리오 1 | B1 | idle→snapshot 트리거(reaper/엔드포인트) |
 | `TestDeferred_SnapshotRestore` | go | lifecycle 시나리오 2 | B2 | snapshot 상태 세션 + 복원 |
 | `TestDeferred_CRIUIntegrity` | go | lifecycle 시나리오 3 | B3 | 검증된 CRIU 런타임 (`docs/criu-verification.md`) |

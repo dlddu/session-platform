@@ -12,10 +12,12 @@ RUN npm run build
 # ---- stage 2: build the Go control plane with the SPA embedded ----
 FROM golang:1.24-alpine AS build
 WORKDIR /src
-COPY control-plane/go.mod ./control-plane/go.mod
-# (no go.sum yet — stdlib-only module)
+# Copy the module manifests first so the dependency download layer caches across
+# source-only changes. client-go (PodOrchestrator) and its transitive deps are
+# resolved here.
+COPY control-plane/go.mod control-plane/go.sum ./control-plane/
 WORKDIR /src/control-plane
-RUN go mod download || true
+RUN go mod download
 COPY control-plane/ ./
 # overlay the freshly built SPA into the embed directory
 COPY --from=web /web/dist ./internal/static/dist

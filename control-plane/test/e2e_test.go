@@ -26,7 +26,10 @@ import (
 	"time"
 )
 
-var client = &http.Client{Timeout: 15 * time.Second}
+// Creating a session now provisions a real pod and waits for it to report Ready
+// (the in-cluster client-go orchestrator), so the create calls can take longer
+// than a stub round-trip — the timeout has headroom for image pull + schedule.
+var client = &http.Client{Timeout: 90 * time.Second}
 
 func baseURL() string {
 	if v := os.Getenv("E2E_BASE_URL"); v != "" {

@@ -34,10 +34,11 @@ func main() {
 		"criu_enabled", cfg.criuEnabled,
 	)
 
-	// Build adapter ports. These are in-memory stubs for the scaffolding; the
-	// real client-go / go-redis / CRIU implementations plug in behind the same
-	// interfaces (see each adapter package).
-	orch := k8s.NewStubOrchestrator(cfg.namespace)
+	// Build adapter ports. The orchestrator auto-selects the real client-go
+	// implementation when running inside a cluster and the in-memory stub
+	// otherwise (e.g. local `make run`). The redis / CRIU adapters remain stubs
+	// behind the same interfaces (see each adapter package).
+	orch := buildOrchestrator(logger, cfg)
 	store := redis.NewStubStore(cfg.redisAddr)
 	ckpt := criu.NewStubCheckpointer(cfg.criuEnabled)
 
@@ -73,19 +74,50 @@ func main() {
 }
 
 type config struct {
-	addr        string
-	redisAddr   string
-	namespace   string
-	criuEnabled bool
+	addr           string
+	redisAddr      string
+	namespace      string
+	dataPlaneImage string
+	criuEnabled    bool
 }
 
 func loadConfig() config {
 	return config{
-		addr:        env("CP_ADDR", ":8080"),
-		redisAddr:   env("REDIS_ADDR", "redis:6379"),
-		namespace:   env("SESSION_NAMESPACE", "sessions"),
-		criuEnabled: envBool("CRIU_ENABLED", false),
+		addr:           env("CP_ADDR", ":8080"),
+		redisAddr:      env("REDIS_ADDR", "redis:6379"),
+		namespace:      resolveNamespace(),
+		dataPlaneImage: env("DATA_PLANE_IMAGE", ""),
+		criuEnabled:    envBool("CRIU_ENABLED", false),
 	}
+}
+
+// resolveNamespace prefers the pod's own namespace (service account file) so the
+// control plane provisions session pods alongside itself, and falls back to a
+// default for local runs where that file is absent. SESSION_NAMESPACE may still
+// override it.
+func resolveNamespace() string {
+	if v := os.Getenv("SESSION_NAMESPACE"); v != "" {
+		return v
+	}
+	if ns := k8s.NamespaceFromServiceAccount(); ns != "" {
+		return ns
+	}
+	return "default"
+}
+
+// buildOrchestrator returns the real client-go PodOrchestrator when the process
+// runs inside a Kubernetes cluster (detected via the in-cluster config), and the
+// in-memory stub otherwise. Both share cfg.namespace so an explicit override
+// applies uniformly; the data plane image is overridable for the real path and
+// ignored by the stub.
+func buildOrchestrator(logger *slog.Logger, cfg config) k8s.PodOrchestrator {
+	client, err := k8s.InClusterClient()
+	if err != nil {
+		logger.Info("k8s: using stub PodOrchestrator (not running in-cluster)", "reason", err.Error())
+		return k8s.NewStubOrchestrator(cfg.namespace)
+	}
+	logger.Info("k8s: using client-go PodOrchestrator", "namespace", cfg.namespace)
+	return k8s.NewClientOrchestrator(client, cfg.namespace, k8s.WithImage(cfg.dataPlaneImage))
 }
 
 func env(k, def string) string {

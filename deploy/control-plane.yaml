@@ -1,10 +1,9 @@
 # Control plane Deployment + Service. Serves the REST API and the embedded SPA
-# on one port (8080). The control plane orchestrates data plane pods (AC-A1);
-# in this scaffolding the orchestrator is a stub, so no RBAC for pod management
-# is wired yet.
-#
-# TODO(rbac): when the k8s adapter drives real pods, add a ServiceAccount +
-# Role/RoleBinding granting pods create/delete in the session namespace.
+# on one port (8080). The control plane orchestrates data plane pods (AC-A1) via
+# the in-cluster client-go orchestrator, which runs as the control-plane
+# ServiceAccount (see rbac.yaml) and provisions session pods in this same
+# namespace — it resolves the namespace from the mounted service account, so no
+# SESSION_NAMESPACE env is needed.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,6 +17,7 @@ spec:
     metadata:
       labels: { app: control-plane }
     spec:
+      serviceAccountName: control-plane
       containers:
         - name: control-plane
           image: session-platform/control-plane:dev
@@ -29,8 +29,8 @@ spec:
               value: ":8080"
             - name: REDIS_ADDR
               value: "redis:6379"
-            - name: SESSION_NAMESPACE
-              value: "sessions"
+            - name: DATA_PLANE_IMAGE
+              value: "alpine:3.20" # placeholder session workload (see data-plane/)
             - name: CRIU_ENABLED
               value: "false" # gated off until a verified runtime exists
           readinessProbe:
