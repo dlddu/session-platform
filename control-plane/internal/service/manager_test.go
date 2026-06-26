@@ -16,7 +16,6 @@ func newService() *service.Service {
 		k8s.NewStubOrchestrator("sessions"),
 		redis.NewStubStore(""),
 		criu.NewStubCheckpointer(false),
-		"us-east-1",
 	)
 }
 

@@ -67,7 +67,6 @@ type Session struct {
 	Name       string      `json:"name"`
 	State      State       `json:"state"`
 	Pod        string      `json:"pod,omitempty"` // data plane pod name; empty when snapshotted/reclaimed
-	Region     string      `json:"region"`
 	CreatedAt  time.Time   `json:"createdAt"`
 	LastAccess time.Time   `json:"lastAccess"`           // last read/write; drives idle/snapshot timing (AC-B1)
 	Checkpoint *Checkpoint `json:"checkpoint,omitempty"` // present only when State == StateSnapshot

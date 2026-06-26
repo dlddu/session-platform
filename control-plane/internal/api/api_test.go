@@ -20,7 +20,6 @@ func newServer() *httptest.Server {
 		k8s.NewStubOrchestrator("sessions"),
 		redis.NewStubStore(""),
 		criu.NewStubCheckpointer(false),
-		"us-east-1",
 	)
 	mux := http.NewServeMux()
 	api.New(mgr).Routes(mux)

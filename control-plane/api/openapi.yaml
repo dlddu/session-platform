@@ -155,13 +155,12 @@ components:
         reclaimed: { type: string }
     Session:
       type: object
-      required: [id, name, state, region, createdAt, lastAccess]
+      required: [id, name, state, createdAt, lastAccess]
       properties:
         id: { type: string }
         name: { type: string }
         state: { $ref: "#/components/schemas/State" }
         pod: { type: string }
-        region: { type: string }
         createdAt: { type: string, format: date-time }
         lastAccess: { type: string, format: date-time }
         checkpoint: { $ref: "#/components/schemas/Checkpoint" }
@@ -170,7 +169,6 @@ components:
       required: [name]
       properties:
         name: { type: string }
-        region: { type: string }
     WriteRequest:
       type: object
       properties:

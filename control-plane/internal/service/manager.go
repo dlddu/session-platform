@@ -21,19 +21,15 @@ import (
 // pod operation goes through the orchestrator, every state mutation through the
 // store, and every checkpoint through the checkpointer.
 type Service struct {
-	orch   k8s.PodOrchestrator
-	store  redis.StateStore
-	ckpt   criu.Checkpointer
-	region string
-	now    func() time.Time // injectable clock for tests
+	orch  k8s.PodOrchestrator
+	store redis.StateStore
+	ckpt  criu.Checkpointer
+	now   func() time.Time // injectable clock for tests
 }
 
 // New builds a Service from its adapter ports.
-func New(orch k8s.PodOrchestrator, store redis.StateStore, ckpt criu.Checkpointer, region string) *Service {
-	if region == "" {
-		region = "us-east-1"
-	}
-	return &Service{orch: orch, store: store, ckpt: ckpt, region: region, now: func() time.Time { return time.Now().UTC() }}
+func New(orch k8s.PodOrchestrator, store redis.StateStore, ckpt criu.Checkpointer) *Service {
+	return &Service{orch: orch, store: store, ckpt: ckpt, now: func() time.Time { return time.Now().UTC() }}
 }
 
 // compile-time assertion that Service satisfies the port.
@@ -53,10 +49,6 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 		return nil, session.ErrInvalidInput
 	}
 	id := newID()
-	region := req.Region
-	if region == "" {
-		region = s.region
-	}
 
 	pod, err := s.orch.Start(ctx, id)
 	if err != nil {
@@ -69,7 +61,6 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 		Name:       name,
 		State:      session.StateActive,
 		Pod:        pod.Name,
-		Region:     region,
 		CreatedAt:  now,
 		LastAccess: now,
 	}

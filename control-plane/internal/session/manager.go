@@ -4,8 +4,7 @@ import "context"
 
 // CreateRequest is the input to Manager.Create.
 type CreateRequest struct {
-	Name   string
-	Region string
+	Name string
 }
 
 // ReadResult is the state-branched result of a Read (AC-C2).

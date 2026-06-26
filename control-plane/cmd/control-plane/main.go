@@ -41,7 +41,7 @@ func main() {
 	store := redis.NewStubStore(cfg.redisAddr)
 	ckpt := criu.NewStubCheckpointer(cfg.criuEnabled)
 
-	mgr := service.New(orch, store, ckpt, cfg.region)
+	mgr := service.New(orch, store, ckpt)
 
 	mux := http.NewServeMux()
 	api.New(mgr).Routes(mux)
@@ -76,7 +76,6 @@ type config struct {
 	addr        string
 	redisAddr   string
 	namespace   string
-	region      string
 	criuEnabled bool
 }
 
@@ -85,7 +84,6 @@ func loadConfig() config {
 		addr:        env("CP_ADDR", ":8080"),
 		redisAddr:   env("REDIS_ADDR", "redis:6379"),
 		namespace:   env("SESSION_NAMESPACE", "sessions"),
-		region:      env("CP_REGION", "us-east-1"),
 		criuEnabled: envBool("CRIU_ENABLED", false),
 	}
 }
