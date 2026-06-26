@@ -10,7 +10,7 @@
 
 > 단계 표기: `J3-S{n}` · 각 단계 끝의 *mockup* 항목은 시각화 산출물 연결 상태입니다.
 
-1. **J3-S1 · 세션 목록 확인** — 작업자가 보유한 세션들과 각 상태(`active`/`idle`/`snapshot`)를 확인한다. ⚠️ 세션 목록 조회 API/화면은 현재 PRD에 명시되어 있지 않음 — 확인 필요. *(mockup: 없음)*
-2. **J3-S2 · 세션 B로 전환** — `active`인 세션 A에서 작업하다 세션 B로 전환한다. *(mockup: 없음)*
-3. **J3-S3 · 대상 상태에 따른 활성화** — B가 `snapshot`이면 복원하여 `active`로 전이하고, 이미 `active`면 그대로 접근시킨다. 전환은 세션 격리(1:1 pod)를 깨지 않는다. *(관련 AC: AC-C4)* *(mockup: 없음)*
+1. **J3-S1 · 세션 목록 확인** — 작업자가 보유한 세션들과 각 상태(`active`/`idle`/`snapshot`)를 확인한다. ⚠️ 세션 목록 조회 API/화면은 현재 PRD에 명시되어 있지 않음 — 확인 필요. *(mockup: index.html)*
+2. **J3-S2 · 세션 B로 전환** — `active`인 세션 A에서 작업하다 세션 B로 전환한다. *(mockup: 부분 — index.html ↔ workspace.html 네비게이션으로 암시)*
+3. **J3-S3 · 대상 상태에 따른 활성화** — B가 `snapshot`이면 복원하여 `active`로 전이하고, 이미 `active`면 그대로 접근시킨다. 전환은 세션 격리(1:1 pod)를 깨지 않는다. *(관련 AC: AC-C4)* *(mockup: 부분 — workspace.html이 snapshot 세션이면 restore.html로 전환)*
 4. **J3-S4 · 다시 A로 복귀** — 작업자가 다시 A로 전환해도 A의 상태가 보존되어 있어, 전환 대상의 상태와 무관하게 일관된 경험으로 재개된다. *(관련 AC: AC-C4, AC-B3)* *(mockup: 없음)*

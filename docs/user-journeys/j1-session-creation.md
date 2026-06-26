@@ -10,6 +10,6 @@
 
 > 단계 표기: `J1-S{n}` · 각 단계 끝의 *mockup* 항목은 시각화 산출물 연결 상태입니다.
 
-1. **J1-S1 · 세션 생성 요청** — 작업자가 control plane API에 세션 생성을 요청한다. *(mockup: 없음 — 시각화 누락)*
-2. **J1-S2 · 전용 pod 기동** — control plane이 이 세션 전용 data plane pod를 정확히 1개 기동하고(1:1 매핑), 세션 메타데이터를 등록한다. 세션 상태는 `active`. *(관련 AC: AC-A1, AC-A2)* *(mockup: 없음)*
-3. **J1-S3 · 격리된 작업** — 작업자가 read/write API로 세션에서 작업한다. 다른 세션 pod의 장애·부하·보안 이슈가 이 세션으로 전파되지 않는다. *(관련 AC: AC-A2, AC-C2, AC-C3)* *(mockup: 없음)*
+1. **J1-S1 · 세션 생성 요청** — 작업자가 control plane API에 세션 생성을 요청한다. *(mockup: new-session.html)*
+2. **J1-S2 · 전용 pod 기동** — control plane이 이 세션 전용 data plane pod를 정확히 1개 기동하고(1:1 매핑), 세션 메타데이터를 등록한다. 세션 상태는 `active`. *(관련 AC: AC-A1, AC-A2)* *(mockup: new-session.html)*
+3. **J1-S3 · 격리된 작업** — 작업자가 read/write API로 세션에서 작업한다. 다른 세션 pod의 장애·부하·보안 이슈가 이 세션으로 전파되지 않는다. *(관련 AC: AC-A2, AC-C2, AC-C3)* *(mockup: workspace.html)*

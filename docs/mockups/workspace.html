@@ -255,25 +255,6 @@
   .gauge + .bar{margin-top:6px;margin-bottom:16px}
   .gauge + .bar:last-child{margin-bottom:0}
 
-  /* connections (J4) */
-  .conn{display:flex;align-items:center;gap:11px;padding:10px 0;border-bottom:1px solid var(--line)}
-  .conn:last-of-type{border-bottom:0}
-  .conn .av{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;flex:0 0 30px;
-    font-size:13px}
-  .conn .av.you{background:linear-gradient(140deg,#2b6c7e,#163b46);color:#cdeaf3}
-  .conn .av.bot{background:#241b33;color:#caa9e8;border:1px solid #3a2c52}
-  .conn .who{flex:1;min-width:0}
-  .conn .who .n{font-size:13px;font-weight:500}
-  .conn .who .r{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--text-faint)}
-  .conn .pulse{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 7px var(--ok);
-    animation:breathe 2.4s var(--ease) infinite}
-  .atomic{margin-top:13px;border:1px dashed var(--line-2);border-radius:10px;padding:11px 12px;
-    display:flex;gap:10px;align-items:flex-start}
-  .atomic .ic{color:var(--ok);flex:0 0 auto;margin-top:1px}
-  .atomic .tx{font-size:11.5px;color:var(--text-dim);line-height:1.5}
-  .atomic .tx b{color:var(--ok);font-family:"IBM Plex Mono",monospace;font-weight:600}
-  .atomic.flash{animation:flashok .9s var(--ease)}
-
   .lc-state{display:flex;align-items:center;gap:11px;padding:12px;border-radius:11px;
     background:var(--active-soft);border:1px solid rgba(255,180,58,.2);margin-bottom:14px}
   .lc-state.frozen{background:var(--frozen-soft);border-color:rgba(127,205,234,.22)}
@@ -337,7 +318,6 @@
   @keyframes spin{to{transform:rotate(360deg)}}
   @keyframes thawin{from{opacity:0}to{opacity:1}}
   @keyframes thawout{from{opacity:1;backdrop-filter:blur(7px)}to{opacity:0;backdrop-filter:blur(0)}}
-  @keyframes flashok{0%{background:rgba(95,208,138,.14);border-color:var(--ok)}100%{background:transparent;border-color:var(--line-2)}}
 
   @media (max-width:880px){
     .ws-body{grid-template-columns:1fr}
@@ -430,27 +410,6 @@
             <div class="bar"><i class="active" id="ws-mem-bar" style="width:0"></i></div>
           </div>
 
-          <!-- connections — J4 concurrent access -->
-          <div class="panel">
-            <h4><span class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.2"/><path d="M5.5 20a6.5 6.5 0 0 1 13 0"/></svg></span> Attached clients</h4>
-            <div class="conn">
-              <div class="av you">JD</div>
-              <div class="who"><div class="n">You</div><div class="r">operator · write</div></div>
-              <div class="pulse"></div>
-            </div>
-            <div class="conn">
-              <div class="av bot">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="11" rx="2.5"/><path d="M12 8V5M9 14h.01M15 14h.01"/></svg>
-              </div>
-              <div class="who"><div class="n">etl-orchestrator</div><div class="r">automation · read</div></div>
-              <div class="pulse"></div>
-            </div>
-            <div class="atomic" id="ws-atomic">
-              <div class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div>
-              <div class="tx">Concurrent write + read resolved by a single <b>Redis atomic</b> transition. No double-apply.</div>
-            </div>
-          </div>
-
           <!-- lifecycle -->
           <div class="panel">
             <h4><span class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.4 2.6L3 8"/><path d="M3 3v5h5"/></svg></span> Lifecycle</h4>
@@ -532,11 +491,9 @@ const termActive = (s)=>[
   {c:'sys',t:`◆ attached to session/${s.id} · pod/${s.pod}`},
   {c:'sys',t:`◆ isolation: dedicated pod — no shared state with other sessions`},
   {c:'req',t:`<span class="op">read</span>  { key: "session_meta" }`},
-  {c:'res',t:`← { status: "active", region: "${s.region}", connections: 2 }`},
+  {c:'res',t:`← { status: "active", region: "${s.region}", connections: 1 }`},
   {c:'req w',t:`<span class="op">write</span> { key: "cursor", value: { row: 4192, col: 7 } }`},
-  {c:'ok',t:`← ok · applied atomically · rev 0x3f`},
-  {c:'',t:`<span class="bot">etl-orchestrator</span> <span class="op" style="color:var(--active)">read</span>  { key: "cursor" }   <span style="color:var(--text-faint)">(concurrent)</span>`},
-  {c:'ok',t:`← { row: 4192, col: 7 }   · served from same atomic rev 0x3f`}
+  {c:'ok',t:`← ok · applied atomically · rev 0x3f`}
 ];
 const termFrozen = (s)=>[
   {c:'sys',t:`◆ session/${s.id} is frozen — pod reclaimed`},
@@ -598,7 +555,6 @@ function populate(s){
     vit.style.display=''; setGauge(s.cpu,s.mem,s.memMax);
     tag.style.display=''; tag.innerHTML='<span class="led"></span>read / write open';
     paintTerm(termActive(s));
-    setTimeout(()=>document.getElementById('ws-atomic').classList.add('flash'),700);
   } else if(s.state==='idle'){
     vit.style.display=''; setGauge(s.cpu,s.mem,s.memMax);
     tag.style.display=''; tag.innerHTML='<span class="led" style="background:var(--idle);box-shadow:none"></span>idle — pod held';
