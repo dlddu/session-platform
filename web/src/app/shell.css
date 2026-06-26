@@ -680,6 +680,99 @@
   margin-top: 8px;
 }
 
+/* ---------- new-session provisioning (ported from new-session.html) ---------- */
+.modal .m-mark {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: var(--active-soft);
+  border: 1px solid rgba(255, 180, 58, 0.25);
+  display: grid;
+  place-items: center;
+  color: var(--active);
+  margin-bottom: 16px;
+}
+.steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  font-size: 13px;
+  color: var(--text-faint);
+  transition: 0.2s;
+}
+.step .ico {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-2);
+  flex: 0 0 22px;
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+  transition: 0.2s var(--ease);
+}
+.step.run {
+  color: var(--text);
+}
+.step.run .ico {
+  border-color: var(--active);
+  color: var(--active);
+}
+.step.run .ico .spin {
+  display: grid;
+  place-items: center;
+  animation: spin 1s linear infinite;
+}
+.step.ok {
+  color: var(--text-dim);
+}
+.step.ok .ico {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #0b1a10;
+}
+.step .mono {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.modal .pod-callout {
+  margin-top: 18px;
+  padding: 12px;
+  border-radius: 11px;
+  background: var(--ink-2);
+  border: 1px solid var(--line);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11.5px;
+  color: var(--frozen);
+  display: none;
+  align-items: center;
+  gap: 9px;
+}
+.modal .pod-callout.show {
+  display: flex;
+  animation: thawin 0.4s var(--ease);
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes thawin {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 .empty,
 .error {
   padding: 40px;
