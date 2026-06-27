@@ -36,10 +36,6 @@ const (
 	// Ready; the real session workload is out of scope for this milestone.
 	defaultDataPlaneImage = "alpine:3.20"
 
-	// defaultNamespace is used when neither an injected namespace nor the
-	// service account namespace file resolves one.
-	defaultNamespace = "default"
-
 	// serviceAccountNamespaceFile is where the kubelet mounts the pod's own
 	// namespace when running in-cluster.
 	serviceAccountNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
@@ -89,11 +85,8 @@ func WithReadiness(pollInterval, timeout time.Duration) Option {
 // NewClientOrchestrator builds a real orchestrator from an injected client and
 // namespace. Injecting kubernetes.Interface lets tests drive it with a fake
 // clientset; main builds the client from the in-cluster config (see
-// NewInClusterOrchestrator). An empty namespace falls back to "default".
+// InClusterClient) and resolves the namespace from the service account.
 func NewClientOrchestrator(client kubernetes.Interface, namespace string, opts ...Option) *ClientOrchestrator {
-	if namespace == "" {
-		namespace = defaultNamespace
-	}
 	o := &ClientOrchestrator{
 		client:       client,
 		namespace:    namespace,
