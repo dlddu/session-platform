@@ -15,17 +15,21 @@
 - **검증 방법**: 동일 세션에 복원/스냅샷/전환 요청을 동시 다발로 발생시켜, 최종 상태가 항상 유효한 단일 상태로 수렴하고 중복 pod 기동·이중 스냅샷이 발생하지 않음을 확인한다.
 
 ### AC-C2: Read API 상태별 분기
-- **설명**: 세션 단위 Read API는 대상 세션의 상태에 따라 분기 처리한다.
+- **설명**: 세션 단위 Read API는 대상 세션을 먼저 `active`로 만든 뒤 그 pod에서 읽는다(통일 규칙: 비-active 접근은 "active 보장 후 처리"). 상태별로 active 보장 경로만 다르다.
   - `active`: pod에서 직접 읽어 즉시 응답
-  - `idle`: 유휴 pod에서 읽기 *(또는 active 승격 후 읽기 — 정책 확정 필요)*
-  - `snapshot`: CRIU 복원 후 읽기 *(또는 스냅샷 메타데이터만 응답 — 정책 확정 필요)*
+  - `idle`: `idle→active` atomic 승격(AC-C1) 후 pod에서 읽기 (idle은 pod를 아직 보유)
+  - `snapshot`: CRIU 복원으로 `active` 전이(AC-B2) 후 읽기
+  - 이는 switch(AC-C4)·snapshot 접근(AC-B2)과 동일한 "접근 시 active화" 원칙을 read에 적용한 것이다.
 - **달성 가치**: V3, V4
-- **검증 방법**: 동일한 read 요청을 세 상태의 세션에 각각 호출하여, 상태별 지정 경로로 처리되고 올바른 결과를 반환함을 확인한다.
+- **검증 방법**: active/idle/snapshot 세션에 각각 read를 호출하여, 각 경로(active 직접 / idle 승격 후 / snapshot 복원 후)로 처리되고 호출 후 최종 상태가 `active`이며 올바른 결과를 반환함을 확인한다.
 
 ### AC-C3: Write API 상태별 분기
-- **설명**: 세션 단위 Write API도 상태별로 분기한다. `snapshot`/`idle` 세션에 write가 들어오면 복원·승격 후 write를 적용하는 등 상태에 맞는 경로로 처리한다. *(snapshot 상태 write를 허용할지/거부할지 정책 확정 필요)*
+- **설명**: 세션 단위 Write API도 read와 같은 통일 규칙을 따른다. 대상 세션을 먼저 `active`로 만든 뒤 write를 적용한다.
+  - `active`: pod에 직접 write
+  - `idle`: `idle→active` atomic 승격(AC-C1) 후 write
+  - `snapshot`: CRIU 복원으로 `active` 전이(AC-B2) 후 write — **snapshot write는 거부하지 않고 복원 후 적용한다** (AC-B2의 "접근=복원"과 일치)
 - **달성 가치**: V3, V5
-- **검증 방법**: 각 상태의 세션에 write 요청 시 데이터가 일관되게 반영되고 상태 전이가 atomic하게 일어남을 확인한다.
+- **검증 방법**: active/idle/snapshot 세션에 각각 write 요청 시 대상이 `active`로 처리되어 데이터가 일관되게 반영되고 상태 전이가 atomic하게 일어남을 확인한다.
 
 ### AC-C4: 세션 간 자유 전환
 - **설명**: 사용자는 보유한 여러 세션 사이를 자유롭게 전환할 수 있다. 전환 대상이 `snapshot`이면 복원하여 `active`로, 이미 `active`면 그대로 접근시킨다. 전환은 세션 격리(AC-A2)를 깨지 않는다.
