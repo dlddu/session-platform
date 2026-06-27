@@ -12,6 +12,10 @@ set -euo pipefail
 
 CLUSTER="${KIND_CLUSTER:-session-platform}"
 IMAGE="${CP_IMAGE:-session-platform/control-plane:dev}"
+# Placeholder data plane image the control plane provisions per session. Loaded
+# into kind so pods come up without a per-pod registry pull (pullPolicy
+# IfNotPresent). Keep in sync with k8s/deployment.yaml's DATA_PLANE_IMAGE.
+DP_IMAGE="${DATA_PLANE_IMAGE:-alpine:3.20}"
 BASE_URL="${E2E_BASE_URL:-http://localhost:8080}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -40,8 +44,12 @@ make docker
 echo "e2e: loading image into kind cluster '$CLUSTER'"
 kind load docker-image "$IMAGE" --name "$CLUSTER"
 
-echo "e2e: applying deploy/ manifests"
-kubectl apply -f deploy/redis.yaml -f deploy/control-plane.yaml
+echo "e2e: ensuring data plane image '$DP_IMAGE' is present in the cluster"
+docker image inspect "$DP_IMAGE" >/dev/null 2>&1 || docker pull "$DP_IMAGE"
+kind load docker-image "$DP_IMAGE" --name "$CLUSTER"
+
+echo "e2e: applying deploy/ overlay (kustomize: base k8s/ + kind patches)"
+kubectl apply -k deploy/
 
 echo "e2e: waiting for rollouts"
 kubectl rollout status deploy/redis --timeout=120s

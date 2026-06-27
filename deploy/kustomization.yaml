@@ -1,0 +1,36 @@
+# Overlay for the kind-based e2e SUT. Reuses the production base (../k8s) and
+# applies only the kind-specific differences:
+#   - the locally built control-plane image (loaded via `kind load`, not pulled
+#     from ghcr),
+#   - a NodePort Service so the e2e suites reach the SUT at host :8080 through the
+#     kind extraPortMapping (deploy/kind-config.yaml).
+#
+# kind-config.yaml is a kind CLI config (not a Kubernetes resource) and is
+# intentionally NOT part of this kustomization.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../k8s
+images:
+  - name: ghcr.io/dlddu/session-platform
+    newName: session-platform/control-plane
+    newTag: dev
+patches:
+  - target:
+      kind: Service
+      name: control-plane
+    patch: |-
+      - op: add
+        path: /spec/type
+        value: NodePort
+      - op: add
+        path: /spec/ports/0/nodePort
+        value: 30080
+  # The image is loaded into kind (`kind load`), so never reach for a registry.
+  - target:
+      kind: Deployment
+      name: control-plane
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent

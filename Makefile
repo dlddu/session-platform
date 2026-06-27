@@ -27,12 +27,16 @@ embed: web
 control-plane: embed
 	cd $(CP_DIR) && go build -o bin/control-plane ./cmd/control-plane
 
-## run: build then run the server (serves API + SPA on :8080)
+## run: build then run the server (serves API + SPA on :8080).
+## Needs a reachable cluster: the in-cluster config, or a kubeconfig pointing at
+## e.g. a local kind cluster (`make e2e-up` brings one up). The control plane
+## provisions data plane pods there and exits if no cluster is reachable.
 run: build
 	./$(BIN)
 
 ## dev: run control plane and Vite dev server together (Vite proxies /api).
-## Control plane on :8080, SPA with HMR on :5173.
+## Control plane on :8080, SPA with HMR on :5173. Like `run`, the control plane
+## needs a reachable cluster (kubeconfig / kind) to start.
 dev:
 	cd $(CP_DIR) && go run ./cmd/control-plane & \
 	cd $(WEB_DIR) && (test -d node_modules || npm install) && npm run dev; \

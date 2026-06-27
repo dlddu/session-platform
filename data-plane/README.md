@@ -13,5 +13,10 @@ the bootstrap scaffolding). This directory is a placeholder for:
 - the pod template / manifest the orchestrator instantiates,
 - the CRIU-capable runtime configuration (see `../docs/criu-verification.md`).
 
-Until then, `control-plane/internal/adapter/k8s` uses an in-memory stub
-orchestrator so the create/list/switch happy path runs without real pods.
+Until the real workload image exists, the control plane's client-go orchestrator
+(`control-plane/internal/adapter/k8s`) provisions a **placeholder pod** from a
+generic image (`alpine:3.20`, overridable via `DATA_PLANE_IMAGE`) that just stays
+running so the pod reports Ready. This proves the 1:1 session↔pod lifecycle
+(create/Ready/reclaim, AC-A1/A2/A3) end-to-end without the real session agent.
+The control plane talks to a cluster either via its in-cluster config (as a pod)
+or the ambient kubeconfig (local development against a kind cluster).

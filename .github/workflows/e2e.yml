@@ -13,6 +13,7 @@ on:
       - "control-plane/**"
       - "web/**"
       - "deploy/**"
+      - "k8s/**" # deploy/ overlay builds on the k8s/ base
       - "scripts/e2e/**"
       - "Makefile"
       - ".github/workflows/e2e.yml"

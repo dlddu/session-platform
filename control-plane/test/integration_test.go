@@ -9,7 +9,7 @@
 //
 // The REAL harness this replaces will, before these assertions:
 //   - bring up a kind cluster (deploy/kind-config.yaml) and a Redis
-//     (deploy/redis.yaml),
+//     (deploy/ overlay over k8s/redis.yaml),
 //   - point the control plane's k8s + redis adapters at them,
 //   - and assert against actual pods.
 //
