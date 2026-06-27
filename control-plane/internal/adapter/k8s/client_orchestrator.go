@@ -1,8 +1,7 @@
 // This file is the real, client-go backed PodOrchestrator. It drives one
 // dedicated data plane pod per session in the control plane's own namespace
 // (AC-A1/A2) and reclaims it on stop (AC-A3). The port and the in-memory stub
-// live in orchestrator.go; main picks between them by detecting whether it runs
-// inside a cluster (see NewInClusterOrchestrator).
+// live in orchestrator.go; main builds the client and namespace via BuildClient.
 package k8s
 
 import (
@@ -16,7 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 const (
@@ -84,8 +83,7 @@ func WithReadiness(pollInterval, timeout time.Duration) Option {
 
 // NewClientOrchestrator builds a real orchestrator from an injected client and
 // namespace. Injecting kubernetes.Interface lets tests drive it with a fake
-// clientset; main builds the client from the in-cluster config (see
-// InClusterClient) and resolves the namespace from the service account.
+// clientset; main builds the client and namespace via BuildClient.
 func NewClientOrchestrator(client kubernetes.Interface, namespace string, opts ...Option) *ClientOrchestrator {
 	o := &ClientOrchestrator{
 		client:       client,
@@ -100,26 +98,37 @@ func NewClientOrchestrator(client kubernetes.Interface, namespace string, opts .
 	return o
 }
 
-// InClusterClient builds a Kubernetes client from the in-cluster config (service
-// account). It returns an error when not running inside a cluster, which main
-// uses to fall back to the stub. main owns namespace resolution so the stub and
-// the real orchestrator agree on it (see NamespaceFromServiceAccount).
-func InClusterClient() (kubernetes.Interface, error) {
-	cfg, err := rest.InClusterConfig()
+// BuildClient builds a Kubernetes client and resolves the namespace the control
+// plane operates in. It uses the in-cluster config when running as a pod, and
+// otherwise the ambient kubeconfig (KUBECONFIG / ~/.kube/config) — so local
+// development can drive a kind cluster.
+//
+// Namespace resolution prefers the pod's own service account namespace (the
+// real namespace in-cluster — the deferred kubeconfig loader does NOT read it),
+// and falls back to the kubeconfig context for local runs.
+func BuildClient() (kubernetes.Interface, string, error) {
+	cc := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{})
+	cfg, err := cc.ClientConfig()
 	if err != nil {
-		return nil, err
+		return nil, "", err
+	}
+	ns := namespaceFromServiceAccount()
+	if ns == "" {
+		if ns, _, err = cc.Namespace(); err != nil {
+			return nil, "", err
+		}
 	}
 	client, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("build kubernetes client: %w", err)
+		return nil, "", fmt.Errorf("build kubernetes client: %w", err)
 	}
-	return client, nil
+	return client, ns, nil
 }
 
-// NamespaceFromServiceAccount reads the pod's own namespace from the mounted
-// service account file. It returns "" when the file is absent (i.e. not running
-// in a cluster), leaving the fallback to the caller.
-func NamespaceFromServiceAccount() string {
+// namespaceFromServiceAccount reads the pod's own namespace from the mounted
+// service account file, returning "" when absent (i.e. not running in-cluster).
+func namespaceFromServiceAccount() string {
 	b, err := os.ReadFile(serviceAccountNamespaceFile)
 	if err != nil {
 		return ""

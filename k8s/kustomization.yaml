@@ -1,0 +1,11 @@
+# Base manifests for the session platform (production). Flux applies this
+# directory directly; the kind-based e2e SUT reuses it through the deploy/
+# overlay (deploy/kustomization.yaml), which patches in the kind-only
+# differences. Keep environment-neutral defaults here.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - rbac.yaml
+  - redis.yaml
+  - deployment.yaml
+  - service.yaml

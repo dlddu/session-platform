@@ -27,23 +27,24 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	cfg := loadConfig()
+
+	// The control plane drives data plane pods via client-go, so it needs a
+	// reachable cluster: the in-cluster config as a pod, or the ambient kubeconfig
+	// for local development against a kind cluster. The redis / CRIU adapters
+	// remain stubs behind the same interfaces (see each adapter package).
+	client, namespace, err := k8s.BuildClient()
+	if err != nil {
+		logger.Error("k8s: no reachable cluster (in-cluster config or kubeconfig required)", "err", err)
+		os.Exit(1)
+	}
 	logger.Info("starting control plane",
 		"addr", cfg.addr,
 		"redis", cfg.redisAddr,
-		"namespace", cfg.namespace,
+		"namespace", namespace,
 		"criu_enabled", cfg.criuEnabled,
 	)
 
-	// The control plane drives data plane pods via client-go, so it must run
-	// inside a Kubernetes cluster. The redis / CRIU adapters remain stubs behind
-	// the same interfaces (see each adapter package).
-	client, err := k8s.InClusterClient()
-	if err != nil {
-		logger.Error("k8s: control plane must run inside a cluster", "err", err)
-		os.Exit(1)
-	}
-	orch := k8s.NewClientOrchestrator(client, cfg.namespace, k8s.WithImage(cfg.dataPlaneImage))
-	logger.Info("k8s: using client-go PodOrchestrator", "namespace", cfg.namespace)
+	orch := k8s.NewClientOrchestrator(client, namespace, k8s.WithImage(cfg.dataPlaneImage))
 	store := redis.NewStubStore(cfg.redisAddr)
 	ckpt := criu.NewStubCheckpointer(cfg.criuEnabled)
 
@@ -81,7 +82,6 @@ func main() {
 type config struct {
 	addr           string
 	redisAddr      string
-	namespace      string
 	dataPlaneImage string
 	criuEnabled    bool
 }
@@ -90,7 +90,6 @@ func loadConfig() config {
 	return config{
 		addr:           env("CP_ADDR", ":8080"),
 		redisAddr:      env("REDIS_ADDR", "redis:6379"),
-		namespace:      k8s.NamespaceFromServiceAccount(),
 		dataPlaneImage: env("DATA_PLANE_IMAGE", ""),
 		criuEnabled:    envBool("CRIU_ENABLED", false),
 	}

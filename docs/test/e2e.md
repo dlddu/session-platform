@@ -26,12 +26,24 @@ make e2e-down                        # kind 클러스터 제거
 `E2E_BASE_URL`(기본 `http://localhost:8080`)로 SUT를 찾으므로, 다른 곳에 떠 있는
 control-plane을 대상으로도 그대로 돌릴 수 있다.
 
+## 매니페스트 구조 (kustomize base/overlay)
+
+프로덕션 `k8s/`가 **base**(kustomization.yaml: rbac·redis·deployment·service)이고,
+`deploy/`는 그 위에 kind 전용 차이만 얹는 **overlay**다:
+
+- `images` 변환으로 control-plane 이미지를 `ghcr.io/...:latest` → 로컬 빌드
+  `session-platform/control-plane:dev`(+ `imagePullPolicy: IfNotPresent`)로 교체한다.
+- control-plane Service를 **NodePort**(`nodePort: 30080`)로 patch한다(base는 ClusterIP).
+
+`kubectl apply -k deploy/`(= `scripts/e2e/up.sh`) 한 줄로 base + patch가 적용된다.
+Flux는 `k8s/`를 그대로 적용한다.
+
 ## SUT 도달 방식
 
-- `deploy/control-plane.yaml`의 Service는 **NodePort**(`nodePort: 30080`)다.
+- overlay가 control-plane Service를 **NodePort**(`nodePort: 30080`)로 patch한다.
 - `deploy/kind-config.yaml`의 `extraPortMappings`가 host `:8080` → node `:30080`을 연결한다.
 - 따라서 백그라운드 port-forward 없이 `http://localhost:8080`으로 SUT에 직결된다.
-- 이 변경은 **`deploy/`에 한정**된다. 프로덕션 `k8s/`의 Service는 ClusterIP 그대로다.
+- NodePort는 **overlay에 한정**된다. 프로덕션 base(`k8s/`)의 Service는 ClusterIP 그대로다.
 
 `scripts/e2e/up.sh`는 멱등하다 — 클러스터가 이미 있으면(CI의 `helm/kind-action`이 만든
 경우) 생성 단계를 건너뛰고 build/load/deploy/대기만 수행한다.
