@@ -44,9 +44,10 @@
 
 ### 🟡 확인 필요한 설계 결정 (스킬 표준 위험은 아니나 명세 공백)
 - **유휴 시간 측정 기준**: "마지막 활동"의 정의(마지막 read/write 시점 기준인지, 연결 종료 기준인지)가 미확정. AC-B1에 영향.
-- **idle 상태 Read 정책**: 유휴 pod에서 직접 읽을지 / active 승격 후 읽을지 미확정. AC-C2에 영향.
-- **snapshot 상태 Write 정책**: 복원 후 write를 적용할지 / write 자체를 거부할지 미확정. AC-C3에 영향.
 - **제품명·소유자**: "Session Pod Platform"은 임시 작업명. 실제 제품명/소유자 확정 필요.
+
+### ✅ 해결된 설계 결정
+- **idle/snapshot read/write 정책 (AC-C2 / AC-C3)** — *2026-06-27 확정*. 비-active 접근은 **통일 "active 보장 후 처리"** 규칙: `idle`은 `idle→active` atomic 승격(AC-C1), `snapshot`은 CRIU 복원(AC-B2)으로 active 전이 후 read/write. snapshot write는 거부하지 않고 복원 후 적용(AC-B2의 "접근=복원"과 일치). AC-C2/AC-C3 본문과 `control-plane/internal/service/manager.go`의 `activate()`에 반영, `TODO(policy)` 제거. 잔여 `TODO(policy)`는 AC-B1의 snapshot **트리거 타이밍**(grace/override) 1건으로, 이는 별개의 미해결 항목(위 "유휴 시간 측정 기준")이다.
 
 ## 변경 이력
 
@@ -57,3 +58,4 @@
 | 초기 생성 | PRD-라이프사이클 작성 (AC-B1~B3) | PRD 1개, AC 3개 | PRD 2개, AC 6개 |
 | 초기 생성 | PRD-상태·API 작성 (AC-C1~C4) | PRD 2개, AC 6개 | PRD 3개, AC 10개 |
 | 초기 생성 | 테스트 문서 3종 작성 (10개 AC 전부 커버) | 테스트 0개 | 테스트 3개, 미검증 AC 0개 |
+| 2026-06-27 | AC-C2/AC-C3 idle·snapshot read/write 정책 확정(통일 "active 보장 후 처리"). PRD·테스트 문서 문구 확정, manager.go `activate()` 구현, `TODO(policy)` 제거(잔여 1건=AC-B1 트리거). AC 수·연결 변화 없음. | 명세 공백 2건(C2 read, C3 write) | 명세 공백 0건(read/write 정책), 트리거 1건 잔존 |

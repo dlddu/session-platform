@@ -19,6 +19,15 @@ func newService() *service.Service {
 	)
 }
 
+// newServiceWithStore is like newService but also hands back the store, so a
+// test can drive a session into a non-active state directly (there is no
+// idle->snapshot reaper yet — that trigger is a separate deferred decision).
+func newServiceWithStore() (*service.Service, *redis.StubStore) {
+	store := redis.NewStubStore("")
+	svc := service.New(k8s.NewStubOrchestrator("sessions"), store, criu.NewStubCheckpointer(false))
+	return svc, store
+}
+
 // TestSnapshotRestoreCycle covers active -> snapshot -> restore (AC-B1, AC-B2,
 // AC-A3): the pod is reclaimed on snapshot and a new one is provisioned on
 // restore.
@@ -61,17 +70,19 @@ func TestSnapshotRestoreCycle(t *testing.T) {
 	}
 }
 
-// TestReadDispatchesOnState covers the state-branched read paths (AC-C2),
-// including snapshot->restore->read.
+// TestReadDispatchesOnState covers the uniform resume-on-access read policy
+// (AC-C2): active serves in place, idle is promoted to active, snapshot is
+// restored to active — and in every non-active case the session ends active.
 func TestReadDispatchesOnState(t *testing.T) {
 	ctx := context.Background()
-	svc := newService()
+	svc, store := newServiceWithStore()
 
 	sess, err := svc.Create(ctx, session.CreateRequest{Name: "notebook-alpha"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
+	// active: served directly.
 	res, err := svc.Read(ctx, sess.ID)
 	if err != nil {
 		t.Fatalf("read active: %v", err)
@@ -80,6 +91,22 @@ func TestReadDispatchesOnState(t *testing.T) {
 		t.Errorf("active read path = %q, want active", res.Path)
 	}
 
+	// idle: a read resumes it to active (idle still holds its pod).
+	if err := store.CompareAndSwapState(ctx, sess.ID, session.StateActive, session.StateIdle); err != nil {
+		t.Fatalf("force idle: %v", err)
+	}
+	res, err = svc.Read(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("read idle: %v", err)
+	}
+	if res.Path != "idle->active->read" {
+		t.Errorf("idle read path = %q, want idle->active->read", res.Path)
+	}
+	if res.Session.State != session.StateActive {
+		t.Errorf("after idle read, state = %q, want active", res.Session.State)
+	}
+
+	// snapshot: a read restores it to active.
 	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
@@ -92,6 +119,55 @@ func TestReadDispatchesOnState(t *testing.T) {
 	}
 	if res.Session.State != session.StateActive {
 		t.Errorf("after snapshot read, state = %q, want active", res.Session.State)
+	}
+}
+
+// TestWriteDispatchesOnState mirrors the read test for the write policy (AC-C3):
+// snapshot/idle writes are not rejected — the session is restored/promoted to
+// active first and then written.
+func TestWriteDispatchesOnState(t *testing.T) {
+	ctx := context.Background()
+	svc, store := newServiceWithStore()
+
+	sess, err := svc.Create(ctx, session.CreateRequest{Name: "scrape-worker"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	res, err := svc.Write(ctx, sess.ID, "payload-a")
+	if err != nil {
+		t.Fatalf("write active: %v", err)
+	}
+	if res.Path != "active" {
+		t.Errorf("active write path = %q, want active", res.Path)
+	}
+
+	if err := store.CompareAndSwapState(ctx, sess.ID, session.StateActive, session.StateIdle); err != nil {
+		t.Fatalf("force idle: %v", err)
+	}
+	res, err = svc.Write(ctx, sess.ID, "payload-b")
+	if err != nil {
+		t.Fatalf("write idle: %v", err)
+	}
+	if res.Path != "idle->active->write" {
+		t.Errorf("idle write path = %q, want idle->active->write", res.Path)
+	}
+	if res.Session.State != session.StateActive {
+		t.Errorf("after idle write, state = %q, want active", res.Session.State)
+	}
+
+	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	res, err = svc.Write(ctx, sess.ID, "payload-c")
+	if err != nil {
+		t.Fatalf("write snapshot: %v", err)
+	}
+	if res.Path != "snapshot->restore->write" {
+		t.Errorf("snapshot write path = %q, want snapshot->restore->write", res.Path)
+	}
+	if res.Session.State != session.StateActive {
+		t.Errorf("after snapshot write, state = %q, want active", res.Session.State)
 	}
 }
 

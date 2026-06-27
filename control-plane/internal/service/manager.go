@@ -1,7 +1,11 @@
 // Package service wires the adapter ports together into a concrete
-// session.Manager. It implements the happy path (create -> active, list,
-// switch) with stub adapters and leaves the state-dependent read/write/snapshot
-// policy decisions marked with TODO(policy).
+// session.Manager. Non-active access follows one uniform "resume-on-access"
+// rule (AC-C2/AC-C3): read, write and switch all bring the session to active
+// first — promoting idle->active (AC-C1) or restoring snapshot->active (AC-B2)
+// — and then serve from the live pod. The dispatch policy is fully implemented;
+// only the data-plane payload itself is stubbed until the data plane workload
+// exists (see data-plane/README.md). The remaining TODO(policy) is the
+// idle->snapshot *trigger* timing in package session, a separate decision.
 package service
 
 import (
@@ -80,87 +84,90 @@ func (s *Service) List(ctx context.Context) ([]*session.Session, error) {
 	return s.store.List(ctx)
 }
 
-// Read dispatches on the session's state (AC-C2).
-func (s *Service) Read(ctx context.Context, id string) (*session.ReadResult, error) {
+// activate ensures the target session is active so a read/write can be served
+// from a live pod, and reports which branch brought it there. This is the
+// shared core of the uniform "resume-on-access" policy (AC-C2/AC-C3): an active
+// session is served in place, an idle one is atomically promoted (AC-C1), and a
+// snapshot is restored via CRIU (AC-B2). Switch (AC-C4) is just activate with no
+// following read/write.
+func (s *Service) activate(ctx context.Context, id string) (*session.Session, string, error) {
 	sess, err := s.store.Get(ctx, id)
 	if err != nil {
-		return nil, err
-	}
-	res := &session.ReadResult{Session: sess}
-	switch sess.State {
-	case session.StateActive:
-		res.Path = "active"
-	case session.StateIdle:
-		// TODO(policy: idle-read): read directly from the idle pod, or promote
-		// to active first? Deferred product decision (AC-C2). Stub reads in place.
-		res.Path = "idle->read-in-place"
-	case session.StateSnapshot:
-		// TODO(policy: snapshot-read): restore via CRIU then read, or return
-		// snapshot metadata only? Deferred (AC-C2). Stub restores.
-		if _, err := s.Restore(ctx, id); err != nil {
-			return nil, err
-		}
-		res.Path = "snapshot->restore->read"
-		sess, _ = s.store.Get(ctx, id)
-		res.Session = sess
-	default:
-		return nil, session.ErrInvalidState
-	}
-	res.Payload = "stub:read:" + id
-	s.touch(ctx, id)
-	return res, nil
-}
-
-// Write dispatches on the session's state (AC-C3).
-func (s *Service) Write(ctx context.Context, id, _ string) (*session.WriteResult, error) {
-	sess, err := s.store.Get(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	res := &session.WriteResult{Session: sess}
-	switch sess.State {
-	case session.StateActive:
-		res.Path = "active"
-	case session.StateIdle:
-		// TODO(policy: idle-write): promote to active before write? Deferred (AC-C3).
-		res.Path = "idle->write-in-place"
-	case session.StateSnapshot:
-		// TODO(policy: snapshot-write): allow (restore then write) or reject?
-		// Deferred product decision (AC-C3). Stub restores then writes.
-		if _, err := s.Restore(ctx, id); err != nil {
-			return nil, err
-		}
-		res.Path = "snapshot->restore->write"
-		sess, _ = s.store.Get(ctx, id)
-		res.Session = sess
-	default:
-		return nil, session.ErrInvalidState
-	}
-	s.touch(ctx, id)
-	return res, nil
-}
-
-// Switch makes the target session active, restoring it from a snapshot if
-// needed; a no-op for already-active sessions (AC-C4).
-func (s *Service) Switch(ctx context.Context, id string) (*session.Session, error) {
-	sess, err := s.store.Get(ctx, id)
-	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	switch sess.State {
 	case session.StateActive:
-		return sess, nil
+		return sess, "active", nil
 	case session.StateIdle:
-		// promote idle -> active (atomic).
+		// idle still holds its pod; resume it to active atomically (AC-C1).
 		if err := s.store.CompareAndSwapState(ctx, id, session.StateIdle, session.StateActive); err != nil {
-			return nil, err
+			return nil, "", err
 		}
-		return s.touchGet(ctx, id)
+		sess, err = s.store.Get(ctx, id)
+		if err != nil {
+			return nil, "", err
+		}
+		return sess, "idle->active", nil
 	case session.StateSnapshot:
-		return s.Restore(ctx, id)
+		// pod was reclaimed at freeze; restore the checkpoint into a fresh pod
+		// and go active (AC-B2). Restore is lock-guarded for atomicity (AC-C1).
+		sess, err = s.Restore(ctx, id)
+		if err != nil {
+			return nil, "", err
+		}
+		return sess, "snapshot->restore", nil
 	default:
-		return nil, session.ErrInvalidState
+		return nil, "", session.ErrInvalidState
 	}
+}
+
+// Read brings the session active (per activate) and reads from its pod (AC-C2).
+// The dispatch policy is fully implemented; only the returned payload is a stub
+// until the data plane workload exists (see data-plane/README.md).
+func (s *Service) Read(ctx context.Context, id string) (*session.ReadResult, error) {
+	sess, branch, err := s.activate(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	s.touch(ctx, id)
+	return &session.ReadResult{
+		Session: sess,
+		Path:    dispatchPath(branch, "read"),
+		Payload: "stub:read:" + id, // real data comes from the data plane pod
+	}, nil
+}
+
+// Write brings the session active (per activate) and writes to its pod (AC-C3).
+// snapshot/idle are restored/promoted first rather than rejected, matching the
+// uniform rule. Applying the payload to the workload is stubbed until the data
+// plane agent exists (see data-plane/README.md).
+func (s *Service) Write(ctx context.Context, id, payload string) (*session.WriteResult, error) {
+	sess, branch, err := s.activate(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	_ = payload // applied to the workload once the data plane agent lands
+	s.touch(ctx, id)
+	return &session.WriteResult{
+		Session: sess,
+		Path:    dispatchPath(branch, "write"),
+	}, nil
+}
+
+// Switch makes the target session active — promoting idle or restoring a
+// snapshot as needed — and is a no-op for an already-active session (AC-C4).
+// It shares the activate core with Read/Write so switching, reading and writing
+// resume a session identically, and switching never breaks isolation (AC-A2).
+func (s *Service) Switch(ctx context.Context, id string) (*session.Session, error) {
+	sess, branch, err := s.activate(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if branch == "idle->active" {
+		// resuming from idle counts as an access; record it.
+		return s.touchGet(ctx, id)
+	}
+	return sess, nil
 }
 
 // Snapshot checkpoints an active/idle session and reclaims its pod (AC-B1, AC-A3).
@@ -267,4 +274,14 @@ func (s *Service) touch(ctx context.Context, id string) {
 func (s *Service) touchGet(ctx context.Context, id string) (*session.Session, error) {
 	s.touch(ctx, id)
 	return s.store.Get(ctx, id)
+}
+
+// dispatchPath renders the ReadResult/WriteResult Path label for the branch that
+// activate took. Active is served directly; non-active branches append the op,
+// e.g. "idle->active->read" or "snapshot->restore->write".
+func dispatchPath(branch, op string) string {
+	if branch == "active" {
+		return "active"
+	}
+	return branch + "->" + op
 }
