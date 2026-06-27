@@ -4,9 +4,11 @@ info:
   version: 0.1.0
   description: >
     REST surface the SPA uses to create, list and operate sessions. Each
-    session maps 1:1 to a dedicated data plane pod (AC-A2). State-dependent
-    behaviour (read/write dispatch, snapshot/restore) is currently stubbed; see
-    TODO(policy) markers in the implementation.
+    session maps 1:1 to a dedicated data plane pod (AC-A2). Non-active access is
+    uniform "ensure active then serve": read, write and switch promote
+    idle->active (AC-C1) or restore snapshot->active (AC-B2) before serving. The
+    state dispatch is implemented; the actual data-plane payload is stubbed
+    until the data plane workload exists (see data-plane/README.md).
 servers:
   - url: /api/v1
 paths:
