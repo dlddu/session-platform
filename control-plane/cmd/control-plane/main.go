@@ -1,7 +1,8 @@
 // Command control-plane is the single entrypoint for the session platform
 // control plane: it serves the REST API (/api/v1) and the embedded React SPA
 // on one port. Domain logic is delegated to a session.Manager built from the
-// (currently stubbed) k8s/redis/criu adapters.
+// k8s pod orchestrator, the ConfigMap/Lease state store, and the (stubbed)
+// CRIU checkpointer.
 package main
 
 import (
@@ -15,9 +16,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/redis"
 	"github.com/dlddu/session-platform/control-plane/internal/api"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
 	"github.com/dlddu/session-platform/control-plane/internal/static"
@@ -28,10 +29,11 @@ func main() {
 
 	cfg := loadConfig()
 
-	// The control plane drives data plane pods via client-go, so it needs a
-	// reachable cluster: the in-cluster config as a pod, or the ambient kubeconfig
-	// for local development against a kind cluster. The redis / CRIU adapters
-	// remain stubs behind the same interfaces (see each adapter package).
+	// The control plane drives data plane pods AND stores session state via
+	// client-go, so it needs a reachable cluster: the in-cluster config as a pod,
+	// or the ambient kubeconfig for local development against a kind cluster. The
+	// same client backs the pod orchestrator and the ConfigMap/Lease state store;
+	// the CRIU adapter remains a stub behind its interface.
 	client, namespace, err := k8s.BuildClient()
 	if err != nil {
 		logger.Error("k8s: no reachable cluster (in-cluster config or kubeconfig required)", "err", err)
@@ -39,13 +41,12 @@ func main() {
 	}
 	logger.Info("starting control plane",
 		"addr", cfg.addr,
-		"redis", cfg.redisAddr,
 		"namespace", namespace,
 		"criu_enabled", cfg.criuEnabled,
 	)
 
 	orch := k8s.NewClientOrchestrator(client, namespace, k8s.WithImage(cfg.dataPlaneImage))
-	store := redis.NewStubStore(cfg.redisAddr)
+	store := configmap.NewStore(client, namespace)
 	ckpt := criu.NewStubCheckpointer(cfg.criuEnabled)
 
 	mgr := service.New(orch, store, ckpt)
@@ -81,7 +82,6 @@ func main() {
 
 type config struct {
 	addr           string
-	redisAddr      string
 	dataPlaneImage string
 	criuEnabled    bool
 }
@@ -89,7 +89,6 @@ type config struct {
 func loadConfig() config {
 	return config{
 		addr:           env("CP_ADDR", ":8080"),
-		redisAddr:      env("REDIS_ADDR", "redis:6379"),
 		dataPlaneImage: env("DATA_PLANE_IMAGE", ""),
 		criuEnabled:    envBool("CRIU_ENABLED", false),
 	}

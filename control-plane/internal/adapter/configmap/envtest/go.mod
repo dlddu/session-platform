@@ -1,23 +1,31 @@
-module github.com/dlddu/session-platform/control-plane
+// Isolated test-only module for the ConfigMap adapter's real-apiserver
+// conflict suite. controller-runtime/envtest (and its large dependency tree)
+// lives ONLY here, so the parent control-plane module gains no runtime
+// dependency from it — `go build ./...` and `go test ./...` in control-plane
+// never compile or resolve anything in this directory (Go excludes nested
+// modules from a parent's ./... expansion).
+//
+// Run it via `make test-envtest`, which provisions kube-apiserver + etcd with
+// setup-envtest and points KUBEBUILDER_ASSETS at them.
+module github.com/dlddu/session-platform/control-plane/internal/adapter/configmap/envtest
 
 go 1.24
 
-// The PodOrchestrator and the StateStore are both backed by client-go: the
-// former drives data plane pods, the latter stores session state in ConfigMaps
-// and per-session locks in coordination.k8s.io Leases. Both reuse the k8s.io
-// dependencies below — no extra runtime deps. Only the Checkpointer (CRIU)
-// remains an in-memory stub, so its external deps are not required yet.
+replace github.com/dlddu/session-platform/control-plane => ../../../..
+
 require (
+	github.com/dlddu/session-platform/control-plane v0.0.0-00010101000000-000000000000
 	k8s.io/api v0.30.3
 	k8s.io/apimachinery v0.30.3
 	k8s.io/client-go v0.30.3
+	sigs.k8s.io/controller-runtime v0.18.7
 )
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/emicklei/go-restful/v3 v3.11.0 // indirect
-	github.com/evanphx/json-patch v4.12.0+incompatible // indirect
-	github.com/go-logr/logr v1.4.1 // indirect
+	github.com/evanphx/json-patch/v5 v5.9.0 // indirect
+	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-openapi/jsonpointer v0.19.6 // indirect
 	github.com/go-openapi/jsonreference v0.20.2 // indirect
 	github.com/go-openapi/swag v0.22.3 // indirect
@@ -36,7 +44,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	golang.org/x/net v0.23.0 // indirect
-	golang.org/x/oauth2 v0.10.0 // indirect
+	golang.org/x/oauth2 v0.12.0 // indirect
 	golang.org/x/sys v0.18.0 // indirect
 	golang.org/x/term v0.18.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
@@ -46,6 +54,7 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	k8s.io/apiextensions-apiserver v0.30.1 // indirect
 	k8s.io/klog/v2 v2.120.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20240228011516-70dd3763d340 // indirect
 	k8s.io/utils v0.0.0-20230726121419-3b25d923346b // indirect

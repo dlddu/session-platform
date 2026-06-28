@@ -17,8 +17,8 @@ import (
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/redis"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
+	"github.com/dlddu/session-platform/control-plane/internal/store"
 )
 
 // Service is the concrete Manager. It owns no workload itself (AC-A1) — every
@@ -26,13 +26,13 @@ import (
 // store, and every checkpoint through the checkpointer.
 type Service struct {
 	orch  k8s.PodOrchestrator
-	store redis.StateStore
+	store store.StateStore
 	ckpt  criu.Checkpointer
 	now   func() time.Time // injectable clock for tests
 }
 
 // New builds a Service from its adapter ports.
-func New(orch k8s.PodOrchestrator, store redis.StateStore, ckpt criu.Checkpointer) *Service {
+func New(orch k8s.PodOrchestrator, store store.StateStore, ckpt criu.Checkpointer) *Service {
 	return &Service{orch: orch, store: store, ckpt: ckpt, now: func() time.Time { return time.Now().UTC() }}
 }
 

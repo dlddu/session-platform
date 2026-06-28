@@ -25,4 +25,4 @@
 
 ### V5: 일관된 세션 상태
 - **유형**: 구체적
-- **설명**: 세션 상태 전이와 동시 접근은 Redis 기반 atomic operation으로 처리되어, 경쟁 상황에서도 세션 상태가 깨지거나 중복 처리되지 않는다.
+- **설명**: 세션 상태 전이와 동시 접근은 ConfigMap(resourceVersion CAS) + Lease 기반 atomic operation으로 처리되어, 경쟁 상황에서도 세션 상태가 깨지거나 중복 처리되지 않는다.

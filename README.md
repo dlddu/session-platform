@@ -6,22 +6,24 @@ control plane is the single entry point for creating, listing, and switching
 between sessions.
 
 > **This repository is a bootstrap scaffolding.** Structure, dependencies,
-> boundaries, and the dev loop are in place; domain logic (real pod
-> orchestration, Redis atomics, CRIU) is stubbed behind interfaces. See the
-> design docs under [`docs/`](docs/) for the value/PRD/AC and mockups this is
-> built from.
+> boundaries, and the dev loop are in place. Pod orchestration (client-go) and
+> session state (Kubernetes ConfigMaps + Leases) are real; CRIU
+> checkpoint/restore is still stubbed behind its interface. See the design docs
+> under [`docs/`](docs/) for the value/PRD/AC and mockups this is built from.
 
 ## Layout
 
 ```
-control-plane/        Go: REST API + orchestration adapters (stub) + SPA serving
+control-plane/        Go: REST API + orchestration/state adapters + SPA serving
   api/openapi.yaml      OpenAPI spec for the /api/v1 surface
   cmd/control-plane/    main: wires adapters, serves API + embedded SPA on one port
   internal/
     session/            domain: Session entity, State enum, Manager port
+    store/              StateStore port (backend-neutral)
     service/            concrete Manager wiring the adapters (happy path)
-    adapter/k8s/        PodOrchestrator port + in-memory stub  (client-go later)
-    adapter/redis/      StateStore port + in-memory stub       (go-redis later)
+    adapter/k8s/        PodOrchestrator: client-go pod lifecycle (real)
+    adapter/configmap/  StateStore: ConfigMap state + Lease locks via client-go (real)
+      envtest/          isolated module: real-apiserver CAS/Lease conflict suite
     adapter/criu/       Checkpointer port + gated stub         (CRIU later)
     api/                REST handlers (thin) + tests
     static/             embeds web/dist and serves the SPA
@@ -32,7 +34,7 @@ web/                  React + Vite + TS SPA
   src/screens/          Sessions, NewSession, Workspace, Restore
   src/api/              typed client over /api/v1
 data-plane/           placeholder for the session workload runtime
-deploy/               kind config + Redis & control-plane manifests
+deploy/               kind config + control-plane manifests (2-replica e2e overlay)
 docs/                 value / PRD·AC / journeys / mockups / CRIU verification note
 ```
 
@@ -40,17 +42,19 @@ docs/                 value / PRD·AC / journeys / mockups / CRIU verification n
 
 - **Control plane / data plane split** (AC-A1): the control plane orchestrates;
   workloads run only in data plane pods. One dedicated pod per session (AC-A2).
-- **State model** `active | idle | snapshot` held in Redis with atomic
-  transitions (AC-C1). Read/Write/Switch dispatch on state (AC-C2/C3/C4).
+- **State model** `active | idle | snapshot` stored in per-session ConfigMaps,
+  with resourceVersion compare-and-swap for atomic transitions and
+  `coordination.k8s.io` Leases for occupancy locks (AC-C1) — shared across
+  control-plane replicas. Read/Write/Switch dispatch on state (AC-C2/C3/C4).
 - **Lifecycle**: 60-min max idle → CRIU snapshot + pod reclaim (AC-B1);
   access → restore into a new pod (AC-B2). CRIU is **gated** (`CRIU_ENABLED`)
   and stubbed; see [`docs/criu-verification.md`](docs/criu-verification.md).
 - **Single entry point**: the control plane container serves both the REST API
   (`/api/v1`) and the statically built SPA on one port.
 
-Unresolved product policy is marked in code with `TODO(policy: ...)` (idle/
-snapshot read & write behaviour) and `TODO(client-go|go-redis|criu|rbac)` for
-the deferred real implementations.
+Unresolved product policy is marked in code with `TODO(policy: ...)` (the
+idle→snapshot *trigger* timing); `TODO(criu)` marks the one remaining stubbed
+adapter (CRIU checkpoint/restore).
 
 ## Prerequisites
 
@@ -90,12 +94,17 @@ gitignored.
   happy-path scenarios from `docs/test/architecture.md` driven **in-process**
   (handlers mounted in a test server) with the stub adapters.
 - **E2E** (kind-deployed SUT): builds the combined image, loads it into a kind
-  cluster (`deploy/`), and runs a Go API suite + a Playwright browser suite
-  against the deployed control-plane (reachable at `http://localhost:8080` via a
-  NodePort). Scope is the α stub happy path (create/list/get/switch·read·write);
-  the B-path (idle → snapshot → restore) and real pod/Redis/CRIU assertions are
-  seeded as documented skips. Details and the deferred-seed ↔ scenario map:
-  [`docs/test/e2e.md`](docs/test/e2e.md).
+  cluster (`deploy/`, 2 control-plane replicas), and runs a Go API suite + a
+  Playwright browser suite against the deployed control-plane (reachable at
+  `http://localhost:8080` via a NodePort). Covers create/list/get/switch·read·write,
+  real-pod provisioning (AC-A1/A2), and cross-replica state consistency over the
+  shared ConfigMap store (AC-C1); the B-path (idle → snapshot → restore) and CRIU
+  assertions remain seeded as documented skips. Details and the deferred-seed ↔
+  scenario map: [`docs/test/e2e.md`](docs/test/e2e.md).
+- **Conflict (envtest)** (`make test-envtest`): an isolated nested module runs
+  the ConfigMap adapter against a real kube-apiserver + etcd to assert AC-C1's
+  single-winner property (exactly one of N concurrent CompareAndSwap / Lease
+  acquisitions wins). controller-runtime stays out of the main module's deps.
 
   ```bash
   make e2e-up                                          # kind + build + deploy, SUT on :8080
@@ -107,8 +116,8 @@ gitignored.
 ## CI
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs lint + unit (Go),
-typecheck + build (web), the in-process integration harness, and the combined
-image build on every PR.
+typecheck + build (web), the in-process integration harness, the real-apiserver
+envtest conflict suite, and the combined image build on every PR.
 
 [`.github/workflows/e2e.yml`](.github/workflows/e2e.yml) runs the kind-based
 e2e suites (Go API + Playwright) on PRs touching `control-plane/`, `web/`,
@@ -124,8 +133,10 @@ The cluster runs this via GitOps (Flux) from the `flux-cd-apps` repo.
   `ghcr.io/dlddu/session-platform:latest` on every push to `main` that touches
   `control-plane/` or `web/`.
 - [`k8s/`](k8s/) holds the cluster manifests Flux applies: the `control-plane`
-  Deployment + Service (port 80 → 8080) and the `redis` backing store. The
-  namespace, ingress, and VPA live on the cluster side in `flux-cd-apps`.
+  Deployment + Service (port 80 → 8080) and its RBAC (pods + configmaps +
+  leases). Session state lives in in-cluster ConfigMaps/Leases, so there is no
+  separate backing-store deployment. The namespace, ingress, and VPA live on the
+  cluster side in `flux-cd-apps`.
 
 The [`deploy/`](deploy/) directory remains the local `kind` setup for the
 integration harness; `k8s/` is the deployed-cluster source of truth.

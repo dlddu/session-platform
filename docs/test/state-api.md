@@ -1,7 +1,7 @@
 # 테스트 문서: 세션 상태 일관성 & Read/Write API
 
 ## 검증 대상 AC
-- AC-C1: Redis 기반 atomic 상태 전이 (PRD: 세션 상태 일관성 & Read/Write API)
+- AC-C1: ConfigMap(resourceVersion CAS) + Lease 기반 atomic 상태 전이 (PRD: 세션 상태 일관성 & Read/Write API)
 - AC-C2: Read API 상태별 분기 (PRD: 세션 상태 일관성 & Read/Write API)
 - AC-C3: Write API 상태별 분기 (PRD: 세션 상태 일관성 & Read/Write API)
 - AC-C4: 세션 간 자유 전환 (PRD: 세션 상태 일관성 & Read/Write API)

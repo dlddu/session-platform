@@ -7,9 +7,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/redis"
 	"github.com/dlddu/session-platform/control-plane/internal/api"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
@@ -18,7 +20,7 @@ import (
 func newServer() *httptest.Server {
 	mgr := service.New(
 		k8s.NewStubOrchestrator("sessions"),
-		redis.NewStubStore(""),
+		configmap.NewStore(fake.NewSimpleClientset(), "sessions"),
 		criu.NewStubCheckpointer(false),
 	)
 	mux := http.NewServeMux()

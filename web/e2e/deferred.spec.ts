@@ -18,9 +18,13 @@ test.skip("J2: thaw & resume restores a snapshot session", async () => {
   // fill when snapshot + restore land.
 });
 
-// J4 / AC-C1: a worker (P1) and an automation client (P2) hit the same session
-// concurrently and observe a single consistent state. Needs a Redis-backed
-// StateStore + multi-replica control-plane.
-test.skip("J4: concurrent access stays consistent", async () => {
-  // fill when the redis adapter + multi-replica deploy land.
+// J4 / AC-C1: concurrent access to one session converges to a single consistent
+// state. J4 is a backend concurrency journey with no UI surface (intentional
+// non-visualization — see docs/user-journeys/j4-concurrent-access.md), so it has
+// no browser assertion. Cross-replica consistency is verified by the Go e2e suite
+// (TestDeferred_CrossReplicaAtomicity, against the 2-replica ConfigMap-backed SUT)
+// and the hermetic single-winner CAS/Lease proof by the envtest suite. This skip
+// stays as a documented pointer, not a pending browser test.
+test.skip("J4: concurrent access stays consistent (backend-only; see Go e2e + envtest)", async () => {
+  // Intentionally no browser body: J4 has no UI. See the Go/envtest coverage above.
 });

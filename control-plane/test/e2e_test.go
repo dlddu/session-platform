@@ -9,9 +9,12 @@
 // JSON DTOs) and talks to whatever E2E_BASE_URL points at — the kind-deployed
 // stub control-plane (default http://localhost:8080, see deploy/ + scripts/e2e).
 //
-// Scope is the α stub level: the adapters are in-memory stubs, so every created
-// session stays `active`. The B-path (idle -> snapshot -> restore) and real
-// pod/Redis/CRIU assertions are deferred — see e2e_deferred_test.go.
+// The deployed SUT backs sessions with real adapters — client-go pods and the
+// ConfigMap/Lease state store — so cross-replica consistency (AC-C1) and
+// real-pod provisioning (AC-A1/A2) are asserted in e2e_deferred_test.go. Only
+// the CRIU checkpointer is still a stub and there is no idle->snapshot trigger,
+// so every created session stays `active`: the B-path (idle -> snapshot ->
+// restore) and CRIU assertions remain deferred — see e2e_deferred_test.go.
 package e2e_test
 
 import (

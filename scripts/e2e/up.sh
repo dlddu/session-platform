@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Bring up the kind-based e2e SUT: a *deployed* control-plane (stub adapters)
-# plus Redis, reachable at http://localhost:8080 through the NodePort
-# extraPortMapping (host :8080 -> node :30080, see deploy/kind-config.yaml).
+# Bring up the kind-based e2e SUT: a *deployed* control-plane, reachable at
+# http://localhost:8080 through the NodePort extraPortMapping (host :8080 ->
+# node :30080, see deploy/kind-config.yaml). Session state lives in ConfigMaps +
+# Leases in the cluster, so there is no separate state-store deployment to wait
+# on.
 #
 #   scripts/e2e/up.sh        # create cluster (if needed) + build + load + deploy
 #
@@ -52,7 +54,6 @@ echo "e2e: applying deploy/ overlay (kustomize: base k8s/ + kind patches)"
 kubectl apply -k deploy/
 
 echo "e2e: waiting for rollouts"
-kubectl rollout status deploy/redis --timeout=120s
 kubectl rollout status deploy/control-plane --timeout=120s
 
 echo "e2e: polling $BASE_URL/api/v1/healthz"
