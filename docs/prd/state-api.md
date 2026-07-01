@@ -21,6 +21,7 @@
   - `snapshot`: CRIU 복원으로 `active` 전이(AC-B2) 후 읽기
   - 이는 switch(AC-C4)·snapshot 접근(AC-B2)과 동일한 "접근 시 active화" 원칙을 read에 적용한 것이다.
 - **달성 가치**: V3, V4
+- **구체화**: read가 반환하는 것 = 세션 시작 이후 누적된 쉘 stdout/stderr **전체** 출력(비파괴적) → AC-D3 (`shell-workload.md`)
 - **검증 방법**: active/idle/snapshot 세션에 각각 read를 호출하여, 각 경로(active 직접 / idle 승격 후 / snapshot 복원 후)로 처리되고 호출 후 최종 상태가 `active`이며 올바른 결과를 반환함을 확인한다.
 
 ### AC-C3: Write API 상태별 분기
@@ -29,6 +30,7 @@
   - `idle`: `idle→active` atomic 승격(AC-C1) 후 write
   - `snapshot`: CRIU 복원으로 `active` 전이(AC-B2) 후 write — **snapshot write는 거부하지 않고 복원 후 적용한다** (AC-B2의 "접근=복원"과 일치)
 - **달성 가치**: V3, V5
+- **구체화**: write가 반영하는 것 = 대상 세션 쉘의 stdin 입력(명령/키 입력) → AC-D2 (`shell-workload.md`)
 - **검증 방법**: active/idle/snapshot 세션에 각각 write 요청 시 대상이 `active`로 처리되어 데이터가 일관되게 반영되고 상태 전이가 atomic하게 일어남을 확인한다.
 
 ### AC-C4: 세션 간 자유 전환

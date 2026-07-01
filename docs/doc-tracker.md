@@ -1,28 +1,31 @@
 # Session Pod Platform 문서 체계 상태 추적
 
 ## 현재 상태 요약
-- 정의된 가치: **5개** (V1~V5)
-- PRD: **3개** (아키텍처/라이프사이클/상태·API)
-- Acceptance Criteria: **10개** (가치 연결됨: 10개 / 미연결: 0개)
-- 테스트 문서: **3개** (AC 커버됨: 10개 / 미커버: 0개)
-- **건강 상태**: ⚠️ **위험 있음** — 모든 가치의 소유자가 미지정(고아 가치 5개)
+- 정의된 가치: **6개** (V1~V6) — V6에서 "세션 = 인터랙티브 쉘" 확정
+- PRD: **4개** (아키텍처/라이프사이클/상태·API/쉘 워크로드)
+- Acceptance Criteria: **15개** (가치 연결됨: 15개 / 미연결: 0개)
+- 테스트 문서: **4개** (AC 커버됨: 15개 / 미커버: 0개)
+- **건강 상태**: ⚠️ **위험 있음** — 모든 가치의 소유자가 미지정(고아 가치 6개). 구조적 연결(가치→PRD→AC→테스트)은 완전.
 
 ## 연결 매트릭스
 
 | 가치 | PRD | AC | 테스트 | 상태 |
 |------|-----|-----|--------|------|
-| V1: 세션 격리 | PRD-아키텍처 | AC-A1, AC-A2 | T-아키텍처 | ✅ 완전 |
-| V2: 유휴 자원 회수 | PRD-아키텍처, PRD-라이프사이클 | AC-A3, AC-B1 | T-아키텍처, T-라이프사이클 | ✅ 완전 |
-| V3: 끊김 없는 연속성 | PRD-라이프사이클, PRD-상태·API | AC-B2, AC-B3, AC-C2, AC-C3, AC-C4 | T-라이프사이클, T-상태·API | ✅ 완전 |
+| V1: 세션 격리 | PRD-아키텍처, PRD-쉘워크로드 | AC-A1, AC-A2, AC-D1 | T-아키텍처, T-쉘워크로드 | ✅ 완전 |
+| V2: 유휴 자원 회수 | PRD-아키텍처, PRD-라이프사이클, PRD-쉘워크로드 | AC-A3, AC-B1, AC-D5 | T-아키텍처, T-라이프사이클, T-쉘워크로드 | ✅ 완전 |
+| V3: 끊김 없는 연속성 | PRD-라이프사이클, PRD-상태·API, PRD-쉘워크로드 | AC-B2, AC-B3, AC-C2, AC-C3, AC-D4 | T-라이프사이클, T-상태·API, T-쉘워크로드 | ✅ 완전 |
 | V4: 자유로운 멀티세션 전환 | PRD-상태·API | AC-C2, AC-C4 | T-상태·API | ✅ 완전 |
 | V5: 일관된 세션 상태 | PRD-아키텍처, PRD-상태·API | AC-A1, AC-C1, AC-C3 | T-아키텍처, T-상태·API | ✅ 완전 |
+| V6: 인터랙티브 쉘 세션 | PRD-쉘워크로드 | AC-D1, AC-D2, AC-D3, AC-D4, AC-D5 | T-쉘워크로드 | ✅ 완전 |
 
 > 가치 → PRD → AC → 테스트의 모든 연결은 이어져 있음. 끊어진 화살표는 소유자 부재(아래) 하나뿐.
+> PRD-쉘워크로드의 AC-D1~D5는 신규 메커니즘이 아니라 기존 AC의 **구체화 연결**을 함께 가진다:
+> AC-D1→AC-A1, AC-D2→AC-C3, AC-D3→AC-C2, AC-D4→AC-B3, AC-D5→AC-B1.
 
 ## 위험 진단
 
 ### 🔴 고아 가치 (소유자 없는 가치)
-- **V1, V2, V3, V4, V5 전부** — 제품 소유자가 미지정 상태. 가치의 책임 소재가 불분명함. **소유자 지정 필요.**
+- **V1~V6 전부** — 제품 소유자가 미지정 상태. 가치의 책임 소재가 불분명함. **소유자 지정 필요.**
 
 ### 미정렬 문서 (가치 참조 없는 문서)
 - (없음)
@@ -43,11 +46,15 @@
 - (없음)
 
 ### 🟡 확인 필요한 설계 결정 (스킬 표준 위험은 아니나 명세 공백)
-- **유휴 시간 측정 기준**: "마지막 활동"의 정의(마지막 read/write 시점 기준인지, 연결 종료 기준인지)가 미확정. AC-B1에 영향.
+- **스냅샷 트리거 정책 (AC-B1)**: 60분은 최대 유휴 한계로 확정됐으나, grace period·per-session override 등 정확한 트리거 타이밍은 미확정 (`session.go`의 `TODO(policy)`).
+- **바쁜 쉘 동결 여부 (AC-D5 ↔ AC-B1)**: 장시간 포그라운드 작업 실행 중 클라이언트 유휴 60분 도달 시 동결 대상이 되는지 — CRIU상 기술적으로는 가능하나, 트리거 정책과 함께 결정 필요. (AC-D5로 유휴 "정의"는 확정, "정책"은 미확정)
+- **read 출력 버퍼 증가 (AC-D3)**: read가 전체 누적 출력을 비파괴적으로 반환하도록 확정. 장시간 세션에서 `payload`·버퍼가 무제한 증가 → 버퍼 상한/ring buffer·offset 페이지네이션·스냅샷 시 버퍼 처리 방식 미확정.
 - **제품명·소유자**: "Session Pod Platform"은 임시 작업명. 실제 제품명/소유자 확정 필요.
 
 ### ✅ 해결된 설계 결정
-- **idle/snapshot read/write 정책 (AC-C2 / AC-C3)** — *2026-06-27 확정*. 비-active 접근은 **통일 "active 보장 후 처리"** 규칙: `idle`은 `idle→active` atomic 승격(AC-C1), `snapshot`은 CRIU 복원(AC-B2)으로 active 전이 후 read/write. snapshot write는 거부하지 않고 복원 후 적용(AC-B2의 "접근=복원"과 일치). AC-C2/AC-C3 본문과 `control-plane/internal/service/manager.go`의 `activate()`에 반영, `TODO(policy)` 제거. 잔여 `TODO(policy)`는 AC-B1의 snapshot **트리거 타이밍**(grace/override) 1건으로, 이는 별개의 미해결 항목(위 "유휴 시간 측정 기준")이다.
+- **세션 워크로드의 정체 (V6 / PRD-쉘워크로드)** — *2026-07-01 확정*. 이전까지 "세션 워크로드"·"인메모리 상태"·"read/write"가 추상적이고 `data-plane`이 미정의(placeholder alpine)였던 상태를 해소. **세션 = 전용 pod에서 PTY에 연결되어 실행되는 인터랙티브 쉘**(기본 `/bin/bash`)로 확정. write=쉘 stdin 입력(AC-D2), read=쉘 stdout/stderr **전체** 출력 비파괴적 반환(AC-D3), 보존 상태=쉘 프로세스 트리(AC-D4), 유휴 기준=클라이언트 쉘 I/O(AC-D5). 기존 AC-A1/B1/B3/C2/C3에 구체화 상호참조 추가, `data-plane/README.md` 갱신.
+- **유휴 시간 측정 기준 (부분 해결, AC-D5)** — *2026-07-01*. "마지막 활동"의 정의를 **마지막 클라이언트 read/write(쉘 I/O)** 로 확정. 단, 트리거 *정책*(위 🟡)은 여전히 열림.
+- **idle/snapshot read/write 정책 (AC-C2 / AC-C3)** — *2026-06-27 확정*. 비-active 접근은 통일 "active 보장 후 처리" 규칙: `idle`은 `idle→active` atomic 승격(AC-C1), `snapshot`은 CRIU 복원(AC-B2)으로 active 전이 후 read/write.
 
 ## 변경 이력
 
@@ -58,5 +65,7 @@
 | 초기 생성 | PRD-라이프사이클 작성 (AC-B1~B3) | PRD 1개, AC 3개 | PRD 2개, AC 6개 |
 | 초기 생성 | PRD-상태·API 작성 (AC-C1~C4) | PRD 2개, AC 6개 | PRD 3개, AC 10개 |
 | 초기 생성 | 테스트 문서 3종 작성 (10개 AC 전부 커버) | 테스트 0개 | 테스트 3개, 미검증 AC 0개 |
-| 2026-06-27 | AC-C2/AC-C3 idle·snapshot read/write 정책 확정(통일 "active 보장 후 처리"). PRD·테스트 문서 문구 확정, manager.go `activate()` 구현, `TODO(policy)` 제거(잔여 1건=AC-B1 트리거). AC 수·연결 변화 없음. | 명세 공백 2건(C2 read, C3 write) | 명세 공백 0건(read/write 정책), 트리거 1건 잔존 |
-| 2026-06-28 | AC-C1 atomic 메커니즘을 Redis → **ConfigMap(resourceVersion CAS) + Lease**로 전환. PRD-상태·API·values·T-상태·API·e2e 문서 문구 갱신, `TestDeferred_CrossReplicaAtomicity` 채움(2-replica 공유 store 일관성) + envtest 스위트로 단일-승자 CAS/Lease 검증. AC 의미·수·연결 변화 없음(메커니즘 명칭만 교체). | 저장소=Redis(스텁) | 저장소=ConfigMap/Lease(실구현), AC-C1 검증 골격 충족 |
+| 2026-06-27 | AC-C2/AC-C3 idle·snapshot read/write 정책 확정("active 보장 후 처리"). | 명세 공백 2건 | 명세 공백 0건(read/write 정책) |
+| 2026-06-28 | AC-C1 atomic 메커니즘을 Redis → ConfigMap(resourceVersion CAS) + Lease로 전환. | 저장소=Redis(스텁) | 저장소=ConfigMap/Lease(실구현) |
+| 2026-07-01 | **V6 "인터랙티브 쉘 세션" 추가 + PRD-쉘워크로드(AC-D1~D5) + T-쉘워크로드 신설**. 세션 워크로드의 정체를 인터랙티브 쉘로 확정. AC-A1/B1/B3/C2/C3에 구체화 상호참조, values 경고·`data-plane/README.md` 갱신, 여정 README·doc-structure-state의 "세션 정체 미확정" 항목 해소 표기. | 가치 5개, PRD 3, AC 10, 테스트 3 / 세션 정체 미확정 | 가치 6개, PRD 4, AC 15, 테스트 4 / 세션 정체 확정 |
+| 2026-07-01 | AC-D3 read 시맨틱을 "마지막 read 이후 델타" → **"세션 시작 이후 전체 누적 출력, 비파괴적 반환"** 으로 변경. PRD·T-쉘워크로드 시나리오3·AC-C2 상호참조 갱신, 버퍼 무제한 증가를 열린 항목으로 등록. AC 수·연결 변화 없음(시맨틱만 변경). | read=마지막 read 이후 델타(1회 전달) | read=전체 누적 출력(비파괴적) |

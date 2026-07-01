@@ -92,3 +92,4 @@
 | 2026-06-18 | 사용자 여정 4개(J1~J4) 신규 작성, 가치 V1~V5 전부 연결 | 여정 0개 | 여정 4개 (mockup 0, 디자인 시스템 0) |
 | 2026-06-18 | 여정 문서를 여정별 파일로 분리 (`user-journeys.md` → `user-journeys/` 폴더: README + J1~J4) | 단일 파일 | 폴더 + 5개 파일 (내용 동일, 연결 변화 없음) |
 | 2026-06-27 | mockup 4종(index/new-session/restore/workspace) 발견·매핑 기록. mockup 인덱스(`mockups/README.md`) 신설, 여정 단계별 mockup 마커 갱신. restore/workspace의 J4 동시 접근 패널 제거(UI 비대상). | mockup 0(기록상), 인덱스 없음 | mockup 4 매핑됨, J4 비시각화 수용, 임의 스타일 4 mockup |
+| 2026-07-01 | 상류(product-doc 사슬)에서 **세션 정체 = 인터랙티브 쉘** 확정(가치 V6 · `prd/shell-workload.md`). 이 사슬은 구조 변화 없음 — 여정 README의 "세션 정체 미확정" 항목 해소만 반영. mockup은 이미 console/terminal 스타일이라 쉘 확정과 정합. 디자인 시스템 부재 위험은 유지. | 세션 정체 미확정(일반화) | 세션 정체 확정(인터랙티브 쉘), 여정/mockup 정합 |
