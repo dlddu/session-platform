@@ -3,7 +3,10 @@
 #   - the locally built control-plane image (loaded via `kind load`, not pulled
 #     from ghcr),
 #   - a NodePort Service so the e2e suites reach the SUT at host :8080 through the
-#     kind extraPortMapping (deploy/kind-config.yaml).
+#     kind extraPortMapping (deploy/kind-config.yaml),
+#   - 2 control-plane replicas so the e2e suite exercises cross-replica state
+#     sharing through the ConfigMap/Lease store (AC-C1). The production base
+#     keeps replicas: 1; scaling production is a separate operational decision.
 #
 # kind-config.yaml is a kind CLI config (not a Kubernetes resource) and is
 # intentionally NOT part of this kustomization.
@@ -26,7 +29,9 @@ patches:
       - op: add
         path: /spec/ports/0/nodePort
         value: 30080
-  # The image is loaded into kind (`kind load`), so never reach for a registry.
+  # The image is loaded into kind (`kind load`), so never reach for a registry;
+  # and run 2 replicas so the e2e suite drives cross-replica atomicity (AC-C1)
+  # against the shared ConfigMap/Lease store.
   - target:
       kind: Deployment
       name: control-plane
@@ -34,3 +39,6 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
+      - op: replace
+        path: /spec/replicas
+        value: 2

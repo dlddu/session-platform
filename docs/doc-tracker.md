@@ -59,3 +59,4 @@
 | 초기 생성 | PRD-상태·API 작성 (AC-C1~C4) | PRD 2개, AC 6개 | PRD 3개, AC 10개 |
 | 초기 생성 | 테스트 문서 3종 작성 (10개 AC 전부 커버) | 테스트 0개 | 테스트 3개, 미검증 AC 0개 |
 | 2026-06-27 | AC-C2/AC-C3 idle·snapshot read/write 정책 확정(통일 "active 보장 후 처리"). PRD·테스트 문서 문구 확정, manager.go `activate()` 구현, `TODO(policy)` 제거(잔여 1건=AC-B1 트리거). AC 수·연결 변화 없음. | 명세 공백 2건(C2 read, C3 write) | 명세 공백 0건(read/write 정책), 트리거 1건 잔존 |
+| 2026-06-28 | AC-C1 atomic 메커니즘을 Redis → **ConfigMap(resourceVersion CAS) + Lease**로 전환. PRD-상태·API·values·T-상태·API·e2e 문서 문구 갱신, `TestDeferred_CrossReplicaAtomicity` 채움(2-replica 공유 store 일관성) + envtest 스위트로 단일-승자 CAS/Lease 검증. AC 의미·수·연결 변화 없음(메커니즘 명칭만 교체). | 저장소=Redis(스텁) | 저장소=ConfigMap/Lease(실구현), AC-C1 검증 골격 충족 |

@@ -33,8 +33,6 @@ spec:
           env:
             - name: CP_ADDR
               value: ":8080"
-            - name: REDIS_ADDR
-              value: "redis:6379"
             - name: DATA_PLANE_IMAGE
               value: "alpine:3.20" # placeholder session workload (see data-plane/)
             - name: CRIU_ENABLED

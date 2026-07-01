@@ -1,7 +1,11 @@
-# RBAC for the control plane to manage data plane pods in its own namespace
-# (AC-A1/A2/A3). The client-go orchestrator creates one pod per session, polls it
-# to Ready (get), and deletes it on terminate/snapshot. Namespaced Role (not
-# ClusterRole): session pods run in the control plane's own namespace.
+# RBAC for the control plane to manage data plane pods AND session state in its
+# own namespace (AC-A1/A2/A3, AC-C1). The client-go orchestrator creates one pod
+# per session, polls it to Ready (get), and deletes it on terminate/snapshot.
+# The ConfigMap/Lease state store keeps one ConfigMap per session (session
+# metadata) and one Lease per session (occupancy lock), so the Role also grants
+# configmaps and coordination.k8s.io/leases. Namespaced Role (not ClusterRole):
+# session pods, ConfigMaps, and Leases all live in the control plane's own
+# namespace.
 #
 # Applied by Flux alongside deployment.yaml into the session-platform namespace
 # (cluster/session-platform.yaml). The namespace is intentionally omitted so the
@@ -20,9 +24,20 @@ metadata:
   labels:
     app: control-plane
 rules:
+  # Data plane pods: one dedicated pod per session (AC-A1/A2/A3).
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["create", "get", "list", "watch", "delete"]
+  # Session state store: one ConfigMap per session holds the session metadata;
+  # CompareAndSwapState reads + updates it under optimistic concurrency (AC-C1).
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  # Per-session occupancy locks: one Lease per session, created/taken-over and
+  # released around snapshot/restore (AC-C1).
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

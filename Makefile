@@ -6,9 +6,13 @@ WEB_DIR     := web
 EMBED_DIR   := $(CP_DIR)/internal/static/dist
 BIN         := $(CP_DIR)/bin/control-plane
 
+# Isolated nested module holding the real-apiserver CAS/Lease conflict suite.
+ENVTEST_DIR         := $(CP_DIR)/internal/adapter/configmap/envtest
+ENVTEST_K8S_VERSION ?= 1.30.0
+
 .DEFAULT_GOAL := build
 
-.PHONY: build web embed control-plane run dev test test-unit test-integration lint fmt docker clean tidy e2e-up e2e-down e2e-api e2e-web e2e
+.PHONY: build web embed control-plane run dev test test-unit test-integration test-envtest lint fmt docker clean tidy e2e-up e2e-down e2e-api e2e-web e2e
 
 ## build: web -> embed -> control-plane binary
 build: control-plane
@@ -54,8 +58,20 @@ test-unit:
 test-integration:
 	cd $(CP_DIR) && go test -tags=integration ./...
 
-## e2e-up: bring up the kind-based SUT (deployed stub control-plane + Redis)
-## reachable at http://localhost:8080. Idempotent (skips create if it exists).
+## test-envtest: real-apiserver CompareAndSwap/Lease conflict suite (AC-C1
+## single-winner). Runs the isolated envtest module — controller-runtime stays
+## out of the main module's deps — provisioning kube-apiserver + etcd via
+## setup-envtest. Needs network on first run to fetch the binaries. setup-envtest
+## is pinned to the release-0.18 line so it builds with this module's Go 1.24
+## (newer setup-envtest releases require a newer toolchain).
+test-envtest:
+	cd $(ENVTEST_DIR) && \
+	  KUBEBUILDER_ASSETS="$$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.18 use $(ENVTEST_K8S_VERSION) -p path)" \
+	  go test ./...
+
+## e2e-up: bring up the kind-based SUT (deployed control-plane, 2 replicas over
+## the in-cluster ConfigMap/Lease store) reachable at http://localhost:8080.
+## Idempotent (skips create if it exists).
 e2e-up:
 	./scripts/e2e/up.sh
 

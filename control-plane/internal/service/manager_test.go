@@ -4,9 +4,11 @@ import (
 	"context"
 	"testing"
 
+	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/redis"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
@@ -14,7 +16,7 @@ import (
 func newService() *service.Service {
 	return service.New(
 		k8s.NewStubOrchestrator("sessions"),
-		redis.NewStubStore(""),
+		configmap.NewStore(fake.NewSimpleClientset(), "sessions"),
 		criu.NewStubCheckpointer(false),
 	)
 }
@@ -22,8 +24,10 @@ func newService() *service.Service {
 // newServiceWithStore is like newService but also hands back the store, so a
 // test can drive a session into a non-active state directly (there is no
 // idle->snapshot reaper yet — that trigger is a separate deferred decision).
-func newServiceWithStore() (*service.Service, *redis.StubStore) {
-	store := redis.NewStubStore("")
+// The store is the real ConfigMap adapter over a fake clientset, so
+// CompareAndSwapState behaves exactly as in production.
+func newServiceWithStore() (*service.Service, *configmap.Store) {
+	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
 	svc := service.New(k8s.NewStubOrchestrator("sessions"), store, criu.NewStubCheckpointer(false))
 	return svc, store
 }

@@ -72,7 +72,7 @@
 - **고아 가치(소유자 미지정)**: V1~V5 전부 소유자 미지정 — `doc-tracker.md`/`values.md` 참고. product-doc-engineer 영역이라 여기서 수정하지 않음.
 
 ## 수용된 위험
-- **J4 시각화 제외 (2026-06-27 수용)**: J4는 백엔드 동시성 여정(Redis atomic 전이)으로 **UI 시각화 대상이 아님**. 따라서 J4-S1~S3의 "mockup 없음"은 누락이 아니라 의도된 상태. 이전에 `mockups/restore.html`·`workspace.html`에 있던 동시 접근(operator+automation) 패널은 UI 비대상 판단으로 제거. 사유: 그릴 화면이 없는 백엔드 일관성 보장.
+- **J4 시각화 제외 (2026-06-27 수용)**: J4는 백엔드 동시성 여정(ConfigMap resourceVersion CAS + Lease 기반 atomic 전이)으로 **UI 시각화 대상이 아님**. 따라서 J4-S1~S3의 "mockup 없음"은 누락이 아니라 의도된 상태. 이전에 `mockups/restore.html`·`workspace.html`에 있던 동시 접근(operator+automation) 패널은 UI 비대상 판단으로 제거. 사유: 그릴 화면이 없는 백엔드 일관성 보장.
 
 ## 권장 다음 단계 (우선순위순)
 

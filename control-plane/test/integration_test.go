@@ -8,9 +8,8 @@
 // docs/test/architecture.md).
 //
 // The REAL harness this replaces will, before these assertions:
-//   - bring up a kind cluster (deploy/kind-config.yaml) and a Redis
-//     (deploy/ overlay over k8s/redis.yaml),
-//   - point the control plane's k8s + redis adapters at them,
+//   - bring up a kind cluster (deploy/kind-config.yaml),
+//   - point the control plane's k8s + ConfigMap state-store adapters at it,
 //   - and assert against actual pods.
 //
 // That wiring is intentionally deferred; see docs/criu-verification.md for the
@@ -26,9 +25,11 @@ import (
 	"os"
 	"testing"
 
+	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/redis"
 	"github.com/dlddu/session-platform/control-plane/internal/api"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
@@ -36,10 +37,12 @@ import (
 
 func harness(t *testing.T) (*httptest.Server, *service.Service) {
 	t.Helper()
-	// TODO(kind+redis): replace the stubs below with adapters pointed at the
-	// kind cluster and Redis brought up for the integration job.
+	// TODO(kind): replace the stubs below with adapters pointed at the kind
+	// cluster brought up for the integration job. The ConfigMap state store
+	// already runs against a fake clientset here, so its contract is exercised
+	// in-process; only the pod orchestrator and CRIU remain stubs.
 	orch := k8s.NewStubOrchestrator("sessions")
-	store := redis.NewStubStore(os.Getenv("REDIS_ADDR"))
+	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
 	ckpt := criu.NewStubCheckpointer(os.Getenv("CRIU_ENABLED") == "1")
 	svc := service.New(orch, store, ckpt)
 
