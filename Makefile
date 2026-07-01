@@ -2,6 +2,7 @@
 # `make build` produces the control-plane binary with the React SPA embedded.
 
 CP_DIR      := control-plane
+DP_DIR      := data-plane
 WEB_DIR     := web
 EMBED_DIR   := $(CP_DIR)/internal/static/dist
 BIN         := $(CP_DIR)/bin/control-plane
@@ -12,7 +13,7 @@ ENVTEST_K8S_VERSION ?= 1.30.0
 
 .DEFAULT_GOAL := build
 
-.PHONY: build web embed control-plane run dev test test-unit test-integration test-envtest lint fmt docker clean tidy e2e-up e2e-down e2e-api e2e-web e2e
+.PHONY: build web embed control-plane run dev test test-unit test-integration test-envtest lint fmt docker docker-data-plane clean tidy e2e-up e2e-down e2e-api e2e-web e2e
 
 ## build: web -> embed -> control-plane binary
 build: control-plane
@@ -49,9 +50,10 @@ dev:
 ## test: unit tests (Go) + web typecheck
 test: test-unit lint
 
-## test-unit: Go unit tests
+## test-unit: Go unit tests (control plane + data plane agent)
 test-unit:
 	cd $(CP_DIR) && go test ./...
+	cd $(DP_DIR) && go test ./...
 
 ## test-integration: opt-in happy-path integration harness (in-process stubs).
 ## Skips CRIU scenarios unless CRIU_ENABLED=1 and a verified runtime exist.
@@ -90,22 +92,30 @@ e2e-web:
 ## e2e: run both e2e suites against an already-up SUT (api then web).
 e2e: e2e-api e2e-web
 
-## lint: go vet + gofmt check + web typecheck
+## lint: go vet + gofmt check (both Go modules) + web typecheck
 lint:
 	cd $(CP_DIR) && go vet ./... && test -z "$$(gofmt -l . | tee /dev/stderr)"
+	cd $(DP_DIR) && go vet ./... && test -z "$$(gofmt -l . | tee /dev/stderr)"
 	cd $(WEB_DIR) && (test -d node_modules || npm install) && npm run lint
 
 ## fmt: format Go sources
 fmt:
 	cd $(CP_DIR) && gofmt -w .
+	cd $(DP_DIR) && gofmt -w .
 
-## tidy: tidy the Go module
+## tidy: tidy the Go modules
 tidy:
 	cd $(CP_DIR) && go mod tidy
+	cd $(DP_DIR) && go mod tidy
 
 ## docker: build the single combined API+SPA image
 docker:
 	docker build -t session-platform/control-plane:dev -f $(CP_DIR)/Dockerfile .
+
+## docker-data-plane: build the data plane session agent image (PTY shell +
+## attach/healthz endpoints — see data-plane/README.md)
+docker-data-plane:
+	docker build -t session-platform/data-plane:dev -f $(DP_DIR)/Dockerfile .
 
 ## clean: remove build artifacts (keeps the embed placeholder)
 clean:

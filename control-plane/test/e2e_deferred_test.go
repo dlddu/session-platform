@@ -41,23 +41,24 @@ func sessionNamespace() string {
 }
 
 // kubeClient builds a client for the cluster the SUT runs in, from the ambient
-// kubeconfig (kind writes one) or the in-cluster config. It reports ok=false
-// when neither is available, so a run pointed at a non-cluster SUT skips rather
-// than fails.
-func kubeClient(t *testing.T) (kubernetes.Interface, bool) {
+// kubeconfig (kind writes one) or the in-cluster config. It also returns the
+// rest config so callers can open exec streams (e2e_shell_test.go). It reports
+// ok=false when neither is available, so a run pointed at a non-cluster SUT
+// skips rather than fails.
+func kubeClient(t *testing.T) (kubernetes.Interface, *rest.Config, bool) {
 	t.Helper()
 	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{}).ClientConfig()
 	if err != nil {
 		if cfg, err = rest.InClusterConfig(); err != nil {
-			return nil, false
+			return nil, nil, false
 		}
 	}
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
-	return cs, true
+	return cs, cfg, true
 }
 
 // getPodEventually fetches a pod, tolerating brief API eventual-consistency.
@@ -85,7 +86,7 @@ func getPodEventually(t *testing.T, cs kubernetes.Interface, ns, name string) *c
 // now that the real client-go PodOrchestrator backs the SUT — the API's returned
 // pod name corresponds to an actual Pod object labelled to its session.
 func TestDeferred_RealPodProvisioned(t *testing.T) {
-	cs, ok := kubeClient(t)
+	cs, _, ok := kubeClient(t)
 	if !ok {
 		t.Skip("no kube API access (kubeconfig/in-cluster) — real-pod assertion needs the deployed cluster")
 	}
@@ -179,7 +180,7 @@ func TestDeferred_WriteIdleAndSnapshotBranches(t *testing.T) {
 // the dimension that suite cannot — two real control-plane processes sharing the
 // store — which is what makes the α SUT's deferred skip obsolete.
 func TestDeferred_CrossReplicaAtomicity(t *testing.T) {
-	cs, ok := kubeClient(t)
+	cs, _, ok := kubeClient(t)
 	if !ok {
 		t.Skip("no kube API access (kubeconfig/in-cluster) — cross-replica assertion needs the deployed multi-replica SUT")
 	}

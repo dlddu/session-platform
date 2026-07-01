@@ -2,10 +2,13 @@
 // session.Manager. Non-active access follows one uniform "resume-on-access"
 // rule (AC-C2/AC-C3): read, write and switch all bring the session to active
 // first — promoting idle->active (AC-C1) or restoring snapshot->active (AC-B2)
-// — and then serve from the live pod. The dispatch policy is fully implemented;
-// only the data-plane payload itself is stubbed until the data plane workload
-// exists (see data-plane/README.md). The remaining TODO(policy) is the
-// idle->snapshot *trigger* timing in package session, a separate decision.
+// — and then serve from the live pod. Becoming active includes proving the
+// session's PTY shell is reachable (AC-D1): Create and Restore open/close the
+// pod agent's attach stream before the state lands. The dispatch policy is
+// fully implemented; only the read/write payload mapping onto the shell's
+// stdin/stdout (AC-D2/D3) is stubbed until J5-S2/S3. The remaining
+// TODO(policy) is the idle->snapshot *trigger* timing in package session, a
+// separate decision.
 package service
 
 import (
@@ -46,7 +49,9 @@ func newID() string {
 }
 
 // Create provisions a dedicated pod and registers the session as active
-// (AC-A1, AC-A2).
+// (AC-A1, AC-A2). "Active" means more than pod Ready: the session's PTY shell
+// must be reachable from the control plane (AC-D1), so the shell agent's
+// attach stream is opened (and closed) before the session is stored.
 func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*session.Session, error) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
@@ -56,6 +61,12 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 
 	pod, err := s.orch.Start(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.orch.Reach(ctx, pod); err != nil {
+		// A pod whose shell is unreachable must not become an active session;
+		// reclaim it instead of leaking it (AC-A3 hygiene).
+		_ = s.orch.Stop(ctx, pod)
 		return nil, err
 	}
 
@@ -123,7 +134,7 @@ func (s *Service) activate(ctx context.Context, id string) (*session.Session, st
 
 // Read brings the session active (per activate) and reads from its pod (AC-C2).
 // The dispatch policy is fully implemented; only the returned payload is a stub
-// until the data plane workload exists (see data-plane/README.md).
+// until read maps onto the shell's accumulated output (AC-D3, J5-S3).
 func (s *Service) Read(ctx context.Context, id string) (*session.ReadResult, error) {
 	sess, branch, err := s.activate(ctx, id)
 	if err != nil {
@@ -139,14 +150,14 @@ func (s *Service) Read(ctx context.Context, id string) (*session.ReadResult, err
 
 // Write brings the session active (per activate) and writes to its pod (AC-C3).
 // snapshot/idle are restored/promoted first rather than rejected, matching the
-// uniform rule. Applying the payload to the workload is stubbed until the data
-// plane agent exists (see data-plane/README.md).
+// uniform rule. Applying the payload to the shell's stdin is stubbed until
+// J5-S2 (AC-D2).
 func (s *Service) Write(ctx context.Context, id, payload string) (*session.WriteResult, error) {
 	sess, branch, err := s.activate(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	_ = payload // applied to the workload once the data plane agent lands
+	_ = payload // injected into the shell's PTY stdin in J5-S2 (AC-D2)
 	s.touch(ctx, id)
 	return &session.WriteResult{
 		Session: sess,
@@ -229,6 +240,12 @@ func (s *Service) Restore(ctx context.Context, id string) (*session.Session, err
 		return nil, err
 	}
 	if err := s.ckpt.Restore(ctx, sess.Checkpoint, pod); err != nil {
+		_ = s.orch.Stop(ctx, pod)
+		return nil, err
+	}
+	// Same bar as Create: the restored session only counts as active once its
+	// shell is reachable again (AC-D1).
+	if err := s.orch.Reach(ctx, pod); err != nil {
 		_ = s.orch.Stop(ctx, pod)
 		return nil, err
 	}
