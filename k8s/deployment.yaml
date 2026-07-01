@@ -33,8 +33,12 @@ spec:
           env:
             - name: CP_ADDR
               value: ":8080"
+            # Session pods run the published data plane agent image: a
+            # PTY-attached interactive shell behind attach/healthz endpoints
+            # (AC-D1, see data-plane/). Published alongside the control-plane
+            # image by .github/workflows/docker-build-push.yaml.
             - name: DATA_PLANE_IMAGE
-              value: "alpine:3.20" # placeholder session workload (see data-plane/)
+              value: "ghcr.io/dlddu/session-platform-data-plane:latest"
             - name: CRIU_ENABLED
               value: "false" # gated off until a verified runtime exists
           readinessProbe:

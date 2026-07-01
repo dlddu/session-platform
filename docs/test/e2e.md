@@ -6,12 +6,17 @@
 
 > **충실도**: PodOrchestrator와 StateStore 모두 실 구현이다 — 세션 생성 시 **진짜 Pod
 > 오브젝트**가 1:1로 기동되고(client-go), 세션 상태는 **ConfigMap + Lease**에 저장된다(클러스터에
-> 배포된 SUT 기준). SUT는 **2 replica**로 배포되어 상태를 공유하므로 교차-replica 원자성(AC-C1)을
-> 실제로 검증한다. Checkpointer(CRIU)만 아직 인메모리 스텁이고 idle→snapshot 트리거가 없으므로
-> 생성된 세션은 여전히 `active`로 머문다. 검증 범위는 **생성/목록/조회/switch·read·write 해피패스
-> + 실 Pod 단언(AC-A1/A2) + 교차-replica 일관성(AC-C1)**이다. B-path(idle → snapshot →
-> restore)와 CRIU 단언은 범위 밖이며, 단계 5의 **deferred 시드**(skip)로 골격만 남겨 둔다 — 해당
-> 트리거/런타임이 들어오면 skip을 지우며 채운다.
+> 배포된 SUT 기준). 세션 pod는 **실 data plane 에이전트 이미지**(`data-plane/`,
+> `session-platform/data-plane:dev`를 kind에 load)로 뜨므로 pod 안에서 PTY에 연결된
+> 인터랙티브 쉘이 실제로 기동되고, create는 pod Ready에 더해 **쉘 도달(Reach, attach 스트림
+> open/close)**까지 확인한 뒤에야 `active`를 반환한다(AC-D1). SUT는 **2 replica**로 배포되어
+> 상태를 공유하므로 교차-replica 원자성(AC-C1)을 실제로 검증한다. Checkpointer(CRIU)만 아직
+> 인메모리 스텁이고 idle→snapshot 트리거가 없으므로 생성된 세션은 여전히 `active`로 머문다.
+> 검증 범위는 **생성/목록/조회/switch·read·write 해피패스 + 실 Pod 단언(AC-A1/A2) + PTY 쉘
+> 런타임 단언(AC-D1) + 교차-replica 일관성(AC-C1)**이다. read/write의 쉘 stdin/stdout 시맨틱
+> (AC-D2/D3)은 J5-S2/S3 범위, B-path(idle → snapshot → restore)와 CRIU 단언은 범위 밖이며,
+> 단계 5의 **deferred 시드**(skip)로 골격만 남겨 둔다 — 해당 트리거/런타임이 들어오면 skip을
+> 지우며 채운다.
 
 ## 빠른 실행 (로컬)
 
@@ -54,8 +59,9 @@ Flux는 `k8s/`를 그대로 적용한다.
 
 ## CI
 
-`.github/workflows/e2e.yml`이 `control-plane/**`·`web/**`·`deploy/**`·`scripts/e2e/**`·
-`Makefile` 변경 PR과 `workflow_dispatch`에서만 돈다(무관 PR은 트리거되지 않음). 흐름:
+`.github/workflows/e2e.yml`이 `control-plane/**`·`data-plane/**`·`web/**`·`deploy/**`·
+`scripts/e2e/**`·`Makefile` 변경 PR과 `workflow_dispatch`에서만 돈다(무관 PR은 트리거되지
+않음). 흐름:
 kind 생성(`helm/kind-action`) → `make e2e-up` → `go test -tags=e2e` → Playwright. 실패 시
 Playwright 리포트/trace를 아티팩트로 올린다. ci.yml의 lint/unit/build/integration 잡은 종전대로
 모든 PR에서 돌고, **envtest 잡**이 실 kube-apiserver로 CAS/Lease 단일-승자(AC-C1)를 검증한다.
@@ -67,6 +73,8 @@ Playwright 리포트/trace를 아티팩트로 올린다. ci.yml의 lint/unit/bui
 | healthz 200 / `{"status":"ok"}` | go API | — |
 | 생성 → `active` + 전용 pod, 3건 → 고유 pod 3개 | go API | A1, A2 |
 | 생성된 세션의 pod 이름 = 실 Pod 오브젝트(라벨 `session-id` 1:1), N건 → 고유 Pod N개 | go API (`TestDeferred_RealPodProvisioned`) | A1, A2 |
+| 세션 pod 안에 PTY에 연결된 쉘 프로세스 정확히 1개(`bash`) | go API (`TestShell_ExactlyOnePTYShellInSessionPod`, shell-workload 시나리오 1) | D1 |
+| control-plane pod에는 쉘 없음(distroless — 쉘 exec 자체가 실패) | go API (`TestShell_ControlPlaneRunsNoShell`, shell-workload 시나리오 1) | D1 |
 | 목록 포함 / 단건 조회 일치 | go API | V5 |
 | active 세션 switch = no-op | go API | C4 |
 | active read(`path:"active"`+payload) / write(`path:"active"`) | go API | C2, C3 |

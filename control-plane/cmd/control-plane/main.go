@@ -43,9 +43,18 @@ func main() {
 		"addr", cfg.addr,
 		"namespace", namespace,
 		"criu_enabled", cfg.criuEnabled,
+		"data_plane_image", cfg.dataPlaneImage,
+		"data_plane_shell", cfg.dataPlaneShell,
 	)
+	if cfg.dataPlaneImage == "" {
+		// The in-code fallback image has no session agent, so session pods will
+		// never pass the shell readiness probe (AC-D1). Deployments must inject
+		// the published data plane agent image.
+		logger.Warn("DATA_PLANE_IMAGE is not set; falling back to a placeholder image that cannot run session shells")
+	}
 
-	orch := k8s.NewClientOrchestrator(client, namespace, k8s.WithImage(cfg.dataPlaneImage))
+	orch := k8s.NewClientOrchestrator(client, namespace,
+		k8s.WithImage(cfg.dataPlaneImage), k8s.WithShell(cfg.dataPlaneShell))
 	store := configmap.NewStore(client, namespace)
 	ckpt := criu.NewStubCheckpointer(cfg.criuEnabled)
 
@@ -83,6 +92,7 @@ func main() {
 type config struct {
 	addr           string
 	dataPlaneImage string
+	dataPlaneShell string
 	criuEnabled    bool
 }
 
@@ -90,6 +100,9 @@ func loadConfig() config {
 	return config{
 		addr:           env("CP_ADDR", ":8080"),
 		dataPlaneImage: env("DATA_PLANE_IMAGE", ""),
+		// Propagated into session pods; the agent launches
+		// ${DATA_PLANE_SHELL:-/bin/bash} on a PTY (AC-D1).
+		dataPlaneShell: env("DATA_PLANE_SHELL", ""),
 		criuEnabled:    envBool("CRIU_ENABLED", false),
 	}
 }

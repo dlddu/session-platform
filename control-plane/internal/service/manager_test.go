@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"k8s.io/client-go/kubernetes/fake"
@@ -172,6 +173,106 @@ func TestWriteDispatchesOnState(t *testing.T) {
 	}
 	if res.Session.State != session.StateActive {
 		t.Errorf("after snapshot write, state = %q, want active", res.Session.State)
+	}
+}
+
+// reachTrackingOrchestrator wraps the stub to observe/steer the AC-D1 shell
+// reachability verification: it counts Reach calls, can fail them, and records
+// which pods were stopped.
+type reachTrackingOrchestrator struct {
+	*k8s.StubOrchestrator
+	reachCalls int
+	reachErr   error
+	stopped    []k8s.PodRef
+}
+
+func (o *reachTrackingOrchestrator) Reach(context.Context, k8s.PodRef) error {
+	o.reachCalls++
+	return o.reachErr
+}
+
+func (o *reachTrackingOrchestrator) Stop(ctx context.Context, ref k8s.PodRef) error {
+	o.stopped = append(o.stopped, ref)
+	return o.StubOrchestrator.Stop(ctx, ref)
+}
+
+func newTrackedService() (*service.Service, *reachTrackingOrchestrator, *configmap.Store) {
+	orch := &reachTrackingOrchestrator{StubOrchestrator: k8s.NewStubOrchestrator("sessions")}
+	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
+	return service.New(orch, store, criu.NewStubCheckpointer(false)), orch, store
+}
+
+// TestCreateVerifiesShellReachability: a session only becomes active after the
+// control plane has opened the pod's shell attach stream (AC-D1) — Create must
+// call Reach exactly once on the happy path.
+func TestCreateVerifiesShellReachability(t *testing.T) {
+	ctx := context.Background()
+	svc, orch, _ := newTrackedService()
+
+	sess, err := svc.Create(ctx, session.CreateRequest{Name: "shell-check"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if orch.reachCalls != 1 {
+		t.Errorf("reach calls = %d, want 1 (AC-D1 verification on create)", orch.reachCalls)
+	}
+	if sess.State != session.StateActive {
+		t.Errorf("state = %q, want active", sess.State)
+	}
+}
+
+// TestCreateReachFailureRollsBackPod: if the shell is unreachable the session
+// must not become active — Create returns the error, reclaims the pod (AC-A3
+// hygiene) and registers nothing.
+func TestCreateReachFailureRollsBackPod(t *testing.T) {
+	ctx := context.Background()
+	svc, orch, store := newTrackedService()
+	orch.reachErr = errors.New("attach stream refused")
+
+	if _, err := svc.Create(ctx, session.CreateRequest{Name: "unreachable"}); err == nil {
+		t.Fatal("create succeeded despite unreachable shell (AC-D1)")
+	}
+	if len(orch.stopped) != 1 {
+		t.Fatalf("stopped %d pods, want 1 (unreachable pod must be reclaimed)", len(orch.stopped))
+	}
+	sessions, err := store.List(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("store holds %d sessions after failed create, want 0", len(sessions))
+	}
+}
+
+// TestRestoreReachFailureRollsBackPod: the restore path holds the same bar —
+// a restored pod whose shell is unreachable is stopped and the session stays
+// in snapshot rather than going active (AC-D1, AC-B2).
+func TestRestoreReachFailureRollsBackPod(t *testing.T) {
+	ctx := context.Background()
+	svc, orch, store := newTrackedService()
+
+	sess, err := svc.Create(ctx, session.CreateRequest{Name: "restore-check"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+
+	orch.reachErr = errors.New("attach stream refused")
+	stoppedBefore := len(orch.stopped) // snapshot already stopped the original pod
+	if _, err := svc.Restore(ctx, sess.ID); err == nil {
+		t.Fatal("restore succeeded despite unreachable shell (AC-D1)")
+	}
+	if got := len(orch.stopped) - stoppedBefore; got != 1 {
+		t.Fatalf("restore stopped %d pods, want 1 (unreachable restored pod must be reclaimed)", got)
+	}
+	got, err := store.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("get after failed restore: %v", err)
+	}
+	if got.State != session.StateSnapshot {
+		t.Errorf("state after failed restore = %q, want snapshot (must not go active)", got.State)
 	}
 }
 

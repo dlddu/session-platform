@@ -1,20 +1,27 @@
 name: Build and Push Docker Image to GHCR
 
-# Builds the single combined control-plane image (Go API + embedded React SPA,
-# see control-plane/Dockerfile) and publishes it to GitHub Container Registry so
-# the cluster (flux-cd-apps) can pull and deploy it. ci.yml only *builds* the
-# image for validation; this workflow is what actually publishes a pullable tag.
+# Builds and publishes the two runtime images to GitHub Container Registry so
+# the cluster (flux-cd-apps) can pull and deploy them:
+#   - the combined control-plane image (Go API + embedded React SPA, see
+#     control-plane/Dockerfile), tagged <repo>:latest/<sha>,
+#   - the data plane session agent image (PTY shell + attach/healthz, see
+#     data-plane/Dockerfile), tagged <repo>-data-plane:latest/<sha> — the tag
+#     k8s/deployment.yaml injects via DATA_PLANE_IMAGE.
+# ci.yml only *builds* images for validation; this workflow is what actually
+# publishes pullable tags.
 
 on:
   push:
     branches: [main]
     paths:
       - "control-plane/**"
+      - "data-plane/**"
       - "web/**"
       - ".github/workflows/docker-build-push.yaml"
   pull_request:
     paths:
       - "control-plane/**"
+      - "data-plane/**"
       - "web/**"
       - ".github/workflows/docker-build-push.yaml"
 
@@ -43,3 +50,28 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:latest
             ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.sha }}
+
+  build-and-push-data-plane:
+    name: build & push data-plane image
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: data-plane/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}-data-plane:latest
+            ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}-data-plane:${{ github.sha }}

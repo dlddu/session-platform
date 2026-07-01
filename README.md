@@ -6,10 +6,13 @@ control plane is the single entry point for creating, listing, and switching
 between sessions.
 
 > **This repository is a bootstrap scaffolding.** Structure, dependencies,
-> boundaries, and the dev loop are in place. Pod orchestration (client-go) and
-> session state (Kubernetes ConfigMaps + Leases) are real; CRIU
-> checkpoint/restore is still stubbed behind its interface. See the design docs
-> under [`docs/`](docs/) for the value/PRD/AC and mockups this is built from.
+> boundaries, and the dev loop are in place. Pod orchestration (client-go),
+> session state (Kubernetes ConfigMaps + Leases), and the data plane session
+> workload — one PTY-attached interactive shell per pod, reachability-checked
+> at the active transition (AC-D1) — are real; the read/write mapping onto the
+> shell's stdin/stdout (J5-S2/S3) and CRIU checkpoint/restore are still stubbed
+> behind their interfaces. See the design docs under [`docs/`](docs/) for the
+> value/PRD/AC and mockups this is built from.
 
 ## Layout
 
@@ -33,7 +36,9 @@ web/                  React + Vite + TS SPA
   src/app/              AppShell (rail + viewport), StateBadge
   src/screens/          Sessions, NewSession, Workspace, Restore
   src/api/              typed client over /api/v1
-data-plane/           placeholder for the session workload runtime
+data-plane/           session agent: one PTY-attached shell + attach/healthz (AC-D1)
+  cmd/agent/            main: launches the shell, serves the WS attach stream
+  Dockerfile            multi-stage: static agent binary on debian-slim
 deploy/               kind config + control-plane manifests (2-replica e2e overlay)
 docs/                 value / PRD·AC / journeys / mockups / CRIU verification note
 ```
