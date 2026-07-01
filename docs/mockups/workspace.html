@@ -376,14 +376,14 @@
         <!-- left: read/write console -->
         <div class="console">
           <div class="console-bar">
-            <span>session console</span>
+            <span>session shell</span>
             <span class="mono" id="ws-console-pod">—</span>
-            <span class="tag" id="ws-console-tag"><span class="led"></span>read / write open</span>
+            <span class="tag" id="ws-console-tag"><span class="led"></span>shell attached</span>
           </div>
           <div class="term mono" id="ws-term"></div>
           <div class="input-row">
-            <span class="p">→</span>
-            <span class="ph" id="ws-input-ph">write { key: "checkpoint", value: … }</span>
+            <span class="p">$</span>
+            <span class="ph" id="ws-input-ph">run a command — executes in the session shell (bash)</span>
           </div>
 
           <!-- thaw / restore overlay -->
@@ -393,7 +393,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M12 2 9 5M12 2l3 3M12 22l-3-3M12 22l3-3M2.7 7l17.3 10M2.7 7l1.1 4M2.7 7l4-1.1M21.3 17l-1.1-4M21.3 17l-4 1.1M21.3 7 4 17M21.3 7l-4-1.1M21.3 7l-1.1 4M2.7 17l4-1.1M2.7 17l1.1-4"/></svg>
               </div>
               <h3>Resuming from checkpoint</h3>
-              <p>Restoring pod from CRIU snapshot. In-memory state — variables, open connections — preserved exactly as frozen.</p>
+              <p>Restoring pod from CRIU snapshot. Shell process tree — env vars, working dir, open descriptors — preserved exactly as frozen.</p>
               <div class="pbar"><i id="ws-pbar"></i></div>
               <div class="rlog mono" id="ws-rlog"></div>
             </div>
@@ -488,17 +488,20 @@ function buildTimeline(s){
   return tl([{cls:'done',lab:'created',fillNext:true},{cls:'done',lab:'active',fillNext:true},{cls:'done',lab:'idle',fillNext:true},{cls:'now frozen-now',lab:'snapshot',time:s.frozenAgo}]);
 }
 const termActive = (s)=>[
-  {c:'sys',t:`◆ attached to session/${s.id} · pod/${s.pod}`},
+  {c:'sys',t:`◆ attached to session/${s.id} · pod/${s.pod} — interactive shell (bash)`},
   {c:'sys',t:`◆ isolation: dedicated pod — no shared state with other sessions`},
-  {c:'req',t:`<span class="op">read</span>  { key: "session_meta" }`},
-  {c:'res',t:`← { status: "active", region: "${s.region}", connections: 1 }`},
-  {c:'req w',t:`<span class="op">write</span> { key: "cursor", value: { row: 4192, col: 7 } }`},
-  {c:'ok',t:`← ok · applied atomically · rev 0x3f`}
+  {c:'req',t:`<span class="op">$</span> export STAGE=dev && cd /work`},
+  {c:'req',t:`<span class="op">$</span> ls`},
+  {c:'res',t:`handlers/   server.js   package.json   README.md`},
+  {c:'req w',t:`<span class="op">$</span> npm run build`},
+  {c:'res',t:`▸ ${s.name}@1.4.0 build`},
+  {c:'res',t:`compiled 128 modules in 3.2s — 0 errors`},
+  {c:'ok',t:`✓ done · cwd=/work $STAGE=dev persist for the next command`}
 ];
 const termFrozen = (s)=>[
   {c:'sys',t:`◆ session/${s.id} is frozen — pod reclaimed`},
-  {c:'sys',t:`◆ checkpoint ${s.checkpoint} on cold storage · frozen ${s.frozenAgo}`},
-  {c:'res',t:`access triggers CRIU restore → new pod → active`}
+  {c:'sys',t:`◆ shell process tree checkpointed (${s.checkpoint}) · frozen ${s.frozenAgo}`},
+  {c:'res',t:`read / write resumes the shell — CRIU restore → new pod → active`}
 ];
 function paintTerm(lines){
   const term = document.getElementById('ws-term');
@@ -553,11 +556,11 @@ function populate(s){
   const tag = document.getElementById('ws-console-tag');
   if(s.state==='active'){
     vit.style.display=''; setGauge(s.cpu,s.mem,s.memMax);
-    tag.style.display=''; tag.innerHTML='<span class="led"></span>read / write open';
+    tag.style.display=''; tag.innerHTML='<span class="led"></span>shell attached';
     paintTerm(termActive(s));
   } else if(s.state==='idle'){
     vit.style.display=''; setGauge(s.cpu,s.mem,s.memMax);
-    tag.style.display=''; tag.innerHTML='<span class="led" style="background:var(--idle);box-shadow:none"></span>idle — pod held';
+    tag.style.display=''; tag.innerHTML='<span class="led" style="background:var(--idle);box-shadow:none"></span>shell idle — pod held';
     paintTerm(termActive(s));
   } else {
     vit.style.display='none'; tag.style.display='none';
@@ -575,7 +578,7 @@ function runRestore(s){
   const pbar=document.getElementById('ws-pbar');
   const rlog=document.getElementById('ws-rlog');
   ov.classList.add('show');
-  const logs=['reading checkpoint '+s.checkpoint+' …','scheduling fresh pod …','restoring memory pages · file descriptors · open sockets …','state verified — resuming'];
+  const logs=['reading checkpoint '+s.checkpoint+' …','scheduling fresh pod …','restoring shell process tree · memory pages · file descriptors …','state verified — resuming'];
   const reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const dur=reduce?0:2400; let step=0;
   const tick=()=>{rlog.textContent=logs[Math.min(step,logs.length-1)];step++;}; tick();
@@ -609,12 +612,13 @@ function promote(s){
   document.getElementById('ws-freeze-btn').style.display='';
   document.getElementById('ws-vitals').style.display='';
   setGauge(s.cpu,s.mem,s.memMax);
-  const tag=document.getElementById('ws-console-tag'); tag.style.display=''; tag.innerHTML='<span class="led"></span>read / write open';
+  const tag=document.getElementById('ws-console-tag'); tag.style.display=''; tag.innerHTML='<span class="led"></span>shell attached';
   paintTerm([
-    {c:'ok',t:`◆ restored from checkpoint — in-memory state intact`},
-    {c:'sys',t:`◆ attached to session/${s.id} · pod/${s.pod}`},
-    {c:'req',t:`<span class="op">read</span>  { key: "cursor" }`},
-    {c:'res',t:`← { row: 4192, col: 7 }   · preserved across freeze`}
+    {c:'ok',t:`✓ restored from checkpoint — shell process tree intact`},
+    {c:'sys',t:`◆ re-attached to session/${s.id} · pod/${s.pod} — interactive shell`},
+    {c:'req',t:`<span class="op">$</span> echo $STAGE; pwd`},
+    {c:'res',t:`dev`},
+    {c:'res',t:`/work   · env + cwd preserved across freeze`}
   ]);
   toast('Session resumed — picked up exactly where it froze','frozen');
 }
