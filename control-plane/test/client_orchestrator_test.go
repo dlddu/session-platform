@@ -2,15 +2,23 @@
 
 // This file exercises the *real* client-go PodOrchestrator against a fake
 // clientset (no cluster needed), asserting the create/label/1:1/delete contract
-// that the in-memory stub can only approximate. The HTTP happy-path scenarios in
-// integration_test.go still run against the stub adapters.
+// and the shell-agent pod spec (AC-D1) that the in-memory stub can only
+// approximate. What the fake cannot verify — an actual PTY shell running inside
+// the pod — is asserted at runtime by the kind e2e suite (e2e_shell_test.go).
+// The HTTP happy-path scenarios in integration_test.go still run against the
+// stub adapters.
 package integration_test
 
 import (
 	"context"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -22,16 +30,21 @@ import (
 
 const testNS = "sessions"
 
+// testPodIP is the pod IP the fake clientset stamps on created pods, standing
+// in for the kubelet-assigned address Start records into PodRef.
+const testPodIP = "10.244.7.42"
+
 // newReadyOrchestrator returns a ClientOrchestrator backed by a fake clientset
-// that immediately marks created pods Running+Ready. The fake has no kubelet to
-// transition pods, so without this the orchestrator's readiness wait would block
-// until timeout. The short poll/timeout keeps the test fast.
-func newReadyOrchestrator(t *testing.T) (*k8s.ClientOrchestrator, *fake.Clientset) {
+// that immediately marks created pods Running+Ready with a pod IP. The fake has
+// no kubelet to transition pods, so without this the orchestrator's readiness
+// wait would block until timeout. The short poll/timeout keeps the test fast.
+func newReadyOrchestrator(t *testing.T, opts ...k8s.Option) (*k8s.ClientOrchestrator, *fake.Clientset) {
 	t.Helper()
 	cs := fake.NewSimpleClientset()
 	cs.PrependReactor("create", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		pod := action.(k8stesting.CreateAction).GetObject().(*corev1.Pod)
 		pod.Status.Phase = corev1.PodRunning
+		pod.Status.PodIP = testPodIP
 		pod.Status.Conditions = append(pod.Status.Conditions, corev1.PodCondition{
 			Type:   corev1.PodReady,
 			Status: corev1.ConditionTrue,
@@ -40,7 +53,8 @@ func newReadyOrchestrator(t *testing.T) (*k8s.ClientOrchestrator, *fake.Clientse
 		// just mutated, so a later Get observes it Ready.
 		return false, pod, nil
 	})
-	orch := k8s.NewClientOrchestrator(cs, testNS, k8s.WithReadiness(time.Millisecond, 5*time.Second))
+	opts = append([]k8s.Option{k8s.WithReadiness(time.Millisecond, 5*time.Second)}, opts...)
+	orch := k8s.NewClientOrchestrator(cs, testNS, opts...)
 	return orch, cs
 }
 
@@ -106,6 +120,147 @@ func TestClientOrchestrator_NSessionsNUniquePods(t *testing.T) {
 		if p.Labels[k8s.LabelSessionID] == "" {
 			t.Fatalf("pod %s missing %s label", p.Name, k8s.LabelSessionID)
 		}
+	}
+}
+
+// AC-D1 (pod spec side): the data plane image's entrypoint owns the PTY shell,
+// so the orchestrator must not override the container command; the agent port
+// is declared and readiness is the agent's /healthz — making "pod Ready" mean
+// "shell alive". The runtime side (an actual PTY shell in the pod) is asserted
+// by the kind e2e suite.
+func TestClientOrchestrator_PodSpecRunsShellAgent(t *testing.T) {
+	orch, cs := newReadyOrchestrator(t)
+	if _, err := orch.Start(context.Background(), "d1a1"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	pods := listPods(t, cs)
+	if len(pods) != 1 {
+		t.Fatalf("expected 1 pod, got %d", len(pods))
+	}
+	c := pods[0].Spec.Containers[0]
+
+	if len(c.Command) != 0 || len(c.Args) != 0 {
+		t.Fatalf("container overrides the image entrypoint (command=%v args=%v); the agent must own the shell (AC-D1)", c.Command, c.Args)
+	}
+	for _, env := range c.Env {
+		if env.Name == "DATA_PLANE_SHELL" {
+			t.Fatalf("DATA_PLANE_SHELL env present without an override: %q", env.Value)
+		}
+	}
+
+	var port *corev1.ContainerPort
+	for i := range c.Ports {
+		if c.Ports[i].ContainerPort == k8s.AgentPort {
+			port = &c.Ports[i]
+		}
+	}
+	if port == nil {
+		t.Fatalf("agent port %d not declared on the container (ports=%v)", k8s.AgentPort, c.Ports)
+	}
+
+	rp := c.ReadinessProbe
+	if rp == nil || rp.HTTPGet == nil {
+		t.Fatal("expected an HTTP readiness probe against the agent (pod Ready must mean shell alive, AC-D1)")
+	}
+	if rp.HTTPGet.Path != "/healthz" {
+		t.Fatalf("readiness path=%q want /healthz", rp.HTTPGet.Path)
+	}
+	if got := rp.HTTPGet.Port.IntValue(); got != k8s.AgentPort {
+		t.Fatalf("readiness port=%d want %d", got, k8s.AgentPort)
+	}
+}
+
+// AC-D1 (shell override): WithShell propagates DATA_PLANE_SHELL into the pod so
+// the agent launches the configured shell instead of /bin/bash.
+func TestClientOrchestrator_PodSpecPropagatesShellOverride(t *testing.T) {
+	orch, cs := newReadyOrchestrator(t, k8s.WithShell("/bin/zsh"))
+	if _, err := orch.Start(context.Background(), "d1b2"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	c := listPods(t, cs)[0].Spec.Containers[0]
+	var got string
+	for _, env := range c.Env {
+		if env.Name == "DATA_PLANE_SHELL" {
+			got = env.Value
+		}
+	}
+	if got != "/bin/zsh" {
+		t.Fatalf("DATA_PLANE_SHELL env=%q want /bin/zsh", got)
+	}
+}
+
+// AC-D1 (transport): Start records the Ready pod's IP so the control plane can
+// dial the session agent without re-fetching the pod.
+func TestClientOrchestrator_StartRecordsPodIP(t *testing.T) {
+	orch, _ := newReadyOrchestrator(t)
+	ref, err := orch.Start(context.Background(), "d1c3")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if ref.IP != testPodIP {
+		t.Fatalf("ref.IP=%q want %q (pod IP recorded at Ready)", ref.IP, testPodIP)
+	}
+}
+
+// AC-D1 (reachability): Reach opens the agent's /attach WebSocket stream and
+// closes it — success against a live endpoint, an error against a dead one,
+// and an error for refs without an IP.
+func TestClientOrchestrator_ReachOpensAttachStream(t *testing.T) {
+	upgraded := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/attach" {
+			http.NotFound(w, r)
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		upgraded <- struct{}{}
+		defer conn.Close()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return // peer closed — Reach hangs up right after opening
+			}
+		}
+	}))
+	defer srv.Close()
+
+	host, portStr, err := net.SplitHostPort(srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split httptest addr: %v", err)
+	}
+	port, _ := strconv.Atoi(portStr)
+
+	orch, _ := newReadyOrchestrator(t, k8s.WithAgentPort(port))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := orch.Reach(ctx, k8s.PodRef{Name: "sess-ok", IP: host}); err != nil {
+		t.Fatalf("reach against live agent: %v", err)
+	}
+	select {
+	case <-upgraded:
+	default:
+		t.Fatal("agent never saw the attach stream open")
+	}
+
+	// A dead endpoint (fresh unused port) must surface as an error.
+	dead, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve dead port: %v", err)
+	}
+	deadPort := dead.Addr().(*net.TCPAddr).Port
+	dead.Close()
+	orchDead, _ := newReadyOrchestrator(t, k8s.WithAgentPort(deadPort))
+	if err := orchDead.Reach(ctx, k8s.PodRef{Name: "sess-dead", IP: "127.0.0.1"}); err == nil {
+		t.Fatal("reach against dead endpoint succeeded; want error (AC-D1 gate)")
+	}
+
+	// A ref without an IP (e.g. rebuilt from stored state) cannot be dialled.
+	if err := orch.Reach(ctx, k8s.PodRef{Name: "sess-noip"}); err == nil {
+		t.Fatal("reach without pod IP succeeded; want error")
 	}
 }
 

@@ -30,8 +30,10 @@ patches:
         path: /spec/ports/0/nodePort
         value: 30080
   # The image is loaded into kind (`kind load`), so never reach for a registry;
-  # and run 2 replicas so the e2e suite drives cross-replica atomicity (AC-C1)
-  # against the shared ConfigMap/Lease store.
+  # run 2 replicas so the e2e suite drives cross-replica atomicity (AC-C1)
+  # against the shared ConfigMap/Lease store; and point DATA_PLANE_IMAGE at the
+  # locally built agent image scripts/e2e/up.sh loads into kind (the base
+  # references the ghcr-published tag). env/1 is DATA_PLANE_IMAGE in the base.
   - target:
       kind: Deployment
       name: control-plane
@@ -42,3 +44,6 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 2
+      - op: replace
+        path: /spec/template/spec/containers/0/env/1/value
+        value: session-platform/data-plane:dev

@@ -1,16 +1,18 @@
 name: e2e
 
-# Full-stack e2e against a kind-deployed stub SUT (deploy/): build the combined
-# image, load it into kind, apply the manifests, then run the Go API suite and
-# the Playwright browser suite against the NodePort-exposed control-plane.
+# Full-stack e2e against a kind-deployed SUT (deploy/): build the combined
+# control-plane image and the data plane agent image, load them into kind,
+# apply the manifests, then run the Go API suite and the Playwright browser
+# suite against the NodePort-exposed control-plane.
 #
-# Path-filtered so it runs only when the control-plane, web, deploy manifests, or
-# this workflow change (plus on-demand). Unrelated PRs don't trigger it; the
-# lint/unit/build jobs in ci.yml still run on every PR.
+# Path-filtered so it runs only when the control-plane, data-plane, web, deploy
+# manifests, or this workflow change (plus on-demand). Unrelated PRs don't
+# trigger it; the lint/unit/build jobs in ci.yml still run on every PR.
 on:
   pull_request:
     paths:
       - "control-plane/**"
+      - "data-plane/**" # session pods run this agent image (AC-D1 runtime assertions)
       - "web/**"
       - "deploy/**"
       - "k8s/**" # deploy/ overlay builds on the k8s/ base
