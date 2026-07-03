@@ -36,8 +36,13 @@ export const api = {
   createSession: (body: CreateSessionRequest) =>
     req<Session>("/sessions", { method: "POST", body: JSON.stringify(body) }),
 
-  readSession: (id: string) =>
-    req<ReadResult>(`/sessions/${id}/read`, { method: "POST" }),
+  /** offset is the nextOffset cursor from the previous read; 0 replays the
+   *  full scrollback since session start (AC-D3). */
+  readSession: (id: string, offset = 0) =>
+    req<ReadResult>(`/sessions/${id}/read`, {
+      method: "POST",
+      body: JSON.stringify({ offset }),
+    }),
 
   writeSession: (id: string, payload: string) =>
     req<WriteResult>(`/sessions/${id}/write`, {

@@ -1,53 +1,84 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { Session } from "../api/types";
 import { StateBadge } from "../app/StateBadge";
 
-// Workspace — a single live session: console (panel) + lifecycle side panel
-// with read/write/switch actions that exercise the state-branched stub
-// endpoints. [plan step 5]
+// Workspace — a single live session: the shell console plus the lifecycle
+// side panel. The console is the J5 loop (docs/mockups/workspace.html):
+// entering replays the full scrollback once (read offset=0), the `$` input
+// row writes commands into the shell's stdin (AC-D2), and follow-up reads use
+// the server-issued nextOffset cursor so only new output is appended (AC-D3).
+// There is NO automatic polling: every read/write is a user action, so
+// lastAccess only moves on real client shell I/O (AC-D5).
 export function Workspace() {
   const { id = "" } = useParams();
   const [sess, setSess] = useState<Session | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [log, setLog] = useState<string[]>([]);
-
-  const refresh = () =>
-    api.getSession(id).then(setSess).catch((e) => setError(String(e)));
+  const [term, setTerm] = useState("");
+  const [cmd, setCmd] = useState("");
+  // The read cursor lives in a ref: reads are sequential await chains, and the
+  // cursor must advance immediately (not on the next render) to keep deltas
+  // non-overlapping.
+  const offsetRef = useRef(0);
+  const termRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    refresh();
+    offsetRef.current = 0;
+    setTerm("");
+    api.getSession(id).then(setSess).catch((e) => setError(String(e)));
+    // Re-entering the workspace restores the entire session history (AC-D3
+    // non-consuming: offset 0 always replays everything).
+    readDelta().catch((e) => appendSys(`read failed: ${e}`));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const append = (line: string) => setLog((l) => [...l, line]);
+  // Keep the scrollback pinned to the newest output.
+  useEffect(() => {
+    const el = termRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [term]);
 
-  async function doRead() {
+  const appendSys = (line: string) =>
+    setTerm((t) => (t === "" || t.endsWith("\n") ? t : t + "\n") + `◆ ${line}\n`);
+
+  async function readDelta() {
+    const r = await api.readSession(id, offsetRef.current);
+    offsetRef.current = r.nextOffset;
+    if (r.payload) setTerm((t) => t + r.payload);
+    setSess(r.session);
+  }
+
+  const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+
+  // One command round-trip: write cmd+"\n" into the shell's stdin, then a
+  // short, bounded series of cursor reads to collect the echo and the command
+  // output. Bounded (it always stops) — deliberately not a poller (AC-D5).
+  // An empty Enter skips the write and just fetches the pending delta.
+  async function run() {
+    const command = cmd;
+    setCmd("");
     try {
-      const r = await api.readSession(id);
-      append(`read  → ${r.path}  (${r.payload})`);
-      setSess(r.session);
+      if (command.trim() !== "") {
+        await api.writeSession(id, command + "\n");
+      }
+      await readDelta();
+      for (const ms of [250, 700]) {
+        await sleep(ms);
+        await readDelta();
+      }
     } catch (e) {
-      append(`read  ✗ ${e}`);
+      appendSys(`shell i/o failed: ${e}`);
     }
   }
-  async function doWrite() {
-    try {
-      const r = await api.writeSession(id, "stub-write");
-      append(`write → ${r.path}`);
-      setSess(r.session);
-    } catch (e) {
-      append(`write ✗ ${e}`);
-    }
-  }
+
   async function doSwitch() {
     try {
       const s = await api.switchSession(id);
-      append(`switch → ${s.state}`);
       setSess(s);
+      appendSys(`switch → ${s.state}`);
     } catch (e) {
-      append(`switch ✗ ${e}`);
+      appendSys(`switch failed: ${e}`);
     }
   }
 
@@ -79,18 +110,44 @@ export function Workspace() {
       <div className="ws-body">
         <div className="console">
           <div className="console-bar">
-            <span>console · {sess.id}</span>
-          </div>
-          <div className="term" data-testid="ws-log">
-            {log.length === 0 && (
-              <div style={{ color: "var(--text-faint)" }}>
-                // run a read / write / switch to exercise the stub endpoints
-              </div>
+            <span>session shell</span>
+            <span data-testid="ws-console-pod">
+              {sess.pod ? `pod/${sess.pod}` : "pod reclaimed"}
+            </span>
+            {!frozen && (
+              <span className="tag">
+                <span className="led" />
+                shell attached
+              </span>
             )}
-            {log.map((l, i) => (
-              <div key={i}>{l}</div>
-            ))}
           </div>
+          <div className="term" data-testid="ws-log" ref={termRef}>
+            {term === "" ? (
+              <span style={{ color: "var(--text-faint)" }}>
+                {"// attached — the shell's output since session start appears here"}
+              </span>
+            ) : (
+              term
+            )}
+          </div>
+          <form
+            className="input-row"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void run();
+            }}
+          >
+            <span className="p">$</span>
+            <input
+              data-testid="ws-cmd"
+              value={cmd}
+              onChange={(e) => setCmd(e.target.value)}
+              placeholder="run a command — executes in the session shell (bash)"
+              spellCheck={false}
+              autoComplete="off"
+              aria-label="shell command"
+            />
+          </form>
         </div>
 
         <div>
@@ -100,12 +157,6 @@ export function Workspace() {
           <div className="panel">
             <h4>Actions</h4>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <button className="btn btn-ghost" data-testid="ws-read" onClick={doRead}>
-                Read (AC-C2)
-              </button>
-              <button className="btn btn-ghost" data-testid="ws-write" onClick={doWrite}>
-                Write (AC-C3)
-              </button>
               <button className="btn btn-ghost" data-testid="ws-switch" onClick={doSwitch}>
                 Switch (AC-C4)
               </button>
