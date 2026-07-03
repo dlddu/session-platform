@@ -1,17 +1,23 @@
 //go:build e2e
 
-// AC-D1 runtime assertions against the kind-deployed SUT (scenario 1 in
-// docs/test/shell-workload.md): a created session's pod runs exactly ONE
-// PTY-attached interactive shell, and the control plane runs none. This is the
-// half of the AC-D1 split the fake-clientset suite cannot cover — it verifies
-// the pod *spec* (client_orchestrator_test.go); this file verifies the
-// resulting *processes* in a real cluster.
+// Shell-workload assertions against the kind-deployed SUT
+// (docs/test/shell-workload.md):
+//   - scenario 1 (AC-D1): a created session's pod runs exactly ONE
+//     PTY-attached interactive shell, and the control plane runs none — the
+//     half of the AC-D1 split the fake-clientset suite cannot cover (it
+//     verifies the pod *spec*; this file verifies the resulting *processes*).
+//   - scenario 2 (AC-D2/D3): write injects into the shell's stdin without
+//     waiting for the command, read recovers the output.
+//   - scenario 3 (AC-D3): read is offset-cursored — a cursor read returns
+//     only the delta, offset=0 keeps replaying the full history.
 package e2e_test
 
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +29,105 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
 )
+
+// writeShell posts a payload to the session's write endpoint (AC-D2).
+func writeShell(t *testing.T, id, payload string) {
+	t.Helper()
+	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+id+"/write", map[string]string{"payload": payload})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("write status=%d body=%s", resp.StatusCode, body)
+	}
+}
+
+// readShellAt reads the session's shell output after offset (AC-D3).
+func readShellAt(t *testing.T, id string, offset int64) readResp {
+	t.Helper()
+	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+id+"/read", map[string]int64{"offset": offset})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("read status=%d body=%s", resp.StatusCode, body)
+	}
+	var r readResp
+	if err := json.Unmarshal(body, &r); err != nil {
+		t.Fatalf("decode read: %v body=%s", err, body)
+	}
+	return r
+}
+
+// eventuallyShellRead polls read at offset until ok(payload) holds. Shell
+// output timing is non-deterministic (bash prompt, command scheduling), so
+// all output assertions are containment + eventually, never exact matches.
+func eventuallyShellRead(t *testing.T, id string, offset int64, ok func(string) bool) readResp {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	var r readResp
+	for {
+		r = readShellAt(t, id, offset)
+		if ok(r.Payload) {
+			return r
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("read at offset %d never matched; last payload=%q", offset, r.Payload)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
+// Scenario 2 (AC-D2, AC-D3): a command written to the session executes in its
+// shell and the output is recovered by read. The $((…)) marker only exists in
+// the output once bash actually ran the command — the PTY-echoed input line
+// alone cannot contain the computed value. Write must return without waiting
+// for the command to finish.
+func TestShell_WriteThenReadRecoversOutput(t *testing.T) {
+	s := createSession(t, uniqueName(t))
+
+	start := time.Now()
+	writeShell(t, s.ID, "sleep 3; echo e2e-marker-$((40+2))\n")
+	if took := time.Since(start); took > 2500*time.Millisecond {
+		t.Fatalf("write blocked for %v on a 3s command — write must not wait for completion (AC-D2)", took)
+	}
+
+	r := eventuallyShellRead(t, s.ID, 0, func(p string) bool {
+		return strings.Contains(p, "e2e-marker-42")
+	})
+	if r.NextOffset <= 0 {
+		t.Fatalf("nextOffset=%d want > 0 (AC-D3 cursor)", r.NextOffset)
+	}
+}
+
+// Scenario 3 (AC-D3): reads are offset-cursored deltas. The first read's
+// nextOffset yields only output produced after it; offset=0 keeps replaying
+// the full ordered history (non-consuming).
+func TestShell_ReadCursorDeltaAndFullReplay(t *testing.T) {
+	s := createSession(t, uniqueName(t))
+
+	writeShell(t, s.ID, "echo e2e-first-$((40+1))\n")
+	first := eventuallyShellRead(t, s.ID, 0, func(p string) bool {
+		return strings.Contains(p, "e2e-first-41")
+	})
+
+	// Quiet shell: the cursor read must not replay pre-cursor output.
+	if d := readShellAt(t, s.ID, first.NextOffset); strings.Contains(d.Payload, "e2e-first-41") {
+		t.Fatalf("cursor read replayed old output %q, want delta only (AC-D3)", d.Payload)
+	}
+
+	writeShell(t, s.ID, "echo e2e-second-$((40+3))\n")
+	delta := eventuallyShellRead(t, s.ID, first.NextOffset, func(p string) bool {
+		return strings.Contains(p, "e2e-second-43")
+	})
+	if strings.Contains(delta.Payload, "e2e-first-41") {
+		t.Fatalf("cursor read %q contains pre-cursor output, want only the delta (AC-D3)", delta.Payload)
+	}
+
+	// offset=0 replays everything in execution order.
+	full := readShellAt(t, s.ID, 0)
+	i, j := strings.Index(full.Payload, "e2e-first-41"), strings.Index(full.Payload, "e2e-second-43")
+	if i == -1 || j == -1 || i > j {
+		t.Fatalf("full read must contain e2e-first-41 then e2e-second-43 in order; payload=%q", full.Payload)
+	}
+	if full.NextOffset < delta.NextOffset {
+		t.Fatalf("full read cursor %d regressed below delta cursor %d", full.NextOffset, delta.NextOffset)
+	}
+}
 
 // execInPod runs command in the pod's (single) container via the exec
 // subresource. Only this e2e runner uses pods/exec, authorised by its own
