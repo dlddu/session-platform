@@ -41,10 +41,17 @@ type writeReq struct {
 	Payload string `json:"payload"`
 }
 
+type readReq struct {
+	// Offset is the nextOffset cursor issued by the previous read; 0 (or an
+	// omitted body) reads the full output since session start (AC-D3).
+	Offset int64 `json:"offset"`
+}
+
 type readResp struct {
-	Session *session.Session `json:"session"`
-	Path    string           `json:"path"`
-	Payload string           `json:"payload"`
+	Session    *session.Session `json:"session"`
+	Path       string           `json:"path"`
+	Payload    string           `json:"payload"`
+	NextOffset int64            `json:"nextOffset"`
 }
 
 type writeResp struct {
@@ -95,17 +102,24 @@ func (a *API) getSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) readSession(w http.ResponseWriter, r *http.Request) {
-	res, err := a.mgr.Read(r.Context(), r.PathValue("id"))
+	var req readReq
+	// body is optional: no body (or no offset) means "from the beginning"
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.Offset < 0 {
+		writeErr(w, session.ErrInvalidInput)
+		return
+	}
+	res, err := a.mgr.Read(r.Context(), r.PathValue("id"), req.Offset)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, readResp{Session: res.Session, Path: res.Path, Payload: res.Payload})
+	writeJSON(w, http.StatusOK, readResp{Session: res.Session, Path: res.Path, Payload: res.Payload, NextOffset: res.NextOffset})
 }
 
 func (a *API) writeSession(w http.ResponseWriter, r *http.Request) {
 	var req writeReq
-	// body is optional for the stub
+	// body is optional: an empty payload is a valid (no-op) shell write
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	res, err := a.mgr.Write(r.Context(), r.PathValue("id"), req.Payload)
 	if err != nil {

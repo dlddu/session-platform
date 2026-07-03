@@ -11,11 +11,14 @@ type CreateRequest struct {
 type ReadResult struct {
 	Session *Session
 	// Path records which state branch served the read (e.g. "active",
-	// "idle->read", "snapshot->restore"). It exists so the scaffolding can
-	// assert dispatch behaviour before the real read paths are implemented.
+	// "idle->active->read", "snapshot->restore->read").
 	Path string
-	// Payload is the (stub) session data. Real reads return workload data.
+	// Payload is the shell output accumulated after the requested offset
+	// (stdout/stderr merged, order preserved — AC-D3).
 	Payload string
+	// NextOffset is the cursor to pass as offset on the next Read to receive
+	// only new output; offset 0 replays the full history (AC-D3).
+	NextOffset int64
 }
 
 // WriteResult is the state-branched result of a Write (AC-C3).
@@ -31,8 +34,10 @@ type WriteResult struct {
 // AC mapping:
 //   - Create    → AC-A1, AC-A2 (provision one dedicated pod, go active).
 //   - Get/List  → V5 (single source of truth for session state).
-//   - Read      → AC-C2 (state-branched read).
-//   - Write     → AC-C3 (state-branched write).
+//   - Read      → AC-C2 (state-branched read), AC-D3 (shell output delta
+//     after offset, nextOffset cursor, non-consuming).
+//   - Write     → AC-C3 (state-branched write), AC-D2 (payload into the
+//     shell's stdin, no wait for command completion).
 //   - Switch    → AC-C4 (free switching; restore snapshot, no-op if active).
 //   - Snapshot  → AC-B1 (checkpoint + reclaim on idle).
 //   - Restore   → AC-B2 (restore checkpoint into a new pod).
@@ -41,7 +46,7 @@ type Manager interface {
 	Create(ctx context.Context, req CreateRequest) (*Session, error)
 	Get(ctx context.Context, id string) (*Session, error)
 	List(ctx context.Context) ([]*Session, error)
-	Read(ctx context.Context, id string) (*ReadResult, error)
+	Read(ctx context.Context, id string, offset int64) (*ReadResult, error)
 	Write(ctx context.Context, id, payload string) (*WriteResult, error)
 	Switch(ctx context.Context, id string) (*Session, error)
 	Snapshot(ctx context.Context, id string) (*Session, error)
