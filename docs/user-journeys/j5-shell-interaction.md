@@ -14,7 +14,7 @@
 
 1. **J5-S1 · 쉘 연결** — 세션이 `active`가 되면 전용 data plane pod 안에서 PTY에 연결된 인터랙티브 쉘(기본 `/bin/bash`)이 기동되어 있고, 작업자는 이 쉘에 연결된다. *(관련 AC: AC-D1)* *(mockup: workspace.html — session shell 콘솔, ✅)*
 2. **J5-S2 · 명령 입력** — 작업자가 write API로 쉘 stdin에 명령을 보낸다(예: `ls`, `cd /work`, `export KEY=…`). 개행이 포함된 입력은 쉘이 명령으로 실행한다. *(관련 AC: AC-D2)* *(mockup: workspace.html — input-row `$` 프롬프트, ✅)*
-3. **J5-S3 · 출력 확인** — 작업자가 read API로 세션 시작 이후 누적된 **전체** 출력(stdout/stderr)을 확인한다. read는 비파괴적이라 여러 번 읽어도 전체 스크롤백이 그대로 보이고, 그 사이 새 명령을 실행했다면 그 출력이 뒤에 덧붙는다. *(관련 AC: AC-D3)* *(mockup: workspace.html — term stdout, ✅)*
+3. **J5-S3 · 출력 확인** — 작업자가 read API로 쉘 출력(stdout/stderr)을 확인한다. read는 서버가 직전 응답에 발급한 `nextOffset` 커서 이후의 **델타**를 반환하므로 반복 조회는 신규 출력만 받고, `offset=0`으로 읽으면 세션 시작 이후 **전체** 스크롤백이 반환된다(재진입 시 이력 복원). read는 비파괴적이라 서버는 출력을 버리지 않는다. *(관련 AC: AC-D3)* *(mockup: workspace.html — term stdout, ✅)*
 4. **J5-S4 · 쉘 상태 축적과 이어짐** — 앞선 명령이 만든 상태(환경 변수, 현재 작업 디렉터리, 쉘 변수·함수, 실행 중 포그라운드 프로세스)가 다음 명령에 그대로 이어진다. 이 쉘 프로세스 트리가 곧 세션의 보존 대상 상태이며, idle·snapshot·restore(J2)를 거쳐도 동결 직전 맥락 그대로 재개된다. *(관련 AC: AC-D4, 보조 AC-B3)* *(mockup: ❌ 전용 화면 없음 — 상태 축적 자체를 그리는 화면 부재)*
 
 ## 인접 여정과의 관계

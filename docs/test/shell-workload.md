@@ -17,14 +17,14 @@
 
 ### 시나리오 2: write로 명령 실행 후 read로 출력 회수
 - **사전 조건**: active 세션 1개
-- **실행 단계**: `payload="echo hello\n"`로 write → 잠시 후 read
-- **기대 결과**: write는 명령 완료를 기다리지 않고 즉시 반환. read 응답 `payload`에 `hello` 포함
+- **실행 단계**: `payload="echo hello\n"`로 write → 잠시 후 read(`offset=0`)
+- **기대 결과**: write는 명령 완료를 기다리지 않고 즉시 반환. read 응답 `payload`에 `hello` 포함, 응답에 다음 read용 `nextOffset` 커서 발급. 발급된 `nextOffset`으로 곧바로 재-read하면 (새 출력이 없는 한) 빈 `payload`
 - **검증 AC**: AC-D2, AC-D3
 
-### 시나리오 3: read는 전체 출력을 비파괴적으로 반환
+### 시나리오 3: read는 offset 커서 기반 델타·offset=0은 전체(비파괴적)
 - **사전 조건**: active 세션 1개
-- **실행 단계**: `echo A` 실행을 write → read(1회차) → `echo B` 실행을 write → read(2회차) → 곧바로 read(3회차)
-- **기대 결과**: 1회차 read에 `A` 포함. 2회차 read에는 `A`와 `B`가 실행 순서대로 **모두** 포함(마지막 read 이후 델타가 아니라 전체 누적). 3회차 read에도 새 write가 없었으므로 2회차와 동일한 전체 출력이 반환됨(비파괴적)
+- **실행 단계**: `echo A` 실행을 write → read(`offset=0`, 1회차) → `echo B` 실행을 write → 1회차가 발급한 `nextOffset`으로 read(2회차) → read(`offset=0`, 3회차)
+- **기대 결과**: 1회차 read에 `A` 포함 + `nextOffset` 발급. 2회차 read(커서 이후 델타)에는 `B`만 포함되고 `A`는 미포함. 3회차 read(`offset=0`)에는 `A`와 `B`가 실행 순서대로 **모두** 포함 — 서버는 출력을 버리지 않으므로 `offset=0` 재조회는 언제나 전체 누적 출력(비파괴적)
 - **검증 AC**: AC-D3
 
 ### 시나리오 4: 복원 후 쉘 상태 무결성(구체 마커)
