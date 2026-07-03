@@ -13,10 +13,10 @@
 > 상태를 공유하므로 교차-replica 원자성(AC-C1)을 실제로 검증한다. Checkpointer(CRIU)만 아직
 > 인메모리 스텁이고 idle→snapshot 트리거가 없으므로 생성된 세션은 여전히 `active`로 머문다.
 > 검증 범위는 **생성/목록/조회/switch·read·write 해피패스 + 실 Pod 단언(AC-A1/A2) + PTY 쉘
-> 런타임 단언(AC-D1) + 교차-replica 일관성(AC-C1)**이다. read/write의 쉘 stdin/stdout 시맨틱
-> (AC-D2/D3)은 J5-S2/S3 범위, B-path(idle → snapshot → restore)와 CRIU 단언은 범위 밖이며,
-> 단계 5의 **deferred 시드**(skip)로 골격만 남겨 둔다 — 해당 트리거/런타임이 들어오면 skip을
-> 지우며 채운다.
+> 런타임 단언(AC-D1) + 쉘 stdin/stdout 시맨틱(AC-D2/D3: write→쉘 stdin 주입, read→offset
+> 커서 델타·offset=0 전체 재조회) + 교차-replica 일관성(AC-C1)**이다. B-path(idle →
+> snapshot → restore)와 CRIU 단언은 범위 밖이며, 단계 5의 **deferred 시드**(skip)로 골격만
+> 남겨 둔다 — 해당 트리거/런타임이 들어오면 skip을 지우며 채운다.
 
 ## 빠른 실행 (로컬)
 
@@ -25,7 +25,7 @@
 ```bash
 make e2e-up                          # kind 생성 + 이미지 빌드/load + deploy/ 적용 + 헬스 대기
 cd control-plane && go test -tags=e2e ./test/...   # API e2e
-cd web && npx playwright test        # 브라우저 e2e (J1, J3, smoke) — 최초 1회 `npx playwright install chromium`
+cd web && npx playwright test        # 브라우저 e2e (J1, J3, J5, smoke) — 최초 1회 `npx playwright install chromium`
 make e2e-down                        # kind 클러스터 제거
 ```
 
@@ -77,11 +77,14 @@ Playwright 리포트/trace를 아티팩트로 올린다. ci.yml의 lint/unit/bui
 | control-plane pod에는 쉘 없음(distroless — 쉘 exec 자체가 실패) | go API (`TestShell_ControlPlaneRunsNoShell`, shell-workload 시나리오 1) | D1 |
 | 목록 포함 / 단건 조회 일치 | go API | V5 |
 | active 세션 switch = no-op | go API | C4 |
-| active read(`path:"active"`+payload) / write(`path:"active"`) | go API | C2, C3 |
+| active read(`path:"active"` + 쉘 프롬프트 payload 수신 대기 + `nextOffset` 커서) / write(`path:"active"`) | go API | C2, C3 |
+| write→쉘 실행→read로 출력 회수, write는 명령 완료 미대기(3초 명령에 비블로킹) | go API (`TestShell_WriteThenReadRecoversOutput`, shell-workload 시나리오 2) | D2, D3 |
+| 커서 read는 델타만, `offset=0` 재조회는 전체 이력 순서 보존(비파괴) | go API (`TestShell_ReadCursorDeltaAndFullReplay`, shell-workload 시나리오 3) | D3 |
 | 없는 id → 404 | go API | (에러 매핑) |
 | 동시 접근(get/read/write/switch 24-way)에서 단일 active 상태로 수렴·중복 pod 없음(2 replica 공유 store) | go API (`TestDeferred_CrossReplicaAtomicity`) | C1 |
-| J1: 생성 → `/session/:id` → read/write/switch | playwright | A1/A2, C2/C3 |
+| J1: 생성 → `/session/:id` → 쉘 명령 실행($((…)) 마커) → switch | playwright | A1/A2, C2/C3, D2/D3 |
 | J3: 다건 목록 노출 → 카드 클릭/전환 | playwright | C4, V4 |
+| J5: 콘솔 명령 입력→출력 누적 표시, 재진입 시 `offset=0`으로 전체 이력 복원 | playwright | D2, D3, V6 |
 
 ## Deferred 시드 ↔ 문서 시나리오 매핑
 

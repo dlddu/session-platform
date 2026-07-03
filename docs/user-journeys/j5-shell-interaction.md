@@ -7,6 +7,8 @@
 - **달성 가치**: **V6 인터랙티브 쉘 세션**(보조: **V3 끊김 없는 세션 연속성** — 쉘 상태 축적·보존)
 
 > 이 여정은 2026-07-01 세션 정체가 "인터랙티브 쉘"로 확정(V6 · `../prd/shell-workload.md`)되면서 신설되었습니다. 이전 여정에서 `J1-S3`가 "read/write API로 세션에서 작업"으로 추상화했던 부분을 쉘 상호작용으로 구체화합니다.
+>
+> 🚀 **구현 상태**: J5-S1은 2026-07-02 구현(PTY 쉘 에이전트 기동 + active 전이 도달 검증, 285b759). J5-S2·S3은 2026-07-03 구현 — 에이전트 scrollback + HTTP `/write`·`/read`, control plane AgentClient 경유 write→stdin·read→offset 커서 델타, web Workspace 쉘 콘솔(`$` input-row·재진입 시 전체 이력 복원). 검증: `data-plane` 단위, `control-plane` 단위·통합, go e2e 시나리오 2·3, playwright J5 spec. J5-S4는 CRIU 검증 대기(AC-B*/D4).
 
 ## 단계
 

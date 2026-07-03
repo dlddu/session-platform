@@ -2,8 +2,10 @@ import { test, expect } from "@playwright/test";
 
 // J1 — first session creation and isolated work.
 // Value V1 (isolation) + V5 (single control-plane entry point); AC-A1/A2 (a
-// dedicated active session) and AC-C2/C3 (state-branched read/write).
-test("create a session and exercise read/write/switch in the workspace", async ({ page }) => {
+// dedicated active session) and AC-C2/C3 via the shell console (J1-S3's
+// "isolated work" is concretely J5's shell loop: write → stdin, read →
+// scrollback).
+test("create a session and work in its shell from the workspace", async ({ page }) => {
   const name = `j1-${Date.now()}`;
 
   // J1-S1: enter via the Sessions console and open the New session modal.
@@ -19,16 +21,12 @@ test("create a session and exercise read/write/switch in the workspace", async (
   await expect(page.getByRole("heading", { name, level: 1 })).toBeVisible();
   await expect(page.getByTestId("ws-state")).toHaveText("active");
 
-  // J1-S3: read / write / switch hit the state-branched stub endpoints and the
-  // SUT's real responses are reflected in the console log.
+  // J1-S3: isolated work = running a command in the session's own shell. The
+  // $((…)) marker only appears once the pod's bash actually executed it.
   const log = page.getByTestId("ws-log");
-
-  await page.getByTestId("ws-read").click();
-  await expect(log).toContainText(/read\s*→\s*active/);
-  await expect(log).toContainText(/stub:read:/);
-
-  await page.getByTestId("ws-write").click();
-  await expect(log).toContainText(/write\s*→\s*active/);
+  await page.getByTestId("ws-cmd").fill("echo j1-marker-$((40+2))");
+  await page.getByTestId("ws-cmd").press("Enter");
+  await expect(log).toContainText("j1-marker-42", { timeout: 15_000 });
 
   await page.getByTestId("ws-switch").click();
   await expect(log).toContainText(/switch\s*→\s*active/);
