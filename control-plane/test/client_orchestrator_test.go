@@ -170,6 +170,38 @@ func TestClientOrchestrator_PodSpecRunsShellAgent(t *testing.T) {
 	}
 }
 
+// A mutable :latest agent image must be pulled Always so a session never comes
+// up on a stale node-cached agent (e.g. a pre-/read build) while a freshly
+// published one exists — the failure mode where read returns the agent's 404.
+// Immutable references (:<sha>, digest, the kind-loaded :dev image) stay
+// IfNotPresent so they are served from the node without a registry round-trip.
+func TestClientOrchestrator_PullPolicyByImageTag(t *testing.T) {
+	cases := []struct {
+		image string
+		want  corev1.PullPolicy
+	}{
+		{"ghcr.io/dlddu/session-platform-data-plane:latest", corev1.PullAlways},
+		{"ghcr.io/dlddu/session-platform-data-plane", corev1.PullAlways}, // untagged == latest
+		{"ghcr.io/dlddu/session-platform-data-plane:abc123", corev1.PullIfNotPresent},
+		{"session-platform/data-plane:dev", corev1.PullIfNotPresent},
+		{"ghcr.io/dlddu/session-platform-data-plane@sha256:" +
+			"0000000000000000000000000000000000000000000000000000000000000000", corev1.PullIfNotPresent},
+		// a registry with an explicit port must not be read as a tag
+		{"localhost:5000/data-plane:latest", corev1.PullAlways},
+		{"localhost:5000/data-plane:dev", corev1.PullIfNotPresent},
+	}
+	for _, tc := range cases {
+		orch, cs := newReadyOrchestrator(t, k8s.WithImage(tc.image))
+		if _, err := orch.Start(context.Background(), "img1"); err != nil {
+			t.Fatalf("start (%s): %v", tc.image, err)
+		}
+		got := listPods(t, cs)[0].Spec.Containers[0].ImagePullPolicy
+		if got != tc.want {
+			t.Errorf("image %q pull policy = %q, want %q", tc.image, got, tc.want)
+		}
+	}
+}
+
 // AC-D1 (shell override): WithShell propagates DATA_PLANE_SHELL into the pod so
 // the agent launches the configured shell instead of /bin/bash.
 func TestClientOrchestrator_PodSpecPropagatesShellOverride(t *testing.T) {

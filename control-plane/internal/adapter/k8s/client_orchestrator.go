@@ -235,7 +235,7 @@ func (o *ClientOrchestrator) podSpec(sessionID string) *corev1.Pod {
 	container := corev1.Container{
 		Name:            containerName,
 		Image:           o.image,
-		ImagePullPolicy: corev1.PullIfNotPresent,
+		ImagePullPolicy: pullPolicyForImage(o.image),
 		Ports: []corev1.ContainerPort{{
 			Name:          agentPortName,
 			ContainerPort: AgentPort,
@@ -277,6 +277,34 @@ func (o *ClientOrchestrator) podSpec(sessionID string) *corev1.Pod {
 // session<->pod mapping is 1:1 and recoverable from the id alone (AC-A2).
 func podName(sessionID string) string {
 	return "sess-" + sessionID
+}
+
+// pullPolicyForImage mirrors kubelet's own default: a mutable :latest (or
+// untagged) reference is pulled Always, so a freshly published data plane agent
+// is picked up on the next session instead of the node serving a stale cache of
+// the same tag — the exact failure where a new control plane calls /read on an
+// old cached agent that never had the route. An immutable reference (a :<sha>
+// tag, a digest, or the kind-loaded :dev image) stays IfNotPresent so it is
+// used from the node without a registry round-trip.
+func pullPolicyForImage(image string) corev1.PullPolicy {
+	ref := image
+	// Drop any registry host[:port]/repo prefix so a registry port colon is not
+	// mistaken for a tag separator.
+	if i := strings.LastIndex(ref, "/"); i >= 0 {
+		ref = ref[i+1:]
+	}
+	// A digest pin (name@sha256:...) is immutable.
+	if strings.Contains(ref, "@") {
+		return corev1.PullIfNotPresent
+	}
+	tag := ""
+	if i := strings.LastIndex(ref, ":"); i >= 0 {
+		tag = ref[i+1:]
+	}
+	if tag == "" || tag == "latest" {
+		return corev1.PullAlways
+	}
+	return corev1.PullIfNotPresent
 }
 
 // waitReady polls until the pod reports Ready — returning its final state, so
