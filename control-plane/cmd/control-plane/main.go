@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
@@ -57,8 +58,12 @@ func main() {
 		k8s.WithImage(cfg.dataPlaneImage), k8s.WithShell(cfg.dataPlaneShell))
 	store := configmap.NewStore(client, namespace)
 	ckpt := criu.NewStubCheckpointer(cfg.criuEnabled)
+	// Shell I/O (write→stdin, read→scrollback delta) rides the same client:
+	// the agent client resolves pod name → IP per request and dials the
+	// session agent directly (AC-D2/D3).
+	agentClient := agent.NewHTTPClient(client, namespace)
 
-	mgr := service.New(orch, store, ckpt)
+	mgr := service.New(orch, store, ckpt, agentClient)
 
 	mux := http.NewServeMux()
 	api.New(mgr).Routes(mux)

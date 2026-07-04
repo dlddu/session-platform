@@ -7,6 +7,7 @@ import (
 
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
@@ -19,6 +20,7 @@ func newService() *service.Service {
 		k8s.NewStubOrchestrator("sessions"),
 		configmap.NewStore(fake.NewSimpleClientset(), "sessions"),
 		criu.NewStubCheckpointer(false),
+		agent.NewStubClient(),
 	)
 }
 
@@ -26,11 +28,14 @@ func newService() *service.Service {
 // test can drive a session into a non-active state directly (there is no
 // idle->snapshot reaper yet — that trigger is a separate deferred decision).
 // The store is the real ConfigMap adapter over a fake clientset, so
-// CompareAndSwapState behaves exactly as in production.
-func newServiceWithStore() (*service.Service, *configmap.Store) {
+// CompareAndSwapState behaves exactly as in production. The agent stub is
+// returned too, so state-dispatch tests can assert the I/O that rode each
+// branch (AC-D2/D3).
+func newServiceWithStore() (*service.Service, *configmap.Store, *agent.StubClient) {
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
-	svc := service.New(k8s.NewStubOrchestrator("sessions"), store, criu.NewStubCheckpointer(false))
-	return svc, store
+	ag := agent.NewStubClient()
+	svc := service.New(k8s.NewStubOrchestrator("sessions"), store, criu.NewStubCheckpointer(false), ag)
+	return svc, store, ag
 }
 
 // TestSnapshotRestoreCycle covers active -> snapshot -> restore (AC-B1, AC-B2,
@@ -80,7 +85,7 @@ func TestSnapshotRestoreCycle(t *testing.T) {
 // restored to active — and in every non-active case the session ends active.
 func TestReadDispatchesOnState(t *testing.T) {
 	ctx := context.Background()
-	svc, store := newServiceWithStore()
+	svc, store, _ := newServiceWithStore()
 
 	sess, err := svc.Create(ctx, session.CreateRequest{Name: "notebook-alpha"})
 	if err != nil {
@@ -88,7 +93,7 @@ func TestReadDispatchesOnState(t *testing.T) {
 	}
 
 	// active: served directly.
-	res, err := svc.Read(ctx, sess.ID)
+	res, err := svc.Read(ctx, sess.ID, 0)
 	if err != nil {
 		t.Fatalf("read active: %v", err)
 	}
@@ -100,7 +105,7 @@ func TestReadDispatchesOnState(t *testing.T) {
 	if err := store.CompareAndSwapState(ctx, sess.ID, session.StateActive, session.StateIdle); err != nil {
 		t.Fatalf("force idle: %v", err)
 	}
-	res, err = svc.Read(ctx, sess.ID)
+	res, err = svc.Read(ctx, sess.ID, 0)
 	if err != nil {
 		t.Fatalf("read idle: %v", err)
 	}
@@ -115,7 +120,7 @@ func TestReadDispatchesOnState(t *testing.T) {
 	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
-	res, err = svc.Read(ctx, sess.ID)
+	res, err = svc.Read(ctx, sess.ID, 0)
 	if err != nil {
 		t.Fatalf("read snapshot: %v", err)
 	}
@@ -132,7 +137,7 @@ func TestReadDispatchesOnState(t *testing.T) {
 // active first and then written.
 func TestWriteDispatchesOnState(t *testing.T) {
 	ctx := context.Background()
-	svc, store := newServiceWithStore()
+	svc, store, _ := newServiceWithStore()
 
 	sess, err := svc.Create(ctx, session.CreateRequest{Name: "scrape-worker"})
 	if err != nil {
@@ -176,6 +181,97 @@ func TestWriteDispatchesOnState(t *testing.T) {
 	}
 }
 
+// TestReadWriteMapToAgentIO: write forwards the payload to the session's pod
+// through the AgentClient (AC-D2) and read returns the offset-cursored delta
+// of what accumulated there with a nextOffset cursor (AC-D3) — across state
+// branches, since idle is promoted before serving.
+func TestReadWriteMapToAgentIO(t *testing.T) {
+	ctx := context.Background()
+	svc, store, _ := newServiceWithStore()
+
+	sess, err := svc.Create(ctx, session.CreateRequest{Name: "shell-io"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if _, err := svc.Write(ctx, sess.ID, "echo A\n"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	res, err := svc.Read(ctx, sess.ID, 0)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if res.Payload != "echo A\n" {
+		t.Fatalf("read payload = %q, want the written payload back from the agent", res.Payload)
+	}
+	if res.NextOffset != int64(len("echo A\n")) {
+		t.Fatalf("nextOffset = %d, want %d", res.NextOffset, len("echo A\n"))
+	}
+
+	// Cursor read with no new output: empty delta, cursor unchanged.
+	res2, err := svc.Read(ctx, sess.ID, res.NextOffset)
+	if err != nil {
+		t.Fatalf("cursor read: %v", err)
+	}
+	if res2.Payload != "" || res2.NextOffset != res.NextOffset {
+		t.Fatalf("cursor read = (%q, %d), want empty delta at cursor %d", res2.Payload, res2.NextOffset, res.NextOffset)
+	}
+
+	// The idle branch serves I/O too (uniform resume-on-access): promote is
+	// followed by the same agent write against the still-held pod.
+	if err := store.CompareAndSwapState(ctx, sess.ID, session.StateActive, session.StateIdle); err != nil {
+		t.Fatalf("force idle: %v", err)
+	}
+	if _, err := svc.Write(ctx, sess.ID, "echo B\n"); err != nil {
+		t.Fatalf("idle write: %v", err)
+	}
+	res3, err := svc.Read(ctx, sess.ID, res.NextOffset)
+	if err != nil {
+		t.Fatalf("delta read: %v", err)
+	}
+	if res3.Payload != "echo B\n" {
+		t.Fatalf("delta read = %q, want only the new output (AC-D3)", res3.Payload)
+	}
+
+	// offset 0 still replays the whole history, and nothing is a stub.
+	full, err := svc.Read(ctx, sess.ID, 0)
+	if err != nil {
+		t.Fatalf("full read: %v", err)
+	}
+	if full.Payload != "echo A\necho B\n" {
+		t.Fatalf("full read = %q, want the ordered full history", full.Payload)
+	}
+}
+
+// failingAgent errors every shell I/O call, to prove Read/Write surface agent
+// failures instead of swallowing them.
+type failingAgent struct{ err error }
+
+func (f failingAgent) Write(context.Context, string, string) error { return f.err }
+func (f failingAgent) Read(context.Context, string, int64) (string, int64, error) {
+	return "", 0, f.err
+}
+
+func TestReadWriteSurfaceAgentErrors(t *testing.T) {
+	ctx := context.Background()
+	svc := service.New(
+		k8s.NewStubOrchestrator("sessions"),
+		configmap.NewStore(fake.NewSimpleClientset(), "sessions"),
+		criu.NewStubCheckpointer(false),
+		failingAgent{err: errors.New("agent unreachable")},
+	)
+	sess, err := svc.Create(ctx, session.CreateRequest{Name: "broken-io"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := svc.Write(ctx, sess.ID, "x"); err == nil {
+		t.Fatal("write succeeded despite agent failure")
+	}
+	if _, err := svc.Read(ctx, sess.ID, 0); err == nil {
+		t.Fatal("read succeeded despite agent failure")
+	}
+}
+
 // reachTrackingOrchestrator wraps the stub to observe/steer the AC-D1 shell
 // reachability verification: it counts Reach calls, can fail them, and records
 // which pods were stopped.
@@ -199,7 +295,7 @@ func (o *reachTrackingOrchestrator) Stop(ctx context.Context, ref k8s.PodRef) er
 func newTrackedService() (*service.Service, *reachTrackingOrchestrator, *configmap.Store) {
 	orch := &reachTrackingOrchestrator{StubOrchestrator: k8s.NewStubOrchestrator("sessions")}
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
-	return service.New(orch, store, criu.NewStubCheckpointer(false)), orch, store
+	return service.New(orch, store, criu.NewStubCheckpointer(false), agent.NewStubClient()), orch, store
 }
 
 // TestCreateVerifiesShellReachability: a session only becomes active after the

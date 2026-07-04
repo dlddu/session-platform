@@ -54,9 +54,10 @@ type session struct {
 }
 
 type readResp struct {
-	Session session `json:"session"`
-	Path    string  `json:"path"`
-	Payload string  `json:"payload"`
+	Session    session `json:"session"`
+	Path       string  `json:"path"`
+	Payload    string  `json:"payload"`
+	NextOffset int64   `json:"nextOffset"`
 }
 
 type writeResp struct {
@@ -219,25 +220,40 @@ func TestSwitchSession_ActiveNoop(t *testing.T) {
 	}
 }
 
-// AC-C2: reading an active session is served by the "active" path with a payload.
+// AC-C2 + AC-D3: reading an active session is served by the "active" path and
+// returns real shell output — the freshly started bash eventually prints its
+// prompt, and the response carries the nextOffset cursor for delta reads.
+// Shell output timing is non-deterministic, so this waits (eventually) instead
+// of asserting on the first read.
 func TestReadSession_ActivePath(t *testing.T) {
 	s := createSession(t, uniqueName(t))
-	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+s.ID+"/read", nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("read status=%d body=%s", resp.StatusCode, body)
-	}
+
+	deadline := time.Now().Add(30 * time.Second)
 	var r readResp
-	if err := json.Unmarshal(body, &r); err != nil {
-		t.Fatalf("decode read: %v body=%s", err, body)
+	for {
+		resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+s.ID+"/read", map[string]int64{"offset": 0})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("read status=%d body=%s", resp.StatusCode, body)
+		}
+		if err := json.Unmarshal(body, &r); err != nil {
+			t.Fatalf("decode read: %v body=%s", err, body)
+		}
+		if r.Path != "active" {
+			t.Fatalf("read path=%q want active", r.Path)
+		}
+		if r.Session.ID != s.ID {
+			t.Fatalf("read session id=%q want %q", r.Session.ID, s.ID)
+		}
+		if r.Payload != "" {
+			break // the shell has spoken (its prompt at minimum)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("shell never produced output (expected at least the bash prompt)")
+		}
+		time.Sleep(300 * time.Millisecond)
 	}
-	if r.Path != "active" {
-		t.Fatalf("read path=%q want active", r.Path)
-	}
-	if r.Payload == "" {
-		t.Fatal("expected a non-empty read payload")
-	}
-	if r.Session.ID != s.ID {
-		t.Fatalf("read session id=%q want %q", r.Session.ID, s.ID)
+	if r.NextOffset <= 0 {
+		t.Fatalf("nextOffset=%d want > 0 alongside a non-empty payload (AC-D3 cursor)", r.NextOffset)
 	}
 }
 

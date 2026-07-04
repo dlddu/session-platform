@@ -19,18 +19,20 @@
 - **검증 방법**: 세션 생성 → pod Ready 후 해당 pod 안에 PTY에 연결된 쉘 프로세스가 정확히 1개 존재함을 확인한다. control plane 프로세스에는 쉘이 없음을 확인한다.
 
 ### AC-D2: write = 쉘 입력(stdin)
-- **설명**: `POST /sessions/{id}/write`의 `payload`는 대상 세션 쉘의 stdin(PTY master)에 그대로 주입된다. 개행이 포함된 입력은 쉘이 명령으로 해석·실행한다. write는 입력을 전달하고 즉시 반환하며, 명령 완료나 출력 수집을 블로킹하지 않는다(출력은 AC-D3의 read로 회수).
+- **설명**: `POST /sessions/{id}/write`의 `payload`는 대상 세션 쉘의 stdin(PTY master)에 그대로 주입된다. 개행이 포함된 입력은 쉘이 명령으로 해석·실행한다. write는 입력을 전달하고 즉시 반환하며, 명령 완료나 출력 수집을 블로킹하지 않는다(출력은 AC-D3의 read로 회수). 여기서 "비블로킹"은 **명령 완료를 기다리지 않는다**는 의미다 — 단일 write의 payload가 커널 PTY 입력 버퍼 한계를 넘는 극단 상황의 거동은 이 스펙의 범위 밖이다.
 - **달성 가치**: V6
 - **구체화 대상**: AC-C3(Write API 상태별 분기)의 "write" 시맨틱
-- **검증 방법**: active 세션에 `payload="echo hello\n"`로 write 후 read하면 출력에 `hello`가 포함됨을 확인한다. write가 명령 실행 완료를 기다리지 않고 반환함을 확인한다.
+- **검증 방법**: active 세션에 `payload="echo hello\n"`로 write 후 read(`offset=0`)하면 출력에 `hello`가 포함됨을 확인한다. write가 명령 실행 완료를 기다리지 않고 반환함을 확인한다.
 
-### AC-D3: read = 쉘 출력(stdout/stderr)
-- **설명**: `POST /sessions/{id}/read`의 응답 `payload`는 **세션 시작 이후 지금까지 쉘 PTY에 누적된 전체 출력**(stdout·stderr 병합)을 순서 보존하여 반환한다. read는 비파괴적(non-consuming)이다 — 같은 세션을 여러 번 read하면 매번 전체 출력을 반환하며, 이후 새 출력이 생기면 그만큼 늘어난 전체 출력을 반환한다. 아직 출력이 없으면 빈 `payload`를 반환한다.
+### AC-D3: read = 쉘 출력(stdout/stderr), offset 커서 기반 델타
+- **설명**: `POST /sessions/{id}/read`는 요청의 `offset`(직전 read 응답이 발급한 `nextOffset` 커서, 생략 시 0) **이후에** 쉘 PTY에 누적된 출력(stdout·stderr 병합)을 순서 보존하여 `payload`로 반환하고, 다음 read에 쓸 새 `nextOffset`(현재 누적 길이)을 함께 발급한다. read는 비파괴적(non-consuming)이다 — 서버는 어떤 출력도 버리지 않으므로 `offset=0`으로 read하면 언제든 **세션 시작 이후 전체 출력**이 반환되고, 같은 `offset`으로 여러 번 read해도 같은 구간이 반복 반환된다. `offset`이 현재 누적 길이보다 크면 빈 `payload`와 현재 누적 길이의 `nextOffset`을 반환한다. 아직 출력이 없으면 빈 `payload`를 반환한다.
 - **달성 가치**: V6
 - **구체화 대상**: AC-C2(Read API 상태별 분기)의 "read" 시맨틱
-- **검증 방법**: 여러 명령을 write한 뒤 read하면 모든 명령의 출력이 실행 순서대로 전부 포함됨을 확인한다. 곧바로 다시 read해도 동일한 전체 출력이 반환되고(비파괴적), 그 사이 새 명령을 write했다면 그 출력이 뒤에 추가되어 반환됨을 확인한다.
+- **검증 방법**: 여러 명령을 write한 뒤 read(`offset=0`)하면 모든 명령의 출력이 실행 순서대로 전부 포함됨을 확인한다. 그 응답의 `nextOffset`으로 곧바로 다시 read하면 (새 출력이 없는 한) 빈 `payload`가 반환되고, 그 사이 새 명령을 write했다면 커서 이후의 신규 출력만 반환됨을 확인한다. `offset=0` 재조회는 여전히 전체 출력을 반환함을 확인한다(비파괴성).
 
-> 📌 **설계 노트 (버퍼 증가)**: 전체 출력을 매번 반환하므로 장시간 세션에서는 `payload` 크기와 누적 버퍼가 무제한으로 커질 수 있다. 버퍼 상한/ring buffer, 페이지네이션(offset 기반), 또는 CRIU 스냅샷 시 버퍼 처리 방식은 후속 결정 항목이다. `../doc-tracker.md`의 열린 항목 참고.
+> 📌 **설계 노트 (버퍼 증가)**: 페이지네이션은 `offset` 커서로 해소되어 반복 read의 `payload` 크기는 델타만큼으로 유지된다. 누적 버퍼 자체의 상한/ring buffer, CRIU 스냅샷 시 버퍼 처리 방식은 계속 보류 항목이다. `../doc-tracker.md`의 열린 항목 참고.
+
+> 📌 **설계 노트 (offset과 복원)**: snapshot→restore(AC-B2/AC-D4)를 거친 세션에서 복원 전 발급된 `nextOffset` 커서가 유효한지(버퍼가 체크포인트에 포함되는지)는 J5-S4/CRIU 작업에서 결정한다. 그 전까지 클라이언트는 복원 후 `offset=0`으로 재동기화하는 것을 기본으로 한다.
 
 ### AC-D4: 쉘 프로세스 트리 = 보존 대상 상태
 - **설명**: 세션이 snapshot으로 동결될 때 CRIU 체크포인트의 대상은 이 쉘 프로세스 트리이며, 보존되는 "인메모리 상태"(AC-B3)는 구체적으로 다음을 포함한다: 환경 변수, 현재 작업 디렉터리, 쉘 변수·함수·alias, 실행 중인 포그라운드 자식 프로세스, 열린 파일 디스크립터. 복원(AC-B2) 후 쉘은 동결 직전의 프롬프트·작업 맥락 그대로 재개되어, 이어서 write하면 동결 이전 문맥 위에서 실행된다.

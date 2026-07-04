@@ -4,11 +4,11 @@
 // first — promoting idle->active (AC-C1) or restoring snapshot->active (AC-B2)
 // — and then serve from the live pod. Becoming active includes proving the
 // session's PTY shell is reachable (AC-D1): Create and Restore open/close the
-// pod agent's attach stream before the state lands. The dispatch policy is
-// fully implemented; only the read/write payload mapping onto the shell's
-// stdin/stdout (AC-D2/D3) is stubbed until J5-S2/S3. The remaining
-// TODO(policy) is the idle->snapshot *trigger* timing in package session, a
-// separate decision.
+// pod agent's attach stream before the state lands. Read and write then move
+// the shell payload through the AgentClient — write into the shell's stdin
+// (AC-D2), read as an offset-cursored delta of its accumulated output
+// (AC-D3). The remaining TODO(policy) is the idle->snapshot *trigger* timing
+// in package session, a separate decision.
 package service
 
 import (
@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
@@ -26,17 +27,19 @@ import (
 
 // Service is the concrete Manager. It owns no workload itself (AC-A1) — every
 // pod operation goes through the orchestrator, every state mutation through the
-// store, and every checkpoint through the checkpointer.
+// store, every checkpoint through the checkpointer, and every shell I/O byte
+// through the agent client.
 type Service struct {
 	orch  k8s.PodOrchestrator
 	store store.StateStore
 	ckpt  criu.Checkpointer
+	agent agent.Client
 	now   func() time.Time // injectable clock for tests
 }
 
 // New builds a Service from its adapter ports.
-func New(orch k8s.PodOrchestrator, store store.StateStore, ckpt criu.Checkpointer) *Service {
-	return &Service{orch: orch, store: store, ckpt: ckpt, now: func() time.Time { return time.Now().UTC() }}
+func New(orch k8s.PodOrchestrator, store store.StateStore, ckpt criu.Checkpointer, agent agent.Client) *Service {
+	return &Service{orch: orch, store: store, ckpt: ckpt, agent: agent, now: func() time.Time { return time.Now().UTC() }}
 }
 
 // compile-time assertion that Service satisfies the port.
@@ -132,32 +135,40 @@ func (s *Service) activate(ctx context.Context, id string) (*session.Session, st
 	}
 }
 
-// Read brings the session active (per activate) and reads from its pod (AC-C2).
-// The dispatch policy is fully implemented; only the returned payload is a stub
-// until read maps onto the shell's accumulated output (AC-D3, J5-S3).
-func (s *Service) Read(ctx context.Context, id string) (*session.ReadResult, error) {
+// Read brings the session active (per activate) and returns the shell output
+// accumulated after offset from its pod, plus the nextOffset cursor (AC-C2,
+// AC-D3). Offset 0 replays the full session history; reads are non-consuming.
+func (s *Service) Read(ctx context.Context, id string, offset int64) (*session.ReadResult, error) {
 	sess, branch, err := s.activate(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	payload, next, err := s.agent.Read(ctx, sess.Pod, offset)
 	if err != nil {
 		return nil, err
 	}
 	s.touch(ctx, id)
 	return &session.ReadResult{
-		Session: sess,
-		Path:    dispatchPath(branch, "read"),
-		Payload: "stub:read:" + id, // real data comes from the data plane pod
+		Session:    sess,
+		Path:       dispatchPath(branch, "read"),
+		Payload:    payload,
+		NextOffset: next,
 	}, nil
 }
 
-// Write brings the session active (per activate) and writes to its pod (AC-C3).
-// snapshot/idle are restored/promoted first rather than rejected, matching the
-// uniform rule. Applying the payload to the shell's stdin is stubbed until
-// J5-S2 (AC-D2).
+// Write brings the session active (per activate) and injects the payload into
+// the shell's stdin on its pod (AC-C3, AC-D2). snapshot/idle are
+// restored/promoted first rather than rejected, matching the uniform rule.
+// The call returns once the agent accepted the input — it never waits for the
+// shell to run the command (output is recovered via Read).
 func (s *Service) Write(ctx context.Context, id, payload string) (*session.WriteResult, error) {
 	sess, branch, err := s.activate(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	_ = payload // injected into the shell's PTY stdin in J5-S2 (AC-D2)
+	if err := s.agent.Write(ctx, sess.Pod, payload); err != nil {
+		return nil, err
+	}
 	s.touch(ctx, id)
 	return &session.WriteResult{
 		Session: sess,

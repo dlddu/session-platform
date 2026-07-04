@@ -26,7 +26,10 @@ export interface CreateSessionRequest {
 export interface ReadResult {
   session: Session;
   path: string;
+  /** shell output accumulated after the requested offset (AC-D3) */
   payload: string;
+  /** cursor to pass as offset on the next read to receive only new output */
+  nextOffset: number;
 }
 
 export interface WriteResult {

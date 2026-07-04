@@ -5,12 +5,19 @@
 // control plane never runs the shell itself; it only orchestrates this pod and
 // reaches the agent over the network:
 //
-//	GET /healthz -> 200 while the shell process is alive; the pod's readiness
-//	                probe targets this, so pod Ready implies a live shell.
-//	GET /attach  -> WebSocket upgrade; the stream is held open until the peer
-//	                closes it. J5-S1 proves reachability only (open/close) —
-//	                the endpoint is payload-agnostic, and the stdin/stdout
-//	                semantics (AC-D2/D3) land on top of it in J5-S2/S3.
+//	GET  /healthz -> 200 while the shell process is alive; the pod's readiness
+//	                 probe targets this, so pod Ready implies a live shell.
+//	GET  /attach  -> WebSocket upgrade held open until the peer closes it.
+//	                 Reachability verification only (AC-D1): the control plane
+//	                 opens and closes it to prove the shell is reachable. The
+//	                 shell I/O itself moves over plain HTTP below.
+//	POST /write   -> injects the raw request body into the shell's stdin (PTY
+//	                 master) and returns immediately, never waiting for the
+//	                 command to run (AC-D2).
+//	GET  /read    -> ?offset=N returns {"payload","nextOffset"}: the shell
+//	                 output accumulated after offset (0 = everything since
+//	                 session start) plus the cursor for the next delta read.
+//	                 Non-consuming — nothing is ever discarded (AC-D3).
 //
 // The agent's lifetime is tied to the shell's: when the shell exits the agent
 // exits, the container restarts (RestartPolicy Always), and a fresh agent
@@ -20,6 +27,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -27,6 +35,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -87,10 +97,43 @@ func main() {
 	}
 }
 
+// scrollback is the append-only record of everything the shell has written to
+// its PTY since it started (stdout and stderr merged by the PTY itself, order
+// preserved). Read serves deltas from it by offset (AC-D3); nothing is ever
+// discarded, so offset 0 always replays the full session history. There is no
+// size cap — the buffer bound is a deliberately open design decision (see
+// docs/prd/shell-workload.md).
+type scrollback struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (b *scrollback) Append(p []byte) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, p...)
+}
+
+// Since returns a copy of the output accumulated after offset, plus the cursor
+// for the next delta read (the current accumulated length). An offset at or
+// past the current length yields an empty payload with that cursor.
+func (b *scrollback) Since(offset int) ([]byte, int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := len(b.buf)
+	if offset < 0 || offset >= n {
+		return nil, n
+	}
+	out := make([]byte, n-offset)
+	copy(out, b.buf[offset:])
+	return out, n
+}
+
 // shellProc is the one PTY-attached session shell (AC-D1) and its lifecycle.
 type shellProc struct {
 	cmd     *exec.Cmd
-	ptmx    *os.File // PTY master; the shell owns the slave as its ctty
+	ptmx    *os.File    // PTY master; the shell owns the slave as its ctty
+	out     *scrollback // everything the shell has emitted (AC-D3)
 	alive   atomic.Bool
 	done    chan struct{} // closed once the shell has exited
 	waitErr error         // cmd.Wait result, valid after done is closed
@@ -108,12 +151,23 @@ func startShell(path string) (*shellProc, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &shellProc{cmd: cmd, ptmx: ptmx, done: make(chan struct{})}
+	s := &shellProc{cmd: cmd, ptmx: ptmx, out: &scrollback{}, done: make(chan struct{})}
 	s.alive.Store(true)
 
-	// Drain the PTY master so the shell never blocks on a full output buffer.
-	// The output is discarded for now: accumulating it for read is J5-S3.
-	go func() { _, _ = io.Copy(io.Discard, ptmx) }()
+	// Drain the PTY master so the shell never blocks on a full output buffer,
+	// accumulating everything into the scrollback that read serves from (AC-D3).
+	go func() {
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := ptmx.Read(buf)
+			if n > 0 {
+				s.out.Append(buf[:n])
+			}
+			if err != nil {
+				return // PTY closed: the shell exited or the agent is shutting down
+			}
+		}
+	}()
 
 	go func() {
 		s.waitErr = cmd.Wait()
@@ -158,10 +212,10 @@ func routes(logger *slog.Logger, sh *shellProc) http.Handler {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	// The attach stream. Payload-agnostic in J5-S1: the agent holds the stream
-	// open, discarding any frames, until the peer closes — opening and closing
-	// it is how the control plane proves the shell is reachable. J5-S2/S3 layer
-	// the stdin/stdout semantics on top of this same endpoint.
+	// The attach stream — reachability verification only (AC-D1): the agent
+	// holds the stream open, discarding any frames, until the peer closes.
+	// Opening and closing it is how the control plane proves the shell is
+	// reachable; the shell I/O itself moves over /write and /read below.
 	mux.HandleFunc("GET /attach", func(w http.ResponseWriter, r *http.Request) {
 		if !sh.alive.Load() {
 			http.Error(w, "shell exited", http.StatusServiceUnavailable)
@@ -179,6 +233,47 @@ func routes(logger *slog.Logger, sh *shellProc) http.Handler {
 				return
 			}
 		}
+	})
+
+	// write = shell stdin (AC-D2): the raw request body goes into the PTY
+	// master verbatim and the handler returns immediately — it never waits for
+	// the shell to run the command (output is recovered via /read).
+	mux.HandleFunc("POST /write", func(w http.ResponseWriter, r *http.Request) {
+		if !sh.alive.Load() {
+			http.Error(w, "shell exited", http.StatusServiceUnavailable)
+			return
+		}
+		payload, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if _, err := sh.ptmx.Write(payload); err != nil {
+			http.Error(w, "write to shell stdin: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	// read = shell output since a cursor (AC-D3): non-consuming, so it serves
+	// even after the shell has exited — the scrollback is history, not a pipe.
+	mux.HandleFunc("GET /read", func(w http.ResponseWriter, r *http.Request) {
+		offset := 0
+		if v := r.URL.Query().Get("offset"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				http.Error(w, "offset must be a non-negative integer", http.StatusBadRequest)
+				return
+			}
+			offset = n
+		}
+		payload, next := sh.out.Since(offset)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"payload":    string(payload),
+			"nextOffset": next,
+		})
 	})
 
 	return mux

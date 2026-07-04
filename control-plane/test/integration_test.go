@@ -27,6 +27,7 @@ import (
 
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
@@ -44,7 +45,7 @@ func harness(t *testing.T) (*httptest.Server, *service.Service) {
 	orch := k8s.NewStubOrchestrator("sessions")
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
 	ckpt := criu.NewStubCheckpointer(os.Getenv("CRIU_ENABLED") == "1")
-	svc := service.New(orch, store, ckpt)
+	svc := service.New(orch, store, ckpt, agent.NewStubClient())
 
 	mux := http.NewServeMux()
 	api.New(svc).Routes(mux)
