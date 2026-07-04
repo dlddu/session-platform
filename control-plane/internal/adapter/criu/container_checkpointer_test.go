@@ -1,8 +1,10 @@
 package criu_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -44,6 +46,23 @@ func (f *fakeDriver) Restore(_ context.Context, ref string, into k8s.PodRef) err
 }
 
 var _ criu.CheckpointDriver = (*fakeDriver)(nil)
+
+// fakeStore stands in for the durable checkpoint store (S3) so the upload wiring
+// is unit-tested without AWS. It records the key and the streamed bytes.
+type fakeStore struct {
+	ref      string
+	err      error
+	gotKey   string
+	gotBytes []byte
+}
+
+func (f *fakeStore) Put(_ context.Context, key string, r io.Reader) (string, error) {
+	f.gotKey = key
+	f.gotBytes, _ = io.ReadAll(r)
+	return f.ref, f.err
+}
+
+var _ criu.CheckpointStore = (*fakeStore)(nil)
 
 func podOn(node, ns, name string) *corev1.Pod {
 	return &corev1.Pod{
@@ -92,6 +111,68 @@ func TestContainerCheckpointer_CheckpointReturnsArchiveRef(t *testing.T) {
 	}
 	if drv.gotContainer != k8s.ContainerName {
 		t.Errorf("driver container = %q, want %q", drv.gotContainer, k8s.ContainerName)
+	}
+	// No store configured: the ref is the ephemeral node-local archive path and
+	// size is unknown (0).
+	if cp.SizeBytes != 0 {
+		t.Errorf("SizeBytes = %d, want 0 without a durable store", cp.SizeBytes)
+	}
+}
+
+// With a CheckpointStore the node-local archive is uploaded and its durable ref
+// (e.g. s3://…) and size are recorded instead of the ephemeral node path
+// (decision ③ — checkpoints survive their node).
+func TestContainerCheckpointer_CheckpointUploadsToStore(t *testing.T) {
+	const ns = "sessions"
+	archive := "/var/lib/kubelet/checkpoints/checkpoint-sess-abcd_sessions-session-9.tar"
+	drv := &fakeDriver{items: []string{archive}}
+	cs := fake.NewSimpleClientset(podOn("node-1", ns, "sess-abcd"))
+	store := &fakeStore{ref: "s3://ckpt/checkpoints/sessions/sess-abcd/checkpoint-sess-abcd_sessions-session-9.tar"}
+	content := []byte("CRIU-ARCHIVE-BYTES")
+	opener := func(path string) (io.ReadCloser, int64, error) {
+		if path != archive {
+			t.Errorf("opener path = %q, want the kubelet archive %q", path, archive)
+		}
+		return io.NopCloser(bytes.NewReader(content)), int64(len(content)), nil
+	}
+
+	ckpt := criu.NewContainerCheckpointer(cs, ns,
+		criu.WithDriver(drv), criu.WithStore(store), criu.WithArchiveOpener(opener))
+
+	cp, err := ckpt.Checkpoint(context.Background(), k8s.PodRef{Name: "sess-abcd"})
+	if err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if cp.Ref != store.ref {
+		t.Errorf("Ref = %q, want the durable store ref %q", cp.Ref, store.ref)
+	}
+	if cp.SizeBytes != int64(len(content)) {
+		t.Errorf("SizeBytes = %d, want the uploaded archive size %d", cp.SizeBytes, len(content))
+	}
+	// Stored under namespace/pod/<kubelet-filename> with the bytes streamed verbatim.
+	if want := "sessions/sess-abcd/checkpoint-sess-abcd_sessions-session-9.tar"; store.gotKey != want {
+		t.Errorf("store key = %q, want %q", store.gotKey, want)
+	}
+	if string(store.gotBytes) != string(content) {
+		t.Errorf("stored bytes = %q, want the archive bytes verbatim", store.gotBytes)
+	}
+}
+
+// A store upload failure surfaces from Checkpoint rather than yielding a
+// checkpoint whose ref points at an archive that was never durably stored.
+func TestContainerCheckpointer_CheckpointSurfacesStoreError(t *testing.T) {
+	const ns = "sessions"
+	drv := &fakeDriver{items: []string{"/var/lib/kubelet/checkpoints/c.tar"}}
+	cs := fake.NewSimpleClientset(podOn("node-1", ns, "sess-abcd"))
+	store := &fakeStore{err: errors.New("access denied")}
+	opener := func(string) (io.ReadCloser, int64, error) {
+		return io.NopCloser(bytes.NewReader([]byte("x"))), 1, nil
+	}
+	ckpt := criu.NewContainerCheckpointer(cs, ns,
+		criu.WithDriver(drv), criu.WithStore(store), criu.WithArchiveOpener(opener))
+
+	if _, err := ckpt.Checkpoint(context.Background(), k8s.PodRef{Name: "sess-abcd"}); err == nil {
+		t.Fatal("checkpoint succeeded despite store failure; want error")
 	}
 }
 

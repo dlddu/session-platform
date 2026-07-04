@@ -28,12 +28,25 @@
 - **근거**: 체크포인트 생성은 kubelet `ContainerCheckpoint`가 담당하고, 실제 freeze/thaw는 runc→CRIU가 수행한다.
 - **후속(프로비저닝)**: 노드 kubelet 플래그 + runc 빌드 확인.
 
-### ③ 체크포인트 저장소 — 1차 노드 로컬, `Ref`=아카이브 경로
-- **선택**: 1차로 노드 로컬(`/var/lib/kubelet/checkpoints/checkpoint-<pod>_<ns>-<container>-<ts>.tar`).
-  `session.Checkpoint.Ref`에 이 아카이브 경로를 기록한다. 오브젝트 스토리지는 후속.
-- **근거**: `ContainerCheckpoint`가 기본으로 노드 로컬 tar를 생성한다. 코드가 겨눌 타겟이 명확.
-- **한계/후속**: 노드 로컬 아카이브는 control plane에서 stat 불가 → `Checkpoint.SizeBytes`는 잠정 0.
-  아카이브 수명주기·오브젝트 스토리지 이관은 후속(별도 항목).
+### ③ 체크포인트 저장소 — S3 (assume-role), 노드 로컬은 중간 산물
+- **선택** *(2026-07-04 개정)*: 내구 저장소는 **S3**. kubelet이 노드 로컬 tar
+  (`/var/lib/kubelet/checkpoints/checkpoint-<pod>_<ns>-<container>-<ts>.tar`)로 아카이브를 생성하면
+  체크포인터가 이를 **S3로 업로드**하고 `session.Checkpoint.Ref`에
+  `s3://<bucket>/<prefix>/<ns>/<pod>/<file>`를 기록한다(업로드 크기를 `SizeBytes`에 반영).
+  노드 로컬 경로는 중간 산물이며, 버킷 미설정 시 노드 로컬 ref로 폴백한다.
+- **권한(코드)**: 정적 키를 두지 않는다. **노드 인스턴스 프로파일(또는 IRSA)** 을 베이스 자격증명으로,
+  코드가 **STS AssumeRole**(`CHECKPOINT_S3_ROLE_ARN`)로 대상 역할을 위임받아 S3에 접근한다
+  (`internal/adapter/checkpointstore` — aws-sdk-go-v2 `stscreds.NewAssumeRoleProvider` +
+  `aws.NewCredentialsCache`). 자격증명은 최초 요청 시 지연 해석된다.
+- **근거**: 노드 로컬 아카이브는 노드가 회수되면 사라지고 다른 노드로 복원할 때 접근 불가. S3는
+  클러스터 전역에서 접근 가능하여 복원 pod가 어느 노드로 스케줄되어도 아카이브를 가져올 수 있다.
+- **설정(env)**: `CHECKPOINT_S3_BUCKET`(설정 시 S3 활성), `CHECKPOINT_S3_ROLE_ARN`,
+  `CHECKPOINT_S3_REGION`(없으면 `AWS_REGION`), `CHECKPOINT_S3_PREFIX`(기본 `checkpoints`),
+  `CHECKPOINT_S3_SESSION_NAME`. 버킷은 설정됐는데 역할/리전이 없으면 기동 시 fail-fast.
+- **경계/후속**: control plane(또는 업로더 사이드카)이 노드의 체크포인트 디렉터리를 읽을 수 있어야 한다
+  (hostPath 마운트 또는 노드 사이드카) — 배포 결정이며, 코드는 아카이브 열기를 `archiveOpener` 심 뒤로
+  격리했다. 대용량 아카이브 멀티파트 스트리밍(`manager.Uploader`)·업로드 후 노드 로컬 tar 정리·수명주기
+  (만료) 정책은 후속.
 
 ### ④ 무결성 검증법 — AC-D4 마커 왕복 (in-process Scenario4)
 - **선택**: 동결 전 인메모리 마커(환경 변수 `MARKER`·작업 디렉터리)를 세팅 → 스냅샷 → 복원 →
@@ -68,8 +81,13 @@
 - `control-plane/internal/adapter/criu/container_checkpointer.go` — **실 어댑터**.
   `ContainerCheckpointer.Checkpoint`는 pod의 노드를 조회한 뒤 `CheckpointDriver`로 kubelet
   `POST /api/v1/nodes/{node}/proxy/checkpoint/{ns}/{pod}/{container}`를 호출해 아카이브 경로를 얻고,
-  `Restore`는 그 ref를 드라이버에 넘긴다. 런타임 호출은 `CheckpointDriver`(실체 `kubeletDriver`) 뒤로
-  격리되어 런타임 없는 CI에서도 컴파일·단위 테스트가 통과한다(가짜 드라이버 주입).
+  `CheckpointStore`가 설정돼 있으면 아카이브를 업로드해 `Ref`에 `s3://…`(+`SizeBytes`)를 기록한다
+  (미설정 시 노드 로컬 경로). `Restore`는 그 ref를 드라이버에 넘긴다. 런타임 호출은 `CheckpointDriver`
+  (실체 `kubeletDriver`), 아카이브 열기는 `archiveOpener` 심 뒤로 격리되어 런타임/AWS 없이 컴파일·
+  단위 테스트가 통과한다(가짜 드라이버·스토어 주입).
+- `control-plane/internal/adapter/checkpointstore/store.go` — **S3 스토어**(`NewS3`). 노드 인스턴스
+  프로파일을 베이스로 STS AssumeRole(`CHECKPOINT_S3_ROLE_ARN`)로 위임받아 `Put`(업로드)/`Get`(복원 시
+  가져오기)을 수행. S3 API를 `objectAPI` 인터페이스 뒤로 격리해 가짜 API로 단위 테스트.
 - `control-plane/internal/adapter/k8s/client_orchestrator.go` — `RestoreInto`가 restore-target pod 스펙
   (`AnnotationRestoreCheckpoint`)을 생성. `Start`(신규 세션)는 어노테이션 없이 불변.
 - `control-plane/internal/service/manager.go` — `Snapshot`/`Restore` 오케스트레이션. `Restore`가
@@ -90,11 +108,16 @@
 - [ ] `DATA_PLANE_IMAGE` 주입(퍼블리시된 data plane 에이전트 이미지) + `CRIU_ENABLED=1`.
 - [ ] 복원 경로 런타임 매핑: `k8s.AnnotationRestoreCheckpoint`(pod 어노테이션)를 런타임 복원 메커니즘
       (CRI-O `io.kubernetes.cri-o.restore` / 아카이브 기반 체크포인트 OCI 이미지)에 연결. 미성숙 시 대안 ⑤ 각주.
-- [ ] 체크포인트 아카이브 접근성: 결정 ③(노드 로컬). 새 pod가 다른 노드로 스케줄되면 아카이브 접근 경로 확보 필요.
+- [ ] S3 저장소(결정 ③): 버킷 생성 + `CHECKPOINT_S3_BUCKET`/`CHECKPOINT_S3_ROLE_ARN`/`CHECKPOINT_S3_REGION` 설정.
+- [ ] IAM: 노드 인스턴스 프로파일(또는 IRSA)이 `CHECKPOINT_S3_ROLE_ARN` 역할을 `sts:AssumeRole` 할 수 있고,
+      그 역할이 버킷에 `s3:PutObject`(복원 시 `s3:GetObject`) 권한을 가질 것.
+- [ ] 업로더의 아카이브 접근성: control plane(또는 사이드카)이 노드 체크포인트 디렉터리를 읽도록
+      hostPath 마운트 또는 노드 사이드카(결정 ③ 경계). 복원 pod가 다른 노드로 스케줄되어도 S3에서 가져오므로 무방.
 
 **확인 명령(green이면 AC-D4 + 커서 연속성 검증 완료)**
 ```
 CRIU_ENABLED=1 DATA_PLANE_IMAGE=<published-agent-image> \
+  CHECKPOINT_S3_BUCKET=<bucket> CHECKPOINT_S3_ROLE_ARN=<role-arn> CHECKPOINT_S3_REGION=<region> \
   go test -tags=integration ./test/... -run TestScenario4_CRIUIntegrity -v
 ```
 - **skip**: 런타임/클러스터/이미지 미준비(정상 — 아직 세울 게 남음).

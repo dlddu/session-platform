@@ -15,6 +15,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -43,15 +46,51 @@ type CheckpointDriver interface {
 	Restore(ctx context.Context, ref string, into k8s.PodRef) error
 }
 
+// CheckpointStore is a durable object store for checkpoint archives. When set on
+// the ContainerCheckpointer, Checkpoint streams the kubelet's node-local archive
+// to it and records the returned durable ref (e.g. s3://bucket/key) in the
+// Checkpoint instead of the ephemeral node-local path — so the archive survives
+// the node and is reachable from wherever the session restores. Defined here
+// (consumer side) so the criu package carries no cloud SDK dependency; the S3
+// implementation lives in internal/adapter/checkpointstore.
+type CheckpointStore interface {
+	// Put uploads the archive read from r under key and returns its durable ref.
+	Put(ctx context.Context, key string, r io.Reader) (ref string, err error)
+}
+
+// archiveOpener opens the kubelet's node-local checkpoint archive so it can be
+// streamed to the CheckpointStore, returning its size for Checkpoint.SizeBytes.
+// The default (openLocalArchive) opens a local file, which assumes the archive
+// path is readable by this process — i.e. the control plane or an uploader
+// sidecar mounts the node's checkpoint dir. That mount is a provisioning concern
+// (docs/criu-verification.md); the seam lets tests inject an in-memory archive.
+type archiveOpener func(path string) (io.ReadCloser, int64, error)
+
+func openLocalArchive(path string) (io.ReadCloser, int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, 0, err
+	}
+	return f, fi.Size(), nil
+}
+
 // ContainerCheckpointer is the real Checkpointer. Checkpoint drives the kubelet
 // ContainerCheckpoint API (via the driver) to freeze a session pod's container
-// into a node-local archive and returns its ref; Restore hands the ref to the
+// into a node-local archive; with a CheckpointStore set it then uploads the
+// archive to durable storage and records that ref. Restore hands the ref to the
 // driver to resume it into the restore-target pod (AC-B1/B2/B3, AC-D4).
 type ContainerCheckpointer struct {
 	client    kubernetes.Interface
 	namespace string
 	container string
 	driver    CheckpointDriver
+	store     CheckpointStore // optional; nil keeps the node-local archive ref
+	open      archiveOpener
 	now       func() time.Time
 }
 
@@ -82,6 +121,27 @@ func WithDriver(d CheckpointDriver) Option {
 	}
 }
 
+// WithStore sets the durable checkpoint store. Without it Checkpoint records the
+// ephemeral node-local archive path; with it the archive is uploaded and the
+// durable ref (e.g. s3://…) is recorded instead.
+func WithStore(s CheckpointStore) Option {
+	return func(c *ContainerCheckpointer) {
+		if s != nil {
+			c.store = s
+		}
+	}
+}
+
+// WithArchiveOpener overrides how the node-local archive is opened for upload
+// (tests inject an in-memory archive).
+func WithArchiveOpener(o archiveOpener) Option {
+	return func(c *ContainerCheckpointer) {
+		if o != nil {
+			c.open = o
+		}
+	}
+}
+
 // WithClock injects the clock stamped onto Checkpoint.CreatedAt (tests).
 func WithClock(now func() time.Time) Option {
 	return func(c *ContainerCheckpointer) {
@@ -98,6 +158,7 @@ func NewContainerCheckpointer(client kubernetes.Interface, namespace string, opt
 		client:    client,
 		namespace: namespace,
 		container: k8s.ContainerName,
+		open:      openLocalArchive,
 		now:       func() time.Time { return time.Now().UTC() },
 	}
 	for _, opt := range opts {
@@ -139,23 +200,52 @@ func (c *ContainerCheckpointer) Checkpoint(ctx context.Context, ref k8s.PodRef) 
 	if len(items) == 0 {
 		return nil, fmt.Errorf("checkpoint pod %s/%s: kubelet returned no archive path", ns, ref.Name)
 	}
+	localPath := items[0]
 
-	return &session.Checkpoint{
-		Ref: items[0],
-		// The ContainerCheckpoint API returns archive paths, not sizes; the
-		// node-local archive is not stat-able from the control plane, so size is
-		// left 0 until an object-store backend records it (docs/criu-verification.md).
+	checkpoint := &session.Checkpoint{
+		Ref:       localPath,
 		SizeBytes: 0,
 		CreatedAt: c.now(),
 		Reclaimed: "pod " + ref.Name,
-	}, nil
+	}
+	if c.store == nil {
+		// No durable store configured: record the ephemeral node-local archive
+		// path. Its size is not stat-able from the control plane, so leave 0.
+		return checkpoint, nil
+	}
+
+	// Upload the node-local archive to durable storage (S3) and record that ref
+	// instead, so the archive survives the node and is reachable when the session
+	// restores onto a different node (decision ③).
+	rc, size, err := c.open(localPath)
+	if err != nil {
+		return nil, fmt.Errorf("open checkpoint archive %s: %w", localPath, err)
+	}
+	defer rc.Close()
+	uri, err := c.store.Put(ctx, checkpointKey(ns, ref.Name, localPath), rc)
+	if err != nil {
+		return nil, fmt.Errorf("store checkpoint archive %s: %w", localPath, err)
+	}
+	checkpoint.Ref = uri
+	checkpoint.SizeBytes = size
+	return checkpoint, nil
+}
+
+// checkpointKey derives the durable object key for a pod's checkpoint archive,
+// keeping the kubelet-assigned filename (which carries a timestamp, so it is
+// unique) under a namespace/pod path.
+func checkpointKey(namespace, pod, localPath string) string {
+	return namespace + "/" + pod + "/" + filepath.Base(localPath)
 }
 
 // Restore resumes the checkpoint into the restore-target pod (AC-B2, AC-B3). The
-// pod was already shaped as a restore target by RestoreInto, so on the K8s-native
-// path this delegates to the driver, which relies on the runtime resuming from
-// the pod's annotation; the service layer then proves the resumed shell is
-// reachable (Reach, AC-D1).
+// pod was already shaped as a restore target by RestoreInto (carrying cp.Ref in
+// an annotation), so on the K8s-native path this delegates to the driver, which
+// relies on the runtime resuming from that annotation; the service layer then
+// proves the resumed shell is reachable (Reach, AC-D1). When cp.Ref is an s3://
+// URI (a durable store was configured at checkpoint time), the node-side restore
+// fetches the archive from the store using the same assume-role identity before
+// resuming — see docs/criu-verification.md.
 func (c *ContainerCheckpointer) Restore(ctx context.Context, cp *session.Checkpoint, into k8s.PodRef) error {
 	if cp == nil || cp.Ref == "" {
 		return fmt.Errorf("restore into pod %s: checkpoint ref is empty", into.Name)

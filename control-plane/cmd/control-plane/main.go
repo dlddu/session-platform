@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/checkpointstore"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
@@ -64,7 +65,28 @@ func main() {
 	// without CRIU.
 	var ckpt criu.Checkpointer = criu.NewStubCheckpointer(false)
 	if cfg.criuEnabled {
-		ckpt = criu.NewContainerCheckpointer(client, namespace)
+		var opts []criu.Option
+		// When a checkpoint S3 bucket is configured, upload archives to it
+		// (accessed by assuming CHECKPOINT_S3_ROLE_ARN over the node instance
+		// profile) so a checkpoint survives its node; otherwise the ephemeral
+		// node-local archive path is recorded.
+		if cfg.checkpointS3Bucket != "" {
+			store, err := checkpointstore.NewS3(context.Background(), checkpointstore.Config{
+				Bucket:      cfg.checkpointS3Bucket,
+				RoleARN:     cfg.checkpointS3RoleARN,
+				Region:      cfg.checkpointS3Region,
+				Prefix:      cfg.checkpointS3Prefix,
+				SessionName: cfg.checkpointS3SessionName,
+			})
+			if err != nil {
+				logger.Error("checkpoint S3 store misconfigured", "err", err)
+				os.Exit(1)
+			}
+			opts = append(opts, criu.WithStore(store))
+			logger.Info("checkpoint archives → S3 (assume-role)",
+				"bucket", cfg.checkpointS3Bucket, "role", cfg.checkpointS3RoleARN)
+		}
+		ckpt = criu.NewContainerCheckpointer(client, namespace, opts...)
 	}
 	// Shell I/O (write→stdin, read→scrollback delta) rides the same client:
 	// the agent client resolves pod name → IP per request and dials the
@@ -107,6 +129,14 @@ type config struct {
 	dataPlaneImage string
 	dataPlaneShell string
 	criuEnabled    bool
+	// Checkpoint archive S3 store (used only when criuEnabled). Empty bucket =
+	// keep archives node-local. Access is by assuming checkpointS3RoleARN over
+	// the node instance profile (see internal/adapter/checkpointstore).
+	checkpointS3Bucket      string
+	checkpointS3RoleARN     string
+	checkpointS3Region      string
+	checkpointS3Prefix      string
+	checkpointS3SessionName string
 }
 
 func loadConfig() config {
@@ -115,8 +145,13 @@ func loadConfig() config {
 		dataPlaneImage: env("DATA_PLANE_IMAGE", ""),
 		// Propagated into session pods; the agent launches
 		// ${DATA_PLANE_SHELL:-/bin/bash} on a PTY (AC-D1).
-		dataPlaneShell: env("DATA_PLANE_SHELL", ""),
-		criuEnabled:    envBool("CRIU_ENABLED", false),
+		dataPlaneShell:          env("DATA_PLANE_SHELL", ""),
+		criuEnabled:             envBool("CRIU_ENABLED", false),
+		checkpointS3Bucket:      env("CHECKPOINT_S3_BUCKET", ""),
+		checkpointS3RoleARN:     env("CHECKPOINT_S3_ROLE_ARN", ""),
+		checkpointS3Region:      env("CHECKPOINT_S3_REGION", env("AWS_REGION", "")),
+		checkpointS3Prefix:      env("CHECKPOINT_S3_PREFIX", "checkpoints"),
+		checkpointS3SessionName: env("CHECKPOINT_S3_SESSION_NAME", ""),
 	}
 }
 
