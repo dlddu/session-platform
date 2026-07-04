@@ -14,11 +14,11 @@ COPY data-plane/ ./
 RUN CGO_ENABLED=0 go build -o /out/agent ./cmd/agent
 
 # ---- stage 2: runtime ----
-# debian-slim rather than distroless/alpine: the session workload IS an
+# ubuntu rather than distroless/alpine: the session workload IS an
 # interactive /bin/bash with the standard userland, and glibc keeps the pod
 # CRIU-friendlier for the later checkpoint/restore work (AC-B*/AC-D4, see
 # ../docs/criu-verification.md). Only the static agent binary is added on top.
-FROM debian:bookworm-slim
+FROM ubuntu:24.04
 COPY --from=build /out/agent /agent
 # Agent port; keep in sync with cmd/agent (defaultAddr) and the control plane
 # orchestrator's agentPort.

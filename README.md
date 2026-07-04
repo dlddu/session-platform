@@ -38,7 +38,7 @@ web/                  React + Vite + TS SPA
   src/api/              typed client over /api/v1
 data-plane/           session agent: one PTY-attached shell + attach/healthz (AC-D1)
   cmd/agent/            main: launches the shell, serves the WS attach stream
-  Dockerfile            multi-stage: static agent binary on debian-slim
+  Dockerfile            multi-stage: static agent binary on ubuntu
 deploy/               kind config + control-plane manifests (2-replica e2e overlay)
 docs/                 value / PRD·AC / journeys / mockups / CRIU verification note
 ```

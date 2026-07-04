@@ -13,7 +13,7 @@ value V6 in `../docs/values.md`. Read/write map onto the shell: write = stdin
 input, read = accumulated stdout/stderr output.
 
 This directory holds the **session agent** (`cmd/agent`) and its image
-(`Dockerfile`, debian-slim + static Go binary). The image's ENTRYPOINT owns the
+(`Dockerfile`, ubuntu + static Go binary). The image's ENTRYPOINT owns the
 workload: on start the agent launches exactly one PTY-attached interactive shell
 (`DATA_PLANE_SHELL`, default `/bin/bash` — AC-D1) and serves two endpoints on
 :8090:
