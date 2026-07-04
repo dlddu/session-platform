@@ -221,6 +221,59 @@ func TestClientOrchestrator_PodSpecPropagatesShellOverride(t *testing.T) {
 	}
 }
 
+// AC-B2/AC-D4 (restore-pod spec): RestoreInto provisions a *restore target* — a
+// pod carrying AnnotationRestoreCheckpoint with the checkpoint ref so a
+// CRIU-capable runtime resumes the checkpointed process tree — not a fresh-shell
+// pod like Start. This is the branch that stops a restore from booting an empty
+// shell and losing the frozen state; the pod is otherwise the same shell-agent
+// pod, so pod-Ready still means "restored shell alive" (AC-D1).
+func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
+	orch, cs := newReadyOrchestrator(t)
+	const ref = "/var/lib/kubelet/checkpoints/checkpoint-sess-r1a2_sessions-session-1.tar"
+
+	restored, err := orch.RestoreInto(context.Background(), "r1a2", ref)
+	if err != nil {
+		t.Fatalf("restore into: %v", err)
+	}
+
+	pods := listPods(t, cs)
+	if len(pods) != 1 {
+		t.Fatalf("expected 1 pod, got %d", len(pods))
+	}
+	p := pods[0]
+	if p.Name != restored.Name {
+		t.Fatalf("pod name=%q want %q (RestoreInto ref)", p.Name, restored.Name)
+	}
+	// The restore marker records the checkpoint the runtime must resume from —
+	// this is what distinguishes a restore from a fresh shell start.
+	if got := p.Annotations[k8s.AnnotationRestoreCheckpoint]; got != ref {
+		t.Fatalf("restore pod annotation %s=%q want %q (restore target, not fresh shell)", k8s.AnnotationRestoreCheckpoint, got, ref)
+	}
+	// Still labelled 1:1 to its session and running the same shell-agent
+	// container with no entrypoint override, so once resumed the agent's
+	// /healthz reflects the *restored* shell (AC-D1).
+	if got := p.Labels[k8s.LabelSessionID]; got != "r1a2" {
+		t.Fatalf("%s label=%q want r1a2", k8s.LabelSessionID, got)
+	}
+	if c := p.Spec.Containers[0]; len(c.Command) != 0 || len(c.Args) != 0 {
+		t.Fatalf("restore pod overrides the entrypoint (command=%v args=%v); the runtime must resume the checkpoint", c.Command, c.Args)
+	}
+
+	// Start, by contrast, provisions a fresh pod with no restore marker — the
+	// branch that boots a brand-new empty shell.
+	if _, err := orch.Start(context.Background(), "f9b8"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	for _, fp := range listPods(t, cs) {
+		if fp.Labels[k8s.LabelSessionID] != "f9b8" {
+			continue
+		}
+		if _, marked := fp.Annotations[k8s.AnnotationRestoreCheckpoint]; marked {
+			t.Fatalf("fresh Start pod carries the restore marker %s; only RestoreInto should", k8s.AnnotationRestoreCheckpoint)
+		}
+	}
+}
+
 // AC-D1 (transport): Start records the Ready pod's IP so the control plane can
 // dial the session agent without re-fetching the pod.
 func TestClientOrchestrator_StartRecordsPodIP(t *testing.T) {

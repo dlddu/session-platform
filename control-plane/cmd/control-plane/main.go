@@ -33,8 +33,9 @@ func main() {
 	// The control plane drives data plane pods AND stores session state via
 	// client-go, so it needs a reachable cluster: the in-cluster config as a pod,
 	// or the ambient kubeconfig for local development against a kind cluster. The
-	// same client backs the pod orchestrator and the ConfigMap/Lease state store;
-	// the CRIU adapter remains a stub behind its interface.
+	// same client backs the pod orchestrator, the ConfigMap/Lease state store,
+	// and — when CRIU_ENABLED is on — the real CRIU checkpointer (kubelet
+	// ContainerCheckpoint API); with the gate off the checkpointer is a no-op stub.
 	client, namespace, err := k8s.BuildClient()
 	if err != nil {
 		logger.Error("k8s: no reachable cluster (in-cluster config or kubeconfig required)", "err", err)
@@ -57,7 +58,14 @@ func main() {
 	orch := k8s.NewClientOrchestrator(client, namespace,
 		k8s.WithImage(cfg.dataPlaneImage), k8s.WithShell(cfg.dataPlaneShell))
 	store := configmap.NewStore(client, namespace)
-	ckpt := criu.NewStubCheckpointer(cfg.criuEnabled)
+	// CRIU gate: on → the real ContainerCheckpoint adapter (kubelet checkpoint
+	// API, alpha — unverified until a CRIU-capable runtime is provisioned, see
+	// docs/criu-verification.md); off → the no-op stub so the happy path runs
+	// without CRIU.
+	var ckpt criu.Checkpointer = criu.NewStubCheckpointer(false)
+	if cfg.criuEnabled {
+		ckpt = criu.NewContainerCheckpointer(client, namespace)
+	}
 	// Shell I/O (write→stdin, read→scrollback delta) rides the same client:
 	// the agent client resolves pod name → IP per request and dials the
 	// session agent directly (AC-D2/D3).

@@ -27,10 +27,11 @@
 - **기대 결과**: 1회차 read에 `A` 포함 + `nextOffset` 발급. 2회차 read(커서 이후 델타)에는 `B`만 포함되고 `A`는 미포함. 3회차 read(`offset=0`)에는 `A`와 `B`가 실행 순서대로 **모두** 포함 — 서버는 출력을 버리지 않으므로 `offset=0` 재조회는 언제나 전체 누적 출력(비파괴적)
 - **검증 AC**: AC-D3
 
-### 시나리오 4: 복원 후 쉘 상태 무결성(구체 마커)
-- **사전 조건**: active 세션에 `export MARKER=42\n`, `cd /tmp\n`를 write하여 쉘 상태 세팅
-- **실행 단계**: 세션 동결(스냅샷) → 이후 접근으로 CRIU 복원 → `echo $MARKER\n`·`pwd\n`를 write → read
-- **기대 결과**: read 출력에 `42`와 `/tmp`가 포함(동결 직전 환경 변수·작업 디렉터리 보존). 이는 AC-B3(무결성)의 구체 마커 검증
+### 시나리오 4: 복원 후 쉘 상태 무결성(구체 마커) + 커서 연속성
+- **사전 조건**: active 세션에 `export MARKER=42\n`, `cd /tmp\n`를 write하여 쉘 상태 세팅. 동결 직전 read로 `nextOffset` 커서를 확보(`cursorBefore`)
+- **실행 단계**: 세션 동결(스냅샷, in-process `Service.Snapshot` 직접 호출 — HTTP 스냅샷 엔드포인트 미추가) → 이후 접근으로 CRIU 복원(AC-B2) → `echo $MARKER\n`·`pwd\n`를 write → (a) `cursorBefore`로 read, (b) `offset=0`으로 read
+- **기대 결과**: (a) `cursorBefore` 델타 read에 `42`와 `/tmp`가 포함(동결 직전 환경 변수·작업 디렉터리 보존) — 이는 AC-B3(무결성)의 구체 마커 검증. 동시에 복원 전 발급 커서가 여전히 복원된 버퍼의 유효 오프셋이라는 **커서 연속성**(버퍼-인-체크포인트)을 입증하며, 델타에는 동결 이전 입력이 재전송되지 않는다. (b) `offset=0` read에는 동결 전 입력 에코와 복원 후 출력이 실행 순서대로 모두 포함(비파괴적 전체 이력)
+- **구현**: `control-plane/test/integration_test.go`의 `TestScenario4_CRIUIntegrity` — 실 클러스터 백엔드 `Service`에 대해 `CRIU_ENABLED=1` + CRIU 지원 런타임에서 실행, 런타임 부재 시 skip(런타임 없는 CI는 정상 skip). 게이트 on 실검증은 프로비저닝 작업으로 인계(`../criu-verification.md`)
 - **검증 AC**: AC-D4 (AC-B3 구체화)
 
 ### 시나리오 5: 유휴 판정은 클라이언트 I/O 기준

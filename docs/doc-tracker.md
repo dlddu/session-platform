@@ -48,7 +48,7 @@
 ### 🟡 확인 필요한 설계 결정 (스킬 표준 위험은 아니나 명세 공백)
 - **스냅샷 트리거 정책 (AC-B1)**: 60분은 최대 유휴 한계로 확정됐으나, grace period·per-session override 등 정확한 트리거 타이밍은 미확정 (`session.go`의 `TODO(policy)`).
 - **바쁜 쉘 동결 여부 (AC-D5 ↔ AC-B1)**: 장시간 포그라운드 작업 실행 중 클라이언트 유휴 60분 도달 시 동결 대상이 되는지 — CRIU상 기술적으로는 가능하나, 트리거 정책과 함께 결정 필요. (AC-D5로 유휴 "정의"는 확정, "정책"은 미확정)
-- **read 출력 버퍼 증가 (AC-D3)**: 페이지네이션은 2026-07-03 `offset` 커서 개정으로 해소(반복 read의 `payload`는 델타만큼). 누적 버퍼 자체의 상한/ring buffer·스냅샷 시 버퍼 처리(복원 후 offset 커서 유효성 포함)는 계속 보류.
+- **read 출력 버퍼 증가 (AC-D3)**: 페이지네이션은 2026-07-03 `offset` 커서 개정으로 해소(반복 read의 `payload`는 델타만큼). 스냅샷 시 버퍼 처리 중 **복원 후 offset 커서 유효성**은 2026-07-04(J5-S4) 확정 — scrollback이 에이전트 메모리 상주라 CRIU 체크포인트에 포함되어 복원 후에도 커서 유효(버퍼-인-체크포인트). 누적 버퍼 자체의 상한/ring buffer는 계속 보류.
 - **제품명·소유자**: "Session Pod Platform"은 임시 작업명. 실제 제품명/소유자 확정 필요.
 
 ### ✅ 해결된 설계 결정
@@ -70,3 +70,4 @@
 | 2026-07-01 | **V6 "인터랙티브 쉘 세션" 추가 + PRD-쉘워크로드(AC-D1~D5) + T-쉘워크로드 신설**. 세션 워크로드의 정체를 인터랙티브 쉘로 확정. AC-A1/B1/B3/C2/C3에 구체화 상호참조, values 경고·`data-plane/README.md` 갱신, 여정 README·doc-structure-state의 "세션 정체 미확정" 항목 해소 표기. | 가치 5개, PRD 3, AC 10, 테스트 3 / 세션 정체 미확정 | 가치 6개, PRD 4, AC 15, 테스트 4 / 세션 정체 확정 |
 | 2026-07-01 | AC-D3 read 시맨틱을 "마지막 read 이후 델타" → **"세션 시작 이후 전체 누적 출력, 비파괴적 반환"** 으로 변경. PRD·T-쉘워크로드 시나리오3·AC-C2 상호참조 갱신, 버퍼 무제한 증가를 열린 항목으로 등록. AC 수·연결 변화 없음(시맨틱만 변경). | read=마지막 read 이후 델타(1회 전달) | read=전체 누적 출력(비파괴적) |
 | 2026-07-03 | AC-D3 read 시맨틱을 **"서버 발급 `nextOffset` 커서 기반 델타"** 로 개정 — read는 요청 `offset`(기본 0) 이후 출력 + 새 `nextOffset`을 반환, `offset=0`은 전체 이력, `offset`>누적 길이는 빈 payload. 서버가 출력을 버리지 않으므로 비파괴·전체 조회 성질은 `offset=0`으로 유지. T-쉘워크로드 시나리오 2·3, J5-S3, OpenAPI(`ReadRequest.offset`/`ReadResult.nextOffset`) 동기 갱신. 페이지네이션 열린 항목 해소(버퍼 상한·스냅샷 시 버퍼 처리는 계속 보류). AC 수·연결 변화 없음. | read=전체 누적 출력(비파괴적) | read=offset 커서 델타(offset=0이면 전체, 비파괴적) |
+| 2026-07-04 | **J5-S4 쉘 상태 축적·이어짐 (CRIU) 실 코드**. `Checkpointer` 포트 뒤 K8s-native 실 어댑터(`criu.ContainerCheckpointer` — kubelet `ContainerCheckpoint` API) 구현, `RestoreInto`를 restore-target pod 스펙(`AnnotationRestoreCheckpoint`)으로 분기(빈 쉘 기동 방지), 복원 후 커서 연속성(버퍼-인-체크포인트) 확정, AC-D4 마커 왕복 in-process 검증(`TestScenario4_CRIUIntegrity`) 채움. `criu-verification.md`의 5개 열린 결정을 구체 선택으로 확정, 게이트 on 실검증은 프로비저닝으로 인계. AC 수·연결 변화 없음(AC-D4/B3 구현). | CRIU=미검증 스텁, 5개 결정 미확정, Scenario4=의도적 실패 | CRIU=실 코드(미검증), 5개 결정 확정, Scenario4=마커 왕복(런타임 시 실검증) |

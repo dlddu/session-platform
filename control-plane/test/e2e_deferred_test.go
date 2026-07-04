@@ -145,11 +145,20 @@ func TestDeferred_SnapshotRestore(t *testing.T) {
 	t.Skip("deferred: needs a snapshot-state session (AC-B1 trigger) to exercise restore-on-access (AC-B2); fill when snapshot + restore land")
 }
 
-// AC-B3: a restored session's in-memory state matches the pre-snapshot state.
-// Blocked on: a verified CRIU runtime (ContainerCheckpoint feature gate) — the
-// stub checkpointer carries no real process state. See docs/criu-verification.md.
+// AC-B3/AC-D4: a restored session's in-memory shell state (env, cwd, shell
+// vars/functions, foreground children, FDs) matches the pre-snapshot state.
+//
+// The in-process marker round-trip that concretely asserts this — export a
+// marker + cd, snapshot via a direct Service call, restore, read back the marker
+// and pwd — lives in integration_test.go's TestScenario4_CRIUIntegrity (real
+// cluster-backed Service, runs under CRIU_ENABLED=1). This deployed-SUT seed
+// stays blocked because it can only drive the SUT over HTTP, and (a) the kind
+// SUT runtime is not CRIU-capable (deploy/kind-config.yaml keeps the gate off)
+// and (b) J5-S4 adds no HTTP snapshot trigger, so there is no way to reach the
+// snapshot state through the API here. Fill when a CRIU-capable SUT and an
+// API-reachable snapshot trigger both exist. See docs/criu-verification.md.
 func TestDeferred_CRIUIntegrity(t *testing.T) {
-	t.Skip("deferred: needs a verified CRIU runtime to assert checkpoint/restore integrity (AC-B3); see docs/criu-verification.md")
+	t.Skip("deferred: needs a CRIU-capable SUT runtime + an API-reachable snapshot trigger (AC-B3/AC-D4); the in-process round-trip is TestScenario4_CRIUIntegrity — see docs/criu-verification.md")
 }
 
 // AC-C2 (idle/snapshot branches): read dispatches on a non-active state.

@@ -103,6 +103,15 @@ func main() {
 // discarded, so offset 0 always replays the full session history. There is no
 // size cap — the buffer bound is a deliberately open design decision (see
 // docs/prd/shell-workload.md).
+//
+// The buffer lives in the agent process's own memory, so a CRIU checkpoint of
+// the session pod captures it along with the shell's process tree (AC-D4). A
+// restore therefore brings back the same accumulated bytes at the same length,
+// which is what keeps a read cursor (nextOffset) issued before the snapshot
+// valid afterwards: a client resumes with only the delta, and offset 0 still
+// replays the full pre- and post-snapshot history. This is distinct from a
+// container *restart* (RestartPolicy Always), which starts a fresh agent with
+// an empty buffer — restore resumes, restart does not.
 type scrollback struct {
 	mu  sync.Mutex
 	buf []byte

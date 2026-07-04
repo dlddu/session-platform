@@ -37,9 +37,11 @@ type PodOrchestrator interface {
 	Start(ctx context.Context, sessionID string) (PodRef, error)
 	// Stop tears down the pod and reclaims its CPU/memory (AC-A3).
 	Stop(ctx context.Context, ref PodRef) error
-	// RestoreInto provisions a fresh pod that a checkpoint will be restored
-	// into (AC-B2). The checkpoint bytes are applied by the Checkpointer.
-	RestoreInto(ctx context.Context, sessionID string) (PodRef, error)
+	// RestoreInto provisions the pod a checkpoint will be restored into
+	// (AC-B2), carrying checkpointRef so the pod is shaped as a *restore
+	// target* (resuming the checkpointed process tree) rather than a fresh
+	// shell. The checkpoint bytes are applied by the Checkpointer.
+	RestoreInto(ctx context.Context, sessionID, checkpointRef string) (PodRef, error)
 	// Reach proves the session shell agent in ref's pod is reachable by
 	// opening its attach stream and closing it again (AC-D1). It moves no
 	// payload — the stdin/stdout semantics on the stream are J5-S2/S3.
@@ -88,10 +90,12 @@ func (o *StubOrchestrator) Stop(_ context.Context, ref PodRef) error {
 	return nil
 }
 
-func (o *StubOrchestrator) RestoreInto(ctx context.Context, sessionID string) (PodRef, error) {
-	// TODO(criu): for a real restore this provisions a pod prepared to accept a
-	// CRIU image; the Checkpointer then restores into it (AC-B2). The stub just
-	// starts a fresh pod.
+func (o *StubOrchestrator) RestoreInto(ctx context.Context, sessionID, checkpointRef string) (PodRef, error) {
+	// The in-memory stub has no runtime to resume a checkpoint into, so it just
+	// starts a fresh pod and ignores the ref. The real ClientOrchestrator builds
+	// a restore-target pod from checkpointRef (see restorePodSpec) that a
+	// CRIU-capable runtime resumes into (AC-B2).
+	_ = checkpointRef
 	return o.Start(ctx, sessionID)
 }
 
