@@ -108,7 +108,9 @@
 - [ ] `DATA_PLANE_IMAGE` 주입(퍼블리시된 data plane 에이전트 이미지) + `CRIU_ENABLED=1`.
 - [ ] 복원 경로 런타임 매핑: `k8s.AnnotationRestoreCheckpoint`(pod 어노테이션)를 런타임 복원 메커니즘
       (CRI-O `io.kubernetes.cri-o.restore` / 아카이브 기반 체크포인트 OCI 이미지)에 연결. 미성숙 시 대안 ⑤ 각주.
-- [ ] S3 저장소(결정 ③): 버킷 생성 + `CHECKPOINT_S3_BUCKET`/`CHECKPOINT_S3_ROLE_ARN`/`CHECKPOINT_S3_REGION` 설정.
+- [ ] S3 저장소(결정 ③): 버킷 생성 + `checkpoint-s3` Secret 프로비저닝(`bucket`/`role-arn`/`region`/`prefix` 4개 키).
+      control-plane Deployment가 이 Secret을 `secretKeyRef`(optional)로 읽는다 — 프로덕션은 external-secrets,
+      검증은 `kubectl create secret generic checkpoint-s3 …`(예시: `k8s/checkpoint-s3-secret.example.yaml`).
 - [ ] IAM: 노드 인스턴스 프로파일(또는 IRSA)이 `CHECKPOINT_S3_ROLE_ARN` 역할을 `sts:AssumeRole` 할 수 있고,
       그 역할이 버킷에 `s3:PutObject`(복원 시 `s3:GetObject`) 권한을 가질 것.
 - [ ] 업로더의 아카이브 접근성: control plane(또는 사이드카)이 노드 체크포인트 디렉터리를 읽도록
@@ -117,12 +119,14 @@
 **확인 명령(green이면 AC-D4 + 커서 연속성 검증 완료)**
 ```
 CRIU_ENABLED=1 DATA_PLANE_IMAGE=<published-agent-image> \
-  CHECKPOINT_S3_BUCKET=<bucket> CHECKPOINT_S3_ROLE_ARN=<role-arn> CHECKPOINT_S3_REGION=<region> \
   go test -tags=integration ./test/... -run TestScenario4_CRIUIntegrity -v
 ```
 - **skip**: 런타임/클러스터/이미지 미준비(정상 — 아직 세울 게 남음).
 - **fail**: 런타임은 있으나 복원 경로 미매듭(위 매핑 항목 완료 필요).
 - **pass**: 동결 전 `MARKER`·cwd가 복원 후 그대로 재개 + 복원 전 커서로 델타 read 유효 → 완료.
+> in-process Scenario4는 노드 로컬 아카이브로 상태 무결성(AC-D4)만 검증하므로 S3 env가 필요 없다
+> (아카이브가 노드에 있고 테스트 프로세스에서 열 수 없음). **S3 업로드 경로**는 (1) 단위 테스트
+> (`checkpointstore`/`criu`)와 (2) `checkpoint-s3` Secret이 주입된 **배포된 control-plane**에서 검증된다.
 
 ## 리스크 / 대안
 - **"새 pod 복원" alpha/미성숙**: 코드를 `Checkpointer` 포트 + `CheckpointDriver` 심 뒤로 격리했으므로
