@@ -14,6 +14,10 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - ../k8s
+  # kind-only placeholder for the now-required `checkpoint-s3` Secret so the SUT
+  # starts (CRIU is off here, so the values are inert). Production uses the k8s/
+  # base + external-secrets, not this overlay.
+  - checkpoint-s3-secret.yaml
 images:
   - name: ghcr.io/dlddu/session-platform
     newName: session-platform/control-plane

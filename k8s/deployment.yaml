@@ -44,37 +44,32 @@ spec:
             # Checkpoint archive S3 store config (decision ③, docs/criu-verification.md):
             # bucket / assume-role ARN / region / key prefix. Sourced from the
             # `checkpoint-s3` Secret rather than inlined here. The Secret is
-            # provisioned out-of-band — in production by external-secrets (as the
-            # ghcr pull secret is), and for CRIU verification by creating it
-            # directly (see k8s/checkpoint-s3-secret.example.yaml). These are
-            # config, not credentials — access is by assume-role over the node
-            # instance profile, so there are no static keys here.
-            # optional: true keeps runs without the Secret (CRIU off, kind e2e)
-            # starting cleanly; the S3 store is only built when CRIU_ENABLED=true.
+            # REQUIRED (no `optional`), so the pod will not start until it exists:
+            # in production external-secrets provisions it (as it does the ghcr
+            # pull secret); the kind e2e overlay (deploy/) ships a placeholder; for
+            # CRIU verification create it directly (k8s/checkpoint-s3-secret.example.yaml).
+            # These are config, not credentials — S3 access is by assume-role over
+            # the node instance profile, so there are no static keys here.
             - name: CHECKPOINT_S3_BUCKET
               valueFrom:
                 secretKeyRef:
                   name: checkpoint-s3
                   key: bucket
-                  optional: true
             - name: CHECKPOINT_S3_ROLE_ARN
               valueFrom:
                 secretKeyRef:
                   name: checkpoint-s3
                   key: role-arn
-                  optional: true
             - name: CHECKPOINT_S3_REGION
               valueFrom:
                 secretKeyRef:
                   name: checkpoint-s3
                   key: region
-                  optional: true
             - name: CHECKPOINT_S3_PREFIX
               valueFrom:
                 secretKeyRef:
                   name: checkpoint-s3
                   key: prefix
-                  optional: true
           readinessProbe:
             httpGet:
               path: /api/v1/healthz

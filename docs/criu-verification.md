@@ -109,7 +109,8 @@
 - [ ] 복원 경로 런타임 매핑: `k8s.AnnotationRestoreCheckpoint`(pod 어노테이션)를 런타임 복원 메커니즘
       (CRI-O `io.kubernetes.cri-o.restore` / 아카이브 기반 체크포인트 OCI 이미지)에 연결. 미성숙 시 대안 ⑤ 각주.
 - [ ] S3 저장소(결정 ③): 버킷 생성 + `checkpoint-s3` Secret 프로비저닝(`bucket`/`role-arn`/`region`/`prefix` 4개 키).
-      control-plane Deployment가 이 Secret을 `secretKeyRef`(optional)로 읽는다 — 프로덕션은 external-secrets,
+      control-plane Deployment가 이 Secret을 `secretKeyRef`로 읽으며 **필수**다 — Secret이 없으면 pod가
+      기동하지 않는다(CRIU off라도). 프로덕션은 external-secrets가, kind e2e는 overlay 플레이스홀더가 제공,
       검증은 `kubectl create secret generic checkpoint-s3 …`(예시: `k8s/checkpoint-s3-secret.example.yaml`).
 - [ ] IAM: 노드 인스턴스 프로파일(또는 IRSA)이 `CHECKPOINT_S3_ROLE_ARN` 역할을 `sts:AssumeRole` 할 수 있고,
       그 역할이 버킷에 `s3:PutObject`(복원 시 `s3:GetObject`) 권한을 가질 것.
