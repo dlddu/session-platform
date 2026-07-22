@@ -94,6 +94,9 @@
   `RestoreInto`에 체크포인트 ref를 전달하고 커서를 리셋하지 않음(버퍼-인-체크포인트).
 - `data-plane/cmd/agent/main.go` — scrollback이 에이전트 메모리 상주 → 체크포인트에 포함(AC-D4),
   복원 후 커서 유효.
+- `data-plane/Dockerfile` — `ENV GODEBUG=multipathtcp=0`: Go 1.24가 Linux 리스너에 MPTCP를 기본
+  활성화하는데 CRIU는 MPTCP 소켓을 체크포인트하지 못하므로, 에이전트 :8090 리스너(및 세션 쉘이
+  상속하는 환경)를 plain TCP로 고정.
 - `control-plane/test/integration_test.go` — `TestScenario4_CRIUIntegrity`(마커 왕복 + 커서 연속성).
 - `control-plane/test/e2e_deferred_test.go` — `TestDeferred_CRIUIntegrity`(B3/D4, deferred 시드).
 

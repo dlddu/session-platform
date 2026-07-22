@@ -20,6 +20,12 @@ RUN CGO_ENABLED=0 go build -o /out/agent ./cmd/agent
 # ../docs/criu-verification.md). Only the static agent binary is added on top.
 FROM ubuntu:24.04
 COPY --from=build /out/agent /agent
+# Go 1.24 uses Multipath TCP for listeners by default on Linux, but CRIU cannot
+# checkpoint MPTCP sockets — the agent's :8090 listener must stay plain TCP or
+# the pod checkpoint fails (AC-B*/AC-D4). Container env is inherited by the
+# session shell too, so Go programs run inside the session stay checkpointable
+# as well.
+ENV GODEBUG=multipathtcp=0
 # Agent port; keep in sync with cmd/agent (defaultAddr) and the control plane
 # orchestrator's agentPort.
 EXPOSE 8090
