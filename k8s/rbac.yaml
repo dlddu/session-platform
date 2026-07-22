@@ -5,7 +5,9 @@
 # metadata) and one Lease per session (occupancy lock), so the Role also grants
 # configmaps and coordination.k8s.io/leases. Namespaced Role (not ClusterRole):
 # session pods, ConfigMaps, and Leases all live in the control plane's own
-# namespace.
+# namespace. The one cluster-scoped exception is the CRIU checkpoint
+# ClusterRole at the bottom — the kubelet ContainerCheckpoint call rides the
+# cluster-scoped nodes/proxy subresource, which no namespaced Role can grant.
 #
 # Applied by Flux alongside deployment.yaml into the session-platform namespace
 # (cluster/session-platform.yaml). The namespace is intentionally omitted so the
@@ -51,4 +53,47 @@ subjects:
 roleRef:
   kind: Role
   name: control-plane-pods
+  apiGroup: rbac.authorization.k8s.io
+---
+# CRIU checkpoint (CRIU_ENABLED=1 only): the real Checkpointer drives the
+# kubelet ContainerCheckpoint API through the API server's node proxy —
+#   POST /api/v1/nodes/{node}/proxy/checkpoint/{ns}/{pod}/{container}
+# (internal/adapter/criu/container_checkpointer.go). Nodes are cluster-scoped,
+# so the namespaced Role above cannot grant this; a POST through nodes/proxy
+# authorizes as verb "create" on the nodes/proxy subresource. With the gate off
+# (the default, and the kind e2e SUT) this permission is never exercised.
+#
+# NOTE(scope): "create" on nodes/proxy is broad — the ContainerCheckpoint API
+# (alpha) has no finer-grained RBAC, and the same verb admits other kubelet
+# POST endpoints via the proxy. Revisit at provisioning if a tighter boundary
+# is wanted.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: session-platform-node-checkpoint
+  labels:
+    app: control-plane
+rules:
+  - apiGroups: [""]
+    resources: ["nodes/proxy"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: session-platform-node-checkpoint
+  labels:
+    app: control-plane
+subjects:
+  - kind: ServiceAccount
+    name: control-plane
+    # Unlike the RoleBinding above, a ClusterRoleBinding subject cannot inherit
+    # the kustomization's target namespace — the SA namespace must be explicit.
+    # This is the Flux target namespace (cluster/session-platform.yaml). The
+    # kind e2e overlay deploys elsewhere, but CRIU is off there so the dangling
+    # subject is inert and harmless.
+    namespace: session-platform
+roleRef:
+  kind: ClusterRole
+  name: session-platform-node-checkpoint
   apiGroup: rbac.authorization.k8s.io

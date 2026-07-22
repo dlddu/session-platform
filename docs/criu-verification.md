@@ -104,7 +104,9 @@
 **전제 체크리스트**
 - [ ] CRIU 지원 노드: 커널 CRIU 옵션 + CRIU 지원 runc 빌드 (결정 ①②).
 - [ ] kubelet feature gate `ContainerCheckpoint`(+ 복원 검증 시 `ContainerCheckpointRestore` 계열) 활성.
-- [ ] control plane ServiceAccount RBAC: `nodes/proxy` 하위리소스 접근 허용(체크포인트 엔드포인트 프록시).
+- [x] control plane ServiceAccount RBAC: `nodes/proxy`에 `create`(프록시 경유 POST) — `k8s/rbac.yaml`의
+      ClusterRole/ClusterRoleBinding(`session-platform-node-checkpoint`)으로 **포함됨**(Flux 자동 적용).
+      확인만 필요: ClusterRoleBinding subject의 namespace(`session-platform`)가 실제 배포 네임스페이스와 일치하는지.
 - [ ] `DATA_PLANE_IMAGE` 주입(퍼블리시된 data plane 에이전트 이미지) + `CRIU_ENABLED=1`.
 - [ ] 복원 경로 런타임 매핑: `k8s.AnnotationRestoreCheckpoint`(pod 어노테이션)를 런타임 복원 메커니즘
       (CRI-O `io.kubernetes.cri-o.restore` / 아카이브 기반 체크포인트 OCI 이미지)에 연결. 미성숙 시 대안 ⑤ 각주.
