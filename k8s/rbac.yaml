@@ -5,9 +5,11 @@
 # metadata) and one Lease per session (occupancy lock), so the Role also grants
 # configmaps and coordination.k8s.io/leases. Namespaced Role (not ClusterRole):
 # session pods, ConfigMaps, and Leases all live in the control plane's own
-# namespace. The one cluster-scoped exception is the CRIU checkpoint
-# ClusterRole at the bottom — the kubelet ContainerCheckpoint call rides the
-# cluster-scoped nodes/proxy subresource, which no namespaced Role can grant.
+# namespace. CRIU checkpoint/restore needs no extra RBAC either — it is
+# agent-driven in-pod (the control plane talks to the pod's agent over HTTP;
+# the criu privilege is the pod's securityContext capabilities). Only the
+# unwired CRI-O alternative would need a cluster-scoped nodes/proxy grant —
+# re-add it from git history if that path is ever adopted.
 #
 # Applied by Flux alongside deployment.yaml into the session-platform namespace
 # (cluster/session-platform.yaml). The namespace is intentionally omitted so the
@@ -53,50 +55,4 @@ subjects:
 roleRef:
   kind: Role
   name: control-plane-pods
-  apiGroup: rbac.authorization.k8s.io
----
-# CRIU checkpoint — CRI-O ALTERNATIVE ONLY, not the wired path. The wired
-# checkpointer is agent-driven in-pod CRIU (internal/adapter/criu/agent_checkpointer.go):
-# the control plane talks to the pod's own agent over HTTP, so it needs NO
-# nodes/proxy access — the criu privilege lives on the data plane pod
-# (securityContext capabilities), not here. This ClusterRole grants the kubelet
-# ContainerCheckpoint proxy —
-#   POST /api/v1/nodes/{node}/proxy/checkpoint/{ns}/{pod}/{container}
-# — which only the kept-but-unwired CRI-O alternative (container_checkpointer.go)
-# uses. It is retained for that alternative and can be removed if you are not
-# pursuing the CRI-O path.
-#
-# NOTE(scope): "create" on nodes/proxy is broad — the ContainerCheckpoint API
-# (alpha) has no finer-grained RBAC, and the same verb admits other kubelet POST
-# endpoints via the proxy. Since the wired path does not use it, prefer removing
-# this grant unless the CRI-O alternative is actually deployed.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: session-platform-node-checkpoint
-  labels:
-    app: control-plane
-rules:
-  - apiGroups: [""]
-    resources: ["nodes/proxy"]
-    verbs: ["create"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: session-platform-node-checkpoint
-  labels:
-    app: control-plane
-subjects:
-  - kind: ServiceAccount
-    name: control-plane
-    # Unlike the RoleBinding above, a ClusterRoleBinding subject cannot inherit
-    # the kustomization's target namespace — the SA namespace must be explicit.
-    # This is the Flux target namespace (cluster/session-platform.yaml). The
-    # kind e2e overlay deploys elsewhere, but CRIU is off there so the dangling
-    # subject is inert and harmless.
-    namespace: session-platform
-roleRef:
-  kind: ClusterRole
-  name: session-platform-node-checkpoint
   apiGroup: rbac.authorization.k8s.io

@@ -147,8 +147,10 @@
       `region`/`prefix`) + IAM(노드 프로파일 → `sts:AssumeRole` → `s3:PutObject`·`GetObject`). Deployment가 이
       Secret을 `secretKeyRef`(필수)로 읽으므로 Secret 없으면 pod 미기동(CRIU off라도). in-process Scenario4는
       이 S3가 필요 없다(인메모리 스토어로 대체).
-- [~] (CRI-O 대안 전용, 미사용 시 삭제 가능) `nodes/proxy` RBAC(`session-platform-node-checkpoint`): 에이전트
-      주도 경로는 쓰지 않는다 — CRI-O 대안을 채택할 때만 필요.
+- [x] `nodes/proxy` RBAC(`session-platform-node-checkpoint`) **삭제됨**(2026-07-23) — 에이전트 주도 경로는
+      쓰지 않는 broad 권한이라 매니페스트에서 제거. CRI-O 대안 채택 시 git 이력에서 재추가.
+      이미 적용된 클러스터에선 Flux prune이 꺼져 있으면 수동 정리:
+      `kubectl delete clusterrole,clusterrolebinding session-platform-node-checkpoint`.
 
 **확인 명령(green이면 AC-D4 + 커서 연속성 검증 완료)**
 ```
