@@ -42,15 +42,21 @@ type Client interface {
 // HTTPClient is the real Client: it resolves the pod's current IP through the
 // Kubernetes API on every call (pod IPs are not stable across restore, and
 // sessions store only the pod name) and talks plain HTTP to the agent's
-// /write and /read endpoints.
+// /write and /read endpoints. It also carries the pod's /checkpoint and /restore
+// endpoints for the agent-driven CRIU path (see Checkpoint/Restore below), so
+// the criu.AgentCheckpointer reuses this one client and its IP resolution.
 type HTTPClient struct {
 	client    kubernetes.Interface
 	namespace string
 	port      int
 	http      *http.Client
+	// stream is used for /checkpoint and /restore, whose bodies are whole
+	// checkpoint archives — bounded by the request context, not the short shell
+	// I/O timeout on http.
+	stream *http.Client
 }
 
-// compile-time assertion that HTTPClient satisfies the port.
+// compile-time assertion that HTTPClient satisfies the shell I/O port.
 var _ Client = (*HTTPClient)(nil)
 
 // HTTPOption customises an HTTPClient.
@@ -73,11 +79,61 @@ func NewHTTPClient(client kubernetes.Interface, namespace string, opts ...HTTPOp
 		namespace: namespace,
 		port:      k8s.AgentPort,
 		http:      &http.Client{Timeout: 30 * time.Second},
+		stream:    &http.Client{}, // no overall timeout: archive transfers are ctx-bounded
 	}
 	for _, opt := range opts {
 		opt(c)
 	}
 	return c
+}
+
+// Checkpoint drives the agent's /checkpoint: it returns the checkpoint archive
+// stream (criu images + scrollback) the agent produced by CRIU-dumping its shell
+// tree. The caller (criu.AgentCheckpointer) streams it to durable storage and
+// must Close the returned reader.
+func (c *HTTPClient) Checkpoint(ctx context.Context, pod string) (io.ReadCloser, error) {
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL(ip)+"/checkpoint", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.stream.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("checkpoint session pod %s: %w", pod, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		resp.Body.Close()
+		return nil, fmt.Errorf("checkpoint session pod %s: agent returned %d: %s", pod, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return resp.Body, nil
+}
+
+// Restore drives the agent's /restore on a restore-target pod: it streams the
+// checkpoint archive to the agent, which CRIU-restores the shell tree from it.
+func (c *HTTPClient) Restore(ctx context.Context, pod string, archive io.Reader) error {
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL(ip)+"/restore", archive)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-tar")
+	resp, err := c.stream.Do(req)
+	if err != nil {
+		return fmt.Errorf("restore into session pod %s: %w", pod, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("restore into session pod %s: agent returned %d: %s", pod, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
 }
 
 // resolve looks up the pod's current IP. A missing or IP-less pod is an

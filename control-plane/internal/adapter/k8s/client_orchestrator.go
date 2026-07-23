@@ -61,6 +61,11 @@ const (
 	// agent's entrypoint launches ${DATA_PLANE_SHELL:-/bin/bash} (AC-D1).
 	shellEnvVar = "DATA_PLANE_SHELL"
 
+	// restoreModeEnvVar tells a restore-target pod's agent to start WITHOUT a
+	// shell and await the checkpoint on POST /restore (in-pod CRIU restore).
+	// Keep in sync with data-plane/cmd/agent (restoreModeEnv).
+	restoreModeEnvVar = "DATA_PLANE_RESTORE_MODE"
+
 	// AgentPort is where the session agent serves /attach and /healthz. Keep
 	// in sync with data-plane/cmd/agent (defaultAddr).
 	AgentPort     = 8090
@@ -83,13 +88,14 @@ const (
 // dedicated data plane pod per session through client-go, and dials the pod's
 // session agent to prove the shell is reachable (AC-D1).
 type ClientOrchestrator struct {
-	client       kubernetes.Interface
-	namespace    string
-	image        string
-	shell        string // DATA_PLANE_SHELL override injected into pods ("" = agent default)
-	agentPort    int
-	pollInterval time.Duration
-	readyTimeout time.Duration
+	client         kubernetes.Interface
+	namespace      string
+	image          string
+	shell          string // DATA_PLANE_SHELL override injected into pods ("" = agent default)
+	checkpointCaps bool   // add CRIU capabilities to session pods (CRIU_ENABLED)
+	agentPort      int
+	pollInterval   time.Duration
+	readyTimeout   time.Duration
 }
 
 // compile-time assertion that ClientOrchestrator satisfies the port.
@@ -115,6 +121,15 @@ func WithShell(shell string) Option {
 		if shell != "" {
 			o.shell = shell
 		}
+	}
+}
+
+// WithCheckpointCapabilities adds the Linux capabilities the in-pod CRIU path
+// needs (agent-driven checkpoint/restore) to session pods. Wired from
+// CRIU_ENABLED so gate-off pods stay unprivileged.
+func WithCheckpointCapabilities(enabled bool) Option {
+	return func(o *ClientOrchestrator) {
+		o.checkpointCaps = enabled
 	}
 }
 
@@ -302,11 +317,25 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string) *corev1.P
 	if o.shell != "" {
 		container.Env = append(container.Env, corev1.EnvVar{Name: shellEnvVar, Value: o.shell})
 	}
+	if o.checkpointCaps {
+		// In-pod CRIU (agent-driven criu dump/restore of the shell tree) needs
+		// these Linux capabilities. A given kernel/criu version may require more
+		// (e.g. SYS_ADMIN) — tuned during on-runtime verification.
+		container.SecurityContext = &corev1.SecurityContext{
+			Capabilities: &corev1.Capabilities{
+				Add: []corev1.Capability{"CHECKPOINT_RESTORE", "SYS_PTRACE"},
+			},
+		}
+	}
 	name := podName(sessionID)
 	var annotations map[string]string
 	if checkpointRef != "" {
 		name = restorePodName(sessionID)
 		annotations = map[string]string{AnnotationRestoreCheckpoint: checkpointRef}
+		// Restore-target pod: the agent starts without a shell and awaits the
+		// checkpoint on POST /restore (in-pod CRIU restore) so the pod can become
+		// Ready before the control plane pushes the archive.
+		container.Env = append(container.Env, corev1.EnvVar{Name: restoreModeEnvVar, Value: "1"})
 	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{

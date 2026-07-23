@@ -1,14 +1,16 @@
-// This file is the real Checkpointer: a K8s-native CRIU adapter built on the
-// kubelet ContainerCheckpoint API (KEP-2008, alpha). It sits behind the same
-// Checkpointer port as the gated stub and is wired in only when CRIU_ENABLED is
-// on (cmd/control-plane/main.go); the stub still covers the gate-off happy path.
+// This file is the CRI-O/kubelet ALTERNATIVE Checkpointer (decision ⑤), NOT the
+// wired path. It drives the kubelet ContainerCheckpoint API (KEP-2008, alpha) to
+// produce a container-level checkpoint archive.
 //
-// The code is written but UNVERIFIED: proving it end-to-end needs a
-// CRIU-capable runtime (containerd/runc CRIU build + the ContainerCheckpoint
-// feature gate), which is provisioned separately. To keep it compiling and
-// unit-testable without that runtime, the one runtime-specific call — hitting
-// the kubelet checkpoint endpoint — is isolated behind CheckpointDriver: tests
-// inject a fake, main injects the real kubeletDriver. See docs/criu-verification.md.
+// It is kept but no longer wired: the k3s/containerd verification on 2026-07-22
+// confirmed the *checkpoint* (dump) side works, but containerd has no way to
+// *restore* that archive (no CRI-O-style checkpoint-image/annotation restore), so
+// the round trip dead-ends. The wired path is instead agent-driven in-pod CRIU
+// (agent_checkpointer.go), which completes the round trip inside this repo. This
+// code remains for a future CRI-O deployment (which would additionally build a
+// checkpoint OCI image from the archive) and to document the KEP path; its
+// runtime call stays isolated behind CheckpointDriver so it compiles and
+// unit-tests without a runtime. See docs/criu-verification.md.
 package criu
 
 import (
@@ -46,16 +48,17 @@ type CheckpointDriver interface {
 	Restore(ctx context.Context, ref string, into k8s.PodRef) error
 }
 
-// CheckpointStore is a durable object store for checkpoint archives. When set on
-// the ContainerCheckpointer, Checkpoint streams the kubelet's node-local archive
-// to it and records the returned durable ref (e.g. s3://bucket/key) in the
-// Checkpoint instead of the ephemeral node-local path — so the archive survives
-// the node and is reachable from wherever the session restores. Defined here
-// (consumer side) so the criu package carries no cloud SDK dependency; the S3
+// CheckpointStore is a durable object store for checkpoint archives, shared by
+// both checkpointers: the wired AgentCheckpointer streams the pod agent's
+// archive through Put and fetches it back with Get; the alternative
+// ContainerCheckpointer uses Put for the kubelet's node-local archive. Defined
+// consumer-side so the criu package carries no cloud SDK dependency; the S3
 // implementation lives in internal/adapter/checkpointstore.
 type CheckpointStore interface {
 	// Put uploads the archive read from r under key and returns its durable ref.
 	Put(ctx context.Context, key string, r io.Reader) (ref string, err error)
+	// Get opens the archive at ref (as returned by Put) for reading.
+	Get(ctx context.Context, ref string) (io.ReadCloser, error)
 }
 
 // archiveOpener opens the kubelet's node-local checkpoint archive so it can be

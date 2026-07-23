@@ -20,10 +20,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -205,11 +208,44 @@ func realService(t *testing.T) *service.Service {
 		t.Skip("CRIU_ENABLED=1 but DATA_PLANE_IMAGE unset; the round-trip needs the published data plane agent image")
 	}
 	orch := k8s.NewClientOrchestrator(client, ns,
-		k8s.WithImage(image), k8s.WithShell(os.Getenv("DATA_PLANE_SHELL")))
+		k8s.WithImage(image), k8s.WithShell(os.Getenv("DATA_PLANE_SHELL")),
+		k8s.WithCheckpointCapabilities(true))
 	store := configmap.NewStore(client, ns)
-	ckpt := criu.NewContainerCheckpointer(client, ns)
 	ag := agent.NewHTTPClient(client, ns)
+	// Agent-driven checkpointer (the wired path). An in-memory store bridges the
+	// archive from checkpoint to restore within this test process, so the AC-D4
+	// round trip is verified without needing S3 — the S3 store is covered by unit
+	// tests and the deployed control plane.
+	ckpt := criu.NewAgentCheckpointer(ag, &memStore{blobs: map[string][]byte{}})
 	return service.New(orch, store, ckpt, ag)
+}
+
+// memStore is an in-process CheckpointStore for the CRIU round-trip test: it
+// keeps archives in memory between checkpoint and restore.
+type memStore struct {
+	mu    sync.Mutex
+	blobs map[string][]byte
+}
+
+func (m *memStore) Put(_ context.Context, key string, r io.Reader) (string, error) {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+	m.mu.Lock()
+	m.blobs[key] = b
+	m.mu.Unlock()
+	return "mem://" + key, nil
+}
+
+func (m *memStore) Get(_ context.Context, ref string) (io.ReadCloser, error) {
+	m.mu.Lock()
+	b, ok := m.blobs[strings.TrimPrefix(ref, "mem://")]
+	m.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("mem store: %s not found", ref)
+	}
+	return io.NopCloser(bytes.NewReader(b)), nil
 }
 
 // createReal creates a session through the real Service and schedules its

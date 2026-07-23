@@ -62,6 +62,12 @@ func (f *fakeStore) Put(_ context.Context, key string, r io.Reader) (string, err
 	return f.ref, f.err
 }
 
+// Get is unused on the kubelet (ContainerCheckpointer) path but part of the
+// shared CheckpointStore contract.
+func (f *fakeStore) Get(_ context.Context, _ string) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(f.gotBytes)), nil
+}
+
 var _ criu.CheckpointStore = (*fakeStore)(nil)
 
 func podOn(node, ns, name string) *corev1.Pod {

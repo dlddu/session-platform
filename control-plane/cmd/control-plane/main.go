@@ -57,41 +57,40 @@ func main() {
 	}
 
 	orch := k8s.NewClientOrchestrator(client, namespace,
-		k8s.WithImage(cfg.dataPlaneImage), k8s.WithShell(cfg.dataPlaneShell))
+		k8s.WithImage(cfg.dataPlaneImage), k8s.WithShell(cfg.dataPlaneShell),
+		k8s.WithCheckpointCapabilities(cfg.criuEnabled))
 	store := configmap.NewStore(client, namespace)
-	// CRIU gate: on → the real ContainerCheckpoint adapter (kubelet checkpoint
-	// API, alpha — unverified until a CRIU-capable runtime is provisioned, see
-	// docs/criu-verification.md); off → the no-op stub so the happy path runs
-	// without CRIU.
+	// Shell I/O (write→stdin, read→scrollback delta) AND checkpoint/restore ride
+	// the same agent client: it resolves pod name → IP per request and dials the
+	// session agent directly (AC-D2/D3, and /checkpoint·/restore for CRIU).
+	agentClient := agent.NewHTTPClient(client, namespace)
+
+	// CRIU gate: on → agent-driven in-pod checkpoint/restore (the pod's own agent
+	// CRIU-dumps/restores its shell tree), archives streamed to S3 by assuming
+	// CHECKPOINT_S3_ROLE_ARN over the node instance profile. The archive is
+	// produced inside a pod that is about to be reclaimed, so a durable store is
+	// required. off → the no-op stub so the happy path runs without CRIU.
 	var ckpt criu.Checkpointer = criu.NewStubCheckpointer(false)
 	if cfg.criuEnabled {
-		var opts []criu.Option
-		// When a checkpoint S3 bucket is configured, upload archives to it
-		// (accessed by assuming CHECKPOINT_S3_ROLE_ARN over the node instance
-		// profile) so a checkpoint survives its node; otherwise the ephemeral
-		// node-local archive path is recorded.
-		if cfg.checkpointS3Bucket != "" {
-			store, err := checkpointstore.NewS3(context.Background(), checkpointstore.Config{
-				Bucket:      cfg.checkpointS3Bucket,
-				RoleARN:     cfg.checkpointS3RoleARN,
-				Region:      cfg.checkpointS3Region,
-				Prefix:      cfg.checkpointS3Prefix,
-				SessionName: cfg.checkpointS3SessionName,
-			})
-			if err != nil {
-				logger.Error("checkpoint S3 store misconfigured", "err", err)
-				os.Exit(1)
-			}
-			opts = append(opts, criu.WithStore(store))
-			logger.Info("checkpoint archives → S3 (assume-role)",
-				"bucket", cfg.checkpointS3Bucket, "role", cfg.checkpointS3RoleARN)
+		if cfg.checkpointS3Bucket == "" {
+			logger.Error("CRIU_ENABLED but CHECKPOINT_S3_BUCKET unset; agent-driven checkpoint needs a durable store")
+			os.Exit(1)
 		}
-		ckpt = criu.NewContainerCheckpointer(client, namespace, opts...)
+		s3store, err := checkpointstore.NewS3(context.Background(), checkpointstore.Config{
+			Bucket:      cfg.checkpointS3Bucket,
+			RoleARN:     cfg.checkpointS3RoleARN,
+			Region:      cfg.checkpointS3Region,
+			Prefix:      cfg.checkpointS3Prefix,
+			SessionName: cfg.checkpointS3SessionName,
+		})
+		if err != nil {
+			logger.Error("checkpoint S3 store misconfigured", "err", err)
+			os.Exit(1)
+		}
+		ckpt = criu.NewAgentCheckpointer(agentClient, s3store)
+		logger.Info("CRIU on: agent-driven in-pod checkpoint → S3 (assume-role)",
+			"bucket", cfg.checkpointS3Bucket, "role", cfg.checkpointS3RoleARN)
 	}
-	// Shell I/O (write→stdin, read→scrollback delta) rides the same client:
-	// the agent client resolves pod name → IP per request and dials the
-	// session agent directly (AC-D2/D3).
-	agentClient := agent.NewHTTPClient(client, namespace)
 
 	mgr := service.New(orch, store, ckpt, agentClient)
 

@@ -55,46 +55,55 @@
   `Service`에 대해 in-process로 `Service.Snapshot`을 직접 호출(HTTP 스냅샷 엔드포인트 미추가).
 - **근거**: AC-D4가 AC-B3(무결성)의 구체 마커. in-process가 브라우저 e2e보다 결정적·저비용.
 
-### ⑤ 새 pod 복원 — 아카이브→복원, 복원용 pod=restore-target 스펙
-- **선택**: 복원용 pod는 `Start`와 달리 **엔트리포인트로 새 쉘을 띄우지 않는다**.
-  `k8s.ClientOrchestrator.RestoreInto`가 pod에 `AnnotationRestoreCheckpoint`(체크포인트 아카이브 ref)를
-  달아 **restore target**으로 만들고, CRIU 지원 런타임이 이 어노테이션을 자신의 복원 메커니즘
-  (예: CRI-O `io.kubernetes.cri-o.restore`, 또는 아카이브로 빌드한 체크포인트 OCI 이미지)에 매핑하여
-  **동결된 프로세스 트리를 재개**한다. pod의 컨테이너/포트/readiness는 `Start`와 동일하므로, 재개 후
-  agent `/healthz`는 **복원된 쉘**의 생존을 반영하고 pod-Ready는 AC-D1 의미를 유지한다.
-- **대안(각주)**: `ContainerCheckpointRestore` 표준 경로가 미성숙하면 **runc restore + pod 재부착**을
-  대안으로 둔다. 이 경우 실제 아카이브 적용은 `criu.CheckpointDriver.Restore` 심(seam)에서 수행한다.
-- **근거**: `RestoreInto == Start`면 빈 쉘이 떠 상태가 소실된다 → 스펙 분기가 필수.
+### ⑤ 복원 메커니즘 — 에이전트 주도 in-pod CRIU (2026-07-22 확정)
+- **선택**: 복원용 pod는 `Start`와 달리 엔트리포인트로 새 쉘을 띄우지 않는다.
+  `RestoreInto`가 pod에 `AnnotationRestoreCheckpoint` + `DATA_PLANE_RESTORE_MODE=1`을 달아 restore-target으로
+  만들고, 그 pod의 **에이전트가 셸 없이 기동(healthz 200 = 복원 대기)해 `/restore`로 아카이브를 받아
+  criu restore로 셸 프로세스 트리를 부활**시킨다. 체크포인트도 대칭으로 에이전트가 `/checkpoint`에서
+  criu dump→tar 아카이브(criu 이미지 + scrollback)를 만든다. 컨트롤플레인은 아카이브를 **에이전트↔S3로
+  중계**할 뿐이라 AWS 자격증명을 세션 pod에 퍼뜨리지 않는다. 재개 후 agent `/healthz`는 복원된 쉘을
+  반영하고, 서비스 계층의 복원-후 Reach가 AC-D1 불변식을 유지한다.
+- **근거(2026-07-22 검증)**: kubelet ContainerCheckpoint의 dump는 성공하나 containerd가 그 아카이브를
+  **복원할 방법이 없음**(CRI-O식 어노테이션/체크포인트-이미지 복원 미지원)이 실증됨. 에이전트 주도는
+  런타임 교체 없이 이 레포 안에서 라운드트립을 완결한다.
+- **대안(유지, 미배선)**: CRI-O 도입 시 kubelet checkpoint(`container_checkpointer.go`) + 체크포인트 OCI
+  이미지 경로. 그 경로만 `nodes/proxy` RBAC가 필요하다(에이전트 주도는 pod securityContext capability만 필요).
+- **런타임 seam(미검증)**: 실제 criu dump/restore + PTY 재부착은 `data-plane`의 `execCriuEngine` 하나에
+  격리 — CRIU-capable 노드에서만 검증. 나머지(아카이브 framing·복원모드·상태 스왑·오케스트레이션)는
+  가짜 엔진/클라이언트로 유닛 테스트됨.
 
 ## 게이트 동작 (현재 스캐폴딩)
 - 환경변수 `CRIU_ENABLED`(기본 `false`).
 - **off**: `criu.StubCheckpointer`가 합성 메타데이터로 no-op 성공 → 스냅샷/복원 플로우가
   엔드투엔드로 도는 골격을 유지(런타임 불필요).
-- **on**: `criu.ContainerCheckpointer`(실 어댑터)가 kubelet `ContainerCheckpoint` API를 구동한다.
-  `main.go`가 게이트로 실 어댑터/스텁을 주입 분기한다. `TestScenario4_CRIUIntegrity`는 게이트 on +
-  CRIU 지원 런타임에서 **마커 왕복을 실검증**하며, 런타임 부재 시 skip(런타임 없는 CI는 정상 skip).
-  런타임은 있으나 복원 경로가 아직 매핑되지 않았다면 **의도적으로 실패**하여 "복원 메커니즘 매듭 필요"를
-  가시화한다(=프로비저닝의 완료 신호).
+- **on**: `criu.AgentCheckpointer`(에이전트 주도 in-pod CRIU)가 pod 에이전트의 `/checkpoint`·`/restore`를
+  구동하고 아카이브를 S3로 중계한다. `main.go`가 게이트로 실 어댑터/스텁을 분기하고 세션 pod에 criu
+  capability를 붙인다. `TestScenario4_CRIUIntegrity`는 게이트 on + CRIU 지원 런타임에서 **마커 왕복을
+  실검증**하며, 런타임 부재 시 skip(런타임 없는 CI는 정상 skip). 런타임은 있으나 `execCriuEngine`(실제
+  criu 호출)가 아직 안 맞으면 **실패**로 신호한다(=런타임 반복 조정 지점).
 
 ## 실구현 요약 (코드)
 - `control-plane/internal/adapter/criu/checkpointer.go` — `Checkpointer` 포트 + 게이트 off 스텁.
-- `control-plane/internal/adapter/criu/container_checkpointer.go` — **실 어댑터**.
-  `ContainerCheckpointer.Checkpoint`는 pod의 노드를 조회한 뒤 `CheckpointDriver`로 kubelet
-  `POST /api/v1/nodes/{node}/proxy/checkpoint/{ns}/{pod}/{container}`를 호출해 아카이브 경로를 얻고,
-  `CheckpointStore`가 설정돼 있으면 아카이브를 업로드해 `Ref`에 `s3://…`(+`SizeBytes`)를 기록한다
-  (미설정 시 노드 로컬 경로). `Restore`는 그 ref를 드라이버에 넘긴다. 런타임 호출은 `CheckpointDriver`
-  (실체 `kubeletDriver`), 아카이브 열기는 `archiveOpener` 심 뒤로 격리되어 런타임/AWS 없이 컴파일·
-  단위 테스트가 통과한다(가짜 드라이버·스토어 주입).
+- `control-plane/internal/adapter/criu/agent_checkpointer.go` — **실 어댑터(wired)**.
+  `AgentCheckpointer.Checkpoint`는 pod 에이전트 `/checkpoint`에서 아카이브 스트림을 받아 `CheckpointStore`로
+  업로드하고 `Ref`에 durable ref(+스트림 크기 `SizeBytes`)를 기록, `Restore`는 store에서 받아 restore-target
+  pod 에이전트 `/restore`로 스트리밍한다. 에이전트 채널은 `AgentCheckpointClient` 인터페이스 뒤로 격리 —
+  런타임/에이전트 없이 가짜 클라이언트로 유닛 테스트.
+- `control-plane/internal/adapter/criu/container_checkpointer.go` — **CRI-O 대안(미배선)**. kubelet
+  ContainerCheckpoint 경로. 유지·테스트되지만 wired가 아님(위 ⑤ 근거).
+- `control-plane/internal/adapter/agent/client.go` — `HTTPClient`에 `/checkpoint`·`/restore` 스트림 메서드
+  추가(셸 I/O와 같은 pod-IP 해석 재사용, 아카이브 전송용 별도 client).
 - `control-plane/internal/adapter/checkpointstore/store.go` — **S3 스토어**(`NewS3`). 노드 인스턴스
-  프로파일을 베이스로 STS AssumeRole(`CHECKPOINT_S3_ROLE_ARN`)로 위임받아 `Put`(업로드)/`Get`(복원 시
-  가져오기)을 수행. S3 API를 `objectAPI` 인터페이스 뒤로 격리해 가짜 API로 단위 테스트.
-- `control-plane/internal/adapter/k8s/client_orchestrator.go` — `RestoreInto`가 restore-target pod 스펙
-  (`AnnotationRestoreCheckpoint`)을 **고유 이름**(`sess-<id>-r<suffix>`)으로 생성 — 동결 pod(결정적 이름)의
-  비동기 삭제와의 AlreadyExists 레이스 제거(2026-07-22 검증 후속). `Start`(신규 세션)는 결정적 이름·어노테이션 없이 불변.
+  프로파일을 베이스로 STS AssumeRole(`CHECKPOINT_S3_ROLE_ARN`)로 위임받아 `Put`/`Get`. 가짜 API로 단위 테스트.
+- `control-plane/internal/adapter/k8s/client_orchestrator.go` — `RestoreInto`가 restore-target pod를 **고유
+  이름**(`sess-<id>-r<suffix>`) + `DATA_PLANE_RESTORE_MODE=1` env로 생성. `WithCheckpointCapabilities`(게이트드)로
+  세션 pod에 criu capability(`CHECKPOINT_RESTORE`,`SYS_PTRACE`) 부여. `Start`(신규 세션)는 불변.
 - `control-plane/internal/service/manager.go` — `Snapshot`/`Restore` 오케스트레이션. `Restore`가
   `RestoreInto`에 체크포인트 ref를 전달하고 커서를 리셋하지 않음(버퍼-인-체크포인트).
-- `data-plane/cmd/agent/main.go` — scrollback이 에이전트 메모리 상주 → 체크포인트에 포함(AC-D4),
-  복원 후 커서 유효.
+- `data-plane/cmd/agent/main.go` + `checkpoint.go` — 스왑 가능한 셸 홀더 + 복원모드 기동, `/checkpoint`(criu
+  dump→tar) / `/restore`(tar→criu restore→셸 부활) 핸들러, scrollback 직렬화. 실제 criu 호출은
+  `execCriuEngine` seam(미검증); 나머지는 가짜 엔진으로 유닛 테스트. scrollback은 에이전트 메모리 상주라
+  아카이브에 함께 직렬화돼 복원 후 커서 유효(AC-D4).
 - `data-plane/Dockerfile` — `ENV GODEBUG=multipathtcp=0`: Go 1.24가 Linux 리스너에 MPTCP를 기본
   활성화하는데 CRIU는 MPTCP 소켓을 체크포인트하지 못하므로, 에이전트 :8090 리스너(및 세션 쉘이
   상속하는 환경)를 plain TCP로 고정.
@@ -110,7 +119,10 @@
   kubelet `ContainerCheckpoint` 호출(RBAC 포함) → 아카이브 생성까지 성공.
 - ❌ **복원 측 미배선(설계된 실패)**: 복원 pod가 `AnnotationRestoreCheckpoint`를 이어받을 런타임
   컴포넌트가 없어 새 쉘(`/# `)로 기동 → 마커 미복원으로 fail. k3s의 containerd는 CRI-O식
-  어노테이션/체크포인트-이미지 복원을 지원하지 않으므로 결정 ⑤의 매핑 선택이 필요(아래 체크리스트).
+  어노테이션/체크포인트-이미지 복원을 지원하지 않음이 실증됨.
+- 🔁 **대응(설계 전환)**: 이 검증 결과로 복원 메커니즘을 **에이전트 주도 in-pod CRIU**로 전환(결정 ⑤
+  확정). 이제 kubelet 경로 대신 pod 에이전트가 직접 criu dump/restore하고 컨트롤플레인이 아카이브를
+  S3로 중계한다. 남은 런타임 미검증 지점은 `execCriuEngine`(criu 호출 + PTY 재부착) 하나로 좁혀짐.
 - 🔧 **레이스 발견→수정됨**: 복원 pod가 동결 pod의 결정적 이름(`sess-<id>`)을 재사용해 Terminating
   잔재와 AlreadyExists 레이스 가능 → 복원 pod를 고유 이름(`sess-<id>-r<suffix>`)으로 분리(2026-07-22).
 
@@ -118,43 +130,42 @@
 
 코드는 준비됐다. 프로비저닝 작업은 아래를 세우고 확인 명령을 green으로 만들면 된다.
 
-**전제 체크리스트**
-- [x] CRIU 지원 노드: 커널 CRIU 옵션 + CRIU 지원 runc 빌드 (결정 ①②) — *체크포인트(dump) 측은
-      2026-07-22 k3s에서 검증됨; restore 측 커널/런타임 지원은 복원 매핑과 함께 확인*.
-- [x] kubelet feature gate `ContainerCheckpoint` 활성 — *2026-07-22 k3s에서 체크포인트 성공으로 검증됨.
-      복원 검증 시 `ContainerCheckpointRestore` 계열은 복원 매핑 결정과 함께*.
-- [x] control plane ServiceAccount RBAC: `nodes/proxy`에 `create`(프록시 경유 POST) — `k8s/rbac.yaml`의
-      ClusterRole/ClusterRoleBinding(`session-platform-node-checkpoint`)으로 **포함됨**(Flux 자동 적용).
-      확인만 필요: ClusterRoleBinding subject의 namespace(`session-platform`)가 실제 배포 네임스페이스와 일치하는지.
-- [x] `DATA_PLANE_IMAGE` 주입(퍼블리시된 data plane 에이전트 이미지) + `CRIU_ENABLED=1` — *2026-07-22 검증 환경에서 수행됨*.
-- [ ] **복원 경로 런타임 매핑 ← 유일하게 남은 핵심 항목**: `k8s.AnnotationRestoreCheckpoint`(pod 어노테이션)를
-      런타임 복원 메커니즘에 연결. **k3s(containerd)는 CRI-O식 어노테이션/체크포인트-이미지 복원을 지원하지
-      않음이 2026-07-22 검증에서 확인됨** → CRI-O 도입(+체크포인트 OCI 이미지) / 에이전트 주도 in-pod CRIU /
-      노드 데몬 runc restore 중 선택 필요(결정 ⑤ 대안, 별도 결정).
-- [ ] S3 저장소(결정 ③): 버킷 생성 + `checkpoint-s3` Secret 프로비저닝(`bucket`/`role-arn`/`region`/`prefix` 4개 키).
-      control-plane Deployment가 이 Secret을 `secretKeyRef`로 읽으며 **필수**다 — Secret이 없으면 pod가
-      기동하지 않는다(CRIU off라도). 프로덕션은 external-secrets가, kind e2e는 overlay 플레이스홀더가 제공,
-      검증은 `kubectl create secret generic checkpoint-s3 …`(예시: `k8s/checkpoint-s3-secret.example.yaml`).
-- [ ] IAM: 노드 인스턴스 프로파일(또는 IRSA)이 `CHECKPOINT_S3_ROLE_ARN` 역할을 `sts:AssumeRole` 할 수 있고,
-      그 역할이 버킷에 `s3:PutObject`(복원 시 `s3:GetObject`) 권한을 가질 것.
-- [ ] 업로더의 아카이브 접근성: control plane(또는 사이드카)이 노드 체크포인트 디렉터리를 읽도록
-      hostPath 마운트 또는 노드 사이드카(결정 ③ 경계). 복원 pod가 다른 노드로 스케줄되어도 S3에서 가져오므로 무방.
+**전제 체크리스트 (에이전트 주도 in-pod CRIU 기준)**
+- [x] criu 바이너리를 데이터플레인 이미지에 포함 — `data-plane/Dockerfile`에 `apt-get install criu` 추가함
+      (2026-07-22 검증 이미지엔 미포함이었음). 런타임(containerd) 자체 교체는 불필요 — 에이전트가 pod
+      안에서 criu를 직접 실행한다.
+- [ ] 노드 커널 CRIU 옵션 활성(체크포인트/복원 syscall 지원) — 노드 측 확인.
+- [x] 세션 pod의 criu capability(`CHECKPOINT_RESTORE`,`SYS_PTRACE`): `WithCheckpointCapabilities`가
+      `CRIU_ENABLED=1`에서 자동 부여(`k8s/deployment.yaml` 수정 불필요). 커널/criu 버전에 따라 `SYS_ADMIN`
+      추가가 필요할 수 있음(런타임 조정 지점).
+- [x] `DATA_PLANE_IMAGE` + `CRIU_ENABLED=1` — *2026-07-22 검증 환경에서 수행됨(criu 미포함 이미지 → 위 항목 필요)*.
+- [ ] **`execCriuEngine` 실검증 ← 유일하게 남은 런타임 지점**: 에이전트 `/checkpoint`(criu dump)·
+      `/restore`(criu restore + PTY 재부착)의 실동작을 CRIU 노드에서 확인·조정. 이 seam 외 전 경로는
+      가짜 엔진/클라이언트로 유닛 테스트됨.
+- [ ] S3 저장소(결정 ③, **배포된 control-plane 실동작용**): 버킷 + `checkpoint-s3` Secret(`bucket`/`role-arn`/
+      `region`/`prefix`) + IAM(노드 프로파일 → `sts:AssumeRole` → `s3:PutObject`·`GetObject`). Deployment가 이
+      Secret을 `secretKeyRef`(필수)로 읽으므로 Secret 없으면 pod 미기동(CRIU off라도). in-process Scenario4는
+      이 S3가 필요 없다(인메모리 스토어로 대체).
+- [~] (CRI-O 대안 전용, 미사용 시 삭제 가능) `nodes/proxy` RBAC(`session-platform-node-checkpoint`): 에이전트
+      주도 경로는 쓰지 않는다 — CRI-O 대안을 채택할 때만 필요.
 
 **확인 명령(green이면 AC-D4 + 커서 연속성 검증 완료)**
 ```
-CRIU_ENABLED=1 DATA_PLANE_IMAGE=<published-agent-image> \
+CRIU_ENABLED=1 DATA_PLANE_IMAGE=<criu-포함 agent-image> \
   go test -tags=integration ./test/... -run TestScenario4_CRIUIntegrity -v
 ```
-- **skip**: 런타임/클러스터/이미지 미준비(정상 — 아직 세울 게 남음).
-- **fail**: 런타임은 있으나 복원 경로 미매듭(위 매핑 항목 완료 필요).
+- **skip**: 런타임/클러스터/이미지 미준비(정상).
+- **fail**: 런타임은 있으나 `execCriuEngine`(criu 호출/PTY 재부착)가 아직 안 맞음 → 조정 지점.
 - **pass**: 동결 전 `MARKER`·cwd가 복원 후 그대로 재개 + 복원 전 커서로 델타 read 유효 → 완료.
-> in-process Scenario4는 노드 로컬 아카이브로 상태 무결성(AC-D4)만 검증하므로 S3 env가 필요 없다
-> (아카이브가 노드에 있고 테스트 프로세스에서 열 수 없음). **S3 업로드 경로**는 (1) 단위 테스트
-> (`checkpointstore`/`criu`)와 (2) `checkpoint-s3` Secret이 주입된 **배포된 control-plane**에서 검증된다.
+> in-process Scenario4는 **인메모리 스토어**로 아카이브를 체크포인트↔복원 사이 중계하므로 S3 env가
+> 필요 없다(에이전트가 아카이브를 HTTP로 테스트 프로세스에 스트리밍). **S3 업로드 경로**는 (1) 단위
+> 테스트(`checkpointstore`/`criu`)와 (2) `checkpoint-s3` Secret이 주입된 **배포된 control-plane**에서 검증된다.
 
 ## 리스크 / 대안
-- **"새 pod 복원" alpha/미성숙**: 코드를 `Checkpointer` 포트 + `CheckpointDriver` 심 뒤로 격리했으므로
-  메커니즘 교체(runc restore 대안, 결정 ⑤ 각주)가 국소적이다.
+- **in-pod criu 복원 + PTY 재부착 미검증**: 실제 criu 호출은 `data-plane`의 `execCriuEngine` 하나에
+  격리했으므로, 복원 시 PTY 재부착/프로세스 reaping이 런타임에서 안 맞으면 그 파일만 조정하면 된다
+  (나머지 경로·아카이브·복원모드는 유닛 테스트로 고정). 메커니즘 자체를 CRI-O로 되돌려도(대안)
+  `Checkpointer` 포트 교체 하나로 국소적이다.
 - **미검증 코드 재작업 위험**: 결정 ①~⑤로 API/저장/복원 타겟을 고정하고 인터페이스 경계를 좁혔다.
 - **실행 중 포그라운드 프로세스/FD 캡처 온전성**: AC-D4 마커는 우선 env·cwd 위주. 실행 중 프로세스
   케이스는 트리거 정책 확정과 함께 후속 시나리오로(범위 밖, `doc-tracker.md`).

@@ -259,6 +259,17 @@ func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 	if c := p.Spec.Containers[0]; len(c.Command) != 0 || len(c.Args) != 0 {
 		t.Fatalf("restore pod overrides the entrypoint (command=%v args=%v); the runtime must resume the checkpoint", c.Command, c.Args)
 	}
+	// Restore mode: the agent starts without a shell and awaits POST /restore, so
+	// the pod can become Ready before the control plane pushes the archive.
+	var restoreMode string
+	for _, e := range p.Spec.Containers[0].Env {
+		if e.Name == "DATA_PLANE_RESTORE_MODE" {
+			restoreMode = e.Value
+		}
+	}
+	if restoreMode != "1" {
+		t.Fatalf("restore pod DATA_PLANE_RESTORE_MODE=%q, want \"1\" (agent must await the checkpoint)", restoreMode)
+	}
 	// The restore pod must NOT reuse the frozen pod's deterministic name
 	// (sess-<id>): that pod's deletion is async, so a restore-on-access right
 	// after a snapshot would race an AlreadyExists against its Terminating
@@ -291,6 +302,39 @@ func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 		if _, marked := fp.Annotations[k8s.AnnotationRestoreCheckpoint]; marked {
 			t.Fatalf("fresh Start pod carries the restore marker %s; only RestoreInto should", k8s.AnnotationRestoreCheckpoint)
 		}
+	}
+}
+
+// CRIU capabilities (in-pod agent-driven checkpoint): WithCheckpointCapabilities
+// adds the criu Linux capabilities to session pods when the gate is on; gate-off
+// pods stay unprivileged (no securityContext).
+func TestClientOrchestrator_CheckpointCapabilitiesGated(t *testing.T) {
+	// Gate on: capabilities present.
+	orchOn, cs := newReadyOrchestrator(t, k8s.WithCheckpointCapabilities(true))
+	if _, err := orchOn.Start(context.Background(), "capon"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	sc := listPods(t, cs)[0].Spec.Containers[0].SecurityContext
+	if sc == nil || sc.Capabilities == nil {
+		t.Fatal("gate on: expected a securityContext with capabilities for in-pod CRIU")
+	}
+	have := map[corev1.Capability]bool{}
+	for _, c := range sc.Capabilities.Add {
+		have[c] = true
+	}
+	for _, want := range []corev1.Capability{"CHECKPOINT_RESTORE", "SYS_PTRACE"} {
+		if !have[want] {
+			t.Errorf("missing capability %q (have %v)", want, sc.Capabilities.Add)
+		}
+	}
+
+	// Gate off (default): no securityContext — pods stay unprivileged.
+	orchOff, csOff := newReadyOrchestrator(t)
+	if _, err := orchOff.Start(context.Background(), "capoff"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if sc := listPods(t, csOff)[0].Spec.Containers[0].SecurityContext; sc != nil {
+		t.Fatalf("gate off: unexpected securityContext %+v (pods should stay unprivileged)", sc)
 	}
 }
 
