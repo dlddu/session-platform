@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -257,6 +258,25 @@ func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 	}
 	if c := p.Spec.Containers[0]; len(c.Command) != 0 || len(c.Args) != 0 {
 		t.Fatalf("restore pod overrides the entrypoint (command=%v args=%v); the runtime must resume the checkpoint", c.Command, c.Args)
+	}
+	// The restore pod must NOT reuse the frozen pod's deterministic name
+	// (sess-<id>): that pod's deletion is async, so a restore-on-access right
+	// after a snapshot would race an AlreadyExists against its Terminating
+	// remains. A unique per-restore name removes the race (k3s verification
+	// follow-up, 2026-07-22).
+	if restored.Name == "sess-r1a2" {
+		t.Fatalf("restore pod reused the frozen pod's name %q; want a unique per-restore name", restored.Name)
+	}
+	if !strings.HasPrefix(restored.Name, "sess-r1a2-r") {
+		t.Fatalf("restore pod name=%q, want the session's deterministic prefix + restore suffix", restored.Name)
+	}
+	// Two restores of the same session never collide either.
+	again, err := orch.RestoreInto(context.Background(), "r1a2", ref)
+	if err != nil {
+		t.Fatalf("second restore into: %v", err)
+	}
+	if again.Name == restored.Name {
+		t.Fatalf("two restores produced the same pod name %q; want unique names", again.Name)
 	}
 
 	// Start, by contrast, provisions a fresh pod with no restore marker — the

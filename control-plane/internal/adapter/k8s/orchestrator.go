@@ -40,7 +40,9 @@ type PodOrchestrator interface {
 	// RestoreInto provisions the pod a checkpoint will be restored into
 	// (AC-B2), carrying checkpointRef so the pod is shaped as a *restore
 	// target* (resuming the checkpointed process tree) rather than a fresh
-	// shell. The checkpoint bytes are applied by the Checkpointer.
+	// shell. The pod gets a fresh unique name — the frozen pod (deterministic
+	// name) may still be Terminating when restore follows snapshot
+	// immediately. The checkpoint bytes are applied by the Checkpointer.
 	RestoreInto(ctx context.Context, sessionID, checkpointRef string) (PodRef, error)
 	// Reach proves the session shell agent in ref's pod is reachable by
 	// opening its attach stream and closing it again (AC-D1). It moves no

@@ -89,7 +89,8 @@
   프로파일을 베이스로 STS AssumeRole(`CHECKPOINT_S3_ROLE_ARN`)로 위임받아 `Put`(업로드)/`Get`(복원 시
   가져오기)을 수행. S3 API를 `objectAPI` 인터페이스 뒤로 격리해 가짜 API로 단위 테스트.
 - `control-plane/internal/adapter/k8s/client_orchestrator.go` — `RestoreInto`가 restore-target pod 스펙
-  (`AnnotationRestoreCheckpoint`)을 생성. `Start`(신규 세션)는 어노테이션 없이 불변.
+  (`AnnotationRestoreCheckpoint`)을 **고유 이름**(`sess-<id>-r<suffix>`)으로 생성 — 동결 pod(결정적 이름)의
+  비동기 삭제와의 AlreadyExists 레이스 제거(2026-07-22 검증 후속). `Start`(신규 세션)는 결정적 이름·어노테이션 없이 불변.
 - `control-plane/internal/service/manager.go` — `Snapshot`/`Restore` 오케스트레이션. `Restore`가
   `RestoreInto`에 체크포인트 ref를 전달하고 커서를 리셋하지 않음(버퍼-인-체크포인트).
 - `data-plane/cmd/agent/main.go` — scrollback이 에이전트 메모리 상주 → 체크포인트에 포함(AC-D4),
@@ -100,19 +101,36 @@
 - `control-plane/test/integration_test.go` — `TestScenario4_CRIUIntegrity`(마커 왕복 + 커서 연속성).
 - `control-plane/test/e2e_deferred_test.go` — `TestDeferred_CRIUIntegrity`(B3/D4, deferred 시드).
 
+## 실검증 현황 (2026-07-22, k3s)
+
+`TestScenario4_CRIUIntegrity`를 실 k3s 클러스터(containerd, arm64)에서 실행한 결과
+(테스트 바이너리를 클러스터 내 pod에서 in-cluster config로 실행 — pod 네트워크 요구 확인됨):
+
+- ✅ **체크포인트 측 green**: 세션 생성 → pod 프로비저닝 → attach(8090) → 쉘 I/O·pre-freeze 커서 →
+  kubelet `ContainerCheckpoint` 호출(RBAC 포함) → 아카이브 생성까지 성공.
+- ❌ **복원 측 미배선(설계된 실패)**: 복원 pod가 `AnnotationRestoreCheckpoint`를 이어받을 런타임
+  컴포넌트가 없어 새 쉘(`/# `)로 기동 → 마커 미복원으로 fail. k3s의 containerd는 CRI-O식
+  어노테이션/체크포인트-이미지 복원을 지원하지 않으므로 결정 ⑤의 매핑 선택이 필요(아래 체크리스트).
+- 🔧 **레이스 발견→수정됨**: 복원 pod가 동결 pod의 결정적 이름(`sess-<id>`)을 재사용해 Terminating
+  잔재와 AlreadyExists 레이스 가능 → 복원 pod를 고유 이름(`sess-<id>-r<suffix>`)으로 분리(2026-07-22).
+
 ## 게이트 on 실검증 인계 (프로비저닝 작업 → "확인 필요")
 
 코드는 준비됐다. 프로비저닝 작업은 아래를 세우고 확인 명령을 green으로 만들면 된다.
 
 **전제 체크리스트**
-- [ ] CRIU 지원 노드: 커널 CRIU 옵션 + CRIU 지원 runc 빌드 (결정 ①②).
-- [ ] kubelet feature gate `ContainerCheckpoint`(+ 복원 검증 시 `ContainerCheckpointRestore` 계열) 활성.
+- [x] CRIU 지원 노드: 커널 CRIU 옵션 + CRIU 지원 runc 빌드 (결정 ①②) — *체크포인트(dump) 측은
+      2026-07-22 k3s에서 검증됨; restore 측 커널/런타임 지원은 복원 매핑과 함께 확인*.
+- [x] kubelet feature gate `ContainerCheckpoint` 활성 — *2026-07-22 k3s에서 체크포인트 성공으로 검증됨.
+      복원 검증 시 `ContainerCheckpointRestore` 계열은 복원 매핑 결정과 함께*.
 - [x] control plane ServiceAccount RBAC: `nodes/proxy`에 `create`(프록시 경유 POST) — `k8s/rbac.yaml`의
       ClusterRole/ClusterRoleBinding(`session-platform-node-checkpoint`)으로 **포함됨**(Flux 자동 적용).
       확인만 필요: ClusterRoleBinding subject의 namespace(`session-platform`)가 실제 배포 네임스페이스와 일치하는지.
-- [ ] `DATA_PLANE_IMAGE` 주입(퍼블리시된 data plane 에이전트 이미지) + `CRIU_ENABLED=1`.
-- [ ] 복원 경로 런타임 매핑: `k8s.AnnotationRestoreCheckpoint`(pod 어노테이션)를 런타임 복원 메커니즘
-      (CRI-O `io.kubernetes.cri-o.restore` / 아카이브 기반 체크포인트 OCI 이미지)에 연결. 미성숙 시 대안 ⑤ 각주.
+- [x] `DATA_PLANE_IMAGE` 주입(퍼블리시된 data plane 에이전트 이미지) + `CRIU_ENABLED=1` — *2026-07-22 검증 환경에서 수행됨*.
+- [ ] **복원 경로 런타임 매핑 ← 유일하게 남은 핵심 항목**: `k8s.AnnotationRestoreCheckpoint`(pod 어노테이션)를
+      런타임 복원 메커니즘에 연결. **k3s(containerd)는 CRI-O식 어노테이션/체크포인트-이미지 복원을 지원하지
+      않음이 2026-07-22 검증에서 확인됨** → CRI-O 도입(+체크포인트 OCI 이미지) / 에이전트 주도 in-pod CRIU /
+      노드 데몬 runc restore 중 선택 필요(결정 ⑤ 대안, 별도 결정).
 - [ ] S3 저장소(결정 ③): 버킷 생성 + `checkpoint-s3` Secret 프로비저닝(`bucket`/`role-arn`/`region`/`prefix` 4개 키).
       control-plane Deployment가 이 Secret을 `secretKeyRef`로 읽으며 **필수**다 — Secret이 없으면 pod가
       기동하지 않는다(CRIU off라도). 프로덕션은 external-secrets가, kind e2e는 overlay 플레이스홀더가 제공,

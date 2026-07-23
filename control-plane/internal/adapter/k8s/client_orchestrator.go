@@ -9,6 +9,8 @@ package k8s
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -268,7 +270,8 @@ func (o *ClientOrchestrator) restorePodSpec(sessionID, checkpointRef string) *co
 }
 
 // buildPod assembles the data plane pod. checkpointRef == "" yields a fresh
-// session pod (no annotation); a non-empty ref yields a restore-target pod.
+// session pod (no annotation) under the session's deterministic name; a
+// non-empty ref yields a restore-target pod under a fresh unique name.
 func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string) *corev1.Pod {
 	// No command override: on a fresh start the data plane image's entrypoint
 	// owns launching the PTY-attached session shell (AC-D1); on a restore the
@@ -299,13 +302,15 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string) *corev1.P
 	if o.shell != "" {
 		container.Env = append(container.Env, corev1.EnvVar{Name: shellEnvVar, Value: o.shell})
 	}
+	name := podName(sessionID)
 	var annotations map[string]string
 	if checkpointRef != "" {
+		name = restorePodName(sessionID)
 		annotations = map[string]string{AnnotationRestoreCheckpoint: checkpointRef}
 	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        podName(sessionID),
+			Name:        name,
 			Namespace:   o.namespace,
 			Annotations: annotations,
 			Labels: map[string]string{
@@ -324,6 +329,20 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string) *corev1.P
 // session<->pod mapping is 1:1 and recoverable from the id alone (AC-A2).
 func podName(sessionID string) string {
 	return "sess-" + sessionID
+}
+
+// restorePodName names a restore-target pod: the session's deterministic name
+// plus a fresh per-restore suffix. The frozen pod carried the deterministic
+// name, and its deletion (snapshot's Stop) is asynchronous — when a
+// restore-on-access follows the snapshot immediately, that pod may still be
+// Terminating, so reusing the name would race an AlreadyExists on create.
+// A unique name removes the race and matches the service contract that restore
+// provisions a *new* pod rather than reusing the old name (the session-id
+// label, not the name, carries the 1:1 session mapping — AC-A2).
+func restorePodName(sessionID string) string {
+	b := make([]byte, 2)
+	_, _ = rand.Read(b)
+	return podName(sessionID) + "-r" + hex.EncodeToString(b)
 }
 
 // pullPolicyForImage mirrors kubelet's own default: a mutable :latest (or
