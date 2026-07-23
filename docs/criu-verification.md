@@ -131,9 +131,10 @@
 코드는 준비됐다. 프로비저닝 작업은 아래를 세우고 확인 명령을 green으로 만들면 된다.
 
 **전제 체크리스트 (에이전트 주도 in-pod CRIU 기준)**
-- [x] criu 바이너리를 데이터플레인 이미지에 포함 — `data-plane/Dockerfile`에 `apt-get install criu` 추가함
-      (2026-07-22 검증 이미지엔 미포함이었음). 런타임(containerd) 자체 교체는 불필요 — 에이전트가 pod
-      안에서 criu를 직접 실행한다.
+- [ ] criu 바이너리를 데이터플레인 이미지에 제공 — **Ubuntu 24.04(noble)는 criu를 패키징하지 않음**
+      (`apt-get install criu` = "no installation candidate", CI에서 확인). 소스 빌드 / noble 지원 PPA /
+      criu 번들 베이스 중 선택하고, PATH에 없으면 `CRIU_BIN` env로 경로를 지정한다. 런타임(containerd)
+      자체 교체는 불필요 — 에이전트가 pod 안에서 criu를 직접 실행한다.
 - [ ] 노드 커널 CRIU 옵션 활성(체크포인트/복원 syscall 지원) — 노드 측 확인.
 - [x] 세션 pod의 criu capability(`CHECKPOINT_RESTORE`,`SYS_PTRACE`): `WithCheckpointCapabilities`가
       `CRIU_ENABLED=1`에서 자동 부여(`k8s/deployment.yaml` 수정 불필요). 커널/criu 버전에 따라 `SYS_ADMIN`
