@@ -18,14 +18,15 @@ RUN CGO_ENABLED=0 go build -o /out/agent ./cmd/agent
 # interactive /bin/bash with the standard userland, and glibc keeps the pod
 # CRIU-friendlier for the later checkpoint/restore work (AC-B*/AC-D4, see
 # ../docs/criu-verification.md). Only the static agent binary is added on top.
-FROM ubuntu:24.04
-# NOTE(criu): the agent CRIU-dumps/restores its shell tree in-pod (agent-driven
-# checkpoint, docs/criu-verification.md), but criu is NOT installed here: Ubuntu
-# 24.04 (noble) dropped the criu package ("no installation candidate"). Providing
-# the criu binary is a provisioning step for the CRIU-capable image (build from
-# source, a PPA that targets noble, or a criu-bundled base); point the agent at
-# it with CRIU_BIN if it is not on PATH. criu is only invoked when CRIU_ENABLED
-# is on and the pod carries the criu capabilities.
+# 22.04 (jammy) rather than 24.04: the agent CRIU-dumps/restores its shell tree
+# in-pod (agent-driven checkpoint, docs/criu-verification.md) and needs the criu
+# binary, which noble dropped from the archive ("no installation candidate")
+# while jammy still packages it. criu is only invoked when CRIU_ENABLED is on
+# and the pod carries the criu capabilities; CRIU_BIN overrides the path.
+FROM ubuntu:22.04
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends criu \
+ && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/agent /agent
 # Go 1.24 uses Multipath TCP for listeners by default on Linux, but CRIU cannot
 # checkpoint MPTCP sockets — the agent's :8090 listener must stay plain TCP or
