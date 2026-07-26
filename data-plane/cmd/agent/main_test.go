@@ -35,6 +35,42 @@ func startTestShell(t *testing.T) *shellProc {
 	return sh
 }
 
+// The shell pid floor comes from CRIU_PID_FLOOR when it is a positive integer,
+// and falls back to the default for unset/garbage/non-positive values — a bad
+// override must not silently disable the CRIU pid-collision guard.
+func TestShellPIDFloor(t *testing.T) {
+	for _, tc := range []struct {
+		env  string
+		want int
+	}{
+		{"", defaultShellPIDFloor},
+		{"1000", 1000},
+		{"garbage", defaultShellPIDFloor},
+		{"0", defaultShellPIDFloor},
+		{"-5", defaultShellPIDFloor},
+	} {
+		t.Setenv("CRIU_PID_FLOOR", tc.env)
+		if got := shellPIDFloor(); got != tc.want {
+			t.Errorf("CRIU_PID_FLOOR=%q floor = %d, want %d", tc.env, got, tc.want)
+		}
+	}
+}
+
+// Reserving the pid floor is best-effort: on an unprivileged host ns_last_pid is
+// read-only (or absent), which must surface as an error the caller can log — not
+// a panic, and never a blocked shell start. startShell itself does not depend on
+// it, which is what keeps the gate-off path working.
+func TestReserveShellPIDIsBestEffort(t *testing.T) {
+	if err := reserveShellPID(300); err != nil {
+		t.Logf("ns_last_pid not writable here (expected unprivileged): %v", err)
+	}
+	// Either way a shell still starts.
+	sh := startTestShell(t)
+	if !sh.alive.Load() {
+		t.Fatal("shell not alive after start")
+	}
+}
+
 // AC-D1: the started shell is attached to a PTY — its stdin is a PTY slave —
 // and exactly one shell exists (one startShell call spawns one process).
 func TestStartShellAttachesPTY(t *testing.T) {

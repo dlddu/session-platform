@@ -103,8 +103,10 @@
 - `data-plane/cmd/agent/main.go` + `checkpoint.go` — 스왑 가능한 셸 홀더 + 복원모드 기동, `/checkpoint`(criu
   dump→tar) / `/restore`(tar→criu restore→셸 부활) 핸들러, scrollback 직렬화. dump가 셸 트리를 얼려 죽이면
   셸-종료→컨테이너-재시작 경로가 아카이브 스트리밍을 자를 수 있어, checkpoint 중엔 `checkpointing` 플래그로
-  재시작을 유예(회수는 컨트롤플레인 Stop이 담당). 실제 criu 호출은 `execCriuEngine` seam(미검증); 나머지는
-  가짜 엔진으로 유닛 테스트. scrollback은 에이전트 메모리 상주라 아카이브에 함께 직렬화돼 복원 후 커서 유효(AC-D4).
+  재시작을 유예(회수는 컨트롤플레인 Stop이 담당). 셸 fork 직전 `ns_last_pid`에 pid floor(기본 300)를 써서
+  복원 시 pid 충돌을 방지(5차). 복원은 `--restore-detached --restore-sibling --pidfile`로 복원된 루트 태스크의
+  실제 pid를 감시(3차). 실제 criu 호출은 `execCriuEngine` seam(미검증); 나머지는 가짜 엔진으로 유닛 테스트.
+  scrollback은 에이전트 메모리 상주라 아카이브에 함께 직렬화돼 복원 후 커서 유효(AC-D4).
 - `data-plane/Dockerfile` — `ENV GODEBUG=multipathtcp=0`: Go 1.24가 Linux 리스너에 MPTCP를 기본
   활성화하는데 CRIU는 MPTCP 소켓을 체크포인트하지 못하므로, 에이전트 :8090 리스너(및 세션 쉘이
   상속하는 환경)를 plain TCP로 고정.
@@ -137,6 +139,15 @@
 - 🔁 **대응**: 베이스 이미지를 `debian:trixie`(CRIU 4.1.x)로 전환, 게이트 on 세션 pod를 **privileged**로
   기동(`WithCheckpointPrivileged` — 검증된 구성). capability 최소화(caps 4종 + AppArmor unconfined +
   `procMount` 조정)는 라운드트립 green 후의 후속 항목.
+
+### 5차 (2026-07-23, pid 충돌 — 간헐 성공의 정체)
+- ❌ **복원 pid 충돌**: CRIU는 체크포인트 당시의 pid로 복원한다. 소스 pod의 셸은 에이전트 기동 직후
+  떠서 항상 낮은 pid(~10)를 받는데, 복원 pod의 에이전트(PID 1)도 Go 런타임 **스레드가 tid ~10대를
+  점유**하므로 `/proc/10`이 이미 차 있어 복원이 실패한다. 4차에서 성공했던 건 우연(복불복).
+- 🔁 **대응**: 소스 pod에서 셸 fork **직전에** `/proc/sys/kernel/ns_last_pid`에 큰 값(기본 300,
+  `CRIU_PID_FLOOR`로 조정)을 써서 셸 pid를 높게 배정. privileged pod라 쓰기 가능하며(2차에서 non-privileged일
+  때 read-only로 걸렸던 그 파일), 복원 pod 에이전트의 tid는 ~15 이내라 충돌이 사라진다. 쓰기 실패는
+  best-effort로 로깅만(게이트 off pod는 unprivileged라 정상적으로 실패).
 
 ### 3차 (2026-07-23, 에이전트 생명주기 레이스 2건)
 - ❌ **dump 중 조기 재시작**: criu dump가 셸 트리를 얼려 죽이면 에이전트의 셸-종료 감시가 `os.Exit(1)`을

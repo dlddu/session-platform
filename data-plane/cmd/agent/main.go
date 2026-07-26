@@ -61,6 +61,19 @@ const (
 	// checkpoint on POST /restore instead (in-pod CRIU restore). The control
 	// plane sets it on restore-target pods (AnnotationRestoreCheckpoint path).
 	restoreModeEnv = "DATA_PLANE_RESTORE_MODE"
+
+	// nsLastPIDPath is the per-pid-namespace knob for the last allocated pid: the
+	// next fork gets the value written here + 1. Writable only in a privileged
+	// pod (which is what the CRIU gate provisions).
+	nsLastPIDPath = "/proc/sys/kernel/ns_last_pid"
+	// defaultShellPIDFloor is written to nsLastPIDPath before the session shell
+	// forks, so the shell lands well above the pids an agent process occupies.
+	// CRIU restores a task under its ORIGINAL pid, and a shell started right
+	// after the agent would otherwise land around pid ~10 — exactly where the
+	// restore pod's own agent has its Go runtime threads (tids ≤ ~15), making the
+	// restore collide (observed on-cluster 2026-07-23; earlier successes were
+	// luck). Overridable via CRIU_PID_FLOOR while tuning against a runtime.
+	defaultShellPIDFloor = 300
 )
 
 func main() {
@@ -80,6 +93,17 @@ func main() {
 		// shell's reachability is then proven by the control plane's Reach.
 		logger.Info("agent started in restore mode; awaiting checkpoint", "addr", addr)
 	} else {
+		// Push the next pid up before forking the shell, so a later CRIU restore
+		// (which reinstates the shell under its original pid) does not land on a
+		// pid the restore pod's agent already occupies. Best-effort: the knob is
+		// only writable in a privileged pod, and without CRIU a low shell pid is
+		// harmless.
+		floor := shellPIDFloor()
+		if err := reserveShellPID(floor); err != nil {
+			logger.Info("could not raise ns_last_pid; the shell will take a low pid"+
+				" (harmless without CRIU, but a restore may hit a pid collision)",
+				"path", nsLastPIDPath, "floor", floor, "err", err)
+		}
 		sh, err := startShell(a.shellPath)
 		if err != nil {
 			logger.Error("failed to start session shell", "shell", a.shellPath, "err", err)
@@ -269,6 +293,27 @@ func newShellProc(ptmx *os.File, pid int, initial []byte, wait func() error, sig
 		close(s.done)
 	}()
 	return s
+}
+
+// shellPIDFloor is the pid floor to claim before forking the shell, from
+// CRIU_PID_FLOOR or defaultShellPIDFloor. A non-positive or unparseable value
+// falls back to the default rather than disabling the guard silently.
+func shellPIDFloor() int {
+	if v := os.Getenv("CRIU_PID_FLOOR"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultShellPIDFloor
+}
+
+// reserveShellPID writes floor to ns_last_pid so the next fork in this pid
+// namespace gets floor+1. The agent's own threads may consume a few pids after
+// this, which only pushes the shell higher — the guarantee needed is "well above
+// the agent's tids", not an exact number. Fails on a non-privileged pod, where
+// the file is read-only; callers treat that as best-effort.
+func reserveShellPID(floor int) error {
+	return os.WriteFile(nsLastPIDPath, []byte(strconv.Itoa(floor)), 0o644)
 }
 
 // startShell launches exactly one interactive shell attached to a fresh PTY.
