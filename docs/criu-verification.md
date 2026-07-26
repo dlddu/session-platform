@@ -20,7 +20,7 @@
   불가(런타임/커널 CRIU 미탑재).
 - **근거**: `ContainerCheckpoint`는 kubelet + 컨테이너 런타임 + 커널의 CRIU 지원이 모두 있어야 동작한다.
 - **후속(프로비저닝)**: CRIU 커널 옵션을 켠 노드 이미지 준비. base 이미지는 이미 CRIU 친화적
-  (ubuntu:22.04 + glibc — jammy는 criu를 패키징하므로 이미지에 criu 포함, `data-plane/Dockerfile`).
+  (debian:trixie + glibc, criu 4.2를 소스 빌드해 포함, `data-plane/Dockerfile`).
 
 ### ② 컨테이너 런타임 — containerd + runc(CRIU 빌드) + kubelet 게이트
 - **선택**: containerd + CRIU 지원 runc 빌드. kubelet feature gate `ContainerCheckpoint`(체크포인트)와,
@@ -107,9 +107,10 @@
   복원 시 pid 충돌을 방지(5차). 복원은 `--restore-detached --restore-sibling --pidfile`로 복원된 루트 태스크의
   실제 pid를 감시(3차). 실제 criu 호출은 `execCriuEngine` seam(미검증); 나머지는 가짜 엔진으로 유닛 테스트.
   scrollback은 에이전트 메모리 상주라 아카이브에 함께 직렬화돼 복원 후 커서 유효(AC-D4).
-- `data-plane/Dockerfile` — `ENV GODEBUG=multipathtcp=0`: Go 1.24가 Linux 리스너에 MPTCP를 기본
-  활성화하는데 CRIU는 MPTCP 소켓을 체크포인트하지 못하므로, 에이전트 :8090 리스너(및 세션 쉘이
-  상속하는 환경)를 plain TCP로 고정.
+- `data-plane/Dockerfile` — debian:trixie 런타임 + **criu 4.2 소스 빌드 스테이지**(`CRIU_VERSION` 고정,
+  `CRIU_BIN=/usr/local/sbin/criu`, 빌드 시 `criu --version`으로 링크 검증). `ENV GODEBUG=multipathtcp=0`:
+  Go 1.24가 Linux 리스너에 MPTCP를 기본 활성화하는데 CRIU는 MPTCP 소켓을 체크포인트하지 못하므로,
+  에이전트 :8090 리스너(및 세션 쉘이 상속하는 환경)를 plain TCP로 고정.
 - `control-plane/test/integration_test.go` — `TestScenario4_CRIUIntegrity`(마커 왕복 + 커서 연속성).
 - `control-plane/test/e2e_deferred_test.go` — `TestDeferred_CRIUIntegrity`(B3/D4, deferred 시드).
 
@@ -163,9 +164,11 @@
 코드는 준비됐다. 프로비저닝 작업은 아래를 세우고 확인 명령을 green으로 만들면 된다.
 
 **전제 체크리스트 (에이전트 주도 in-pod CRIU 기준)**
-- [x] criu 바이너리를 데이터플레인 이미지에 제공 — 베이스를 **debian:trixie(CRIU 4.1.x)** 로 전환하고
-      `apt-get install criu` 포함(2026-07-23 2차). jammy의 CRIU 3.16.1은 kernel 6.12/arm64 vdso 파싱 실패,
-      noble(24.04)은 criu 미패키징이라 둘 다 불가였음. PATH 밖의 criu는 `CRIU_BIN` env로 지정 가능.
+- [x] criu 바이너리를 데이터플레인 이미지에 제공 — 베이스 **debian:trixie** + **criu 4.2 소스 빌드**
+      (`CRIU_VERSION` build-arg로 고정, 멀티스테이지). jammy의 CRIU 3.16.1은 kernel 6.12/arm64 vdso 파싱
+      실패, noble은 criu 미패키징, trixie는 4.1.1 고정이라 소스 빌드가 필요했다. sid pin은 sid의 glibc가
+      런타임(=세션 쉘 userland)에 섞이고 빌드가 움직이는 타깃이 되어 배제. 이미지는 `CRIU_BIN`을
+      `/usr/local/sbin/criu`로 고정하고, 빌드 단계에서 `criu --version`으로 링크를 검증한다.
       런타임(containerd) 자체 교체는 불필요 — 에이전트가 pod 안에서 criu를 직접 실행한다.
 - [x] 노드 커널 CRIU 지원 — 2026-07-23 2차에서 privileged pod의 `criu check` "Looks good"으로 검증됨.
 - [x] 세션 pod 권한: `WithCheckpointPrivileged`가 `CRIU_ENABLED=1`에서 **privileged**로 자동 기동
