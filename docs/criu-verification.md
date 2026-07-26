@@ -159,6 +159,19 @@
   --pidfile`로 전환해 **복원된 루트 태스크의 실제 pid**를 pidfile에서 읽어 감시/시그널 대상으로 삼음
   (sibling이라 에이전트가 부모 → reap 가능; ECHILD 시 liveness 폴링 폴백).
 
+## CI 프로브 — kind(GitHub Actions)에서 in-pod CRIU가 되는가
+
+에이전트 주도 방식으로 바꾸면서 **kind를 막던 이유(런타임 CRIU 미지원)가 사라졌다** — criu는 우리가
+빌드해 pod 안에서 실행하므로 containerd/kubelet이 관여하지 않고, 필요한 건 커널 지원 + privileged pod뿐이다.
+e2e 워크플로에 `criu check` 프로브 스텝을 추가해(비차단, `continue-on-error`) GHA 러너 커널 + kind 중첩
+컨테이너에서 실제로 되는지 답을 받는다: `criu --version` → `ns_last_pid` 쓰기 가능 여부(= pid floor 가드의
+전제) → `criu check`.
+
+프로브가 통과하면 CRIU 라운드트립을 **e2e 자동 검증으로 승격**할 수 있고, 그때 추가로 필요한 것은:
+① HTTP로 닿는 스냅샷 트리거(테스트 전용 게이트 엔드포인트면 트리거 *정책* 결정을 건드리지 않음),
+② AWS 없는 체크포인트 저장소(아카이브 보관 주체인 control-plane pod는 스냅샷 중에도 살아 있으므로
+로컬 디렉터리 store로 충분). 두 항목은 프로브 결과를 보고 착수한다.
+
 ## 게이트 on 실검증 인계 (프로비저닝 작업 → "확인 필요")
 
 코드는 준비됐다. 프로비저닝 작업은 아래를 세우고 확인 명령을 green으로 만들면 된다.
