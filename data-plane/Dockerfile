@@ -27,7 +27,7 @@ RUN apt-get update \
       build-essential pkg-config curl ca-certificates \
       libbsd-dev libcap-dev libnet1-dev libnl-3-dev libnl-route-3-dev \
       libprotobuf-c-dev libprotobuf-dev protobuf-c-compiler protobuf-compiler \
-      python3 python3-protobuf \
+      python3 python3-protobuf uuid-dev \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 # Only the criu binary is needed at runtime (the parasite blobs are linked into
@@ -52,7 +52,7 @@ RUN curl -fsSL "https://github.com/checkpoint-restore/criu/archive/refs/tags/v${
 FROM debian:trixie
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      libbsd0 libcap2 libnet1 libnl-3-200 libnl-route-3-200 libprotobuf-c1 \
+      libbsd0 libcap2 libnet1 libnl-3-200 libnl-route-3-200 libprotobuf-c1 libuuid1 \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=criu-build /src/criu/criu /usr/local/sbin/criu
 # Fail the image build (i.e. in CI) if the copied binary is missing a shared
