@@ -138,6 +138,15 @@
   기동(`WithCheckpointPrivileged` — 검증된 구성). capability 최소화(caps 4종 + AppArmor unconfined +
   `procMount` 조정)는 라운드트립 green 후의 후속 항목.
 
+### 3차 (2026-07-23, 에이전트 생명주기 레이스 2건)
+- ❌ **dump 중 조기 재시작**: criu dump가 셸 트리를 얼려 죽이면 에이전트의 셸-종료 감시가 `os.Exit(1)`을
+  일으켜 **아카이브 스트리밍이 잘림**. → dump 직전 `checkpointing` 플래그로 재시작 경로 유예, 스트리밍
+  완료 후 컨트롤플레인의 `Stop`이 pod를 회수(실패 시 플래그 원복으로 재-arm).
+- ❌ **복원 직후 조기 재시작**: 포그라운드 `criu restore`는 복원 성공과 동시에 종료하는데 이를 셸 사망으로
+  오인해 컨테이너 재시작 → 후속 `/write`가 connection refused. → `--restore-detached --restore-sibling
+  --pidfile`로 전환해 **복원된 루트 태스크의 실제 pid**를 pidfile에서 읽어 감시/시그널 대상으로 삼음
+  (sibling이라 에이전트가 부모 → reap 가능; ECHILD 시 liveness 폴링 폴백).
+
 ## 게이트 on 실검증 인계 (프로비저닝 작업 → "확인 필요")
 
 코드는 준비됐다. 프로비저닝 작업은 아래를 세우고 확인 명령을 green으로 만들면 된다.

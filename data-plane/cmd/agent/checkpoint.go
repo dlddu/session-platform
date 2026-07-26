@@ -11,6 +11,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/creack/pty"
 )
@@ -216,14 +219,14 @@ func readArchive(r io.Reader, imagesDir string) ([]byte, error) {
 
 // execCriuEngine shells out to the criu binary.
 //
-// RUNTIME SEAM — UNVERIFIED. This is the one part of the in-pod CRIU path that
-// cannot run without a CRIU-capable node, so it is exercised only during
-// on-runtime verification, never in CI (tests inject a fake engine). In
-// particular the PTY handling on restore — recreating a master and reattaching
-// the restored shell's controlling terminal to it — and the reaping model (we
-// treat the foreground `criu restore` process as the restored shell's lifetime
-// proxy) are best-effort starting points to iterate on against a real runtime,
-// not a verified recipe. See docs/criu-verification.md.
+// RUNTIME SEAM — being tuned against a real runtime. This is the one part of the
+// in-pod CRIU path that cannot run without a CRIU-capable node, so it is
+// exercised only during on-runtime verification, never in CI (tests inject a
+// fake engine). Fixes landed from on-cluster rounds so far: the restore now runs
+// detached with the restored root task as a sibling and its pid taken from a
+// pidfile, because criu's own exit is not the shell's (2026-07-23). The PTY
+// handling on restore — recreating a master and restoring the shell job against
+// that tty — remains the least-proven part. See docs/criu-verification.md.
 type execCriuEngine struct {
 	bin string
 }
@@ -255,20 +258,65 @@ func (e *execCriuEngine) Restore(ctx context.Context, imagesDir string, initial 
 	if err != nil {
 		return nil, fmt.Errorf("open pty for restore: %w", err)
 	}
-	// Run criu restore in the foreground so its own lifetime tracks the restored
-	// tree's — Wait on it stands in for waiting on the shell. The restored
-	// process's stdio is the PTY slave.
+	fail := func(err error) (*shellProc, error) {
+		_ = ptmx.Close()
+		_ = tty.Close()
+		return nil, err
+	}
+
+	// --restore-detached: criu exits as soon as the tree is running, so criu's own
+	// lifetime is NOT the shell's — waiting on criu would report "shell exited"
+	// the instant the restore succeeded and restart the container out from under
+	// the restored session (observed on-cluster 2026-07-23).
+	// --restore-sibling: the restored root task becomes a child of criu's parent,
+	// i.e. of this agent, so the agent can signal and reap it.
+	// --pidfile: criu records the restored root task's real pid, which is what we
+	// then watch/signal instead of criu's.
+	pidfile := filepath.Join(imagesDir, "restored.pid")
 	cmd := exec.CommandContext(ctx, e.bin, "restore",
 		"--images-dir", imagesDir,
 		"--shell-job",
+		"--restore-detached",
 		"--restore-sibling",
+		"--pidfile", pidfile,
 	)
+	// criu's stdio is the PTY slave: that is the tty the shell job is restored
+	// against (and where criu's own diagnostics land if the restore fails).
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
-	if err := cmd.Start(); err != nil {
-		_ = ptmx.Close()
-		_ = tty.Close()
-		return nil, fmt.Errorf("start criu restore: %w", err)
+	if err := cmd.Run(); err != nil {
+		return fail(fmt.Errorf("criu restore: %w", err))
 	}
-	_ = tty.Close() // the child holds it now
-	return newShellProc(ptmx, cmd.Process.Pid, initial, cmd.Wait, cmd.Process.Signal, cmd.Process.Kill), nil
+	_ = tty.Close() // the restored task holds its own copy now
+
+	b, err := os.ReadFile(pidfile)
+	if err != nil {
+		return fail(fmt.Errorf("read criu pidfile %s: %w", pidfile, err))
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || pid <= 0 {
+		return fail(fmt.Errorf("parse criu pidfile %s (%q): %w", pidfile, b, err))
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return fail(fmt.Errorf("find restored task %d: %w", pid, err))
+	}
+	return newShellProc(ptmx, pid, initial,
+		func() error { return waitRestored(proc) }, proc.Signal, proc.Kill), nil
+}
+
+// waitRestored blocks until the restored root task exits. --restore-sibling makes
+// it a child of this agent, so os.Process.Wait normally reaps it directly. If the
+// kernel/criu ever leaves it unreapable here (wait4 ECHILD), fall back to
+// liveness polling rather than returning early — an early return would be read
+// as "shell exited" and restart the container while the session is alive.
+func waitRestored(p *os.Process) error {
+	if _, err := p.Wait(); err == nil {
+		return nil
+	}
+	for {
+		if err := p.Signal(syscall.Signal(0)); err != nil {
+			return nil // process is gone
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
