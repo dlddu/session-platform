@@ -69,7 +69,14 @@ func (a *agent) handleCheckpoint(logger *slog.Logger) http.HandlerFunc {
 		}
 		defer os.RemoveAll(imagesDir)
 
+		// Suppress the shell-exit→restart path BEFORE the dump: criu freezes and
+		// kills the shell tree, and without this the exit watch would os.Exit(1)
+		// mid-request and truncate the archive below. On dump failure criu leaves
+		// the tree running, so re-arm restart; on success we stay suppressed and
+		// let the control plane reclaim the pod after the archive lands.
+		a.checkpointing.Store(true)
 		if err := a.engine.Dump(r.Context(), sh.pid, imagesDir); err != nil {
+			a.checkpointing.Store(false)
 			http.Error(w, "criu dump: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -83,7 +90,8 @@ func (a *agent) handleCheckpoint(logger *slog.Logger) http.HandlerFunc {
 			logger.Error("stream checkpoint archive", "err", err)
 			return
 		}
-		logger.Info("checkpoint streamed", "pid", sh.pid, "scrollback_bytes", len(sb))
+		logger.Info("checkpoint streamed; shell frozen, awaiting pod reclaim by control plane",
+			"pid", sh.pid, "scrollback_bytes", len(sb))
 	}
 }
 

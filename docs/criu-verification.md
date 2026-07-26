@@ -101,9 +101,10 @@
 - `control-plane/internal/service/manager.go` — `Snapshot`/`Restore` 오케스트레이션. `Restore`가
   `RestoreInto`에 체크포인트 ref를 전달하고 커서를 리셋하지 않음(버퍼-인-체크포인트).
 - `data-plane/cmd/agent/main.go` + `checkpoint.go` — 스왑 가능한 셸 홀더 + 복원모드 기동, `/checkpoint`(criu
-  dump→tar) / `/restore`(tar→criu restore→셸 부활) 핸들러, scrollback 직렬화. 실제 criu 호출은
-  `execCriuEngine` seam(미검증); 나머지는 가짜 엔진으로 유닛 테스트. scrollback은 에이전트 메모리 상주라
-  아카이브에 함께 직렬화돼 복원 후 커서 유효(AC-D4).
+  dump→tar) / `/restore`(tar→criu restore→셸 부활) 핸들러, scrollback 직렬화. dump가 셸 트리를 얼려 죽이면
+  셸-종료→컨테이너-재시작 경로가 아카이브 스트리밍을 자를 수 있어, checkpoint 중엔 `checkpointing` 플래그로
+  재시작을 유예(회수는 컨트롤플레인 Stop이 담당). 실제 criu 호출은 `execCriuEngine` seam(미검증); 나머지는
+  가짜 엔진으로 유닛 테스트. scrollback은 에이전트 메모리 상주라 아카이브에 함께 직렬화돼 복원 후 커서 유효(AC-D4).
 - `data-plane/Dockerfile` — `ENV GODEBUG=multipathtcp=0`: Go 1.24가 Linux 리스너에 MPTCP를 기본
   활성화하는데 CRIU는 MPTCP 소켓을 체크포인트하지 못하므로, 에이전트 :8090 리스너(및 세션 쉘이
   상속하는 환경)를 plain TCP로 고정.

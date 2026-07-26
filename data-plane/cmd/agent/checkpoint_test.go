@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/creack/pty"
 )
@@ -23,6 +25,7 @@ import (
 type fakeCriuEngine struct {
 	dumpErr    error
 	restoreErr error
+	onDump     func() // mimics criu freezing/killing the shell tree during dump
 
 	gotDumpPid     int
 	gotRestoreInit []byte
@@ -30,6 +33,9 @@ type fakeCriuEngine struct {
 
 func (f *fakeCriuEngine) Dump(_ context.Context, pid int, imagesDir string) error {
 	f.gotDumpPid = pid
+	if f.onDump != nil {
+		f.onDump()
+	}
 	if f.dumpErr != nil {
 		return f.dumpErr
 	}
@@ -138,6 +144,68 @@ func TestCheckpointHandlerStreamsArchive(t *testing.T) {
 	}
 	if fake.gotDumpPid != sh.pid {
 		t.Errorf("engine dumped pid %d, want the shell pid %d", fake.gotDumpPid, sh.pid)
+	}
+}
+
+// The dump freezes and kills the shell, but that must NOT trip the container
+// restart path until the archive has streamed — otherwise the agent os.Exit(1)s
+// mid-response and truncates the checkpoint. The exit watch is suppressed while
+// a checkpoint is in flight.
+func TestCheckpointDefersRestartWhileStreaming(t *testing.T) {
+	sh := startTestShell(t)
+	// The fake dump mimics criu: it freezes/kills the shell tree, closing sh.done
+	// exactly as a real dump would.
+	fake := &fakeCriuEngine{onDump: func() { _ = sh.kill(); <-sh.done }}
+	a := &agent{engine: fake, exited: make(chan struct{})}
+	a.adopt(sh) // arms the real exit watch (the restart trigger)
+	srv := httptest.NewServer(routes(testLogger(), a))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/checkpoint", "", nil)
+	if err != nil {
+		t.Fatalf("POST /checkpoint: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("checkpoint status = %d, want 200", resp.StatusCode)
+	}
+	// The archive streamed fully despite the shell dying mid-request.
+	if _, err := readArchive(resp.Body, t.TempDir()); err != nil {
+		t.Fatalf("archive truncated (early restart raced the stream?): %v", err)
+	}
+	// The restart path stayed suppressed: a.exited must still be open.
+	select {
+	case <-a.exited:
+		t.Fatal("shell-exit→restart fired during checkpoint; the archive would truncate")
+	default:
+	}
+}
+
+// A failed dump leaves the shell running, so the restart path is re-armed: a
+// subsequent real shell exit still triggers a restart (a.exited closes).
+func TestCheckpointDumpFailureReArmsRestart(t *testing.T) {
+	sh := startTestShell(t)
+	fake := &fakeCriuEngine{dumpErr: errors.New("dump boom")} // does not kill the shell
+	a := &agent{engine: fake, exited: make(chan struct{})}
+	a.adopt(sh)
+	srv := httptest.NewServer(routes(testLogger(), a))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/checkpoint", "", nil)
+	if err != nil {
+		t.Fatalf("POST /checkpoint: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("failed-dump checkpoint = %d, want 500", resp.StatusCode)
+	}
+	// The shell was never frozen; killing it now must still trigger a restart,
+	// proving checkpointing was re-armed (not left suppressed).
+	_ = sh.kill()
+	select {
+	case <-a.exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shell exit after a failed dump did not trigger restart; checkpointing stuck on")
 	}
 }
 

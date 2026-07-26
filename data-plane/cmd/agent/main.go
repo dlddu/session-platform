@@ -131,6 +131,13 @@ type agent struct {
 	sh     *shellProc
 	exited chan struct{} // closed once an adopted shell exits (triggers restart)
 	once   sync.Once
+	// checkpointing suppresses the shell-exit→container-restart path while a
+	// /checkpoint is in flight. criu dump freezes and kills the shell tree, which
+	// would otherwise trip the exit watch and os.Exit(1) mid-request — truncating
+	// the archive still streaming in the response body. Set before the dump; the
+	// control plane reclaims the pod once it has the archive, so no self-restart
+	// is needed on the checkpoint path.
+	checkpointing atomic.Bool
 }
 
 // current returns the adopted shell, or nil in restore mode before /restore.
@@ -149,6 +156,12 @@ func (a *agent) adopt(sh *shellProc) {
 	a.mu.Unlock()
 	go func() {
 		<-sh.done
+		if a.checkpointing.Load() {
+			// Expected exit: criu dump froze/killed the shell for a checkpoint.
+			// Don't restart — the archive is still streaming and the control
+			// plane reclaims this pod once it has it.
+			return
+		}
 		a.once.Do(func() { close(a.exited) })
 	}()
 }
