@@ -72,30 +72,25 @@ func main() {
 	// required. off → the no-op stub so the happy path runs without CRIU.
 	var ckpt criu.Checkpointer = criu.NewStubCheckpointer(false)
 	if cfg.criuEnabled {
-		if cfg.checkpointS3Bucket == "" {
-			logger.Error("CRIU_ENABLED but CHECKPOINT_S3_BUCKET unset; agent-driven checkpoint needs a durable store")
-			os.Exit(1)
-		}
-		s3store, err := checkpointstore.NewS3(context.Background(), checkpointstore.Config{
-			Bucket:      cfg.checkpointS3Bucket,
-			RoleARN:     cfg.checkpointS3RoleARN,
-			Region:      cfg.checkpointS3Region,
-			Prefix:      cfg.checkpointS3Prefix,
-			SessionName: cfg.checkpointS3SessionName,
-		})
+		cstore, err := buildCheckpointStore(cfg)
 		if err != nil {
-			logger.Error("checkpoint S3 store misconfigured", "err", err)
+			logger.Error("checkpoint store misconfigured", "err", err)
 			os.Exit(1)
 		}
-		ckpt = criu.NewAgentCheckpointer(agentClient, s3store)
-		logger.Info("CRIU on: agent-driven in-pod checkpoint → S3 (assume-role)",
-			"bucket", cfg.checkpointS3Bucket, "role", cfg.checkpointS3RoleARN)
+		ckpt = criu.NewAgentCheckpointer(agentClient, cstore)
+		logger.Info("CRIU on: agent-driven in-pod checkpoint",
+			"store", cfg.checkpointStoreDesc())
 	}
 
 	mgr := service.New(orch, store, ckpt, agentClient)
 
+	if cfg.testEndpoints {
+		// Not a product API: it exists so an e2e SUT can freeze a session on
+		// demand (the idle->snapshot trigger policy is still open).
+		logger.Warn("E2E_TEST_ENDPOINTS is on; test-only endpoints are exposed")
+	}
 	mux := http.NewServeMux()
-	api.New(mgr).Routes(mux)
+	api.New(mgr, api.WithTestEndpoints(cfg.testEndpoints)).Routes(mux)
 	mux.Handle("/", static.Handler())
 
 	srv := &http.Server{
@@ -128,14 +123,47 @@ type config struct {
 	dataPlaneImage string
 	dataPlaneShell string
 	criuEnabled    bool
-	// Checkpoint archive S3 store (used only when criuEnabled). Empty bucket =
-	// keep archives node-local. Access is by assuming checkpointS3RoleARN over
-	// the node instance profile (see internal/adapter/checkpointstore).
+	// testEndpoints exposes test-only HTTP endpoints (snapshot trigger). Off in
+	// deployments; the e2e SUT turns it on.
+	testEndpoints bool
+	// Checkpoint archive store (used only when criuEnabled). Exactly one backend
+	// is used: a local directory (checkpointDir, for clusters without S3 — the
+	// directory must be shared by all replicas) or S3, accessed by assuming
+	// checkpointS3RoleARN over the node instance profile.
+	checkpointDir           string
 	checkpointS3Bucket      string
 	checkpointS3RoleARN     string
 	checkpointS3Region      string
 	checkpointS3Prefix      string
 	checkpointS3SessionName string
+}
+
+// buildCheckpointStore selects the checkpoint archive backend. The agent-driven
+// checkpointer always needs one: the archive is produced inside a pod that is
+// reclaimed moments later.
+func buildCheckpointStore(cfg config) (criu.CheckpointStore, error) {
+	switch {
+	case cfg.checkpointDir != "":
+		return checkpointstore.NewDir(cfg.checkpointDir)
+	case cfg.checkpointS3Bucket != "":
+		return checkpointstore.NewS3(context.Background(), checkpointstore.Config{
+			Bucket:      cfg.checkpointS3Bucket,
+			RoleARN:     cfg.checkpointS3RoleARN,
+			Region:      cfg.checkpointS3Region,
+			Prefix:      cfg.checkpointS3Prefix,
+			SessionName: cfg.checkpointS3SessionName,
+		})
+	default:
+		return nil, errors.New("CRIU_ENABLED needs a checkpoint store: set CHECKPOINT_DIR or CHECKPOINT_S3_BUCKET")
+	}
+}
+
+// checkpointStoreDesc renders the selected backend for the startup log.
+func (c config) checkpointStoreDesc() string {
+	if c.checkpointDir != "" {
+		return "dir:" + c.checkpointDir
+	}
+	return "s3:" + c.checkpointS3Bucket + " (assume " + c.checkpointS3RoleARN + ")"
 }
 
 func loadConfig() config {
@@ -146,6 +174,8 @@ func loadConfig() config {
 		// ${DATA_PLANE_SHELL:-/bin/bash} on a PTY (AC-D1).
 		dataPlaneShell:          env("DATA_PLANE_SHELL", ""),
 		criuEnabled:             envBool("CRIU_ENABLED", false),
+		testEndpoints:           envBool("E2E_TEST_ENDPOINTS", false),
+		checkpointDir:           env("CHECKPOINT_DIR", ""),
 		checkpointS3Bucket:      env("CHECKPOINT_S3_BUCKET", ""),
 		checkpointS3RoleARN:     env("CHECKPOINT_S3_ROLE_ARN", ""),
 		checkpointS3Region:      env("CHECKPOINT_S3_REGION", env("AWS_REGION", "")),

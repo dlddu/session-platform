@@ -167,10 +167,21 @@ e2e 워크플로에 `criu check` 프로브 스텝을 추가해(비차단, `conti
 컨테이너에서 실제로 되는지 답을 받는다: `criu --version` → `ns_last_pid` 쓰기 가능 여부(= pid floor 가드의
 전제) → `criu check`.
 
-프로브가 통과하면 CRIU 라운드트립을 **e2e 자동 검증으로 승격**할 수 있고, 그때 추가로 필요한 것은:
-① HTTP로 닿는 스냅샷 트리거(테스트 전용 게이트 엔드포인트면 트리거 *정책* 결정을 건드리지 않음),
-② AWS 없는 체크포인트 저장소(아카이브 보관 주체인 control-plane pod는 스냅샷 중에도 살아 있으므로
-로컬 디렉터리 store로 충분). 두 항목은 프로브 결과를 보고 착수한다.
+**프로브 결과 (2026-07-26, GHA 러너 + kind): 통과** — `criu 4.2` 실행, `ns_last_pid` 쓰기 가능
+(pid floor 가드 전제 성립), `criu check` → *Looks good*. (`check --all`은 nftables 기반 locking 미지원
+경고만 — 우리 워크로드는 netns 잠금을 쓰지 않는다.) 이로써 **CRIU 라운드트립을 e2e 자동 검증으로 승격**했다:
+
+- ① **스냅샷 트리거**: `E2E_TEST_ENDPOINTS=1`에서만 등록되는 `POST /sessions/{id}/snapshot`
+  (`api.WithTestEndpoints`). 제품 API가 아니며 트리거 *정책* 결정을 건드리지 않는다. 복원은 엔드포인트가
+  필요 없다(접근 시 자동 복원).
+- ② **AWS 없는 저장소**: `checkpointstore.NewDir`(`CHECKPOINT_DIR`). 아카이브는 세션 pod보다만 오래
+  살면 되고 control-plane pod는 스냅샷 중에도 살아 있다. e2e overlay는 2개 replica가 공유하도록
+  RWO PVC로 뒷받침한다(local-path의 WaitForFirstConsumer로 두 replica가 같은 노드에 배치됨).
+- ③ **검증**: `TestDeferred_CRIUIntegrity`가 HTTP만으로 전 스택을 구동 — 마커 세팅 → 스냅샷 → 접근으로
+  복원 → 복원 전 커서 델타에 `frozen42`·`/tmp` 확인 + `offset=0` 전체 이력 순서 확인. 트리거가 없는
+  SUT에서는 skip한다.
+
+즉 지금까지 수동 라운드로 잡던 종류의 회귀(pid 충돌, 조기 재시작 등)가 **CI에서 자동으로** 잡힌다.
 
 ## 게이트 on 실검증 인계 (프로비저닝 작업 → "확인 필요")
 

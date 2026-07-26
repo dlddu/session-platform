@@ -18,7 +18,7 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-func newServer() *httptest.Server {
+func newServer(opts ...api.Option) *httptest.Server {
 	mgr := service.New(
 		k8s.NewStubOrchestrator("sessions"),
 		configmap.NewStore(fake.NewSimpleClientset(), "sessions"),
@@ -26,8 +26,82 @@ func newServer() *httptest.Server {
 		agent.NewStubClient(),
 	)
 	mux := http.NewServeMux()
-	api.New(mgr).Routes(mux)
+	api.New(mgr, opts...).Routes(mux)
 	return httptest.NewServer(mux)
+}
+
+// createForTest creates a session through the API and returns it.
+func createForTest(t *testing.T, srv *httptest.Server, name string) session.Session {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"name": name})
+	resp, err := http.Post(srv.URL+"/api/v1/sessions", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	var s session.Session
+	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
+		t.Fatalf("decode created session: %v", err)
+	}
+	return s
+}
+
+// The snapshot endpoint is test-only: it exists to let the e2e suite reach the
+// snapshot state (the product trigger policy is still undecided), so it must be
+// absent unless WithTestEndpoints is set.
+func TestSnapshotEndpointIsGated(t *testing.T) {
+	// Default (production) surface: no snapshot route.
+	srv := newServer()
+	defer srv.Close()
+	s := createForTest(t, srv, "gated-off")
+	resp, err := http.Post(srv.URL+"/api/v1/sessions/"+s.ID+"/snapshot", "application/json", nil)
+	if err != nil {
+		t.Fatalf("snapshot (gate off): %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("snapshot with the gate off = %d, want 404 (route must not exist)", resp.StatusCode)
+	}
+
+	// With test endpoints on: the session freezes and its pod is reclaimed.
+	srvTest := newServer(api.WithTestEndpoints(true))
+	defer srvTest.Close()
+	s2 := createForTest(t, srvTest, "gated-on")
+	resp2, err := http.Post(srvTest.URL+"/api/v1/sessions/"+s2.ID+"/snapshot", "application/json", nil)
+	if err != nil {
+		t.Fatalf("snapshot (gate on): %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("snapshot with the gate on = %d, want 200", resp2.StatusCode)
+	}
+	var frozen session.Session
+	if err := json.NewDecoder(resp2.Body).Decode(&frozen); err != nil {
+		t.Fatalf("decode snapshot response: %v", err)
+	}
+	if frozen.State != session.StateSnapshot {
+		t.Errorf("state = %q, want snapshot", frozen.State)
+	}
+	if frozen.Pod != "" {
+		t.Errorf("pod = %q, want it reclaimed (AC-A3)", frozen.Pod)
+	}
+}
+
+// A snapshot of an unknown session is a 404 like the other handlers.
+func TestSnapshotUnknownSession(t *testing.T) {
+	srv := newServer(api.WithTestEndpoints(true))
+	defer srv.Close()
+	resp, err := http.Post(srv.URL+"/api/v1/sessions/nope/snapshot", "application/json", nil)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("snapshot of an unknown session = %d, want 404", resp.StatusCode)
+	}
 }
 
 // TestHappyPath exercises create -> list -> switch end-to-end through the HTTP

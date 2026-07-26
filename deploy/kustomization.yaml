@@ -14,10 +14,13 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - ../k8s
-  # kind-only placeholder for the now-required `checkpoint-s3` Secret so the SUT
-  # starts (CRIU is off here, so the values are inert). Production uses the k8s/
-  # base + external-secrets, not this overlay.
+  # kind-only placeholder for the required `checkpoint-s3` Secret so the SUT
+  # starts. The e2e SUT stores checkpoints in a directory (CHECKPOINT_DIR below),
+  # not S3, so these values stay inert. Production uses the k8s/ base +
+  # external-secrets, not this overlay.
   - checkpoint-s3-secret.yaml
+  # The shared directory backing CHECKPOINT_DIR for the CRIU round trip.
+  - checkpoint-store-pvc.yaml
 images:
   - name: ghcr.io/dlddu/session-platform
     newName: session-platform/control-plane
@@ -37,7 +40,17 @@ patches:
   # run 2 replicas so the e2e suite drives cross-replica atomicity (AC-C1)
   # against the shared ConfigMap/Lease store; and point DATA_PLANE_IMAGE at the
   # locally built agent image scripts/e2e/up.sh loads into kind (the base
-  # references the ghcr-published tag). env/1 is DATA_PLANE_IMAGE in the base.
+  # references the ghcr-published tag). env/1 is DATA_PLANE_IMAGE, env/2 is
+  # CRIU_ENABLED in the base.
+  #
+  # CRIU is turned ON here: since checkpoint/restore moved into the agent
+  # (docs/criu-verification.md decision ⑤) it needs no CRIU-capable *runtime*,
+  # only a capable kernel and a privileged session pod — and the e2e CRIU probe
+  # confirms that holds on GitHub runners. That makes the AC-D4 round trip an
+  # automated assertion (TestDeferred_CRIUIntegrity) instead of a manual round.
+  # It also needs: a snapshot trigger reachable over HTTP (E2E_TEST_ENDPOINTS,
+  # test-only — the product trigger policy is still open) and an archive store
+  # (CHECKPOINT_DIR on the shared PVC, since there is no S3 in kind).
   - target:
       kind: Deployment
       name: control-plane
@@ -51,3 +64,27 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/env/1/value
         value: session-platform/data-plane:dev
+      - op: replace
+        path: /spec/template/spec/containers/0/env/2/value
+        value: "true"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: E2E_TEST_ENDPOINTS
+          value: "1"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: CHECKPOINT_DIR
+          value: /var/lib/session-platform/checkpoints
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts
+        value:
+          - name: checkpoint-store
+            mountPath: /var/lib/session-platform/checkpoints
+      - op: add
+        path: /spec/template/spec/volumes
+        value:
+          - name: checkpoint-store
+            persistentVolumeClaim:
+              claimName: checkpoint-store

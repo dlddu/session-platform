@@ -142,37 +142,96 @@ func TestDeferred_IdleToSnapshot(t *testing.T) {
 // AC-B2: accessing a snapshot session restores it into a new pod and goes active.
 // Blocked on: a snapshot-state session (see IdleToSnapshot) + real CRIU.
 func TestDeferred_SnapshotRestore(t *testing.T) {
-	t.Skip("deferred: needs a snapshot-state session (AC-B1 trigger) to exercise restore-on-access (AC-B2); fill when snapshot + restore land")
+	t.Skip("covered by TestDeferred_CRIUIntegrity, which snapshots then asserts restore-on-access provisions a new pod (AC-B2); kept as a placeholder for a focused restore-only case")
 }
 
-// AC-B3/AC-D4: a restored session's in-memory shell state (env, cwd, shell
-// vars/functions, foreground children, FDs) matches the pre-snapshot state.
+// AC-B3/AC-D4 (deployed SUT): a restored session's in-memory shell state — env
+// var and working directory here — matches the pre-snapshot state, and the read
+// cursor issued before the freeze stays valid afterwards.
 //
-// The in-process marker round-trip that concretely asserts this — export a
-// marker + cd, snapshot via a direct Service call, restore, read back the marker
-// and pwd — lives in integration_test.go's TestScenario4_CRIUIntegrity (real
-// cluster-backed Service, runs under CRIU_ENABLED=1). This deployed-SUT seed
-// stays blocked because it can only drive the SUT over HTTP, and (a) the kind
-// SUT runtime is not CRIU-capable (deploy/kind-config.yaml keeps the gate off)
-// and (b) J5-S4 adds no HTTP snapshot trigger, so there is no way to reach the
-// snapshot state through the API here. Fill when a CRIU-capable SUT and an
-// API-reachable snapshot trigger both exist. See docs/criu-verification.md.
+// This drives the *whole stack over HTTP*: the control plane asks the session
+// pod's agent to CRIU-dump its shell tree, streams the archive to the checkpoint
+// store, reclaims the pod, then on the next access provisions a restore-target
+// pod and streams the archive back for the agent to CRIU-restore. Both preconditions
+// are now met in the e2e SUT (docs/criu-verification.md): the agent runs criu
+// in-pod so no CRIU-capable *runtime* is needed (the workflow's CRIU probe
+// confirms the runner's kernel supports it), and the deploy/ overlay turns on
+// CRIU plus the test-only snapshot trigger and a shared archive directory.
+//
+// Against a SUT without those (CRIU off, no snapshot endpoint) it skips, so the
+// suite still runs anywhere.
 func TestDeferred_CRIUIntegrity(t *testing.T) {
-	t.Skip("deferred: needs a CRIU-capable SUT runtime + an API-reachable snapshot trigger (AC-B3/AC-D4); the in-process round-trip is TestScenario4_CRIUIntegrity — see docs/criu-verification.md")
+	s := createSession(t, uniqueName(t))
+
+	// Set shell state that must survive the freeze (AC-D4 markers). export/cd
+	// print nothing, so anchor the pre-freeze cursor on the PTY's echo of the input.
+	writeShell(t, s.ID, "export CRIUMARK=frozen42\n")
+	writeShell(t, s.ID, "cd /tmp\n")
+	before := eventuallyShellRead(t, s.ID, 0, func(p string) bool {
+		return strings.Contains(p, "CRIUMARK=frozen42")
+	})
+
+	// Freeze. The endpoint is test-only (the product trigger policy is open), so
+	// a SUT without it just means this assertion is not runnable here.
+	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+s.ID+"/snapshot", nil)
+	if resp.StatusCode == http.StatusNotFound {
+		t.Skip("SUT has no snapshot trigger (E2E_TEST_ENDPOINTS off) — CRIU round trip not exercisable here; see docs/criu-verification.md")
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("snapshot status=%d body=%s", resp.StatusCode, body)
+	}
+	var frozen session
+	if err := json.Unmarshal(body, &frozen); err != nil {
+		t.Fatalf("decode snapshot response: %v body=%s", err, body)
+	}
+	if frozen.State != "snapshot" {
+		t.Fatalf("state after snapshot = %q, want snapshot (AC-B1)", frozen.State)
+	}
+	if frozen.Pod != "" {
+		t.Fatalf("pod after snapshot = %q, want it reclaimed (AC-A3)", frozen.Pod)
+	}
+
+	// Accessing the frozen session restores it (AC-B2) and runs on top of the
+	// frozen context: $CRIUMARK and the cwd must be exactly as before.
+	writeShell(t, s.ID, "echo restored:$CRIUMARK\n")
+	writeShell(t, s.ID, "pwd\n")
+
+	// AC-D4 + cursor continuity: the delta from the PRE-FREEZE cursor must show
+	// the frozen env var and cwd. That the cursor is still a valid offset into
+	// the restored buffer is the buffer-in-checkpoint guarantee.
+	delta := eventuallyShellRead(t, s.ID, before.NextOffset, func(p string) bool {
+		return strings.Contains(p, "restored:frozen42") && strings.Contains(p, "/tmp")
+	})
+	if strings.Contains(delta.Payload, "export CRIUMARK") {
+		t.Fatalf("delta from the pre-freeze cursor replayed pre-freeze input %q; want only the post-restore delta", delta.Payload)
+	}
+	if delta.Session.Pod == "" || delta.Session.Pod == frozen.Pod {
+		t.Fatalf("restored session pod = %q, want a freshly provisioned pod (AC-B2)", delta.Session.Pod)
+	}
+
+	// offset 0 still replays the whole history across the freeze, in order.
+	full := eventuallyShellRead(t, s.ID, 0, func(p string) bool {
+		return strings.Contains(p, "CRIUMARK=frozen42") && strings.Contains(p, "restored:frozen42")
+	})
+	pre := strings.Index(full.Payload, "CRIUMARK=frozen42")
+	post := strings.Index(full.Payload, "restored:frozen42")
+	if pre == -1 || post == -1 || pre > post {
+		t.Fatalf("full history order broken across the freeze: pre=%d post=%d in %q", pre, post, full.Payload)
+	}
 }
 
 // AC-C2 (idle/snapshot branches): read dispatches on a non-active state.
 // Blocked on: idle/snapshot states (lifecycle trigger). The active-read branch
 // is covered by TestReadSession_ActivePath in e2e_test.go.
 func TestDeferred_ReadIdleAndSnapshotBranches(t *testing.T) {
-	t.Skip("deferred: needs idle/snapshot states to assert the non-active read branches (AC-C2); the active branch is covered today")
+	t.Skip("deferred: the snapshot branch is now reachable via the test-only snapshot trigger (see TestDeferred_CRIUIntegrity); the idle branch still needs an idle trigger (AC-C2)")
 }
 
 // AC-C3 (idle/snapshot branches): write dispatches on a non-active state.
 // Blocked on: idle/snapshot states (lifecycle trigger). The active-write branch
 // is covered by TestWriteSession_ActivePath in e2e_test.go.
 func TestDeferred_WriteIdleAndSnapshotBranches(t *testing.T) {
-	t.Skip("deferred: needs idle/snapshot states to assert the non-active write branches (AC-C3); the active branch is covered today")
+	t.Skip("deferred: the snapshot branch is now reachable via the test-only snapshot trigger (see TestDeferred_CRIUIntegrity); the idle branch still needs an idle trigger (AC-C3)")
 }
 
 // AC-C1: concurrent requests to the same session, served by a multi-replica
