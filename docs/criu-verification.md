@@ -126,19 +126,31 @@
 - 🔧 **레이스 발견→수정됨**: 복원 pod가 동결 pod의 결정적 이름(`sess-<id>`)을 재사용해 Terminating
   잔재와 AlreadyExists 레이스 가능 → 복원 pod를 고유 이름(`sess-<id>-r<suffix>`)으로 분리(2026-07-22).
 
+### 2차 (2026-07-23, k3s · kernel 6.12/arm64 — in-pod criu 사전 점검)
+- ❌ capability만으로 불충분: `CHECKPOINT_RESTORE`+`SYS_PTRACE`는 netns 접근 EPERM. `SYS_ADMIN`+`NET_ADMIN`
+  추가로 그 계열은 해소되나, non-privileged에선 containerd 기본 AppArmor의 mount 차단과
+  `/proc/sys/kernel/ns_last_pid` read-only가 남음.
+- ❌ CRIU 3.16.1(jammy)은 kernel 6.12/arm64의 vdso 파싱 실패로 초기화 불가(치명). 같은 노드에서
+  **CRIU 4.1.1(Debian trixie)은 통과**.
+- ✅ **privileged pod + CRIU 4.1.1 → `criu check` "Looks good" 완전 통과**.
+- 🔁 **대응**: 베이스 이미지를 `debian:trixie`(CRIU 4.1.x)로 전환, 게이트 on 세션 pod를 **privileged**로
+  기동(`WithCheckpointPrivileged` — 검증된 구성). capability 최소화(caps 4종 + AppArmor unconfined +
+  `procMount` 조정)는 라운드트립 green 후의 후속 항목.
+
 ## 게이트 on 실검증 인계 (프로비저닝 작업 → "확인 필요")
 
 코드는 준비됐다. 프로비저닝 작업은 아래를 세우고 확인 명령을 green으로 만들면 된다.
 
 **전제 체크리스트 (에이전트 주도 in-pod CRIU 기준)**
-- [x] criu 바이너리를 데이터플레인 이미지에 제공 — 베이스를 **ubuntu:22.04(jammy)** 로 전환하고
-      `apt-get install criu` 포함(2026-07-23). noble(24.04)은 criu를 패키징하지 않아 불가했음(CI에서 확인).
-      PATH 밖의 criu는 `CRIU_BIN` env로 지정 가능. 런타임(containerd) 자체 교체는 불필요 — 에이전트가
-      pod 안에서 criu를 직접 실행한다.
-- [ ] 노드 커널 CRIU 옵션 활성(체크포인트/복원 syscall 지원) — 노드 측 확인.
-- [x] 세션 pod의 criu capability(`CHECKPOINT_RESTORE`,`SYS_PTRACE`): `WithCheckpointCapabilities`가
-      `CRIU_ENABLED=1`에서 자동 부여(`k8s/deployment.yaml` 수정 불필요). 커널/criu 버전에 따라 `SYS_ADMIN`
-      추가가 필요할 수 있음(런타임 조정 지점).
+- [x] criu 바이너리를 데이터플레인 이미지에 제공 — 베이스를 **debian:trixie(CRIU 4.1.x)** 로 전환하고
+      `apt-get install criu` 포함(2026-07-23 2차). jammy의 CRIU 3.16.1은 kernel 6.12/arm64 vdso 파싱 실패,
+      noble(24.04)은 criu 미패키징이라 둘 다 불가였음. PATH 밖의 criu는 `CRIU_BIN` env로 지정 가능.
+      런타임(containerd) 자체 교체는 불필요 — 에이전트가 pod 안에서 criu를 직접 실행한다.
+- [x] 노드 커널 CRIU 지원 — 2026-07-23 2차에서 privileged pod의 `criu check` "Looks good"으로 검증됨.
+- [x] 세션 pod 권한: `WithCheckpointPrivileged`가 `CRIU_ENABLED=1`에서 **privileged**로 자동 기동
+      (2026-07-23 2차 검증 구성 — capability만으론 AppArmor·read-only `/proc/sys`에 막힘).
+      ⚠️ privileged 세션 쉘 = 노드 root 수준 — capability 최소화(caps + AppArmor unconfined +
+      `procMount`)는 라운드트립 green 후의 후속 항목.
 - [x] `DATA_PLANE_IMAGE` + `CRIU_ENABLED=1` — *2026-07-22 검증 환경에서 수행됨(criu 미포함 이미지 → 위 항목 필요)*.
 - [ ] **`execCriuEngine` 실검증 ← 유일하게 남은 런타임 지점**: 에이전트 `/checkpoint`(criu dump)·
       `/restore`(criu restore + PTY 재부착)의 실동작을 CRIU 노드에서 확인·조정. 이 seam 외 전 경로는

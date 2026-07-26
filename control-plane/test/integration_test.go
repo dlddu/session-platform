@@ -209,7 +209,7 @@ func realService(t *testing.T) *service.Service {
 	}
 	orch := k8s.NewClientOrchestrator(client, ns,
 		k8s.WithImage(image), k8s.WithShell(os.Getenv("DATA_PLANE_SHELL")),
-		k8s.WithCheckpointCapabilities(true))
+		k8s.WithCheckpointPrivileged(true))
 	store := configmap.NewStore(client, ns)
 	ag := agent.NewHTTPClient(client, ns)
 	// Agent-driven checkpointer (the wired path). An in-memory store bridges the

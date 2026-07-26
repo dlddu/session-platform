@@ -58,7 +58,7 @@ func main() {
 
 	orch := k8s.NewClientOrchestrator(client, namespace,
 		k8s.WithImage(cfg.dataPlaneImage), k8s.WithShell(cfg.dataPlaneShell),
-		k8s.WithCheckpointCapabilities(cfg.criuEnabled))
+		k8s.WithCheckpointPrivileged(cfg.criuEnabled))
 	store := configmap.NewStore(client, namespace)
 	// Shell I/O (write→stdin, read→scrollback delta) AND checkpoint/restore ride
 	// the same agent client: it resolves pod name → IP per request and dials the

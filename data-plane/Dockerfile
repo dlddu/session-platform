@@ -14,16 +14,17 @@ COPY data-plane/ ./
 RUN CGO_ENABLED=0 go build -o /out/agent ./cmd/agent
 
 # ---- stage 2: runtime ----
-# ubuntu rather than distroless/alpine: the session workload IS an
+# A full glibc distro rather than distroless/alpine: the session workload IS an
 # interactive /bin/bash with the standard userland, and glibc keeps the pod
-# CRIU-friendlier for the later checkpoint/restore work (AC-B*/AC-D4, see
-# ../docs/criu-verification.md). Only the static agent binary is added on top.
-# 22.04 (jammy) rather than 24.04: the agent CRIU-dumps/restores its shell tree
-# in-pod (agent-driven checkpoint, docs/criu-verification.md) and needs the criu
-# binary, which noble dropped from the archive ("no installation candidate")
-# while jammy still packages it. criu is only invoked when CRIU_ENABLED is on
-# and the pod carries the criu capabilities; CRIU_BIN overrides the path.
-FROM ubuntu:22.04
+# CRIU-friendly (AC-B*/AC-D4, see ../docs/criu-verification.md). Only criu and
+# the static agent binary are added on top.
+# debian:trixie because of its CRIU version: the agent CRIU-dumps/restores its
+# shell tree in-pod (agent-driven checkpoint, docs/criu-verification.md), and the
+# 2026-07-23 on-cluster verification showed jammy's CRIU 3.16.1 cannot parse the
+# vdso on kernel 6.12/arm64 (init fails) while trixie's CRIU 4.1.1 passes on the
+# same node. noble (24.04) packages no criu at all. criu is only invoked when
+# CRIU_ENABLED is on; CRIU_BIN overrides the path.
+FROM debian:trixie
 RUN apt-get update \
  && apt-get install -y --no-install-recommends criu \
  && rm -rf /var/lib/apt/lists/*

@@ -88,14 +88,14 @@ const (
 // dedicated data plane pod per session through client-go, and dials the pod's
 // session agent to prove the shell is reachable (AC-D1).
 type ClientOrchestrator struct {
-	client         kubernetes.Interface
-	namespace      string
-	image          string
-	shell          string // DATA_PLANE_SHELL override injected into pods ("" = agent default)
-	checkpointCaps bool   // add CRIU capabilities to session pods (CRIU_ENABLED)
-	agentPort      int
-	pollInterval   time.Duration
-	readyTimeout   time.Duration
+	client               kubernetes.Interface
+	namespace            string
+	image                string
+	shell                string // DATA_PLANE_SHELL override injected into pods ("" = agent default)
+	checkpointPrivileged bool   // run session pods privileged for in-pod CRIU (CRIU_ENABLED)
+	agentPort            int
+	pollInterval         time.Duration
+	readyTimeout         time.Duration
 }
 
 // compile-time assertion that ClientOrchestrator satisfies the port.
@@ -124,12 +124,17 @@ func WithShell(shell string) Option {
 	}
 }
 
-// WithCheckpointCapabilities adds the Linux capabilities the in-pod CRIU path
-// needs (agent-driven checkpoint/restore) to session pods. Wired from
-// CRIU_ENABLED so gate-off pods stay unprivileged.
-func WithCheckpointCapabilities(enabled bool) Option {
+// WithCheckpointPrivileged runs session pods privileged so the in-pod CRIU path
+// (agent-driven checkpoint/restore) works. The 2026-07-23 on-cluster
+// verification showed capabilities alone are not enough: CHECKPOINT_RESTORE +
+// SYS_PTRACE hit netns EPERM, and even with SYS_ADMIN + NET_ADMIN added,
+// containerd's default AppArmor blocks mounts and /proc/sys/kernel/ns_last_pid
+// stays read-only — while a privileged pod passes `criu check` completely.
+// Wired from CRIU_ENABLED so gate-off pods stay unprivileged. Narrowing this
+// (caps + AppArmor unconfined + unmasked /proc) is a documented follow-up.
+func WithCheckpointPrivileged(enabled bool) Option {
 	return func(o *ClientOrchestrator) {
-		o.checkpointCaps = enabled
+		o.checkpointPrivileged = enabled
 	}
 }
 
@@ -317,15 +322,14 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string) *corev1.P
 	if o.shell != "" {
 		container.Env = append(container.Env, corev1.EnvVar{Name: shellEnvVar, Value: o.shell})
 	}
-	if o.checkpointCaps {
-		// In-pod CRIU (agent-driven criu dump/restore of the shell tree) needs
-		// these Linux capabilities. A given kernel/criu version may require more
-		// (e.g. SYS_ADMIN) — tuned during on-runtime verification.
-		container.SecurityContext = &corev1.SecurityContext{
-			Capabilities: &corev1.Capabilities{
-				Add: []corev1.Capability{"CHECKPOINT_RESTORE", "SYS_PTRACE"},
-			},
-		}
+	if o.checkpointPrivileged {
+		// In-pod CRIU needs a privileged container: the verified-on-cluster
+		// configuration where `criu check` fully passes (capability sets alone
+		// are defeated by the runtime's AppArmor profile and read-only
+		// /proc/sys — see WithCheckpointPrivileged). This makes CRIU-enabled
+		// session shells node-root; narrowing is a documented follow-up.
+		privileged := true
+		container.SecurityContext = &corev1.SecurityContext{Privileged: &privileged}
 	}
 	name := podName(sessionID)
 	var annotations map[string]string

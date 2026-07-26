@@ -305,27 +305,20 @@ func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 	}
 }
 
-// CRIU capabilities (in-pod agent-driven checkpoint): WithCheckpointCapabilities
-// adds the criu Linux capabilities to session pods when the gate is on; gate-off
-// pods stay unprivileged (no securityContext).
-func TestClientOrchestrator_CheckpointCapabilitiesGated(t *testing.T) {
-	// Gate on: capabilities present.
-	orchOn, cs := newReadyOrchestrator(t, k8s.WithCheckpointCapabilities(true))
+// CRIU privilege (in-pod agent-driven checkpoint): WithCheckpointPrivileged runs
+// session pods privileged when the gate is on — the on-cluster-verified config
+// where `criu check` fully passes (capability sets alone are defeated by the
+// runtime's AppArmor and read-only /proc/sys, 2026-07-23). Gate-off pods stay
+// unprivileged (no securityContext).
+func TestClientOrchestrator_CheckpointPrivilegeGated(t *testing.T) {
+	// Gate on: privileged container.
+	orchOn, cs := newReadyOrchestrator(t, k8s.WithCheckpointPrivileged(true))
 	if _, err := orchOn.Start(context.Background(), "capon"); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	sc := listPods(t, cs)[0].Spec.Containers[0].SecurityContext
-	if sc == nil || sc.Capabilities == nil {
-		t.Fatal("gate on: expected a securityContext with capabilities for in-pod CRIU")
-	}
-	have := map[corev1.Capability]bool{}
-	for _, c := range sc.Capabilities.Add {
-		have[c] = true
-	}
-	for _, want := range []corev1.Capability{"CHECKPOINT_RESTORE", "SYS_PTRACE"} {
-		if !have[want] {
-			t.Errorf("missing capability %q (have %v)", want, sc.Capabilities.Add)
-		}
+	if sc == nil || sc.Privileged == nil || !*sc.Privileged {
+		t.Fatalf("gate on: securityContext=%+v, want privileged (in-pod CRIU)", sc)
 	}
 
 	// Gate off (default): no securityContext — pods stay unprivileged.
