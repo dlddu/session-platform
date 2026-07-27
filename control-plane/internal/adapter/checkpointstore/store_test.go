@@ -67,6 +67,35 @@ func TestS3_PutStoresUnderPrefixAndReturnsRef(t *testing.T) {
 	}
 }
 
+// unseekableReader exposes only Read, hiding the Seek/ReadAt that strings.Reader
+// happens to provide — the shape of the real input, where the pod agent streams
+// the archive as it dumps.
+type unseekableReader struct{ r io.Reader }
+
+func (u unseekableReader) Read(p []byte) (int, error) { return u.r.Read(p) }
+
+// The archive stream is unseekable and of unknown length, which S3 cannot take
+// directly (it needs a seekable body to checksum, and the trailing-checksum
+// fallback needs TLS — this failed against the e2e MinIO backend). Put must
+// spool it so the upload still carries the exact bytes.
+func TestS3_PutSpoolsUnseekableStream(t *testing.T) {
+	fake := &fakeS3{}
+	store := newWithAPI(fake, "b", "p")
+
+	archive := strings.Repeat("CRIU-ARCHIVE-", 1000)
+	ref, err := store.Put(context.Background(), "sess-abcd/checkpoint.tar",
+		unseekableReader{r: strings.NewReader(archive)})
+	if err != nil {
+		t.Fatalf("put of an unseekable stream: %v", err)
+	}
+	if ref != "s3://b/p/sess-abcd/checkpoint.tar" {
+		t.Errorf("ref = %q", ref)
+	}
+	if string(fake.putBody) != archive {
+		t.Errorf("uploaded %d bytes, want the %d-byte archive verbatim", len(fake.putBody), len(archive))
+	}
+}
+
 // An empty prefix falls back to the default so archives are never written to the
 // bucket root.
 func TestS3_PutDefaultsPrefix(t *testing.T) {

@@ -141,6 +141,15 @@
   기동(`WithCheckpointPrivileged` — 검증된 구성). capability 최소화(caps 4종 + AppArmor unconfined +
   `procMount` 조정)는 라운드트립 green 후의 후속 항목.
 
+### 6차 (2026-07-27, e2e SUT 첫 CRIU-on 실행 — S3 업로드)
+- ✅ **in-pod criu dump 성공**: GHA kind SUT에서 스냅샷 요청 시 에이전트가 셸 트리를 실제로 덤프
+  (해당 pod가 `0/1` = 셸 동결로 healthz 503, 조기 재시작 억제도 설계대로 동작)하고 아카이브를 스트리밍.
+- ❌ **S3 업로드 실패**: `PutObject ... unseekable stream is not supported without TLS and trailing checksum`.
+  아카이브는 길이를 모르는 unseekable 스트림인데, aws-sdk는 요청 체크섬·Content-Length를 위해 seekable
+  body가 필요하고 대안인 trailing checksum은 TLS를 요구한다(e2e MinIO는 http).
+- 🔁 **대응**: `S3.Put`이 스트림을 임시 파일로 spool한 뒤 업로드. 아카이브가 매우 커지면
+  `manager.Uploader`의 멀티파트 스트리밍으로 교체하는 것이 다음 수순.
+
 ### 5차 (2026-07-23, pid 충돌 — 간헐 성공의 정체)
 - ❌ **복원 pid 충돌**: CRIU는 체크포인트 당시의 pid로 복원한다. 소스 pod의 셸은 에이전트 기동 직후
   떠서 항상 낮은 pid(~10)를 받는데, 복원 pod의 에이전트(PID 1)도 Go 런타임 **스레드가 tid ~10대를

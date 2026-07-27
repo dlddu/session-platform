@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -115,14 +116,37 @@ func newWithAPI(api objectAPI, bucket, prefix string) *S3 {
 func (s *S3) Bucket() string { return s.bucket }
 
 // Put uploads the archive read from r under key (joined with the configured
-// prefix) and returns its durable s3:// ref. r should be seekable (a file) so
-// the SDK streams it without buffering the whole archive in memory.
+// prefix) and returns its durable s3:// ref.
+//
+// The archive arrives as an unseekable stream of unknown length — the pod agent
+// produces it while dumping — which S3 cannot take directly: the SDK needs a
+// seekable body to compute the request checksum and Content-Length, and its
+// fallback (trailing checksums over an aws-chunked body) requires TLS. So spool
+// the stream to a temp file first and upload that. Checkpoint archives are a few
+// MB; if they ever grow enough for the spool to hurt, the move is
+// manager.Uploader's multipart streaming, which buffers parts instead.
 func (s *S3) Put(ctx context.Context, key string, r io.Reader) (string, error) {
 	full := s.key(key)
+
+	spool, err := os.CreateTemp("", "checkpoint-*.tar")
+	if err != nil {
+		return "", fmt.Errorf("spool checkpoint archive: %w", err)
+	}
+	defer func() {
+		spool.Close()
+		os.Remove(spool.Name())
+	}()
+	if _, err := io.Copy(spool, r); err != nil {
+		return "", fmt.Errorf("spool checkpoint archive to %s: %w", spool.Name(), err)
+	}
+	if _, err := spool.Seek(0, io.SeekStart); err != nil {
+		return "", fmt.Errorf("rewind spooled archive %s: %w", spool.Name(), err)
+	}
+
 	if _, err := s.api.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(full),
-		Body:   r,
+		Body:   spool,
 	}); err != nil {
 		return "", fmt.Errorf("put s3://%s/%s: %w", s.bucket, full, err)
 	}
