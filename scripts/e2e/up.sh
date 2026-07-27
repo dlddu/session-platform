@@ -62,6 +62,9 @@ echo "e2e: applying deploy/ overlay (kustomize: base k8s/ + kind patches)"
 kubectl apply -k deploy/
 
 echo "e2e: waiting for rollouts"
+# MinIO backs the CRIU checkpoint archives (deploy/minio.yaml). Wait for it too,
+# so the first snapshot cannot race its startup or bucket creation.
+kubectl rollout status deploy/minio --timeout=180s
 kubectl rollout status deploy/control-plane --timeout=120s
 
 echo "e2e: polling $BASE_URL/api/v1/healthz"

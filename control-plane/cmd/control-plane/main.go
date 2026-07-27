@@ -126,44 +126,46 @@ type config struct {
 	// testEndpoints exposes test-only HTTP endpoints (snapshot trigger). Off in
 	// deployments; the e2e SUT turns it on.
 	testEndpoints bool
-	// Checkpoint archive store (used only when criuEnabled). Exactly one backend
-	// is used: a local directory (checkpointDir, for clusters without S3 — the
-	// directory must be shared by all replicas) or S3, accessed by assuming
-	// checkpointS3RoleARN over the node instance profile.
-	checkpointDir           string
+	// Checkpoint archive store (used only when criuEnabled): an S3 bucket,
+	// accessed by assuming checkpointS3RoleARN over the ambient credentials
+	// (node instance profile / IRSA). checkpointS3Endpoint targets an
+	// S3-compatible backend instead of AWS — the e2e SUT points it at MinIO and
+	// leaves the role empty, authenticating with static keys from the env.
 	checkpointS3Bucket      string
 	checkpointS3RoleARN     string
 	checkpointS3Region      string
 	checkpointS3Prefix      string
 	checkpointS3SessionName string
+	checkpointS3Endpoint    string
 }
 
-// buildCheckpointStore selects the checkpoint archive backend. The agent-driven
+// buildCheckpointStore builds the checkpoint archive backend. The agent-driven
 // checkpointer always needs one: the archive is produced inside a pod that is
 // reclaimed moments later.
 func buildCheckpointStore(cfg config) (criu.CheckpointStore, error) {
-	switch {
-	case cfg.checkpointDir != "":
-		return checkpointstore.NewDir(cfg.checkpointDir)
-	case cfg.checkpointS3Bucket != "":
-		return checkpointstore.NewS3(context.Background(), checkpointstore.Config{
-			Bucket:      cfg.checkpointS3Bucket,
-			RoleARN:     cfg.checkpointS3RoleARN,
-			Region:      cfg.checkpointS3Region,
-			Prefix:      cfg.checkpointS3Prefix,
-			SessionName: cfg.checkpointS3SessionName,
-		})
-	default:
-		return nil, errors.New("CRIU_ENABLED needs a checkpoint store: set CHECKPOINT_DIR or CHECKPOINT_S3_BUCKET")
+	if cfg.checkpointS3Bucket == "" {
+		return nil, errors.New("CRIU_ENABLED needs a checkpoint store: set CHECKPOINT_S3_BUCKET")
 	}
+	return checkpointstore.NewS3(context.Background(), checkpointstore.Config{
+		Bucket:      cfg.checkpointS3Bucket,
+		RoleARN:     cfg.checkpointS3RoleARN,
+		Region:      cfg.checkpointS3Region,
+		Prefix:      cfg.checkpointS3Prefix,
+		SessionName: cfg.checkpointS3SessionName,
+		Endpoint:    cfg.checkpointS3Endpoint,
+	})
 }
 
 // checkpointStoreDesc renders the selected backend for the startup log.
 func (c config) checkpointStoreDesc() string {
-	if c.checkpointDir != "" {
-		return "dir:" + c.checkpointDir
+	desc := "s3:" + c.checkpointS3Bucket
+	if c.checkpointS3Endpoint != "" {
+		desc += " @" + c.checkpointS3Endpoint
 	}
-	return "s3:" + c.checkpointS3Bucket + " (assume " + c.checkpointS3RoleARN + ")"
+	if c.checkpointS3RoleARN != "" {
+		desc += " (assume " + c.checkpointS3RoleARN + ")"
+	}
+	return desc
 }
 
 func loadConfig() config {
@@ -175,7 +177,7 @@ func loadConfig() config {
 		dataPlaneShell:          env("DATA_PLANE_SHELL", ""),
 		criuEnabled:             envBool("CRIU_ENABLED", false),
 		testEndpoints:           envBool("E2E_TEST_ENDPOINTS", false),
-		checkpointDir:           env("CHECKPOINT_DIR", ""),
+		checkpointS3Endpoint:    env("CHECKPOINT_S3_ENDPOINT", ""),
 		checkpointS3Bucket:      env("CHECKPOINT_S3_BUCKET", ""),
 		checkpointS3RoleARN:     env("CHECKPOINT_S3_ROLE_ARN", ""),
 		checkpointS3Region:      env("CHECKPOINT_S3_REGION", env("AWS_REGION", "")),

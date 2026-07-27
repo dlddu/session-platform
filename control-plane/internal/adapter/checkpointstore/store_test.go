@@ -129,9 +129,9 @@ func TestNewS3_ValidatesConfig(t *testing.T) {
 	ctx := context.Background()
 	for _, cfg := range []Config{
 		{},
-		{Bucket: "b"},
+		{Bucket: "b"}, // missing region
 		{Bucket: "b", RoleARN: "arn:aws:iam::123:role/r"}, // missing region
-		{Bucket: "b", Region: "us-east-1"},                // missing role
+		{Region: "us-east-1"},                             // missing bucket
 	} {
 		if _, err := NewS3(ctx, cfg); err == nil {
 			t.Errorf("NewS3(%+v) succeeded; want error for incomplete config", cfg)
@@ -144,5 +144,23 @@ func TestNewS3_ValidatesConfig(t *testing.T) {
 	}
 	if store == nil || store.Bucket() != "b" {
 		t.Fatalf("NewS3 returned %+v, want a store bound to bucket b", store)
+	}
+}
+
+// A role ARN is optional: without one the ambient credentials are used directly
+// (IRSA, or the static keys the S3-compatible e2e backend uses). An endpoint
+// override targets an S3-compatible backend such as MinIO.
+func TestNewS3_RoleOptionalAndEndpointOverride(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewS3(ctx, Config{
+		Bucket:   "checkpoints",
+		Region:   "us-east-1",
+		Endpoint: "http://minio:9000",
+	})
+	if err != nil {
+		t.Fatalf("NewS3 without a role but with an endpoint: %v", err)
+	}
+	if store.Bucket() != "checkpoints" {
+		t.Fatalf("bucket = %q, want checkpoints", store.Bucket())
 	}
 }

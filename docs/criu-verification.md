@@ -174,9 +174,12 @@ e2e 워크플로에 `criu check` 프로브 스텝을 추가해(비차단, `conti
 - ① **스냅샷 트리거**: `E2E_TEST_ENDPOINTS=1`에서만 등록되는 `POST /sessions/{id}/snapshot`
   (`api.WithTestEndpoints`). 제품 API가 아니며 트리거 *정책* 결정을 건드리지 않는다. 복원은 엔드포인트가
   필요 없다(접근 시 자동 복원).
-- ② **AWS 없는 저장소**: `checkpointstore.NewDir`(`CHECKPOINT_DIR`). 아카이브는 세션 pod보다만 오래
-  살면 되고 control-plane pod는 스냅샷 중에도 살아 있다. e2e overlay는 2개 replica가 공유하도록
-  RWO PVC로 뒷받침한다(local-path의 WaitForFirstConsumer로 두 replica가 같은 노드에 배치됨).
+- ② **AWS 없는 저장소**: 클러스터 안에 **MinIO**를 띄우고 `CHECKPOINT_S3_ENDPOINT`로 가리킨다
+  (`deploy/minio.yaml`). 테스트 전용 저장 백엔드를 따로 만드는 대신 **프로덕션과 동일한 S3 코드 경로**
+  (`checkpointstore`)를 그대로 태우는 것이 핵심이며, 2개 replica가 같은 저장소를 보는 문제도 자연히
+  해결된다(스냅샷과 복원이 서로 다른 replica로 갈 수 있음). e2e SUT는 role을 비워 두고 static key로
+  인증한다(=MinIO root) — 프로덕션은 role ARN을 설정해 인스턴스 프로파일 위에서 assume-role 한다.
+  즉 이 경로에서 미검증으로 남는 것은 assume-role 홉 하나뿐이다.
 - ③ **검증**: `TestDeferred_CRIUIntegrity`가 HTTP만으로 전 스택을 구동 — 마커 세팅 → 스냅샷 → 접근으로
   복원 → 복원 전 커서 델타에 `frozen42`·`/tmp` 확인 + `offset=0` 전체 이력 순서 확인. 트리거가 없는
   SUT에서는 skip한다.

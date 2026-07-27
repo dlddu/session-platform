@@ -28,14 +28,17 @@ const defaultSessionName = "session-platform-checkpointer"
 // defaultPrefix is the key prefix under which archives are stored.
 const defaultPrefix = "checkpoints"
 
-// Config configures the S3 checkpoint store. Bucket, RoleARN and Region are
-// required; Prefix and SessionName have defaults.
+// Config configures the S3 checkpoint store. Bucket and Region are required;
+// the rest are optional.
 type Config struct {
-	Bucket      string // target S3 bucket (required)
-	RoleARN     string // IAM role to assume for bucket access (required)
-	Region      string // AWS region (required)
+	Bucket  string // target S3 bucket (required)
+	Region  string // AWS region (required)
+	RoleARN string // IAM role to assume for bucket access; empty uses the
+	// ambient credentials directly (instance profile / IRSA / static env keys —
+	// the last is how the S3-compatible e2e backend authenticates).
 	Prefix      string // key prefix for archives (default "checkpoints")
 	SessionName string // STS role session name (default defaultSessionName)
+	Endpoint    string // S3-compatible endpoint (e.g. MinIO); empty = AWS S3
 }
 
 // objectAPI is the minimal S3 surface S3 uses. *s3.Client satisfies it; tests
@@ -59,29 +62,43 @@ type S3 struct {
 // or IRSA provides the base credentials). Building the client makes no network
 // call — credentials are resolved lazily on the first S3 request.
 func NewS3(ctx context.Context, cfg Config) (*S3, error) {
-	if cfg.Bucket == "" || cfg.RoleARN == "" || cfg.Region == "" {
-		return nil, fmt.Errorf("checkpoint S3 store needs bucket, role ARN and region (got bucket=%q role=%q region=%q)",
-			cfg.Bucket, cfg.RoleARN, cfg.Region)
+	if cfg.Bucket == "" || cfg.Region == "" {
+		return nil, fmt.Errorf("checkpoint S3 store needs bucket and region (got bucket=%q region=%q)",
+			cfg.Bucket, cfg.Region)
 	}
 
 	// Base credentials come from the default chain — on a node that is the EC2
-	// instance profile (via IMDS), or IRSA when the pod has a projected token.
+	// instance profile (via IMDS), IRSA when the pod has a projected token, or
+	// static keys from the environment.
 	base, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.Region))
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
 
-	// Assume the target role on top of the base credentials (STS AssumeRole),
-	// caching the temporary credentials so they are reused until they near expiry.
-	sessionName := cfg.SessionName
-	if sessionName == "" {
-		sessionName = defaultSessionName
+	if cfg.RoleARN != "" {
+		// Assume the target role on top of the base credentials (STS AssumeRole),
+		// caching the temporary credentials so they are reused until they near
+		// expiry. Skipped when no role is configured — then the ambient
+		// credentials are used as-is.
+		sessionName := cfg.SessionName
+		if sessionName == "" {
+			sessionName = defaultSessionName
+		}
+		provider := stscreds.NewAssumeRoleProvider(sts.NewFromConfig(base), cfg.RoleARN,
+			func(o *stscreds.AssumeRoleOptions) { o.RoleSessionName = sessionName })
+		base.Credentials = aws.NewCredentialsCache(provider)
 	}
-	provider := stscreds.NewAssumeRoleProvider(sts.NewFromConfig(base), cfg.RoleARN,
-		func(o *stscreds.AssumeRoleOptions) { o.RoleSessionName = sessionName })
-	base.Credentials = aws.NewCredentialsCache(provider)
 
-	return newWithAPI(s3.NewFromConfig(base), cfg.Bucket, cfg.Prefix), nil
+	client := s3.NewFromConfig(base, func(o *s3.Options) {
+		if cfg.Endpoint != "" {
+			// An S3-compatible backend (MinIO in the e2e SUT): address the bucket
+			// as a path rather than a virtual host, since these endpoints have no
+			// per-bucket DNS.
+			o.BaseEndpoint = aws.String(cfg.Endpoint)
+			o.UsePathStyle = true
+		}
+	})
+	return newWithAPI(client, cfg.Bucket, cfg.Prefix), nil
 }
 
 // newWithAPI builds an S3 store over an injected object API (tests) and

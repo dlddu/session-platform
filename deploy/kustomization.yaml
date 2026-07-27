@@ -14,13 +14,12 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - ../k8s
-  # kind-only placeholder for the required `checkpoint-s3` Secret so the SUT
-  # starts. The e2e SUT stores checkpoints in a directory (CHECKPOINT_DIR below),
-  # not S3, so these values stay inert. Production uses the k8s/ base +
-  # external-secrets, not this overlay.
+  # The `checkpoint-s3` Secret the control plane requires, pointed at the
+  # in-cluster MinIO below (production uses the k8s/ base + external-secrets).
   - checkpoint-s3-secret.yaml
-  # The shared directory backing CHECKPOINT_DIR for the CRIU round trip.
-  - checkpoint-store-pvc.yaml
+  # S3-compatible backend for the CRIU checkpoint archives, so the round trip
+  # runs against the real S3 code path with no cloud account.
+  - minio.yaml
 images:
   - name: ghcr.io/dlddu/session-platform
     newName: session-platform/control-plane
@@ -50,7 +49,9 @@ patches:
   # automated assertion (TestDeferred_CRIUIntegrity) instead of a manual round.
   # It also needs: a snapshot trigger reachable over HTTP (E2E_TEST_ENDPOINTS,
   # test-only — the product trigger policy is still open) and an archive store
-  # (CHECKPOINT_DIR on the shared PVC, since there is no S3 in kind).
+  # shared by both replicas (CHECKPOINT_S3_ENDPOINT → the in-cluster MinIO,
+  # authenticated with the static keys from the checkpoint-s3 Secret since no
+  # role is set here).
   - target:
       kind: Deployment
       name: control-plane
@@ -75,16 +76,23 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
-          name: CHECKPOINT_DIR
-          value: /var/lib/session-platform/checkpoints
+          name: CHECKPOINT_S3_ENDPOINT
+          value: http://minio:9000
+      # No role is set in this SUT, so the store uses these ambient credentials
+      # directly (they are also MinIO's root user).
       - op: add
-        path: /spec/template/spec/containers/0/volumeMounts
+        path: /spec/template/spec/containers/0/env/-
         value:
-          - name: checkpoint-store
-            mountPath: /var/lib/session-platform/checkpoints
+          name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: checkpoint-s3
+              key: access-key
       - op: add
-        path: /spec/template/spec/volumes
+        path: /spec/template/spec/containers/0/env/-
         value:
-          - name: checkpoint-store
-            persistentVolumeClaim:
-              claimName: checkpoint-store
+          name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: checkpoint-s3
+              key: secret-key
