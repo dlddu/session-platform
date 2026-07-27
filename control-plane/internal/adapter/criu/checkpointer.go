@@ -1,8 +1,10 @@
-// Package criu contains the Checkpointer port and a gated stub. CRIU-based
-// checkpoint/restore is non-trivial (K8s ContainerCheckpoint is alpha and
-// "restore into a new pod" is even less mature), so it sits behind a feature
-// gate. With the gate off the stub succeeds as a no-op, letting the happy path
-// run without CRIU; with it on, the real implementation would be required.
+// Package criu contains the Checkpointer port, a gated no-op stub, and the real
+// K8s-native adapter (ContainerCheckpointer, see container_checkpointer.go).
+// CRIU-based checkpoint/restore is non-trivial (K8s ContainerCheckpoint is alpha
+// and "restore into a new pod" is even less mature), so it sits behind a feature
+// gate: with CRIU_ENABLED off the stub succeeds as a no-op, letting the happy
+// path run without CRIU; with it on, main injects the real ContainerCheckpointer
+// (unverified until a CRIU-capable runtime is provisioned — docs/criu-verification.md).
 package criu
 
 import (
@@ -28,16 +30,17 @@ type Checkpointer interface {
 	Restore(ctx context.Context, cp *session.Checkpoint, into k8s.PodRef) error
 }
 
-// StubCheckpointer is gated by CRIU_ENABLED. When disabled it is a no-op that
-// returns synthetic checkpoint metadata so the snapshot/restore flow is
-// exercisable without a CRIU-capable runtime.
+// StubCheckpointer is the gate-off no-op: it returns synthetic checkpoint
+// metadata so the snapshot/restore flow is exercisable without a CRIU-capable
+// runtime. main injects it with enabled=false when CRIU_ENABLED is off; the
+// gate-on path uses the real ContainerCheckpointer instead.
 type StubCheckpointer struct {
 	enabled bool
 }
 
-// NewStubCheckpointer returns a checkpointer. When enabled is true the stub
-// still does not perform real CRIU work — it marks the spot where the real
-// implementation must be plugged in and where verification is required.
+// NewStubCheckpointer returns the no-op checkpointer. main passes enabled=false
+// (the gate-on path swaps in the real ContainerCheckpointer), but the flag is
+// kept so the stub can still report Enabled() for tests that want it.
 func NewStubCheckpointer(enabled bool) *StubCheckpointer {
 	return &StubCheckpointer{enabled: enabled}
 }
@@ -45,10 +48,9 @@ func NewStubCheckpointer(enabled bool) *StubCheckpointer {
 func (c *StubCheckpointer) Enabled() bool { return c.enabled }
 
 func (c *StubCheckpointer) Checkpoint(_ context.Context, _ k8s.PodRef) (*session.Checkpoint, error) {
-	// TODO(criu): drive `kubectl checkpoint`/kubelet ContainerCheckpoint (alpha)
-	// or runc checkpoint, push the image to storage, and return its real ref +
-	// size (AC-B1, AC-B3). Verification environment is still TBD — see
-	// docs/criu-verification.md.
+	// No-op: the real kubelet ContainerCheckpoint drive lives in
+	// ContainerCheckpointer.Checkpoint (container_checkpointer.go). This stub just
+	// keeps the snapshot/reclaim flow running without a CRIU runtime.
 	return &session.Checkpoint{
 		Ref:       "stub-checkpoint",
 		SizeBytes: 0,
@@ -58,7 +60,8 @@ func (c *StubCheckpointer) Checkpoint(_ context.Context, _ k8s.PodRef) (*session
 }
 
 func (c *StubCheckpointer) Restore(_ context.Context, _ *session.Checkpoint, _ k8s.PodRef) error {
-	// TODO(criu): restore the checkpoint image into the target pod and confirm
-	// the process resumes with its pre-snapshot in-memory state (AC-B2, AC-B3).
+	// No-op: the real restore lives in ContainerCheckpointer.Restore. The stub
+	// leaves the freshly-provisioned pod as-is (a fresh shell), which is why the
+	// gate-off path does not preserve pre-snapshot state.
 	return nil
 }

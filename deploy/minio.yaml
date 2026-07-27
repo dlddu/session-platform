@@ -1,0 +1,85 @@
+# kind e2e ONLY: an S3-compatible backend for the CRIU checkpoint archives.
+#
+# The agent-driven checkpointer streams each archive out of the session pod
+# (reclaimed immediately after) and back into the restore pod, so it needs a
+# store that outlives the session pod AND is shared by both control-plane
+# replicas — the Service may route the snapshot to one replica and the restoring
+# access to the other. MinIO gives that while exercising the SAME S3 code path
+# production uses (internal/adapter/checkpointstore), rather than a test-only
+# storage backend: the control plane points CHECKPOINT_S3_ENDPOINT at this
+# Service and talks real S3 to it.
+#
+# Throwaway single-node instance: emptyDir storage (archives only need to live
+# for the duration of a test) and the root credentials from the overlay's
+# checkpoint-s3 Secret. Production uses real S3 with assume-role instead.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  labels:
+    app: minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      # MinIO does not create buckets on demand, and a top-level directory in
+      # the data dir IS a bucket — so create it before the server starts. This
+      # avoids racing a separate bucket-creation Job against the first snapshot.
+      initContainers:
+        - name: create-bucket
+          image: quay.io/minio/minio:latest
+          command: ["mkdir", "-p", "/data/session-checkpoints"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        - name: minio
+          # quay.io rather than Docker Hub: no anonymous pull rate limit on CI.
+          image: quay.io/minio/minio:latest
+          args: ["server", "/data"]
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: checkpoint-s3
+                  key: access-key
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: checkpoint-s3
+                  key: secret-key
+          ports:
+            - containerPort: 9000
+              name: s3
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: 9000
+            initialDelaySeconds: 2
+            periodSeconds: 2
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  labels:
+    app: minio
+spec:
+  selector:
+    app: minio
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: 9000

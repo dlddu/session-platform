@@ -14,6 +14,12 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - ../k8s
+  # The `checkpoint-s3` Secret the control plane requires, pointed at the
+  # in-cluster MinIO below (production uses the k8s/ base + external-secrets).
+  - checkpoint-s3-secret.yaml
+  # S3-compatible backend for the CRIU checkpoint archives, so the round trip
+  # runs against the real S3 code path with no cloud account.
+  - minio.yaml
 images:
   - name: ghcr.io/dlddu/session-platform
     newName: session-platform/control-plane
@@ -33,7 +39,19 @@ patches:
   # run 2 replicas so the e2e suite drives cross-replica atomicity (AC-C1)
   # against the shared ConfigMap/Lease store; and point DATA_PLANE_IMAGE at the
   # locally built agent image scripts/e2e/up.sh loads into kind (the base
-  # references the ghcr-published tag). env/1 is DATA_PLANE_IMAGE in the base.
+  # references the ghcr-published tag). env/1 is DATA_PLANE_IMAGE, env/2 is
+  # CRIU_ENABLED in the base.
+  #
+  # CRIU is turned ON here: since checkpoint/restore moved into the agent
+  # (docs/criu-verification.md decision ⑤) it needs no CRIU-capable *runtime*,
+  # only a capable kernel and a privileged session pod — and the e2e CRIU probe
+  # confirms that holds on GitHub runners. That makes the AC-D4 round trip an
+  # automated assertion (TestDeferred_CRIUIntegrity) instead of a manual round.
+  # It also needs: a snapshot trigger reachable over HTTP (E2E_TEST_ENDPOINTS,
+  # test-only — the product trigger policy is still open) and an archive store
+  # shared by both replicas (CHECKPOINT_S3_ENDPOINT → the in-cluster MinIO,
+  # authenticated with the static keys from the checkpoint-s3 Secret since no
+  # role is set here).
   - target:
       kind: Deployment
       name: control-plane
@@ -47,3 +65,34 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/env/1/value
         value: session-platform/data-plane:dev
+      - op: replace
+        path: /spec/template/spec/containers/0/env/2/value
+        value: "true"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: E2E_TEST_ENDPOINTS
+          value: "1"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: CHECKPOINT_S3_ENDPOINT
+          value: http://minio:9000
+      # No role is set in this SUT, so the store uses these ambient credentials
+      # directly (they are also MinIO's root user).
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: checkpoint-s3
+              key: access-key
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: checkpoint-s3
+              key: secret-key

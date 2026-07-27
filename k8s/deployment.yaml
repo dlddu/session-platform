@@ -41,6 +41,35 @@ spec:
               value: "ghcr.io/dlddu/session-platform-data-plane:latest"
             - name: CRIU_ENABLED
               value: "false" # gated off until a verified runtime exists
+            # Checkpoint archive S3 store config (decision ③, docs/criu-verification.md):
+            # bucket / assume-role ARN / region / key prefix. Sourced from the
+            # `checkpoint-s3` Secret rather than inlined here. The Secret is
+            # REQUIRED (no `optional`), so the pod will not start until it exists:
+            # in production external-secrets provisions it (as it does the ghcr
+            # pull secret); the kind e2e overlay (deploy/) ships a placeholder; for
+            # CRIU verification create it directly (k8s/checkpoint-s3-secret.example.yaml).
+            # These are config, not credentials — S3 access is by assume-role over
+            # the node instance profile, so there are no static keys here.
+            - name: CHECKPOINT_S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: checkpoint-s3
+                  key: bucket
+            - name: CHECKPOINT_S3_ROLE_ARN
+              valueFrom:
+                secretKeyRef:
+                  name: checkpoint-s3
+                  key: role-arn
+            - name: CHECKPOINT_S3_REGION
+              valueFrom:
+                secretKeyRef:
+                  name: checkpoint-s3
+                  key: region
+            - name: CHECKPOINT_S3_PREFIX
+              valueFrom:
+                secretKeyRef:
+                  name: checkpoint-s3
+                  key: prefix
           readinessProbe:
             httpGet:
               path: /api/v1/healthz

@@ -13,11 +13,27 @@ import (
 
 // API holds the dependencies the handlers need.
 type API struct {
-	mgr session.Manager
+	mgr           session.Manager
+	testEndpoints bool
+}
+
+// Option customises the API surface.
+type Option func(*API)
+
+// WithTestEndpoints registers the test-only endpoints (see Routes). Deployments
+// leave it off; the e2e SUT turns it on via E2E_TEST_ENDPOINTS.
+func WithTestEndpoints(enabled bool) Option {
+	return func(a *API) { a.testEndpoints = enabled }
 }
 
 // New returns an API bound to a session.Manager.
-func New(mgr session.Manager) *API { return &API{mgr: mgr} }
+func New(mgr session.Manager, opts ...Option) *API {
+	a := &API{mgr: mgr}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
+}
 
 // Routes registers the /api/v1 endpoints on a ServeMux. Go 1.22+ method+path
 // patterns keep routing dependency-free.
@@ -29,6 +45,17 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/sessions/{id}/read", a.readSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/write", a.writeSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/switch", a.switchSession)
+
+	if a.testEndpoints {
+		// Test-only: freeze a session on demand (AC-B1's effect without its
+		// trigger). The product's idle->snapshot *trigger policy* is still an
+		// open decision (docs/doc-tracker.md), so this deliberately is NOT part
+		// of the product API — it exists so the e2e suite can reach the snapshot
+		// state and assert the CRIU round trip (AC-B2/B3/D4), which is otherwise
+		// unreachable over HTTP. Restore needs no endpoint: any access to a
+		// frozen session restores it (resume-on-access).
+		mux.HandleFunc("POST /api/v1/sessions/{id}/snapshot", a.snapshotSession)
+	}
 }
 
 // ---- request/response DTOs ----
@@ -131,6 +158,17 @@ func (a *API) writeSession(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) switchSession(w http.ResponseWriter, r *http.Request) {
 	sess, err := a.mgr.Switch(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sess)
+}
+
+// snapshotSession freezes a session and reclaims its pod (AC-B1/AC-A3).
+// Registered only with WithTestEndpoints — see Routes.
+func (a *API) snapshotSession(w http.ResponseWriter, r *http.Request) {
+	sess, err := a.mgr.Snapshot(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeErr(w, err)
 		return

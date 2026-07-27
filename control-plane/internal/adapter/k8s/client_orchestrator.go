@@ -9,6 +9,8 @@ package k8s
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -34,8 +36,19 @@ const (
 	labelManagedBy = "app.kubernetes.io/managed-by"
 	managedByValue = "control-plane"
 
-	// containerName is the single container in each data plane pod.
-	containerName = "session"
+	// AnnotationRestoreCheckpoint marks a pod the orchestrator provisions as a
+	// CRIU *restore target* and records the checkpoint archive it must resume
+	// from (RestoreInto). A CRIU-capable runtime maps this to its concrete
+	// restore mechanism (e.g. CRI-O's io.kubernetes.cri-o.restore annotation or
+	// a checkpoint OCI image built from the archive) so the container comes up
+	// as the restored process tree instead of running the image entrypoint's
+	// fresh shell. It is exported because that runtime mapping is part of the
+	// restore contract the provisioning work wires up. See docs/criu-verification.md.
+	AnnotationRestoreCheckpoint = "session-platform.dev/restore-checkpoint"
+
+	// ContainerName is the single container in each data plane pod. The CRIU
+	// checkpointer targets it by name when freezing the pod (internal/adapter/criu).
+	ContainerName = "session"
 
 	// defaultDataPlaneImage is the in-code fallback when no DATA_PLANE_IMAGE
 	// is injected. It cannot pass the shell readiness probe (no session agent
@@ -47,6 +60,11 @@ const (
 	// shellEnvVar propagates the session shell override into the pod; the
 	// agent's entrypoint launches ${DATA_PLANE_SHELL:-/bin/bash} (AC-D1).
 	shellEnvVar = "DATA_PLANE_SHELL"
+
+	// restoreModeEnvVar tells a restore-target pod's agent to start WITHOUT a
+	// shell and await the checkpoint on POST /restore (in-pod CRIU restore).
+	// Keep in sync with data-plane/cmd/agent (restoreModeEnv).
+	restoreModeEnvVar = "DATA_PLANE_RESTORE_MODE"
 
 	// AgentPort is where the session agent serves /attach and /healthz. Keep
 	// in sync with data-plane/cmd/agent (defaultAddr).
@@ -70,13 +88,14 @@ const (
 // dedicated data plane pod per session through client-go, and dials the pod's
 // session agent to prove the shell is reachable (AC-D1).
 type ClientOrchestrator struct {
-	client       kubernetes.Interface
-	namespace    string
-	image        string
-	shell        string // DATA_PLANE_SHELL override injected into pods ("" = agent default)
-	agentPort    int
-	pollInterval time.Duration
-	readyTimeout time.Duration
+	client               kubernetes.Interface
+	namespace            string
+	image                string
+	shell                string // DATA_PLANE_SHELL override injected into pods ("" = agent default)
+	checkpointPrivileged bool   // run session pods privileged for in-pod CRIU (CRIU_ENABLED)
+	agentPort            int
+	pollInterval         time.Duration
+	readyTimeout         time.Duration
 }
 
 // compile-time assertion that ClientOrchestrator satisfies the port.
@@ -102,6 +121,20 @@ func WithShell(shell string) Option {
 		if shell != "" {
 			o.shell = shell
 		}
+	}
+}
+
+// WithCheckpointPrivileged runs session pods privileged so the in-pod CRIU path
+// (agent-driven checkpoint/restore) works. The 2026-07-23 on-cluster
+// verification showed capabilities alone are not enough: CHECKPOINT_RESTORE +
+// SYS_PTRACE hit netns EPERM, and even with SYS_ADMIN + NET_ADMIN added,
+// containerd's default AppArmor blocks mounts and /proc/sys/kernel/ns_last_pid
+// stays read-only — while a privileged pod passes `criu check` completely.
+// Wired from CRIU_ENABLED so gate-off pods stay unprivileged. Narrowing this
+// (caps + AppArmor unconfined + unmasked /proc) is a documented follow-up.
+func WithCheckpointPrivileged(enabled bool) Option {
+	return func(o *ClientOrchestrator) {
+		o.checkpointPrivileged = enabled
 	}
 }
 
@@ -191,9 +224,17 @@ func (o *ClientOrchestrator) Namespace() string { return o.namespace }
 // — which, via the agent readiness probe, means its PTY shell is alive (AC-D1)
 // — and returns its ref with the pod IP recorded for the agent dial (AC-A1/A2).
 func (o *ClientOrchestrator) Start(ctx context.Context, sessionID string) (PodRef, error) {
-	created, err := o.client.CoreV1().Pods(o.namespace).Create(ctx, o.podSpec(sessionID), metav1.CreateOptions{})
+	return o.provision(ctx, o.podSpec(sessionID))
+}
+
+// provision creates a pod from spec, waits for it to report Ready — which, via
+// the agent readiness probe, means its PTY shell is alive (AC-D1) — and returns
+// its ref with the pod IP recorded. Start and RestoreInto differ only in the
+// spec they hand in (a fresh-shell pod vs. a restore-target pod).
+func (o *ClientOrchestrator) provision(ctx context.Context, spec *corev1.Pod) (PodRef, error) {
+	created, err := o.client.CoreV1().Pods(o.namespace).Create(ctx, spec, metav1.CreateOptions{})
 	if err != nil {
-		return PodRef{}, fmt.Errorf("create pod for session %s: %w", sessionID, err)
+		return PodRef{}, fmt.Errorf("create pod %s: %w", spec.Name, err)
 	}
 	ref := PodRef{Name: created.Name, Namespace: o.namespace}
 	pod, err := o.waitReady(ctx, ref.Name)
@@ -222,18 +263,42 @@ func (o *ClientOrchestrator) Stop(ctx context.Context, ref PodRef) error {
 	return nil
 }
 
-// RestoreInto provisions a fresh pod for a checkpoint to be restored into
-// (AC-B2). Supplying the new pod is all the orchestrator owns; the CRIU restore
-// itself is the Checkpointer's job, so this mirrors Start.
-func (o *ClientOrchestrator) RestoreInto(ctx context.Context, sessionID string) (PodRef, error) {
-	return o.Start(ctx, sessionID)
+// RestoreInto provisions the pod a session's checkpoint is restored into
+// (AC-B2). Unlike Start — which brings up a *fresh* pod whose image entrypoint
+// launches a brand-new PTY shell — the restore pod carries checkpointRef in an
+// annotation so a CRIU-capable runtime resumes the checkpointed process tree
+// instead; "Ready" then means the *restored* shell is alive, not an empty new
+// one. Applying the checkpoint bytes is the Checkpointer's job; supplying the
+// correctly-shaped pod is all the orchestrator owns.
+func (o *ClientOrchestrator) RestoreInto(ctx context.Context, sessionID, checkpointRef string) (PodRef, error) {
+	return o.provision(ctx, o.restorePodSpec(sessionID, checkpointRef))
 }
 
+// podSpec is the fresh-session pod: its image entrypoint starts a new PTY shell.
 func (o *ClientOrchestrator) podSpec(sessionID string) *corev1.Pod {
-	// No command override: the data plane image's entrypoint owns starting the
-	// PTY-attached session shell (AC-D1) — the control plane only orchestrates.
+	return o.buildPod(sessionID, "")
+}
+
+// restorePodSpec is the pod RestoreInto hands to provision: the same shell-agent
+// container as a fresh session, plus AnnotationRestoreCheckpoint carrying the
+// checkpoint ref so a CRIU-capable runtime resumes the checkpointed process tree
+// rather than running the entrypoint's fresh shell. The container is otherwise
+// identical, so once the runtime restores it the agent's /healthz reflects the
+// *restored* shell and pod-Ready keeps its AC-D1 meaning.
+func (o *ClientOrchestrator) restorePodSpec(sessionID, checkpointRef string) *corev1.Pod {
+	return o.buildPod(sessionID, checkpointRef)
+}
+
+// buildPod assembles the data plane pod. checkpointRef == "" yields a fresh
+// session pod (no annotation) under the session's deterministic name; a
+// non-empty ref yields a restore-target pod under a fresh unique name.
+func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string) *corev1.Pod {
+	// No command override: on a fresh start the data plane image's entrypoint
+	// owns launching the PTY-attached session shell (AC-D1); on a restore the
+	// runtime resumes the checkpointed process tree and the entrypoint never
+	// runs. Either way the control plane only orchestrates.
 	container := corev1.Container{
-		Name:            containerName,
+		Name:            ContainerName,
 		Image:           o.image,
 		ImagePullPolicy: pullPolicyForImage(o.image),
 		Ports: []corev1.ContainerPort{{
@@ -242,7 +307,7 @@ func (o *ClientOrchestrator) podSpec(sessionID string) *corev1.Pod {
 			Protocol:      corev1.ProtocolTCP,
 		}},
 		// The agent answers /healthz only while the shell process is alive, so
-		// "pod Ready" — what Start waits for — reflects shell liveness.
+		// "pod Ready" — what provision waits for — reflects shell liveness.
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{
@@ -257,10 +322,30 @@ func (o *ClientOrchestrator) podSpec(sessionID string) *corev1.Pod {
 	if o.shell != "" {
 		container.Env = append(container.Env, corev1.EnvVar{Name: shellEnvVar, Value: o.shell})
 	}
+	if o.checkpointPrivileged {
+		// In-pod CRIU needs a privileged container: the verified-on-cluster
+		// configuration where `criu check` fully passes (capability sets alone
+		// are defeated by the runtime's AppArmor profile and read-only
+		// /proc/sys — see WithCheckpointPrivileged). This makes CRIU-enabled
+		// session shells node-root; narrowing is a documented follow-up.
+		privileged := true
+		container.SecurityContext = &corev1.SecurityContext{Privileged: &privileged}
+	}
+	name := podName(sessionID)
+	var annotations map[string]string
+	if checkpointRef != "" {
+		name = restorePodName(sessionID)
+		annotations = map[string]string{AnnotationRestoreCheckpoint: checkpointRef}
+		// Restore-target pod: the agent starts without a shell and awaits the
+		// checkpoint on POST /restore (in-pod CRIU restore) so the pod can become
+		// Ready before the control plane pushes the archive.
+		container.Env = append(container.Env, corev1.EnvVar{Name: restoreModeEnvVar, Value: "1"})
+	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      podName(sessionID),
-			Namespace: o.namespace,
+			Name:        name,
+			Namespace:   o.namespace,
+			Annotations: annotations,
 			Labels: map[string]string{
 				LabelSessionID: sessionID,
 				labelManagedBy: managedByValue,
@@ -277,6 +362,20 @@ func (o *ClientOrchestrator) podSpec(sessionID string) *corev1.Pod {
 // session<->pod mapping is 1:1 and recoverable from the id alone (AC-A2).
 func podName(sessionID string) string {
 	return "sess-" + sessionID
+}
+
+// restorePodName names a restore-target pod: the session's deterministic name
+// plus a fresh per-restore suffix. The frozen pod carried the deterministic
+// name, and its deletion (snapshot's Stop) is asynchronous — when a
+// restore-on-access follows the snapshot immediately, that pod may still be
+// Terminating, so reusing the name would race an AlreadyExists on create.
+// A unique name removes the race and matches the service contract that restore
+// provisions a *new* pod rather than reusing the old name (the session-id
+// label, not the name, carries the 1:1 session mapping — AC-A2).
+func restorePodName(sessionID string) string {
+	b := make([]byte, 2)
+	_, _ = rand.Read(b)
+	return podName(sessionID) + "-r" + hex.EncodeToString(b)
 }
 
 // pullPolicyForImage mirrors kubelet's own default: a mutable :latest (or

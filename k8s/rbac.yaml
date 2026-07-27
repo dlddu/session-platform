@@ -5,7 +5,11 @@
 # metadata) and one Lease per session (occupancy lock), so the Role also grants
 # configmaps and coordination.k8s.io/leases. Namespaced Role (not ClusterRole):
 # session pods, ConfigMaps, and Leases all live in the control plane's own
-# namespace.
+# namespace. CRIU checkpoint/restore needs no extra RBAC either — it is
+# agent-driven in-pod (the control plane talks to the pod's agent over HTTP;
+# the criu privilege is the pod's securityContext capabilities). Only the
+# unwired CRI-O alternative would need a cluster-scoped nodes/proxy grant —
+# re-add it from git history if that path is ever adopted.
 #
 # Applied by Flux alongside deployment.yaml into the session-platform namespace
 # (cluster/session-platform.yaml). The namespace is intentionally omitted so the

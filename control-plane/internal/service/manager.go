@@ -246,7 +246,13 @@ func (s *Service) Restore(ctx context.Context, id string) (*session.Session, err
 		return sess, nil // already live; nothing to restore
 	}
 
-	pod, err := s.orch.RestoreInto(ctx, id)
+	// RestoreInto shapes the new pod as a restore target from the checkpoint ref
+	// (not a fresh shell), so a CRIU-capable runtime resumes the checkpointed
+	// process tree — env, cwd, shell vars/functions, foreground children, FDs and
+	// the agent's in-memory scrollback (AC-D4). The scrollback riding the
+	// checkpoint is what keeps a pre-snapshot read cursor valid after restore:
+	// Restore never resets it (the cursor is client-held, the buffer is resumed).
+	pod, err := s.orch.RestoreInto(ctx, id, checkpointRef(sess.Checkpoint))
 	if err != nil {
 		return nil, err
 	}
@@ -302,6 +308,17 @@ func (s *Service) touch(ctx context.Context, id string) {
 func (s *Service) touchGet(ctx context.Context, id string) (*session.Session, error) {
 	s.touch(ctx, id)
 	return s.store.Get(ctx, id)
+}
+
+// checkpointRef returns the checkpoint archive reference the restore pod should
+// resume from, or "" when there is no checkpoint (the orchestrator then
+// provisions a plain fresh pod). Snapshot always records one before a session
+// reaches StateSnapshot, so the nil case is defensive.
+func checkpointRef(cp *session.Checkpoint) string {
+	if cp == nil {
+		return ""
+	}
+	return cp.Ref
 }
 
 // dispatchPath renders the ReadResult/WriteResult Path label for the branch that

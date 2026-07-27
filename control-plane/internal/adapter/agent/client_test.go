@@ -18,10 +18,16 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
 )
 
-// fakeAgent is an httptest stand-in for the data plane agent's /write and
-// /read endpoints, recording writes and serving scrollback deltas.
+// fakeAgent is an httptest stand-in for the data plane agent's /write, /read,
+// /checkpoint and /restore endpoints, recording writes and serving scrollback
+// deltas / checkpoint archives.
 type fakeAgent struct {
 	buf []byte
+
+	checkpointBody   []byte // archive returned by /checkpoint
+	checkpointStatus int    // non-200 to force a checkpoint error
+	restoreBody      []byte // archive received by /restore
+	restoreStatus    int    // non-200 to force a restore error
 }
 
 func (a *fakeAgent) handler() http.Handler {
@@ -31,6 +37,23 @@ func (a *fakeAgent) handler() http.Handler {
 		a.buf = append(a.buf, body...)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	mux.HandleFunc("POST /checkpoint", func(w http.ResponseWriter, r *http.Request) {
+		if a.checkpointStatus != 0 && a.checkpointStatus != http.StatusOK {
+			http.Error(w, "checkpoint failed", a.checkpointStatus)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-tar")
+		_, _ = w.Write(a.checkpointBody)
+	})
+	mux.HandleFunc("POST /restore", func(w http.ResponseWriter, r *http.Request) {
+		a.restoreBody, _ = io.ReadAll(r.Body)
+		if a.restoreStatus != 0 && a.restoreStatus != http.StatusOK {
+			http.Error(w, "restore failed", a.restoreStatus)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"restored"}`))
 	})
 	mux.HandleFunc("GET /read", func(w http.ResponseWriter, r *http.Request) {
 		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
@@ -179,5 +202,52 @@ func TestStubClientCursorSemantics(t *testing.T) {
 	other, n0, _ := c.Read(ctx, "p2", 0)
 	if other != "" || n0 != 0 {
 		t.Fatalf("unwritten pod read = (%q, %d), want empty", other, n0)
+	}
+}
+
+// Checkpoint resolves the pod and returns the agent's archive stream verbatim
+// (the criu.AgentCheckpointer then persists it).
+func TestCheckpointReturnsArchiveStream(t *testing.T) {
+	c, fa := harness(t, "sess-cp")
+	fa.checkpointBody = []byte("CRIU-ARCHIVE-TAR-BYTES")
+
+	rc, err := c.Checkpoint(context.Background(), "sess-cp")
+	if err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	defer rc.Close()
+	got, _ := io.ReadAll(rc)
+	if string(got) != "CRIU-ARCHIVE-TAR-BYTES" {
+		t.Fatalf("checkpoint archive = %q, want the agent body verbatim", got)
+	}
+}
+
+// A non-200 from the agent surfaces as a Checkpoint error rather than a bogus
+// (empty) archive.
+func TestCheckpointSurfacesAgentError(t *testing.T) {
+	c, fa := harness(t, "sess-cp")
+	fa.checkpointStatus = http.StatusServiceUnavailable
+	if _, err := c.Checkpoint(context.Background(), "sess-cp"); err == nil {
+		t.Fatal("checkpoint succeeded despite agent 503; want error")
+	}
+}
+
+// Restore streams the archive to the agent's /restore.
+func TestRestoreStreamsArchiveToAgent(t *testing.T) {
+	c, fa := harness(t, "sess-r")
+	if err := c.Restore(context.Background(), "sess-r", strings.NewReader("RESTORE-ARCHIVE")); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if string(fa.restoreBody) != "RESTORE-ARCHIVE" {
+		t.Fatalf("agent received %q, want the streamed archive", fa.restoreBody)
+	}
+}
+
+// A non-200 from /restore surfaces as an error.
+func TestRestoreSurfacesAgentError(t *testing.T) {
+	c, fa := harness(t, "sess-r")
+	fa.restoreStatus = http.StatusInternalServerError
+	if err := c.Restore(context.Background(), "sess-r", strings.NewReader("x")); err == nil {
+		t.Fatal("restore succeeded despite agent 500; want error")
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -218,6 +219,115 @@ func TestClientOrchestrator_PodSpecPropagatesShellOverride(t *testing.T) {
 	}
 	if got != "/bin/zsh" {
 		t.Fatalf("DATA_PLANE_SHELL env=%q want /bin/zsh", got)
+	}
+}
+
+// AC-B2/AC-D4 (restore-pod spec): RestoreInto provisions a *restore target* — a
+// pod carrying AnnotationRestoreCheckpoint with the checkpoint ref so a
+// CRIU-capable runtime resumes the checkpointed process tree — not a fresh-shell
+// pod like Start. This is the branch that stops a restore from booting an empty
+// shell and losing the frozen state; the pod is otherwise the same shell-agent
+// pod, so pod-Ready still means "restored shell alive" (AC-D1).
+func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
+	orch, cs := newReadyOrchestrator(t)
+	const ref = "/var/lib/kubelet/checkpoints/checkpoint-sess-r1a2_sessions-session-1.tar"
+
+	restored, err := orch.RestoreInto(context.Background(), "r1a2", ref)
+	if err != nil {
+		t.Fatalf("restore into: %v", err)
+	}
+
+	pods := listPods(t, cs)
+	if len(pods) != 1 {
+		t.Fatalf("expected 1 pod, got %d", len(pods))
+	}
+	p := pods[0]
+	if p.Name != restored.Name {
+		t.Fatalf("pod name=%q want %q (RestoreInto ref)", p.Name, restored.Name)
+	}
+	// The restore marker records the checkpoint the runtime must resume from —
+	// this is what distinguishes a restore from a fresh shell start.
+	if got := p.Annotations[k8s.AnnotationRestoreCheckpoint]; got != ref {
+		t.Fatalf("restore pod annotation %s=%q want %q (restore target, not fresh shell)", k8s.AnnotationRestoreCheckpoint, got, ref)
+	}
+	// Still labelled 1:1 to its session and running the same shell-agent
+	// container with no entrypoint override, so once resumed the agent's
+	// /healthz reflects the *restored* shell (AC-D1).
+	if got := p.Labels[k8s.LabelSessionID]; got != "r1a2" {
+		t.Fatalf("%s label=%q want r1a2", k8s.LabelSessionID, got)
+	}
+	if c := p.Spec.Containers[0]; len(c.Command) != 0 || len(c.Args) != 0 {
+		t.Fatalf("restore pod overrides the entrypoint (command=%v args=%v); the runtime must resume the checkpoint", c.Command, c.Args)
+	}
+	// Restore mode: the agent starts without a shell and awaits POST /restore, so
+	// the pod can become Ready before the control plane pushes the archive.
+	var restoreMode string
+	for _, e := range p.Spec.Containers[0].Env {
+		if e.Name == "DATA_PLANE_RESTORE_MODE" {
+			restoreMode = e.Value
+		}
+	}
+	if restoreMode != "1" {
+		t.Fatalf("restore pod DATA_PLANE_RESTORE_MODE=%q, want \"1\" (agent must await the checkpoint)", restoreMode)
+	}
+	// The restore pod must NOT reuse the frozen pod's deterministic name
+	// (sess-<id>): that pod's deletion is async, so a restore-on-access right
+	// after a snapshot would race an AlreadyExists against its Terminating
+	// remains. A unique per-restore name removes the race (k3s verification
+	// follow-up, 2026-07-22).
+	if restored.Name == "sess-r1a2" {
+		t.Fatalf("restore pod reused the frozen pod's name %q; want a unique per-restore name", restored.Name)
+	}
+	if !strings.HasPrefix(restored.Name, "sess-r1a2-r") {
+		t.Fatalf("restore pod name=%q, want the session's deterministic prefix + restore suffix", restored.Name)
+	}
+	// Two restores of the same session never collide either.
+	again, err := orch.RestoreInto(context.Background(), "r1a2", ref)
+	if err != nil {
+		t.Fatalf("second restore into: %v", err)
+	}
+	if again.Name == restored.Name {
+		t.Fatalf("two restores produced the same pod name %q; want unique names", again.Name)
+	}
+
+	// Start, by contrast, provisions a fresh pod with no restore marker — the
+	// branch that boots a brand-new empty shell.
+	if _, err := orch.Start(context.Background(), "f9b8"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	for _, fp := range listPods(t, cs) {
+		if fp.Labels[k8s.LabelSessionID] != "f9b8" {
+			continue
+		}
+		if _, marked := fp.Annotations[k8s.AnnotationRestoreCheckpoint]; marked {
+			t.Fatalf("fresh Start pod carries the restore marker %s; only RestoreInto should", k8s.AnnotationRestoreCheckpoint)
+		}
+	}
+}
+
+// CRIU privilege (in-pod agent-driven checkpoint): WithCheckpointPrivileged runs
+// session pods privileged when the gate is on — the on-cluster-verified config
+// where `criu check` fully passes (capability sets alone are defeated by the
+// runtime's AppArmor and read-only /proc/sys, 2026-07-23). Gate-off pods stay
+// unprivileged (no securityContext).
+func TestClientOrchestrator_CheckpointPrivilegeGated(t *testing.T) {
+	// Gate on: privileged container.
+	orchOn, cs := newReadyOrchestrator(t, k8s.WithCheckpointPrivileged(true))
+	if _, err := orchOn.Start(context.Background(), "capon"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	sc := listPods(t, cs)[0].Spec.Containers[0].SecurityContext
+	if sc == nil || sc.Privileged == nil || !*sc.Privileged {
+		t.Fatalf("gate on: securityContext=%+v, want privileged (in-pod CRIU)", sc)
+	}
+
+	// Gate off (default): no securityContext — pods stay unprivileged.
+	orchOff, csOff := newReadyOrchestrator(t)
+	if _, err := orchOff.Start(context.Background(), "capoff"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if sc := listPods(t, csOff)[0].Spec.Containers[0].SecurityContext; sc != nil {
+		t.Fatalf("gate off: unexpected securityContext %+v (pods should stay unprivileged)", sc)
 	}
 }
 

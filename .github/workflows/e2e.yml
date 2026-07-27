@@ -52,6 +52,60 @@ jobs:
       - name: deploy SUT
         run: make e2e-up
 
+      # PROBE (informational, non-blocking): can the agent's in-pod CRIU actually
+      # run here? Since checkpoint/restore moved into the agent (it execs criu
+      # itself, docs/criu-verification.md decision ⑤), kind no longer needs a
+      # CRIU-capable *runtime* — only a capable kernel and a privileged pod. This
+      # step answers whether that holds on a GitHub runner's kernel with kind's
+      # nested containers, which decides whether the CRIU round-trip can become a
+      # real e2e assertion (today it stays a skipped seed: there is also no
+      # HTTP-reachable snapshot trigger). continue-on-error keeps a negative
+      # answer from failing the suite — read the step's log for the verdict.
+      - name: CRIU probe (in-pod criu viability on this runner)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          kubectl delete pod criu-probe --ignore-not-found
+          cat <<'EOF' | kubectl apply -f -
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: criu-probe
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: probe
+                # The data plane agent image, loaded into kind by make e2e-up; it
+                # carries the source-built criu the agent uses.
+                image: session-platform/data-plane:dev
+                imagePullPolicy: IfNotPresent
+                command:
+                  - sh
+                  - -c
+                  - |
+                    set -x
+                    /usr/local/sbin/criu --version
+                    # The pid-floor guard writes this before forking the shell.
+                    echo 300 > /proc/sys/kernel/ns_last_pid && echo "ns_last_pid: writable"
+                    # Extra signal only; --all includes experimental features and
+                    # may fail on a perfectly usable kernel.
+                    /usr/local/sbin/criu check --all 2>&1 || echo "check --all: not clean (informational)"
+                    # The verdict: plain check must pass for in-pod CRIU.
+                    /usr/local/sbin/criu check 2>&1
+                securityContext:
+                  privileged: true
+          EOF
+          kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/criu-probe --timeout=120s \
+            || kubectl wait --for=jsonpath='{.status.phase}'=Failed pod/criu-probe --timeout=10s \
+            || true
+          echo "--- probe output ---"
+          kubectl logs criu-probe || true
+          phase=$(kubectl get pod criu-probe -o jsonpath='{.status.phase}' 2>/dev/null || echo Unknown)
+          echo "--- probe pod phase: $phase ---"
+          kubectl delete pod criu-probe --ignore-not-found
+          # Non-zero marks the step (not the job) red when criu is unusable here.
+          [ "$phase" = "Succeeded" ]
+
       - name: API e2e (go, -tags=e2e)
         working-directory: control-plane
         env:

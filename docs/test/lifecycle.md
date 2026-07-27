@@ -24,3 +24,4 @@
 - **실행 단계**: 세션 동결(스냅샷) → 이후 접근으로 복원 → 마커 상태 조회
 - **기대 결과**: 동결 직전 마커 상태가 손실 없이 동일하게 보존됨
 - **검증 AC**: AC-B3
+- **구체 마커 구현**: 인터랙티브 쉘 워크로드에서의 구체 마커 왕복(환경 변수 `MARKER`·작업 디렉터리 + 커서 연속성)은 T-쉘워크로드 시나리오 4 = `control-plane/test/integration_test.go`의 `TestScenario4_CRIUIntegrity`로 실구현(AC-D4가 AC-B3를 구체화). 게이트 on(`CRIU_ENABLED=1`) + CRIU 지원 런타임에서 실행, 게이트 on 실검증은 `../criu-verification.md`의 인계 항목
