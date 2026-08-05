@@ -15,6 +15,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -124,11 +125,89 @@ func TestDeferred_RealPodProvisioned(t *testing.T) {
 	}
 }
 
-// AC-A3 (real pod): terminating/snapshotting a session deletes its Pod and
-// reclaims cluster resources.
-// Blocked on: a real client-go PodOrchestrator (and the snapshot/terminate path).
+// AC-A3 (real pod): freezing a session to a snapshot deletes its backing Pod
+// object and reclaims the cluster resources it held (architecture scenario 3).
+// This is the mirror of TestDeferred_RealPodProvisioned — that asserts create
+// provisions a real Pod; this asserts snapshot reclaims it. Both preconditions
+// are now met: the real client-go PodOrchestrator backs the SUT (its Stop
+// deletes the Pod object), and a snapshot is reachable via the test-only trigger
+// (its operational counterpart is service.IdleReaper, AC-B1).
+//
+// It skips where the assertion is not runnable — no kube API access (a
+// non-cluster SUT), or no HTTP snapshot trigger (E2E_TEST_ENDPOINTS off) — the
+// same guards as the other real-cluster/CRIU seeds, so the suite still runs
+// anywhere.
 func TestDeferred_RealPodReclaimed(t *testing.T) {
-	t.Skip("deferred: needs the real client-go PodOrchestrator to assert Pod deletion + resource reclaim (AC-A3); fill when the k8s adapter lands")
+	cs, _, ok := kubeClient(t)
+	if !ok {
+		t.Skip("no kube API access (kubeconfig/in-cluster) — Pod-reclaim assertion needs the deployed cluster")
+	}
+	ns := sessionNamespace()
+
+	// Precondition (scenario 3): an active session backed by a real Pod object.
+	s := createSession(t, uniqueName(t))
+	if s.Pod == "" {
+		t.Fatal("created session has no pod (AC-A1/A2)")
+	}
+	getPodEventually(t, cs, ns, s.Pod) // the Pod exists before the freeze
+
+	// Freeze it. The trigger is test-only (the product policy is IdleReaper's idle
+	// window); a SUT without it just means this assertion is not runnable here.
+	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+s.ID+"/snapshot", nil)
+	if resp.StatusCode == http.StatusNotFound {
+		t.Skip("SUT has no snapshot trigger (E2E_TEST_ENDPOINTS off) — Pod reclaim not exercisable here")
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("snapshot status=%d body=%s", resp.StatusCode, body)
+	}
+	var frozen session
+	if err := json.Unmarshal(body, &frozen); err != nil {
+		t.Fatalf("decode snapshot response: %v body=%s", err, body)
+	}
+	// The API reports the reclaim first: snapshot state, pod field cleared
+	// (AC-B1/AC-A3).
+	if frozen.State != "snapshot" {
+		t.Fatalf("state after snapshot = %q, want snapshot (AC-B1)", frozen.State)
+	}
+	if frozen.Pod != "" {
+		t.Fatalf("pod after snapshot = %q, want it reclaimed (AC-A3)", frozen.Pod)
+	}
+
+	// Ground truth from the cluster: the backing Pod object is actually gone (or
+	// at least accepted for deletion) — the resources it held are reclaimed, not
+	// merely dropped from the API's view (AC-A3, architecture scenario 3). Poll
+	// past the pod's termination grace (default 30s) before giving up.
+	deadline := time.Now().Add(90 * time.Second)
+	for {
+		pod, err := cs.CoreV1().Pods(ns).Get(context.Background(), s.Pod, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			break // fully deleted — resources reclaimed
+		}
+		if err != nil {
+			t.Fatalf("get pod %s/%s: %v", ns, s.Pod, err)
+		}
+		if pod.DeletionTimestamp != nil {
+			break // accepted for deletion (terminating) — reclaim in progress
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pod %s/%s still present with no deletion after snapshot — not reclaimed (AC-A3)", ns, s.Pod)
+		}
+		time.Sleep(time.Second)
+	}
+
+	// And the session reads back unambiguously frozen: still snapshot, still no
+	// pod — an independent confirmation the reclaim stuck.
+	resp, body = do(t, http.MethodGet, "/api/v1/sessions/"+s.ID, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get after snapshot status=%d body=%s", resp.StatusCode, body)
+	}
+	var got session
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode get after snapshot: %v body=%s", err, body)
+	}
+	if got.State != "snapshot" || got.Pod != "" {
+		t.Fatalf("session after snapshot = %+v, want state=snapshot pod=\"\" (AC-A3)", got)
+	}
 }
 
 // AC-B1: after 60m idle a session is checkpointed (CRIU) and transitions to
