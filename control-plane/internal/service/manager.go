@@ -7,8 +7,9 @@
 // pod agent's attach stream before the state lands. Read and write then move
 // the shell payload through the AgentClient — write into the shell's stdin
 // (AC-D2), read as an offset-cursored delta of its accumulated output
-// (AC-D3). The remaining TODO(policy) is the idle->snapshot *trigger* timing
-// in package session, a separate decision.
+// (AC-D3). The idle->snapshot *trigger* is service.IdleReaper (AC-B1); only
+// its finer TODO(policy) timing — grace periods / per-session overrides —
+// stays a deferred decision.
 package service
 
 import (

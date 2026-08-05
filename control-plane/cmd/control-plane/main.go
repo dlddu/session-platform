@@ -23,6 +23,7 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
 	"github.com/dlddu/session-platform/control-plane/internal/api"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
+	"github.com/dlddu/session-platform/control-plane/internal/session"
 	"github.com/dlddu/session-platform/control-plane/internal/static"
 )
 
@@ -84,9 +85,17 @@ func main() {
 
 	mgr := service.New(orch, store, ckpt, agentClient)
 
+	// AC-B1: the operational idle->snapshot trigger. A background reaper scans
+	// sessions every cfg.idleScanInterval and freezes any idle (no client
+	// read/write, AC-D5) for at least session.MaxIdle, reclaiming its pod
+	// (AC-A3). It is what freezes a session on its own after the idle limit,
+	// independent of the test-only /snapshot endpoint below.
+	reaper := service.NewIdleReaper(mgr, session.MaxIdle, cfg.idleScanInterval, nil, logger)
+
 	if cfg.testEndpoints {
 		// Not a product API: it exists so an e2e SUT can freeze a session on
-		// demand (the idle->snapshot trigger policy is still open).
+		// demand and deterministically, rather than waiting on the reaper's
+		// idle window (the operational trigger itself is IdleReaper, AC-B1).
 		logger.Warn("E2E_TEST_ENDPOINTS is on; test-only endpoints are exposed")
 	}
 	mux := http.NewServeMux()
@@ -102,6 +111,9 @@ func main() {
 	// graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Drive the idle->snapshot reaper until shutdown (AC-B1).
+	go reaper.Run(ctx)
 
 	go func() {
 		logger.Info("listening", "addr", cfg.addr)
@@ -126,6 +138,10 @@ type config struct {
 	// testEndpoints exposes test-only HTTP endpoints (snapshot trigger). Off in
 	// deployments; the e2e SUT turns it on.
 	testEndpoints bool
+	// idleScanInterval is how often the reaper scans for sessions past their
+	// idle limit (AC-B1). The 60m limit itself is session.MaxIdle; this only
+	// bounds how promptly a newly-idle session is noticed.
+	idleScanInterval time.Duration
 	// Checkpoint archive store (used only when criuEnabled): an S3 bucket,
 	// accessed by assuming checkpointS3RoleARN over the ambient credentials
 	// (node instance profile / IRSA). checkpointS3Endpoint targets an
@@ -177,6 +193,7 @@ func loadConfig() config {
 		dataPlaneShell:          env("DATA_PLANE_SHELL", ""),
 		criuEnabled:             envBool("CRIU_ENABLED", false),
 		testEndpoints:           envBool("E2E_TEST_ENDPOINTS", false),
+		idleScanInterval:        envDuration("IDLE_SCAN_INTERVAL", time.Minute),
 		checkpointS3Endpoint:    env("CHECKPOINT_S3_ENDPOINT", ""),
 		checkpointS3Bucket:      env("CHECKPOINT_S3_BUCKET", ""),
 		checkpointS3RoleARN:     env("CHECKPOINT_S3_ROLE_ARN", ""),
@@ -198,6 +215,16 @@ func envBool(k string, def bool) bool {
 		b, err := strconv.ParseBool(v)
 		if err == nil {
 			return b
+		}
+	}
+	return def
+}
+
+func envDuration(k string, def time.Duration) time.Duration {
+	if v := os.Getenv(k); v != "" {
+		d, err := time.ParseDuration(v)
+		if err == nil && d > 0 {
+			return d
 		}
 	}
 	return def

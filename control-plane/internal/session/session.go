@@ -43,10 +43,13 @@ func (s State) Valid() bool {
 }
 
 // MaxIdle is the maximum idle duration before a session is snapshotted.
+// The operational trigger that enforces it is service.IdleReaper (AC-B1).
 //
-// TODO(policy): 60m is the maximum idle limit from AC-B1; the exact
-// snapshot trigger policy (grace periods, per-session overrides) is a
-// product decision that is intentionally deferred for the scaffolding.
+// TODO(policy): 60m is the maximum idle limit from AC-B1 and the reaper now
+// enforces the plain "idle >= MaxIdle -> snapshot" rule. The finer trigger
+// policy — grace periods, per-session overrides, and whether to freeze a
+// shell running a long foreground job that has merely gone client-idle
+// (AC-D5) — remains a deferred product decision.
 const MaxIdle = 60 * time.Minute
 
 // Checkpoint captures the metadata of a CRIU checkpoint for a snapshotted
