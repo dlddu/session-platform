@@ -73,6 +73,7 @@ Playwright 리포트/trace를 아티팩트로 올린다. ci.yml의 lint/unit/bui
 | healthz 200 / `{"status":"ok"}` | go API | — |
 | 생성 → `active` + 전용 pod, 3건 → 고유 pod 3개 | go API | A1, A2 |
 | 생성된 세션의 pod 이름 = 실 Pod 오브젝트(라벨 `session-id` 1:1), N건 → 고유 Pod N개 | go API (`TestDeferred_RealPodProvisioned`) | A1, A2 |
+| 세션 동결(snapshot) 시 대상 Pod 오브젝트 삭제 + 자원 회수(API `pod:""` + 클러스터 그라운드-트루스로 Pod 삭제/terminating 확인) | go API (`TestDeferred_RealPodReclaimed`, architecture 시나리오 3) | A3 |
 | 세션 pod 안에 PTY에 연결된 쉘 프로세스 정확히 1개(`bash`) | go API (`TestShell_ExactlyOnePTYShellInSessionPod`, shell-workload 시나리오 1) | D1 |
 | control-plane pod에는 쉘 없음(distroless — 쉘 exec 자체가 실패) | go API (`TestShell_ControlPlaneRunsNoShell`, shell-workload 시나리오 1) | D1 |
 | 목록 포함 / 단건 조회 일치 | go API | V5 |
@@ -94,7 +95,7 @@ Playwright 리포트/trace를 아티팩트로 올린다. ci.yml의 lint/unit/bui
 | 시드 (테스트) | 스위트 | 문서 시나리오 / 여정 | AC | 막힌 이유 (선결조건) |
 | --- | --- | --- | --- | --- |
 | ~~`TestDeferred_RealPodProvisioned`~~ → **채움** | go | architecture 시나리오 1·2 | A1, A2 | (해소: 실 client-go PodOrchestrator 적용 — 위 커버 표로 이동) |
-| `TestDeferred_RealPodReclaimed` | go | architecture 시나리오 3 | A3 | terminate/snapshot 경로 + Pod 삭제·자원 회수 단언 |
+| ~~`TestDeferred_RealPodReclaimed`~~ → **채움** | go | architecture 시나리오 3 | A3 | (해소: 실 client-go PodOrchestrator의 Stop이 Pod를 삭제 + test-only snapshot 트리거로 동결 경로 도달 — 위 커버 표로 이동) |
 | `TestDeferred_IdleToSnapshot` | go | lifecycle 시나리오 1 | B1 | idle→snapshot 트리거(reaper/엔드포인트) |
 | `TestDeferred_SnapshotRestore` | go | lifecycle 시나리오 2 | B2 | snapshot 상태 세션 + 복원 |
 | `TestDeferred_CRIUIntegrity` | go | lifecycle 시나리오 3 | B3 | 검증된 CRIU 런타임 (`docs/criu-verification.md`) |
