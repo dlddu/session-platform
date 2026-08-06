@@ -10,13 +10,19 @@
 > `session-platform/data-plane:dev`를 kind에 load)로 뜨므로 pod 안에서 PTY에 연결된
 > 인터랙티브 쉘이 실제로 기동되고, create는 pod Ready에 더해 **쉘 도달(Reach, attach 스트림
 > open/close)**까지 확인한 뒤에야 `active`를 반환한다(AC-D1). SUT는 **2 replica**로 배포되어
-> 상태를 공유하므로 교차-replica 원자성(AC-C1)을 실제로 검증한다. Checkpointer(CRIU)만 아직
-> 인메모리 스텁이고 idle→snapshot 트리거가 없으므로 생성된 세션은 여전히 `active`로 머문다.
+> 상태를 공유하므로 교차-replica 원자성(AC-C1)을 실제로 검증한다. Checkpointer(CRIU)는
+> 오버레이(`deploy/`)에서 게이트 ON(agent-driven in-pod CRIU + MinIO 아카이브 저장소 +
+> test-only snapshot 트리거)으로 배포되어, **snapshot→pod 회수→접근 시 새 pod로 복원→쉘
+> 상태 보존 왕복이 실 단언으로 검증**된다(`TestDeferred_CRIUIntegrity`, AC-B2/B3/D4; e2e
+> 워크플로의 CRIU 프로브가 러너 커널의 in-pod criu 지원을 확인). 다만 **운영 idle→snapshot
+> 트리거(reaper 타이밍 정책)는 아직 미확정**(`TODO(policy)`, AC-B1)이라, 트리거 없이 둔
+> 세션은 base 경로에서 여전히 `active`로 머문다.
 > 검증 범위는 **생성/목록/조회/switch·read·write 해피패스 + 실 Pod 단언(AC-A1/A2) + PTY 쉘
 > 런타임 단언(AC-D1) + 쉘 stdin/stdout 시맨틱(AC-D2/D3: write→쉘 stdin 주입, read→offset
-> 커서 델타·offset=0 전체 재조회) + 교차-replica 일관성(AC-C1)**이다. B-path(idle →
-> snapshot → restore)와 CRIU 단언은 범위 밖이며, 단계 5의 **deferred 시드**(skip)로 골격만
-> 남겨 둔다 — 해당 트리거/런타임이 들어오면 skip을 지우며 채운다.
+> 커서 델타·offset=0 전체 재조회) + 교차-replica 일관성(AC-C1) + CRIU 왕복(AC-B2/B3/D4)**
+> 이다. 아직 범위 밖으로 남아 단계 5의 **deferred 시드**(skip)로 두는 것은 **reaper-구동
+> idle→snapshot(IdleToSnapshot, B1)**과 **read/write의 idle 분기(C2/C3 idle)** 뿐이며 —
+> 미구현 idle 진입 트리거/미확정 트리거 정책이 들어오면 skip을 지우며 채운다.
 
 ## 빠른 실행 (로컬)
 
@@ -66,7 +72,7 @@ kind 생성(`helm/kind-action`) → `make e2e-up` → `go test -tags=e2e` → Pl
 Playwright 리포트/trace를 아티팩트로 올린다. ci.yml의 lint/unit/build/integration 잡은 종전대로
 모든 PR에서 돌고, **envtest 잡**이 실 kube-apiserver로 CAS/Lease 단일-승자(AC-C1)를 검증한다.
 
-## 현재 커버되는 시나리오 (active 경로)
+## 현재 커버되는 시나리오
 
 | 검증 | 스위트 | AC |
 | --- | --- | --- |
@@ -83,6 +89,7 @@ Playwright 리포트/trace를 아티팩트로 올린다. ci.yml의 lint/unit/bui
 | 커서 read는 델타만, `offset=0` 재조회는 전체 이력 순서 보존(비파괴) | go API (`TestShell_ReadCursorDeltaAndFullReplay`, shell-workload 시나리오 3) | D3 |
 | 없는 id → 404 | go API | (에러 매핑) |
 | 동시 접근(get/read/write/switch 24-way)에서 단일 active 상태로 수렴·중복 pod 없음(2 replica 공유 store) | go API (`TestDeferred_CrossReplicaAtomicity`) | C1 |
+| CRIU 왕복: 동결(snapshot) 세션 접근 시 새 pod로 복원 + 쉘 상태(env·cwd)·read 커서 보존(마커 왕복, 프리즈 전/후 이력 순서 유지) | go API (`TestDeferred_CRIUIntegrity`, lifecycle 시나리오 3, CRIU-on 오버레이) | B2, B3, D4 |
 | J1: 생성 → `/session/:id` → 쉘 명령 실행($((…)) 마커) → switch | playwright | A1/A2, C2/C3, D2/D3 |
 | J3: 다건 목록 노출 → 카드 클릭/전환 | playwright | C4, V4 |
 | J5: 콘솔 명령 입력→출력 누적 표시, 재진입 시 `offset=0`으로 전체 이력 복원 | playwright | D2, D3, V6 |
@@ -97,10 +104,10 @@ Playwright 리포트/trace를 아티팩트로 올린다. ci.yml의 lint/unit/bui
 | ~~`TestDeferred_RealPodProvisioned`~~ → **채움** | go | architecture 시나리오 1·2 | A1, A2 | (해소: 실 client-go PodOrchestrator 적용 — 위 커버 표로 이동) |
 | ~~`TestDeferred_RealPodReclaimed`~~ → **채움** | go | architecture 시나리오 3 | A3 | (해소: 실 client-go PodOrchestrator의 Stop이 Pod를 삭제 + test-only snapshot 트리거로 동결 경로 도달 — 위 커버 표로 이동) |
 | `TestDeferred_IdleToSnapshot` | go | lifecycle 시나리오 1 | B1 | idle→snapshot 트리거(reaper/엔드포인트) |
-| `TestDeferred_SnapshotRestore` | go | lifecycle 시나리오 2 | B2 | snapshot 상태 세션 + 복원 |
-| `TestDeferred_CRIUIntegrity` | go | lifecycle 시나리오 3 | B3 | 검증된 CRIU 런타임 (`docs/criu-verification.md`) |
-| `TestDeferred_ReadIdleAndSnapshotBranches` | go | state-api 시나리오 2 | C2 | idle/snapshot 상태 |
-| `TestDeferred_WriteIdleAndSnapshotBranches` | go | state-api 시나리오 3 | C3 | idle/snapshot 상태 |
+| `TestDeferred_SnapshotRestore` | go | lifecycle 시나리오 2 | B2 | B2는 `TestDeferred_CRIUIntegrity`(복원→새 pod)로 이미 커버 — 이 시드는 focused restore-only 잉여 placeholder(비차단) |
+| ~~`TestDeferred_CRIUIntegrity`~~ → **채움** | go | lifecycle 시나리오 3 | B2, B3, D4 | (해소: deploy/ 오버레이가 CRIU 게이트 ON(agent-driven in-pod CRIU + MinIO) + test-only snapshot 트리거 → snapshot→복원→상태 보존 왕복 실단언; e2e CRIU 프로브가 러너 커널 지원 확인 — 위 커버 표로 이동) |
+| `TestDeferred_ReadIdleAndSnapshotBranches` | go | state-api 시나리오 2 | C2 | idle 분기만 잔여(snapshot 분기는 `TestDeferred_CRIUIntegrity`가 커버) — idle 진입 트리거 필요 |
+| `TestDeferred_WriteIdleAndSnapshotBranches` | go | state-api 시나리오 3 | C3 | idle 분기만 잔여(snapshot 분기는 `TestDeferred_CRIUIntegrity`가 커버) — idle 진입 트리거 필요 |
 | ~~`TestDeferred_CrossReplicaAtomicity`~~ → **채움** | go | state-api 시나리오 1 | C1 | (해소: ConfigMap/Lease StateStore + 2-replica 오버레이로 교차-replica 일관성 단언 — 위 커버 표로 이동. 단일-승자 CAS/Lease는 envtest 스위트가 실 apiserver로 검증) |
 | `J2: session freezes to a snapshot after idle` | playwright | J2 | B1 | idle→snapshot 트리거 |
 | `J2: thaw & resume restores a snapshot session` | playwright | J2 | B2 | snapshot 상태 세션 + 복원(Restore 화면) |

@@ -7,11 +7,17 @@ between sessions.
 
 > **This repository is a bootstrap scaffolding.** Structure, dependencies,
 > boundaries, and the dev loop are in place. Pod orchestration (client-go),
-> session state (Kubernetes ConfigMaps + Leases), and the data plane session
+> session state (Kubernetes ConfigMaps + Leases), the data plane session
 > workload — one PTY-attached interactive shell per pod, reachability-checked
-> at the active transition (AC-D1) — are real; the read/write mapping onto the
-> shell's stdin/stdout (J5-S2/S3) and CRIU checkpoint/restore are still stubbed
-> behind their interfaces. See the design docs under [`docs/`](docs/) for the
+> at the active transition (AC-D1), with read/write mapped onto the shell's
+> stdin/stdout (J5-S2/S3, AC-D2/D3) — and CRIU checkpoint/restore are all real.
+> CRIU is agent-driven (the pod's own agent CRIU-dumps/restores its shell tree)
+> behind the `CRIU_ENABLED` gate: off in the production default (a no-op stub),
+> on in the kind e2e overlay, where the snapshot → reclaim → restore round trip
+> runs end-to-end (`TestDeferred_CRIUIntegrity`). What is not yet settled is the
+> idle→snapshot *trigger* timing policy (`TODO(policy)`, AC-B1), so the
+> reaper-driven idle path and the idle-state read/write branches stay seeded as
+> documented skips. See the design docs under [`docs/`](docs/) for the
 > value/PRD/AC and mockups this is built from.
 
 ## Layout
@@ -27,7 +33,7 @@ control-plane/        Go: REST API + orchestration/state adapters + SPA serving
     adapter/k8s/        PodOrchestrator: client-go pod lifecycle (real)
     adapter/configmap/  StateStore: ConfigMap state + Lease locks via client-go (real)
       envtest/          isolated module: real-apiserver CAS/Lease conflict suite
-    adapter/criu/       Checkpointer port + gated stub         (CRIU later)
+    adapter/criu/       Checkpointer port + agent-driven adapter + gate-off stub
     api/                REST handlers (thin) + tests
     static/             embeds web/dist and serves the SPA
   Dockerfile            multi-stage: build SPA -> embed in Go -> minimal image
@@ -52,14 +58,17 @@ docs/                 value / PRD·AC / journeys / mockups / CRIU verification n
   `coordination.k8s.io` Leases for occupancy locks (AC-C1) — shared across
   control-plane replicas. Read/Write/Switch dispatch on state (AC-C2/C3/C4).
 - **Lifecycle**: 60-min max idle → CRIU snapshot + pod reclaim (AC-B1);
-  access → restore into a new pod (AC-B2). CRIU is **gated** (`CRIU_ENABLED`)
-  and stubbed; see [`docs/criu-verification.md`](docs/criu-verification.md).
+  access → restore into a new pod (AC-B2). CRIU is **gated** (`CRIU_ENABLED`):
+  off in the production default (a no-op stub), on in the e2e overlay with the
+  real agent-driven checkpointer, where the round trip is verified
+  (`TestDeferred_CRIUIntegrity`); see [`docs/criu-verification.md`](docs/criu-verification.md).
 - **Single entry point**: the control plane container serves both the REST API
   (`/api/v1`) and the statically built SPA on one port.
 
-Unresolved product policy is marked in code with `TODO(policy: ...)` (the
-idle→snapshot *trigger* timing); `TODO(criu)` marks the one remaining stubbed
-adapter (CRIU checkpoint/restore).
+Unresolved product policy is marked in code with `TODO(policy: ...)` — the
+idle→snapshot *trigger* timing (grace periods / per-session overrides, AC-B1).
+The CRIU checkpoint/restore adapter itself is implemented (agent-driven); what
+remains open is that trigger policy and the gate default (off in production).
 
 ## Prerequisites
 
@@ -103,9 +112,12 @@ gitignored.
   Playwright browser suite against the deployed control-plane (reachable at
   `http://localhost:8080` via a NodePort). Covers create/list/get/switch·read·write,
   real-pod provisioning (AC-A1/A2), and cross-replica state consistency over the
-  shared ConfigMap store (AC-C1); the B-path (idle → snapshot → restore) and CRIU
-  assertions remain seeded as documented skips. Details and the deferred-seed ↔
-  scenario map: [`docs/test/e2e.md`](docs/test/e2e.md).
+  shared ConfigMap store (AC-C1). With CRIU turned on in the overlay, the
+  snapshot → reclaim → restore round trip is a verified assertion too
+  (`TestDeferred_CRIUIntegrity`, AC-B2/B3/D4); only the reaper-driven
+  idle→snapshot trigger and the idle-state read/write branches remain seeded as
+  documented skips (they need the idle trigger, `TODO(policy)`). Details and the
+  deferred-seed ↔ scenario map: [`docs/test/e2e.md`](docs/test/e2e.md).
 - **Conflict (envtest)** (`make test-envtest`): an isolated nested module runs
   the ConfigMap adapter against a real kube-apiserver + etcd to assert AC-C1's
   single-winner property (exactly one of N concurrent CompareAndSwap / Lease
