@@ -18,7 +18,10 @@ between sessions.
 > idle→snapshot *trigger* timing policy (`TODO(policy)`, AC-B1), so the
 > reaper-driven idle path and the idle-state read/write branches stay seeded as
 > documented skips. See the design docs under [`docs/`](docs/) for the
-> value/PRD/AC and mockups this is built from.
+> value/PRD/AC and mockups this is built from. The **design system** — tokens,
+> primitives, and components — lives in code at
+> [`web/src/design/`](web/src/design/README.md) (+ `web/src/app/shell.css`);
+> that directory is the source of truth for anything visual.
 
 ## Layout
 
@@ -38,7 +41,9 @@ control-plane/        Go: REST API + orchestration/state adapters + SPA serving
     static/             embeds web/dist and serves the SPA
   Dockerfile            multi-stage: build SPA -> embed in Go -> minimal image
 web/                  React + Vite + TS SPA
-  src/design/tokens.css design tokens ported 1:1 from the mockups
+  src/design/          canonical design system (README.md indexes it; code is the source of truth)
+    tokens.css          design tokens + base primitives; mockups hold inline copies of these values
+  src/app/shell.css     component/pattern layer of the design system
   src/app/              AppShell (rail + viewport), StateBadge
   src/screens/          Sessions, NewSession, Workspace, Restore
   src/api/              typed client over /api/v1

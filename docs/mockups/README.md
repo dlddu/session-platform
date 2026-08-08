@@ -26,9 +26,15 @@
 > 참고: `workspace.html`의 session shell 콘솔은 2026-07-01 쉘 명령 기준으로 갱신됨(옛 key/value write 예시 → `$ ls` / `$ npm run build` 등 쉘 입력·출력, 복원 시 env·cwd 보존 시연). J5와 정합.
 > `restore.html` 콘솔도 2026-08-08 같은 기준으로 갱신됨(옛 key/value read/write 예시 제거 — 이전 판의 🟡 위험 해소).
 
-> 5개 mockup 모두 디자인 시스템 없이 인라인 CSS 변수를 사용 → 전부 **임의 스타일 mockup(🟢)**.
+> 5개 mockup 모두 인라인 CSS 변수를 사용 → 전부 **임의 스타일 mockup(🟢)**.
 > `agent-workspace.html`은 `workspace.html`의 인라인 토큰을 복사해 만들었으므로 겉보기 일관성은 있으나, **시스템에 연결된 것은 아닙니다.**
-> 디자인 시스템 셋업 후 토큰/컴포넌트 단위로 재매핑이 필요합니다.
+>
+> **2026-08-08 (4) 갱신 — 디자인 시스템 정본이 생겼습니다**: [`web/src/design/`](../../web/src/design/README.md)
+> (토큰·프리미티브 `tokens.css`, 컴포넌트·패턴 `web/src/app/shell.css`). 코드가 정본이고 문서는 색인입니다.
+> 다만 mockup 5개는 여전히 그 정본을 참조하지 않고 같은 값을 각자 인라인으로 갖고 있습니다 —
+> 값은 일치하지만 **연결은 아니므로 "미연결" 상태는 유지**됩니다.
+> 토큰 하나를 바꾸려면 `tokens.css` + mockup 5개 = **6곳**을 고쳐야 하며, 이 중복이 남은 🟢 위험의 실체입니다.
+> 방향 규칙: **코드를 먼저 고치고 mockup이 따라옵니다.**
 
 ---
 
