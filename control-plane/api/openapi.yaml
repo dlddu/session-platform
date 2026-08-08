@@ -87,6 +87,24 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      summary: Delete a session and reclaim its live pod, if any
+      operationId: deleteSession
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "204":
+          description: Session deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: A lifecycle operation is already in progress
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /sessions/{id}/read:
     post:
       summary: Read workload output since an offset cursor (state-branched, AC-C2)

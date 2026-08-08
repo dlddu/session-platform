@@ -231,18 +231,42 @@ type commitThenErrorStore struct {
 
 func (s *commitThenErrorStore) CompareAndSwapSession(
 	ctx context.Context,
-	id string,
+	id, token string,
 	expectedState session.State,
 	expectedTxn *session.SnapshotTransaction,
 	next *session.Session,
 ) error {
-	if err := s.StateStore.CompareAndSwapSession(ctx, id, expectedState, expectedTxn, next); err != nil {
+	if err := s.StateStore.CompareAndSwapSession(ctx, id, token, expectedState, expectedTxn, next); err != nil {
 		return err
 	}
 	if next.State == session.StateActive {
 		return s.err
 	}
 	return nil
+}
+
+// deleteBeforeRestoreCASStore models metadata disappearing after RestoreInto
+// succeeds but before the restored pod can be committed to the aggregate.
+type deleteBeforeRestoreCASStore struct {
+	storeport.StateStore
+}
+
+func (s *deleteBeforeRestoreCASStore) CompareAndSwapSession(
+	ctx context.Context,
+	id, token string,
+	expectedState session.State,
+	expectedTxn *session.SnapshotTransaction,
+	next *session.Session,
+) error {
+	if expectedState == session.StateSnapshot && next.State == session.StateActive {
+		if err := s.StateStore.Delete(ctx, id, token); err != nil {
+			return err
+		}
+		return session.ErrNotFound
+	}
+	return s.StateStore.CompareAndSwapSession(
+		ctx, id, token, expectedState, expectedTxn, next,
+	)
 }
 
 type legacyCheckpointer struct{ criu.Checkpointer }
@@ -572,7 +596,7 @@ func TestPreparingRecoveryOwnerClaimFencesExpiredHolderCommit(t *testing.T) {
 	staleNext := *created
 	staleNext.SnapshotTransaction = &committing
 	if err := store.CompareAndSwapSession(
-		ctx, created.ID, session.StateActive, &expected, &staleNext,
+		ctx, created.ID, expected.Owner, session.StateActive, &expected, &staleNext,
 	); !errors.Is(err, session.ErrConflict) {
 		t.Fatalf("expired owner commit err=%v, want ErrConflict", err)
 	}
@@ -843,6 +867,41 @@ func TestRestoreTreatsCommittedCASWithLostResponseAsSuccess(t *testing.T) {
 	}
 	if got := orch.RunningCount(); got != 1 {
 		t.Fatalf("running pods = %d, want committed restore pod", got)
+	}
+}
+
+func TestRestoreCleansPodWhenRecordDisappearsBeforeFinalCAS(t *testing.T) {
+	ctx := context.Background()
+	orch := &reachTrackingOrchestrator{StubOrchestrator: k8s.NewStubOrchestrator("sessions")}
+	baseStore := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
+	normal := service.New(orch, baseStore, criu.NewStubCheckpointer(true), agent.NewStubClient())
+
+	created, err := normal.Create(ctx, session.CreateRequest{Name: "restore-record-deleted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := normal.Snapshot(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	stopsBeforeRestore := len(orch.stopped)
+	restorer := service.New(
+		orch,
+		&deleteBeforeRestoreCASStore{StateStore: baseStore},
+		criu.NewStubCheckpointer(true),
+		agent.NewStubClient(),
+	)
+
+	if _, err := restorer.Restore(ctx, created.ID); !errors.Is(err, session.ErrNotFound) {
+		t.Fatalf("restore err = %v, want ErrNotFound", err)
+	}
+	if got := len(orch.stopped) - stopsBeforeRestore; got != 1 {
+		t.Fatalf("restore cleaned up %d pods, want 1", got)
+	}
+	if got := orch.RunningCount(); got != 0 {
+		t.Fatalf("running pods after record deletion = %d, want 0", got)
+	}
+	if _, err := baseStore.Get(ctx, created.ID); err != session.ErrNotFound {
+		t.Fatalf("get after record deletion err = %v, want ErrNotFound", err)
 	}
 }
 
@@ -1224,5 +1283,173 @@ func TestTerminate(t *testing.T) {
 	}
 	if _, err := svc.Get(ctx, sess.ID); err != session.ErrNotFound {
 		t.Errorf("get after terminate err = %v, want ErrNotFound", err)
+	}
+}
+
+// Termination shares the lifecycle Lease with snapshot/restore. A competing
+// holder must make deletion fail before the live pod or metadata is touched.
+func TestTerminateConflictsWithLifecycleLock(t *testing.T) {
+	ctx := context.Background()
+	svc, orch, stateStore := newTrackedService()
+
+	created, err := svc.Create(ctx, session.CreateRequest{Name: "locked-session"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := stateStore.Lock(ctx, created.ID, "snapshot-owner"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	defer stateStore.Unlock(ctx, created.ID, "snapshot-owner")
+
+	if err := svc.Terminate(ctx, created.ID); !errors.Is(err, session.ErrConflict) {
+		t.Fatalf("terminate while locked err = %v, want ErrConflict", err)
+	}
+	if len(orch.stopped) != 0 {
+		t.Fatalf("stopped pods = %d, want 0 while another lifecycle operation holds the Lease", len(orch.stopped))
+	}
+	if _, err := svc.Get(ctx, created.ID); err != nil {
+		t.Fatalf("session was removed despite lock conflict: %v", err)
+	}
+}
+
+// A blocked pod deletion must keep the lifecycle Lease alive instead of
+// allowing another control-plane replica to take it over mid-termination.
+func TestTerminateRenewsLeaseWhileStoppingPod(t *testing.T) {
+	ctx := context.Background()
+	stateStore := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
+	renewStarted := make(chan struct{})
+	renewRelease := make(chan struct{})
+	store := &controlledRenewStore{
+		StateStore: stateStore,
+		started:    renewStarted,
+		release:    renewRelease,
+	}
+	orch := &reachTrackingOrchestrator{
+		StubOrchestrator: k8s.NewStubOrchestrator("sessions"),
+	}
+	orch.beforeStop = func() {
+		select {
+		case <-renewStarted:
+			close(renewRelease)
+		case <-time.After(time.Second):
+			t.Fatal("termination never renewed its lifecycle Lease")
+		}
+	}
+	svc := service.New(
+		orch,
+		store,
+		criu.NewStubCheckpointer(true),
+		agent.NewStubClient(),
+		service.WithLeaseRenewInterval(50*time.Millisecond),
+	)
+
+	created, err := svc.Create(ctx, session.CreateRequest{Name: "slow-delete"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := svc.Terminate(ctx, created.ID); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+	if len(orch.stopped) != 1 {
+		t.Fatalf("stopped pods = %d, want 1", len(orch.stopped))
+	}
+	if _, err := stateStore.Get(ctx, created.ID); err != session.ErrNotFound {
+		t.Fatalf("get after terminate err = %v, want ErrNotFound", err)
+	}
+}
+
+// Losing the Lease cancels an in-flight Stop and preserves metadata so a new
+// holder can retry deletion safely.
+func TestTerminateLeaseLossPreservesSession(t *testing.T) {
+	ctx := context.Background()
+	stateStore := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
+	renewRelease := make(chan struct{})
+	close(renewRelease)
+	store := &controlledRenewStore{
+		StateStore: stateStore,
+		err:        session.ErrConflict,
+		release:    renewRelease,
+	}
+	orch := &reachTrackingOrchestrator{
+		StubOrchestrator: k8s.NewStubOrchestrator("sessions"),
+		waitStopCancel:   true,
+	}
+	svc := service.New(
+		orch,
+		store,
+		criu.NewStubCheckpointer(true),
+		agent.NewStubClient(),
+		service.WithLeaseRenewInterval(time.Millisecond),
+	)
+
+	created, err := svc.Create(ctx, session.CreateRequest{Name: "lost-delete"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := svc.Terminate(ctx, created.ID); !errors.Is(err, session.ErrConflict) {
+		t.Fatalf("terminate after Lease loss err = %v, want ErrConflict", err)
+	}
+	if _, err := stateStore.Get(ctx, created.ID); err != nil {
+		t.Fatalf("session removed after Lease loss: %v", err)
+	}
+	if got := orch.RunningCount(); got != 1 {
+		t.Fatalf("running pods after cancelled Stop = %d, want 1", got)
+	}
+}
+
+// Deletion is a terminal cleanup path: it owner-fences a crashed snapshot
+// transaction and reclaims both recorded pod references without depending on
+// the workload's recovery/abort endpoint.
+func TestTerminateClaimsInFlightSnapshotAndReclaimsPods(t *testing.T) {
+	ctx := context.Background()
+	stateStore := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
+	orch := &reachTrackingOrchestrator{
+		StubOrchestrator: k8s.NewStubOrchestrator("sessions"),
+	}
+	checkpointer := &abortTrackingCheckpointer{
+		abortErr: errors.New("agent cannot reopen admission"),
+	}
+	svc := service.New(orch, stateStore, checkpointer, agent.NewStubClient())
+
+	created, err := svc.Create(ctx, session.CreateRequest{Name: "stuck-snapshot"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	stored, err := stateStore.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get created: %v", err)
+	}
+	stored.SnapshotTransaction = &session.SnapshotTransaction{
+		Generation: "crashed-generation",
+		Owner:      "crashed-owner",
+		SourcePod:  "orphaned-source-pod",
+		Phase:      session.SnapshotPhasePreparing,
+	}
+	if err := stateStore.Put(ctx, stored); err != nil {
+		t.Fatalf("seed snapshot transaction: %v", err)
+	}
+
+	var ownerAtStop string
+	orch.beforeStop = func() {
+		current, getErr := stateStore.Get(ctx, created.ID)
+		if getErr != nil {
+			t.Fatalf("get during Stop: %v", getErr)
+		}
+		ownerAtStop = current.SnapshotTransaction.Owner
+	}
+	if err := svc.Terminate(ctx, created.ID); err != nil {
+		t.Fatalf("terminate: %v", err)
+	}
+	if ownerAtStop == "" || ownerAtStop == "crashed-owner" {
+		t.Fatalf("snapshot owner at Stop = %q, want a newly claimed fencing token", ownerAtStop)
+	}
+	if checkpointer.abortCalls != 0 {
+		t.Fatalf("abort calls = %d, want 0 for terminal deletion", checkpointer.abortCalls)
+	}
+	if len(orch.stopped) != 2 {
+		t.Fatalf("stopped pods = %d, want current and source pods", len(orch.stopped))
+	}
+	if _, err := stateStore.Get(ctx, created.ID); err != session.ErrNotFound {
+		t.Fatalf("get after terminate err = %v, want ErrNotFound", err)
 	}
 }

@@ -24,6 +24,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(`${res.status} ${detail}`);
   }
+  if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
@@ -35,6 +36,9 @@ export const api = {
 
   createSession: (body: CreateSessionRequest) =>
     req<Session>("/sessions", { method: "POST", body: JSON.stringify(body) }),
+
+  deleteSession: (id: string) =>
+    req<void>(`/sessions/${id}`, { method: "DELETE" }),
 
   /** offset is the nextOffset cursor from the previous read; 0 replays the
    *  full workload output since session start (AC-D3/AC-E3). */

@@ -32,7 +32,7 @@ func createRaw(t *testing.T, url string, body map[string]any) (int, session.Sess
 // AC-E1/AC-E6: the create wire contract validates immutable workload settings,
 // echoes their normalized values, and copies them to provisioning.
 func TestCreateSessionWorkloadType(t *testing.T) {
-	srv, orch := newServerWithOrchestrator()
+	srv, orch, _ := newServerWithOrchestrator()
 	defer srv.Close()
 
 	t.Run("omitted defaults to shell", func(t *testing.T) {
@@ -127,7 +127,7 @@ func TestCreateSessionWorkloadType(t *testing.T) {
 
 // AC-E1/AC-E6: workload type and model are immutable for the session lifetime.
 func TestWorkloadTypeIsImmutableAfterCreate(t *testing.T) {
-	srv, orch := newServerWithOrchestrator()
+	srv, orch, _ := newServerWithOrchestrator()
 	defer srv.Close()
 
 	const model = "claude-sonnet-4-5"
@@ -174,7 +174,7 @@ func TestWorkloadTypeIsImmutableAfterCreate(t *testing.T) {
 // AC-E6: the API-visible model remains fixed while snapshot access restores a
 // new pod, and the restored provisioning request receives the same model.
 func TestModelSurvivesSnapshotRestoreOverHTTP(t *testing.T) {
-	srv, orch := newServerWithOrchestrator(api.WithTestEndpoints(true))
+	srv, orch, _ := newServerWithOrchestrator(api.WithTestEndpoints(true))
 	defer srv.Close()
 
 	const model = "claude-sonnet-4-5"

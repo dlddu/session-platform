@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -19,23 +20,26 @@ import (
 )
 
 func newServer(opts ...api.Option) *httptest.Server {
-	srv, _ := newServerWithOrchestrator(opts...)
+	srv, _, _ := newServerWithOrchestrator(opts...)
 	return srv
 }
 
-func newServerWithOrchestrator(opts ...api.Option) (*httptest.Server, *k8s.StubOrchestrator) {
+func newServerWithOrchestrator(
+	opts ...api.Option,
+) (*httptest.Server, *k8s.StubOrchestrator, *configmap.Store) {
 	orch := k8s.NewStubOrchestrator("sessions")
 	ckpt := criu.NewStubCheckpointer(true)
+	stateStore := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
 	mgr := service.New(
 		orch,
-		configmap.NewStore(fake.NewSimpleClientset(), "sessions"),
+		stateStore,
 		ckpt,
 		agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 	)
 	mux := http.NewServeMux()
 	api.New(mgr, opts...).Routes(mux)
-	return httptest.NewServer(mux), orch
+	return httptest.NewServer(mux), orch, stateStore
 }
 
 // createForTest creates a session through the API and returns it.
@@ -264,5 +268,140 @@ func TestGetUnknownReturns404(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown get status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// Deleting an active session returns an empty 204 response, reclaims its pod,
+// and removes it from subsequent reads.
+func TestDeleteSession(t *testing.T) {
+	srv, orch, _ := newServerWithOrchestrator()
+	defer srv.Close()
+	created := createForTest(t, srv, "delete-me")
+
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/sessions/"+created.ID, nil)
+	if err != nil {
+		t.Fatalf("build delete request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want 204", resp.StatusCode)
+	}
+	if contentType := resp.Header.Get("Content-Type"); contentType != "" {
+		t.Errorf("delete content-type = %q, want no response body", contentType)
+	}
+	if got := orch.RunningCount(); got != 0 {
+		t.Errorf("running pods after delete = %d, want 0", got)
+	}
+
+	getResp, err := http.Get(srv.URL + "/api/v1/sessions/" + created.ID)
+	if err != nil {
+		t.Fatalf("get after delete: %v", err)
+	}
+	getResp.Body.Close()
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("get after delete status = %d, want 404", getResp.StatusCode)
+	}
+}
+
+// Unknown IDs stay distinguishable from successfully deleted sessions.
+func TestDeleteUnknownSessionReturns404(t *testing.T) {
+	srv := newServer()
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/sessions/nope", nil)
+	if err != nil {
+		t.Fatalf("build delete request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete unknown: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("delete unknown status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// A competing lifecycle holder is surfaced as 409 and leaves the session intact.
+func TestDeleteConflictReturns409(t *testing.T) {
+	srv, _, stateStore := newServerWithOrchestrator()
+	defer srv.Close()
+	created := createForTest(t, srv, "delete-conflict")
+	const owner = "snapshot-owner"
+
+	if err := stateStore.Lock(context.Background(), created.ID, owner); err != nil {
+		t.Fatalf("lock session: %v", err)
+	}
+	defer func() {
+		_ = stateStore.Unlock(context.Background(), created.ID, owner)
+	}()
+
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/sessions/"+created.ID, nil)
+	if err != nil {
+		t.Fatalf("build delete request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete conflicted session: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("delete conflict status = %d, want 409", resp.StatusCode)
+	}
+
+	getResp, err := http.Get(srv.URL + "/api/v1/sessions/" + created.ID)
+	if err != nil {
+		t.Fatalf("get after conflict: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("get after conflict status = %d, want 200", getResp.StatusCode)
+	}
+}
+
+// A snapshotted session has no live pod but its logical record is still
+// deletable through the same product endpoint.
+func TestDeleteSnapshotSession(t *testing.T) {
+	srv := newServer(api.WithTestEndpoints(true))
+	defer srv.Close()
+	created := createForTest(t, srv, "delete-frozen")
+
+	snapshotResp, err := http.Post(
+		srv.URL+"/api/v1/sessions/"+created.ID+"/snapshot",
+		"application/json",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("snapshot before delete: %v", err)
+	}
+	snapshotResp.Body.Close()
+	if snapshotResp.StatusCode != http.StatusOK {
+		t.Fatalf("snapshot status = %d, want 200", snapshotResp.StatusCode)
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/sessions/"+created.ID, nil)
+	if err != nil {
+		t.Fatalf("build delete request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete snapshot: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete snapshot status = %d, want 204", resp.StatusCode)
+	}
+
+	getResp, err := http.Get(srv.URL + "/api/v1/sessions/" + created.ID)
+	if err != nil {
+		t.Fatalf("get after snapshot delete: %v", err)
+	}
+	getResp.Body.Close()
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("get after snapshot delete status = %d, want 404", getResp.StatusCode)
 	}
 }

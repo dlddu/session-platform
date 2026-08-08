@@ -458,7 +458,7 @@ func (s *Service) snapshot(ctx context.Context, id string, idleCutoff *time.Time
 	next.State = session.StateSnapshot
 	next.Pod = ""
 	next.Checkpoint = cp
-	if err := s.store.CompareAndSwapSession(ctx, id, sess.State, sess.SnapshotTransaction, &next); err != nil {
+	if err := s.store.CompareAndSwapSession(ctx, id, token, sess.State, sess.SnapshotTransaction, &next); err != nil {
 		return nil, err
 	}
 	if snapshotted != nil {
@@ -486,7 +486,7 @@ func (s *Service) snapshotWithTransactionLocked(
 	// close. The single resourceVersion update also refuses to overwrite a
 	// concurrently recovered transaction.
 	if err := s.store.CompareAndSwapSession(
-		ctx, sess.ID, sess.State, sess.SnapshotTransaction, &next,
+		ctx, sess.ID, generation, sess.State, sess.SnapshotTransaction, &next,
 	); err != nil {
 		return nil, err
 	}
@@ -517,7 +517,7 @@ func (s *Service) snapshotWithTransactionLocked(
 	next = *sess
 	next.SnapshotTransaction = committingTxn
 	if err := s.store.CompareAndSwapSession(
-		ctx, sess.ID, sess.State, expectedTxn, &next,
+		ctx, sess.ID, generation, sess.State, expectedTxn, &next,
 	); err != nil {
 		if errors.Is(err, session.ErrConflict) {
 			// A recovering holder claimed this prepare first. Abort this exact
@@ -537,7 +537,7 @@ func (s *Service) snapshotWithTransactionLocked(
 		// retry safe, whereas aborting here could reopen a pod already terminating.
 		return nil, err
 	}
-	return s.finalizeSnapshotLocked(ctx, sess)
+	return s.finalizeSnapshotLocked(ctx, sess, generation)
 }
 
 func (s *Service) recoverSnapshot(ctx context.Context, id string) (result *session.Session, retErr error) {
@@ -591,7 +591,7 @@ func (s *Service) recoverSnapshotLocked(ctx context.Context, sess *session.Sessi
 			next := *sess
 			next.SnapshotTransaction = claimedTxn
 			if err := s.store.CompareAndSwapSession(
-				ctx, sess.ID, sess.State, expectedTxn, &next,
+				ctx, sess.ID, token, sess.State, expectedTxn, &next,
 			); err != nil {
 				if errors.Is(err, session.ErrConflict) {
 					fresh, getErr := s.Get(ctx, sess.ID)
@@ -614,7 +614,7 @@ func (s *Service) recoverSnapshotLocked(ctx context.Context, sess *session.Sessi
 		next := *sess
 		next.SnapshotTransaction = nil
 		if err := s.store.CompareAndSwapSession(
-			ctx, sess.ID, sess.State, expectedTxn, &next,
+			ctx, sess.ID, token, sess.State, expectedTxn, &next,
 		); err != nil {
 			return nil, err
 		}
@@ -629,7 +629,7 @@ func (s *Service) recoverSnapshotLocked(ctx context.Context, sess *session.Sessi
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		return s.finalizeSnapshotLocked(ctx, sess)
+		return s.finalizeSnapshotLocked(ctx, sess, token)
 	default:
 		return nil, session.ErrInvalidState
 	}
@@ -652,7 +652,7 @@ func (s *Service) rollbackPreparingSnapshot(ctx context.Context, sess *session.S
 	next := *sess
 	next.SnapshotTransaction = nil
 	if err := s.store.CompareAndSwapSession(
-		rollbackCtx, sess.ID, sess.State, expectedTxn, &next,
+		rollbackCtx, sess.ID, txn.Owner, sess.State, expectedTxn, &next,
 	); err != nil {
 		return errors.Join(cause, err)
 	}
@@ -684,7 +684,7 @@ func (s *Service) abortSnapshotGenerationWithCheckpointer(ctx context.Context, c
 	return aborter.AbortCheckpoint(abortCtx, k8s.PodRef{Name: pod}, &session.Checkpoint{AbortToken: generation})
 }
 
-func (s *Service) finalizeSnapshotLocked(ctx context.Context, sess *session.Session) (*session.Session, error) {
+func (s *Service) finalizeSnapshotLocked(ctx context.Context, sess *session.Session, token string) (*session.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -699,7 +699,7 @@ func (s *Service) finalizeSnapshotLocked(ctx context.Context, sess *session.Sess
 	next.Checkpoint = txn.Checkpoint
 	next.SnapshotTransaction = nil
 	if err := s.store.CompareAndSwapSession(
-		ctx, sess.ID, sess.State, expectedTxn, &next,
+		ctx, sess.ID, token, sess.State, expectedTxn, &next,
 	); err != nil {
 		if errors.Is(err, session.ErrConflict) {
 			fresh, getErr := s.Get(ctx, sess.ID)
@@ -815,7 +815,7 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 	next.Checkpoint = nil
 	next.LastAccess = now
 	if err := s.store.CompareAndSwapSession(
-		ctx, id, session.StateSnapshot, sess.SnapshotTransaction, &next,
+		ctx, id, token, session.StateSnapshot, sess.SnapshotTransaction, &next,
 	); err != nil {
 		fresh, getErr := s.getSessionBestEffort(id)
 		if getErr == nil &&
@@ -827,7 +827,9 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 			// lost. Deleting pod here would corrupt an active session.
 			return fresh, nil
 		}
-		if getErr == nil || errors.Is(err, session.ErrConflict) {
+		if getErr == nil ||
+			errors.Is(err, session.ErrConflict) ||
+			errors.Is(getErr, session.ErrNotFound) {
 			// The authoritative record proves our target was not committed, or
 			// the CAS was definitively rejected.
 			s.stopPodBestEffort(pod)
@@ -855,18 +857,67 @@ func (s *Service) unlockBestEffort(id, token string) {
 	_ = s.store.Unlock(unlockCtx, id, token)
 }
 
-// Terminate reclaims the pod (if any) and removes the session (AC-A3).
-func (s *Service) Terminate(ctx context.Context, id string) error {
+// Terminate reclaims the pod (if any) and removes the session (AC-A3). It uses
+// the same per-session Lease as snapshot/restore so deletion cannot race a
+// restore target into existence or remove metadata underneath a snapshot
+// transaction.
+func (s *Service) Terminate(ctx context.Context, id string) (retErr error) {
+	token, err := newID()
+	if err != nil {
+		return err
+	}
+	if err := s.store.Lock(ctx, id, token); err != nil {
+		return err
+	}
+	defer s.unlockBestEffort(id, token)
+
+	operationCtx, stopRenewal := s.renewLeaseContext(ctx, id, token)
+	ctx = operationCtx
+	deleteCommitted := false
+	defer func() {
+		// Once deletion commits, absence is authoritative; a simultaneous heartbeat
+		// failure must not turn success into an outcome-ambiguous 500 response.
+		if err := stopRenewal(); err != nil && !deleteCommitted {
+			retErr = errors.Join(retErr, err)
+		}
+	}()
+
 	sess, err := s.Get(ctx, id)
 	if err != nil {
 		return err
 	}
-	if sess.Pod != "" {
-		if err := s.orch.Stop(ctx, k8s.PodRef{Name: sess.Pod}); err != nil {
+	if sess.SnapshotTransaction != nil {
+		expectedTxn := cloneSnapshotTransaction(sess.SnapshotTransaction)
+		claimedTxn := cloneSnapshotTransaction(expectedTxn)
+		claimedTxn.Owner = token
+		next := *sess
+		next.SnapshotTransaction = claimedTxn
+		if err := s.store.CompareAndSwapSession(
+			ctx, id, token, sess.State, expectedTxn, &next,
+		); err != nil {
+			return err
+		}
+		sess = &next
+	}
+
+	pods := []string{sess.Pod}
+	if txn := sess.SnapshotTransaction; txn != nil && txn.SourcePod != sess.Pod {
+		pods = append(pods, txn.SourcePod)
+	}
+	for _, pod := range pods {
+		if pod == "" {
+			continue
+		}
+		if err := s.orch.Stop(ctx, k8s.PodRef{Name: pod}); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 	}
-	return s.store.Delete(ctx, id)
+	retErr = s.store.Delete(ctx, id, token)
+	deleteCommitted = retErr == nil
+	return retErr
 }
 
 // touch updates LastAccess without changing state.
