@@ -9,6 +9,7 @@ package integration_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -30,6 +31,24 @@ func envOf(c corev1.Container, name string) (string, bool) {
 	return "", false
 }
 
+func envVarOf(c corev1.Container, name string) (corev1.EnvVar, bool) {
+	for _, env := range c.Env {
+		if env.Name == name {
+			return env, true
+		}
+	}
+	return corev1.EnvVar{}, false
+}
+
+func containerNamed(pod corev1.Pod, name string) (corev1.Container, bool) {
+	for _, container := range pod.Spec.Containers {
+		if container.Name == name {
+			return container, true
+		}
+	}
+	return corev1.Container{}, false
+}
+
 // AC-E1: "control plane은 타입에 따라 서로 다른 data plane 워크로드로 pod를
 // 프로비저닝한다" — the two types must not produce the same pod. Image, the
 // workload env var and the workload label all have to follow the type.
@@ -37,20 +56,24 @@ func TestClientOrchestrator_PodSpecBranchesOnWorkloadType(t *testing.T) {
 	const shellImage = "ghcr.io/dlddu/session-platform-data-plane:dev"
 
 	cases := []struct {
-		workload  session.WorkloadType
-		wantImage string
+		workload       session.WorkloadType
+		wantImage      string
+		wantContainers int
 	}{
-		{session.WorkloadTypeShell, shellImage},
-		{session.WorkloadTypeClaudeCode, claudeCodeImage},
+		{session.WorkloadTypeShell, shellImage, 1},
+		{session.WorkloadTypeClaudeCode, claudeCodeImage, 2},
 	}
 	for _, tc := range cases {
 		orch, cs := newReadyOrchestrator(t,
 			k8s.WithImage(shellImage),
 			k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, claudeCodeImage))
-		if _, err := orch.Start(context.Background(), "wt01", tc.workload); err != nil {
+		if _, err := orch.Start(context.Background(), "wt01", k8s.WorkloadSpec{Type: tc.workload}); err != nil {
 			t.Fatalf("start (%s): %v", tc.workload, err)
 		}
 		pod := listPods(t, cs)[0]
+		if len(pod.Spec.Containers) != tc.wantContainers {
+			t.Fatalf("%s: containers = %d, want %d", tc.workload, len(pod.Spec.Containers), tc.wantContainers)
+		}
 		c := pod.Spec.Containers[0]
 		if c.Image != tc.wantImage {
 			t.Errorf("%s: image = %q, want %q", tc.workload, c.Image, tc.wantImage)
@@ -69,7 +92,7 @@ func TestClientOrchestrator_PodSpecBranchesOnWorkloadType(t *testing.T) {
 // keeps getting exactly the pod it used to get.
 func TestClientOrchestrator_UnspecifiedWorkloadTypeIsShell(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t, k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"))
-	if _, err := orch.Start(context.Background(), "wt02", ""); err != nil {
+	if _, err := orch.Start(context.Background(), "wt02", k8s.WorkloadSpec{}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	pod := listPods(t, cs)[0]
@@ -81,13 +104,171 @@ func TestClientOrchestrator_UnspecifiedWorkloadTypeIsShell(t *testing.T) {
 	}
 }
 
+// AC-E6: Claude Code model selection is normalized at the orchestrator
+// boundary and copied into the pod. Invalid settings are rejected before a pod
+// is created, including a model on a shell workload.
+func TestClientOrchestrator_ModelIsValidatedAndCopiedToPod(t *testing.T) {
+	cases := []struct {
+		name      string
+		id        string
+		spec      k8s.WorkloadSpec
+		wantModel string
+		wantErr   bool
+	}{
+		{
+			name:      "claude-code defaults to platform model",
+			id:        "model-default",
+			spec:      k8s.WorkloadSpec{Type: session.WorkloadTypeClaudeCode},
+			wantModel: session.PlatformDefaultModel,
+		},
+		{
+			name:      "explicit claude-code model",
+			id:        "model-explicit",
+			spec:      k8s.WorkloadSpec{Type: session.WorkloadTypeClaudeCode, Model: "claude-sonnet-4-5"},
+			wantModel: "claude-sonnet-4-5",
+		},
+		{
+			name:    "invalid claude-code model",
+			id:      "model-invalid",
+			spec:    k8s.WorkloadSpec{Type: session.WorkloadTypeClaudeCode, Model: "bad model"},
+			wantErr: true,
+		},
+		{
+			name:    "shell rejects model",
+			id:      "model-shell",
+			spec:    k8s.WorkloadSpec{Type: session.WorkloadTypeShell, Model: "claude-sonnet-4-5"},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			orch, cs := newReadyOrchestrator(t,
+				k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
+				k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, claudeCodeImage))
+			_, err := orch.Start(context.Background(), tc.id, tc.spec)
+			if tc.wantErr {
+				if !errors.Is(err, session.ErrInvalidInput) {
+					t.Fatalf("err = %v, want ErrInvalidInput", err)
+				}
+				if pods := listPods(t, cs); len(pods) != 0 {
+					t.Fatalf("created %d pods for invalid model, want 0", len(pods))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			got, ok := envOf(listPods(t, cs)[0].Spec.Containers[0], k8s.ClaudeCodeModelEnvVar)
+			if !ok || got != tc.wantModel {
+				t.Errorf("%s = %q (present=%v), want %q", k8s.ClaudeCodeModelEnvVar, got, ok, tc.wantModel)
+			}
+		})
+	}
+}
+
+// AC-E6: the tool-running Claude container must never receive the provider
+// Secret. Only a hardened, separate-PID-namespace localhost proxy holds it;
+// the main container sees a non-secret placeholder and cannot recover the real
+// token with Read/Bash or transformed output.
+func TestClientOrchestrator_ClaudeCredentialsAreIsolatedInSidecar(t *testing.T) {
+	orch, cs := newReadyOrchestrator(t,
+		k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
+		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, claudeCodeImage),
+		k8s.WithClaudeCredentialsSecret("provider-credentials"),
+		k8s.WithCheckpointPrivileged(true),
+	)
+	if _, err := orch.Start(context.Background(), "credential-isolation", k8s.WorkloadSpec{
+		Type: session.WorkloadTypeClaudeCode,
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	pod := listPods(t, cs)[0]
+	if len(pod.Spec.Containers) != 2 {
+		t.Fatalf("containers = %d, want agent + credential proxy", len(pod.Spec.Containers))
+	}
+	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
+		t.Fatal("session pod must not mount a Kubernetes service-account token")
+	}
+	if pod.Spec.ShareProcessNamespace != nil && *pod.Spec.ShareProcessNamespace {
+		t.Fatal("credential proxy must keep its separate PID namespace")
+	}
+
+	main, ok := containerNamed(pod, k8s.ContainerName)
+	if !ok {
+		t.Fatalf("missing main container %q", k8s.ContainerName)
+	}
+	for _, env := range main.Env {
+		if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil {
+			t.Fatalf("main container env %s references Secret %q", env.Name, env.ValueFrom.SecretKeyRef.Name)
+		}
+	}
+	baseURL, ok := envVarOf(main, k8s.AnthropicBaseURLEnvVar)
+	if !ok || baseURL.Value != k8s.ClaudeCredentialProxyURL {
+		t.Fatalf("main base URL = %q (present=%v), want %q", baseURL.Value, ok, k8s.ClaudeCredentialProxyURL)
+	}
+	placeholder, ok := envVarOf(main, k8s.AnthropicAuthTokenEnvVar)
+	if !ok || placeholder.Value != "session-platform-proxy" {
+		t.Fatalf("main auth token = %q (present=%v), want non-secret proxy placeholder", placeholder.Value, ok)
+	}
+	if main.SecurityContext != nil && main.SecurityContext.Privileged != nil && *main.SecurityContext.Privileged {
+		t.Fatal("claude-code main container became privileged under the CRIU gate")
+	}
+	if len(main.VolumeMounts) != 1 || main.VolumeMounts[0].MountPath != "/session" {
+		t.Fatalf("claude state mount = %+v, want one /session mount", main.VolumeMounts)
+	}
+	if len(pod.Spec.Volumes) != 1 || pod.Spec.Volumes[0].EmptyDir == nil ||
+		pod.Spec.Volumes[0].Name != main.VolumeMounts[0].Name {
+		t.Fatalf("claude state volume = %+v, want one matching emptyDir", pod.Spec.Volumes)
+	}
+
+	proxy, ok := containerNamed(pod, k8s.ClaudeCredentialsContainerName)
+	if !ok {
+		t.Fatalf("missing credential container %q", k8s.ClaudeCredentialsContainerName)
+	}
+	if len(proxy.VolumeMounts) != 0 {
+		t.Fatalf("credential proxy must not mount Claude session state: %+v", proxy.VolumeMounts)
+	}
+	if got, _ := envOf(proxy, "DATA_PLANE_WORKLOAD"); got != "credential-proxy" {
+		t.Fatalf("proxy workload = %q, want credential-proxy", got)
+	}
+	if got, _ := envOf(proxy, "DATA_PLANE_AGENT_ADDR"); got != "127.0.0.1:8091" {
+		t.Fatalf("proxy listen address = %q, want loopback", got)
+	}
+	for _, tc := range []struct {
+		name string
+		key  string
+	}{
+		{k8s.AnthropicBaseURLEnvVar, k8s.ClaudeCodeBaseURLSecretKey},
+		{k8s.AnthropicAuthTokenEnvVar, k8s.ClaudeCodeAuthTokenSecretKey},
+	} {
+		env, ok := envVarOf(proxy, tc.name)
+		if !ok || env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
+			t.Fatalf("proxy env %s is not Secret-backed: %+v", tc.name, env)
+		}
+		selector := env.ValueFrom.SecretKeyRef
+		if selector.Name != "provider-credentials" || selector.Key != tc.key {
+			t.Fatalf("proxy env %s selector = %s/%s, want provider-credentials/%s", tc.name, selector.Name, selector.Key, tc.key)
+		}
+	}
+	if proxy.ReadinessProbe == nil || proxy.ReadinessProbe.Exec == nil {
+		t.Fatal("loopback credential proxy needs an in-container readiness probe")
+	}
+	security := proxy.SecurityContext
+	if security == nil || security.RunAsNonRoot == nil || !*security.RunAsNonRoot ||
+		security.AllowPrivilegeEscalation == nil || *security.AllowPrivilegeEscalation ||
+		security.ReadOnlyRootFilesystem == nil || !*security.ReadOnlyRootFilesystem {
+		t.Fatalf("credential proxy security context is not hardened: %+v", security)
+	}
+}
+
 // A type with no image configured must fail loudly and provision nothing. The
 // alternative — silently falling back to the shell image — would hand the
 // caller a session that claims a workload it is not running, which is the exact
 // "gate-behind-a-stub" shape the convergence model rejects.
 func TestClientOrchestrator_UnconfiguredWorkloadTypeIsRefused(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t, k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"))
-	_, err := orch.Start(context.Background(), "wt03", session.WorkloadTypeClaudeCode)
+	_, err := orch.Start(context.Background(), "wt03", k8s.WorkloadSpec{Type: session.WorkloadTypeClaudeCode})
 	if err == nil {
 		t.Fatal("start with an unconfigured workload type succeeded, want an error")
 	}
@@ -106,19 +287,24 @@ func TestClientOrchestrator_RestoreKeepsWorkloadType(t *testing.T) {
 		k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, claudeCodeImage))
 
-	ref, err := orch.RestoreInto(context.Background(), "wt04", "s3://bucket/wt04.tar", session.WorkloadTypeClaudeCode)
+	const model = "claude-sonnet-4-5"
+	ref, err := orch.RestoreInto(context.Background(), "wt04", "s3://bucket/wt04.tar", k8s.WorkloadSpec{Type: session.WorkloadTypeClaudeCode, Model: model})
 	if err != nil {
 		t.Fatalf("restore into: %v", err)
 	}
 	var pod *corev1.Pod
-	for i, p := range listPods(t, cs) {
-		if p.Name == ref.Name {
-			pod = &listPods(t, cs)[i]
+	pods := listPods(t, cs)
+	for i := range pods {
+		if pods[i].Name == ref.Name {
+			pod = &pods[i]
 			break
 		}
 	}
 	if pod == nil {
 		t.Fatalf("restore pod %q not found", ref.Name)
+	}
+	if got, _ := envOf(pod.Spec.Containers[0], k8s.ClaudeCodeModelEnvVar); got != model {
+		t.Errorf("restore %s = %q, want %q", k8s.ClaudeCodeModelEnvVar, got, model)
 	}
 	if got := pod.Labels[k8s.LabelWorkloadType]; got != string(session.WorkloadTypeClaudeCode) {
 		t.Errorf("%s label = %q, want %q", k8s.LabelWorkloadType, got, session.WorkloadTypeClaudeCode)
@@ -126,7 +312,10 @@ func TestClientOrchestrator_RestoreKeepsWorkloadType(t *testing.T) {
 	if got := pod.Spec.Containers[0].Image; got != claudeCodeImage {
 		t.Errorf("restore image = %q, want %q", got, claudeCodeImage)
 	}
-	if _, ok := pod.Annotations[k8s.AnnotationRestoreCheckpoint]; !ok {
-		t.Errorf("restore pod is missing %s", k8s.AnnotationRestoreCheckpoint)
+	if _, ok := pod.Annotations[k8s.AnnotationRestoreArchive]; !ok {
+		t.Errorf("restore pod is missing %s", k8s.AnnotationRestoreArchive)
+	}
+	if _, ok := pod.Annotations[k8s.AnnotationRestoreCheckpoint]; ok {
+		t.Errorf("claude-code restore pod unexpectedly carries CRIU annotation %s", k8s.AnnotationRestoreCheckpoint)
 	}
 }

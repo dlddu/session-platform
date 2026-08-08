@@ -2,6 +2,7 @@ import { useNavigate } from "react-router-dom";
 import type { Session } from "../api/types";
 import { StateBadge } from "./StateBadge";
 import { ClockIcon, CrystalIcon, PodIcon } from "./icons";
+import { sessionEntryPath } from "./sessionRoutes";
 
 // MaxIdle mirrors control-plane/internal/session.MaxIdle (60m). A session
 // freezes once it has been idle this long; the idle card counts down to it.
@@ -85,7 +86,9 @@ function SnapshotBody({ s, now }: { s: Session; now: number }) {
         </div>
         <div className="snap-meta">
           <div className="row">
-            <span className="k">checkpoint</span>
+            <span className="k">
+              {s.workloadType === "claude-code" ? "archive" : "checkpoint"}
+            </span>
             <span className="v">{cp ? fmtBytes(cp.sizeBytes) : "—"}</span>
           </div>
           <div className="row">
@@ -99,7 +102,10 @@ function SnapshotBody({ s, now }: { s: Session; now: number }) {
         </div>
       </div>
       <div className="snap-hint">
-        <ClockIcon size={13} /> open to thaw and resume exactly where it froze
+        <ClockIcon size={13} />{" "}
+        {s.workloadType === "claude-code"
+          ? "open to restore the archive and continue the conversation"
+          : "open to thaw and resume exactly where it froze"}
       </div>
     </>
   );
@@ -116,10 +122,9 @@ export function SessionCard({ s, now }: { s: Session; now: number }) {
       data-testid="session-card"
       data-session-id={s.id}
       data-state={s.state}
-      onClick={() =>
-        navigate(s.state === "snapshot" ? `/restore/${s.id}` : `/session/${s.id}`)
-      }
-      aria-label={`${s.name}, ${s.state}`}
+      data-workload-type={s.workloadType}
+      onClick={() => navigate(sessionEntryPath(s))}
+      aria-label={`${s.name}, ${s.workloadType}, ${s.state}`}
     >
       {s.state === "snapshot" && (
         <>
@@ -149,6 +154,15 @@ export function SessionCard({ s, now }: { s: Session; now: number }) {
             <PodIcon size={12} /> pod/{s.pod}
           </span>
         )}
+        <span
+          className={
+            "workload-tag" +
+            (s.workloadType === "claude-code" ? " workload-tag-agent" : "")
+          }
+          title={`workloadType=${s.workloadType}`}
+        >
+          {s.workloadType === "claude-code" ? "◇ claude-code" : "$ shell"}
+        </span>
       </div>
     </button>
   );

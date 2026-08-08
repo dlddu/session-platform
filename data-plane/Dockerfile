@@ -1,7 +1,8 @@
-# Data plane session agent image: the ENTRYPOINT launches exactly one
-# PTY-attached interactive shell (default /bin/bash, DATA_PLANE_SHELL
-# overrides) and serves the /attach + /healthz endpoints the control plane
-# reaches at the active transition (AC-D1). See cmd/agent and ./README.md.
+# Multi-workload data plane image. DATA_PLANE_WORKLOAD selects a PTY-attached
+# shell, the serial one-shot Claude Code runner, or its localhost credential
+# proxy sidecar. Shell and Claude expose lifecycle/I/O endpoints; shell adds
+# CRIU snapshots, Claude adds filesystem archives, and the proxy isolates auth.
+# See cmd/agent and ./README.md.
 # Build from the repo root:  docker build -f data-plane/Dockerfile -t session-platform/data-plane .
 
 # ---- stage 1: build the agent ----
@@ -37,11 +38,23 @@ RUN curl -fsSL "https://github.com/checkpoint-restore/criu/archive/refs/tags/v${
  && make -j"$(nproc)" criu \
  && ./criu/criu --version
 
-# ---- stage 3: runtime ----
+# ---- stage 3: install the official Claude Code package ----
+# Install from the official package in a Node 22, trixie-based build stage, then
+# copy that immutable installation into the runtime. The ARG remains
+# overridable, while the default is a published exact version rather than the
+# moving npm "latest" tag.
+FROM node:22-trixie-slim AS claude-build
+ARG CLAUDE_CODE_VERSION=2.1.220
+ENV DISABLE_AUTOUPDATER=1
+RUN npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+ && claude --version \
+ && npm cache clean --force
+
+# ---- stage 4: runtime ----
 # A full glibc distro rather than distroless/alpine: the session workload IS an
-# interactive /bin/bash with the standard userland, and glibc keeps the pod
-# CRIU-friendly (AC-B*/AC-D4, see ../docs/criu-verification.md). Only criu and
-# the static agent binary are added on top.
+# interactive /bin/bash or Node-based Claude CLI, and glibc keeps shell pods
+# CRIU-friendly (AC-B*/AC-D4, see ../docs/criu-verification.md). The pinned
+# Node/Claude runtime, criu, and static agent are added below.
 # debian:trixie for the CRIU story: the agent CRIU-dumps/restores its shell tree
 # in-pod (agent-driven checkpoint, docs/criu-verification.md). The 2026-07-23
 # on-cluster verification showed jammy's CRIU 3.16.1 cannot parse the vdso on
@@ -52,8 +65,14 @@ RUN curl -fsSL "https://github.com/checkpoint-restore/criu/archive/refs/tags/v${
 FROM debian:trixie
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
+      ca-certificates \
       libbsd0 libcap2 libnet1 libnl-3-200 libnl-route-3-200 libprotobuf-c1 libuuid1 \
  && rm -rf /var/lib/apt/lists/*
+# The same image serves both workload modes. Copy the official Node 22 runtime,
+# npm installation metadata, and the pinned Claude Code package together.
+COPY --from=claude-build /usr/local/ /usr/local/
+ENV DISABLE_AUTOUPDATER=1
+RUN node --version && npm --version && claude --version
 COPY --from=criu-build /src/criu/criu /usr/local/sbin/criu
 # Fail the image build (i.e. in CI) if the copied binary is missing a shared
 # library here, instead of discovering it when a session pod tries to checkpoint.

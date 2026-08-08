@@ -5,14 +5,14 @@ name: e2e
 # apply the manifests, then run the Go API suite and the Playwright browser
 # suite against the NodePort-exposed control-plane.
 #
-# Path-filtered so it runs only when the control-plane, data-plane, web, deploy
-# manifests, or this workflow change (plus on-demand). Unrelated PRs don't
-# trigger it; the lint/unit/build jobs in ci.yml still run on every PR.
+# Path-filtered to control-plane, data-plane, web, deploy/k8s manifests,
+# e2e scripts, Makefile, and this workflow (plus on-demand). Unrelated PRs do
+# not trigger it; the lint/unit/build jobs in ci.yml still run on every PR.
 on:
   pull_request:
     paths:
       - "control-plane/**"
-      - "data-plane/**" # session pods run this agent image (AC-D1 runtime assertions)
+      - "data-plane/**" # session pods run this multi-workload agent image
       - "web/**"
       - "deploy/**"
       - "k8s/**" # deploy/ overlay builds on the k8s/ base
@@ -56,11 +56,11 @@ jobs:
       # run here? Since checkpoint/restore moved into the agent (it execs criu
       # itself, docs/criu-verification.md decision ⑤), kind no longer needs a
       # CRIU-capable *runtime* — only a capable kernel and a privileged pod. This
-      # step answers whether that holds on a GitHub runner's kernel with kind's
-      # nested containers, which decides whether the CRIU round-trip can become a
-      # real e2e assertion (today it stays a skipped seed: there is also no
-      # HTTP-reachable snapshot trigger). continue-on-error keeps a negative
-      # answer from failing the suite — read the step's log for the verdict.
+      # step exposes that preflight signal on a GitHub runner's kernel with
+      # kind's nested containers. The deploy overlay already enables the
+      # test-only HTTP snapshot trigger and TestDeferred_CRIUIntegrity is the
+      # authoritative real round-trip assertion. continue-on-error keeps this
+      # duplicate diagnostic from hiding that API-test verdict.
       - name: CRIU probe (in-pod criu viability on this runner)
         continue-on-error: true
         run: |

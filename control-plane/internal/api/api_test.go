@@ -19,15 +19,23 @@ import (
 )
 
 func newServer(opts ...api.Option) *httptest.Server {
+	srv, _ := newServerWithOrchestrator(opts...)
+	return srv
+}
+
+func newServerWithOrchestrator(opts ...api.Option) (*httptest.Server, *k8s.StubOrchestrator) {
+	orch := k8s.NewStubOrchestrator("sessions")
+	ckpt := criu.NewStubCheckpointer(true)
 	mgr := service.New(
-		k8s.NewStubOrchestrator("sessions"),
+		orch,
 		configmap.NewStore(fake.NewSimpleClientset(), "sessions"),
-		criu.NewStubCheckpointer(false),
+		ckpt,
 		agent.NewStubClient(),
+		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 	)
 	mux := http.NewServeMux()
 	api.New(mgr, opts...).Routes(mux)
-	return httptest.NewServer(mux)
+	return httptest.NewServer(mux), orch
 }
 
 // createForTest creates a session through the API and returns it.

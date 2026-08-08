@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/dlddu/session-platform/control-plane/internal/api"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
@@ -28,12 +29,10 @@ func createRaw(t *testing.T, url string, body map[string]any) (int, session.Sess
 	return resp.StatusCode, s
 }
 
-// AC-E1: the create request carries the workload type. Omitting it must keep
-// the pre-type behaviour (a shell session), an allowed value must be honoured
-// and echoed back, and anything else must be a 400 — the type axis must not
-// become a way to smuggle an unknown workload past the control plane.
+// AC-E1/AC-E6: the create wire contract validates immutable workload settings,
+// echoes their normalized values, and copies them to provisioning.
 func TestCreateSessionWorkloadType(t *testing.T) {
-	srv := newServer()
+	srv, orch := newServerWithOrchestrator()
 	defer srv.Close()
 
 	t.Run("omitted defaults to shell", func(t *testing.T) {
@@ -43,6 +42,9 @@ func TestCreateSessionWorkloadType(t *testing.T) {
 		}
 		if s.WorkloadType != session.WorkloadTypeShell {
 			t.Errorf("workloadType = %q, want %q", s.WorkloadType, session.WorkloadTypeShell)
+		}
+		if s.Model != "" || orch.ModelFor(s.ID) != "" {
+			t.Errorf("shell model = %q, orchestrator model = %q, want both empty", s.Model, orch.ModelFor(s.ID))
 		}
 	})
 
@@ -54,9 +56,12 @@ func TestCreateSessionWorkloadType(t *testing.T) {
 		if s.WorkloadType != session.WorkloadTypeShell {
 			t.Errorf("workloadType = %q, want %q", s.WorkloadType, session.WorkloadTypeShell)
 		}
+		if got := orch.ModelFor(s.ID); got != "" {
+			t.Errorf("orchestrator model = %q, want empty", got)
+		}
 	})
 
-	t.Run("explicit claude-code", func(t *testing.T) {
+	t.Run("claude-code defaults to platform model", func(t *testing.T) {
 		status, s := createRaw(t, srv.URL, map[string]any{"name": "wt-cc", "workloadType": "claude-code"})
 		if status != http.StatusCreated {
 			t.Fatalf("status = %d, want 201", status)
@@ -64,41 +69,86 @@ func TestCreateSessionWorkloadType(t *testing.T) {
 		if s.WorkloadType != session.WorkloadTypeClaudeCode {
 			t.Errorf("workloadType = %q, want %q", s.WorkloadType, session.WorkloadTypeClaudeCode)
 		}
+		if s.Model != session.PlatformDefaultModel {
+			t.Errorf("model = %q, want %q", s.Model, session.PlatformDefaultModel)
+		}
+		if got := orch.ModelFor(s.ID); got != session.PlatformDefaultModel {
+			t.Errorf("orchestrator model = %q, want %q", got, session.PlatformDefaultModel)
+		}
+	})
+
+	t.Run("explicit claude-code model", func(t *testing.T) {
+		const model = "claude-sonnet-4-5"
+		status, s := createRaw(t, srv.URL, map[string]any{
+			"name": "wt-cc-model", "workloadType": "claude-code", "model": model,
+		})
+		if status != http.StatusCreated {
+			t.Fatalf("status = %d, want 201", status)
+		}
+		if s.Model != model {
+			t.Errorf("model = %q, want %q", s.Model, model)
+		}
+		if got := orch.ModelFor(s.ID); got != model {
+			t.Errorf("orchestrator model = %q, want %q", got, model)
+		}
 	})
 
 	t.Run("unknown type is rejected", func(t *testing.T) {
-		for _, bad := range []string{"foo", "SHELL", "claude_code", " shell"} {
+		before := orch.RunningCount()
+		for _, bad := range []any{"foo", "SHELL", "claude_code", " shell", "", nil, 42} {
 			status, _ := createRaw(t, srv.URL, map[string]any{"name": "wt-bad", "workloadType": bad})
 			if status != http.StatusBadRequest {
-				t.Errorf("workloadType=%q: status = %d, want 400", bad, status)
+				t.Errorf("workloadType=%v: status = %d, want 400", bad, status)
+			}
+		}
+		if got := orch.RunningCount(); got != before {
+			t.Errorf("invalid workload types provisioned pods: running=%d, want %d", got, before)
+		}
+	})
+
+	t.Run("invalid models are rejected", func(t *testing.T) {
+		cases := []map[string]any{
+			{"name": "model-shell", "workloadType": "shell", "model": "claude-sonnet-4-5"},
+			{"name": "model-empty", "workloadType": "claude-code", "model": ""},
+			{"name": "model-trim", "workloadType": "claude-code", "model": " claude-sonnet-4-5"},
+			{"name": "model-null", "workloadType": "claude-code", "model": nil},
+			{"name": "model-number", "workloadType": "claude-code", "model": 42},
+			{"name": "model-space", "workloadType": "claude-code", "model": "bad model"},
+			{"name": "model-option", "workloadType": "claude-code", "model": "--danger"},
+		}
+		for _, body := range cases {
+			status, _ := createRaw(t, srv.URL, body)
+			if status != http.StatusBadRequest {
+				t.Errorf("body=%v: status = %d, want 400", body, status)
 			}
 		}
 	})
 }
 
-// AC-E1: the type is immutable for the session's lifetime. There is no API that
-// changes it — this pins that: the fields a client can send on create are the
-// only lever, and a subsequent GET reports what creation fixed. If a mutation
-// endpoint is ever added, this test is where the immutability rule has to be
-// re-argued.
+// AC-E1/AC-E6: workload type and model are immutable for the session lifetime.
 func TestWorkloadTypeIsImmutableAfterCreate(t *testing.T) {
-	srv := newServer()
+	srv, orch := newServerWithOrchestrator()
 	defer srv.Close()
 
-	status, created := createRaw(t, srv.URL, map[string]any{"name": "wt-immutable", "workloadType": "claude-code"})
+	const model = "claude-sonnet-4-5"
+	status, created := createRaw(t, srv.URL, map[string]any{
+		"name": "wt-immutable", "workloadType": "claude-code", "model": model,
+	})
 	if status != http.StatusCreated {
 		t.Fatalf("status = %d, want 201", status)
 	}
 
-	// Every mutating route the API exposes for an existing session; none of them
-	// takes a type, so none of them can change it.
+	// Existing-session routes reject attempted immutable-field mutations.
 	for _, path := range []string{"/read", "/write", "/switch"} {
-		body := bytes.NewReader([]byte(`{"workloadType":"shell","payload":"x"}`))
+		body := bytes.NewReader([]byte(`{"workloadType":"shell","model":"platform-default","payload":"x"}`))
 		resp, err := http.Post(srv.URL+"/api/v1/sessions/"+created.ID+path, "application/json", body)
 		if err != nil {
 			t.Fatalf("post %s: %v", path, err)
 		}
 		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("post %s status = %d, want 400", path, resp.StatusCode)
+		}
 	}
 
 	resp, err := http.Get(srv.URL + "/api/v1/sessions/" + created.ID)
@@ -112,5 +162,65 @@ func TestWorkloadTypeIsImmutableAfterCreate(t *testing.T) {
 	}
 	if got.WorkloadType != session.WorkloadTypeClaudeCode {
 		t.Errorf("workloadType after mutating calls = %q, want %q", got.WorkloadType, session.WorkloadTypeClaudeCode)
+	}
+	if got.Model != model {
+		t.Errorf("model after mutating calls = %q, want %q", got.Model, model)
+	}
+	if provisioned := orch.ModelFor(created.ID); provisioned != model {
+		t.Errorf("orchestrator model = %q, want %q", provisioned, model)
+	}
+}
+
+// AC-E6: the API-visible model remains fixed while snapshot access restores a
+// new pod, and the restored provisioning request receives the same model.
+func TestModelSurvivesSnapshotRestoreOverHTTP(t *testing.T) {
+	srv, orch := newServerWithOrchestrator(api.WithTestEndpoints(true))
+	defer srv.Close()
+
+	const model = "claude-sonnet-4-5"
+	status, created := createRaw(t, srv.URL, map[string]any{
+		"name": "model-round-trip", "workloadType": "claude-code", "model": model,
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", status)
+	}
+
+	resp, err := http.Post(srv.URL+"/api/v1/sessions/"+created.ID+"/snapshot", "application/json", nil)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		t.Fatalf("snapshot status = %d, want 200", resp.StatusCode)
+	}
+	var frozen session.Session
+	if err := json.NewDecoder(resp.Body).Decode(&frozen); err != nil {
+		resp.Body.Close()
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	resp.Body.Close()
+	if frozen.State != session.StateSnapshot || frozen.Model != model {
+		t.Errorf("frozen state/model = %q/%q, want snapshot/%q", frozen.State, frozen.Model, model)
+	}
+
+	resp, err = http.Post(srv.URL+"/api/v1/sessions/"+created.ID+"/switch", "application/json", nil)
+	if err != nil {
+		t.Fatalf("restore switch: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		t.Fatalf("restore switch status = %d, want 200", resp.StatusCode)
+	}
+	var restored session.Session
+	if err := json.NewDecoder(resp.Body).Decode(&restored); err != nil {
+		resp.Body.Close()
+		t.Fatalf("decode restored session: %v", err)
+	}
+	resp.Body.Close()
+	if restored.State != session.StateActive || restored.Model != model {
+		t.Errorf("restored state/model = %q/%q, want active/%q", restored.State, restored.Model, model)
+	}
+	if got := orch.ModelFor(created.ID); got != model {
+		t.Errorf("restored orchestrator model = %q, want %q", got, model)
 	}
 }

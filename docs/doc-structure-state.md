@@ -83,7 +83,7 @@
 
 ### 🟠 인접 사슬에서 인지된 항목 (이 스킬 관할 밖, 참고용)
 - **고아 가치(소유자 미지정)**: V1~V5·V8 전부 소유자 미지정 — `doc-tracker.md`/`values.md` 참고. product-doc-engineer 영역이라 여기서 수정하지 않음.
-- **mockup 내용이 상류 열린 항목에 의존**: `new-session.html`의 모델 이름·기본값(AC-E6 열린 항목)과 `agent-workspace.html`의 대화 재개 표현(AC-E4 열린 항목)은 **자리표시자**다. 상류 확정 시 mockup 갱신 필요 (`mockups/README.md`의 "잠정성" 절 참고).
+- **mockup의 명시 model 예시**: `new-session.html`의 `model-a`/`model-b`는 자리표시자다. `platform-default` 별칭과 첫 성공 뒤 `--continue` 재개 방식은 AC-E4/E6에서 확정되어 `agent-workspace.html`은 그 사용자 관측 결과를 표현한다.
 - **에이전트 세션의 페르소나**: J6는 P1로 작성됐으나 전용 페르소나가 필요한지, P2(자동화 클라이언트)가 `claude-code` 세션을 쓰는 시나리오는 어떻게 다룰지 미확인 (`user-journeys/README.md` 미해결 항목).
 
 ## 수용된 위험
@@ -97,7 +97,7 @@
 | 🟡 | 부분 시각화 4단계 | 단계 전용 화면 필요 여부 검토 (web-artifacts-builder) |
 | 🟢 | mockup ↔ 정본 미연결 (토큰 값 6중복) | mockup을 `tokens.css`에 물릴지, "mockup은 스케치이므로 복제 수용"으로 갈지 **결정 필요**. 수용 시 본 문서 "수용된 위험"에 기록 |
 | 🟢 | SPA의 정본 준수 여부 미검증 | 다음 검증 시 `web/src/screens/`에 `shell.css` 밖 인라인 스타일·하드코딩 hex가 있는지 점검 |
-| 🔵 | 상류 열린 항목에 걸린 mockup 내용 | AC-E4(재개 방식)·AC-E6(기본 모델) 확정 시 mockup 갱신 |
+| 🔵 | 명시 model 예시 이름 | 실제 product model 선택지를 고정하면 `model-a`/`model-b` 교체 |
 | 🔵 | 여정의 미해결 항목 | `user-journeys/README.md`의 "미해결 항목" → product-doc-engineer로 보강 |
 
 > 위험은 자동으로 고치지 않습니다. 사용자가 인지한 상태에서 대응 방식을 결정합니다.

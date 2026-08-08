@@ -33,14 +33,27 @@ spec:
           env:
             - name: CP_ADDR
               value: ":8080"
-            # Session pods run the published data plane agent image: a
-            # PTY-attached interactive shell behind attach/healthz endpoints
-            # (AC-D1, see data-plane/). Published alongside the control-plane
-            # image by .github/workflows/docker-build-push.yaml.
+            # Session pods run the published multi-workload data plane agent
+            # image. DATA_PLANE_WORKLOAD selects PTY shell or Claude Code mode.
             - name: DATA_PLANE_IMAGE
               value: "ghcr.io/dlddu/session-platform-data-plane:latest"
             - name: CRIU_ENABLED
-              value: "false" # gated off until a verified runtime exists
+              # Production stays opt-in until node capability, privileged-pod,
+              # and durable checkpoint-store policies are explicitly approved.
+              value: "false"
+            - name: DATA_PLANE_CLAUDE_CODE_IMAGE
+              value: "ghcr.io/dlddu/session-platform-data-plane:latest"
+            # Only the localhost credential-proxy sidecar in a Claude session
+            # pod references this Secret; neither the tool-running container nor
+            # the control plane reads its base URL/token (AC-E6). Provision it
+            # out of band; see claude-code-credentials-secret.example.yaml.
+            - name: CLAUDE_CODE_CREDENTIALS_SECRET
+              value: "claude-code-credentials"
+            # Explicit data-transfer gate. When enabled, Claude workspace,
+            # conversation state and output archives are stored in the S3
+            # destination below. Keep off until that destination is approved.
+            - name: CLAUDE_CODE_ARCHIVE_ENABLED
+              value: "false"
             # Checkpoint archive S3 store config (decision ③, docs/criu-verification.md):
             # bucket / assume-role ARN / region / key prefix. Sourced from the
             # `checkpoint-s3` Secret rather than inlined here. The Secret is

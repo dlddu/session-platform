@@ -2,6 +2,8 @@ package configmap_test
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,6 +66,101 @@ func TestPutGetRoundTrip(t *testing.T) {
 	}
 	if got := cm.Labels["session-id"]; got != "a1b2" {
 		t.Errorf("session-id label=%q want a1b2", got)
+	}
+}
+
+func TestSnapshotTransactionIsDurableButHiddenFromPublicJSON(t *testing.T) {
+	ctx := context.Background()
+	store, cs := newStore(t)
+
+	in := sampleSession("txn1")
+	in.SnapshotTransaction = &session.SnapshotTransaction{
+		Generation: "0123456789abcdef0123456789abcdef",
+		Owner:      "fedcba9876543210fedcba9876543210",
+		SourcePod:  in.Pod,
+		Phase:      session.SnapshotPhaseCommitting,
+		Checkpoint: &session.Checkpoint{Ref: "s3://bucket/txn1.tar"},
+	}
+	if err := store.Put(ctx, in); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	got, err := store.Get(ctx, in.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.SnapshotTransaction == nil || got.SnapshotTransaction.Generation != in.SnapshotTransaction.Generation ||
+		got.SnapshotTransaction.Phase != session.SnapshotPhaseCommitting ||
+		got.SnapshotTransaction.Checkpoint == nil || got.SnapshotTransaction.Checkpoint.Ref != "s3://bucket/txn1.tar" {
+		t.Fatalf("snapshot transaction did not round-trip: %+v", got.SnapshotTransaction)
+	}
+	cm, err := cs.CoreV1().ConfigMaps(testNS).Get(ctx, "session-txn1", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw := cm.Data["session"]; !strings.Contains(raw, `"snapshotTxn"`) || !strings.Contains(raw, in.SnapshotTransaction.Generation) {
+		t.Fatalf("durable session JSON is missing snapshotTxn: %s", raw)
+	}
+	public, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(public), "snapshotTxn") || strings.Contains(string(public), in.SnapshotTransaction.Generation) {
+		t.Fatalf("public session JSON leaked snapshot transaction: %s", public)
+	}
+}
+
+func TestTouchAndAggregateCASPreserveTransactionFenceAndLatestAccess(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newStore(t)
+	in := sampleSession("txn-cas")
+	in.SnapshotTransaction = &session.SnapshotTransaction{
+		Generation: "0123456789abcdef0123456789abcdef",
+		Owner:      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		SourcePod:  in.Pod,
+		Phase:      session.SnapshotPhaseCommitting,
+		Checkpoint: &session.Checkpoint{Ref: "s3://bucket/txn-cas.tar"},
+	}
+	if err := store.Put(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	latest := in.LastAccess.Add(time.Minute)
+	if err := store.Touch(ctx, in.ID, latest); err != nil {
+		t.Fatal(err)
+	}
+	touched, err := store.Get(ctx, in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if touched.SnapshotTransaction == nil || touched.SnapshotTransaction.Owner != in.SnapshotTransaction.Owner {
+		t.Fatalf("touch lost transaction fence: %+v", touched.SnapshotTransaction)
+	}
+
+	wrong := *in.SnapshotTransaction
+	wrong.Owner = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	next := *in
+	next.State = session.StateSnapshot
+	next.Pod = ""
+	next.Checkpoint = in.SnapshotTransaction.Checkpoint
+	next.SnapshotTransaction = nil
+	if err := store.CompareAndSwapSession(ctx, in.ID, session.StateActive, &wrong, &next); err != session.ErrConflict {
+		t.Fatalf("CAS with stale owner err=%v, want ErrConflict", err)
+	}
+	if err := store.CompareAndSwapSession(ctx, in.ID, session.StateActive, in.SnapshotTransaction, &next); err != nil {
+		t.Fatalf("CAS with current owner: %v", err)
+	}
+	got, err := store.Get(ctx, in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != session.StateSnapshot || got.SnapshotTransaction != nil {
+		t.Fatalf("aggregate CAS result = %+v", got)
+	}
+	if !got.LastAccess.Equal(latest) {
+		t.Fatalf("LastAccess regressed to %v, want latest %v", got.LastAccess, latest)
+	}
+	if !next.LastAccess.Equal(in.LastAccess) {
+		t.Fatalf("CAS mutated caller's next LastAccess to %v", next.LastAccess)
 	}
 }
 
@@ -236,6 +333,36 @@ func TestUnlockScopedToHolder(t *testing.T) {
 	}
 	if err := store.Lock(ctx, "s2", "other"); err != nil {
 		t.Fatalf("lock after owner release: %v", err)
+	}
+}
+
+func TestRenewExtendsOnlyCurrentHolderLease(t *testing.T) {
+	ctx := context.Background()
+	cs := fake.NewSimpleClientset()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	offset := time.Duration(0)
+	store := configmap.NewStore(cs, testNS,
+		configmap.WithClock(func() time.Time { return base.Add(offset) }),
+		configmap.WithLeaseDuration(time.Second),
+	)
+	if err := store.Lock(ctx, "renew", "owner"); err != nil {
+		t.Fatal(err)
+	}
+	offset = 750 * time.Millisecond
+	if err := store.Renew(ctx, "renew", "owner"); err != nil {
+		t.Fatalf("renew owner: %v", err)
+	}
+	if err := store.Renew(ctx, "renew", "intruder"); err != session.ErrConflict {
+		t.Fatalf("renew intruder err=%v, want ErrConflict", err)
+	}
+	// The original one-second deadline passed, but the renewed deadline did not.
+	offset = 1500 * time.Millisecond
+	if err := store.Lock(ctx, "renew", "newcomer"); err != session.ErrConflict {
+		t.Fatalf("takeover inside renewed window err=%v, want ErrConflict", err)
+	}
+	offset = 2 * time.Second
+	if err := store.Lock(ctx, "renew", "newcomer"); err != nil {
+		t.Fatalf("takeover after renewed deadline: %v", err)
 	}
 }
 

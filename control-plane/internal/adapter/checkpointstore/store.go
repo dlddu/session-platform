@@ -1,11 +1,9 @@
-// Package checkpointstore is the durable object store for CRIU checkpoint
-// archives. The kubelet writes a checkpoint as a node-local tar; this package
-// uploads it to S3 so the archive outlives the node and is reachable when the
-// session restores onto a different node (decision ③, docs/criu-verification.md).
+// Package checkpointstore is the durable object store for workload snapshots.
+// A pod agent streams either a shell CRIU bundle or a Claude filesystem archive
+// here so it outlives the pod and can restore on another node.
 //
-// Access is by STS AssumeRole layered over the ambient credential chain: the
-// node instance profile (or IRSA) supplies the base credentials and this code
-// assumes the configured role on top — no static keys in the control plane.
+// Credentials use the ambient chain and may optionally assume a configured role.
+// Local/e2e S3-compatible deployments may use ambient static environment keys.
 package checkpointstore
 
 import (
@@ -49,9 +47,8 @@ type objectAPI interface {
 	GetObject(ctx context.Context, in *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 }
 
-// S3 stores and retrieves checkpoint archives in an S3 bucket. Put satisfies the
-// criu.CheckpointStore contract used by the checkpoint path; Get is the read
-// half the restore path (node-side fetch / runc-restore alternative) uses.
+// S3 stores and retrieves workload snapshots in an S3 bucket and satisfies the
+// shared criu.CheckpointStore contract.
 type S3 struct {
 	api    objectAPI
 	bucket string
@@ -122,9 +119,8 @@ func (s *S3) Bucket() string { return s.bucket }
 // produces it while dumping — which S3 cannot take directly: the SDK needs a
 // seekable body to compute the request checksum and Content-Length, and its
 // fallback (trailing checksums over an aws-chunked body) requires TLS. So spool
-// the stream to a temp file first and upload that. Checkpoint archives are a few
-// MB; if they ever grow enough for the spool to hurt, the move is
-// manager.Uploader's multipart streaming, which buffers parts instead.
+// the stream to a temp file first and upload that. A future large-archive path
+// can replace the spool with the SDK's multipart uploader.
 func (s *S3) Put(ctx context.Context, key string, r io.Reader) (string, error) {
 	full := s.key(key)
 

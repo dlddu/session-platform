@@ -1,10 +1,10 @@
 // This file is the real, client-go backed PodOrchestrator. It drives one
 // dedicated data plane pod per session in the control plane's own namespace
-// (AC-A1/A2), reclaims it on stop (AC-A3), and proves the pod's PTY shell
-// agent is reachable by opening/closing its attach stream (AC-D1) — the shell
-// itself is started by the data plane image's entrypoint, never by the control
-// plane. The port and the in-memory stub live in orchestrator.go; main builds
-// the client and namespace via BuildClient.
+// (AC-A1/A2), reclaims it on stop (AC-A3), and proves the selected workload
+// agent is reachable (AC-D1/E1). The workload itself is started by the data
+// plane image's entrypoint, never by the control plane. The port and the
+// in-memory stub live in orchestrator.go; main builds the client and namespace
+// via BuildClient.
 package k8s
 
 import (
@@ -52,8 +52,15 @@ const (
 	// restore contract the provisioning work wires up. See docs/criu-verification.md.
 	AnnotationRestoreCheckpoint = "session-platform.dev/restore-checkpoint"
 
-	// ContainerName is the single container in each data plane pod. The CRIU
-	// checkpointer targets it by name when freezing the pod (internal/adapter/criu).
+	// AnnotationRestoreArchive marks a claude-code restore target. Unlike the
+	// shell annotation above, the agent unpacks a filesystem archive and never
+	// invokes CRIU (AC-E5).
+	AnnotationRestoreArchive = "session-platform.dev/restore-archive"
+
+	defaultClaudeCredentialsSecret = "claude-code-credentials"
+	// ContainerName is the workload container in each data plane pod. Shell pods
+	// contain only it; Claude pods add an isolated credential-proxy sidecar. The
+	// CRIU checkpointer targets this container by name and only for shell sessions.
 	ContainerName = "session"
 
 	// defaultDataPlaneImage is the in-code fallback when no DATA_PLANE_IMAGE
@@ -68,14 +75,36 @@ const (
 	shellEnvVar = "DATA_PLANE_SHELL"
 
 	// workloadEnvVar tells the pod which workload type it is running (AC-E1).
-	// The shell agent ignores it (its only mode is the PTY shell); the
-	// claude-code data plane workload — image plus agent mode — is the follow-up
-	// that consumes it. It is set unconditionally so the pod is self-describing
-	// rather than inferring its role from which image happened to be injected.
+	// The data plane agent branches on it and it is set unconditionally so the
+	// pod is self-describing rather than inferring its role from its image.
 	workloadEnvVar = "DATA_PLANE_WORKLOAD"
 
-	// restoreModeEnvVar tells a restore-target pod's agent to start WITHOUT a
-	// shell and await the checkpoint on POST /restore (in-pod CRIU restore).
+	// Claude Code runtime configuration. Secret values are projected only into
+	// a separate localhost credential-proxy container. The agent/CLI container
+	// gets a non-secret placeholder and cannot read or transform the real token
+	// through its coding tools (AC-E6).
+	ClaudeCodeModelEnvVar        = "CLAUDE_CODE_MODEL"
+	claudeCodeStateDirEnvVar     = "CLAUDE_CODE_STATE_DIR"
+	claudeCodeStateDir           = "/session"
+	claudeCodeStateVolumeName    = "claude-state"
+	AnthropicBaseURLEnvVar       = "ANTHROPIC_BASE_URL"
+	AnthropicAuthTokenEnvVar     = "ANTHROPIC_AUTH_TOKEN"
+	ClaudeCodeBaseURLSecretKey   = "base-url"
+	ClaudeCodeAuthTokenSecretKey = "auth-token"
+	// ClaudeCredentialsContainerName identifies the isolated Secret holder.
+	ClaudeCredentialsContainerName = "claude-credentials"
+	// ClaudeCredentialProxyURL is the loopback-only endpoint visible to the
+	// Claude CLI in the pod's shared network namespace.
+	ClaudeCredentialProxyURL = "http://127.0.0.1:8091"
+
+	credentialProxyWorkload         = "credential-proxy"
+	credentialProxyListenAddr       = "127.0.0.1:8091"
+	credentialProxyPlaceholderToken = "session-platform-proxy"
+	agentAddrEnvVar                 = "DATA_PLANE_AGENT_ADDR"
+
+	// restoreModeEnvVar tells a restore-target agent to wait for POST /restore
+	// instead of starting a fresh workload. Shell restores use CRIU; Claude Code
+	// restores unpack the filesystem/output archive (AC-D4, AC-E5).
 	// Keep in sync with data-plane/cmd/agent (restoreModeEnv).
 	restoreModeEnvVar = "DATA_PLANE_RESTORE_MODE"
 
@@ -84,9 +113,10 @@ const (
 	AgentPort     = 8090
 	agentPortName = "agent"
 	// agentHealthzPath backs the pod readiness probe, so pod Ready implies a
-	// live shell process (AC-D1).
+	// live workload agent (AC-D1/E1).
 	agentHealthzPath = "/healthz"
-	// agentAttachPath is the shell attach stream Reach opens and closes.
+	// agentAttachPath is the readiness stream Reach opens and closes. User I/O
+	// uses the workload-neutral /read and /write endpoints instead.
 	agentAttachPath = "/attach"
 
 	// serviceAccountNamespaceFile is where the kubelet mounts the pod's own
@@ -107,12 +137,13 @@ type ClientOrchestrator struct {
 	// workloadImages holds the per-type image overrides (AC-E1). The default
 	// type falls back to `image`; a type with no image configured is refused
 	// rather than silently provisioned from the shell image.
-	workloadImages       map[session.WorkloadType]string
-	shell                string // DATA_PLANE_SHELL override injected into pods ("" = agent default)
-	checkpointPrivileged bool   // run session pods privileged for in-pod CRIU (CRIU_ENABLED)
-	agentPort            int
-	pollInterval         time.Duration
-	readyTimeout         time.Duration
+	claudeCredentialsSecret string // platform Secret referenced by claude-code pods
+	workloadImages          map[session.WorkloadType]string
+	shell                   string // DATA_PLANE_SHELL override injected into pods ("" = agent default)
+	checkpointPrivileged    bool   // run session pods privileged for in-pod CRIU (CRIU_ENABLED)
+	agentPort               int
+	pollInterval            time.Duration
+	readyTimeout            time.Duration
 }
 
 // compile-time assertion that ClientOrchestrator satisfies the port.
@@ -146,6 +177,16 @@ func WithWorkloadImage(workload session.WorkloadType, image string) Option {
 			o.workloadImages = map[session.WorkloadType]string{}
 		}
 		o.workloadImages[workload] = image
+	}
+}
+
+// WithClaudeCredentialsSecret selects the platform-managed Secret whose
+// base-url and auth-token keys are projected only into the credential sidecar.
+func WithClaudeCredentialsSecret(name string) Option {
+	return func(o *ClientOrchestrator) {
+		if strings.TrimSpace(name) != "" {
+			o.claudeCredentialsSecret = strings.TrimSpace(name)
+		}
 	}
 }
 
@@ -201,12 +242,13 @@ func WithReadiness(pollInterval, timeout time.Duration) Option {
 // clientset; main builds the client and namespace via BuildClient.
 func NewClientOrchestrator(client kubernetes.Interface, namespace string, opts ...Option) *ClientOrchestrator {
 	o := &ClientOrchestrator{
-		client:       client,
-		namespace:    namespace,
-		image:        defaultDataPlaneImage,
-		agentPort:    AgentPort,
-		pollInterval: defaultPollInterval,
-		readyTimeout: defaultReadyTimeout,
+		client:                  client,
+		namespace:               namespace,
+		image:                   defaultDataPlaneImage,
+		agentPort:               AgentPort,
+		claudeCredentialsSecret: defaultClaudeCredentialsSecret,
+		pollInterval:            defaultPollInterval,
+		readyTimeout:            defaultReadyTimeout,
 	}
 	for _, opt := range opts {
 		opt(o)
@@ -255,10 +297,10 @@ func namespaceFromServiceAccount() string {
 // Namespace reports the namespace this orchestrator provisions pods in.
 func (o *ClientOrchestrator) Namespace() string { return o.namespace }
 
-// Start provisions a dedicated pod for sessionID, waits for it to report Ready
-// — which, via the agent readiness probe, means its PTY shell is alive (AC-D1)
-// — and returns its ref with the pod IP recorded for the agent dial (AC-A1/A2).
-func (o *ClientOrchestrator) Start(ctx context.Context, sessionID string, workload session.WorkloadType) (PodRef, error) {
+// Start provisions a dedicated pod for sessionID, waits for its workload agent
+// to report Ready, and returns its ref with the pod IP recorded for later agent
+// calls (AC-A1/A2, AC-D1/E1).
+func (o *ClientOrchestrator) Start(ctx context.Context, sessionID string, workload WorkloadSpec) (PodRef, error) {
 	spec, err := o.podSpec(sessionID, workload)
 	if err != nil {
 		return PodRef{}, err
@@ -266,10 +308,9 @@ func (o *ClientOrchestrator) Start(ctx context.Context, sessionID string, worklo
 	return o.provision(ctx, spec)
 }
 
-// provision creates a pod from spec, waits for it to report Ready — which, via
-// the agent readiness probe, means its PTY shell is alive (AC-D1) — and returns
-// its ref with the pod IP recorded. Start and RestoreInto differ only in the
-// spec they hand in (a fresh-shell pod vs. a restore-target pod).
+// provision creates a pod from spec, waits for its workload agent to report
+// Ready, and returns its ref with the pod IP recorded. Start and RestoreInto
+// differ only in the fresh-workload or restore-target spec they hand in.
 func (o *ClientOrchestrator) provision(ctx context.Context, spec *corev1.Pod) (PodRef, error) {
 	created, err := o.client.CoreV1().Pods(o.namespace).Create(ctx, spec, metav1.CreateOptions{})
 	if err != nil {
@@ -302,14 +343,12 @@ func (o *ClientOrchestrator) Stop(ctx context.Context, ref PodRef) error {
 	return nil
 }
 
-// RestoreInto provisions the pod a session's checkpoint is restored into
-// (AC-B2). Unlike Start — which brings up a *fresh* pod whose image entrypoint
-// launches a brand-new PTY shell — the restore pod carries checkpointRef in an
-// annotation so a CRIU-capable runtime resumes the checkpointed process tree
-// instead; "Ready" then means the *restored* shell is alive, not an empty new
-// one. Applying the checkpoint bytes is the Checkpointer's job; supplying the
-// correctly-shaped pod is all the orchestrator owns.
-func (o *ClientOrchestrator) RestoreInto(ctx context.Context, sessionID, checkpointRef string, workload session.WorkloadType) (PodRef, error) {
+// RestoreInto provisions the pod a session archive is restored into (AC-B2).
+// The workload-specific annotation and restore mode tell the agent whether to
+// accept a shell CRIU archive or a Claude filesystem archive. Applying the
+// archive bytes is the Checkpointer's job; supplying the correctly shaped pod
+// is all the orchestrator owns.
+func (o *ClientOrchestrator) RestoreInto(ctx context.Context, sessionID, checkpointRef string, workload WorkloadSpec) (PodRef, error) {
 	spec, err := o.restorePodSpec(sessionID, checkpointRef, workload)
 	if err != nil {
 		return PodRef{}, err
@@ -317,18 +356,16 @@ func (o *ClientOrchestrator) RestoreInto(ctx context.Context, sessionID, checkpo
 	return o.provision(ctx, spec)
 }
 
-// podSpec is the fresh-session pod: its image entrypoint starts a new PTY shell.
-func (o *ClientOrchestrator) podSpec(sessionID string, workload session.WorkloadType) (*corev1.Pod, error) {
+// podSpec is a fresh-session pod whose image entrypoint starts the selected
+// workload agent.
+func (o *ClientOrchestrator) podSpec(sessionID string, workload WorkloadSpec) (*corev1.Pod, error) {
 	return o.buildPod(sessionID, "", workload)
 }
 
-// restorePodSpec is the pod RestoreInto hands to provision: the same shell-agent
-// container as a fresh session, plus AnnotationRestoreCheckpoint carrying the
-// checkpoint ref so a CRIU-capable runtime resumes the checkpointed process tree
-// rather than running the entrypoint's fresh shell. The container is otherwise
-// identical, so once the runtime restores it the agent's /healthz reflects the
-// *restored* shell and pod-Ready keeps its AC-D1 meaning.
-func (o *ClientOrchestrator) restorePodSpec(sessionID, checkpointRef string, workload session.WorkloadType) (*corev1.Pod, error) {
+// restorePodSpec is the workload-specific restore target handed to provision.
+// buildPod adds the matching annotation and makes the agent wait for the
+// Checkpointer to stream the archive before serving the restored workload.
+func (o *ClientOrchestrator) restorePodSpec(sessionID, checkpointRef string, workload WorkloadSpec) (*corev1.Pod, error) {
 	return o.buildPod(sessionID, checkpointRef, workload)
 }
 
@@ -352,19 +389,22 @@ func (o *ClientOrchestrator) imageFor(workload session.WorkloadType) (string, er
 // non-empty ref yields a restore-target pod under a fresh unique name. The
 // workload type picks the image and is recorded on the pod (label + env) so the
 // pod runs — and advertises — the workload its session selected (AC-E1).
-func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string, workload session.WorkloadType) (*corev1.Pod, error) {
-	workload, err := session.NormalizeWorkloadType(workload)
+func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string, workload WorkloadSpec) (*corev1.Pod, error) {
+	workloadType, err := session.NormalizeWorkloadType(workload.Type)
 	if err != nil {
 		return nil, err
 	}
-	image, err := o.imageFor(workload)
+	model, err := session.NormalizeModel(workloadType, workload.Model)
 	if err != nil {
 		return nil, err
 	}
-	// No command override: on a fresh start the data plane image's entrypoint
-	// owns launching the PTY-attached session shell (AC-D1); on a restore the
-	// runtime resumes the checkpointed process tree and the entrypoint never
-	// runs. Either way the control plane only orchestrates.
+	image, err := o.imageFor(workloadType)
+	if err != nil {
+		return nil, err
+	}
+	// No command override: the data plane image's entrypoint owns starting the
+	// selected agent. In restore mode that agent waits for the Checkpointer to
+	// stream the workload archive. The control plane only orchestrates.
 	container := corev1.Container{
 		Name:            ContainerName,
 		Image:           image,
@@ -374,8 +414,8 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string, workload 
 			ContainerPort: AgentPort,
 			Protocol:      corev1.ProtocolTCP,
 		}},
-		// The agent answers /healthz only while the shell process is alive, so
-		// "pod Ready" — what provision waits for — reflects shell liveness.
+		// The agent answers /healthz only while it can serve the selected
+		// workload, so pod Ready is a workload-neutral readiness signal.
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{
@@ -387,11 +427,32 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string, workload 
 			PeriodSeconds:       2,
 		},
 	}
-	container.Env = append(container.Env, corev1.EnvVar{Name: workloadEnvVar, Value: string(workload)})
-	if o.shell != "" {
-		container.Env = append(container.Env, corev1.EnvVar{Name: shellEnvVar, Value: o.shell})
+	container.Env = append(container.Env, corev1.EnvVar{Name: workloadEnvVar, Value: string(workloadType)})
+	var sidecars []corev1.Container
+	var volumes []corev1.Volume
+	switch workloadType {
+	case session.WorkloadTypeShell:
+		if o.shell != "" {
+			container.Env = append(container.Env, corev1.EnvVar{Name: shellEnvVar, Value: o.shell})
+		}
+	case session.WorkloadTypeClaudeCode:
+		container.Env = append(container.Env,
+			corev1.EnvVar{Name: ClaudeCodeModelEnvVar, Value: model},
+			corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: claudeCodeStateDir},
+			corev1.EnvVar{Name: AnthropicBaseURLEnvVar, Value: ClaudeCredentialProxyURL},
+			corev1.EnvVar{Name: AnthropicAuthTokenEnvVar, Value: credentialProxyPlaceholderToken},
+		)
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name: claudeCodeStateVolumeName, MountPath: claudeCodeStateDir,
+		})
+		volumes = append(volumes, corev1.Volume{
+			Name:         claudeCodeStateVolumeName,
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		})
+
+		sidecars = append(sidecars, o.claudeCredentialProxy(image))
 	}
-	if o.checkpointPrivileged {
+	if o.checkpointPrivileged && workloadType == session.WorkloadTypeShell {
 		// In-pod CRIU needs a privileged container: the verified-on-cluster
 		// configuration where `criu check` fully passes (capability sets alone
 		// are defeated by the runtime's AppArmor profile and read-only
@@ -403,13 +464,22 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string, workload 
 	name := podName(sessionID)
 	var annotations map[string]string
 	if checkpointRef != "" {
-		name = restorePodName(sessionID)
-		annotations = map[string]string{AnnotationRestoreCheckpoint: checkpointRef}
-		// Restore-target pod: the agent starts without a shell and awaits the
-		// checkpoint on POST /restore (in-pod CRIU restore) so the pod can become
-		// Ready before the control plane pushes the archive.
+		name, err = restorePodName(sessionID)
+		if err != nil {
+			return nil, err
+		}
+		annotation := AnnotationRestoreCheckpoint
+		if workloadType == session.WorkloadTypeClaudeCode {
+			annotation = AnnotationRestoreArchive
+		}
+		annotations = map[string]string{annotation: checkpointRef}
+		// The agent waits for the shell checkpoint or Claude filesystem archive
+		// on POST /restore before accepting workload I/O.
 		container.Env = append(container.Env, corev1.EnvVar{Name: restoreModeEnvVar, Value: "1"})
 	}
+	containers := append([]corev1.Container{container}, sidecars...)
+	automountServiceAccountToken := false
+
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
@@ -417,15 +487,70 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string, workload 
 			Annotations: annotations,
 			Labels: map[string]string{
 				LabelSessionID:    sessionID,
-				LabelWorkloadType: string(workload),
+				LabelWorkloadType: string(workloadType),
 				labelManagedBy:    managedByValue,
 			},
 		},
 		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyAlways,
-			Containers:    []corev1.Container{container},
+			RestartPolicy:                corev1.RestartPolicyAlways,
+			AutomountServiceAccountToken: &automountServiceAccountToken,
+			Containers:                   containers,
+			Volumes:                      volumes,
 		},
 	}, nil
+}
+
+// claudeCredentialProxy holds provider credentials outside the tool-running
+// container. Kubernetes gives pod containers a shared network namespace but
+// separate PID/filesystem namespaces, so Claude can call this loopback service
+// without being able to read its Secret-backed environment or /proc entries.
+func (o *ClientOrchestrator) claudeCredentialProxy(image string) corev1.Container {
+	runAsNonRoot := true
+	runAsUser := int64(65532)
+	disallowPrivilegeEscalation := false
+	readOnlyRootFilesystem := true
+	return corev1.Container{
+		Name:            ClaudeCredentialsContainerName,
+		Image:           image,
+		ImagePullPolicy: pullPolicyForImage(image),
+		Env: []corev1.EnvVar{
+			{Name: workloadEnvVar, Value: credentialProxyWorkload},
+			{Name: agentAddrEnvVar, Value: credentialProxyListenAddr},
+			secretEnv(AnthropicBaseURLEnvVar, o.claudeCredentialsSecret, ClaudeCodeBaseURLSecretKey),
+			secretEnv(AnthropicAuthTokenEnvVar, o.claudeCredentialsSecret, ClaudeCodeAuthTokenSecretKey),
+		},
+		// An exec probe reaches loopback from inside this container. An HTTP
+		// probe would target the pod IP and force the credential proxy to listen
+		// on the cluster network instead of localhost.
+		ReadinessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{
+				"/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8091",
+			}}},
+			InitialDelaySeconds: 1,
+			PeriodSeconds:       2,
+		},
+		SecurityContext: &corev1.SecurityContext{
+			RunAsNonRoot:             &runAsNonRoot,
+			RunAsUser:                &runAsUser,
+			RunAsGroup:               &runAsUser,
+			AllowPrivilegeEscalation: &disallowPrivilegeEscalation,
+			ReadOnlyRootFilesystem:   &readOnlyRootFilesystem,
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+		},
+	}
+}
+
+func secretEnv(envName, secretName, key string) corev1.EnvVar {
+	return corev1.EnvVar{
+		Name: envName,
+		ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+			Key:                  key,
+		}},
+	}
 }
 
 // podName derives a deterministic, DNS-safe pod name from the session id so the
@@ -442,10 +567,14 @@ func podName(sessionID string) string {
 // A unique name removes the race and matches the service contract that restore
 // provisions a *new* pod rather than reusing the old name (the session-id
 // label, not the name, carries the 1:1 session mapping — AC-A2).
-func restorePodName(sessionID string) string {
-	b := make([]byte, 2)
-	_, _ = rand.Read(b)
-	return podName(sessionID) + "-r" + hex.EncodeToString(b)
+func restorePodName(sessionID string) (string, error) {
+	// Maximum entropy that still keeps the 32-hex session ID in a 63-char DNS label.
+	// "sess-" + id + "-r" + 24 hex chars = 63.
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate restore pod suffix: %w", err)
+	}
+	return podName(sessionID) + "-r" + hex.EncodeToString(b), nil
 }
 
 // pullPolicyForImage mirrors kubelet's own default: a mutable :latest (or

@@ -83,8 +83,8 @@ export function Sessions() {
           <div className="eyebrow">Control plane · us-east-1</div>
           <h1>Sessions</h1>
           <div className="sub">
-            Every session runs in its own dedicated pod. Idle sessions freeze to
-            a checkpoint and hand their compute back.
+            Every session runs in its own dedicated pod. Idle sessions preserve
+            their state and hand their compute back.
           </div>
         </div>
         <div style={{ display: "flex", gap: 10 }}>

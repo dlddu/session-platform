@@ -1,7 +1,6 @@
-// Package k8s contains the PodOrchestrator port and an in-memory stub
-// implementation. The real implementation will drive data plane pods through
-// client-go; here we only model the contract and a no-op lifecycle so the
-// happy path runs end-to-end without a cluster.
+// Package k8s contains the PodOrchestrator port, its client-go implementation
+// (client_orchestrator.go), and an in-memory stub used by isolated tests. Both
+// model the same workload-aware pod lifecycle contract.
 package k8s
 
 import (
@@ -24,6 +23,14 @@ type PodRef struct {
 
 func (p PodRef) String() string { return p.Namespace + "/" + p.Name }
 
+// WorkloadSpec is the immutable runtime configuration copied from a session
+// into every fresh or restored pod. Model is empty for shell and contains a
+// concrete identifier or session.PlatformDefaultModel for claude-code (AC-E6).
+type WorkloadSpec struct {
+	Type  session.WorkloadType
+	Model string
+}
+
 // PodOrchestrator provisions and reclaims the dedicated data plane pod for a
 // session.
 //
@@ -33,26 +40,22 @@ func (p PodRef) String() string { return p.Namespace + "/" + p.Name }
 //     is the one the session's type selects).
 //   - Stop    → AC-A3 (resources reclaimed on terminate/snapshot).
 //   - RestoreInto → AC-B2 (restore a checkpoint into a *new* pod).
-//   - Reach   → AC-D1 (the pod's PTY shell is reachable from the control
-//     plane before the session counts as active).
+//   - Reach   → AC-D1/AC-E1 (the selected workload agent is reachable before
+//     the session counts as active).
 type PodOrchestrator interface {
 	// Start provisions a new dedicated pod for sessionID running the workload
 	// its type selects (AC-E1) and returns its ref.
-	Start(ctx context.Context, sessionID string, workload session.WorkloadType) (PodRef, error)
+	Start(ctx context.Context, sessionID string, workload WorkloadSpec) (PodRef, error)
 	// Stop tears down the pod and reclaims its CPU/memory (AC-A3).
 	Stop(ctx context.Context, ref PodRef) error
-	// RestoreInto provisions the pod a checkpoint will be restored into
-	// (AC-B2), carrying checkpointRef so the pod is shaped as a *restore
-	// target* (resuming the checkpointed process tree) rather than a fresh
-	// shell. The restore pod runs the same workload type as the session it
-	// belongs to — the type is immutable (AC-E1), so a restore never changes
-	// it. The pod gets a fresh unique name — the frozen pod (deterministic
-	// name) may still be Terminating when restore follows snapshot
-	// immediately. The checkpoint bytes are applied by the Checkpointer.
-	RestoreInto(ctx context.Context, sessionID, checkpointRef string, workload session.WorkloadType) (PodRef, error)
-	// Reach proves the session shell agent in ref's pod is reachable by
-	// opening its attach stream and closing it again (AC-D1). It moves no
-	// payload — the stdin/stdout semantics on the stream are J5-S2/S3.
+	// RestoreInto provisions a fresh restore-target pod carrying checkpointRef.
+	// It keeps the session's immutable workload type and gets a unique name so a
+	// terminating source pod cannot collide. The selected Checkpointer applies
+	// either CRIU state or a filesystem archive (AC-B2/AC-E1).
+	RestoreInto(ctx context.Context, sessionID, checkpointRef string, workload WorkloadSpec) (PodRef, error)
+	// Reach opens and closes the workload agent's attach endpoint to prove
+	// readiness. It moves no user I/O; Client.Read/Write own those semantics.
+	// (AC-D1/AC-E1)
 	Reach(ctx context.Context, ref PodRef) error
 }
 
@@ -65,6 +68,7 @@ type StubOrchestrator struct {
 	seq       int
 	running   map[string]PodRef               // sessionID -> pod
 	workload  map[string]session.WorkloadType // sessionID -> the type it was started with
+	models    map[string]string               // sessionID -> immutable model setting
 }
 
 // NewStubOrchestrator returns a stub bound to the given namespace.
@@ -76,19 +80,20 @@ func NewStubOrchestrator(namespace string) *StubOrchestrator {
 		namespace: namespace,
 		running:   map[string]PodRef{},
 		workload:  map[string]session.WorkloadType{},
+		models:    map[string]string{},
 	}
 }
 
-func (o *StubOrchestrator) Start(_ context.Context, sessionID string, workload session.WorkloadType) (PodRef, error) {
+func (o *StubOrchestrator) Start(_ context.Context, sessionID string, workload WorkloadSpec) (PodRef, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.seq++
-	// TODO(client-go): create a Pod (or a Deployment of 1) from the data plane
-	// base image, wait for Ready, then return its ref. Enforce 1:1 by naming
-	// the pod after the session (AC-A2).
+	// Model a unique pod ref and the one-live-pod-per-session mapping without a
+	// cluster; ClientOrchestrator performs the real create/readiness wait.
 	ref := PodRef{Name: fmt.Sprintf("sess-%s-%04x", sessionID, o.seq), Namespace: o.namespace}
 	o.running[sessionID] = ref
-	o.workload[sessionID] = workload
+	o.workload[sessionID] = workload.Type
+	o.models[sessionID] = workload.Model
 	return ref, nil
 }
 
@@ -98,6 +103,13 @@ func (o *StubOrchestrator) WorkloadFor(sessionID string) session.WorkloadType {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.workload[sessionID]
+}
+
+// ModelFor reports the model last copied into a session pod in tests (AC-E6).
+func (o *StubOrchestrator) ModelFor(sessionID string) string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.models[sessionID]
 }
 
 // RunningCount reports how many pods the stub believes are running — the
@@ -112,20 +124,19 @@ func (o *StubOrchestrator) RunningCount() int {
 func (o *StubOrchestrator) Stop(_ context.Context, ref PodRef) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	// TODO(client-go): delete the Pod and confirm resources are reclaimed (AC-A3).
+	// A missing namespace means the service reconstructed this ref from metadata.
 	for id, r := range o.running {
-		if r == ref {
+		if r.Name == ref.Name && (ref.Namespace == "" || r.Namespace == ref.Namespace) {
 			delete(o.running, id)
 		}
 	}
 	return nil
 }
 
-func (o *StubOrchestrator) RestoreInto(ctx context.Context, sessionID, checkpointRef string, workload session.WorkloadType) (PodRef, error) {
-	// The in-memory stub has no runtime to resume a checkpoint into, so it just
-	// starts a fresh pod and ignores the ref. The real ClientOrchestrator builds
-	// a restore-target pod from checkpointRef (see restorePodSpec) that a
-	// CRIU-capable runtime resumes into (AC-B2).
+func (o *StubOrchestrator) RestoreInto(ctx context.Context, sessionID, checkpointRef string, workload WorkloadSpec) (PodRef, error) {
+	// The stub cannot apply an archive, so it models only the fresh target pod.
+	// ClientOrchestrator shapes the real restore target and the Checkpointer
+	// streams CRIU or filesystem state into its agent.
 	_ = checkpointRef
 	return o.Start(ctx, sessionID, workload)
 }

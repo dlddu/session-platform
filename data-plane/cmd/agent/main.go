@@ -1,38 +1,27 @@
-// Command agent is the data plane session agent — the entrypoint of every
-// session pod. On start it launches exactly ONE interactive shell (default
-// /bin/bash, overridable via DATA_PLANE_SHELL) attached to a PTY: that shell
-// process and its children are the entire session workload (AC-D1). The
-// control plane never runs the shell itself; it only orchestrates this pod and
-// reaches the agent over the network:
+// Command agent is the data plane entrypoint for both session workloads,
+// selected by DATA_PLANE_WORKLOAD (default "shell"):
 //
-//	GET  /healthz    -> 200 while the shell process is alive (or, in restore
-//	                    mode, while the agent is up awaiting a checkpoint); the
-//	                    pod's readiness probe targets this.
-//	GET  /attach     -> WebSocket upgrade held open until the peer closes it.
-//	                    Reachability verification only (AC-D1).
-//	POST /write       -> injects the request body into the shell's stdin (AC-D2).
-//	GET  /read        -> ?offset=N returns {"payload","nextOffset"} (AC-D3).
-//	POST /checkpoint  -> CRIU-dumps the shell tree and streams back a tar of the
-//	                    criu images + scrollback (AC-B1/AC-D4). See checkpoint.go.
-//	POST /restore     -> (restore mode) receives that tar and CRIU-restores the
-//	                    shell tree, resuming the frozen session (AC-B2/AC-D4).
+//   - shell launches exactly one PTY-attached interactive shell. /write is
+//     stdin, /read is offset-cursored PTY output, and checkpoint/restore uses
+//     CRIU plus serialized scrollback (AC-D1~D4).
+//   - claude-code launches no resident shell or Claude process. /write queues a
+//     prompt for one serial worker, each job execs a one-shot Claude CLI, /read
+//     serves merged stdout/stderr, and checkpoint/restore archives filesystem
+//     state plus scrollback without CRIU (AC-E2~E5).
+//   - credential-proxy is the localhost-only sidecar that holds the real
+//     Anthropic gateway URL/token. It pins all requests to that upstream and
+//     keeps credentials out of the Claude/Bash process environment (AC-E6).
 //
-// Two startup modes:
-//   - normal: launch a fresh shell immediately.
-//   - restore (DATA_PLANE_RESTORE_MODE=1): start WITHOUT a shell and wait for
-//     POST /restore to bring back the checkpointed one. This lets the pod become
-//     Ready (healthz 200) before the control plane pushes the checkpoint, which
-//     is how in-pod CRIU restore avoids a readiness deadlock.
-//
-// The agent's lifetime is tied to the (adopted) shell's: when it exits the agent
-// exits, the container restarts (RestartPolicy Always), and a fresh agent starts
-// a fresh shell — so "exactly one PTY-attached shell" (AC-D1) holds across
-// restarts. Shell-state *continuity* across a snapshot is the CRIU work here.
+// Shell and Claude modes expose /healthz and the reachability-only /attach
+// WebSocket. A DATA_PLANE_RESTORE_MODE=1 pod reports healthy while awaiting
+// POST /restore, avoiding a readiness deadlock before the control plane streams
+// its archive. Credential-proxy exposes /healthz and the fixed-upstream proxy.
 package main
 
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -50,6 +39,14 @@ import (
 )
 
 const (
+	workloadEnv             = "DATA_PLANE_WORKLOAD"
+	workloadShell           = "shell"
+	workloadClaudeCode      = "claude-code"
+	workloadCredentialProxy = "credential-proxy"
+
+	claudeProxyBaseURL          = "http://127.0.0.1:8091"
+	claudeProxyPlaceholderToken = "session-platform-proxy"
+
 	// defaultShell is the interactive shell launched when DATA_PLANE_SHELL is
 	// unset (AC-D1).
 	defaultShell = "/bin/bash"
@@ -80,42 +77,90 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	addr := env("DATA_PLANE_AGENT_ADDR", defaultAddr)
-	a := &agent{
-		shellPath: env("DATA_PLANE_SHELL", defaultShell),
-		engine:    newExecCriuEngine(),
-		exited:    make(chan struct{}),
-	}
+	workload := env(workloadEnv, workloadShell)
+	restoreMode := env(restoreModeEnv, "") == "1"
+	a := &agent{exited: make(chan struct{})}
+	var handler http.Handler
 
-	if env(restoreModeEnv, "") == "1" {
-		// Restore mode: no shell yet — POST /restore brings back the checkpointed
-		// one. healthz reports 200 (agent up, awaiting restore) so the pod becomes
-		// Ready before the control plane pushes the checkpoint. The restored
-		// shell's reachability is then proven by the control plane's Reach.
-		logger.Info("agent started in restore mode; awaiting checkpoint", "addr", addr)
-	} else {
-		// Push the next pid up before forking the shell, so a later CRIU restore
-		// (which reinstates the shell under its original pid) does not land on a
-		// pid the restore pod's agent already occupies. Best-effort: the knob is
-		// only writable in a privileged pod, and without CRIU a low shell pid is
-		// harmless.
-		floor := shellPIDFloor()
-		if err := reserveShellPID(floor); err != nil {
-			logger.Info("could not raise ns_last_pid; the shell will take a low pid"+
-				" (harmless without CRIU, but a restore may hit a pid collision)",
-				"path", nsLastPIDPath, "floor", floor, "err", err)
+	switch workload {
+	case workloadShell:
+		a.shellPath = env("DATA_PLANE_SHELL", defaultShell)
+		a.engine = newExecCriuEngine()
+		if restoreMode {
+			// Restore mode: no shell yet — POST /restore brings back the
+			// checkpointed one. healthz reports 200 while awaiting it.
+			logger.Info("shell agent started in restore mode; awaiting checkpoint", "addr", addr)
+		} else {
+			// Push the next pid up before forking the shell, so a later CRIU
+			// restore does not collide with one of the restore agent's threads.
+			floor := shellPIDFloor()
+			if err := reserveShellPID(floor); err != nil {
+				logger.Info("could not raise ns_last_pid; the shell will take a low pid"+
+					" (harmless without CRIU, but a restore may hit a pid collision)",
+					"path", nsLastPIDPath, "floor", floor, "err", err)
+			}
+			sh, err := startShell(a.shellPath)
+			if err != nil {
+				logger.Error("failed to start session shell", "shell", a.shellPath, "err", err)
+				os.Exit(1)
+			}
+			a.adopt(sh)
+			logger.Info("session shell started", "shell", a.shellPath, "pid", sh.pid, "addr", addr)
 		}
-		sh, err := startShell(a.shellPath)
-		if err != nil {
-			logger.Error("failed to start session shell", "shell", a.shellPath, "err", err)
+	case workloadClaudeCode:
+		if err := validateClaudeProxyClientEnv(); err != nil {
+			logger.Error("unsafe claude-code credential configuration", "err", err)
 			os.Exit(1)
 		}
-		a.adopt(sh)
-		logger.Info("session shell started", "shell", a.shellPath, "pid", sh.pid, "addr", addr)
+		runTimeout, err := durationEnv("CLAUDE_CODE_RUN_TIMEOUT", defaultClaudeRunTimeout)
+		if err != nil {
+			logger.Error("invalid claude-code run timeout", "err", err)
+			os.Exit(1)
+		}
+		claude, err := newClaudeWorkload(claudeConfig{
+			StateDir:    env("CLAUDE_CODE_STATE_DIR", defaultClaudeStateDir),
+			Model:       env("CLAUDE_CODE_MODEL", platformDefaultModel),
+			Binary:      env("CLAUDE_CODE_BIN", defaultClaudeBinary),
+			RestoreMode: restoreMode,
+			Runner:      execCommandRunner{},
+			Logger:      logger,
+			Redact:      credentialLiteralsFromEnv(),
+			RunTimeout:  runTimeout,
+		})
+		if err != nil {
+			logger.Error("failed to initialise claude-code workload", "err", err)
+			os.Exit(1)
+		}
+		a.claude = claude
+		logger.Info("claude-code agent started", "addr", addr, "model", claude.model,
+			"state_dir", claude.stateDir, "restore_mode", restoreMode)
+	case workloadCredentialProxy:
+		if err := validateCredentialProxyBindAddr(addr); err != nil {
+			logger.Error("invalid credential-proxy bind address", "err", err)
+			os.Exit(1)
+		}
+		proxy, err := newCredentialProxy(
+			os.Getenv("ANTHROPIC_BASE_URL"),
+			os.Getenv("ANTHROPIC_AUTH_TOKEN"),
+			logger,
+		)
+		if err != nil {
+			logger.Error("failed to initialise credential proxy", "err", err)
+			os.Exit(1)
+		}
+		handler = proxy
+		logger.Info("credential proxy started", "addr", addr)
+	default:
+		logger.Error("unknown data plane workload", "workload", workload)
+		os.Exit(1)
+	}
+	if handler == nil {
+		handler = routes(logger, a)
 	}
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           routes(logger, a),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -130,8 +175,11 @@ func main() {
 
 	select {
 	case s := <-sig:
-		// Pod shutdown: hang up the shell's terminal (if any) and exit cleanly.
+		// Pod shutdown: stop the selected workload and exit cleanly.
 		logger.Info("signal received; terminating", "signal", s.String())
+		if a.claude != nil {
+			a.claude.Close()
+		}
 		if sh := a.current(); sh != nil {
 			sh.hangup(logger)
 		}
@@ -150,6 +198,7 @@ func main() {
 type agent struct {
 	shellPath string
 	engine    criuEngine
+	claude    *claudeWorkload
 
 	mu     sync.Mutex
 	sh     *shellProc
@@ -215,6 +264,50 @@ func (b *scrollback) Append(p []byte) {
 	b.buf = append(b.buf, p...)
 }
 
+// appendClaudeBoundedAt appends one already-bounded invocation to the Claude
+// scrollback while reserving room for an explicit terminal marker. Existing
+// bytes are never rewritten, so every offset issued before the limit remains
+// valid. It reports only the transition to full; already accepted queued jobs
+// may continue to run, but their later output is discarded.
+func (b *scrollback) appendClaudeBoundedAt(p []byte, limit int, markerText string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	marker := []byte(markerText)
+	if b.claudeFullAtLocked(limit, len(marker)) || len(p) == 0 {
+		return false
+	}
+	dataLimit := limit - len(marker)
+	if dataLimit < 0 {
+		dataLimit = 0
+	}
+	if len(b.buf)+len(p) <= dataLimit {
+		b.buf = append(b.buf, p...)
+		return false
+	}
+	if remaining := dataLimit - len(b.buf); remaining > 0 {
+		b.buf = append(b.buf, p[:min(remaining, len(p))]...)
+	}
+	b.buf = append(b.buf, marker...)
+	return true
+}
+
+// claudeFullAt is the admission guard after the terminal marker has been
+// appended. It also fails closed for a legacy restored archive that already
+// consumed the reserved marker space before this bound was introduced.
+func (b *scrollback) claudeFullAt(limit int, markerText string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.claudeFullAtLocked(limit, len(markerText))
+}
+
+func (b *scrollback) claudeFullAtLocked(limit, markerBytes int) bool {
+	dataLimit := limit - markerBytes
+	if dataLimit < 0 {
+		dataLimit = 0
+	}
+	return len(b.buf) > dataLimit
+}
+
 // Since returns a copy of the output accumulated after offset, plus the cursor
 // for the next delta read (the current accumulated length). An offset at or
 // past the current length yields an empty payload with that cursor.
@@ -238,6 +331,15 @@ func (b *scrollback) snapshot() []byte {
 	out := make([]byte, len(b.buf))
 	copy(out, b.buf)
 	return out
+}
+
+// restore replaces the complete buffer before a restored Claude workload starts
+// accepting writes. Existing cursors therefore address the same bytes after
+// the pod round trip.
+func (b *scrollback) restore(p []byte) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf[:0], p...)
 }
 
 // shellProc is the one PTY-attached session shell (AC-D1) and its lifecycle.
@@ -352,6 +454,9 @@ var upgrader = websocket.Upgrader{
 }
 
 func routes(logger *slog.Logger, a *agent) http.Handler {
+	if a.claude != nil {
+		return claudeRoutes(logger, a.claude)
+	}
 	mux := http.NewServeMux()
 
 	// The readiness probe. In restore mode before the checkpoint arrives the
@@ -454,4 +559,16 @@ func env(k, def string) string {
 		return v
 	}
 	return def
+}
+
+func durationEnv(k string, def time.Duration) (time.Duration, error) {
+	value := os.Getenv(k)
+	if value == "" {
+		return def, nil
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration, got %q", k, value)
+	}
+	return duration, nil
 }
