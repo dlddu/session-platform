@@ -4,7 +4,7 @@
 // clientset (no cluster needed), asserting the create/label/1:1/delete contract
 // and the shell-agent pod spec (AC-D1) that the in-memory stub can only
 // approximate. What the fake cannot verify — an actual PTY shell running inside
-// the pod — is asserted at runtime by the kind e2e suite (e2e_shell_test.go).
+// the pod — is asserted at runtime by the kind e2e suite (e2e_d1_pty_shell_test.go).
 // The HTTP happy-path scenarios in integration_test.go still run against the
 // stub adapters.
 package integration_test

@@ -1,3 +1,6 @@
+// 매칭 단위 밖 (AC ↔ e2e 1:1): 이 디렉터리의 여정 spec은 web/e2e 최상위가 아니므로
+// AC 매칭 단위가 아니다. 여정 전체를 한 파일에서 훑는 형태를 유지하되, 각 AC의 주검증은
+// Go e2e의 전용 파일이 소유한다. 등재: docs/test/e2e.md.
 import { test } from "@playwright/test";
 
 // Deferred browser scenarios — blocked on real adapters / lifecycle triggers the
@@ -22,7 +25,7 @@ test.skip("J2: thaw & resume restores a snapshot session", async () => {
 // state. J4 is a backend concurrency journey with no UI surface (intentional
 // non-visualization — see docs/user-journeys/j4-concurrent-access.md), so it has
 // no browser assertion. Cross-replica consistency is verified by the Go e2e suite
-// (TestDeferred_CrossReplicaAtomicity, against the 2-replica ConfigMap-backed SUT)
+// (e2e_c1_atomic_state_test.go, against the 2-replica ConfigMap-backed SUT)
 // and the hermetic single-winner CAS/Lease proof by the envtest suite. This skip
 // stays as a documented pointer, not a pending browser test.
 test.skip("J4: concurrent access stays consistent (backend-only; see Go e2e + envtest)", async () => {

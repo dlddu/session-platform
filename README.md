@@ -14,10 +14,10 @@ between sessions.
 > CRIU is agent-driven (the pod's own agent CRIU-dumps/restores its shell tree)
 > behind the `CRIU_ENABLED` gate: off in the production default (a no-op stub),
 > on in the kind e2e overlay, where the snapshot → reclaim → restore round trip
-> runs end-to-end (`TestDeferred_CRIUIntegrity`). What is not yet settled is the
-> idle→snapshot *trigger* timing policy (`TODO(policy)`, AC-B1), so the
-> reaper-driven idle path and the idle-state read/write branches stay seeded as
-> documented skips. See the design docs under [`docs/`](docs/) for the
+> runs end-to-end (the AC-B2/B3/D4 e2e files). What is not yet settled is the
+> idle→snapshot *trigger* timing policy (`TODO(policy)`, AC-B1), so AC-B1 is a
+> registered exception and the idle-state read/write branches stay unasserted.
+> See the design docs under [`docs/`](docs/) for the
 > value/PRD/AC and mockups this is built from. The **design system** — tokens,
 > primitives, and components — lives in code at
 > [`web/src/design/`](web/src/design/README.md) (+ `web/src/app/shell.css`);
@@ -66,7 +66,7 @@ docs/                 value / PRD·AC / journeys / mockups / CRIU verification n
   access → restore into a new pod (AC-B2). CRIU is **gated** (`CRIU_ENABLED`):
   off in the production default (a no-op stub), on in the e2e overlay with the
   real agent-driven checkpointer, where the round trip is verified
-  (`TestDeferred_CRIUIntegrity`); see [`docs/criu-verification.md`](docs/criu-verification.md).
+  (the AC-B2/B3/D4 e2e files); see [`docs/criu-verification.md`](docs/criu-verification.md).
 - **Single entry point**: the control plane container serves both the REST API
   (`/api/v1`) and the statically built SPA on one port.
 
@@ -119,10 +119,11 @@ gitignored.
   real-pod provisioning (AC-A1/A2), and cross-replica state consistency over the
   shared ConfigMap store (AC-C1). With CRIU turned on in the overlay, the
   snapshot → reclaim → restore round trip is a verified assertion too
-  (`TestDeferred_CRIUIntegrity`, AC-B2/B3/D4); only the reaper-driven
-  idle→snapshot trigger and the idle-state read/write branches remain seeded as
-  documented skips (they need the idle trigger, `TODO(policy)`). Details and the
-  deferred-seed ↔ scenario map: [`docs/test/e2e.md`](docs/test/e2e.md).
+  (AC-B2/B3/D4). Each AC has its own e2e file, declared in the file header and
+  registered in [`docs/test/e2e.md`](docs/test/e2e.md) — `make check-ac-mapping`
+  enforces the 1:1. Only the reaper-driven idle→snapshot trigger (AC-B1, a
+  registered exception) and the idle-state read/write branches remain open, both
+  waiting on the same `TODO(policy)`.
 - **Conflict (envtest)** (`make test-envtest`): an isolated nested module runs
   the ConfigMap adapter against a real kube-apiserver + etcd to assert AC-C1's
   single-winner property (exactly one of N concurrent CompareAndSwap / Lease
