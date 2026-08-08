@@ -9,6 +9,10 @@ type CreateRequest struct {
 	// unspecified and creates a shell session; an unknown value is rejected
 	// with ErrInvalidInput (the API maps that to 400).
 	WorkloadType WorkloadType
+	// Model selects the Claude Code model for this session (AC-E6). Empty means
+	// PlatformDefaultModel for claude-code and is invalid when supplied for a
+	// shell session. It is immutable after creation.
+	Model string
 }
 
 // ReadResult is the state-branched result of a Read (AC-C2).
@@ -17,11 +21,11 @@ type ReadResult struct {
 	// Path records which state branch served the read (e.g. "active",
 	// "idle->active->read", "snapshot->restore->read").
 	Path string
-	// Payload is the shell output accumulated after the requested offset
-	// (stdout/stderr merged, order preserved — AC-D3).
+	// Payload is workload output accumulated after the requested offset
+	// (stdout/stderr merged, order preserved — AC-D3/AC-E3).
 	Payload string
 	// NextOffset is the cursor to pass as offset on the next Read to receive
-	// only new output; offset 0 replays the full history (AC-D3).
+	// only new output; offset 0 replays the full history (AC-D3/AC-E3).
 	NextOffset int64
 }
 
@@ -39,13 +43,11 @@ type WriteResult struct {
 //   - Create    → AC-A1, AC-A2 (provision one dedicated pod, go active),
 //     AC-E1 (workload type selection: default shell, immutable afterwards).
 //   - Get/List  → V5 (single source of truth for session state).
-//   - Read      → AC-C2 (state-branched read), AC-D3 (shell output delta
-//     after offset, nextOffset cursor, non-consuming).
-//   - Write     → AC-C3 (state-branched write), AC-D2 (payload into the
-//     shell's stdin, no wait for command completion).
+//   - Read      → AC-C2 plus the workload output cursor (AC-D3/AC-E3).
+//   - Write     → AC-C3 plus shell stdin or queued agent prompt (AC-D2/AC-E2).
 //   - Switch    → AC-C4 (free switching; restore snapshot, no-op if active).
-//   - Snapshot  → AC-B1 (checkpoint + reclaim on idle).
-//   - Restore   → AC-B2 (restore checkpoint into a new pod).
+//   - Snapshot  → AC-B1 (workload archive + reclaim on idle).
+//   - Restore   → AC-B2 (restore the workload into a new pod).
 //   - Terminate → AC-A3 (reclaim resources).
 type Manager interface {
 	Create(ctx context.Context, req CreateRequest) (*Session, error)

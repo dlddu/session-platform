@@ -4,9 +4,12 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
@@ -16,6 +19,8 @@ type API struct {
 	mgr           session.Manager
 	testEndpoints bool
 }
+
+const maxRequestBodyBytes = 8 << 20
 
 // Option customises the API surface.
 type Option func(*API)
@@ -47,13 +52,10 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/sessions/{id}/switch", a.switchSession)
 
 	if a.testEndpoints {
-		// Test-only: freeze a session on demand (AC-B1's effect without its
-		// trigger). The product's idle->snapshot *trigger policy* is still an
-		// open decision (docs/doc-tracker.md), so this deliberately is NOT part
-		// of the product API — it exists so the e2e suite can reach the snapshot
-		// state and assert the CRIU round trip (AC-B2/B3/D4), which is otherwise
-		// unreachable over HTTP. Restore needs no endpoint: any access to a
-		// frozen session restores it (resume-on-access).
+		// Test-only: freeze on demand without waiting for IdleReaper's 60-minute
+		// product window. The e2e suite uses it to verify workload-specific archive
+		// and restore behavior; it is deliberately not a product API. Restore needs
+		// no endpoint because any access resumes a frozen session.
 		mux.HandleFunc("POST /api/v1/sessions/{id}/snapshot", a.snapshotSession)
 	}
 }
@@ -62,10 +64,12 @@ func (a *API) Routes(mux *http.ServeMux) {
 
 type createReq struct {
 	Name string `json:"name"`
-	// WorkloadType selects the data plane workload (AC-E1). Omitted (or empty)
-	// means "shell", so a request written before the type axis existed behaves
-	// exactly as it did; an unknown value is a 400.
-	WorkloadType session.WorkloadType `json:"workloadType"`
+	// WorkloadType stays raw so omitted can differ from explicit empty/null.
+	WorkloadType json.RawMessage `json:"workloadType"`
+
+	// Model is accepted only for claude-code. Omitted resolves to the stable
+	// platform-default alias and is immutable with the workload type (AC-E6).
+	Model json.RawMessage `json:"model"`
 }
 
 type writeReq struct {
@@ -102,11 +106,31 @@ func (a *API) health(w http.ResponseWriter, _ *http.Request) {
 
 func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 	var req createReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, session.ErrInvalidInput)
+	if err := decodeRequestBody(r.Body, &req, true); err != nil {
+		if errors.Is(err, session.ErrRequestBodyTooLarge) {
+			writeErr(w, err)
+		} else {
+			writeErr(w, session.ErrInvalidInput)
+		}
 		return
 	}
-	sess, err := a.mgr.Create(r.Context(), session.CreateRequest{Name: req.Name, WorkloadType: req.WorkloadType})
+	var workload session.WorkloadType
+	if len(req.WorkloadType) != 0 {
+		if err := json.Unmarshal(req.WorkloadType, &workload); err != nil || !workload.Valid() {
+			writeErr(w, session.ErrInvalidInput)
+			return
+		}
+	}
+	var model string
+	if len(req.Model) != 0 {
+		if err := json.Unmarshal(req.Model, &model); err != nil || model == "" || model != strings.TrimSpace(model) {
+			writeErr(w, session.ErrInvalidInput)
+			return
+		}
+	}
+	sess, err := a.mgr.Create(r.Context(), session.CreateRequest{
+		Name: req.Name, WorkloadType: workload, Model: model,
+	})
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -135,7 +159,10 @@ func (a *API) getSession(w http.ResponseWriter, r *http.Request) {
 func (a *API) readSession(w http.ResponseWriter, r *http.Request) {
 	var req readReq
 	// body is optional: no body (or no offset) means "from the beginning"
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := decodeRequestBody(r.Body, &req, false); err != nil {
+		writeErr(w, err)
+		return
+	}
 	if req.Offset < 0 {
 		writeErr(w, session.ErrInvalidInput)
 		return
@@ -151,7 +178,10 @@ func (a *API) readSession(w http.ResponseWriter, r *http.Request) {
 func (a *API) writeSession(w http.ResponseWriter, r *http.Request) {
 	var req writeReq
 	// body is optional: an empty payload is a valid (no-op) shell write
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := decodeRequestBody(r.Body, &req, false); err != nil {
+		writeErr(w, err)
+		return
+	}
 	res, err := a.mgr.Write(r.Context(), r.PathValue("id"), req.Payload)
 	if err != nil {
 		writeErr(w, err)
@@ -161,6 +191,10 @@ func (a *API) writeSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) switchSession(w http.ResponseWriter, r *http.Request) {
+	if err := decodeRequestBody(r.Body, &struct{}{}, false); err != nil {
+		writeErr(w, err)
+		return
+	}
 	sess, err := a.mgr.Switch(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeErr(w, err)
@@ -172,6 +206,10 @@ func (a *API) switchSession(w http.ResponseWriter, r *http.Request) {
 // snapshotSession freezes a session and reclaims its pod (AC-B1/AC-A3).
 // Registered only with WithTestEndpoints — see Routes.
 func (a *API) snapshotSession(w http.ResponseWriter, r *http.Request) {
+	if err := decodeRequestBody(r.Body, &struct{}{}, false); err != nil {
+		writeErr(w, err)
+		return
+	}
 	sess, err := a.mgr.Snapshot(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeErr(w, err)
@@ -181,6 +219,58 @@ func (a *API) snapshotSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---- helpers ----
+
+func decodeRequestBody(body io.Reader, dst any, required bool) error {
+	wire, err := io.ReadAll(io.LimitReader(body, maxRequestBodyBytes+1))
+	if err != nil {
+		return session.ErrInvalidInput
+	}
+	if len(wire) > maxRequestBodyBytes {
+		return session.ErrRequestBodyTooLarge
+	}
+	decoder := json.NewDecoder(bytes.NewReader(wire))
+	var raw json.RawMessage
+	if err := decoder.Decode(&raw); err != nil {
+		if errors.Is(err, io.EOF) && !required {
+			return nil
+		}
+		return session.ErrInvalidInput
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil || containsJSONNull(value) {
+		return session.ErrInvalidInput
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return session.ErrInvalidInput
+	}
+	strict := json.NewDecoder(bytes.NewReader(raw))
+	strict.DisallowUnknownFields()
+	if err := strict.Decode(dst); err != nil {
+		return session.ErrInvalidInput
+	}
+	return nil
+}
+
+func containsJSONNull(value any) bool {
+	switch value := value.(type) {
+	case nil:
+		return true
+	case map[string]any:
+		for _, child := range value {
+			if containsJSONNull(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if containsJSONNull(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -199,6 +289,16 @@ func writeErr(w http.ResponseWriter, err error) {
 		status = http.StatusUnprocessableEntity
 	case errors.Is(err, session.ErrConflict):
 		status = http.StatusConflict
+	case errors.Is(err, session.ErrWorkloadQueueFull):
+		status = http.StatusTooManyRequests
+	case errors.Is(err, session.ErrWorkloadPromptTooLarge):
+		status = http.StatusRequestEntityTooLarge
+	case errors.Is(err, session.ErrRequestBodyTooLarge):
+		status = http.StatusRequestEntityTooLarge
+	case errors.Is(err, session.ErrWorkloadOutputFull):
+		status = http.StatusInsufficientStorage
+	case errors.Is(err, session.ErrCheckpointDisabled):
+		status = http.StatusServiceUnavailable
 	}
 	writeJSON(w, status, errResp{Error: err.Error()})
 }

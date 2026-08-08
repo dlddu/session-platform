@@ -7,14 +7,12 @@
 // Unlike integration_test.go (which mounts the handlers in-process), this suite
 // is a black box: it only knows the wire contract (the /api/v1 surface and its
 // JSON DTOs) and talks to whatever E2E_BASE_URL points at — the kind-deployed
-// stub control-plane (default http://localhost:8080, see deploy/ + scripts/e2e).
-//
-// The deployed SUT backs sessions with real adapters — client-go pods and the
-// ConfigMap/Lease state store — so cross-replica consistency (AC-C1) and
-// real-pod provisioning (AC-A1/A2) are asserted in e2e_deferred_test.go. Only
-// the CRIU checkpointer is still a stub and there is no idle->snapshot trigger,
-// so every created session stays `active`: the B-path (idle -> snapshot ->
-// restore) and CRIU assertions remain deferred — see e2e_deferred_test.go.
+// control plane (default http://localhost:8080, see deploy/ + scripts/e2e). The
+// kind overlay enables real client-go adapters, the test-only snapshot endpoint,
+// agent-driven CRIU, and a shared archive store. Capability-gated tests assert
+// real pod provisioning/reclaim and the shell round trip; unsupported external
+// SUTs skip those cases. The 60-minute reaper is the product trigger, while the
+// suite uses the direct endpoint to avoid waiting for the idle window.
 package e2e_test
 
 import (

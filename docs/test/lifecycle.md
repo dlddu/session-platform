@@ -1,27 +1,27 @@
-# 테스트 문서: 세션 라이프사이클 & CRIU 스냅샷
+# 테스트 문서: 세션 라이프사이클 & 워크로드별 스냅샷
 
 ## 검증 대상 AC
-- AC-B1: 60분 유휴 후 스냅샷 (PRD: 세션 라이프사이클 & CRIU 스냅샷)
-- AC-B2: 스냅샷 복원 (PRD: 세션 라이프사이클 & CRIU 스냅샷)
-- AC-B3: 스냅샷·복원 무결성 (PRD: 세션 라이프사이클 & CRIU 스냅샷)
+- AC-B1: 60분 유휴 후 스냅샷 (PRD: 세션 라이프사이클 & 워크로드별 스냅샷)
+- AC-B2: 스냅샷 복원 (PRD: 세션 라이프사이클 & 워크로드별 스냅샷)
+- AC-B3: 스냅샷·복원 무결성 (PRD: 세션 라이프사이클 & 워크로드별 스냅샷)
 
 ## 테스트 시나리오
 
 ### 시나리오 1: 60분 유휴 도달 시 스냅샷 (경계값 포함)
 - **사전 조건**: active 세션 1개 존재, 유휴 타이머 측정 기준이 설정됨
 - **실행 단계**: (a) 세션을 59분간 미사용 후 상태 확인 → (b) 추가로 1분 더 미사용(누적 60분) 후 상태 확인
-- **기대 결과**: 59분 시점에는 동결되지 않음, 60분 시점에 CRIU 스냅샷 생성 + 상태 `snapshot` 전이 + pod 회수
+- **기대 결과**: 59분 시점에는 동결되지 않음. 60분 시점에는 workload별 snapshot(`shell`=CRIU, `claude-code`=filesystem archive) 생성 + 상태 `snapshot` 전이 + pod 회수. 해당 workload의 snapshot gate가 꺼져 있으면 reaper는 대상을 skip/log하고 live pod를 보존하며, 명시적 Snapshot 호출은 unavailable 오류를 반환
 - **검증 AC**: AC-B1
 
 ### 시나리오 2: 스냅샷 세션 접근 시 복원
 - **사전 조건**: `snapshot` 상태 세션 1개 존재
 - **실행 단계**: 해당 세션에 read(또는 write/전환) 요청
-- **기대 결과**: CRIU 복원으로 새 pod에 체크포인트 복원, 상태 `active` 전이, 정상 응답
+- **기대 결과**: workload별 복원(`shell`=CRIU, `claude-code`=filesystem archive)으로 새 pod에 상태 복원, 상태 `active` 전이, 정상 응답
 - **검증 AC**: AC-B2
 
 ### 시나리오 3: 복원 후 상태 무결성
-- **사전 조건**: active 세션에 검증 가능한 마커 상태(인메모리 변수/열린 연결 등) 세팅
+- **사전 조건**: active 세션에 workload별 마커 상태(`shell`=인메모리 변수/cwd, `claude-code`=대화 기록/workspace/output cursor) 세팅
 - **실행 단계**: 세션 동결(스냅샷) → 이후 접근으로 복원 → 마커 상태 조회
 - **기대 결과**: 동결 직전 마커 상태가 손실 없이 동일하게 보존됨
 - **검증 AC**: AC-B3
-- **구체 마커 구현**: 인터랙티브 쉘 워크로드에서의 구체 마커 왕복(환경 변수 `MARKER`·작업 디렉터리 + 커서 연속성)은 T-쉘워크로드 시나리오 4 = `control-plane/test/integration_test.go`의 `TestScenario4_CRIUIntegrity`로 실구현(AC-D4가 AC-B3를 구체화). 게이트 on(`CRIU_ENABLED=1`) + CRIU 지원 런타임에서 실행, 게이트 on 실검증은 `../criu-verification.md`의 인계 항목
+- **구체 마커 구현**: `shell`의 환경 변수 `MARKER`·작업 디렉터리·커서 왕복은 T-쉘워크로드 시나리오 4와 `TestScenario4_CRIUIntegrity`/배포 e2e가 검증한다. `claude-code`의 workspace·CLI home·resume flag·bounded scrollback·pre-snapshot cursor 왕복은 T-클로드코드 시나리오 6·8과 data-plane archive/control-plane transaction 단위 테스트가 검증한다. 실제 provider API를 호출하는 Claude 배포 smoke는 별도 opt-in 범위다.

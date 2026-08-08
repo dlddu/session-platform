@@ -14,15 +14,14 @@
 > 오버레이(`deploy/`)에서 게이트 ON(agent-driven in-pod CRIU + MinIO 아카이브 저장소 +
 > test-only snapshot 트리거)으로 배포되어, **snapshot→pod 회수→접근 시 새 pod로 복원→쉘
 > 상태 보존 왕복이 실 단언으로 검증**된다(`TestDeferred_CRIUIntegrity`, AC-B2/B3/D4; e2e
-> 워크플로의 CRIU 프로브가 러너 커널의 in-pod criu 지원을 확인). 다만 **운영 idle→snapshot
-> 트리거(reaper 타이밍 정책)는 아직 미확정**(`TODO(policy)`, AC-B1)이라, 트리거 없이 둔
-> 세션은 base 경로에서 여전히 `active`로 머문다.
+> 워크플로의 CRIU 프로브가 러너 커널의 in-pod criu 지원을 확인). 운영 reaper는 마지막
+> read/write부터 60분에 도달한 세션을 스캔해 snapshot한다. 다만 배포 e2e에는 60분 시계를
+> 가속하거나 `lastAccess`를 주입하는 제품 API가 없어 실제 시간 경계 시드는 skip이다.
 > 검증 범위는 **생성/목록/조회/switch·read·write 해피패스 + 실 Pod 단언(AC-A1/A2) + PTY 쉘
 > 런타임 단언(AC-D1) + 쉘 stdin/stdout 시맨틱(AC-D2/D3: write→쉘 stdin 주입, read→offset
 > 커서 델타·offset=0 전체 재조회) + 교차-replica 일관성(AC-C1) + CRIU 왕복(AC-B2/B3/D4)**
-> 이다. 아직 범위 밖으로 남아 단계 5의 **deferred 시드**(skip)로 두는 것은 **reaper-구동
-> idle→snapshot(IdleToSnapshot, B1)**과 **read/write의 idle 분기(C2/C3 idle)** 뿐이며 —
-> 미구현 idle 진입 트리거/미확정 트리거 정책이 들어오면 skip을 지우며 채운다.
+> 이다. reaper 시간 경계(B1)와 중간 `idle` 상태의 read/write 분기(C2/C3)는 각각
+> 제어 가능한 시계와 operational idle-state producer가 생기면 배포 e2e로 채운다.
 
 ## 빠른 실행 (로컬)
 
@@ -31,7 +30,7 @@
 ```bash
 make e2e-up                          # kind 생성 + 이미지 빌드/load + deploy/ 적용 + 헬스 대기
 cd control-plane && go test -tags=e2e ./test/...   # API e2e
-cd web && npx playwright test        # 브라우저 e2e (J1, J3, J5, smoke) — 최초 1회 `npx playwright install chromium`
+cd web && npx playwright test        # 브라우저 e2e (J1, J3, J5, J6, smoke) — 최초 1회 `npx playwright install chromium`
 make e2e-down                        # kind 클러스터 제거
 ```
 
@@ -65,9 +64,9 @@ Flux는 `k8s/`를 그대로 적용한다.
 
 ## CI
 
-`.github/workflows/e2e.yml`이 `control-plane/**`·`data-plane/**`·`web/**`·`deploy/**`·
-`scripts/e2e/**`·`Makefile` 변경 PR과 `workflow_dispatch`에서만 돈다(무관 PR은 트리거되지
-않음). 흐름:
+`.github/workflows/e2e.yml`이 `control-plane/**`·`data-plane/**`·`web/**`·`deploy/**`·`k8s/**`·
+`scripts/e2e/**`·`Makefile`·e2e workflow 자체 변경 PR과 `workflow_dispatch`에서만 돈다(무관 PR은
+트리거되지 않음). 흐름:
 kind 생성(`helm/kind-action`) → `make e2e-up` → `go test -tags=e2e` → Playwright. 실패 시
 Playwright 리포트/trace를 아티팩트로 올린다. ci.yml의 lint/unit/build/integration 잡은 종전대로
 모든 PR에서 돌고, **envtest 잡**이 실 kube-apiserver로 CAS/Lease 단일-승자(AC-C1)를 검증한다.
@@ -93,22 +92,23 @@ Playwright 리포트/trace를 아티팩트로 올린다. ci.yml의 lint/unit/bui
 | J1: 생성 → `/session/:id` → 쉘 명령 실행($((…)) 마커) → switch | playwright | A1/A2, C2/C3, D2/D3 |
 | J3: 다건 목록 노출 → 카드 클릭/전환 | playwright | C4, V4 |
 | J5: 콘솔 명령 입력→출력 누적 표시, 재진입 시 `offset=0`으로 전체 이력 복원 | playwright | D2, D3, V3 |
+| J6: workload/model picker, agent route/card, exact prompt payload, cursor refresh, archive restore 화면 | playwright route fixture (`j6-agent-prompt-loop.spec.ts`) | E1~E6 UI/API 계약 |
 
 ## Deferred 시드 ↔ 문서 시나리오 매핑
 
 `go test -tags=e2e`와 `npx playwright test` 실행 시 아래 케이스는 **사유와 함께
-"skipped"** 로 표시된다. 실 어댑터/트리거 PR이 해당 skip을 제거하며 본문을 채운다.
+"skipped"** 로 표시된다. 표의 구체 선결조건이 갖춰지면 skip을 제거하고 본문을 채운다.
 
 | 시드 (테스트) | 스위트 | 문서 시나리오 / 여정 | AC | 막힌 이유 (선결조건) |
 | --- | --- | --- | --- | --- |
 | ~~`TestDeferred_RealPodProvisioned`~~ → **채움** | go | architecture 시나리오 1·2 | A1, A2 | (해소: 실 client-go PodOrchestrator 적용 — 위 커버 표로 이동) |
 | ~~`TestDeferred_RealPodReclaimed`~~ → **채움** | go | architecture 시나리오 3 | A3 | (해소: 실 client-go PodOrchestrator의 Stop이 Pod를 삭제 + test-only snapshot 트리거로 동결 경로 도달 — 위 커버 표로 이동) |
-| `TestDeferred_IdleToSnapshot` | go | lifecycle 시나리오 1 | B1 | idle→snapshot 트리거(reaper/엔드포인트) |
+| `TestDeferred_IdleToSnapshot` | go | lifecycle 시나리오 1 | B1 | reaper는 구현됨; 배포 SUT의 60분 경계를 가속할 clock/lastAccess test seam 필요 |
 | `TestDeferred_SnapshotRestore` | go | lifecycle 시나리오 2 | B2 | B2는 `TestDeferred_CRIUIntegrity`(복원→새 pod)로 이미 커버 — 이 시드는 focused restore-only 잉여 placeholder(비차단) |
 | ~~`TestDeferred_CRIUIntegrity`~~ → **채움** | go | lifecycle 시나리오 3 | B2, B3, D4 | (해소: deploy/ 오버레이가 CRIU 게이트 ON(agent-driven in-pod CRIU + MinIO) + test-only snapshot 트리거 → snapshot→복원→상태 보존 왕복 실단언; e2e CRIU 프로브가 러너 커널 지원 확인 — 위 커버 표로 이동) |
-| `TestDeferred_ReadIdleAndSnapshotBranches` | go | state-api 시나리오 2 | C2 | idle 분기만 잔여(snapshot 분기는 `TestDeferred_CRIUIntegrity`가 커버) — idle 진입 트리거 필요 |
-| `TestDeferred_WriteIdleAndSnapshotBranches` | go | state-api 시나리오 3 | C3 | idle 분기만 잔여(snapshot 분기는 `TestDeferred_CRIUIntegrity`가 커버) — idle 진입 트리거 필요 |
+| `TestDeferred_ReadIdleAndSnapshotBranches` | go | state-api 시나리오 2 | C2 | idle 분기만 잔여(snapshot 분기는 `TestDeferred_CRIUIntegrity`가 커버) — operational `idle` 상태 producer 필요 |
+| `TestDeferred_WriteIdleAndSnapshotBranches` | go | state-api 시나리오 3 | C3 | idle 분기만 잔여(snapshot 분기는 `TestDeferred_CRIUIntegrity`가 커버) — operational `idle` 상태 producer 필요 |
 | ~~`TestDeferred_CrossReplicaAtomicity`~~ → **채움** | go | state-api 시나리오 1 | C1 | (해소: ConfigMap/Lease StateStore + 2-replica 오버레이로 교차-replica 일관성 단언 — 위 커버 표로 이동. 단일-승자 CAS/Lease는 envtest 스위트가 실 apiserver로 검증) |
-| `J2: session freezes to a snapshot after idle` | playwright | J2 | B1 | idle→snapshot 트리거 |
-| `J2: thaw & resume restores a snapshot session` | playwright | J2 | B2 | snapshot 상태 세션 + 복원(Restore 화면) |
+| `J2: session freezes to a snapshot after idle` | playwright | J2 | B1 | reaper 60분 경계를 가속할 배포 test seam 필요 |
+| `J2: thaw & resume restores a snapshot session` | playwright | J2 | B2 | deployed snapshot fixture 필요(J6 archive Restore 화면은 route fixture로 별도 검증) |
 | `J4: concurrent access stays consistent` | playwright | J4 | C1 | UI 비대상(백엔드 동시성) — Go e2e(`TestDeferred_CrossReplicaAtomicity`) + envtest로 검증 |

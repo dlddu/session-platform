@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -10,15 +11,13 @@ import (
 
 // IdleReaper is the operational idle->snapshot trigger (AC-B1). On a fixed
 // interval it scans every session and snapshots any that has had no client
-// read/write (AC-D5) for at least maxIdle — checkpointing it via CRIU and
-// reclaiming its pod (AC-A3). It is the operational counterpart to the
+// read/write (AC-D5) for at least maxIdle — using its workload snapshot strategy
+// and reclaiming its pod (AC-A3). It is the operational counterpart to the
 // test-only /snapshot endpoint: without it a session never freezes on its own
 // after its idle limit; a client had to trigger the snapshot explicitly.
 //
-// It reuses session.Manager.Snapshot unchanged. Snapshot is lock-guarded and
-// idempotent — it re-reads state under the per-session lock and no-ops a
-// session already in snapshot — so a candidate that a concurrent access resumes
-// between the List scan and the Snapshot call is handled safely.
+// Service.SnapshotIfIdle acquires the session Lease and reloads LastAccess,
+// closing the stale List-to-Snapshot gap. Generic managers retain Snapshot.
 //
 // Scope: this implements only the plain "idle >= maxIdle -> snapshot" rule. The
 // finer trigger *policy* — grace periods, per-session overrides, and whether to
@@ -31,6 +30,10 @@ type IdleReaper struct {
 	interval time.Duration
 	now      func() time.Time
 	log      *slog.Logger
+}
+
+type idleSnapshotManager interface {
+	SnapshotIfIdle(context.Context, string, time.Time) (*session.Session, bool, error)
 }
 
 // NewIdleReaper builds a reaper over the session manager. now defaults to
@@ -73,6 +76,7 @@ func (r *IdleReaper) ScanOnce(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	now := r.now()
+	cutoff := now.Add(-r.maxIdle)
 	snapshotted := 0
 	for _, sess := range sessions {
 		if sess.State == session.StateSnapshot {
@@ -82,8 +86,22 @@ func (r *IdleReaper) ScanOnce(ctx context.Context) (int, error) {
 		if idle < r.maxIdle {
 			continue // still within the idle budget (e.g. the 59-minute boundary)
 		}
-		if _, err := r.mgr.Snapshot(ctx, sess.ID); err != nil {
-			r.log.Warn("idle reaper: snapshot failed", "session", sess.ID, "idle", idle.String(), "err", err)
+		didSnapshot := true
+		var snapshotErr error
+		if guarded, ok := r.mgr.(idleSnapshotManager); ok {
+			_, didSnapshot, snapshotErr = guarded.SnapshotIfIdle(ctx, sess.ID, cutoff)
+		} else {
+			_, snapshotErr = r.mgr.Snapshot(ctx, sess.ID)
+		}
+		if snapshotErr != nil {
+			if errors.Is(snapshotErr, session.ErrCheckpointDisabled) {
+				r.log.Debug("idle reaper: workload snapshot strategy disabled", "session", sess.ID)
+				continue
+			}
+			r.log.Warn("idle reaper: snapshot failed", "session", sess.ID, "idle", idle.String(), "err", snapshotErr)
+			continue
+		}
+		if !didSnapshot {
 			continue
 		}
 		snapshotted++

@@ -15,10 +15,10 @@
 > 단계 표기: `J6-S{n}` · 각 단계 끝의 *mockup* 항목은 시각화 산출물 연결 상태입니다.
 
 1. **J6-S1 · 작업 환경 선택** — 작업자가 세션을 만들면서 워크로드 타입을 고른다. `shell`(기본값, 직접 명령을 치는 인터랙티브 쉘)과 `claude-code`(프롬프트로 일을 맡기는 에이전트 CLI) 중 하나이며, `claude-code`를 고르면 사용할 모델도 함께 지정한다(미지정 시 플랫폼 기본 모델). 타입과 모델은 **세션 수명 동안 불변**이라, 바꾸려면 새 세션을 만든다. 어떤 타입을 골라도 "1 세션 = 1 전용 pod" 격리는 동일하게 적용된다. *(관련 AC: AC-E1, AC-E6, 보조 AC-A1·A2)* *(mockup: new-session.html — workload type 선택 카드 + model 선택, ✅)*
-2. **J6-S2 · 프롬프트 전송** — 작업자가 자연어 프롬프트를 보낸다. 플랫폼은 이를 세션 pod 안에서 `claude --model <세션 model> -p "<프롬프트>"` 1회 실행으로 처리한다. 실행은 원샷이라 응답을 내고 프로세스가 끝나며, 상주하는 CLI 프로세스는 없다. 전송은 실행 완료를 기다리지 않고 즉시 반환하고, 이전 실행이 끝나지 않았으면 다음 프롬프트는 **직렬로 큐잉**되어 한 세션에서 두 실행이 겹치지 않는다. *(관련 AC: AC-E2)* *(mockup: agent-workspace.html — prompt input-row + queued 표시, ✅)*
-3. **J6-S3 · 응답 확인** — 작업자가 실행 출력(에이전트 응답)을 확인한다. read는 J5-S3과 **동일한 offset 커서 규약**을 따라 직전 `nextOffset` 이후의 델타만 돌려주고, `offset=0`으로 읽으면 세션 시작 이후 전체 대화 이력이 돌아온다(재진입 시 이력 복원). 워크로드 타입이 달라도 API 계약은 같고, 그 안에 담기는 내용만 쉘 출력에서 에이전트 응답으로 바뀐다. *(관련 AC: AC-E3)* *(mockup: agent-workspace.html — 응답 렌더 + offset 커서 표시, ✅)*
+2. **J6-S2 · 프롬프트 전송** — 작업자가 자연어 프롬프트를 보낸다. 플랫폼은 이를 세션 pod 안에서 `claude [--model <명시 모델>] -p -- "<프롬프트>"` 1회 실행으로 처리한다(`platform-default`는 model 플래그 생략, **첫 성공 실행 이후** `--continue` 추가). `--` 뒤의 프롬프트는 옵션으로 해석되지 않는 단일 argv다. 실행은 원샷이라 응답을 내고 프로세스가 끝나며, 상주하는 CLI 프로세스는 없다. 전송은 실행 완료를 기다리지 않고 즉시 반환하고, 이전 실행이 끝나지 않았으면 다음 프롬프트는 **직렬로 큐잉**되어 한 세션에서 두 실행이 겹치지 않는다. prompt 한 건이 1 MiB를 넘으면 큐에 들어가지 않고 413, bounded queue가 포화되면 새 제출은 429로 거부된다. 화면의 `submissions · checking output`은 클라이언트가 제출 후 짧은 read polling을 수행 중인 횟수일 뿐, 서버 내부의 running/queued 개수를 추정하지 않는다. *(관련 AC: AC-E2)* *(mockup: agent-workspace.html — prompt input-row + submission/output 확인 표시, ✅)*
+3. **J6-S3 · 응답 확인** — 작업자가 실행 출력(에이전트 응답)을 확인한다. read는 J5-S3과 **동일한 offset 커서 규약**을 따라 직전 `nextOffset` 이후의 델타만 돌려주고, `offset=0`으로 읽으면 서버가 보존한 누적 실행 출력 전체가 돌아온다(재진입 시 출력 복원). 전송 직후의 bounded polling에서 실행이 끝나지 않았으면 `Refresh output`으로 다시 읽는다. 한 invocation의 raw 출력은 marker 포함 16 MiB이고, 누적 출력은 terminal marker 포함 256 MiB다. 누적 상한에 도달하기 전에 수락된 prompt는 계속 실행되지만 그 뒤 출력은 버려지고, terminal marker 뒤 새 prompt는 507로 거부된다. 기존 bytes를 다시 쓰지 않으므로 이미 받은 cursor는 유효하다. 워크로드 타입이 달라도 API 계약은 같고, 그 안에 담기는 내용만 쉘 출력에서 에이전트 실행 출력으로 바뀐다. 이 스트림은 stdout/stderr 누적분이며 구조화된 prompt/agent 턴 메타데이터는 아니다. *(관련 AC: AC-E3)* *(mockup: agent-workspace.html — 응답 렌더 + offset 커서 표시, ✅)*
 4. **J6-S4 · 대화가 이어짐** — 연속된 프롬프트가 **하나의 이어지는 대화**로 처리된다. 각 실행은 원샷이지만 pod 파일시스템에 남은 대화 기록을 다음 실행이 이어받으므로, N번째 프롬프트는 앞선 1~N-1번째 프롬프트·응답을 문맥으로 갖는다. 작업 디렉터리도 실행 간 유지되어 이전 실행이 만든 파일을 다음 실행이 그대로 본다. 이 **대화 기록 + 작업 디렉터리**가 곧 이 타입에서 세션의 보존 대상 상태다(J5-S4의 쉘 프로세스 트리에 대응). *(관련 AC: AC-E4)* *(mockup: agent-workspace.html — conversation context 패널, ✅)*
-5. **J6-S5 · 동결과 복원을 건너 이어감** — 유휴 한계에 도달하면 이 타입은 **CRIU 없이** 작업 디렉터리·대화 기록·누적 출력 버퍼를 아카이브해 외부 스토리지에 저장하고 pod를 회수한다(상주 프로세스가 없어 체크포인트할 프로세스 트리 자체가 없다). 재접근 시 새 pod에 아카이브를 복원한 뒤 `active`로 전이하며, 복원 후의 프롬프트는 동결 이전 대화 문맥과 작업 디렉터리 위에서 이어진다. 누적 출력 버퍼도 아카이브에 포함되므로 **동결 전에 받은 `nextOffset` 커서가 복원 후에도 유효**하다. 작업자가 보는 경험은 J2와 동일하다 — 멈췄다는 사실을 거의 인지하지 못한 채 이어간다. *(관련 AC: AC-E5, 상위 AC-B1·B2·B3)* *(mockup: agent-workspace.html — snapshot 상태 콘솔(아카이브 기반 동결·복원), ✅)*
+5. **J6-S5 · 동결과 복원을 건너 이어감** — 유휴 한계에 도달하면 이 타입은 **CRIU 없이** 작업 디렉터리·대화 기록·누적 출력 버퍼를 아카이브해 외부 스토리지에 저장하고 pod를 회수한다(상주 프로세스가 없어 체크포인트할 프로세스 트리 자체가 없다). control plane은 CP-owned generation의 durable prepare/commit 기록으로 crash를 복구하고, commit 결정 뒤에는 admission을 다시 열지 않은 채 pod 회수를 끝낸다. 재접근 시 새 pod에 아카이브를 복원한 뒤 `active`로 전이하며, 복원 후의 프롬프트는 동결 이전 대화 문맥과 작업 디렉터리 위에서 이어진다. 누적 출력 버퍼·terminal marker도 아카이브에 포함되므로 **동결 전에 받은 `nextOffset` 커서가 복원 후에도 유효**하고 output-full 세션은 복원 뒤에도 새 prompt를 507로 거부한다. 작업자가 보는 경험은 J2와 동일하다 — 멈췄다는 사실을 거의 인지하지 못한 채 이어간다. *(관련 AC: AC-E5, 상위 AC-B1·B2·B3)* *(mockup: agent-workspace.html — snapshot 상태 콘솔(아카이브 기반 동결·복원), ✅)*
 
 ## 인접 여정과의 관계
 
@@ -27,9 +27,11 @@
 - **J2(자리 비움과 재개)**: J6-S5는 J2의 동결·복원을 `claude-code` 타입 경로로 밟는다. 사용자가 보는 흐름(J2-S1~S4)은 같고 메커니즘만 CRIU→파일시스템 아카이브로 갈린다.
 - **J3(멀티세션 전환)**: 타입이 섞인 세션들을 한 목록에서 오가며 전환한다. 전환 후에도 동일한 offset 커서 규약으로 출력을 이어 읽는다(AC-E3).
 
-## 이 여정이 드러내는 상류 열린 항목
+## 구현 상태
 
-> 아래는 PRD가 이미 열린 항목으로 표시한 것들이며, 이 여정은 **결정하지 않고 반영만** 합니다 (product-doc-engineer 영역).
+> 2026-08-08 기준으로 J6의 제품 경로와 결정은 코드에 반영되었다.
 
-- **재개 방식 (AC-E4)**: AC-E2가 명시한 커맨드 형태에 재개 옵션이 없어, 2회차 이후 실행이 대화를 이어받는 구체적 방법(직전 대화 이어받기 vs 대화 ID 지정)이 미확정이다. J6-S4의 "이어짐"이 어떻게 구현되는지가 여기에 걸려 있다.
-- **모델 불변성·기본값 (AC-E6)**: "세션 model 불변"과 "플랫폼 기본 모델 존재"는 일관성을 위해 채택된 결정이며 별도 확인이 필요하다. 기본 모델의 구체 값도 미지정이라, J6-S1의 모델 선택 UI는 mockup에서 예시 값으로 그려져 있다.
+- **재개·모델**: 첫 성공 실행 뒤 `--continue`, 세션별 고정 HOME/workdir, immutable model과 `platform-default` 별칭으로 확정했다.
+- **화면·복원**: 생성 picker, workload별 route/workspace, agent prompt/read 화면, archive 기반 restore 화면이 구현되었다. 외부 저장은 `CLAUDE_CODE_ARCHIVE_ENABLED` 명시적 opt-in이다.
+- **출력 경계**: invocation 16 MiB truncation, 누적 256 MiB terminal 상태, accepted queue drain, 507와 archive 뒤 cursor/full 상태 보존이 구현되었다. 단위 테스트는 같은 로직에 축소 limit를 주입해 결정적으로 검증한다.
+- **검증 경계**: queue/cursor/resume/archive·crash recovery는 fake runner/adapter 단위 테스트, 화면의 submission/output 확인 계약은 Playwright route fixture로 검증한다. 실제 외부 Claude API를 호출하는 배포 e2e는 아직 별도 opt-in 검증으로 남는다.

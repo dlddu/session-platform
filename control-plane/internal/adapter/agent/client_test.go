@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -16,18 +17,27 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
+	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
+
+const testCheckpointIDHeader = "X-Session-Checkpoint-ID"
 
 // fakeAgent is an httptest stand-in for the data plane agent's /write, /read,
 // /checkpoint and /restore endpoints, recording writes and serving scrollback
 // deltas / checkpoint archives.
 type fakeAgent struct {
-	buf []byte
+	buf         []byte
+	writeStatus int
 
-	checkpointBody   []byte // archive returned by /checkpoint
-	checkpointStatus int    // non-200 to force a checkpoint error
-	restoreBody      []byte // archive received by /restore
-	restoreStatus    int    // non-200 to force a restore error
+	checkpointBody      []byte // archive returned by /checkpoint
+	checkpointStatus    int    // non-200 to force a checkpoint error
+	checkpointID        string
+	checkpointRequestID string
+	restoreBody         []byte // archive received by /restore
+	restoreStatus       int    // non-200 to force a restore error
+	abortCalls          int
+	abortStatus         int // non-200 to force an abort error
+	abortCheckpointID   string
 }
 
 func (a *fakeAgent) handler() http.Handler {
@@ -35,15 +45,25 @@ func (a *fakeAgent) handler() http.Handler {
 	mux.HandleFunc("POST /write", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		a.buf = append(a.buf, body...)
+		if a.writeStatus != 0 && a.writeStatus != http.StatusOK {
+			http.Error(w, http.StatusText(a.writeStatus), a.writeStatus)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 	mux.HandleFunc("POST /checkpoint", func(w http.ResponseWriter, r *http.Request) {
+		a.checkpointRequestID = r.Header.Get(testCheckpointIDHeader)
 		if a.checkpointStatus != 0 && a.checkpointStatus != http.StatusOK {
 			http.Error(w, "checkpoint failed", a.checkpointStatus)
 			return
 		}
 		w.Header().Set("Content-Type", "application/x-tar")
+		responseID := a.checkpointID
+		if responseID == "" {
+			responseID = a.checkpointRequestID
+		}
+		w.Header().Set(testCheckpointIDHeader, responseID)
 		_, _ = w.Write(a.checkpointBody)
 	})
 	mux.HandleFunc("POST /restore", func(w http.ResponseWriter, r *http.Request) {
@@ -54,6 +74,16 @@ func (a *fakeAgent) handler() http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"restored"}`))
+	})
+	mux.HandleFunc("POST /checkpoint/abort", func(w http.ResponseWriter, r *http.Request) {
+		a.abortCalls++
+		a.abortCheckpointID = r.Header.Get(testCheckpointIDHeader)
+		if a.abortStatus != 0 && a.abortStatus != http.StatusOK {
+			http.Error(w, "abort failed", a.abortStatus)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"aborted"}`))
 	})
 	mux.HandleFunc("GET /read", func(w http.ResponseWriter, r *http.Request) {
 		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
@@ -210,15 +240,37 @@ func TestStubClientCursorSemantics(t *testing.T) {
 func TestCheckpointReturnsArchiveStream(t *testing.T) {
 	c, fa := harness(t, "sess-cp")
 	fa.checkpointBody = []byte("CRIU-ARCHIVE-TAR-BYTES")
+	fa.checkpointID = "generation-1"
 
-	rc, err := c.Checkpoint(context.Background(), "sess-cp")
+	rc, checkpointID, err := c.Checkpoint(context.Background(), "sess-cp")
 	if err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
 	defer rc.Close()
+	if checkpointID != "generation-1" {
+		t.Fatalf("checkpoint ID = %q, want generation-1", checkpointID)
+	}
 	got, _ := io.ReadAll(rc)
 	if string(got) != "CRIU-ARCHIVE-TAR-BYTES" {
 		t.Fatalf("checkpoint archive = %q, want the agent body verbatim", got)
+	}
+}
+
+func TestCheckpointWithGenerationSendsDurableID(t *testing.T) {
+	const generation = "0123456789abcdef0123456789abcdef"
+	c, fa := harness(t, "sess-cp")
+	fa.checkpointBody = []byte("archive")
+
+	rc, gotID, err := c.CheckpointWithGeneration(context.Background(), "sess-cp", generation)
+	if err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	defer rc.Close()
+	if fa.checkpointRequestID != generation {
+		t.Fatalf("request generation = %q, want %q", fa.checkpointRequestID, generation)
+	}
+	if gotID != generation {
+		t.Fatalf("response generation = %q, want %q", gotID, generation)
 	}
 }
 
@@ -227,8 +279,30 @@ func TestCheckpointReturnsArchiveStream(t *testing.T) {
 func TestCheckpointSurfacesAgentError(t *testing.T) {
 	c, fa := harness(t, "sess-cp")
 	fa.checkpointStatus = http.StatusServiceUnavailable
-	if _, err := c.Checkpoint(context.Background(), "sess-cp"); err == nil {
+	if _, _, err := c.Checkpoint(context.Background(), "sess-cp"); err == nil {
 		t.Fatal("checkpoint succeeded despite agent 503; want error")
+	}
+}
+
+func TestAbortCheckpointCallsAgent(t *testing.T) {
+	c, fa := harness(t, "sess-cp")
+	if err := c.AbortCheckpoint(context.Background(), "sess-cp", "generation-1"); err != nil {
+		t.Fatalf("abort checkpoint: %v", err)
+	}
+	if fa.abortCalls != 1 {
+		t.Fatalf("abort calls = %d, want 1", fa.abortCalls)
+	}
+	if fa.abortCheckpointID != "generation-1" {
+		t.Fatalf("abort checkpoint ID = %q, want generation-1", fa.abortCheckpointID)
+	}
+}
+
+func TestAbortCheckpointSurfacesAgentError(t *testing.T) {
+	c, fa := harness(t, "sess-cp")
+	fa.abortStatus = http.StatusConflict
+	err := c.AbortCheckpoint(context.Background(), "sess-cp", "generation-1")
+	if err == nil || !strings.Contains(err.Error(), "409") {
+		t.Fatalf("abort error = %v, want agent 409", err)
 	}
 }
 
@@ -249,5 +323,26 @@ func TestRestoreSurfacesAgentError(t *testing.T) {
 	fa.restoreStatus = http.StatusInternalServerError
 	if err := c.Restore(context.Background(), "sess-r", strings.NewReader("x")); err == nil {
 		t.Fatal("restore succeeded despite agent 500; want error")
+	}
+}
+
+func TestHTTPClientWritePreservesAdmissionErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		want   error
+	}{
+		{name: "queue full", status: http.StatusTooManyRequests, want: session.ErrWorkloadQueueFull},
+		{name: "prompt too large", status: http.StatusRequestEntityTooLarge, want: session.ErrWorkloadPromptTooLarge},
+		{name: "output full", status: http.StatusInsufficientStorage, want: session.ErrWorkloadOutputFull},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, fa := harness(t, "sess-limited")
+			fa.writeStatus = tc.status
+			err := c.Write(context.Background(), "sess-limited", "prompt")
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("write error = %v, want errors.Is(_, %v)", err, tc.want)
+			}
+		})
 	}
 }

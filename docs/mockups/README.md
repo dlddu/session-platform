@@ -18,7 +18,7 @@
 | [`new-session.html`](./new-session.html) | New session (새 세션 생성) | **J1-S1, J1-S2, J6-S1** | V1, V5, **V8** | 미연결 — 인라인 임의 토큰 |
 | [`workspace.html`](./workspace.html) | Session workspace (활성 `shell` 세션 작업) | **J1-S3, J5-S1·S2·S3·S4** | V1, V3 | 미연결 — 인라인 임의 토큰 |
 | [`agent-workspace.html`](./agent-workspace.html) | Agent session workspace (활성 `claude-code` 세션 작업) | **J6-S2·S3·S4·S5** | V8, V3, V2 (보조 V1) | 미연결 — 인라인 임의 토큰 |
-| [`restore.html`](./restore.html) | Resume from checkpoint (CRIU 복원) | **J2-S4** | V3, V2 | 미연결 — 인라인 임의 토큰 |
+| [`restore.html`](./restore.html) | Resume from checkpoint (`shell` CRIU 복원) | **J2-S4 (`shell`)** | V3, V2 | 미연결 — 인라인 임의 토큰 |
 
 > **타입별 작업 화면이 둘로 갈립니다 (2026-08-08)**: `workspace.html`은 `shell` 타입, `agent-workspace.html`은 `claude-code` 타입 전용입니다.
 > `index.html`의 세션 카드는 workloadType 태그를 달고 타입에 따라 두 화면 중 하나로 링크합니다 — 이것이 여정 J5(쉘)와 J6(에이전트)가 갈리는 지점입니다.
@@ -50,7 +50,7 @@
 | J2-S1 이탈 → idle | ⚠️ | `index.html` 목록의 idle 상태 · `workspace.html` lifecycle (전용 화면 없음) |
 | J2-S2 60분 동결 → snapshot | ⚠️ | `restore.html` lifecycle "auto-freeze 60min" · "Freeze now" (동결 진행 전용 화면 없음) |
 | J2-S3 재접근 | ❌ | 전용 화면 없음 (복원의 트리거) |
-| J2-S4 복원 후 재개 | ✅ | `restore.html` (CRIU 복원, in-memory 상태 보존) |
+| J2-S4 복원 후 재개 | ✅ | `restore.html` (`shell` CRIU) + `agent-workspace.html` (`claude-code` archive) |
 | J3-S1 세션 목록 확인 | ✅ | `index.html` (active/idle/snapshot 상태별 목록 + workloadType 태그) |
 | J3-S2 세션 B로 전환 | ⚠️ | `index.html` ↔ `workspace.html`/`agent-workspace.html` 네비게이션으로 암시 |
 | J3-S3 상태에 따른 활성화 | ⚠️ | `workspace.html`이 snapshot 세션이면 `restore.html`로 전환 |
@@ -63,7 +63,7 @@
 | J5-S3 출력 확인 | ✅ | `workspace.html` term — 쉘 stdout 렌더(빌드 로그·상태 보존 문구) |
 | J5-S4 쉘 상태 축적 | ✅ | `workspace.html` **Shell state 패널** — cwd·env·shell var·background job과 "이것이 체크포인트 대상"임을 렌더 (2026-08-08 신규) |
 | J6-S1 작업 환경 선택 | ✅ | `new-session.html` **workload type 카드**(shell/claude-code) + model 선택 + 타입·모델 불변성 안내 |
-| J6-S2 프롬프트 전송 | ✅ | `agent-workspace.html` input-row `▸` 프롬프트 + queued 표시(직렬 큐잉) |
+| J6-S2 프롬프트 전송 | ✅ | `agent-workspace.html` input-row `▸` 프롬프트 + submission/output 확인 표시(서버 running/queued 추정 아님) |
 | J6-S3 응답 확인 | ✅ | `agent-workspace.html` term — 에이전트 응답 렌더 + `nextOffset` 커서 표기 |
 | J6-S4 대화가 이어짐 | ✅ | `agent-workspace.html` **Conversation 패널** — 턴 이력·작업 디렉터리·생성 파일, "턴 N이 1~N-1을 본다" |
 | J6-S5 동결·복원 건너 이어감 | ✅ | `agent-workspace.html` snapshot 상태 콘솔 — CRIU 아님·아카이브 기반, 복원 후 옛 문맥으로 응답 |
@@ -85,12 +85,13 @@
 
 ---
 
-## mockup 내용의 잠정성 (상류 열린 항목 의존)
+## mockup 내용의 잠정성
 
-`agent-workspace.html`과 `new-session.html`의 일부 내용은 PRD의 **열린 항목**에 걸려 있어 확정 시 갱신이 필요하다.
-
-- **모델 이름·기본값 (AC-E6)**: `new-session.html`의 `model-a`/`model-b`와 "platform default"는 **자리표시자**다. 플랫폼 기본 모델의 구체 값이 미지정이라 실제 값이 정해지면 갈아야 한다.
-- **대화 재개 방식 (AC-E4)**: `agent-workspace.html`은 "다음 실행이 pod의 대화 기록을 이어받는다"를 결과로만 그린다. 재개 옵션(직전 대화 이어받기 vs 대화 ID 지정)이 확정되면 콘솔 표현에 반영할지 검토 필요.
+- **명시 model 예시 (AC-E6)**: `new-session.html`의 `model-a`/`model-b`는 자리표시자다. 반면
+  `platform-default`는 특정 공급자 버전을 API에 고정하지 않고 CLI 기본 선택에 위임하는 구현 별칭으로
+  확정됐다.
+- **대화 재개 (AC-E4)**: 실제 계약은 첫 성공 실행 뒤 `--continue`와 세션별 고정 HOME/workdir이다.
+  mockup은 CLI flag 자체보다 사용자가 보는 연속 대화 결과를 표현한다.
 
 ---
 

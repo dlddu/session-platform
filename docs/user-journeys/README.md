@@ -6,13 +6,13 @@
 > ⚠️ **확인 필요**: 아래 페르소나와 여정은 가치 문서(`../values.md`)와 PRD에서 역으로 추론한 것입니다.
 > 실제 사용자/시나리오에 맞게 수정이 필요합니다.
 >
-> ✅ **확정됨 (2026-07-01)**: 이전까지 미확정이던 **"세션"의 구체적 정체**가 확정되었습니다 —
-> 세션은 **전용 pod에서 실행되는 인터랙티브 쉘**입니다(`../prd/shell-workload.md`).
-> 페르소나의 "상태를 가진 인터랙티브 세션"은 이제 "인터랙티브 쉘 세션"으로 구체화됩니다.
+> ✅ **확정됨 (2026-08-08 갱신)**: 세션은 전용 pod에서 사용자가 선택한 workload를 실행합니다.
+> 기본 `shell`은 PTY 인터랙티브 쉘(`../prd/shell-workload.md`), `claude-code`는 serial one-shot
+> agent loop(`../prd/claude-code-workload.md`)이며 두 타입 모두 같은 격리·동결·복원 보장을 받습니다.
 
 > 📎 **연결 관계**: 이 문서는 `가치 → 사용자 여정 → mockup ↔ 디자인 시스템` 중 **사용자 여정**입니다.
 > 각 여정 단계는 mockup으로 시각화됩니다. 현재 mockup 5종(`../mockups/`)이 작성되어 **J1·J5·J6은 완전·J2/J3는 부분** 시각화,
-> **J4는 백엔드 동시성 여정이라 의도적 비시각화**입니다. 디자인 시스템은 **미정의**.
+> **J4는 백엔드 동시성 여정이라 의도적 비시각화**입니다. 디자인 시스템 정본은 `web/src/design/`입니다.
 > (단계별 매핑: `../mockups/README.md` · 상세 상태: `../doc-structure-state.md`).
 
 ---
@@ -58,17 +58,17 @@
 | V8 목적에 맞는 작업 환경 선택 | J6 | ✅ 연결됨 (2026-08-08 J6 신설로 해소) |
 
 > **고아 여정(가치 없는 여정) 없음 · 여정 없는 가치 없음.** 2026-08-08 신설된 V8(작업 환경 선택)은 같은 날 **J6 신설로 연결**되었습니다(이전: 여정 없음). J5는 V6 삭제에 따라 V3(연속성)으로 재연결됨.
-> mockup 매핑 결과 **V1~V5·V8 전부 1개 이상 mockup에 연결**됩니다. 단계 단위로는 J1·J6 완전·J2/J3/J5 부분·J4 의도적 비시각화이며, `J2-S3`·`J3-S4`가 미시각화로 남아 있습니다. J5 단계(S1~S4)는 `workspace.html`의 쉘 콘솔·session state 패널에, J6 단계(S1~S5)는 `new-session.html`의 타입 선택과 `agent-workspace.html`의 프롬프트 콘솔에 시각화됩니다. (단계별 매핑: `../mockups/README.md` · 상세: `../doc-structure-state.md`)
+> mockup 매핑 결과 **V1~V5·V8 전부 1개 이상 mockup에 연결**됩니다. 단계 단위로는 J1·J5·J6 완전·J2/J3 부분·J4 의도적 비시각화이며, `J2-S3`·`J3-S4`가 미시각화로 남아 있습니다. J5 단계(S1~S4)는 `workspace.html`의 쉘 콘솔·session state 패널에, J6 단계(S1~S5)는 `new-session.html`의 타입 선택과 `agent-workspace.html`의 프롬프트 콘솔에 시각화됩니다. (단계별 매핑: `../mockups/README.md` · 상세: `../doc-structure-state.md`)
 
 ---
 
 ## 미해결 항목 (여정 작성 중 발견)
 
 - **세션 목록 조회 흐름 (J3-S1)**: 사용자가 보유 세션과 상태를 확인하는 경로가 PRD에 없음. PRD 보강 또는 의도적 제외 결정 필요.
-- **유휴 측정 기준 (J2-S1)**: `idle` 진입과 60분 카운트의 기준 시점 미확정 (`../doc-tracker.md`의 열린 질문과 동일).
+- ~~**유휴 측정 기준 (J2-S1)**~~ → **2026-07-01 확정**: 마지막 클라이언트 read/write부터 60분을 잰다. 별도의 operational `active→idle` producer는 없고 reaper가 `active`/`idle` record를 직접 검사한다. grace period·busy-shell 등 세부 정책만 열린 항목이다.
 - ~~**idle/snapshot 상태의 read/write 정책 (J1-S3, J2-S4)**~~ → **2026-06-27 확정**: 비-active 접근은 통일 "active 보장 후 처리"(idle 승격 / snapshot 복원 후 read·write). J1-S3(격리된 작업)·J2-S4(복원 후 재개) 단계 경험이 이 규칙으로 정의됨 (AC-C2/AC-C3 · `../doc-tracker.md` 참고).
 - ~~**"세션"의 정체**~~ → **2026-07-01 확정**: 세션 = 전용 pod의 인터랙티브 쉘(`../prd/shell-workload.md`). **2026-08-08 개정**: 워크로드 타입이 `shell`·`claude-code` 둘로 늘어남(`../prd/claude-code-workload.md`). ~~`claude-code` 여정 신설 여부 검토 필요~~ → **2026-08-08 해소**: J6 신설로 `claude-code` 타입의 사용 루프와 타입 선택 순간을 모두 다룸. 세션의 정체는 이제 "전용 pod에서 도는 **선택된 타입의** 워크로드"이며, J5(쉘)·J6(에이전트)가 타입별 루프를 나눠 담는다. **제품명·소유자**는 여전히 임시값(`../doc-tracker.md` 참고).
-- **에이전트 세션의 재개 방식·기본 모델 (J6-S4, J6-S1)**: `claude-code` 타입의 대화 재개 방식(직전 대화 이어받기 vs 대화 ID 지정)과 플랫폼 기본 모델 값이 미확정 (`../prd/claude-code-workload.md` AC-E4·AC-E6의 열린 항목과 동일). mockup은 예시 값으로 그려져 있어 확정 시 갱신 필요.
+- ~~**에이전트 세션의 재개 방식·기본 모델 (J6-S4, J6-S1)**~~ → **2026-08-08 확정**: 첫 성공 실행 뒤 `--continue`, 세션별 고정 HOME/workdir, immutable model, 특정 공급자 버전을 고정하지 않는 `platform-default` 별칭을 사용한다. mockup의 `model-a`/`model-b`만 예시 이름이다.
 - **에이전트 세션의 전용 페르소나 (J6)**: J6는 P1(멀티세션 작업자)로 작성됐으나, "프롬프트로 일을 맡기는 사람"이 P1과 같은 페르소나인지 별도 페르소나인지 확인이 필요하다. P2(자동화 클라이언트)가 `claude-code` 세션을 쓰는 시나리오도 아직 다뤄지지 않음.
 
 > 가치 문서·PRD의 수정이 필요한 항목은 product-doc-engineer 영역입니다. 이 문서는 그 결정을 반영만 합니다.

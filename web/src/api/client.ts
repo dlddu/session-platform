@@ -37,7 +37,7 @@ export const api = {
     req<Session>("/sessions", { method: "POST", body: JSON.stringify(body) }),
 
   /** offset is the nextOffset cursor from the previous read; 0 replays the
-   *  full scrollback since session start (AC-D3). */
+   *  full workload output since session start (AC-D3/AC-E3). */
   readSession: (id: string, offset = 0) =>
     req<ReadResult>(`/sessions/${id}/read`, {
       method: "POST",

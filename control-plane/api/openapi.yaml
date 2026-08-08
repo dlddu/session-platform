@@ -10,11 +10,14 @@ info:
     A session picks a workload type at creation (AC-E1): `shell` (the default)
     or `claude-code`. The type is immutable for the session's lifetime — no
     endpoint changes it, and a restore keeps it — so switching workloads means
-    creating a new session. Read and write map onto the `shell` type's PTY
-    shell: write injects the payload into the shell's stdin (AC-D2) and read
-    returns the shell output accumulated after an offset cursor, with offset=0
-    returning the full scrollback (AC-D3). The `claude-code` type's own
-    read/write semantics (AC-E2/E3) are specified but not yet implemented.
+    creating a new session. For `shell`, write injects the payload into the PTY
+    stdin (AC-D2); for `claude-code`, write asynchronously queues one prompt
+    execution (AC-E2). Both read paths return workload output after an offset
+    cursor, with offset=0 returning the full history (AC-D3/E3). Claude Code
+    credentials are projected from a platform Secret only into a localhost
+    credential-proxy sidecar; the tool-running container receives no real
+    token. Its optional session model is immutable and defaults to
+    `platform-default` (AC-E6).
 servers:
   - url: /api/v1
 paths:
@@ -61,10 +64,12 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Session" }
         "400":
-          description: Invalid input
+          description: Malformed body, unknown field, trailing JSON, or invalid name, workload type, or model
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
   /sessions/{id}:
     get:
       summary: Get a single session
@@ -84,7 +89,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
   /sessions/{id}/read:
     post:
-      summary: Read shell output since an offset cursor (state-branched, AC-C2/AC-D3)
+      summary: Read workload output since an offset cursor (state-branched, AC-C2)
       operationId: readSession
       parameters:
         - $ref: "#/components/parameters/SessionId"
@@ -99,11 +104,18 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ReadResult" }
+        "400":
+          description: Malformed request body, unknown field, trailing JSON, or invalid offset
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "404":
           description: Not found
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
   /sessions/{id}/write:
     post:
       summary: Write to a session (state-branched, AC-C3)
@@ -121,8 +133,25 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/WriteResult" }
+        "400":
+          description: Malformed request body, unknown field, or trailing JSON
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "404":
           description: Not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "429":
+          description: The workload prompt queue is full; retry after an accepted prompt completes
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "507":
+          description: The workload output quota is full; existing output remains readable and restorable but new writes are refused
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -132,23 +161,43 @@ paths:
       operationId: switchSession
       parameters:
         - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
       responses:
         "200":
           description: The now-active session
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Session" }
+        "400":
+          description: Malformed body, trailing JSON, or a non-empty request object
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "404":
           description: Not found
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
         "409":
           description: Concurrent state change
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 components:
+  responses:
+    RequestEntityTooLarge:
+      description: The JSON wire body exceeds 8 MiB, or a Claude Code prompt exceeds the 1 MiB decoded payload limit
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
   parameters:
     SessionId:
       name: id
@@ -183,15 +232,25 @@ components:
         name: { type: string }
         workloadType: { $ref: "#/components/schemas/WorkloadType" }
         state: { $ref: "#/components/schemas/State" }
+        model:
+          type: string
+          description: >
+            Immutable Claude Code model identifier. Present only for
+            `claude-code`; omitted at creation resolves to `platform-default`.
         pod: { type: string }
         createdAt: { type: string, format: date-time }
         lastAccess: { type: string, format: date-time }
         checkpoint: { $ref: "#/components/schemas/Checkpoint" }
     CreateSessionRequest:
       type: object
+      additionalProperties: false
       required: [name]
       properties:
-        name: { type: string }
+        name:
+          type: string
+          minLength: 1
+          pattern: '.*\S.*'
+          description: Leading and trailing whitespace is trimmed; at least one non-whitespace character is required.
         workloadType:
           allOf:
             - $ref: "#/components/schemas/WorkloadType"
@@ -199,17 +258,31 @@ components:
             Optional. Omitted means `shell`, so a request that predates the
             workload type axis behaves unchanged. A value outside the enum is
             rejected with 400 before any pod is provisioned.
+        model:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
+          description: >
+            Claude Code model for this session. Valid only when workloadType is
+            `claude-code`; omitted resolves to `platform-default`. Credentials
+            are never accepted in this request.
     WriteRequest:
       type: object
+      additionalProperties: false
       properties:
-        payload: { type: string }
+        payload:
+          type: string
+          description: >
+            Raw workload input. Claude Code writes are limited to 1 MiB of UTF-8
+            bytes per prompt; larger writes return 413.
     ReadRequest:
       type: object
+      additionalProperties: false
       properties:
         offset:
           type: integer
           format: int64
           default: 0
+          minimum: 0
           description: >
             Cursor issued as nextOffset by the previous read. 0 (or omitted)
             returns the full output accumulated since session start (AC-D3);
@@ -223,7 +296,7 @@ components:
           description: which state branch served the read
         payload:
           type: string
-          description: shell output accumulated after the requested offset
+          description: workload stdout/stderr accumulated after the requested offset
         nextOffset:
           type: integer
           format: int64

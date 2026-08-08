@@ -1,8 +1,9 @@
 // Command control-plane is the single entrypoint for the session platform
 // control plane: it serves the REST API (/api/v1) and the embedded React SPA
 // on one port. Domain logic is delegated to a session.Manager built from the
-// k8s pod orchestrator, the ConfigMap/Lease state store, and the (stubbed)
-// CRIU checkpointer.
+// k8s pod orchestrator, the ConfigMap/Lease state store, and workload-specific
+// snapshot strategies. Disabled strategies fail closed and never reclaim a
+// live pod.
 package main
 
 import (
@@ -35,9 +36,10 @@ func main() {
 	// The control plane drives data plane pods AND stores session state via
 	// client-go, so it needs a reachable cluster: the in-cluster config as a pod,
 	// or the ambient kubeconfig for local development against a kind cluster. The
-	// same client backs the pod orchestrator, the ConfigMap/Lease state store,
-	// and — when CRIU_ENABLED is on — the real CRIU checkpointer (kubelet
-	// ContainerCheckpoint API); with the gate off the checkpointer is a no-op stub.
+	// same client backs the pod orchestrator and ConfigMap/Lease state store.
+	// Enabled snapshot strategies ask the session pod agent to produce either a
+	// shell CRIU bundle or Claude filesystem archive, then persist it in the
+	// configured durable store; disabled strategies fail closed before reclaim.
 	client, namespace, err := k8s.BuildClient()
 	if err != nil {
 		logger.Error("k8s: no reachable cluster (in-cluster config or kubeconfig required)", "err", err)
@@ -48,6 +50,7 @@ func main() {
 		"namespace", namespace,
 		"criu_enabled", cfg.criuEnabled,
 		"data_plane_image", cfg.dataPlaneImage,
+		"data_plane_claude_code_image", cfg.dataPlaneClaudeCodeImage,
 		"data_plane_shell", cfg.dataPlaneShell,
 	)
 	if cfg.dataPlaneImage == "" {
@@ -63,6 +66,7 @@ func main() {
 		// unconfigured — Start then refuses that type instead of provisioning a
 		// shell pod under a claude-code label.
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, cfg.dataPlaneClaudeCodeImage),
+		k8s.WithClaudeCredentialsSecret(cfg.claudeCredentialsSecret),
 		k8s.WithCheckpointPrivileged(cfg.criuEnabled))
 	store := configmap.NewStore(client, namespace)
 	// Shell I/O (write→stdin, read→scrollback delta) AND checkpoint/restore ride
@@ -70,24 +74,39 @@ func main() {
 	// session agent directly (AC-D2/D3, and /checkpoint·/restore for CRIU).
 	agentClient := agent.NewHTTPClient(client, namespace)
 
-	// CRIU gate: on → agent-driven in-pod checkpoint/restore (the pod's own agent
-	// CRIU-dumps/restores its shell tree), archives streamed to S3 by assuming
-	// CHECKPOINT_S3_ROLE_ARN over the node instance profile. The archive is
-	// produced inside a pod that is about to be reclaimed, so a durable store is
-	// required. off → the no-op stub so the happy path runs without CRIU.
-	var ckpt criu.Checkpointer = criu.NewStubCheckpointer(false)
-	if cfg.criuEnabled {
-		cstore, err := buildCheckpointStore(cfg)
+	// Snapshot archives may contain workspace and conversation data. They are
+	// sent to the configured durable store only behind an explicit mechanism
+	// gate: CRIU_ENABLED for shell, CLAUDE_CODE_ARCHIVE_ENABLED for claude-code.
+	var cstore criu.CheckpointStore
+	if cfg.criuEnabled || cfg.claudeArchiveEnabled {
+		cstore, err = buildCheckpointStore(cfg)
 		if err != nil {
 			logger.Error("checkpoint store misconfigured", "err", err)
 			os.Exit(1)
 		}
-		ckpt = criu.NewAgentCheckpointer(agentClient, cstore)
+	}
+
+	var shellCkpt criu.Checkpointer = criu.NewStubCheckpointer(false)
+	if cfg.criuEnabled {
+		shellCkpt = criu.NewAgentCheckpointer(agentClient, cstore)
 		logger.Info("CRIU on: agent-driven in-pod checkpoint",
 			"store", cfg.checkpointStoreDesc())
 	}
 
-	mgr := service.New(orch, store, ckpt, agentClient)
+	var serviceOpts []service.Option
+	if cfg.claudeArchiveEnabled {
+		if cfg.dataPlaneClaudeCodeImage == "" {
+			logger.Error("CLAUDE_CODE_ARCHIVE_ENABLED needs DATA_PLANE_CLAUDE_CODE_IMAGE")
+			os.Exit(1)
+		}
+		serviceOpts = append(serviceOpts, service.WithWorkloadCheckpointer(
+			session.WorkloadTypeClaudeCode,
+			criu.NewAgentArchiveCheckpointer(agentClient, cstore),
+		))
+		logger.Info("claude-code filesystem archive enabled", "store", cfg.checkpointStoreDesc())
+	}
+	mgr := service.New(orch, store, shellCkpt, agentClient, serviceOpts...)
+	snapshotEnabled := shellCkpt.Enabled() || cfg.claudeArchiveEnabled
 
 	// AC-B1: the operational idle->snapshot trigger. A background reaper scans
 	// sessions every cfg.idleScanInterval and freezes any idle (no client
@@ -110,6 +129,7 @@ func main() {
 		Addr:              cfg.addr,
 		Handler:           withLogging(logger, mux),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
 	}
 
 	// graceful shutdown
@@ -117,7 +137,11 @@ func main() {
 	defer stop()
 
 	// Drive the idle->snapshot reaper until shutdown (AC-B1).
-	go reaper.Run(ctx)
+	if snapshotEnabled {
+		go reaper.Run(ctx)
+	} else {
+		logger.Warn("idle reaper disabled: no real snapshot strategy is enabled")
+	}
 
 	go func() {
 		logger.Info("listening", "addr", cfg.addr)
@@ -140,11 +164,13 @@ type config struct {
 	dataPlaneShell string
 	// dataPlaneClaudeCodeImage is the image for `workloadType=claude-code`
 	// sessions (AC-E1). Unset means the type is not deployable here: creating
-	// such a session fails loudly rather than getting a shell pod. The image
-	// itself — a data plane agent that runs the Claude Code CLI — is follow-up
-	// work (docs/prd/claude-code-workload.md, data-plane/README.md).
+	// such a session fails loudly rather than getting a shell pod.
 	dataPlaneClaudeCodeImage string
-	criuEnabled              bool
+	// claudeArchiveEnabled explicitly permits workspace/conversation/output
+	// archives to be written to CHECKPOINT_S3_* (default false).
+	claudeArchiveEnabled    bool
+	claudeCredentialsSecret string
+	criuEnabled             bool
 	// testEndpoints exposes test-only HTTP endpoints (snapshot trigger). Off in
 	// deployments; the e2e SUT turns it on.
 	testEndpoints bool
@@ -152,7 +178,8 @@ type config struct {
 	// idle limit (AC-B1). The 60m limit itself is session.MaxIdle; this only
 	// bounds how promptly a newly-idle session is noticed.
 	idleScanInterval time.Duration
-	// Checkpoint archive store (used only when criuEnabled): an S3 bucket,
+	// Checkpoint/archive store used by either explicitly enabled strategy:
+	// an S3 bucket,
 	// accessed by assuming checkpointS3RoleARN over the ambient credentials
 	// (node instance profile / IRSA). checkpointS3Endpoint targets an
 	// S3-compatible backend instead of AWS — the e2e SUT points it at MinIO and
@@ -170,7 +197,7 @@ type config struct {
 // reclaimed moments later.
 func buildCheckpointStore(cfg config) (criu.CheckpointStore, error) {
 	if cfg.checkpointS3Bucket == "" {
-		return nil, errors.New("CRIU_ENABLED needs a checkpoint store: set CHECKPOINT_S3_BUCKET")
+		return nil, errors.New("snapshot strategy needs a checkpoint store: set CHECKPOINT_S3_BUCKET")
 	}
 	return checkpointstore.NewS3(context.Background(), checkpointstore.Config{
 		Bucket:      cfg.checkpointS3Bucket,
@@ -202,6 +229,8 @@ func loadConfig() config {
 		// ${DATA_PLANE_SHELL:-/bin/bash} on a PTY (AC-D1).
 		dataPlaneShell:           env("DATA_PLANE_SHELL", ""),
 		dataPlaneClaudeCodeImage: env("DATA_PLANE_CLAUDE_CODE_IMAGE", ""),
+		claudeArchiveEnabled:     envBool("CLAUDE_CODE_ARCHIVE_ENABLED", false),
+		claudeCredentialsSecret:  env("CLAUDE_CODE_CREDENTIALS_SECRET", "claude-code-credentials"),
 		criuEnabled:              envBool("CRIU_ENABLED", false),
 		testEndpoints:            envBool("E2E_TEST_ENDPOINTS", false),
 		idleScanInterval:         envDuration("IDLE_SCAN_INTERVAL", time.Minute),
