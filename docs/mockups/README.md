@@ -3,7 +3,7 @@
 > 이 문서는 `가치 → 사용자 여정 → mockup ↔ 디자인 시스템` 사슬에서
 > **mockup ↔ (여정 단계 · 가치 · 디자인 시스템)** 연결의 **단일 진실 원천**입니다.
 > 상위 상태 추적은 [`../doc-structure-state.md`](../doc-structure-state.md),
-> 여정 정의는 [`../user-journeys/`](../user-journeys/), 가치 정의는 [`../values.md`](../values.md)(V1~V5) 참고.
+> 여정 정의는 [`../user-journeys/`](../user-journeys/), 가치 정의는 [`../values.md`](../values.md)(V1~V5·V8) 참고.
 
 > ⚠️ **파일명 주의**: `index.html`은 이 인덱스 문서가 아니라 **세션 목록(대시보드) mockup**입니다.
 > mockup 매핑의 단일 소스는 이 `README.md`입니다.
