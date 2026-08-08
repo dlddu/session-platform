@@ -1,3 +1,6 @@
+// 매칭 단위 밖 (AC ↔ e2e 1:1): 이 디렉터리의 여정 spec은 web/e2e 최상위가 아니므로
+// AC 매칭 단위가 아니다. 여정 전체를 한 파일에서 훑는 형태를 유지하되, 각 AC의 주검증은
+// Go e2e의 전용 파일이 소유한다. 등재: docs/test/e2e.md.
 import { test, expect } from "@playwright/test";
 
 // J3 — multiple sessions and free switching.

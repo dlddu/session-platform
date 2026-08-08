@@ -112,7 +112,10 @@
   Go 1.24가 Linux 리스너에 MPTCP를 기본 활성화하는데 CRIU는 MPTCP 소켓을 체크포인트하지 못하므로,
   에이전트 :8090 리스너(및 세션 쉘이 상속하는 환경)를 plain TCP로 고정.
 - `control-plane/test/integration_test.go` — `TestScenario4_CRIUIntegrity`(마커 왕복 + 커서 연속성).
-- `control-plane/test/e2e_deferred_test.go` — `TestDeferred_CRIUIntegrity`(B3/D4, deferred 시드).
+- `control-plane/test/e2e_b2_snapshot_restore_test.go`·`e2e_b3_restore_integrity_test.go`·
+  `e2e_d4_process_tree_test.go` — 배포 SUT 대상 CRIU 왕복을 AC별로 나눠 단언한다(B2 = 접근 시
+  새 pod로 복원, B3 = 이력·커서 무결성, D4 = env/cwd 등 쉘 프로세스 트리 보존). AC ↔ 파일
+  매핑은 `docs/test/e2e.md`.
 
 ## 실검증 현황 (2026-07-22, k3s)
 
@@ -189,9 +192,9 @@ e2e 워크플로에 `criu check` 프로브 스텝을 추가해(비차단, `conti
   해결된다(스냅샷과 복원이 서로 다른 replica로 갈 수 있음). e2e SUT는 role을 비워 두고 static key로
   인증한다(=MinIO root) — 프로덕션은 role ARN을 설정해 인스턴스 프로파일 위에서 assume-role 한다.
   즉 이 경로에서 미검증으로 남는 것은 assume-role 홉 하나뿐이다.
-- ③ **검증**: `TestDeferred_CRIUIntegrity`가 HTTP만으로 전 스택을 구동 — 마커 세팅 → 스냅샷 → 접근으로
-  복원 → 복원 전 커서 델타에 `frozen42`·`/tmp` 확인 + `offset=0` 전체 이력 순서 확인. 트리거가 없는
-  SUT에서는 skip한다.
+- ③ **검증**: AC-B2/B3/D4의 e2e 파일이 HTTP만으로 전 스택을 구동 — 마커 세팅 → 스냅샷 → 접근으로
+  복원 → 새 pod 확인(B2) + 복원 전 커서 델타·`offset=0` 전체 이력 순서 확인(B3) + `$D4MARK`·`pwd`
+  보존 확인(D4). 트리거가 없는 SUT에서는 skip한다.
 
 즉 지금까지 수동 라운드로 잡던 종류의 회귀(pid 충돌, 조기 재시작 등)가 **CI에서 자동으로** 잡힌다.
 

@@ -13,7 +13,7 @@ ENVTEST_K8S_VERSION ?= 1.30.0
 
 .DEFAULT_GOAL := build
 
-.PHONY: build web embed control-plane run dev test test-unit test-integration test-envtest lint fmt docker docker-data-plane clean tidy e2e-up e2e-down e2e-api e2e-web e2e
+.PHONY: build web embed control-plane run dev test test-unit test-integration test-envtest lint fmt docker docker-data-plane clean tidy e2e-up e2e-down e2e-api e2e-web e2e check-ac-mapping
 
 ## build: web -> embed -> control-plane binary
 build: control-plane
@@ -91,6 +91,11 @@ e2e-web:
 
 ## e2e: run both e2e suites against an already-up SUT (api then web).
 e2e: e2e-api e2e-web
+
+## check-ac-mapping: verify the AC <-> e2e 1:1 mapping (docs/test/e2e.md).
+## Static — no cluster, no toolchain; runs on every PR from ci.yml.
+check-ac-mapping:
+	./scripts/e2e/check-ac-mapping.sh
 
 ## lint: go vet + gofmt check (both Go modules) + web typecheck
 lint:

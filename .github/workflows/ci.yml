@@ -18,12 +18,30 @@ jobs:
       - name: go vet
         working-directory: control-plane
         run: go vet ./...
+      # The e2e suite is behind the `e2e` build tag, so the vet above never
+      # compiles it and only the (cluster-bound) e2e workflow would catch a
+      # broken test file. Vet it here so every PR type-checks it.
+      - name: go vet (e2e build tag)
+        working-directory: control-plane
+        run: go vet -tags=e2e ./...
       - name: gofmt check
         working-directory: control-plane
         run: test -z "$(gofmt -l .)"
       - name: unit tests
         working-directory: control-plane
         run: go test ./...
+
+  ac-mapping:
+    name: AC ↔ e2e 1:1 mapping
+    runs-on: ubuntu-latest
+    # Static check of the acceptance-criteria ↔ e2e file mapping: every AC has
+    # exactly one declaring file (or a registered exception), every matching-unit
+    # file declares exactly one AC, and docs/test/e2e.md's registry and totals
+    # match reality. No cluster, no toolchain — seconds, on every PR.
+    steps:
+      - uses: actions/checkout@v4
+      - name: check AC <-> e2e mapping
+        run: ./scripts/e2e/check-ac-mapping.sh
 
   data-plane:
     name: data-plane (lint + unit)
