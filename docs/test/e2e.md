@@ -92,7 +92,7 @@ Playwright 리포트/trace를 아티팩트로 올린다. ci.yml의 lint/unit/bui
 | CRIU 왕복: 동결(snapshot) 세션 접근 시 새 pod로 복원 + 쉘 상태(env·cwd)·read 커서 보존(마커 왕복, 프리즈 전/후 이력 순서 유지) | go API (`TestDeferred_CRIUIntegrity`, lifecycle 시나리오 3, CRIU-on 오버레이) | B2, B3, D4 |
 | J1: 생성 → `/session/:id` → 쉘 명령 실행($((…)) 마커) → switch | playwright | A1/A2, C2/C3, D2/D3 |
 | J3: 다건 목록 노출 → 카드 클릭/전환 | playwright | C4, V4 |
-| J5: 콘솔 명령 입력→출력 누적 표시, 재진입 시 `offset=0`으로 전체 이력 복원 | playwright | D2, D3, V6 |
+| J5: 콘솔 명령 입력→출력 누적 표시, 재진입 시 `offset=0`으로 전체 이력 복원 | playwright | D2, D3, V3 |
 
 ## Deferred 시드 ↔ 문서 시나리오 매핑
 

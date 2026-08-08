@@ -8,8 +8,9 @@ session (AC-A2). The control plane provisions and reclaims these pods via the
 
 The concrete "session workload" runtime is **defined and running**: a session is
 an **interactive shell** (default `/bin/bash`) attached to a PTY, running inside
-the session's dedicated pod. See `../docs/prd/shell-workload.md` (AC-D1~D5) and
-value V6 in `../docs/values.md`. Read/write map onto the shell: write = stdin
+the session's dedicated pod. See `../docs/prd/shell-workload.md` (AC-D1~D5); a second workload type
+(Claude Code CLI) is specified in `../docs/prd/claude-code-workload.md`
+(AC-E1~E6) but not yet implemented here. Read/write map onto the shell: write = stdin
 input, read = accumulated stdout/stderr output.
 
 This directory holds the **session agent** (`cmd/agent`) and its image
