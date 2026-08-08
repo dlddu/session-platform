@@ -21,7 +21,9 @@ between sessions.
 > never deletes a pod behind synthetic checkpoint metadata. The plain 60-minute reaper exists;
 > finer policy such as grace periods and busy-shell handling remains open. See
 > the design docs under [`docs/`](docs/) for the
-> value/PRD/AC and mockups this is built from. The **design system** — tokens,
+> value/PRD/AC and mockups this is built from. The mockups are published at
+> [`dlddu.github.io/session-platform`](https://dlddu.github.io/session-platform/).
+> The **design system** — tokens,
 > primitives, and components — lives in code at
 > [`web/src/design/`](web/src/design/README.md) (+ `web/src/app/shell.css`);
 > that directory is the source of truth for anything visual.
