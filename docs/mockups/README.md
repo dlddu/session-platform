@@ -3,7 +3,7 @@
 > 이 문서는 `가치 → 사용자 여정 → mockup ↔ 디자인 시스템` 사슬에서
 > **mockup ↔ (여정 단계 · 가치 · 디자인 시스템)** 연결의 **단일 진실 원천**입니다.
 > 상위 상태 추적은 [`../doc-structure-state.md`](../doc-structure-state.md),
-> 여정 정의는 [`../user-journeys/`](../user-journeys/), 가치 정의는 [`../values.md`](../values.md)(V1~V6) 참고.
+> 여정 정의는 [`../user-journeys/`](../user-journeys/), 가치 정의는 [`../values.md`](../values.md)(V1~V5·V8) 참고.
 
 > ⚠️ **파일명 주의**: `index.html`은 이 인덱스 문서가 아니라 **세션 목록(대시보드) mockup**입니다.
 > mockup 매핑의 단일 소스는 이 `README.md`입니다.
@@ -16,7 +16,7 @@
 |------|------|----------------------|-----------|----------------|
 | [`index.html`](./index.html) | Sessions — control plane (세션 목록 대시보드) | **J3-S1** | V4 (보조 V1·V5) | 미연결 — 인라인 임의 토큰 |
 | [`new-session.html`](./new-session.html) | New session (새 세션 생성) | **J1-S1, J1-S2** | V1, V5 | 미연결 — 인라인 임의 토큰 |
-| [`workspace.html`](./workspace.html) | Session workspace (활성 세션 작업) | **J1-S3, J5-S1·J5-S2·J5-S3** | V1, V3, V6 | 미연결 — 인라인 임의 토큰 |
+| [`workspace.html`](./workspace.html) | Session workspace (활성 세션 작업) | **J1-S3, J5-S1·J5-S2·J5-S3** | V1, V3 | 미연결 — 인라인 임의 토큰 |
 
 > 참고: `workspace.html`의 session shell 콘솔은 2026-07-01 쉘 명령 기준으로 갱신됨(옛 key/value write 예시 → `$ ls` / `$ npm run build` 등 쉘 입력·출력, 복원 시 env·cwd 보존 시연). V6·J5와 정합.
 | [`restore.html`](./restore.html) | Resume from checkpoint (CRIU 복원) | **J2-S4** | V3, V2 | 미연결 — 인라인 임의 토큰 |
@@ -70,5 +70,5 @@
 ## 마지막 갱신
 
 - **2026-07-01 (2)** — `workspace.html` session shell 콘솔을 쉘 명령 기준으로 갱신(key/value write 예시 제거 → `$` 프롬프트·쉘 stdout·복원 시 env/cwd 보존 시연). J5-S1~S3 ⚠️→✅, 요약 ✅8/⚠️4/❌3/⚪3. 디자인/레이아웃·임의 스타일 상태는 변화 없음.
-- **2026-07-01** — V6(인터랙티브 쉘) 확정에 따른 J5 신설 반영. `workspace.html`을 J5-S1~S3·V6에 매핑(당시 콘솔 내용 갱신 필요=⚠️), J5-S4는 전용 화면 없음(❌). 단계 총계 14→18.
+- **2026-07-01** — 인터랙티브 쉘 확정(당시 가치 V6, 2026-08-08 삭제)에 따른 J5 신설 반영. `workspace.html`을 J5-S1~S3에 매핑(당시 콘솔 내용 갱신 필요=⚠️), J5-S4는 전용 화면 없음(❌). 단계 총계 14→18.
 - **2026-06-27** — mockup 4종(index/new-session/restore/workspace) 매핑 최초 기록(인덱스 신설). restore/workspace의 J4 동시 접근 패널 제거 반영.

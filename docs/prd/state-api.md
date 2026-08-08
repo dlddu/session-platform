@@ -21,7 +21,7 @@
   - `snapshot`: CRIU 복원으로 `active` 전이(AC-B2) 후 읽기
   - 이는 switch(AC-C4)·snapshot 접근(AC-B2)과 동일한 "접근 시 active화" 원칙을 read에 적용한 것이다.
 - **달성 가치**: V3, V4
-- **구체화**: read가 반환하는 것 = 세션 시작 이후 누적된 쉘 stdout/stderr **전체** 출력(비파괴적) → AC-D3 (`shell-workload.md`)
+- **구체화**: read가 반환하는 것은 워크로드 타입별로 다르다 — `shell`은 누적된 쉘 stdout/stderr → AC-D3 (`shell-workload.md`), `claude-code`는 `claude` 실행들의 누적 출력 → AC-E3 (`claude-code-workload.md`). **offset 커서 규약(비파괴·`offset=0`=전체)은 두 타입이 동일**하다.
 - **검증 방법**: active/idle/snapshot 세션에 각각 read를 호출하여, 각 경로(active 직접 / idle 승격 후 / snapshot 복원 후)로 처리되고 호출 후 최종 상태가 `active`이며 올바른 결과를 반환함을 확인한다.
 
 ### AC-C3: Write API 상태별 분기
@@ -30,10 +30,10 @@
   - `idle`: `idle→active` atomic 승격(AC-C1) 후 write
   - `snapshot`: CRIU 복원으로 `active` 전이(AC-B2) 후 write — **snapshot write는 거부하지 않고 복원 후 적용한다** (AC-B2의 "접근=복원"과 일치)
 - **달성 가치**: V3, V5
-- **구체화**: write가 반영하는 것 = 대상 세션 쉘의 stdin 입력(명령/키 입력) → AC-D2 (`shell-workload.md`)
+- **구체화**: write가 반영하는 것은 워크로드 타입별로 다르다 — `shell`은 쉘 stdin 입력(명령/키 입력) → AC-D2 (`shell-workload.md`), `claude-code`는 프롬프트 1회 실행 트리거 → AC-E2 (`claude-code-workload.md`). **비블로킹 반환 규약은 두 타입이 동일**하다.
 - **검증 방법**: active/idle/snapshot 세션에 각각 write 요청 시 대상이 `active`로 처리되어 데이터가 일관되게 반영되고 상태 전이가 atomic하게 일어남을 확인한다.
 
 ### AC-C4: 세션 간 자유 전환
-- **설명**: 사용자는 보유한 여러 세션 사이를 자유롭게 전환할 수 있다. 전환 대상이 `snapshot`이면 복원하여 `active`로, 이미 `active`면 그대로 접근시킨다. 전환은 세션 격리(AC-A2)를 깨지 않는다.
+- **설명**: 사용자는 보유한 여러 세션 사이를 자유롭게 전환할 수 있다. 전환 대상이 `snapshot`이면 복원하여 `active`로, 이미 `active`면 그대로 접근시킨다. 전환은 워크로드 타입과 무관하게 동일하게 동작하며, 서로 다른 타입의 세션이 섞여 있어도 마찬가지다(AC-E1). 전환은 세션 격리(AC-A2)를 깨지 않는다.
 - **달성 가치**: V4, V3
 - **검증 방법**: 여러 세션을 오가며 전환 시 매번 대상 세션이 올바른 상태로 활성화되고, 이전 세션의 상태가 보존됨을 확인한다.
