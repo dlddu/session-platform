@@ -59,6 +59,10 @@ func main() {
 
 	orch := k8s.NewClientOrchestrator(client, namespace,
 		k8s.WithImage(cfg.dataPlaneImage), k8s.WithShell(cfg.dataPlaneShell),
+		// Per-type image (AC-E1). Empty is a no-op, which leaves claude-code
+		// unconfigured — Start then refuses that type instead of provisioning a
+		// shell pod under a claude-code label.
+		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, cfg.dataPlaneClaudeCodeImage),
 		k8s.WithCheckpointPrivileged(cfg.criuEnabled))
 	store := configmap.NewStore(client, namespace)
 	// Shell I/O (write→stdin, read→scrollback delta) AND checkpoint/restore ride
@@ -134,7 +138,13 @@ type config struct {
 	addr           string
 	dataPlaneImage string
 	dataPlaneShell string
-	criuEnabled    bool
+	// dataPlaneClaudeCodeImage is the image for `workloadType=claude-code`
+	// sessions (AC-E1). Unset means the type is not deployable here: creating
+	// such a session fails loudly rather than getting a shell pod. The image
+	// itself — a data plane agent that runs the Claude Code CLI — is follow-up
+	// work (docs/prd/claude-code-workload.md, data-plane/README.md).
+	dataPlaneClaudeCodeImage string
+	criuEnabled              bool
 	// testEndpoints exposes test-only HTTP endpoints (snapshot trigger). Off in
 	// deployments; the e2e SUT turns it on.
 	testEndpoints bool
@@ -190,16 +200,17 @@ func loadConfig() config {
 		dataPlaneImage: env("DATA_PLANE_IMAGE", ""),
 		// Propagated into session pods; the agent launches
 		// ${DATA_PLANE_SHELL:-/bin/bash} on a PTY (AC-D1).
-		dataPlaneShell:          env("DATA_PLANE_SHELL", ""),
-		criuEnabled:             envBool("CRIU_ENABLED", false),
-		testEndpoints:           envBool("E2E_TEST_ENDPOINTS", false),
-		idleScanInterval:        envDuration("IDLE_SCAN_INTERVAL", time.Minute),
-		checkpointS3Endpoint:    env("CHECKPOINT_S3_ENDPOINT", ""),
-		checkpointS3Bucket:      env("CHECKPOINT_S3_BUCKET", ""),
-		checkpointS3RoleARN:     env("CHECKPOINT_S3_ROLE_ARN", ""),
-		checkpointS3Region:      env("CHECKPOINT_S3_REGION", env("AWS_REGION", "")),
-		checkpointS3Prefix:      env("CHECKPOINT_S3_PREFIX", "checkpoints"),
-		checkpointS3SessionName: env("CHECKPOINT_S3_SESSION_NAME", ""),
+		dataPlaneShell:           env("DATA_PLANE_SHELL", ""),
+		dataPlaneClaudeCodeImage: env("DATA_PLANE_CLAUDE_CODE_IMAGE", ""),
+		criuEnabled:              envBool("CRIU_ENABLED", false),
+		testEndpoints:            envBool("E2E_TEST_ENDPOINTS", false),
+		idleScanInterval:         envDuration("IDLE_SCAN_INTERVAL", time.Minute),
+		checkpointS3Endpoint:     env("CHECKPOINT_S3_ENDPOINT", ""),
+		checkpointS3Bucket:       env("CHECKPOINT_S3_BUCKET", ""),
+		checkpointS3RoleARN:      env("CHECKPOINT_S3_ROLE_ARN", ""),
+		checkpointS3Region:       env("CHECKPOINT_S3_REGION", env("AWS_REGION", "")),
+		checkpointS3Prefix:       env("CHECKPOINT_S3_PREFIX", "checkpoints"),
+		checkpointS3SessionName:  env("CHECKPOINT_S3_SESSION_NAME", ""),
 	}
 }
 

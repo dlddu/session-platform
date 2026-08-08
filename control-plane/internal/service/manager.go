@@ -61,9 +61,15 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 	if name == "" {
 		return nil, session.ErrInvalidInput
 	}
+	// AC-E1: an omitted type creates a shell session (unchanged behaviour); an
+	// unknown one is rejected before any pod is provisioned.
+	workload, err := session.NormalizeWorkloadType(req.WorkloadType)
+	if err != nil {
+		return nil, err
+	}
 	id := newID()
 
-	pod, err := s.orch.Start(ctx, id)
+	pod, err := s.orch.Start(ctx, id, workload)
 	if err != nil {
 		return nil, err
 	}
@@ -76,12 +82,13 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 
 	now := s.now()
 	sess := &session.Session{
-		ID:         id,
-		Name:       name,
-		State:      session.StateActive,
-		Pod:        pod.Name,
-		CreatedAt:  now,
-		LastAccess: now,
+		ID:           id,
+		WorkloadType: workload,
+		Name:         name,
+		State:        session.StateActive,
+		Pod:          pod.Name,
+		CreatedAt:    now,
+		LastAccess:   now,
 	}
 	if err := s.store.Put(ctx, sess); err != nil {
 		// best-effort rollback of the pod we just started
@@ -253,7 +260,14 @@ func (s *Service) Restore(ctx context.Context, id string) (*session.Session, err
 	// the agent's in-memory scrollback (AC-D4). The scrollback riding the
 	// checkpoint is what keeps a pre-snapshot read cursor valid after restore:
 	// Restore never resets it (the cursor is client-held, the buffer is resumed).
-	pod, err := s.orch.RestoreInto(ctx, id, checkpointRef(sess.Checkpoint))
+	// The restore pod runs the session's own workload type: the type is fixed at
+	// creation and a restore never changes it (AC-E1). Sessions stored before
+	// the type axis existed carry no type, so normalize to the shell default.
+	workload, err := session.NormalizeWorkloadType(sess.WorkloadType)
+	if err != nil {
+		return nil, err
+	}
+	pod, err := s.orch.RestoreInto(ctx, id, checkpointRef(sess.Checkpoint), workload)
 	if err != nil {
 		return nil, err
 	}

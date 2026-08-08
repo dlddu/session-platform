@@ -25,12 +25,18 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
 const (
 	// LabelSessionID ties a data plane pod 1:1 to its session (AC-A2). The
 	// orchestrator's selectors and the deferred e2e suite both key off it.
 	LabelSessionID = "session-id"
+	// LabelWorkloadType records which workload type the pod runs (AC-E1), so
+	// the type a session was created with is observable on the cluster object
+	// and not only in control plane state.
+	LabelWorkloadType = "session-platform.dev/workload-type"
 	// labelManagedBy marks the pods this control plane owns so a stray selector
 	// never reclaims something it did not create.
 	labelManagedBy = "app.kubernetes.io/managed-by"
@@ -61,6 +67,13 @@ const (
 	// agent's entrypoint launches ${DATA_PLANE_SHELL:-/bin/bash} (AC-D1).
 	shellEnvVar = "DATA_PLANE_SHELL"
 
+	// workloadEnvVar tells the pod which workload type it is running (AC-E1).
+	// The shell agent ignores it (its only mode is the PTY shell); the
+	// claude-code data plane workload — image plus agent mode — is the follow-up
+	// that consumes it. It is set unconditionally so the pod is self-describing
+	// rather than inferring its role from which image happened to be injected.
+	workloadEnvVar = "DATA_PLANE_WORKLOAD"
+
 	// restoreModeEnvVar tells a restore-target pod's agent to start WITHOUT a
 	// shell and await the checkpoint on POST /restore (in-pod CRIU restore).
 	// Keep in sync with data-plane/cmd/agent (restoreModeEnv).
@@ -88,9 +101,13 @@ const (
 // dedicated data plane pod per session through client-go, and dials the pod's
 // session agent to prove the shell is reachable (AC-D1).
 type ClientOrchestrator struct {
-	client               kubernetes.Interface
-	namespace            string
-	image                string
+	client    kubernetes.Interface
+	namespace string
+	image     string
+	// workloadImages holds the per-type image overrides (AC-E1). The default
+	// type falls back to `image`; a type with no image configured is refused
+	// rather than silently provisioned from the shell image.
+	workloadImages       map[session.WorkloadType]string
 	shell                string // DATA_PLANE_SHELL override injected into pods ("" = agent default)
 	checkpointPrivileged bool   // run session pods privileged for in-pod CRIU (CRIU_ENABLED)
 	agentPort            int
@@ -111,6 +128,24 @@ func WithImage(image string) Option {
 		if image != "" {
 			o.image = image
 		}
+	}
+}
+
+// WithWorkloadImage overrides the data plane image for one workload type
+// (AC-E1: the control plane provisions a different data plane workload per
+// type). An empty image is ignored, which is what leaves a type unconfigured —
+// and an unconfigured non-default type is refused by Start rather than being
+// provisioned from the shell image, so a session can never claim a type whose
+// workload is not actually there.
+func WithWorkloadImage(workload session.WorkloadType, image string) Option {
+	return func(o *ClientOrchestrator) {
+		if image == "" {
+			return
+		}
+		if o.workloadImages == nil {
+			o.workloadImages = map[session.WorkloadType]string{}
+		}
+		o.workloadImages[workload] = image
 	}
 }
 
@@ -223,8 +258,12 @@ func (o *ClientOrchestrator) Namespace() string { return o.namespace }
 // Start provisions a dedicated pod for sessionID, waits for it to report Ready
 // — which, via the agent readiness probe, means its PTY shell is alive (AC-D1)
 // — and returns its ref with the pod IP recorded for the agent dial (AC-A1/A2).
-func (o *ClientOrchestrator) Start(ctx context.Context, sessionID string) (PodRef, error) {
-	return o.provision(ctx, o.podSpec(sessionID))
+func (o *ClientOrchestrator) Start(ctx context.Context, sessionID string, workload session.WorkloadType) (PodRef, error) {
+	spec, err := o.podSpec(sessionID, workload)
+	if err != nil {
+		return PodRef{}, err
+	}
+	return o.provision(ctx, spec)
 }
 
 // provision creates a pod from spec, waits for it to report Ready — which, via
@@ -270,13 +309,17 @@ func (o *ClientOrchestrator) Stop(ctx context.Context, ref PodRef) error {
 // instead; "Ready" then means the *restored* shell is alive, not an empty new
 // one. Applying the checkpoint bytes is the Checkpointer's job; supplying the
 // correctly-shaped pod is all the orchestrator owns.
-func (o *ClientOrchestrator) RestoreInto(ctx context.Context, sessionID, checkpointRef string) (PodRef, error) {
-	return o.provision(ctx, o.restorePodSpec(sessionID, checkpointRef))
+func (o *ClientOrchestrator) RestoreInto(ctx context.Context, sessionID, checkpointRef string, workload session.WorkloadType) (PodRef, error) {
+	spec, err := o.restorePodSpec(sessionID, checkpointRef, workload)
+	if err != nil {
+		return PodRef{}, err
+	}
+	return o.provision(ctx, spec)
 }
 
 // podSpec is the fresh-session pod: its image entrypoint starts a new PTY shell.
-func (o *ClientOrchestrator) podSpec(sessionID string) *corev1.Pod {
-	return o.buildPod(sessionID, "")
+func (o *ClientOrchestrator) podSpec(sessionID string, workload session.WorkloadType) (*corev1.Pod, error) {
+	return o.buildPod(sessionID, "", workload)
 }
 
 // restorePodSpec is the pod RestoreInto hands to provision: the same shell-agent
@@ -285,22 +328,47 @@ func (o *ClientOrchestrator) podSpec(sessionID string) *corev1.Pod {
 // rather than running the entrypoint's fresh shell. The container is otherwise
 // identical, so once the runtime restores it the agent's /healthz reflects the
 // *restored* shell and pod-Ready keeps its AC-D1 meaning.
-func (o *ClientOrchestrator) restorePodSpec(sessionID, checkpointRef string) *corev1.Pod {
-	return o.buildPod(sessionID, checkpointRef)
+func (o *ClientOrchestrator) restorePodSpec(sessionID, checkpointRef string, workload session.WorkloadType) (*corev1.Pod, error) {
+	return o.buildPod(sessionID, checkpointRef, workload)
+}
+
+// imageFor resolves the data plane image for a workload type (AC-E1). The
+// default type falls back to the orchestrator's `image` (DATA_PLANE_IMAGE);
+// any other type must have been configured with WithWorkloadImage, otherwise
+// provisioning fails loudly instead of handing the session a shell pod that
+// does not run the workload its type promises.
+func (o *ClientOrchestrator) imageFor(workload session.WorkloadType) (string, error) {
+	if img, ok := o.workloadImages[workload]; ok {
+		return img, nil
+	}
+	if workload == session.WorkloadTypeShell {
+		return o.image, nil
+	}
+	return "", fmt.Errorf("no data plane image configured for workload type %q", workload)
 }
 
 // buildPod assembles the data plane pod. checkpointRef == "" yields a fresh
 // session pod (no annotation) under the session's deterministic name; a
-// non-empty ref yields a restore-target pod under a fresh unique name.
-func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string) *corev1.Pod {
+// non-empty ref yields a restore-target pod under a fresh unique name. The
+// workload type picks the image and is recorded on the pod (label + env) so the
+// pod runs — and advertises — the workload its session selected (AC-E1).
+func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string, workload session.WorkloadType) (*corev1.Pod, error) {
+	workload, err := session.NormalizeWorkloadType(workload)
+	if err != nil {
+		return nil, err
+	}
+	image, err := o.imageFor(workload)
+	if err != nil {
+		return nil, err
+	}
 	// No command override: on a fresh start the data plane image's entrypoint
 	// owns launching the PTY-attached session shell (AC-D1); on a restore the
 	// runtime resumes the checkpointed process tree and the entrypoint never
 	// runs. Either way the control plane only orchestrates.
 	container := corev1.Container{
 		Name:            ContainerName,
-		Image:           o.image,
-		ImagePullPolicy: pullPolicyForImage(o.image),
+		Image:           image,
+		ImagePullPolicy: pullPolicyForImage(image),
 		Ports: []corev1.ContainerPort{{
 			Name:          agentPortName,
 			ContainerPort: AgentPort,
@@ -319,6 +387,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string) *corev1.P
 			PeriodSeconds:       2,
 		},
 	}
+	container.Env = append(container.Env, corev1.EnvVar{Name: workloadEnvVar, Value: string(workload)})
 	if o.shell != "" {
 		container.Env = append(container.Env, corev1.EnvVar{Name: shellEnvVar, Value: o.shell})
 	}
@@ -347,15 +416,16 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string) *corev1.P
 			Namespace:   o.namespace,
 			Annotations: annotations,
 			Labels: map[string]string{
-				LabelSessionID: sessionID,
-				labelManagedBy: managedByValue,
+				LabelSessionID:    sessionID,
+				LabelWorkloadType: string(workload),
+				labelManagedBy:    managedByValue,
 			},
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyAlways,
 			Containers:    []corev1.Container{container},
 		},
-	}
+	}, nil
 }
 
 // podName derives a deterministic, DNS-safe pod name from the session id so the
