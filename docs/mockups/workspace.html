@@ -224,6 +224,20 @@
   .input-row .p{color:var(--active)}
   .input-row .ph{color:#46545e}
 
+  /* accumulated shell state (J5-S4) */
+  .st-row{display:flex;gap:9px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--line)}
+  .st-row:last-of-type{border-bottom:0}
+  .st-row .k{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--text-faint);
+    flex:0 0 62px;text-transform:uppercase;letter-spacing:.06em;margin-top:2px}
+  .st-row .v{font-family:"IBM Plex Mono",monospace;font-size:11.5px;color:var(--text);
+    min-width:0;word-break:break-all;line-height:1.55}
+  .st-row .v em{font-style:normal;color:var(--text-faint)}
+  .st-note{margin-top:12px;border:1px dashed var(--line-2);border-radius:10px;padding:10px 12px;
+    display:flex;gap:9px;align-items:flex-start}
+  .st-note .ic{color:var(--frozen);flex:0 0 auto;margin-top:1px}
+  .st-note .tx{font-size:11px;color:var(--text-dim);line-height:1.5}
+  .st-note .tx b{font-family:"IBM Plex Mono",monospace;color:var(--frozen);font-weight:600}
+
   /* restore overlay (thaw) */
   .restore{position:absolute;inset:0;display:none;place-items:center;z-index:5;
     background:linear-gradient(160deg,rgba(19,40,49,.82),rgba(11,20,25,.9));
@@ -410,6 +424,21 @@
             <div class="bar"><i class="active" id="ws-mem-bar" style="width:0"></i></div>
           </div>
 
+          <!-- accumulated shell state (J5-S4 · AC-D4) -->
+          <div class="panel" id="ws-state-panel">
+            <h4><span class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span> Shell state</h4>
+            <div class="st-row"><span class="k">cwd</span><span class="v" id="ws-st-cwd">/work</span></div>
+            <div class="st-row"><span class="k">env</span><span class="v" id="ws-st-env">STAGE=dev<br>NODE_ENV=development</span></div>
+            <div class="st-row"><span class="k">vars</span><span class="v" id="ws-st-vars">BUILD_TAG=1.4.0 <em>(shell var)</em></span></div>
+            <div class="st-row"><span class="k">jobs</span><span class="v" id="ws-st-jobs">[1]+ node watch.js <em>&amp;</em></span></div>
+            <div class="st-note" id="ws-st-note">
+              <span class="ic">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M4.2 7l15.6 10M19.8 7 4.2 17"/></svg>
+              </span>
+              <span class="tx">Everything above carries into the next command &mdash; and it is exactly what gets frozen. This <b>process tree</b> is the checkpoint, so a resume lands back on this state, not a fresh shell.</span>
+            </div>
+          </div>
+
           <!-- lifecycle -->
           <div class="panel">
             <h4><span class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.4 2.6L3 8"/><path d="M3 3v5h5"/></svg></span> Lifecycle</h4>
@@ -552,6 +581,7 @@ function populate(s){
     document.getElementById('ws-lc-up').textContent=s.up;
     freezeBtn.style.display='';
   }
+  paintShellState(s);
   const vit = document.getElementById('ws-vitals');
   const tag = document.getElementById('ws-console-tag');
   if(s.state==='active'){
@@ -565,6 +595,24 @@ function populate(s){
   } else {
     vit.style.display='none'; tag.style.display='none';
     paintTerm(termFrozen(s));
+  }
+}
+// J5-S4 · 축적된 쉘 상태 (다음 명령으로 이어지고, 그대로 체크포인트된다)
+function paintShellState(s){
+  const note = document.getElementById('ws-st-note');
+  const jobs = document.getElementById('ws-st-jobs');
+  if(s.state==='snapshot'){
+    document.getElementById('ws-st-cwd').innerHTML = '/work <em>(in checkpoint)</em>';
+    document.getElementById('ws-st-env').innerHTML = 'STAGE=dev<br>NODE_ENV=development';
+    document.getElementById('ws-st-vars').innerHTML = 'BUILD_TAG=1.4.0 <em>(shell var)</em>';
+    jobs.innerHTML = '[1]+ node watch.js <em>(suspended in checkpoint)</em>';
+    note.querySelector('.tx').innerHTML = 'Frozen inside <b>' + s.checkpoint + '</b> on cold storage. A restore rebuilds this exact process tree on a new pod &mdash; same cwd, same env, same job.';
+  } else {
+    document.getElementById('ws-st-cwd').innerHTML = '/work';
+    document.getElementById('ws-st-env').innerHTML = 'STAGE=dev<br>NODE_ENV=development';
+    document.getElementById('ws-st-vars').innerHTML = 'BUILD_TAG=1.4.0 <em>(shell var)</em>';
+    jobs.innerHTML = '[1]+ node watch.js <em>&amp;</em>';
+    note.querySelector('.tx').innerHTML = 'Everything above carries into the next command &mdash; and it is exactly what gets frozen. This <b>process tree</b> is the checkpoint, so a resume lands back on this state, not a fresh shell.';
   }
 }
 function clearRestore(){
@@ -613,6 +661,7 @@ function promote(s){
   document.getElementById('ws-vitals').style.display='';
   setGauge(s.cpu,s.mem,s.memMax);
   const tag=document.getElementById('ws-console-tag'); tag.style.display=''; tag.innerHTML='<span class="led"></span>shell attached';
+  paintShellState(s);
   paintTerm([
     {c:'ok',t:`✓ restored from checkpoint — shell process tree intact`},
     {c:'sys',t:`◆ re-attached to session/${s.id} · pod/${s.pod} — interactive shell`},

@@ -63,8 +63,10 @@
 - **idle/snapshot read/write 정책 (AC-C2 / AC-C3)** — *2026-06-27 확정*. 비-active 접근은 통일 "active 보장 후 처리" 규칙: `idle`은 `idle→active` atomic 승격(AC-C1), `snapshot`은 CRIU 복원(AC-B2)으로 active 전이 후 read/write.
 
 ### 🟠 인접 사슬에서 인지된 항목 (이 문서 관할 밖, 참고용)
-- **디자인 사슬 미갱신 (`claude-code` 타입)**: V7 삭제로 "시각화 없는 가치"는 발생하지 않게 되었으나, `claude-code` 타입을 다루는 여정·mockup은 여전히 없다(세션 생성 화면에 타입 선택 없음, 콘솔은 쉘 전용). `doc-structure-state.md`에 위험으로 등록됨. 여정 신설·mockup 갱신은 design-doc-structure-validator 영역.
-- **V8의 시각화 부재 (2026-08-08 신규)**: V8(작업 환경 선택)에 대응하는 사용자 여정·mockup이 없다 — 세션 생성 화면에 워크로드 타입 선택 UI가 없음. 디자인 사슬 기준 **시각화 없는 가치 1개**로 `doc-structure-state.md`에 등록됨. design-doc-structure-validator 영역.
+- ~~**디자인 사슬 미갱신 (`claude-code` 타입)**~~ → **2026-08-08 해소**: `claude-code` 타입을 다루는 여정(J6)과 mockup이 신설되었다 — 세션 생성 화면에 워크로드 타입·모델 선택이 추가되고, 프롬프트·응답 콘솔(`mockups/agent-workspace.html`)이 생겼다. 상세는 `doc-structure-state.md`.
+- ~~**V8의 시각화 부재 (2026-08-08 신규)**~~ → **2026-08-08 해소**: V8이 **J6(작업 환경 선택 + 에이전트 프롬프트 루프)** 로 연결되고 `new-session.html`의 타입 선택 UI로 시각화되어, 디자인 사슬의 "시각화 없는 가치"는 **0**이 되었다. design-doc-structure-validator 영역.
+
+> ⚠️ **다만 mockup 내용이 이 문서의 열린 항목에 걸려 있다**: `new-session.html`의 모델 선택지(`model-a`/`model-b`, "platform default")는 AC-E6의 기본 모델 미확정 때문에 **자리표시자**이고, `agent-workspace.html`의 대화 재개 표현은 AC-E4의 재개 방식 미확정 상태에서 결과만 그린 것이다. 두 항목이 확정되면 mockup 갱신이 필요하다.
 - **V6 삭제에 따른 하류 재연결 (2026-08-08 수행)**: V6를 참조하던 J5 여정·`workspace.html` 매핑·e2e 커버리지 표를 V3으로 재연결했다. 디자인 사슬 문서(`doc-structure-state.md`)는 **참조 재연결만** 반영했고 전체 재검증은 하지 않았다.
 - **구현 사슬 미반영 (AC-E1/E6)**: `control-plane/api/openapi.yaml`의 `CreateSessionRequest`에는 아직 `workloadType`·`model` 필드가 없고, data plane에도 클로드 코드 CLI 워크로드가 없다. AC-E1~E6은 **명세만 확정된 상태**이며 구현은 후속.
 

@@ -376,14 +376,14 @@
         <!-- left: read/write console -->
         <div class="console">
           <div class="console-bar">
-            <span>session console</span>
+            <span>session shell</span>
             <span class="mono" id="ws-console-pod">—</span>
-            <span class="tag" id="ws-console-tag"><span class="led"></span>read / write open</span>
+            <span class="tag" id="ws-console-tag"><span class="led"></span>shell attached</span>
           </div>
           <div class="term mono" id="ws-term"></div>
           <div class="input-row">
             <span class="p">→</span>
-            <span class="ph" id="ws-input-ph">write { key: "checkpoint", value: … }</span>
+            <span class="ph" id="ws-input-ph">run a command — executes in the session shell (bash)</span>
           </div>
 
           <!-- thaw / restore overlay -->
@@ -490,15 +490,15 @@ function buildTimeline(s){
 const termActive = (s)=>[
   {c:'sys',t:`◆ attached to session/${s.id} · pod/${s.pod}`},
   {c:'sys',t:`◆ isolation: dedicated pod — no shared state with other sessions`},
-  {c:'req',t:`<span class="op">read</span>  { key: "session_meta" }`},
-  {c:'res',t:`← { status: "active", region: "${s.region}", connections: 1 }`},
-  {c:'req w',t:`<span class="op">write</span> { key: "cursor", value: { row: 4192, col: 7 } }`},
-  {c:'ok',t:`← ok · applied atomically · rev 0x3f`}
+  {c:'req',t:`<span class="op">$</span> export STAGE=dev && cd /work`},
+  {c:'req',t:`<span class="op">$</span> ls`},
+  {c:'res',t:`handlers/   server.js   package.json   README.md`},
+  {c:'ok',t:`✓ cwd=/work · $STAGE=dev persist for the next command`}
 ];
 const termFrozen = (s)=>[
   {c:'sys',t:`◆ session/${s.id} is frozen — pod reclaimed`},
   {c:'sys',t:`◆ checkpoint ${s.checkpoint} on cold storage · frozen ${s.frozenAgo}`},
-  {c:'res',t:`access triggers CRIU restore → new pod → active`}
+  {c:'res',t:`read / write resumes the shell — CRIU restore → new pod → active`}
 ];
 function paintTerm(lines){
   const term = document.getElementById('ws-term');
@@ -553,7 +553,7 @@ function populate(s){
   const tag = document.getElementById('ws-console-tag');
   if(s.state==='active'){
     vit.style.display=''; setGauge(s.cpu,s.mem,s.memMax);
-    tag.style.display=''; tag.innerHTML='<span class="led"></span>read / write open';
+    tag.style.display=''; tag.innerHTML='<span class="led"></span>shell attached';
     paintTerm(termActive(s));
   } else if(s.state==='idle'){
     vit.style.display=''; setGauge(s.cpu,s.mem,s.memMax);
@@ -609,12 +609,13 @@ function promote(s){
   document.getElementById('ws-freeze-btn').style.display='';
   document.getElementById('ws-vitals').style.display='';
   setGauge(s.cpu,s.mem,s.memMax);
-  const tag=document.getElementById('ws-console-tag'); tag.style.display=''; tag.innerHTML='<span class="led"></span>read / write open';
+  const tag=document.getElementById('ws-console-tag'); tag.style.display=''; tag.innerHTML='<span class="led"></span>shell attached';
   paintTerm([
-    {c:'ok',t:`◆ restored from checkpoint — in-memory state intact`},
-    {c:'sys',t:`◆ attached to session/${s.id} · pod/${s.pod}`},
-    {c:'req',t:`<span class="op">read</span>  { key: "cursor" }`},
-    {c:'res',t:`← { row: 4192, col: 7 }   · preserved across freeze`}
+    {c:'ok',t:`✓ restored from checkpoint — shell process tree intact`},
+    {c:'sys',t:`◆ re-attached to session/${s.id} · pod/${s.pod} — interactive shell`},
+    {c:'req',t:`<span class="op">$</span> echo $STAGE; pwd`},
+    {c:'res',t:`dev`},
+    {c:'res',t:`/work   · env + cwd preserved across freeze`}
   ]);
   toast('Session resumed — picked up exactly where it froze','frozen');
 }

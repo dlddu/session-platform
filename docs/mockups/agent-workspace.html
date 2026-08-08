@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Sessions — control plane</title>
+<title>Agent session workspace</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -223,6 +223,36 @@
     font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--text-dim);background:var(--ink)}
   .input-row .p{color:var(--active)}
   .input-row .ph{color:#46545e}
+  .input-row .ph .mono{color:#5d6d78}
+  .input-row .queued{margin-left:auto;font-family:"IBM Plex Mono",monospace;font-size:10.5px;
+    color:#b79ae0;background:#241b33;border:1px solid #3a2c52;border-radius:6px;padding:3px 7px;display:none}
+  .input-row .queued.on{display:inline-block}
+
+  /* ---------- agent conversation (J6-S2~S4) ---------- */
+  .ln.prompt{color:#d6c9ea}
+  .ln.prompt .op{color:#b79ae0;font-weight:600}
+  .ln.agent{color:var(--text-dim)}
+  .ln.agent .op{color:#8f7fb0}
+  .ln.meta{color:#5a6b76;font-size:11.5px}
+  .turn-sep{height:1px;background:var(--line);margin:9px 0 9px 26px}
+
+  /* conversation context panel */
+  .ctx-turn{display:flex;gap:9px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line)}
+  .ctx-turn:last-of-type{border-bottom:0}
+  .ctx-turn .n{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:#b79ae0;flex:0 0 auto;
+    background:#241b33;border:1px solid #3a2c52;border-radius:5px;padding:1px 5px;margin-top:1px}
+  .ctx-turn .t{font-size:11.5px;color:var(--text-dim);line-height:1.5;min-width:0;word-break:break-word}
+  .ctx-note{margin-top:12px;border:1px dashed var(--line-2);border-radius:10px;padding:10px 12px;
+    display:flex;gap:9px;align-items:flex-start}
+  .ctx-note .ic{color:#b79ae0;flex:0 0 auto;margin-top:1px}
+  .ctx-note .tx{font-size:11px;color:var(--text-dim);line-height:1.5}
+  .ctx-note .tx b{font-family:"IBM Plex Mono",monospace;color:#b79ae0;font-weight:600}
+
+  .kv{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 0;font-size:12px}
+  .kv .k{color:var(--text-dim)}
+  .kv .v{font-family:"IBM Plex Mono",monospace;color:var(--text);text-align:right}
+  .kv .v.masked{color:var(--text-faint);letter-spacing:.06em}
+  .kv .v .lock{color:var(--ok);margin-left:5px}
 
   /* restore overlay (thaw) */
   .restore{position:absolute;inset:0;display:none;place-items:center;z-index:5;
@@ -254,25 +284,6 @@
   .gauge .g-val{font-family:"IBM Plex Mono",monospace;font-size:13px}
   .gauge + .bar{margin-top:6px;margin-bottom:16px}
   .gauge + .bar:last-child{margin-bottom:0}
-
-  /* connections (J4) */
-  .conn{display:flex;align-items:center;gap:11px;padding:10px 0;border-bottom:1px solid var(--line)}
-  .conn:last-of-type{border-bottom:0}
-  .conn .av{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;flex:0 0 30px;
-    font-size:13px}
-  .conn .av.you{background:linear-gradient(140deg,#2b6c7e,#163b46);color:#cdeaf3}
-  .conn .av.bot{background:#241b33;color:#caa9e8;border:1px solid #3a2c52}
-  .conn .who{flex:1;min-width:0}
-  .conn .who .n{font-size:13px;font-weight:500}
-  .conn .who .r{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--text-faint)}
-  .conn .pulse{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 7px var(--ok);
-    animation:breathe 2.4s var(--ease) infinite}
-  .atomic{margin-top:13px;border:1px dashed var(--line-2);border-radius:10px;padding:11px 12px;
-    display:flex;gap:10px;align-items:flex-start}
-  .atomic .ic{color:var(--ok);flex:0 0 auto;margin-top:1px}
-  .atomic .tx{font-size:11.5px;color:var(--text-dim);line-height:1.5}
-  .atomic .tx b{color:var(--ok);font-family:"IBM Plex Mono",monospace;font-weight:600}
-  .atomic.flash{animation:flashok .9s var(--ease)}
 
   .lc-state{display:flex;align-items:center;gap:11px;padding:12px;border-radius:11px;
     background:var(--active-soft);border:1px solid rgba(255,180,58,.2);margin-bottom:14px}
@@ -337,7 +348,6 @@
   @keyframes spin{to{transform:rotate(360deg)}}
   @keyframes thawin{from{opacity:0}to{opacity:1}}
   @keyframes thawout{from{opacity:1;backdrop-filter:blur(7px)}to{opacity:0;backdrop-filter:blur(0)}}
-  @keyframes flashok{0%{background:rgba(95,208,138,.14);border-color:var(--ok)}100%{background:transparent;border-color:var(--line-2)}}
 
   @media (max-width:880px){
     .ws-body{grid-template-columns:1fr}
@@ -372,22 +382,121 @@
     <div class="rail-me" title="You">JD</div>
   </nav>
 <div class="viewport">
-<section class="screen show" id="screen-console" aria-label="Sessions console">
-      <div class="pad">
-        <div class="h-top">
-          <div>
-            <div class="eyebrow">Control plane · us-east-1</div>
-            <h1>Sessions</h1>
-            <div class="sub">Every session runs in its own dedicated pod. Idle sessions freeze to a checkpoint and hand their compute back.</div>
+<section class="screen show" id="screen-workspace" aria-label="Session workspace">
+      <div class="ws-top">
+        <div class="inner">
+          <div class="crumbs">
+            <button class="back" onclick="location.href='index.html'">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+              Sessions
+            </button>
+            <span>/</span>
+            <span class="mono" id="ws-crumb-id">—</span>
           </div>
-          <button class="btn btn-primary" onclick="location.href='new-session.html'">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-            New session
-          </button>
+          <div class="ws-id-row">
+            <h2 id="ws-name">—</h2>
+            <span class="badge" id="ws-badge"><span class="led"></span><span id="ws-badge-t">—</span></span>
+          </div>
+          <div class="meta-line" id="ws-meta"></div>
+          <div class="timeline" id="ws-timeline"></div>
+        </div>
+      </div>
+
+      <div class="ws-body">
+        <!-- left: read/write console -->
+        <div class="console">
+          <div class="console-bar">
+            <span>claude-code session</span>
+            <span class="mono" id="ws-console-pod">—</span>
+            <span class="mono" id="ws-console-model" style="color:#b79ae0">—</span>
+            <span class="tag" id="ws-console-tag"><span class="led"></span>agent ready</span>
+          </div>
+          <div class="term mono" id="ws-term"></div>
+          <div class="input-row">
+            <span class="p" style="color:#b79ae0">&#9656;</span>
+            <span class="ph" id="ws-input-ph">send a prompt — runs <span class="mono">claude -p</span> once in the session pod</span>
+            <span class="queued" id="ws-queued">1 queued</span>
+          </div>
+
+          <!-- thaw / restore overlay -->
+          <div class="restore" id="ws-restore">
+            <div>
+              <div class="crystal-lg">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M12 2 9 5M12 2l3 3M12 22l-3-3M12 22l3-3M2.7 7l17.3 10M2.7 7l1.1 4M2.7 7l4-1.1M21.3 17l-1.1-4M21.3 17l-4 1.1M21.3 7 4 17M21.3 7l-4-1.1M21.3 7l-1.1 4M2.7 17l4-1.1M2.7 17l1.1-4"/></svg>
+              </div>
+              <h3>Resuming from archive</h3>
+              <p>Restoring pod from the session archive. Conversation history, working directory and the accumulated output buffer come back exactly as frozen &mdash; no CRIU involved.</p>
+              <div class="pbar"><i id="ws-pbar"></i></div>
+              <div class="rlog mono" id="ws-rlog"></div>
+            </div>
+          </div>
         </div>
 
-        <div class="summary" id="summary"><!-- chips injected --></div>
-        <div class="grid" id="grid"><!-- cards injected --></div>
+        <!-- right: panels -->
+        <div>
+          <div class="panel" id="ws-vitals">
+            <h4><span class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span> Vitals</h4>
+            <div class="gauge"><span class="g-lab">CPU</span><span class="g-val" id="ws-cpu-v">—</span></div>
+            <div class="bar"><i class="active" id="ws-cpu-bar" style="width:0"></i></div>
+            <div class="gauge"><span class="g-lab">Memory</span><span class="g-val" id="ws-mem-v">—</span></div>
+            <div class="bar"><i class="active" id="ws-mem-bar" style="width:0"></i></div>
+          </div>
+
+          <!-- conversation context (J6-S4 · AC-E4) -->
+          <div class="panel">
+            <h4><span class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.4 7.2L3 21l1.8-6.6A8 8 0 1 1 21 12Z"/></svg></span> Conversation</h4>
+            <div id="ws-ctx-turns"></div>
+            <div class="ctx-note">
+              <span class="ic">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5V6a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 1.5Z"/><path d="M9 8h6"/></svg>
+              </span>
+              <span class="tx">Each prompt runs <b>once and exits</b> &mdash; no resident process. The next run picks up the conversation history and working directory left on the pod, so turn N sees turns 1&ndash;(N&minus;1).</span>
+            </div>
+            <div class="lc-row" style="margin-top:10px"><span class="k">Working dir</span><span class="v mono" id="ws-ctx-cwd">/work</span></div>
+            <div class="lc-row"><span class="k">Files created</span><span class="v mono" id="ws-ctx-files">—</span></div>
+            <div class="lc-row"><span class="k">Read cursor</span><span class="v mono" id="ws-ctx-cursor">—</span></div>
+          </div>
+
+          <!-- workload config (AC-E1 / AC-E6) -->
+          <div class="panel">
+            <h4><span class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span> Workload</h4>
+            <div class="kv"><span class="k">Type</span><span class="v" style="color:#b79ae0">claude-code</span></div>
+            <div class="kv"><span class="k">Model</span><span class="v" id="ws-model-v">platform default</span></div>
+            <div class="kv"><span class="k">Base URL</span><span class="v masked">from Secret</span></div>
+            <div class="kv"><span class="k">Auth token</span><span class="v masked">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;<span class="lock"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M20 6 9 17l-5-5"/></svg></span></span></div>
+            <div class="ctx-note" style="margin-top:12px">
+              <span class="ic" style="color:var(--ok)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 21 6v6c0 5-3.8 8.9-9 10-5.2-1.1-9-5-9-10V6l9-4Z"/></svg>
+              </span>
+              <span class="tx">Credentials are injected from a platform Secret and never appear in session reads, logs, or the API response. Type and model are <b>immutable</b> for this session.</span>
+            </div>
+          </div>
+
+          <!-- lifecycle -->
+          <div class="panel">
+            <h4><span class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.4 2.6L3 8"/><path d="M3 3v5h5"/></svg></span> Lifecycle</h4>
+            <div class="lc-state" id="ws-lc-state">
+              <span class="led"></span>
+              <div>
+                <div class="big" id="ws-lc-big">active</div>
+                <div style="font-size:11px;color:var(--text-faint)" id="ws-lc-sub">running on dedicated pod</div>
+              </div>
+            </div>
+            <div class="lc-row"><span class="k">Idle timer</span><span class="v" id="ws-lc-idle">00:00 / 60:00</span></div>
+            <div class="lc-row"><span class="k">Auto-archive at</span><span class="v">60 min idle</span></div>
+            <div class="lc-row"><span class="k">Pod uptime</span><span class="v" id="ws-lc-up">—</span></div>
+            <div class="lc-actions">
+              <button class="b" id="ws-freeze-btn" onclick="freezeNow()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v10a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19V9M10 13h4"/></svg>
+                Archive now
+              </button>
+              <button class="b danger">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                End
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 </div>
@@ -402,27 +511,18 @@ const ICON = {
 };
 function ic(n,s){return ICON[n].replace('viewBox',`width="${s}" height="${s}" viewBox`);}
 const STATE_LABEL = {active:'active', idle:'idle', snapshot:'snapshot'};
-// 세션마다 workloadType이 있고(AC-E1), 목록은 타입이 섞인 채로 한 화면에서 다뤄진다 (J3 · V4)
+// 이 화면은 workloadType=claude-code 세션 전용이다 (shell 타입은 workspace.html)
 let sessions = [
-  {id:'7f3a', name:'api-gateway-dev', type:'shell', state:'active', pod:'sess-7f3a-x29k', region:'us-east-1', up:'2h 14m', upMin:134, cpu:38, mem:612, memMax:1024, idleMin:0},
-  {id:'5b1e', name:'refactor-billing', type:'claude-code', state:'active', pod:'sess-5b1e-h7za', region:'us-east-1', up:'1h 05m', upMin:65, cpu:22, mem:408, memMax:2048, idleMin:0},
-  {id:'91c0', name:'etl-runner', type:'shell', state:'active', pod:'sess-91c0-tb7p', region:'us-east-1', up:'5h 02m', upMin:302, cpu:71, mem:1432, memMax:2048, idleMin:0},
-  {id:'2db8', name:'notebook-alpha', type:'shell', state:'active', pod:'sess-2db8-m04c', region:'us-east-1', up:'47m', upMin:47, cpu:12, mem:240, memMax:1024, idleMin:0},
-  {id:'a92f', name:'migrate-schema', type:'claude-code', state:'idle', pod:'sess-a92f-k3md', region:'us-east-1', up:'2h 11m', upMin:131, cpu:2, mem:196, memMax:2048, idleMin:41, freezeSec:1140},
-  {id:'4e5f', name:'scrape-worker', type:'shell', state:'idle', pod:'sess-4e5f-q8wd', region:'us-east-1', up:'1h 38m', upMin:98, cpu:3, mem:188, memMax:1024, idleMin:48, freezeSec:702},
-  {id:'0a17', name:'model-train-7b', type:'shell', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'2h ago', checkpoint:'412 MB', reclaim:'2 vCPU · 4 GB'},
-  {id:'c83d', name:'doc-migration', type:'claude-code', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'18m ago', checkpoint:'38 MB archive', reclaim:'1 vCPU · 2 GB'}
+  {id:'5b1e', name:'refactor-billing', type:'claude-code', model:'platform default', state:'active',
+   pod:'sess-5b1e-h7za', region:'us-east-1', up:'1h 05m', upMin:65, cpu:22, mem:408, memMax:2048, idleMin:0,
+   turns:3, cwd:'/work', files:'invoice.go, marker.txt', cursor:'nextOffset=8214'},
+  {id:'a92f', name:'migrate-schema', type:'claude-code', model:'model-a', state:'idle',
+   pod:'sess-a92f-k3md', region:'us-east-1', up:'2h 11m', upMin:131, cpu:2, mem:196, memMax:2048, idleMin:41, freezeSec:1140,
+   turns:7, cwd:'/work/db', files:'0007_add_index.sql', cursor:'nextOffset=19677'},
+  {id:'c83d', name:'doc-migration', type:'claude-code', model:'platform default', state:'snapshot',
+   pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'18m ago', checkpoint:'38 MB archive', reclaim:'1 vCPU · 2 GB',
+   turns:12, cwd:'/work/docs', files:'42 files', cursor:'nextOffset=31408'}
 ];
-// 타입에 따라 작업 화면이 갈린다: shell → workspace.html · claude-code → agent-workspace.html
-function wsHref(s){
-  if(s.state==='snapshot') return `restore.html?id=${s.id}`;
-  return s.type==='claude-code' ? `agent-workspace.html?id=${s.id}` : `workspace.html?id=${s.id}`;
-}
-function typeTag(s){
-  return s.type==='claude-code'
-    ? `<span class="pod" style="color:#b79ae0" title="workloadType=claude-code">◇ claude-code</span>`
-    : `<span class="pod" style="color:var(--text-faint)" title="workloadType=shell">$ shell</span>`;
-}
 function fmtSec(s){const m=Math.floor(s/60),ss=s%60;return m+':'+String(ss).padStart(2,'0');}
 function qid(){return new URLSearchParams(location.search).get('id');}
 function toast(msg,kind){
@@ -440,78 +540,219 @@ function toast(msg,kind){
   setTimeout(()=>{el.classList.remove('in'); setTimeout(()=>el.remove(),350);}, 3200);
 }
 
-const grid = document.getElementById('grid');
-const summaryEl = document.getElementById('summary');
-function renderSummary(){
-  const a = sessions.filter(s=>s.state==='active').length;
-  const i = sessions.filter(s=>s.state==='idle').length;
-  const f = sessions.filter(s=>s.state==='snapshot').length;
-  summaryEl.innerHTML = `
-    <div class="chip"><span class="dot" style="background:var(--active);box-shadow:0 0 8px var(--active)"></span><b>${a}</b><span>active</span></div>
-    <div class="chip"><span class="dot" style="background:var(--idle)"></span><b>${i}</b><span>idle</span></div>
-    <div class="chip"><span class="dot" style="background:var(--frozen);box-shadow:0 0 8px rgba(127,205,234,.7)"></span><b>${f}</b><span>frozen</span></div>
-    <div class="chip reclaim"><span class="ic">${ic('pod',16)}</span><div><b style="font-size:13px;color:var(--frozen)">3 vCPU · 6 GB</b><div style="font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-faint)">reclaimed from frozen</div></div></div>`;
+let cur = null;
+let restoreTimers = [];
+function tl(steps){
+  return `<div class="timeline">${steps.map((st,i)=>{
+    const line = i<steps.length-1 ? `<div class="tl-line ${st.fillNext?'fill':''}"></div>` : '';
+    return `<div class="tl-step ${st.cls}"><span class="tl-dot"></span><span class="tl-lab">${st.lab}${st.time?`<span class="tl-time">${st.time}</span>`:''}</span></div>${line}`;
+  }).join('')}</div>`;
 }
-function cardHTML(s){
-  const href = wsHref(s);
-  let body='';
-  if(s.state==='active'){
-    body = `<div class="vit">
-      <div class="m"><div class="lab">CPU</div><div class="val" data-cpu>${s.cpu}<small>%</small></div>
-        <div class="bar"><i class="active" data-cpubar style="width:${s.cpu}%"></i></div></div>
-      <div class="m"><div class="lab">Mem</div><div class="val" data-mem>${s.mem}<small>/${s.memMax}MB</small></div>
-        <div class="bar"><i class="active" data-membar style="width:${Math.round(s.mem/s.memMax*100)}%"></i></div></div></div>`;
-  } else if(s.state==='idle'){
-    const pct = Math.max(0, Math.round((1 - s.freezeSec/3600)*100));
-    body = `<div class="freeze">
-      <div class="ring" data-ring style="--p:${pct}"><b data-ringtxt>${Math.round(s.freezeSec/60)}m</b></div>
-      <div class="txt"><div class="t" data-frz>freezes in ${fmtSec(s.freezeSec)}</div>
-      <div class="d">idle ${s.idleMin}m · ${s.cpu}% cpu · holding pod</div></div></div>`;
-  } else {
-    body = `<div class="snap-body">
-      <div class="crystal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M12 2 9.5 4.5M12 2l2.5 2.5M12 22l-2.5-2.5M12 22l2.5-2.5M3.3 7l17.4 10M3.3 7l3.4.9M3.3 7l.9 3.4M20.7 17l-3.4-.9M20.7 17l-.9-3.4M20.7 7 3.3 17M20.7 7l-3.4.9M20.7 7l-.9 3.4M3.3 17l3.4-.9M3.3 17l.9-3.4"/></svg></div>
-      <div class="snap-meta">
-        <div class="row"><span class="k">checkpoint</span><span class="v">${s.checkpoint}</span></div>
-        <div class="row"><span class="k">frozen</span><span class="v">${s.frozenAgo}</span></div>
-        <div class="row"><span class="k">reclaimed</span><span class="v">${s.reclaim}</span></div>
-      </div></div>
-      <div class="snap-hint">${ic('clock',13)} ${s.type==='claude-code'
-        ? 'open to restore the archive and continue the conversation'
-        : 'open to thaw and resume exactly where it froze'}</div>`;
+function buildTimeline(s){
+  if(s.state==='active') return tl([{cls:'done',lab:'created',fillNext:true,time:s.up&&s.up!=='—'?'-'+s.up:''},{cls:'now',lab:'active'},{cls:'',lab:'idle'},{cls:'',lab:'snapshot'}]);
+  if(s.state==='idle') return tl([{cls:'done',lab:'created',fillNext:true},{cls:'done',lab:'active',fillNext:true},{cls:'now',lab:'idle'},{cls:'',lab:'snapshot'}]);
+  return tl([{cls:'done',lab:'created',fillNext:true},{cls:'done',lab:'active',fillNext:true},{cls:'done',lab:'idle',fillNext:true},{cls:'now frozen-now',lab:'snapshot',time:s.frozenAgo}]);
+}
+const termActive = (s)=>[
+  {c:'sys',t:`◆ attached to session/${s.id} · pod/${s.pod} — workloadType=claude-code`},
+  {c:'sys',t:`◆ isolation: dedicated pod — conversation and workspace are private to this session`},
+  {c:'prompt',t:`<span class="op">▸</span> read invoice.go and tell me what the rounding bug is`},
+  {c:'agent',t:`<span class="op">‹agent›</span> Line 88 rounds each line item with math.Round before summing,`},
+  {c:'agent',t:`        so the per-item error accumulates. Sum first, round once at the end.`},
+  {c:'meta',t:`        run 1 exited · output appended → nextOffset=4096`},
+  {c:'sep'},
+  {c:'prompt',t:`<span class="op">▸</span> fix it and leave a marker file so I know you were here`},
+  {c:'agent',t:`<span class="op">‹agent›</span> Edited invoice.go:88 — moved rounding out of the loop.`},
+  {c:'agent',t:`        Created marker.txt in /work.`},
+  {c:'meta',t:`        run 2 exited · same pod, same working dir as run 1`},
+  {c:'sep'},
+  {c:'prompt',t:`<span class="op">▸</span> what did you change, and what's in the working dir now?`},
+  {c:'agent',t:`<span class="op">‹agent›</span> I changed the rounding in invoice.go — the bug from your first message.`},
+  {c:'agent',t:`        /work now holds: invoice.go, marker.txt`},
+  {c:'ok',t:`✓ turn 3 saw turns 1–2 — conversation history persists on the pod between runs`},
+  {c:'meta',t:`  read(offset=${s.cursor.split('=')[1]}) returns only new output · read(offset=0) replays the whole conversation`}
+];
+const termFrozen = (s)=>[
+  {c:'sys',t:`◆ session/${s.id} is frozen — pod reclaimed`},
+  {c:'sys',t:`◆ no CRIU checkpoint — one-shot runs leave no resident process tree to dump`},
+  {c:'sys',t:`◆ archived instead (${s.checkpoint}) · frozen ${s.frozenAgo}`},
+  {c:'meta',t:`  archive contents: working dir (${s.cwd}) · conversation history (${s.turns} turns) · output buffer`},
+  {c:'res',t:`the next prompt restores the archive to a fresh pod → active, then answers with the old context intact`},
+  {c:'meta',t:`  ${s.cursor} stays valid across the freeze — the buffer travels inside the archive`}
+];
+function paintTerm(lines){
+  const term = document.getElementById('ws-term');
+  let n = 0;
+  term.innerHTML = lines.map((l)=>{
+    if(l.c==='sep') return '<div class="turn-sep"></div>';
+    n++;
+    return `<div class="ln ${l.c}"><span class="gut">${String(n).padStart(2,'0')}</span><span>${l.t}</span></div>`;
+  }).join('')
+    + `<div class="ln"><span class="gut">${String(n+1).padStart(2,'0')}</span><span><span class="cursor" style="background:#b79ae0"></span></span></div>`;
+  term.scrollTop = term.scrollHeight;
+}
+function setGauge(cpu, mem, memMax){
+  document.getElementById('ws-cpu-v').textContent = cpu+'%';
+  document.getElementById('ws-cpu-bar').style.width = cpu+'%';
+  document.getElementById('ws-mem-v').textContent = mem+' / '+memMax+' MB';
+  document.getElementById('ws-mem-bar').style.width = Math.round(mem/memMax*100)+'%';
+}
+function metaLine(s){
+  if(s.state==='snapshot'){
+    return `<span class="it">${ic('pod',13)} <b>checkpoint ${s.checkpoint}</b></span>
+      <span class="it">${ic('clock',13)} <b>frozen ${s.frozenAgo}</b></span>
+      <span class="it">${ic('pin',13)} <b>${s.region}</b></span>`;
   }
-  const podLine = s.state==='snapshot'
-    ? `<span class="pod" style="color:#5a7686">${ic('pod',12)} pod reclaimed</span>`
-    : `<span class="pod">${ic('pod',12)} pod/${s.pod}</span>`;
-  return `<button class="card" data-state="${s.state}" onclick="location.href='${href}'" aria-label="${s.name}, ${s.state}">
-    ${s.state==='snapshot'?'<div class="frost"></div><div class="shimmer"></div>':''}
-    <div class="card-head">
-      <div><div class="c-name">${s.name}</div><div class="c-id">session/${s.id}</div></div>
-      <span class="badge ${s.state}"><span class="led"></span>${STATE_LABEL[s.state]}</span>
-    </div>
-    ${body}
-    <div class="card-foot">${podLine}<span style="margin-left:auto">${typeTag(s)}</span></div>
-  </button>`;
+  return `<span class="it">${ic('pod',13)} <b>pod/${s.pod}</b></span>
+      <span class="it">${ic('clock',13)} up <b>${s.up}</b></span>
+      <span class="it">${ic('pin',13)} <b>${s.region}</b></span>`;
 }
-function renderGrid(){ grid.innerHTML = sessions.map(cardHTML).join(''); }
-function startGridTick(){
+function populate(s){
+  cur = s;
+  clearRestore();
+  document.getElementById('ws-crumb-id').textContent = 'session/'+s.id;
+  document.getElementById('ws-name').textContent = s.name;
+  document.getElementById('ws-console-pod').textContent = s.state==='snapshot' ? 'pod reclaimed' : 'pod/'+s.pod;
+  document.getElementById('ws-badge').className = 'badge '+s.state;
+  document.getElementById('ws-badge-t').textContent = STATE_LABEL[s.state];
+  document.getElementById('ws-meta').innerHTML = metaLine(s);
+  document.getElementById('ws-timeline').outerHTML = buildTimeline(s).replace('class="timeline"','class="timeline" id="ws-timeline"');
+  const lcState = document.getElementById('ws-lc-state');
+  const freezeBtn = document.getElementById('ws-freeze-btn');
+  if(s.state==='snapshot'){
+    lcState.classList.add('frozen');
+    document.getElementById('ws-lc-big').textContent='snapshot';
+    document.getElementById('ws-lc-sub').textContent='pod reclaimed · archive on cold storage';
+    document.getElementById('ws-lc-idle').textContent='frozen';
+    document.getElementById('ws-lc-up').textContent='—';
+    freezeBtn.style.display='none';
+  } else {
+    lcState.classList.remove('frozen');
+    document.getElementById('ws-lc-big').textContent=s.state;
+    document.getElementById('ws-lc-sub').textContent=s.state==='idle'?'no runs — pod still held':'ready on dedicated pod';
+    document.getElementById('ws-lc-idle').textContent=s.state==='idle'?`${s.idleMin}:00 / 60:00`:'00:00 / 60:00';
+    document.getElementById('ws-lc-up').textContent=s.up;
+    freezeBtn.style.display='';
+  }
+  document.getElementById('ws-console-model').textContent = 'model=' + s.model;
+  document.getElementById('ws-model-v').textContent = s.model;
+  paintContext(s);
+  const vit = document.getElementById('ws-vitals');
+  const tag = document.getElementById('ws-console-tag');
+  const queued = document.getElementById('ws-queued');
+  if(s.state==='active'){
+    vit.style.display=''; setGauge(s.cpu,s.mem,s.memMax);
+    tag.style.display=''; tag.innerHTML='<span class="led"></span>agent ready';
+    queued.classList.remove('on');
+    paintTerm(termActive(s));
+  } else if(s.state==='idle'){
+    vit.style.display=''; setGauge(s.cpu,s.mem,s.memMax);
+    tag.style.display=''; tag.innerHTML='<span class="led" style="background:var(--idle);box-shadow:none"></span>no runs — pod held';
+    queued.classList.remove('on');
+    paintTerm(termActive(s));
+  } else {
+    vit.style.display='none'; tag.style.display='none';
+    queued.classList.remove('on');
+    paintTerm(termFrozen(s));
+  }
+}
+// J6-S4 · 대화 문맥 패널 (AC-E4)
+function paintContext(s){
+  const turns = [
+    {n:'1', t:'read invoice.go and tell me what the rounding bug is'},
+    {n:'2', t:'fix it and leave a marker file so I know you were here'},
+    {n:'3', t:"what did you change, and what's in the working dir now?"}
+  ];
+  const shown = s.turns > turns.length
+    ? [{n:'…', t:`${s.turns - turns.length} earlier turns kept on the pod`}].concat(turns)
+    : turns.slice(0, s.turns);
+  document.getElementById('ws-ctx-turns').innerHTML =
+    shown.map(t=>`<div class="ctx-turn"><span class="n">${t.n}</span><span class="t">${t.t}</span></div>`).join('');
+  document.getElementById('ws-ctx-cwd').textContent = s.cwd;
+  document.getElementById('ws-ctx-files').textContent = s.files;
+  document.getElementById('ws-ctx-cursor').textContent = s.cursor;
+}
+function clearRestore(){
+  restoreTimers.forEach(t=>clearTimeout(t)); restoreTimers=[];
+  const ov=document.getElementById('ws-restore'); ov.className='restore';
+  document.getElementById('ws-pbar').style.width='0';
+  document.getElementById('ws-rlog').textContent='';
+}
+function runRestore(s){
+  const ov=document.getElementById('ws-restore');
+  const pbar=document.getElementById('ws-pbar');
+  const rlog=document.getElementById('ws-rlog');
+  ov.classList.add('show');
+  const logs=['fetching archive '+s.checkpoint+' …','scheduling fresh pod …','unpacking working dir · conversation history · output buffer …','archive verified — resuming'];
+  const reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const dur=reduce?0:2400; let step=0;
+  const tick=()=>{rlog.textContent=logs[Math.min(step,logs.length-1)];step++;}; tick();
+  restoreTimers.push(setTimeout(tick,dur*0.25));
+  restoreTimers.push(setTimeout(tick,dur*0.55));
+  restoreTimers.push(setTimeout(tick,dur*0.85));
+  requestAnimationFrame(()=>{pbar.style.transition=`width ${dur}ms cubic-bezier(.4,.1,.2,1)`; pbar.style.width='100%';});
+  restoreTimers.push(setTimeout(()=>{
+    ov.classList.add('clearing'); promote(s);
+    restoreTimers.push(setTimeout(()=>{ov.className='restore';}, reduce?10:980));
+  }, dur+(reduce?10:250)));
+}
+function promote(s){
+  s.state='active';
+  s.pod='sess-'+s.id+'-'+Math.random().toString(36).slice(2,6);
+  s.up='0m'; s.upMin=0; s.idleMin=0;
+  s.cpu=22+Math.floor(Math.random()*20);
+  s.mem=280+Math.floor(Math.random()*180); s.memMax=2048;
+  document.getElementById('ws-console-pod').textContent='pod/'+s.pod;
+  document.getElementById('ws-badge').className='badge active';
+  document.getElementById('ws-badge-t').textContent='active';
+  document.getElementById('ws-meta').innerHTML = `<span class="it">${ic('pod',13)} <b>pod/${s.pod}</b></span>
+    <span class="it">${ic('clock',13)} up <b>just now</b></span>
+    <span class="it">${ic('pin',13)} <b>${s.region}</b></span>`;
+  document.getElementById('ws-timeline').outerHTML = buildTimeline(s).replace('class="timeline"','class="timeline" id="ws-timeline"');
+  document.getElementById('ws-lc-state').classList.remove('frozen');
+  document.getElementById('ws-lc-big').textContent='active';
+  document.getElementById('ws-lc-sub').textContent='restored — running on new pod';
+  document.getElementById('ws-lc-idle').textContent='00:00 / 60:00';
+  document.getElementById('ws-lc-up').textContent='0m';
+  document.getElementById('ws-freeze-btn').style.display='';
+  document.getElementById('ws-vitals').style.display='';
+  setGauge(s.cpu,s.mem,s.memMax);
+  const tag=document.getElementById('ws-console-tag'); tag.style.display=''; tag.innerHTML='<span class="led"></span>agent ready';
+  document.getElementById('ws-console-model').textContent = 'model=' + s.model;
+  paintContext(s);
+  paintTerm([
+    {c:'ok',t:`\u2713 restored from archive \u2014 conversation history and working dir intact`},
+    {c:'sys',t:`\u25c6 session/${s.id} \u00b7 pod/${s.pod} \u2014 workloadType=claude-code`},
+    {c:'prompt',t:`<span class="op">\u25b8</span> remind me what we decided about the rounding`},
+    {c:'agent',t:`<span class="op">\u2039agent\u203a</span> We moved rounding out of the per-item loop in invoice.go so the`},
+    {c:'agent',t:`        error stops accumulating \u2014 same thing you asked about before the pause.`},
+    {c:'meta',t:`  answered from pre-freeze context \u00b7 ${s.cursor} still valid`}
+  ]);
+  toast('Session resumed — the conversation picked up where it froze','frozen');
+}
+function freezeNow(){
+  toast('Session archived — pod reclaimed','ok');
+  setTimeout(()=>location.href='index.html', 950);
+}
+function startWsTick(){
   setInterval(()=>{
     if(window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    document.querySelectorAll('#grid .card[data-state="active"]').forEach((card,idx)=>{
-      const s = sessions.filter(x=>x.state==='active')[idx]; if(!s) return;
-      s.cpu = Math.max(4, Math.min(96, s.cpu + (Math.random()*8-4)|0));
-      const cv=card.querySelector('[data-cpu]'), cb=card.querySelector('[data-cpubar]');
-      if(cv){cv.innerHTML=`${s.cpu}<small>%</small>`; cb.style.width=s.cpu+'%';}
-    });
-    document.querySelectorAll('#grid .card[data-state="idle"]').forEach((card,idx)=>{
-      const s = sessions.filter(x=>x.state==='idle')[idx]; if(!s) return;
-      s.freezeSec = Math.max(0, s.freezeSec-1);
-      const frz=card.querySelector('[data-frz]'); if(frz) frz.textContent='freezes in '+fmtSec(s.freezeSec);
-      const ring=card.querySelector('[data-ring]'); if(ring) ring.style.setProperty('--p', Math.max(0,Math.round((1-s.freezeSec/3600)*100)));
-    });
+    if(cur && cur.state==='active'){
+      cur.cpu = Math.max(4, Math.min(96, cur.cpu + (Math.random()*6-3)|0));
+      const v=document.getElementById('ws-cpu-v');
+      if(v){ v.textContent=cur.cpu+'%'; document.getElementById('ws-cpu-bar').style.width=cur.cpu+'%'; }
+    }
   },1000);
 }
 
-renderSummary(); renderGrid(); startGridTick();
+(function(){
+  let s = sessions.find(x=>x.id===qid());
+  if(!s) s = sessions.find(x=>x.state==='active');
+  populate(s); startWsTick();
+  // J6-S5 데모: snapshot 세션으로 들어오면 아카이브 복원을 재생한다
+  if(s.state==='snapshot'){ setTimeout(()=>runRestore(s), 700); }
+})();
+
 </script>
 </body>
 </html>
