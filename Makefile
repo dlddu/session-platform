@@ -13,7 +13,7 @@ ENVTEST_K8S_VERSION ?= 1.30.0
 
 .DEFAULT_GOAL := build
 
-.PHONY: build web embed control-plane run dev test test-unit test-integration test-envtest lint fmt docker docker-data-plane clean tidy e2e-up e2e-down e2e-api e2e-web e2e
+.PHONY: build web embed control-plane run dev test test-unit test-integration test-envtest lint check-fidelity fmt docker docker-data-plane clean tidy e2e-up e2e-down e2e-api e2e-web e2e
 
 ## build: web -> embed -> control-plane binary
 build: control-plane
@@ -92,8 +92,14 @@ e2e-web:
 ## e2e: run both e2e suites against an already-up SUT (api then web).
 e2e: e2e-api e2e-web
 
-## lint: go vet + gofmt check (both Go modules) + web typecheck
-lint:
+## check-fidelity: e2e 충실도 허용목록(docs/test/e2e.md) <-> 코드 seam 양방향 1:1 검사.
+## 등재되지 않은 치환(게이트 no-op 분기 / test 전용 트리거 / web 네트워크 인터셉트)과
+## 코드에 없는 고아 등재를 모두 막는다. python3 표준 라이브러리만 쓴다.
+check-fidelity:
+	python3 scripts/check-fidelity-allowlist.py
+
+## lint: go vet + gofmt check (both Go modules) + web typecheck + 충실도 허용목록
+lint: check-fidelity
 	cd $(CP_DIR) && go vet ./... && test -z "$$(gofmt -l . | tee /dev/stderr)"
 	cd $(DP_DIR) && go vet ./... && test -z "$$(gofmt -l . | tee /dev/stderr)"
 	cd $(WEB_DIR) && (test -d node_modules || npm install) && npm run lint

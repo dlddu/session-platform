@@ -52,6 +52,13 @@ patches:
   # shared by both replicas (CHECKPOINT_S3_ENDPOINT → the in-cluster MinIO,
   # authenticated with the static keys from the checkpoint-s3 Secret since no
   # role is set here).
+  #
+  # 아래 patch에 이 오버레이의 충실도 seam 두 지점이 들어 있다:
+  # mock-exception: CRIU-GATE — env/2 replace가 base의 off를 on으로 올린다. 프로덕션 base는
+  #   검증된 런타임 전까지 off가 의도된 동작이고, e2e만 실 CRIU 경로를 타게 하는 지점이다.
+  # mock-exception: SNAPSHOT-TRIG — E2E_TEST_ENDPOINTS 주입. 운영 트리거(IdleReaper, AC-B1)는
+  #   실재하며, 이 주입은 그 유휴 창을 실시간으로 기다리지 않게 할 뿐이다.
+  # 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
   - target:
       kind: Deployment
       name: control-plane

@@ -153,6 +153,7 @@ func TestDeferred_RealPodReclaimed(t *testing.T) {
 
 	// Freeze it. The trigger is test-only (the product policy is IdleReaper's idle
 	// window); a SUT without it just means this assertion is not runnable here.
+	// mock-exception: SNAPSHOT-TRIG — 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
 	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+s.ID+"/snapshot", nil)
 	if resp.StatusCode == http.StatusNotFound {
 		t.Skip("SUT has no snapshot trigger (E2E_TEST_ENDPOINTS off) — Pod reclaim not exercisable here")
@@ -252,6 +253,7 @@ func TestDeferred_CRIUIntegrity(t *testing.T) {
 
 	// Freeze. The endpoint is test-only (the product trigger policy is open), so
 	// a SUT without it just means this assertion is not runnable here.
+	// mock-exception: SNAPSHOT-TRIG — 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
 	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+s.ID+"/snapshot", nil)
 	if resp.StatusCode == http.StatusNotFound {
 		t.Skip("SUT has no snapshot trigger (E2E_TEST_ENDPOINTS off) — CRIU round trip not exercisable here; see docs/criu-verification.md")

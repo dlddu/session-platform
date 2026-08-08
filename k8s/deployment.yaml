@@ -39,6 +39,9 @@ spec:
             # image by .github/workflows/docker-build-push.yaml.
             - name: DATA_PLANE_IMAGE
               value: "ghcr.io/dlddu/session-platform-data-plane:latest"
+            # mock-exception: CRIU-GATE — 검증된 런타임이 설 때까지 off가 프로덕션의 의도된
+            # 동작이다(그 경로에서 동결/복원은 no-op 스텁). e2e 오버레이(deploy/)만 on으로
+            # 올려 실 경로를 탄다. 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
             - name: CRIU_ENABLED
               value: "false" # gated off until a verified runtime exists
             # Checkpoint archive S3 store config (decision ③, docs/criu-verification.md):

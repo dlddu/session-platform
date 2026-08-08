@@ -7,6 +7,19 @@ on:
   workflow_dispatch:
 
 jobs:
+  fidelity:
+    name: e2e fidelity allowlist (docs <-> code seams)
+    runs-on: ubuntu-latest
+    # Enforces docs/test/e2e.md's fidelity allowlist against the code: every
+    # fidelity seam in the e2e SUT path must be registered (or explicitly
+    # accounted for as a non-seam), every registration must exist in code, and
+    # web e2e must keep zero network intercepts. Needs no toolchain — the
+    # checker is python3 stdlib only — so it stays the cheapest job here.
+    steps:
+      - uses: actions/checkout@v4
+      - name: fidelity allowlist check
+        run: python3 scripts/check-fidelity-allowlist.py
+
   control-plane:
     name: control-plane (lint + unit)
     runs-on: ubuntu-latest

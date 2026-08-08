@@ -46,6 +46,9 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/sessions/{id}/write", a.writeSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/switch", a.switchSession)
 
+	// mock-exception: SNAPSHOT-TRIG — 동결에 이르는 제품 경로가 reaper의 유휴 창뿐이라 HTTP로
+	// 결정적으로 도달할 수단이 없다. 이 스위치가 켜진 SUT에서만 등록되며, 배포는 끄고 쓴다.
+	// 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
 	if a.testEndpoints {
 		// Test-only: freeze a session on demand (AC-B1's effect without its
 		// trigger). The product's idle->snapshot *trigger policy* is still an

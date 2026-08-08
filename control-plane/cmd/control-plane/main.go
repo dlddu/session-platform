@@ -71,6 +71,10 @@ func main() {
 	// CHECKPOINT_S3_ROLE_ARN over the node instance profile. The archive is
 	// produced inside a pod that is about to be reclaimed, so a durable store is
 	// required. off → the no-op stub so the happy path runs without CRIU.
+	// mock-exception: CRIU-GATE — 검증된 런타임이 설 때까지 게이트 off가 프로덕션의 의도된
+	// 동작이고, 그 경로에서 동결은 이 no-op 스텁이다. e2e는 deploy/ 오버레이가 게이트를 on으로
+	// 올려 실 경로(agent-driven in-pod checkpoint + S3 아카이브)를 탄다.
+	// 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
 	var ckpt criu.Checkpointer = criu.NewStubCheckpointer(false)
 	if cfg.criuEnabled {
 		cstore, err := buildCheckpointStore(cfg)
@@ -99,6 +103,10 @@ func main() {
 		logger.Warn("E2E_TEST_ENDPOINTS is on; test-only endpoints are exposed")
 	}
 	mux := http.NewServeMux()
+	// mock-exception: SNAPSHOT-TRIG — 운영 트리거는 위의 IdleReaper이며(AC-B1), 이 스위치는
+	// 그 유휴 창(session.MaxIdle)을 실시간으로 기다리지 않고 e2e가 동결을 결정적으로 유발하게
+	// 할 뿐이다. 배포에서는 꺼져 있다.
+	// 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
 	api.New(mgr, api.WithTestEndpoints(cfg.testEndpoints)).Routes(mux)
 	mux.Handle("/", static.Handler())
 
