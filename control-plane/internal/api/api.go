@@ -62,6 +62,10 @@ func (a *API) Routes(mux *http.ServeMux) {
 
 type createReq struct {
 	Name string `json:"name"`
+	// WorkloadType selects the data plane workload (AC-E1). Omitted (or empty)
+	// means "shell", so a request written before the type axis existed behaves
+	// exactly as it did; an unknown value is a 400.
+	WorkloadType session.WorkloadType `json:"workloadType"`
 }
 
 type writeReq struct {
@@ -102,7 +106,7 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, session.ErrInvalidInput)
 		return
 	}
-	sess, err := a.mgr.Create(r.Context(), session.CreateRequest{Name: req.Name})
+	sess, err := a.mgr.Create(r.Context(), session.CreateRequest{Name: req.Name, WorkloadType: req.WorkloadType})
 	if err != nil {
 		writeErr(w, err)
 		return

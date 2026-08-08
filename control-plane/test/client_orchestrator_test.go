@@ -27,6 +27,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
+	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
 const testNS = "sessions"
@@ -72,7 +73,7 @@ func listPods(t *testing.T, cs *fake.Clientset) []corev1.Pod {
 // namespace, labelled 1:1 to the session.
 func TestClientOrchestrator_StartCreatesOnePodWithLabel(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t)
-	ref, err := orch.Start(context.Background(), "a1b2")
+	ref, err := orch.Start(context.Background(), "a1b2", session.WorkloadTypeShell)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -104,7 +105,7 @@ func TestClientOrchestrator_NSessionsNUniquePods(t *testing.T) {
 	ids := []string{"aa01", "bb02", "cc03", "dd04"}
 	names := map[string]bool{}
 	for _, id := range ids {
-		ref, err := orch.Start(context.Background(), id)
+		ref, err := orch.Start(context.Background(), id, session.WorkloadTypeShell)
 		if err != nil {
 			t.Fatalf("start %s: %v", id, err)
 		}
@@ -131,7 +132,7 @@ func TestClientOrchestrator_NSessionsNUniquePods(t *testing.T) {
 // by the kind e2e suite.
 func TestClientOrchestrator_PodSpecRunsShellAgent(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t)
-	if _, err := orch.Start(context.Background(), "d1a1"); err != nil {
+	if _, err := orch.Start(context.Background(), "d1a1", session.WorkloadTypeShell); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	pods := listPods(t, cs)
@@ -193,7 +194,7 @@ func TestClientOrchestrator_PullPolicyByImageTag(t *testing.T) {
 	}
 	for _, tc := range cases {
 		orch, cs := newReadyOrchestrator(t, k8s.WithImage(tc.image))
-		if _, err := orch.Start(context.Background(), "img1"); err != nil {
+		if _, err := orch.Start(context.Background(), "img1", session.WorkloadTypeShell); err != nil {
 			t.Fatalf("start (%s): %v", tc.image, err)
 		}
 		got := listPods(t, cs)[0].Spec.Containers[0].ImagePullPolicy
@@ -207,7 +208,7 @@ func TestClientOrchestrator_PullPolicyByImageTag(t *testing.T) {
 // the agent launches the configured shell instead of /bin/bash.
 func TestClientOrchestrator_PodSpecPropagatesShellOverride(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t, k8s.WithShell("/bin/zsh"))
-	if _, err := orch.Start(context.Background(), "d1b2"); err != nil {
+	if _, err := orch.Start(context.Background(), "d1b2", session.WorkloadTypeShell); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	c := listPods(t, cs)[0].Spec.Containers[0]
@@ -232,7 +233,7 @@ func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t)
 	const ref = "/var/lib/kubelet/checkpoints/checkpoint-sess-r1a2_sessions-session-1.tar"
 
-	restored, err := orch.RestoreInto(context.Background(), "r1a2", ref)
+	restored, err := orch.RestoreInto(context.Background(), "r1a2", ref, session.WorkloadTypeShell)
 	if err != nil {
 		t.Fatalf("restore into: %v", err)
 	}
@@ -282,7 +283,7 @@ func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 		t.Fatalf("restore pod name=%q, want the session's deterministic prefix + restore suffix", restored.Name)
 	}
 	// Two restores of the same session never collide either.
-	again, err := orch.RestoreInto(context.Background(), "r1a2", ref)
+	again, err := orch.RestoreInto(context.Background(), "r1a2", ref, session.WorkloadTypeShell)
 	if err != nil {
 		t.Fatalf("second restore into: %v", err)
 	}
@@ -292,7 +293,7 @@ func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 
 	// Start, by contrast, provisions a fresh pod with no restore marker — the
 	// branch that boots a brand-new empty shell.
-	if _, err := orch.Start(context.Background(), "f9b8"); err != nil {
+	if _, err := orch.Start(context.Background(), "f9b8", session.WorkloadTypeShell); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	for _, fp := range listPods(t, cs) {
@@ -313,7 +314,7 @@ func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 func TestClientOrchestrator_CheckpointPrivilegeGated(t *testing.T) {
 	// Gate on: privileged container.
 	orchOn, cs := newReadyOrchestrator(t, k8s.WithCheckpointPrivileged(true))
-	if _, err := orchOn.Start(context.Background(), "capon"); err != nil {
+	if _, err := orchOn.Start(context.Background(), "capon", session.WorkloadTypeShell); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	sc := listPods(t, cs)[0].Spec.Containers[0].SecurityContext
@@ -323,7 +324,7 @@ func TestClientOrchestrator_CheckpointPrivilegeGated(t *testing.T) {
 
 	// Gate off (default): no securityContext — pods stay unprivileged.
 	orchOff, csOff := newReadyOrchestrator(t)
-	if _, err := orchOff.Start(context.Background(), "capoff"); err != nil {
+	if _, err := orchOff.Start(context.Background(), "capoff", session.WorkloadTypeShell); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	if sc := listPods(t, csOff)[0].Spec.Containers[0].SecurityContext; sc != nil {
@@ -335,7 +336,7 @@ func TestClientOrchestrator_CheckpointPrivilegeGated(t *testing.T) {
 // dial the session agent without re-fetching the pod.
 func TestClientOrchestrator_StartRecordsPodIP(t *testing.T) {
 	orch, _ := newReadyOrchestrator(t)
-	ref, err := orch.Start(context.Background(), "d1c3")
+	ref, err := orch.Start(context.Background(), "d1c3", session.WorkloadTypeShell)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -409,7 +410,7 @@ func TestClientOrchestrator_ReachOpensAttachStream(t *testing.T) {
 // Scenario 3 (AC-A3): Stop deletes the pod and is idempotent.
 func TestClientOrchestrator_StopDeletesPodIdempotently(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t)
-	ref, err := orch.Start(context.Background(), "ee05")
+	ref, err := orch.Start(context.Background(), "ee05", session.WorkloadTypeShell)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}

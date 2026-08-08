@@ -5,6 +5,10 @@ import "context"
 // CreateRequest is the input to Manager.Create.
 type CreateRequest struct {
 	Name string
+	// WorkloadType selects the data plane workload (AC-E1). Empty means
+	// unspecified and creates a shell session; an unknown value is rejected
+	// with ErrInvalidInput (the API maps that to 400).
+	WorkloadType WorkloadType
 }
 
 // ReadResult is the state-branched result of a Read (AC-C2).
@@ -32,7 +36,8 @@ type WriteResult struct {
 // "SessionManager" of the design docs.
 //
 // AC mapping:
-//   - Create    → AC-A1, AC-A2 (provision one dedicated pod, go active).
+//   - Create    → AC-A1, AC-A2 (provision one dedicated pod, go active),
+//     AC-E1 (workload type selection: default shell, immutable afterwards).
 //   - Get/List  → V5 (single source of truth for session state).
 //   - Read      → AC-C2 (state-branched read), AC-D3 (shell output delta
 //     after offset, nextOffset cursor, non-consuming).

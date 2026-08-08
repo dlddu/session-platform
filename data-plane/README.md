@@ -4,14 +4,24 @@ The data plane is where actual session workloads run — one dedicated pod per
 session (AC-A2). The control plane provisions and reclaims these pods via the
 `PodOrchestrator` port.
 
-## Status: shell agent built (J5-S1) · payload semantics pending (J5-S2/S3)
+## Status: shell agent built (J5-S1) · claude-code workload not built here yet (AC-E1~E6)
 
 The concrete "session workload" runtime is **defined and running**: a session is
 an **interactive shell** (default `/bin/bash`) attached to a PTY, running inside
-the session's dedicated pod. See `../docs/prd/shell-workload.md` (AC-D1~D5); a second workload type
-(Claude Code CLI) is specified in `../docs/prd/claude-code-workload.md`
-(AC-E1~E6) but not yet implemented here. Read/write map onto the shell: write = stdin
-input, read = accumulated stdout/stderr output.
+the session's dedicated pod. See `../docs/prd/shell-workload.md` (AC-D1~D5).
+Read/write map onto the shell: write = stdin input, read = accumulated
+stdout/stderr output.
+
+A second workload type (Claude Code CLI) is specified in
+`../docs/prd/claude-code-workload.md` (AC-E1~E6). Its **control plane half is
+wired**: a session carries an immutable `workloadType` (`shell` default /
+`claude-code`, AC-E1), and the orchestrator provisions a type-specific pod —
+per-type image, a `DATA_PLANE_WORKLOAD` env var and a
+`session-platform.dev/workload-type` label. **The data plane half is not built
+here yet**: there is no image with the Claude Code CLI in it and no agent mode
+that runs prompts (AC-E2~E6). Until `DATA_PLANE_CLAUDE_CODE_IMAGE` names such an
+image, creating a `claude-code` session fails with "no data plane image
+configured for workload type" rather than silently getting a shell pod.
 
 This directory holds the **session agent** (`cmd/agent`) and its image
 (`Dockerfile`, ubuntu + static Go binary). The image's ENTRYPOINT owns the

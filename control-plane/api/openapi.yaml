@@ -7,10 +7,14 @@ info:
     session maps 1:1 to a dedicated data plane pod (AC-A2). Non-active access is
     uniform "ensure active then serve": read, write and switch promote
     idle->active (AC-C1) or restore snapshot->active (AC-B2) before serving.
-    Read and write map onto the session's PTY shell: write injects the payload
-    into the shell's stdin (AC-D2) and read returns the shell output
-    accumulated after an offset cursor, with offset=0 returning the full
-    scrollback (AC-D3).
+    A session picks a workload type at creation (AC-E1): `shell` (the default)
+    or `claude-code`. The type is immutable for the session's lifetime — no
+    endpoint changes it, and a restore keeps it — so switching workloads means
+    creating a new session. Read and write map onto the `shell` type's PTY
+    shell: write injects the payload into the shell's stdin (AC-D2) and read
+    returns the shell output accumulated after an offset cursor, with offset=0
+    returning the full scrollback (AC-D3). The `claude-code` type's own
+    read/write semantics (AC-E2/E3) are specified but not yet implemented.
 servers:
   - url: /api/v1
 paths:
@@ -155,6 +159,15 @@ components:
     State:
       type: string
       enum: [active, idle, snapshot]
+    WorkloadType:
+      type: string
+      enum: [shell, claude-code]
+      default: shell
+      description: >
+        Which data plane workload the session runs (AC-E1). Fixed at creation
+        and immutable afterwards. `shell` is an interactive PTY shell
+        (AC-D1~D5); `claude-code` is the Claude Code CLI workload (AC-E2~E6),
+        which requires the control plane to have an image configured for it.
     Checkpoint:
       type: object
       properties:
@@ -164,10 +177,11 @@ components:
         reclaimed: { type: string }
     Session:
       type: object
-      required: [id, name, state, createdAt, lastAccess]
+      required: [id, name, state, workloadType, createdAt, lastAccess]
       properties:
         id: { type: string }
         name: { type: string }
+        workloadType: { $ref: "#/components/schemas/WorkloadType" }
         state: { $ref: "#/components/schemas/State" }
         pod: { type: string }
         createdAt: { type: string, format: date-time }
@@ -178,6 +192,13 @@ components:
       required: [name]
       properties:
         name: { type: string }
+        workloadType:
+          allOf:
+            - $ref: "#/components/schemas/WorkloadType"
+          description: >
+            Optional. Omitted means `shell`, so a request that predates the
+            workload type axis behaves unchanged. A value outside the enum is
+            rejected with 400 before any pod is provisioned.
     WriteRequest:
       type: object
       properties:
