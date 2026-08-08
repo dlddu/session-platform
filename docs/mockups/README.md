@@ -1,5 +1,7 @@
 # Session Pod Platform — Mockup 인덱스
 
+브라우저 미리보기: <https://dlddu.github.io/session-platform/>
+
 > 이 문서는 `가치 → 사용자 여정 → mockup ↔ 디자인 시스템` 사슬에서
 > **mockup ↔ (여정 단계 · 가치 · 디자인 시스템)** 연결의 **단일 진실 원천**입니다.
 > 상위 상태 추적은 [`../doc-structure-state.md`](../doc-structure-state.md),
