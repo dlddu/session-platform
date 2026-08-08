@@ -12,11 +12,11 @@
 ### AC-A1: Control plane / data plane 분리
 - **설명**: 시스템은 control plane API server와 data plane pod로 분리된다. Control plane은 세션 생성·조회·전환·스냅샷·복원 요청을 수신·오케스트레이션하고, 실제 세션 워크로드는 data plane pod에서만 수행된다. Control plane은 세션 자체 연산을 직접 수행하지 않는다.
 - **달성 가치**: V1, V5
-- **구체화**: "실제 세션 워크로드"의 정체는 인터랙티브 쉘로 확정됨 → AC-D1 (`shell-workload.md`)
+- **구체화**: "실제 세션 워크로드"는 **워크로드 타입별로 분기**한다 → 타입 선택은 AC-E1, `shell` 타입은 AC-D1 (`shell-workload.md`), `claude-code` 타입은 AC-E2~E6 (`claude-code-workload.md`)
 - **검증 방법**: control plane에 세션 생성 요청 시 별도 data plane pod가 기동되며, control plane 프로세스 내부에서는 세션 워크로드가 실행되지 않음을 확인한다.
 
 ### AC-A2: 세션당 전용 Pod
-- **설명**: 각 세션은 정확히 하나의 전용 data plane pod에 매핑된다(1:1). 서로 다른 세션은 동일 pod를 공유하지 않는다.
+- **설명**: 각 세션은 정확히 하나의 전용 data plane pod에 매핑된다(1:1). 서로 다른 세션은 동일 pod를 공유하지 않는다. 워크로드 타입(AC-E1)이 달라도 이 매핑은 동일하다 — 타입은 pod 안에서 무엇이 도는지만 바꾼다.
 - **달성 가치**: V1
 - **검증 방법**: N개의 세션을 생성하면 N개의 고유 pod가 존재하고 세션-pod 매핑이 1:1임을 확인한다. 한 세션 pod의 강제 종료가 다른 세션에 영향을 주지 않음을 확인한다.
 

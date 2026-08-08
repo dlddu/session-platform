@@ -1,31 +1,35 @@
 # Session Pod Platform 문서 체계 상태 추적
 
 ## 현재 상태 요약
-- 정의된 가치: **6개** (V1~V6) — V6에서 "세션 = 인터랙티브 쉘" 확정
-- PRD: **4개** (아키텍처/라이프사이클/상태·API/쉘 워크로드)
-- Acceptance Criteria: **15개** (가치 연결됨: 15개 / 미연결: 0개)
-- 테스트 문서: **4개** (AC 커버됨: 15개 / 미커버: 0개)
-- **건강 상태**: ⚠️ **위험 있음** — 모든 가치의 소유자가 미지정(고아 가치 6개). 구조적 연결(가치→PRD→AC→테스트)은 완전.
+- 정의된 가치: **7개** (V1~V7) — V6=쉘 워크로드 타입, V7=클로드 코드 CLI 워크로드 타입
+- PRD: **5개** (아키텍처/라이프사이클/상태·API/쉘 워크로드/클로드코드 워크로드)
+- Acceptance Criteria: **21개** (가치 연결됨: 21개 / 미연결: 0개)
+- 테스트 문서: **5개** (AC 커버됨: 21개 / 미커버: 0개)
+- **건강 상태**: ⚠️ **위험 있음** — 모든 가치의 소유자가 미지정(고아 가치 7개). 구조적 연결(가치→PRD→AC→테스트)은 완전.
 
 ## 연결 매트릭스
 
 | 가치 | PRD | AC | 테스트 | 상태 |
 |------|-----|-----|--------|------|
-| V1: 세션 격리 | PRD-아키텍처, PRD-쉘워크로드 | AC-A1, AC-A2, AC-D1 | T-아키텍처, T-쉘워크로드 | ✅ 완전 |
-| V2: 유휴 자원 회수 | PRD-아키텍처, PRD-라이프사이클, PRD-쉘워크로드 | AC-A3, AC-B1, AC-D5 | T-아키텍처, T-라이프사이클, T-쉘워크로드 | ✅ 완전 |
-| V3: 끊김 없는 연속성 | PRD-라이프사이클, PRD-상태·API, PRD-쉘워크로드 | AC-B2, AC-B3, AC-C2, AC-C3, AC-D4 | T-라이프사이클, T-상태·API, T-쉘워크로드 | ✅ 완전 |
+| V1: 세션 격리 | PRD-아키텍처, PRD-쉘워크로드, PRD-클로드코드 | AC-A1, AC-A2, AC-D1, AC-E1, AC-E6 | T-아키텍처, T-쉘워크로드, T-클로드코드 | ✅ 완전 |
+| V2: 유휴 자원 회수 | PRD-아키텍처, PRD-라이프사이클, PRD-쉘워크로드, PRD-클로드코드 | AC-A3, AC-B1, AC-D5, AC-E5 | T-아키텍처, T-라이프사이클, T-쉘워크로드, T-클로드코드 | ✅ 완전 |
+| V3: 끊김 없는 연속성 | PRD-라이프사이클, PRD-상태·API, PRD-쉘워크로드, PRD-클로드코드 | AC-B2, AC-B3, AC-C2, AC-C3, AC-D4, AC-E4, AC-E5 | T-라이프사이클, T-상태·API, T-쉘워크로드, T-클로드코드 | ✅ 완전 |
 | V4: 자유로운 멀티세션 전환 | PRD-상태·API | AC-C2, AC-C4 | T-상태·API | ✅ 완전 |
 | V5: 일관된 세션 상태 | PRD-아키텍처, PRD-상태·API | AC-A1, AC-C1, AC-C3 | T-아키텍처, T-상태·API | ✅ 완전 |
-| V6: 인터랙티브 쉘 세션 | PRD-쉘워크로드 | AC-D1, AC-D2, AC-D3, AC-D4, AC-D5 | T-쉘워크로드 | ✅ 완전 |
+| V6: 인터랙티브 쉘 세션 (타입 `shell`) | PRD-쉘워크로드 | AC-D1, AC-D2, AC-D3, AC-D4, AC-D5 | T-쉘워크로드 | ✅ 완전 |
+| V7: 에이전트 세션 — 클로드 코드 CLI (타입 `claude-code`) | PRD-클로드코드 | AC-E1, AC-E2, AC-E3, AC-E4, AC-E5, AC-E6 | T-클로드코드 | ✅ 완전 |
 
 > 가치 → PRD → AC → 테스트의 모든 연결은 이어져 있음. 끊어진 화살표는 소유자 부재(아래) 하나뿐.
-> PRD-쉘워크로드의 AC-D1~D5는 신규 메커니즘이 아니라 기존 AC의 **구체화 연결**을 함께 가진다:
-> AC-D1→AC-A1, AC-D2→AC-C3, AC-D3→AC-C2, AC-D4→AC-B3, AC-D5→AC-B1.
+> PRD-쉘워크로드의 AC-D1~D5, PRD-클로드코드의 AC-E2~E6은 신규 상위 메커니즘이 아니라 기존 AC의
+> **타입별 구체화 연결**을 함께 가진다:
+> `shell` — AC-D1→AC-A1, AC-D2→AC-C3, AC-D3→AC-C2, AC-D4→AC-B3, AC-D5→AC-B1
+> `claude-code` — AC-E2→AC-C3, AC-E3→AC-C2, AC-E5→AC-B1·B2·B3
+> AC-E1(타입 선택)만은 구체화가 아니라 **새 축**이다: AC-A1의 "실제 세션 워크로드"가 단수에서 타입 분기로 바뀐다.
 
 ## 위험 진단
 
 ### 🔴 고아 가치 (소유자 없는 가치)
-- **V1~V6 전부** — 제품 소유자가 미지정 상태. 가치의 책임 소재가 불분명함. **소유자 지정 필요.**
+- **V1~V7 전부** — 제품 소유자가 미지정 상태. 가치의 책임 소재가 불분명함. **소유자 지정 필요.**
 
 ### 미정렬 문서 (가치 참조 없는 문서)
 - (없음)
@@ -50,11 +54,18 @@
 - **바쁜 쉘 동결 여부 (AC-D5 ↔ AC-B1)**: 장시간 포그라운드 작업 실행 중 클라이언트 유휴 60분 도달 시 동결 대상이 되는지 — CRIU상 기술적으로는 가능하나, 트리거 정책과 함께 결정 필요. (AC-D5로 유휴 "정의"는 확정, "정책"은 미확정)
 - **read 출력 버퍼 증가 (AC-D3)**: 페이지네이션은 2026-07-03 `offset` 커서 개정으로 해소(반복 read의 `payload`는 델타만큼). 스냅샷 시 버퍼 처리 중 **복원 후 offset 커서 유효성**은 2026-07-04(J5-S4) 확정 — scrollback이 에이전트 메모리 상주라 CRIU 체크포인트에 포함되어 복원 후에도 커서 유효(버퍼-인-체크포인트). 누적 버퍼 자체의 상한/ring buffer는 계속 보류.
 - **제품명·소유자**: "Session Pod Platform"은 임시 작업명. 실제 제품명/소유자 확정 필요.
+- **🆕 claude-code 대화 재개 방식 (AC-E4)**: 확정된 커맨드 형태(`claude --model … -p <프롬프트>`)에는 재개 옵션이 없다. 첫 실행은 그대로지만 2회차 이후가 AC-E4(대화 이어짐)를 만족하려면 재개 옵션이 필요하다. **어떤 재개 방식을 쓸지, 대화 ID를 세션 메타데이터로 보관할지 미확정.** T-클로드코드 시나리오 5는 확정 전까지 의도적 실패로 둔다.
+- **🆕 claude-code 모델 정책 (AC-E6)**: "세션 model 불변"과 "플랫폼 기본 모델 존재"는 타입 불변성(AC-E1)과의 일관성을 위해 채택한 결정으로, 별도 확인 필요. 기본 모델의 구체 값도 미지정.
+- **🆕 claude-code의 `idle` 상태 의미 (AC-E5 ↔ AC-C2/C3)**: 상주 프로세스가 없는 타입에서 `active`와 `idle`(pod 보유·미사용)의 실질 차이는 자원 점유뿐이다. 상태 모델은 타입 공통으로 유지했으나, `idle` 구간에 대한 별도 정책(예: 더 짧은 유휴 한계)이 필요한지는 미결.
 
 ### ✅ 해결된 설계 결정
 - **세션 워크로드의 정체 (V6 / PRD-쉘워크로드)** — *2026-07-01 확정*. 이전까지 "세션 워크로드"·"인메모리 상태"·"read/write"가 추상적이고 `data-plane`이 미정의(placeholder alpine)였던 상태를 해소. **세션 = 전용 pod에서 PTY에 연결되어 실행되는 인터랙티브 쉘**(기본 `/bin/bash`)로 확정. write=쉘 stdin 입력(AC-D2), read=쉘 stdout/stderr **전체** 출력 비파괴적 반환(AC-D3), 보존 상태=쉘 프로세스 트리(AC-D4), 유휴 기준=클라이언트 쉘 I/O(AC-D5). 기존 AC-A1/B1/B3/C2/C3에 구체화 상호참조 추가, `data-plane/README.md` 갱신.
 - **유휴 시간 측정 기준 (부분 해결, AC-D5)** — *2026-07-01*. "마지막 활동"의 정의를 **마지막 클라이언트 read/write(쉘 I/O)** 로 확정. 단, 트리거 *정책*(위 🟡)은 여전히 열림.
 - **idle/snapshot read/write 정책 (AC-C2 / AC-C3)** — *2026-06-27 확정*. 비-active 접근은 통일 "active 보장 후 처리" 규칙: `idle`은 `idle→active` atomic 승격(AC-C1), `snapshot`은 CRIU 복원(AC-B2)으로 active 전이 후 read/write.
+
+### 🟠 인접 사슬에서 인지된 항목 (이 문서 관할 밖, 참고용)
+- **디자인 사슬 미갱신 (V7)**: V7은 아직 사용자 여정·mockup에 연결되지 않아 `doc-structure-state.md` 기준으로 **시각화 없는 가치**가 1개 생겼다. 여정 신설(J6?)과 mockup 매핑은 design-doc-structure-validator 영역이라 여기서 수정하지 않음.
+- **구현 사슬 미반영 (AC-E1/E6)**: `control-plane/api/openapi.yaml`의 `CreateSessionRequest`에는 아직 `workloadType`·`model` 필드가 없고, data plane에도 클로드 코드 CLI 워크로드가 없다. AC-E1~E6은 **명세만 확정된 상태**이며 구현은 후속.
 
 ## 변경 이력
 
@@ -72,3 +83,4 @@
 | 2026-07-03 | AC-D3 read 시맨틱을 **"서버 발급 `nextOffset` 커서 기반 델타"** 로 개정 — read는 요청 `offset`(기본 0) 이후 출력 + 새 `nextOffset`을 반환, `offset=0`은 전체 이력, `offset`>누적 길이는 빈 payload. 서버가 출력을 버리지 않으므로 비파괴·전체 조회 성질은 `offset=0`으로 유지. T-쉘워크로드 시나리오 2·3, J5-S3, OpenAPI(`ReadRequest.offset`/`ReadResult.nextOffset`) 동기 갱신. 페이지네이션 열린 항목 해소(버퍼 상한·스냅샷 시 버퍼 처리는 계속 보류). AC 수·연결 변화 없음. | read=전체 누적 출력(비파괴적) | read=offset 커서 델타(offset=0이면 전체, 비파괴적) |
 | 2026-07-04 | **J5-S4 쉘 상태 축적·이어짐 (CRIU) 실 코드**. `Checkpointer` 포트 뒤 K8s-native 실 어댑터(`criu.ContainerCheckpointer` — kubelet `ContainerCheckpoint` API) 구현, `RestoreInto`를 restore-target pod 스펙(`AnnotationRestoreCheckpoint`)으로 분기(빈 쉘 기동 방지), 복원 후 커서 연속성(버퍼-인-체크포인트) 확정, AC-D4 마커 왕복 in-process 검증(`TestScenario4_CRIUIntegrity`) 채움. `criu-verification.md`의 5개 열린 결정을 구체 선택으로 확정, 게이트 on 실검증은 프로비저닝으로 인계. AC 수·연결 변화 없음(AC-D4/B3 구현). | CRIU=미검증 스텁, 5개 결정 미확정, Scenario4=의도적 실패 | CRIU=실 코드(미검증), 5개 결정 확정, Scenario4=마커 왕복(런타임 시 실검증) |
 | 2026-07-04 | 체크포인트 저장소(결정 ③)를 **노드 로컬 1차 → S3(내구)** 로 개정. 노드 인스턴스 프로파일을 베이스로 STS AssumeRole(`CHECKPOINT_S3_ROLE_ARN`)로 접근하는 S3 스토어(`internal/adapter/checkpointstore`, aws-sdk-go-v2) 구현. `ContainerCheckpointer`가 kubelet 노드 로컬 아카이브를 업로드하고 `Ref=s3://…`(+`SizeBytes`) 기록, 버킷 미설정 시 노드 로컬 폴백. `criu-verification.md` 결정 ③·실구현 요약·인계 체크리스트 갱신. | 저장소=노드 로컬(1차), 오브젝트 스토리지=후속 | 저장소=S3(assume-role), 노드 로컬은 중간 산물 |
+| 2026-08-08 | **V7 "에이전트 세션 — 클로드 코드 CLI" 추가 + PRD-클로드코드(AC-E1~E6) + T-클로드코드 신설**. 세션 워크로드를 단수(쉘)에서 **복수 타입**(`shell` 기본 / `claude-code`)으로 확장: write=프롬프트 1회 실행(`claude --model … -p`, 직렬 큐잉), read=실행 출력(커서 규약은 쉘과 동일), 대화·작업디렉터리 연속성, **CRIU 비대상 — 파일시스템 아카이브로 동결·복원**, 자격증명=Secret 주입·model=세션별. V2·V3 서술을 타입 중립으로 개정, V6를 "기본 타입"으로 격하 표기, AC-A1/A2·B1/B2/B3·C2/C3/C4에 타입 분기 상호참조 추가, PRD-쉘워크로드에 범위(`workloadType=shell`) 한정 명시. | 가치 6개, PRD 4, AC 15, 테스트 4 / 워크로드 타입 단수 | 가치 7개, PRD 5, AC 21, 테스트 5 / 워크로드 타입 복수 |
