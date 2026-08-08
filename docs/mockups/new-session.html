@@ -320,6 +320,58 @@
     display:none;align-items:center;gap:9px}
   .modal .pod-callout.show{display:flex;animation:thawin .4s var(--ease)}
 
+  /* ---------- workload type picker (AC-E1 / V8) ---------- */
+  .modal .phase{display:none}
+  .modal .phase.on{display:block;animation:thawin .3s var(--ease)}
+  .field{margin-bottom:18px}
+  .field > label{display:block;font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--text-faint);margin-bottom:9px}
+  .field .name-in{width:100%;height:40px;border-radius:10px;background:var(--ink-2);border:1px solid var(--line);
+    color:var(--text);padding:0 13px;font-family:"IBM Plex Mono",monospace;font-size:13px}
+  .field .name-in::placeholder{color:#46545e}
+  .field .name-in:focus{outline:none;border-color:var(--line-2)}
+
+  .types{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .type{position:relative;text-align:left;padding:13px;border-radius:12px;background:var(--ink-2);
+    border:1px solid var(--line);transition:.18s var(--ease);display:block;width:100%}
+  .type:hover{border-color:var(--line-2)}
+  .type .t-ic{width:28px;height:28px;border-radius:8px;display:grid;place-items:center;margin-bottom:10px;
+    background:var(--surface-2);color:var(--text-dim);border:1px solid var(--line)}
+  .type .t-n{display:block;font-family:"IBM Plex Mono",monospace;font-size:12.5px;font-weight:600;color:var(--text)}
+  .type .t-d{display:block;font-size:11px;color:var(--text-faint);line-height:1.45;margin-top:5px}
+  .type .t-def{position:absolute;top:11px;right:11px;font-family:"IBM Plex Mono",monospace;font-size:9px;
+    letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint);
+    border:1px solid var(--line-2);border-radius:5px;padding:2px 5px}
+  .type.sel{border-color:var(--active);background:var(--active-soft)}
+  .type.sel .t-ic{background:rgba(255,180,58,.14);border-color:rgba(255,180,58,.3);color:var(--active)}
+  .type.sel .t-n{color:var(--active)}
+  .type.sel .t-def{border-color:rgba(255,180,58,.35);color:var(--active)}
+
+  .model-field{margin-top:16px;display:none}
+  .model-field.on{display:block;animation:thawin .3s var(--ease)}
+  .seg{display:flex;gap:6px;flex-wrap:wrap}
+  .seg button{font-family:"IBM Plex Mono",monospace;font-size:11.5px;padding:7px 11px;border-radius:9px;
+    background:var(--ink-2);border:1px solid var(--line);color:var(--text-faint);transition:.16s var(--ease)}
+  .seg button:hover{border-color:var(--line-2);color:var(--text-dim)}
+  .seg button.sel{background:var(--surface-3);border-color:var(--line-2);color:var(--text)}
+  .seg button .def{font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-faint);margin-left:6px}
+
+  .immutable{margin-top:14px;display:flex;gap:9px;align-items:flex-start;
+    border:1px dashed var(--line-2);border-radius:10px;padding:10px 12px}
+  .immutable .ic{color:var(--frozen);flex:0 0 auto;margin-top:1px}
+  .immutable .tx{font-size:11px;color:var(--text-dim);line-height:1.5}
+  .immutable .tx b{font-family:"IBM Plex Mono",monospace;color:var(--frozen);font-weight:600}
+
+  .modal-foot{display:flex;gap:8px;margin-top:22px}
+  .modal-foot .btn{flex:1;justify-content:center}
+  .guarantee{margin-top:16px;padding-top:14px;border-top:1px solid var(--line);
+    font-size:11px;color:var(--text-faint);line-height:1.55}
+  .guarantee b{color:var(--text-dim);font-weight:500}
+
+  .prov-type{display:inline-flex;align-items:center;gap:6px;font-family:"IBM Plex Mono",monospace;
+    font-size:11px;color:var(--active);background:var(--active-soft);border:1px solid rgba(255,180,58,.22);
+    border-radius:7px;padding:4px 8px;margin-bottom:16px}
+
   /* toast */
   .toast-wrap{position:fixed;bottom:calc(var(--rail) + 24px);left:50%;transform:translateX(-50%);z-index:60;
     display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
@@ -397,16 +449,79 @@
     <div class="m-mark">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 21 7v10l-9 5-9-5V7l9-5Z"/><circle cx="12" cy="12" r="2"/></svg>
     </div>
-    <h3>New session</h3>
-    <p class="desc">A dedicated pod is provisioned for this session — one session, one pod, fully isolated.</p>
-    <div class="steps" id="prov-steps">
-      <div class="step" data-s="0"><span class="ico"><span class="n">1</span></span> Register session metadata <span class="mono done-t"></span></div>
-      <div class="step" data-s="1"><span class="ico"><span class="n">2</span></span> Schedule dedicated pod <span class="mono done-t"></span></div>
-      <div class="step" data-s="2"><span class="ico"><span class="n">3</span></span> Open read / write channel <span class="mono done-t"></span></div>
+    <!-- ===== phase 1: configure (J6-S1 · AC-E1/AC-E6 · V8) ===== -->
+    <div class="phase on" id="phase-config">
+      <h3>New session</h3>
+      <p class="desc">Pick the working environment for this session. Whichever you pick, it runs on its own dedicated pod.</p>
+
+      <div class="field">
+        <label for="sess-name">Session name</label>
+        <input class="name-in mono" id="sess-name" value="refactor-billing" placeholder="my-session" />
+      </div>
+
+      <div class="field">
+        <label>Workload type</label>
+        <div class="types">
+          <button class="type sel" data-type="shell" onclick="pickType('shell')">
+            <span class="t-def">default</span>
+            <span class="t-ic">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 4 4-4 4M12 16h7"/><rect x="2" y="3" width="20" height="18" rx="2.5"/></svg>
+            </span>
+            <span class="t-n">shell</span>
+            <span class="t-d">Interactive bash. You type the commands.</span>
+          </button>
+          <button class="type" data-type="claude-code" onclick="pickType('claude-code')">
+            <span class="t-ic">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3.2"/></svg>
+            </span>
+            <span class="t-n">claude-code</span>
+            <span class="t-d">Agent CLI. You send prompts, it does the work.</span>
+          </button>
+        </div>
+
+        <div class="model-field" id="model-field">
+          <label style="display:block;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-faint);margin:16px 0 9px">Model</label>
+          <div class="seg" id="model-seg">
+            <button class="sel" data-model="platform-default" onclick="pickModel('platform-default')">platform default<span class="def">tbd</span></button>
+            <button data-model="model-a" onclick="pickModel('model-a')">model-a</button>
+            <button data-model="model-b" onclick="pickModel('model-b')">model-b</button>
+          </div>
+          <div class="immutable">
+            <span class="ic">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+            </span>
+            <span class="tx">Workload type and model are <b>fixed for the lifetime</b> of the session. To use a different one, create a new session.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="guarantee">
+        <b>Same guarantees either way</b> — dedicated pod isolation, idle reclaim, restore-on-access, free switching, and consistent state apply to every workload type. Only the freeze mechanism differs under the hood.
+      </div>
+
+      <div class="modal-foot">
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="startProvision()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          Create session
+        </button>
+      </div>
     </div>
-    <div class="pod-callout" id="prov-pod">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 21 7v10l-9 5-9-5V7l9-5Z"/></svg>
-      <span id="prov-pod-name">pod scheduled</span>
+
+    <!-- ===== phase 2: provisioning (J1-S2) ===== -->
+    <div class="phase" id="phase-prov">
+      <h3>Creating session</h3>
+      <p class="desc">A dedicated pod is provisioned for this session — one session, one pod, fully isolated.</p>
+      <div class="prov-type" id="prov-type">workloadType=shell</div>
+      <div class="steps" id="prov-steps">
+        <div class="step" data-s="0"><span class="ico"><span class="n">1</span></span> Register session metadata <span class="mono done-t"></span></div>
+        <div class="step" data-s="1"><span class="ico"><span class="n">2</span></span> <span id="prov-step-2">Schedule dedicated pod</span> <span class="mono done-t"></span></div>
+        <div class="step" data-s="2"><span class="ico"><span class="n">3</span></span> Open read / write channel <span class="mono done-t"></span></div>
+      </div>
+      <div class="pod-callout" id="prov-pod">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 21 7v10l-9 5-9-5V7l9-5Z"/></svg>
+        <span id="prov-pod-name">pod scheduled</span>
+      </div>
     </div>
   </div>
 </div>
@@ -421,13 +536,24 @@ const ICON = {
 function ic(n,s){return ICON[n].replace('viewBox',`width="${s}" height="${s}" viewBox`);}
 const STATE_LABEL = {active:'active', idle:'idle', snapshot:'snapshot'};
 let sessions = [
-  {id:'7f3a', name:'api-gateway-dev', state:'active', pod:'sess-7f3a-x29k', region:'us-east-1', up:'2h 14m', upMin:134, cpu:38, mem:612, memMax:1024, idleMin:0},
-  {id:'91c0', name:'etl-runner', state:'active', pod:'sess-91c0-tb7p', region:'us-east-1', up:'5h 02m', upMin:302, cpu:71, mem:1432, memMax:2048, idleMin:0},
-  {id:'2db8', name:'notebook-alpha', state:'active', pod:'sess-2db8-m04c', region:'us-east-1', up:'47m', upMin:47, cpu:12, mem:240, memMax:1024, idleMin:0},
-  {id:'4e5f', name:'scrape-worker', state:'idle', pod:'sess-4e5f-q8wd', region:'us-east-1', up:'1h 38m', upMin:98, cpu:3, mem:188, memMax:1024, idleMin:48, freezeSec:702},
-  {id:'0a17', name:'model-train-7b', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'2h ago', checkpoint:'412 MB', reclaim:'2 vCPU · 4 GB'},
-  {id:'c83d', name:'batch-report', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'18m ago', checkpoint:'156 MB', reclaim:'1 vCPU · 2 GB'}
+  {id:'7f3a', name:'api-gateway-dev', type:'shell', state:'active', pod:'sess-7f3a-x29k', region:'us-east-1', up:'2h 14m', upMin:134, cpu:38, mem:612, memMax:1024, idleMin:0},
+  {id:'5b1e', name:'refactor-billing', type:'claude-code', model:'platform default', state:'active', pod:'sess-5b1e-h7za', region:'us-east-1', up:'1h 05m', upMin:65, cpu:22, mem:408, memMax:2048, idleMin:0},
+  {id:'91c0', name:'etl-runner', type:'shell', state:'active', pod:'sess-91c0-tb7p', region:'us-east-1', up:'5h 02m', upMin:302, cpu:71, mem:1432, memMax:2048, idleMin:0},
+  {id:'2db8', name:'notebook-alpha', type:'shell', state:'active', pod:'sess-2db8-m04c', region:'us-east-1', up:'47m', upMin:47, cpu:12, mem:240, memMax:1024, idleMin:0},
+  {id:'4e5f', name:'scrape-worker', type:'shell', state:'idle', pod:'sess-4e5f-q8wd', region:'us-east-1', up:'1h 38m', upMin:98, cpu:3, mem:188, memMax:1024, idleMin:48, freezeSec:702},
+  {id:'0a17', name:'model-train-7b', type:'shell', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'2h ago', checkpoint:'412 MB', reclaim:'2 vCPU · 4 GB'},
+  {id:'c83d', name:'doc-migration', type:'claude-code', model:'platform default', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'18m ago', checkpoint:'38 MB archive', reclaim:'1 vCPU · 2 GB'}
 ];
+// workloadType은 세션 수명 동안 불변 (AC-E1) · 링크 대상이 타입에 따라 갈린다
+function wsHref(s){
+  if(s.state==='snapshot') return `restore.html?id=${s.id}`;
+  return s.type==='claude-code' ? `agent-workspace.html?id=${s.id}` : `workspace.html?id=${s.id}`;
+}
+function typeTag(s){
+  return s.type==='claude-code'
+    ? `<span class="pod" style="color:#b79ae0" title="workloadType=claude-code">◇ claude-code</span>`
+    : `<span class="pod" style="color:var(--text-faint)" title="workloadType=shell">$ shell</span>`;
+}
 function fmtSec(s){const m=Math.floor(s/60),ss=s%60;return m+':'+String(ss).padStart(2,'0');}
 function qid(){return new URLSearchParams(location.search).get('id');}
 function toast(msg,kind){
@@ -458,7 +584,7 @@ function renderSummary(){
     <div class="chip reclaim"><span class="ic">${ic('pod',16)}</span><div><b style="font-size:13px;color:var(--frozen)">3 vCPU · 6 GB</b><div style="font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-faint)">reclaimed from frozen</div></div></div>`;
 }
 function cardHTML(s){
-  const href = s.state==='snapshot' ? `restore.html?id=${s.id}` : `workspace.html?id=${s.id}`;
+  const href = wsHref(s);
   let body='';
   if(s.state==='active'){
     body = `<div class="vit">
@@ -480,7 +606,9 @@ function cardHTML(s){
         <div class="row"><span class="k">frozen</span><span class="v">${s.frozenAgo}</span></div>
         <div class="row"><span class="k">reclaimed</span><span class="v">${s.reclaim}</span></div>
       </div></div>
-      <div class="snap-hint">${ic('clock',13)} open to thaw and resume exactly where it froze</div>`;
+      <div class="snap-hint">${ic('clock',13)} ${s.type==='claude-code'
+        ? 'open to restore the archive and continue the conversation'
+        : 'open to thaw and resume exactly where it froze'}</div>`;
   }
   const podLine = s.state==='snapshot'
     ? `<span class="pod" style="color:#5a7686">${ic('pod',12)} pod reclaimed</span>`
@@ -492,7 +620,7 @@ function cardHTML(s){
       <span class="badge ${s.state}"><span class="led"></span>${STATE_LABEL[s.state]}</span>
     </div>
     ${body}
-    <div class="card-foot">${podLine}<span style="margin-left:auto">${s.region}</span></div>
+    <div class="card-foot">${podLine}<span style="margin-left:auto">${typeTag(s)}</span></div>
   </button>`;
 }
 function renderGrid(){ grid.innerHTML = sessions.map(cardHTML).join(''); }
@@ -514,37 +642,80 @@ function startGridTick(){
   },1000);
 }
 
+/* ---------- J6-S1 · workload type selection (AC-E1 / AC-E6 · V8) ---------- */
 let provBusy=false;
+let draft = { type:'shell', model:'platform-default' };
+
+function pickType(t){
+  if(provBusy) return;
+  draft.type = t;
+  document.querySelectorAll('.type').forEach(b=>b.classList.toggle('sel', b.dataset.type===t));
+  // model은 claude-code 타입에만 해당 (AC-E6)
+  document.getElementById('model-field').classList.toggle('on', t==='claude-code');
+}
+function pickModel(m){
+  if(provBusy) return;
+  draft.model = m;
+  document.querySelectorAll('#model-seg button').forEach(b=>b.classList.toggle('sel', b.dataset.model===m));
+}
+function openModal(){
+  provBusy=false;
+  document.getElementById('phase-config').classList.add('on');
+  document.getElementById('phase-prov').classList.remove('on');
+  document.getElementById('scrim').classList.add('show');
+}
 function closeModal(){ document.getElementById('scrim').classList.remove('show'); }
-function openProvision(){
+
+const MODEL_LABEL = {'platform-default':'platform default','model-a':'model-a','model-b':'model-b'};
+
+function startProvision(){
   if(provBusy) return; provBusy=true;
-  const scrim=document.getElementById('scrim');
+  const isAgent = draft.type==='claude-code';
+  const rawName = (document.getElementById('sess-name').value||'').trim();
+
+  document.getElementById('phase-config').classList.remove('on');
+  document.getElementById('phase-prov').classList.add('on');
+  document.getElementById('prov-type').textContent =
+    isAgent ? `workloadType=claude-code · model=${MODEL_LABEL[draft.model]}` : 'workloadType=shell';
+  // control plane은 타입에 따라 서로 다른 워크로드로 pod를 프로비저닝한다 (AC-E1)
+  document.getElementById('prov-step-2').textContent =
+    isAgent ? 'Schedule dedicated pod (agent CLI image)' : 'Schedule dedicated pod (shell image)';
+
   const steps=[...document.querySelectorAll('#prov-steps .step')];
-  steps.forEach(s=>{s.className='step'; s.querySelector('.done-t').textContent='';});
+  steps.forEach(s=>{s.className='step'; s.querySelector('.done-t').textContent='';
+    s.querySelector('.ico').innerHTML='<span class="n">'+(steps.indexOf(s)+1)+'</span>';});
   document.getElementById('prov-pod').classList.remove('show');
-  scrim.classList.add('show');
+
   const reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const gap=reduce?120:720;
   const names=['67b2','a4e1','3c90','d518'];
   const newId=names[Math.floor(Math.random()*names.length)];
+  const pod='sess-'+newId+'-'+Math.random().toString(36).slice(2,6);
+
   const run=(i)=>{
     if(i>0){steps[i-1].className='step ok'; steps[i-1].querySelector('.ico').innerHTML='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>'; steps[i-1].querySelector('.done-t').textContent='done';}
     if(i<steps.length){
       steps[i].className='step run';
       steps[i].querySelector('.ico').innerHTML='<span class="spin"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3a9 9 0 1 0 9 9"/></svg></span>';
-      if(i===1){ setTimeout(()=>{document.getElementById('prov-pod-name').textContent='pod/sess-'+newId+'-'+Math.random().toString(36).slice(2,6)+' scheduled'; document.getElementById('prov-pod').classList.add('show');}, gap*0.5); }
+      if(i===1){ setTimeout(()=>{document.getElementById('prov-pod-name').textContent='pod/'+pod+' scheduled'; document.getElementById('prov-pod').classList.add('show');}, gap*0.5); }
       setTimeout(()=>run(i+1), gap);
     } else {
-      const s={id:newId,name:'session-'+newId,state:'active',pod:'sess-'+newId+'-'+Math.random().toString(36).slice(2,6),region:'us-east-1',up:'0m',upMin:0,cpu:18+Math.floor(Math.random()*16),mem:240+Math.floor(Math.random()*120),memMax:2048,idleMin:0};
+      const s={id:newId, name:rawName||('session-'+newId), type:draft.type, state:'active',
+        pod:pod, region:'us-east-1', up:'0m', upMin:0,
+        cpu:18+Math.floor(Math.random()*16), mem:240+Math.floor(Math.random()*120), memMax:2048, idleMin:0};
+      if(isAgent) s.model = MODEL_LABEL[draft.model];
       sessions.unshift(s);
-      setTimeout(()=>{ closeModal(); provBusy=false; renderGrid(); renderSummary(); toast('Session created on a dedicated pod','warm'); }, reduce?80:480);
+      setTimeout(()=>{
+        closeModal(); provBusy=false; renderGrid(); renderSummary();
+        toast(isAgent ? 'claude-code session created on a dedicated pod' : 'shell session created on a dedicated pod','warm');
+      }, reduce?80:480);
     }
   };
   setTimeout(()=>run(0), reduce?40:260);
 }
 document.getElementById('scrim').addEventListener('click',e=>{ if(e.target.id==='scrim' && !provBusy) closeModal(); });
 renderSummary(); renderGrid(); startGridTick();
-setTimeout(openProvision, 350);
+setTimeout(openModal, 350);
 
 </script>
 </body>
