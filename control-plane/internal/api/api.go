@@ -47,6 +47,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/sessions", a.createSession)
 	mux.HandleFunc("GET /api/v1/sessions", a.listSessions)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", a.getSession)
+	mux.HandleFunc("DELETE /api/v1/sessions/{id}", a.deleteSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/read", a.readSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/write", a.writeSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/switch", a.switchSession)
@@ -154,6 +155,14 @@ func (a *API) getSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, sess)
+}
+
+func (a *API) deleteSession(w http.ResponseWriter, r *http.Request) {
+	if err := a.mgr.Terminate(r.Context(), r.PathValue("id")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *API) readSession(w http.ResponseWriter, r *http.Request) {

@@ -27,7 +27,9 @@ type StateStore interface {
 	Put(ctx context.Context, s *session.Session) error
 	Get(ctx context.Context, id string) (*session.Session, error)
 	List(ctx context.Context) ([]*session.Session, error)
-	Delete(ctx context.Context, id string) error
+	// Delete removes session metadata only when token owns the lifecycle fence;
+	// the caller keeps that lock held and releases it separately through Unlock.
+	Delete(ctx context.Context, id, token string) error
 
 	// Touch advances LastAccess on the latest stored object without replacing
 	// lifecycle or recovery metadata from a stale read.
@@ -38,12 +40,12 @@ type StateStore interface {
 	// CompareAndSwapSession atomically replaces the whole aggregate only when
 	// both its lifecycle state and durable snapshot transaction still match the
 	// caller's expected values.
-	CompareAndSwapSession(ctx context.Context, id string, expectedState session.State,
+	CompareAndSwapSession(ctx context.Context, id, token string, expectedState session.State,
 		expectedTxn *session.SnapshotTransaction, next *session.Session) error
 
-	// Lock acquires an exclusive, per-session advisory lock. token identifies
-	// the holder so Unlock can be made safe. Returns session.ErrConflict if the
-	// lock is already held.
+	// Lock acquires an exclusive, per-session advisory lock. token uniquely
+	// identifies this acquisition so aggregate CAS/Delete and Unlock are fenced.
+	// Returns session.ErrConflict if the lock is already held.
 	Lock(ctx context.Context, id, token string) error
 	// Renew extends a held lock only when token is still its owner. Long archive
 	// transfers use it to prevent another replica recovering a live transaction.

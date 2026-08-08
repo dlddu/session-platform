@@ -81,6 +81,10 @@ docs/                 value / PRD·AC / journeys / mockups / CRIU verification n
   Claude archives use a CP-owned generation and durable owner-fenced
   `preparing→committing` transaction: prepare failures abort only that generation,
   while committing recovery keeps admission closed and retries Stop/finalization.
+  Explicit deletion uses the same lifecycle Lease, reclaims any live pod, and
+  removes the session record.
+  Already-uploaded checkpoint/archive objects remain governed by the checkpoint
+  store's retention policy; DELETE does not currently erase them physically.
 - **Single entry point**: the control plane container serves both the REST API
   (`/api/v1`) and the statically built SPA on one port. JSON POST bodies have an
   8 MiB wire limit and a 30-second read timeout; Claude prompts also have the
@@ -126,6 +130,7 @@ gitignored.
 | `POST /sessions`             | create (provision pod, active) | A1, A2 |
 | `GET  /sessions`             | list                           | V5     |
 | `GET  /sessions/{id}`        | get one                        | V5     |
+| `DELETE /sessions/{id}`       | delete and reclaim live pod    | A3     |
 | `POST /sessions/{id}/read`   | read (state-branched)          | C2     |
 | `POST /sessions/{id}/write`  | write (state-branched)         | C3     |
 | `POST /sessions/{id}/switch` | switch (restore if snapshot)   | C4     |

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { Session } from "../api/types";
+import { DeleteSessionDialog } from "../app/DeleteSessionDialog";
 import { StateBadge } from "../app/StateBadge";
+import { useToast } from "../app/Toast";
 
 const READ_DELAYS_MS = [250, 700] as const;
 
@@ -42,10 +44,13 @@ export function Workspace() {
   const [cmd, setCmd] = useState("");
   const [pendingRuns, setPendingRuns] = useState(0);
   const [reading, setReading] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const offsetRef = useRef(0);
   const readQueueRef = useRef<Promise<void>>(Promise.resolve());
   const termRef = useRef<HTMLDivElement>(null);
   const activeIdRef = useRef(id);
+  const navigate = useNavigate();
+  const { toast } = useToast();
   activeIdRef.current = id;
 
   const appendSys = useCallback((line: string) => {
@@ -166,6 +171,11 @@ export function Workspace() {
     } catch (switchError) {
       appendSys(`switch failed: ${switchError}`);
     }
+  }
+
+  function handleDeleted(deleted: Session) {
+    toast('Session "' + deleted.name + '" deleted');
+    navigate("/", { replace: true });
   }
 
   if (error) return <div className="pad error">Failed to load session: {error}</div>;
@@ -321,10 +331,26 @@ export function Workspace() {
               >
                 Switch (AC-C4)
               </button>
+              <button
+                className="btn btn-danger"
+                type="button"
+                data-testid="ws-delete-session"
+                onClick={() => setDeleteOpen(true)}
+              >
+                Delete session
+              </button>
             </div>
           </div>
         </div>
       </div>
+
+      {deleteOpen ? (
+        <DeleteSessionDialog
+          session={sess}
+          onCancel={() => setDeleteOpen(false)}
+          onDeleted={handleDeleted}
+        />
+      ) : null}
     </div>
   );
 }

@@ -117,7 +117,7 @@ h1 {
   color: #1c1404;
   box-shadow: 0 6px 22px -8px rgba(255, 180, 58, 0.6);
 }
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
   filter: brightness(1.06);
   transform: translateY(-1px);
 }
@@ -126,9 +126,24 @@ h1 {
   border: 1px solid var(--line);
   color: var(--text-dim);
 }
-.btn-ghost:hover {
+.btn-ghost:hover:not(:disabled) {
   border-color: var(--line-2);
   color: var(--text);
+}
+.btn-danger {
+  background: rgba(242, 97, 107, 0.1);
+  border: 1px solid rgba(242, 97, 107, 0.35);
+  color: var(--danger);
+}
+.btn-danger:hover:not(:disabled) {
+  background: rgba(242, 97, 107, 0.17);
+  border-color: rgba(242, 97, 107, 0.58);
+  transform: translateY(-1px);
+}
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

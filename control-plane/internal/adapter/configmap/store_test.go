@@ -136,6 +136,12 @@ func TestTouchAndAggregateCASPreserveTransactionFenceAndLatestAccess(t *testing.
 		t.Fatalf("touch lost transaction fence: %+v", touched.SnapshotTransaction)
 	}
 
+	const casToken = "aggregate-cas-owner"
+	if err := store.Lock(ctx, in.ID, casToken); err != nil {
+		t.Fatalf("lock aggregate CAS: %v", err)
+	}
+	defer func() { _ = store.Unlock(ctx, in.ID, casToken) }()
+
 	wrong := *in.SnapshotTransaction
 	wrong.Owner = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	next := *in
@@ -143,10 +149,10 @@ func TestTouchAndAggregateCASPreserveTransactionFenceAndLatestAccess(t *testing.
 	next.Pod = ""
 	next.Checkpoint = in.SnapshotTransaction.Checkpoint
 	next.SnapshotTransaction = nil
-	if err := store.CompareAndSwapSession(ctx, in.ID, session.StateActive, &wrong, &next); err != session.ErrConflict {
+	if err := store.CompareAndSwapSession(ctx, in.ID, casToken, session.StateActive, &wrong, &next); err != session.ErrConflict {
 		t.Fatalf("CAS with stale owner err=%v, want ErrConflict", err)
 	}
-	if err := store.CompareAndSwapSession(ctx, in.ID, session.StateActive, in.SnapshotTransaction, &next); err != nil {
+	if err := store.CompareAndSwapSession(ctx, in.ID, casToken, session.StateActive, in.SnapshotTransaction, &next); err != nil {
 		t.Fatalf("CAS with current owner: %v", err)
 	}
 	got, err := store.Get(ctx, in.ID)
@@ -243,18 +249,56 @@ func TestGetNotFound(t *testing.T) {
 func TestDeleteIdempotent(t *testing.T) {
 	ctx := context.Background()
 	store, _ := newStore(t)
+	const owner = "delete-owner"
 
 	if err := store.Put(ctx, sampleSession("ee05")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-	if err := store.Delete(ctx, "ee05"); err != nil {
+	if err := store.Lock(ctx, "ee05", owner); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	if err := store.Delete(ctx, "ee05", owner); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if _, err := store.Get(ctx, "ee05"); err != session.ErrNotFound {
 		t.Fatalf("get after delete err=%v want ErrNotFound", err)
 	}
-	if err := store.Delete(ctx, "ee05"); err != nil {
+	if err := store.Delete(ctx, "ee05", owner); err != nil {
 		t.Fatalf("delete (idempotent) err=%v", err)
+	}
+	if err := store.Unlock(ctx, "ee05", owner); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+}
+
+// Delete removes metadata but deliberately keeps a held lifecycle Lease until
+// its owner releases it with token-safe Unlock.
+func TestDeleteKeepsHeldLeaseUntilUnlock(t *testing.T) {
+	ctx := context.Background()
+	store, _ := newStore(t)
+	const id = "ee06"
+	const owner = "delete-owner"
+
+	if err := store.Put(ctx, sampleSession(id)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if err := store.Lock(ctx, id, owner); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	if err := store.Delete(ctx, id, owner); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := store.Lock(ctx, id, "successor"); err != session.ErrConflict {
+		t.Fatalf("successor lock before owner unlock err = %v, want ErrConflict", err)
+	}
+	if err := store.Unlock(ctx, id, owner); err != nil {
+		t.Fatalf("owner unlock: %v", err)
+	}
+	if err := store.Lock(ctx, id, "successor"); err != nil {
+		t.Fatalf("successor lock after owner unlock: %v", err)
+	}
+	if err := store.Unlock(ctx, id, "successor"); err != nil {
+		t.Fatalf("successor unlock: %v", err)
 	}
 }
 
@@ -396,5 +440,57 @@ func TestLockTakesOverStaleLease(t *testing.T) {
 	}
 	if lease.Spec.HolderIdentity == nil || *lease.Spec.HolderIdentity != "newcomer" {
 		t.Fatalf("holder=%v want newcomer after takeover", lease.Spec.HolderIdentity)
+	}
+}
+
+// A stale holder cannot delete the session after a successor takes over the
+// Lease and claims the ConfigMap lifecycle-owner fence.
+func TestDeleteRejectsStaleHolderAfterTakeover(t *testing.T) {
+	ctx := context.Background()
+	cs := fake.NewSimpleClientset()
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	offset := time.Duration(0)
+	store := configmap.NewStore(cs, testNS,
+		configmap.WithClock(func() time.Time { return base.Add(offset) }),
+		configmap.WithLeaseDuration(time.Second),
+	)
+	const id = "delete-fence"
+
+	if err := store.Put(ctx, sampleSession(id)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if err := store.Lock(ctx, id, "holder-a"); err != nil {
+		t.Fatalf("initial lock: %v", err)
+	}
+	offset = 2 * time.Second
+	if err := store.Lock(ctx, id, "holder-b"); err != nil {
+		t.Fatalf("take over lock: %v", err)
+	}
+	staleNext := sampleSession(id)
+	staleNext.Pod = "stale-restore-pod"
+	if err := store.CompareAndSwapSession(ctx, id, "holder-a", session.StateActive, nil, staleNext); err != session.ErrConflict {
+		t.Fatalf("stale-holder aggregate CAS err = %v, want ErrConflict", err)
+	}
+	afterStaleCAS, err := store.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("get after stale aggregate CAS: %v", err)
+	}
+	if afterStaleCAS.Pod == staleNext.Pod {
+		t.Fatalf("stale holder committed replacement pod %q", staleNext.Pod)
+	}
+	if err := store.Delete(ctx, id, "holder-a"); err != session.ErrConflict {
+		t.Fatalf("stale-holder delete err = %v, want ErrConflict", err)
+	}
+	if _, err := store.Get(ctx, id); err != nil {
+		t.Fatalf("session removed by stale holder: %v", err)
+	}
+	if err := store.Delete(ctx, id, "holder-b"); err != nil {
+		t.Fatalf("current-holder delete: %v", err)
+	}
+	if _, err := store.Get(ctx, id); err != session.ErrNotFound {
+		t.Fatalf("get after current-holder delete err = %v, want ErrNotFound", err)
+	}
+	if err := store.Unlock(ctx, id, "holder-b"); err != nil {
+		t.Fatalf("unlock current holder: %v", err)
 	}
 }

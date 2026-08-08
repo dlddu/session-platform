@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { Session } from "../api/types";
+import { DeleteSessionDialog } from "../app/DeleteSessionDialog";
 import { liveSessionPath } from "../app/sessionRoutes";
+import { useToast } from "../app/Toast";
 
 const AGENT_RESTORE_COPY =
   "A fresh agent pod will restore the conversation history, working directory, " +
@@ -18,7 +20,9 @@ export function Restore() {
   const [sess, setSess] = useState<Session | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const navigate = useNavigate();
+  const { toast } = useToast();
 
   useEffect(() => {
     let cancelled = false;
@@ -46,6 +50,11 @@ export function Restore() {
       setError(String(e));
       setBusy(false);
     }
+  }
+
+  function handleDeleted(deleted: Session) {
+    toast('Session "' + deleted.name + '" deleted');
+    navigate("/", { replace: true });
   }
 
   if (error) return <div className="pad error">Failed to load session: {error}</div>;
@@ -106,6 +115,7 @@ export function Restore() {
         </div>
         <div className="modal-actions restore-actions">
           <button
+            type="button"
             className="btn btn-primary"
             data-testid="restore-submit"
             onClick={resume}
@@ -113,8 +123,25 @@ export function Restore() {
           >
             {resumeLabel}
           </button>
+          <button
+            type="button"
+            className="btn btn-danger"
+            data-testid="restore-delete-session"
+            onClick={() => setDeleteOpen(true)}
+            disabled={busy}
+          >
+            Delete session
+          </button>
         </div>
       </div>
+
+      {deleteOpen ? (
+        <DeleteSessionDialog
+          session={sess}
+          onCancel={() => setDeleteOpen(false)}
+          onDeleted={handleDeleted}
+        />
+      ) : null}
     </div>
   );
 }
