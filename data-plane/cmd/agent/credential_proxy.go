@@ -128,6 +128,20 @@ func newCredentialProxyWithTransport(
 			_ = response.Body.Close()
 			return errors.New("credential proxy upstream returned unsupported content encoding")
 		}
+		if credentialProxyStreamsResponse(response) {
+			scrubCredentialProxyResponseMetadata(response, token)
+			response.Body = newCredentialProxyStreamingBody(
+				response.Body,
+				token,
+				maxCredentialProxyResponseBytes,
+				func() { scrubCredentialProxyResponseMetadata(response, token) },
+			)
+			response.ContentLength = -1
+			response.Header.Del("Content-Length")
+			response.Header.Del("Content-Encoding")
+			return nil
+		}
+
 		body, err := io.ReadAll(io.LimitReader(response.Body, maxCredentialProxyResponseBytes+1))
 		closeErr := response.Body.Close()
 		if err != nil {
@@ -140,14 +154,7 @@ func newCredentialProxyWithTransport(
 			return errors.New("credential proxy upstream response is too large")
 		}
 		body = bytes.ReplaceAll(body, []byte(token), []byte(redactedLiteral))
-		// Authentication response headers are never useful to Claude and could
-		// hand a credential back verbatim under a standard secret-bearing name.
-		for _, name := range credentialProxyAuthHeaders {
-			response.Header.Del(name)
-			response.Trailer.Del(name)
-		}
-		redactCredentialProxyHeaders(response.Header, token)
-		redactCredentialProxyHeaders(response.Trailer, token)
+		scrubCredentialProxyResponseMetadata(response, token)
 		response.Body = io.NopCloser(bytes.NewReader(body))
 		response.ContentLength = int64(len(body))
 		response.Header.Set("Content-Length", strconv.FormatInt(response.ContentLength, 10))

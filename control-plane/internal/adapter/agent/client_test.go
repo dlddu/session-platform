@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -28,6 +29,10 @@ const testCheckpointIDHeader = "X-Session-Checkpoint-ID"
 type fakeAgent struct {
 	buf         []byte
 	writeStatus int
+
+	streamOffset      string
+	streamStatus      int
+	streamContentType string
 
 	checkpointBody      []byte // archive returned by /checkpoint
 	checkpointStatus    int    // non-200 to force a checkpoint error
@@ -84,6 +89,19 @@ func (a *fakeAgent) handler() http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"aborted"}`))
+	})
+	mux.HandleFunc("GET /stream", func(w http.ResponseWriter, r *http.Request) {
+		a.streamOffset = r.URL.Query().Get("offset")
+		if a.streamStatus != 0 && a.streamStatus != http.StatusOK {
+			http.Error(w, "stream failed", a.streamStatus)
+			return
+		}
+		contentType := a.streamContentType
+		if contentType == "" {
+			contentType = "text/event-stream"
+		}
+		w.Header().Set("Content-Type", contentType)
+		_, _ = fmt.Fprint(w, "id: 5\nevent: output\ndata: {\"offset\":2,\"payloadBase64\":\"YWJj\",\"nextOffset\":5}\n\n")
 	})
 	mux.HandleFunc("GET /read", func(w http.ResponseWriter, r *http.Request) {
 		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
@@ -160,6 +178,39 @@ func TestHTTPClientReadCursor(t *testing.T) {
 }
 
 // A pod the API server does not know is an error, not a silent no-op.
+func TestHTTPClientStreamProxiesSSEAtCursor(t *testing.T) {
+	c, fa := harness(t, "sess-ab12")
+	body, err := c.Stream(context.Background(), "sess-ab12", 2)
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	defer body.Close()
+	wire, err := io.ReadAll(body)
+	if err != nil {
+		t.Fatalf("read stream body: %v", err)
+	}
+	if fa.streamOffset != "2" {
+		t.Fatalf("agent stream offset = %q, want 2", fa.streamOffset)
+	}
+	if got := string(wire); !strings.Contains(got, "event: output") || !strings.Contains(got, `"nextOffset":5`) {
+		t.Fatalf("stream wire = %q", got)
+	}
+}
+
+func TestHTTPClientStreamValidatesAgentResponse(t *testing.T) {
+	c, fa := harness(t, "sess-ab12")
+	fa.streamStatus = http.StatusBadRequest
+	if _, err := c.Stream(context.Background(), "sess-ab12", 0); !errors.Is(err, session.ErrInvalidInput) {
+		t.Fatalf("bad stream cursor err = %v, want invalid input", err)
+	}
+
+	fa.streamStatus = http.StatusOK
+	fa.streamContentType = "application/json"
+	if _, err := c.Stream(context.Background(), "sess-ab12", 0); err == nil || !strings.Contains(err.Error(), "content type") {
+		t.Fatalf("unexpected stream content type err = %v", err)
+	}
+}
+
 func TestHTTPClientUnknownPod(t *testing.T) {
 	c := agent.NewHTTPClient(fake.NewSimpleClientset(), "sessions")
 	if err := c.Write(context.Background(), "sess-gone", "x"); err == nil {

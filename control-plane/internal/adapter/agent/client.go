@@ -33,9 +33,11 @@ const checkpointIDHeader = "X-Session-Checkpoint-ID"
 //   - Write → AC-D2/AC-E2: shell stdin or an asynchronously accepted prompt.
 //   - Read  → AC-D3/AC-E3: output after offset plus nextOffset; offset 0
 //     replays the full history and reads are non-consuming.
+//   - Stream → the same append-only output as resumable SSE events.
 type Client interface {
 	Write(ctx context.Context, pod, payload string) error
 	Read(ctx context.Context, pod string, offset int64) (payload string, nextOffset int64, err error)
+	Stream(ctx context.Context, pod string, offset int64) (io.ReadCloser, error)
 }
 
 // HTTPClient is the real Client: it resolves the pod's current IP through the
@@ -257,4 +259,37 @@ func (c *HTTPClient) Read(ctx context.Context, pod string, offset int64) (string
 		return "", 0, fmt.Errorf("decode read response from session pod %s: %w", pod, err)
 	}
 	return out.Payload, out.NextOffset, nil
+}
+
+// Stream opens the data plane's long-lived SSE output feed at offset. Unlike
+// the short Read client, it uses the context-bounded streaming HTTP client so
+// an otherwise healthy workspace connection has no 30-second deadline.
+func (c *HTTPClient) Stream(ctx context.Context, pod string, offset int64) (io.ReadCloser, error) {
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return nil, err
+	}
+	url := fmt.Sprintf("%s/stream?offset=%d", c.baseURL(ip), offset)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.stream.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("stream from session pod %s: %w", pod, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		resp.Body.Close()
+		message := strings.TrimSpace(string(body))
+		if resp.StatusCode == http.StatusBadRequest {
+			return nil, fmt.Errorf("stream from session pod %s: %w: %s", pod, session.ErrInvalidInput, message)
+		}
+		return nil, fmt.Errorf("stream from session pod %s: agent returned %d: %s", pod, resp.StatusCode, message)
+	}
+	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "text/event-stream") {
+		resp.Body.Close()
+		return nil, fmt.Errorf("stream from session pod %s: unexpected content type %q", pod, contentType)
+	}
+	return resp.Body, nil
 }

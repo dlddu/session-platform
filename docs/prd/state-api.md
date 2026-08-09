@@ -21,8 +21,12 @@
   - `snapshot`: workload별 복원(`shell`=CRIU, `claude-code`=filesystem archive)으로 `active` 전이(AC-B2) 후 읽기
   - 이는 switch(AC-C4)·snapshot 접근(AC-B2)과 동일한 "접근 시 active화" 원칙을 read에 적용한 것이다.
 - **달성 가치**: V3, V4
-- **구체화**: read가 반환하는 것은 워크로드 타입별로 다르다 — `shell`은 누적된 쉘 stdout/stderr → AC-D3 (`shell-workload.md`), `claude-code`는 `claude` 실행들의 누적 출력 → AC-E3 (`claude-code-workload.md`). **offset 커서 규약(비파괴·`offset=0`=전체)은 두 타입이 동일**하다.
+- **구체화**: read가 반환하는 것은 워크로드 타입별로 다르다 — `shell`은 누적된 쉘 stdout/stderr → AC-D3 (`shell-workload.md`), `claude-code`는 투영된 assistant text delta와 diagnostic stderr → AC-E3 (`claude-code-workload.md`). **append-only byte offset 커서 규약(비파괴·`offset=0`=전체)은 두 타입이 동일**하다.
 - **검증 방법**: active/idle/snapshot 세션에 각각 read를 호출하여, 각 경로(active 직접 / idle 승격 후 / snapshot 복원 후)로 처리되고 호출 후 최종 상태가 `active`이며 올바른 결과를 반환함을 확인한다.
+
+> 📌 **Passive live output stream**: `GET /sessions/{id}/stream`은 AC-E3의 실시간 관찰 경로이며 위 Read API처럼 “active 보장 후 처리”하지 않는다. 현재 session을 `Get`한 뒤 active 또는 pod를 보유한 idle 상태에서만 기존 pod의 같은 append-only output을 SSE로 전달한다. 상태를 승격하거나 snapshot을 복원하거나 `lastAccess`를 touch하지 않으며 snapshot에는 invalid-state 오류를 반환한다. output event id는 `nextOffset`, data는 `{offset,payloadBase64,nextOffset}`이고 decoded byte 길이는 `nextOffset-offset`이어야 한다. Base64는 정확한 byte 범위와 overlap을 보존하며, Claude의 모든 서버 발급 cursor/event 경계는 UTF-8 code-point 경계다.
+>
+> 최초 연결은 non-negative query `offset`을 사용하고, 재연결의 non-negative decimal `Last-Event-ID`가 있으면 query보다 우선한다. cursor가 현재 보존 길이보다 크면 `reset` event의 id와 `data.nextOffset`으로 현재 길이를 알린다. reset을 받은 SPA는 decoder의 미완성 bytes를 버리고 read(`offset=0`)로 전체 콘솔을 교체한 뒤 read가 발급한 cursor에서 stream을 재개한다. SSE 연결·output/reset event·comment keepalive 자체는 상태나 `lastAccess`를 바꾸지 않지만, 이 reset reconciliation은 일반 Read API라 idle을 active로 승격하고 `lastAccess`를 갱신할 수 있다. 연결은 workspace 수명 동안 유지되며 run/queue 완료 event는 없다. SPA는 전송 오류 시 native EventSource를 먼저 닫고 session 상태를 조회한다. active/idle만 마지막 cursor로 backoff 재연결하고, snapshot이면 read/stream 자동 재시도를 멈춘 채 Restore 화면으로 이동한다.
 
 ### AC-C3: Write API 상태별 분기
 - **설명**: 세션 단위 Write API도 read와 같은 통일 규칙을 따른다. 대상 세션을 먼저 `active`로 만든 뒤 write를 적용한다.
@@ -45,3 +49,6 @@
 > metadata는 바뀌지 않는다. 모든 JSON POST wire body는 8 MiB로 제한되고 서버는 body read에 30초
 > timeout을 둔다. wire 상한 초과는 413이다. `claude-code` write는 decoded UTF-8 payload 1 MiB를 추가로
 > 제한하며, snapshot 세션도 이 검증을 복원보다 먼저 수행해 초과 prompt를 413으로 거부한다.
+>
+> stream은 JSON body와 30초 JSON I/O timeout의 대상이 아닌 request-context-bounded GET이다.
+> query/header cursor가 음수·비정수이면 output side effect 없이 400으로 거부한다.

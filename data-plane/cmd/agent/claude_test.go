@@ -181,8 +181,14 @@ func TestClaudeWriteIsNonBlockingAndSerial(t *testing.T) {
 	runner.release <- struct{}{}
 	waitClaudeIdle(t, c)
 
-	wantFirst := []string{"claude", "--model", "claude-test-model", "-p", "--", "first prompt"}
-	wantSecond := []string{"claude", "--continue", "--model", "claude-test-model", "-p", "--", "second prompt"}
+	wantFirst := []string{
+		"claude", "--model", "claude-test-model", "-p", "--output-format",
+		"stream-json", "--verbose", "--include-partial-messages", "--", "first prompt",
+	}
+	wantSecond := []string{
+		"claude", "--continue", "--model", "claude-test-model", "-p", "--output-format",
+		"stream-json", "--verbose", "--include-partial-messages", "--", "second prompt",
+	}
 	if !reflect.DeepEqual(first.argv, wantFirst) {
 		t.Fatalf("first argv = %q, want %q", first.argv, wantFirst)
 	}
@@ -209,7 +215,10 @@ func TestClaudePlatformDefaultOmitsModelFlag(t *testing.T) {
 	writeViaHTTP(t, srv, "hello", http.StatusOK)
 	run := receiveClaudeRun(t, runner.started)
 	waitClaudeIdle(t, c)
-	want := []string{"claude", "-p", "--", "hello"}
+	want := []string{
+		"claude", "-p", "--output-format", "stream-json", "--verbose",
+		"--include-partial-messages", "--", "hello",
+	}
 	if !reflect.DeepEqual(run.argv, want) {
 		t.Fatalf("argv = %q, want %q", run.argv, want)
 	}
@@ -244,7 +253,10 @@ func TestClaudePromptCannotInjectCLIOptions(t *testing.T) {
 	writeViaHTTP(t, srv, prompt, http.StatusOK)
 	run := receiveClaudeRun(t, runner.started)
 	waitClaudeIdle(t, c)
-	want := []string{"claude", "--model", "immutable-model", "-p", "--", prompt}
+	want := []string{
+		"claude", "--model", "immutable-model", "-p", "--output-format",
+		"stream-json", "--verbose", "--include-partial-messages", "--", prompt,
+	}
 	if !reflect.DeepEqual(run.argv, want) {
 		t.Fatalf("argv = %q, want %q", run.argv, want)
 	}
@@ -330,26 +342,6 @@ func TestClaudeQueueHasTotalByteBudget(t *testing.T) {
 	c.mu.Unlock()
 	if queuedBytes != maxClaudeQueuedBytes {
 		t.Fatalf("queued bytes=%d, want %d", queuedBytes, maxClaudeQueuedBytes)
-	}
-}
-
-func TestSynchronizedBufferCapsInvocationOutputWithMarker(t *testing.T) {
-	const (
-		limit  = 12
-		marker = "[cut]"
-	)
-	buffer := newSynchronizedBuffer(limit, marker)
-	for _, chunk := range []string{"abcdefghij", "klmnop", "ignored"} {
-		n, err := io.WriteString(buffer, chunk)
-		if err != nil || n != len(chunk) {
-			t.Fatalf("write %q = (%d,%v), want (%d,nil)", chunk, n, err, len(chunk))
-		}
-	}
-	if got, want := string(buffer.Bytes()), "abcdefg[cut]"; got != want {
-		t.Fatalf("bounded invocation output = %q, want %q", got, want)
-	}
-	if got := len(buffer.Bytes()); got != limit {
-		t.Fatalf("bounded invocation bytes = %d, want %d", got, limit)
 	}
 }
 

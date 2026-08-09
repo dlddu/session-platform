@@ -9,9 +9,12 @@ between sessions.
 > Pod orchestration (client-go), shared session state (Kubernetes ConfigMaps +
 > Leases), both data plane modes, and the SPA are implemented. Shell sessions
 > map read/write to PTY stdout/stdin (J5, AC-D1~D3). Claude Code sessions queue
-> prompts through one serial worker, retain their CLI home/workspace, expose the
-> same offset-cursor read contract, and can archive filesystem state without
-> CRIU (J6, AC-E1~E6). Each invocation is bounded to 16 MiB and cumulative Claude
+> prompts through one serial worker, retain their CLI home/workspace, and project
+> Claude Code `stream-json` text deltas plus diagnostic stderr into an append-only
+> output buffer. The SPA receives that buffer live over an offset-cursored SSE
+> stream; the existing JSON read remains available for full replay and catch-up.
+> Claude sessions can archive filesystem state without CRIU (J6, AC-E1~E6).
+> Each invocation is bounded to 16 MiB and cumulative Claude
 > output to 256 MiB with explicit terminal markers; the full state and cursors
 > survive archive restore. Shell CRIU is agent-driven behind `CRIU_ENABLED`; Claude
 > archives are separately gated by `CLAUDE_CODE_ARCHIVE_ENABLED` because they
@@ -70,11 +73,16 @@ docs/                 value / PRD·AC / journeys / mockups / CRIU verification n
   the default 15-second Lease every 5 seconds; private snapshot transactions are
   owner-fenced. Read/Write/Switch dispatch on state (AC-C2/C3/C4).
 - **Workloads**: `shell` (default) runs one PTY shell; `claude-code` runs one
-  CLI process per prompt through a bounded serial queue. Type and Claude model
-  are immutable session metadata. Real provider credentials exist only in a
-  hardened localhost proxy sidecar that accepts only a configured HTTPS upstream;
-  the tool-running container receives a
-  non-secret placeholder and no Kubernetes service-account token.
+  CLI process per prompt through a bounded serial queue. Claude is invoked with
+  partial `stream-json` output enabled; the data plane incrementally redacts and
+  UTF-8-normalizes assistant text deltas and diagnostic stderr before appending
+  them to the session scrollback. Type and Claude model are immutable session
+  metadata. Real provider credentials exist only in a hardened localhost proxy
+  sidecar that accepts one configured HTTPS upstream. The proxy forwards safe
+  SSE response chunks before upstream completion, holds possible credential
+  suffixes across network reads for tail-safe redaction, and enforces a 64 MiB
+  raw-upstream SSE cap without whole-body buffering. The tool-running container
+  receives a non-secret placeholder and no Kubernetes service-account token.
 - **Lifecycle**: 60-min max idle → workload snapshot + pod reclaim (AC-B1);
   access → restore into a new pod (AC-B2). Shell uses CRIU behind
   `CRIU_ENABLED`; Claude uses a filesystem archive behind the independent,
@@ -90,7 +98,29 @@ docs/                 value / PRD·AC / journeys / mockups / CRIU verification n
 - **Single entry point**: the control plane container serves both the REST API
   (`/api/v1`) and the statically built SPA on one port. JSON POST bodies have an
   8 MiB wire limit and a 30-second read timeout; Claude prompts also have the
-  workload-specific 1 MiB decoded-payload limit.
+  workload-specific 1 MiB decoded-payload limit. The long-lived output SSE is
+  request-context bounded rather than subject to that short JSON I/O timeout.
+
+Claude workspaces keep one passive session output stream open. Each `output`
+event uses the server-issued byte cursor as its SSE id and carries
+`{offset,payloadBase64,nextOffset}`; decoding the payload yields exactly
+`nextOffset-offset` bytes. Base64 preserves the exact byte range and overlap
+math on the wire; it does not make JavaScript string length a cursor. For
+Claude output, every server-issued cursor and event boundary is also a UTF-8
+code-point boundary, so the same cursor is safe for the JSON read fallback.
+Reconnection resumes from `Last-Event-ID` (preferred over the initial `offset`
+query).
+
+If a requested cursor is ahead of the retained output, the stream emits
+`event: reset` with `id=<currentLength>` and `{"nextOffset":currentLength}`.
+The client discards partial decoder state, replaces its rendered history from
+`POST /read` at offset 0, and reconnects from that read's `nextOffset`. Opening
+the SSE connection and receiving output/reset/keepalive signals remain passive:
+they do not promote state, restore a snapshot, or touch `lastAccess`. The
+prescribed reset reconciliation is a normal Read API call, so it can promote an
+idle session and touch `lastAccess`. On transport failure, the SPA checks
+session state and reconnects only active/idle sessions, routing a snapshot to
+explicit restore instead of restoring it through an automatic read retry.
 
 The reaper scans the PRD's plain “last read/write was at least 60 minutes ago”
 boundary and rechecks authoritative `lastAccess` under the lifecycle Lease.
@@ -135,6 +165,7 @@ gitignored.
 | `DELETE /sessions/{id}`       | delete and reclaim live pod    | A3     |
 | `POST /sessions/{id}/read`   | read (state-branched)          | C2     |
 | `POST /sessions/{id}/write`  | write (state-branched)         | C3     |
+| `GET  /sessions/{id}/stream` | passive live output SSE        | E3     |
 | `POST /sessions/{id}/switch` | switch (restore if snapshot)   | C4     |
 
 ## Testing
@@ -155,8 +186,9 @@ gitignored.
   snapshot → reclaim → restore round trip is a verified assertion too
   (`TestDeferred_CRIUIntegrity`, AC-B2/B3/D4). J6 browser contract coverage
   uses deterministic Playwright route fixtures, while the Claude worker,
-  cursor, resume, output limits, redaction, archive round trip, and lifecycle
-  crash boundaries use fake-runner/adapter Go tests.
+  cursor, live pre-exit output, reconnect, runner/proxy incremental redaction,
+  proxy pre-EOF chunk forwarding, byte boundaries, output limits, resume,
+  archive round trip, and lifecycle crash boundaries use fake-runner/adapter Go tests.
   A deployed test against the external Claude API is intentionally not claimed.
   The seeded idle-state cases still lack an operational producer for the
   intermediate `idle` state. Details and the deferred-seed ↔ scenario map:

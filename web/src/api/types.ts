@@ -45,6 +45,30 @@ export interface ReadResult {
   nextOffset: number;
 }
 
+/**
+ * One `output` event from the session SSE stream. Payload bytes are base64 so
+ * byte offsets, overlap slicing, and wire lengths stay exact. Claude output
+ * event cursors are always issued at UTF-8 code-point boundaries.
+ */
+export interface OutputStreamEvent {
+  /** byte offset of the first payload byte */
+  offset: number;
+  payloadBase64: string;
+  /** byte offset immediately after the last payload byte */
+  nextOffset: number;
+}
+
+/** The server's authoritative cursor after retained output history changed. */
+export interface OutputStreamResetEvent {
+  nextOffset: number;
+}
+
+export type OutputStreamState =
+  | "connecting"
+  | "live"
+  | "reconnecting"
+  | "offline";
+
 export interface WriteResult {
   session: Session;
   path: string;

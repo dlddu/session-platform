@@ -13,8 +13,11 @@ session (AC-A2). The control plane provisions and reclaims these pods via the
   accumulated PTY output, and checkpoint/restore uses CRIU.
 - `claude-code` launches no resident shell. Write asynchronously queues a
   prompt for one serial worker; each job executes
-  `claude [--continue] [--model MODEL] -p -- PROMPT`, and read returns the merged
-  stdout/stderr through the same offset cursor contract. `--continue` starts
+  `claude [--continue] [--model MODEL] -p --output-format stream-json --verbose
+  --include-partial-messages -- PROMPT`. The agent parses stdout JSONL and
+  projects ordered `text_delta` values, while diagnostic stderr is retained as
+  text. Both are incrementally redacted and appended through the same offset
+  cursor contract while the invocation is still running. `--continue` starts
   only after the first successful invocation; a failed or timed-out first run
   still starts a new conversation next time. `CLAUDE_CODE_MODEL=platform-default` omits the
   model flag. Each invocation is limited to 30 minutes by default; set
@@ -26,7 +29,12 @@ session (AC-A2). The control plane provisions and reclaims these pods via the
   `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, pins every request to that
   configured HTTPS upstream (plain HTTP is rejected), forwards only an explicit
   Anthropic/Claude/Stainless header allowlist, rejects tunnels/upgrades, and
-  injects the real token as `Authorization: Bearer …`. Set
+  injects the real token as `Authorization: Bearer …`. Provider `text/event-stream`
+  bodies are forwarded incrementally up to a 64 MiB raw-upstream cap: a safe
+  flushed chunk reaches Claude before upstream EOF, while a streaming literal
+  redactor holds possible token suffixes across response reads so a split
+  credential is never exposed transiently. This does not buffer the full
+  Anthropic SSE response. Set
   `DATA_PLANE_AGENT_ADDR=127.0.0.1:8091`; non-loopback bind addresses are
   rejected. Its `/healthz` endpoint never contacts the upstream.
 
@@ -44,12 +52,16 @@ alone receives the Secret. Fresh session HOME also receives a platform-managed
 `Read`, `Write`, `Edit`, `Glob`, `Grep`, and `Bash`; the agent does not
 use `--dangerously-skip-permissions`.
 
-Merged raw stdout/stderr from one Claude invocation is capped at 16 MiB,
-including the terminal line
+Projected assistant text plus diagnostic stderr from one Claude invocation is
+capped at 16 MiB after incremental redaction, including the terminal line
 `[session-platform: invocation output truncated at 16 MiB]`. Cumulative Claude
 scrollback is capped at 256 MiB, including
 `[session-platform: session output limit reached; further prompts are disabled]`.
 The cumulative cap never rewrites bytes already exposed through `nextOffset`.
+The streaming writer holds incomplete UTF-8 and possible credential-match
+suffixes until they are safe to expose, so every issued cursor lands on a UTF-8
+code-point boundary and a credential split across runner writes is never
+transiently readable.
 Prompts accepted before the cap was observed still drain through the serial
 worker (later output is discarded); new writes after the terminal marker return
 507. Checkpoint/restore preserves the bounded bytes, terminal state, resume flag,
@@ -68,8 +80,26 @@ never reopen a different active generation; repeating an already completed
 abort is idempotent.
 
 The shell and Claude modes expose `/healthz`, reachability-only `/attach`, `/write`,
-`/read`, `/checkpoint`, and `/restore` on port 8090. Restore-target agents
-report healthy while awaiting the archive so provisioning cannot deadlock.
+`/read`, `/stream`, `/checkpoint`, and `/restore` on port 8090. `/read`
+remains the non-consuming JSON replay/catch-up endpoint. `/stream?offset=N` is
+a long-lived SSE view of the same append-only bytes. An `output` event uses
+`nextOffset` as its id and JSON `{offset,payloadBase64,nextOffset}`; the decoded
+byte count equals `nextOffset-offset`. Base64 preserves exact bytes and cursor
+length rather than allowing Claude events to split a UTF-8 rune: every
+server-issued Claude cursor and event boundary is a code-point boundary.
+
+If the requested cursor is greater than the retained byte length, the agent
+emits `event: reset` with that current length as both the id and
+`data.nextOffset`. A receiver must discard partial decoder state, reconcile the
+full retained history through `/read?offset=0`, and resume from that read's
+cursor. `Last-Event-ID` takes precedence over the query cursor on a reconnect,
+whether the agent endpoint is called directly or through the public proxy.
+The SSE reset itself is passive; at the public API, the prescribed `POST /read`
+reconciliation retains normal state-branched access semantics and can promote
+an idle session and refresh `lastAccess`.
+Comment keepalives carry no cursor or workload state, and there are no run/queue
+lifecycle events. Restore-target agents report healthy while awaiting the
+archive so provisioning cannot deadlock.
 The credential proxy exposes only `/healthz` plus the fixed-upstream proxy on
 its loopback port 8091; it never logs the token and strips/redacts it from
 upstream responses.

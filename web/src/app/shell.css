@@ -685,6 +685,24 @@ article.card {
 .console-actions .tag {
   margin-left: 0;
 }
+.console-bar .stream-status.connecting,
+.console-bar .stream-status.reconnecting {
+  color: var(--idle);
+}
+.console-bar .stream-status.connecting .led,
+.console-bar .stream-status.reconnecting .led {
+  background: var(--idle);
+  box-shadow: 0 0 7px var(--idle);
+  animation: breathe 2.6s var(--ease) infinite;
+}
+.console-bar .stream-status.offline {
+  color: var(--danger);
+}
+.console-bar .stream-status.offline .led {
+  background: var(--danger);
+  box-shadow: none;
+}
+
 .console-refresh {
   border: 1px solid var(--line);
   border-radius: 7px;

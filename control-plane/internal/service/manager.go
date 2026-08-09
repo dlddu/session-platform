@@ -17,6 +17,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"io"
 	"strings"
 	"time"
 
@@ -314,6 +315,22 @@ func (s *Service) Read(ctx context.Context, id string, offset int64) (*session.R
 		Payload:    payload,
 		NextOffset: next,
 	}, nil
+}
+
+// Stream passively observes the retained pod's append-only output. Deliberately
+// unlike Read, it does not activate idle sessions, restore snapshots, or touch
+// LastAccess: an open browser tab and SSE heartbeats must not defeat idle
+// reclamation. The SPA closes a failed source, checks session state, and asks
+// the user to restore a snapshot explicitly.
+func (s *Service) Stream(ctx context.Context, id string, offset int64) (io.ReadCloser, error) {
+	sess, err := s.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if sess.State == session.StateSnapshot || sess.Pod == "" {
+		return nil, session.ErrInvalidState
+	}
+	return s.agent.Stream(ctx, sess.Pod, offset)
 }
 
 // Write validates workload-specific limits, brings the session active, and

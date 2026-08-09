@@ -325,20 +325,31 @@ func (c *claudeWorkload) runWorker() {
 		c.active = true
 		c.mu.Unlock()
 
-		output := newSynchronizedBuffer(c.runOutputLimit, claudeRunOutputLimitMarker)
+		output := newClaudeOutputSink(
+			&c.out,
+			c.redact,
+			c.runOutputLimit,
+			c.scrollbackLimit,
+			func() { c.logger.Warn("claude session output limit reached; rejecting new prompts") },
+		)
+		stdoutUTF8 := newUTF8NormalizingWriter(output)
+		stdout := newClaudeStreamProjector(stdoutUTF8)
+		stderr := newUTF8NormalizingWriter(output)
 		runCtx, cancelRun := context.WithTimeout(c.ctx, c.runTimeout)
 		err := c.runner.Run(runCtx, c.argv(job.prompt, resume), runnerOptions{
 			Dir:    c.workDir,
 			Env:    environmentWithHome(c.homeDir),
-			Stdout: output,
-			Stderr: output,
+			Stdout: stdout,
+			Stderr: stderr,
 		})
 		cancelRun()
-		if b := c.redactBytes(output.Bytes()); len(b) != 0 {
-			if c.out.appendClaudeBoundedAt(b, c.scrollbackLimit, claudeOutputLimitMarker) {
-				c.logger.Warn("claude session output limit reached; rejecting new prompts")
-			}
-		}
+		// Flush projector/newline, per-fd UTF-8 tails, redaction tail and the
+		// invocation-limit tail before active becomes false. A checkpoint waiting
+		// on c.active therefore archives every byte produced by the drained run.
+		err = errors.Join(err, stdout.Close())
+		err = errors.Join(err, stdoutUTF8.Close())
+		err = errors.Join(err, stderr.Close())
+		err = errors.Join(err, output.Close())
 
 		// A failed first invocation may not have created a Claude conversation.
 		// Once a run succeeds, later failures do not erase the established resume
@@ -369,10 +380,13 @@ func (c *claudeWorkload) argv(prompt string, resume bool) []string {
 	if c.model != "" && c.model != platformDefaultModel {
 		argv = append(argv, "--model", c.model)
 	}
-	// -p/--print is a boolean; the prompt is positional. The option delimiter
-	// prevents a prompt beginning with "--" from changing model or permission
-	// flags.
-	return append(argv, "-p", "--", prompt)
+	// Partial stream-json is projected back to user-facing text by runWorker.
+	// The option delimiter still prevents a prompt beginning with "--" from
+	// changing any platform-controlled flag.
+	return append(argv,
+		"-p", "--output-format", "stream-json", "--verbose",
+		"--include-partial-messages", "--", prompt,
+	)
 }
 
 // beginCheckpoint atomically closes admission and drains all accepted work.
@@ -790,52 +804,6 @@ func validateClaudeManagedSettings(homeDir string) error {
 	return nil
 }
 
-type synchronizedBuffer struct {
-	mu        sync.Mutex
-	buf       bytes.Buffer
-	limit     int
-	marker    []byte
-	truncated bool
-}
-
-func newSynchronizedBuffer(limit int, marker string) *synchronizedBuffer {
-	return &synchronizedBuffer{limit: limit, marker: []byte(marker)}
-}
-
-func (b *synchronizedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	originalLen := len(p)
-	if originalLen == 0 || b.truncated {
-		return originalLen, nil
-	}
-	if b.limit <= 0 || b.buf.Len()+originalLen <= b.limit {
-		_, _ = b.buf.Write(p)
-		return originalLen, nil
-	}
-	prefixLimit := b.limit - len(b.marker)
-	if prefixLimit < 0 {
-		prefixLimit = 0
-	}
-	if b.buf.Len() > prefixLimit {
-		b.buf.Truncate(prefixLimit)
-	}
-	if remaining := prefixLimit - b.buf.Len(); remaining > 0 {
-		_, _ = b.buf.Write(p[:min(remaining, len(p))])
-	}
-	if remaining := b.limit - b.buf.Len(); remaining > 0 {
-		_, _ = b.buf.Write(b.marker[:min(remaining, len(b.marker))])
-	}
-	b.truncated = true
-	return originalLen, nil
-}
-
-func (b *synchronizedBuffer) Bytes() []byte {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return append([]byte(nil), b.buf.Bytes()...)
-}
-
 func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 	mux := http.NewServeMux()
 
@@ -916,6 +884,14 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 			"payload":    string(payload),
 			"nextOffset": next,
 		})
+	})
+
+	mux.HandleFunc("GET /stream", func(w http.ResponseWriter, r *http.Request) {
+		if !c.isReady() {
+			http.Error(w, "claude workload is awaiting restore", http.StatusServiceUnavailable)
+			return
+		}
+		serveOutputStream(w, r, &c.out)
 	})
 
 	mux.HandleFunc("POST /checkpoint", func(w http.ResponseWriter, r *http.Request) {

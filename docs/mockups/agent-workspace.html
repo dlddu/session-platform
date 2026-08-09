@@ -224,9 +224,9 @@
   .input-row .p{color:var(--active)}
   .input-row .ph{color:#46545e}
   .input-row .ph .mono{color:#5d6d78}
-  .input-row .queued{margin-left:auto;font-family:"IBM Plex Mono",monospace;font-size:10.5px;
+  .input-row .stream-state{margin-left:auto;font-family:"IBM Plex Mono",monospace;font-size:10.5px;
     color:#b79ae0;background:#241b33;border:1px solid #3a2c52;border-radius:6px;padding:3px 7px;display:none}
-  .input-row .queued.on{display:inline-block}
+  .input-row .stream-state.on{display:inline-block}
 
   /* ---------- agent conversation (J6-S2~S4) ---------- */
   .ln.prompt{color:#d6c9ea}
@@ -409,13 +409,13 @@
             <span>claude-code session</span>
             <span class="mono" id="ws-console-pod">—</span>
             <span class="mono" id="ws-console-model" style="color:#b79ae0">—</span>
-            <span class="tag" id="ws-console-tag"><span class="led"></span>agent ready</span>
+            <span class="tag" id="ws-console-tag"><span class="led"></span>agent available</span>
           </div>
           <div class="term mono" id="ws-term"></div>
           <div class="input-row">
             <span class="p" style="color:#b79ae0">&#9656;</span>
-            <span class="ph" id="ws-input-ph">send a prompt — runs <span class="mono">claude -p</span> once in the session pod</span>
-            <span class="queued" id="ws-queued">1 submission · checking output</span>
+            <span class="ph" id="ws-input-ph">send a prompt — streams one <span class="mono">claude -p</span> response</span>
+            <span class="stream-state on" id="ws-stream-state">output connected · cursor resumes</span>
           </div>
 
           <!-- thaw / restore overlay -->
@@ -559,18 +559,18 @@ const termActive = (s)=>[
   {c:'prompt',t:`<span class="op">▸</span> read invoice.go and tell me what the rounding bug is`},
   {c:'agent',t:`<span class="op">‹agent›</span> Line 88 rounds each line item with math.Round before summing,`},
   {c:'agent',t:`        so the per-item error accumulates. Sum first, round once at the end.`},
-  {c:'meta',t:`        run 1 exited · output appended → nextOffset=4096`},
+  {c:'meta',t:`        response streamed before run 1 exited · nextOffset=4096`},
   {c:'sep'},
   {c:'prompt',t:`<span class="op">▸</span> fix it and leave a marker file so I know you were here`},
   {c:'agent',t:`<span class="op">‹agent›</span> Edited invoice.go:88 — moved rounding out of the loop.`},
   {c:'agent',t:`        Created marker.txt in /work.`},
-  {c:'meta',t:`        run 2 exited · same pod, same working dir as run 1`},
+  {c:'meta',t:`        response streamed live · run 2 exited · same pod and working dir`},
   {c:'sep'},
   {c:'prompt',t:`<span class="op">▸</span> what did you change, and what's in the working dir now?`},
   {c:'agent',t:`<span class="op">‹agent›</span> I changed the rounding in invoice.go — the bug from your first message.`},
   {c:'agent',t:`        /work now holds: invoice.go, marker.txt`},
   {c:'ok',t:`✓ turn 3 saw turns 1–2 — conversation history persists on the pod between runs`},
-  {c:'meta',t:`  read(offset=${s.cursor.split('=')[1]}) returns only new output · read(offset=0) replays the whole conversation`}
+  {c:'meta',t:`  SSE resumes from ${s.cursor} · read(offset=0) still replays the whole output history`}
 ];
 const termFrozen = (s)=>[
   {c:'sys',t:`◆ session/${s.id} is frozen — pod reclaimed`},
@@ -639,20 +639,22 @@ function populate(s){
   paintContext(s);
   const vit = document.getElementById('ws-vitals');
   const tag = document.getElementById('ws-console-tag');
-  const queued = document.getElementById('ws-queued');
+  const streamState = document.getElementById('ws-stream-state');
   if(s.state==='active'){
     vit.style.display=''; setGauge(s.cpu,s.mem,s.memMax);
-    tag.style.display=''; tag.innerHTML='<span class="led"></span>agent ready';
-    queued.classList.remove('on');
+    tag.style.display=''; tag.innerHTML='<span class="led"></span>agent available';
+    streamState.textContent='output connected · '+s.cursor;
+    streamState.classList.add('on');
     paintTerm(termActive(s));
   } else if(s.state==='idle'){
     vit.style.display=''; setGauge(s.cpu,s.mem,s.memMax);
-    tag.style.display=''; tag.innerHTML='<span class="led" style="background:var(--idle);box-shadow:none"></span>no runs — pod held';
-    queued.classList.remove('on');
+    tag.style.display=''; tag.innerHTML='<span class="led" style="background:var(--idle);box-shadow:none"></span>pod held';
+    streamState.textContent='output connected · passive · '+s.cursor;
+    streamState.classList.add('on');
     paintTerm(termActive(s));
   } else {
     vit.style.display='none'; tag.style.display='none';
-    queued.classList.remove('on');
+    streamState.classList.remove('on');
     paintTerm(termFrozen(s));
   }
 }
@@ -719,6 +721,9 @@ function promote(s){
   setGauge(s.cpu,s.mem,s.memMax);
   const tag=document.getElementById('ws-console-tag'); tag.style.display=''; tag.innerHTML='<span class="led"></span>agent ready';
   document.getElementById('ws-console-model').textContent = 'model=' + s.model;
+  const streamState=document.getElementById('ws-stream-state');
+  streamState.textContent='output connected · '+s.cursor;
+  streamState.classList.add('on');
   paintContext(s);
   paintTerm([
     {c:'ok',t:`\u2713 restored from archive \u2014 conversation history and working dir intact`},

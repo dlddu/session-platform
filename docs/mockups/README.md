@@ -65,8 +65,8 @@
 | J5-S3 출력 확인 | ✅ | `workspace.html` term — 쉘 stdout 렌더(빌드 로그·상태 보존 문구) |
 | J5-S4 쉘 상태 축적 | ✅ | `workspace.html` **Shell state 패널** — cwd·env·shell var·background job과 "이것이 체크포인트 대상"임을 렌더 (2026-08-08 신규) |
 | J6-S1 작업 환경 선택 | ✅ | `new-session.html` **workload type 카드**(shell/claude-code) + model 선택 + 타입·모델 불변성 안내 |
-| J6-S2 프롬프트 전송 | ✅ | `agent-workspace.html` input-row `▸` 프롬프트 + submission/output 확인 표시(서버 running/queued 추정 아님) |
-| J6-S3 응답 확인 | ✅ | `agent-workspace.html` term — 에이전트 응답 렌더 + `nextOffset` 커서 표기 |
+| J6-S2 프롬프트 전송 | ✅ | `agent-workspace.html` input-row `▸` 프롬프트 + passive output 연결 표시(서버 running/queued 추정 아님) |
+| J6-S3 응답 확인 | ✅ | `agent-workspace.html` term — 실행 중 에이전트 응답 자동 append + 재연결 가능한 `nextOffset` 커서 표기 |
 | J6-S4 대화가 이어짐 | ✅ | `agent-workspace.html` **Conversation 패널** — 턴 이력·작업 디렉터리·생성 파일, "턴 N이 1~N-1을 본다" |
 | J6-S5 동결·복원 건너 이어감 | ✅ | `agent-workspace.html` snapshot 상태 콘솔 — CRIU 아님·아카이브 기반, 복원 후 옛 문맥으로 응답 |
 
@@ -99,6 +99,7 @@
 
 ## 마지막 갱신
 
+- **2026-08-09 (5)** — **J6 live output UX 갱신**: `agent-workspace.html`이 passive SSE 연결 상태와 실행 중 자동 append, `nextOffset` cursor 재개, snapshot Restore 전환을 표현하도록 갱신했다. 서버 run/queue 수는 추정하지 않으며 mockup 수·커버리지 합계는 변하지 않았다.
 - **2026-08-08 (3)** — **J6 신설에 따른 mockup 확충**: `agent-workspace.html` 신규 작성(J6-S2~S5), `new-session.html`에 workload type·model 선택 추가(J6-S1 · V8), `workspace.html`에 Shell state 패널 추가(J5-S4 ❌→✅), `index.html` 카드에 workloadType 태그·타입별 링크 분기 추가, `restore.html` 콘솔을 쉘 기준으로 갱신(옛 key/value 예시 제거). mockup 4→5, 단계 총계 18→23, 요약 ✅8→14 / ❌3→2. **V8 시각화 부재(🔴) 해소.**
 - **2026-07-01 (2)** — `workspace.html` session shell 콘솔을 쉘 명령 기준으로 갱신(key/value write 예시 제거 → `$` 프롬프트·쉘 stdout·복원 시 env/cwd 보존 시연). J5-S1~S3 ⚠️→✅, 요약 ✅8/⚠️4/❌3/⚪3. 디자인/레이아웃·임의 스타일 상태는 변화 없음.
 - **2026-07-01** — 인터랙티브 쉘 확정(당시 가치 V6, 2026-08-08 삭제)에 따른 J5 신설 반영. `workspace.html`을 J5-S1~S3에 매핑(당시 콘솔 내용 갱신 필요=⚠️), J5-S4는 전용 화면 없음(❌). 단계 총계 14→18.

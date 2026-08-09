@@ -42,3 +42,9 @@
   모두 400이고 agent side effect와 workload/model 변경 없음. (d)·(e)는 413이고, (e)는 pod 복원이나
   agent write 전에 거부됨. 서버 body read는 30초로 제한됨
 - **검증 AC**: AC-C2, AC-C3, AC-C4 (wire validation)
+
+### 시나리오 6: passive live output stream cursor·상태 계약
+- **사전 조건**: active, pod 보유 idle, snapshot 세션과 같은 append-only output bytes 준비
+- **실행 단계**: 각 상태에서 `GET .../stream?offset=N` 호출 → output event 수신 → query와 다른 유효 `Last-Event-ID`로 재연결 → 현재 길이보다 큰 cursor → 음수/비정수 cursor → keepalive만 전달
+- **기대 결과**: active/idle은 기존 pod에서만 stream하고 상태 승격·restore·`lastAccess` touch 없음. snapshot은 invalid-state이고 pod side effect 없음. output은 `id=nextOffset` 및 `{offset,payloadBase64,nextOffset}`이며 decoded byte 길이가 cursor 차이와 같고 Claude cursor는 UTF-8 경계다. Last-Event-ID가 query보다 우선한다. past-end cursor는 현재 길이를 `id`/`data.nextOffset`으로 갖는 reset, 음수/비정수 cursor는 400이다. SSE의 reset/keepalive 자체는 output이나 activity로 세지 않지만 클라이언트가 이어서 호출하는 read(0)은 일반 Read API대로 idle 승격·`lastAccess` 갱신 의미를 갖는다.
+- **검증 AC**: AC-E3 (AC-C2 JSON read와 같은 보존 cursor, 별도 passive 상태 정책)

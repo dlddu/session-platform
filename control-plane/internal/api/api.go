@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/dlddu/session-platform/control-plane/internal/session"
@@ -48,6 +49,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/sessions", a.listSessions)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", a.getSession)
 	mux.HandleFunc("DELETE /api/v1/sessions/{id}", a.deleteSession)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/stream", a.streamSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/read", a.readSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/write", a.writeSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/switch", a.switchSession)
@@ -163,6 +165,63 @@ func (a *API) deleteSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// streamSession proxies the selected pod's passive SSE output feed. The
+// Last-Event-ID header wins over the query cursor so a native EventSource
+// reconnect resumes from the last event the browser accepted.
+func (a *API) streamSession(w http.ResponseWriter, r *http.Request) {
+	offset, err := outputStreamOffset(r)
+	if err != nil {
+		writeErr(w, session.ErrInvalidInput)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, errResp{Error: "streaming is unsupported by this server"})
+		return
+	}
+	stream, err := a.mgr.Stream(r.Context(), r.PathValue("id"), offset)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	defer stream.Close()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+
+	buf := make([]byte, 32<<10)
+	for {
+		n, readErr := stream.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				return
+			}
+			flusher.Flush()
+		}
+		if readErr != nil {
+			return
+		}
+	}
+}
+
+func outputStreamOffset(r *http.Request) (int64, error) {
+	value := r.URL.Query().Get("offset")
+	if lastEventID := r.Header.Get("Last-Event-ID"); lastEventID != "" {
+		value = lastEventID
+	}
+	if value == "" {
+		return 0, nil
+	}
+	offset, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || offset < 0 {
+		return 0, session.ErrInvalidInput
+	}
+	return offset, nil
 }
 
 func (a *API) readSession(w http.ResponseWriter, r *http.Request) {
