@@ -4,6 +4,9 @@ The data plane is where actual session workloads run — one dedicated pod per
 session (AC-A2). The control plane provisions and reclaims these pods via the
 `PodOrchestrator` port.
 
+The runtime image includes `git`, `gh`, `curl`, `jq`, and `kubectl` for use by
+interactive shell and Claude Code workloads.
+
 ## Status: shell, claude-code, and credential-proxy agents built
 
 `DATA_PLANE_WORKLOAD` selects one of three modes in the dedicated session pod:
