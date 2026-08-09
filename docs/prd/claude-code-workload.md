@@ -33,7 +33,7 @@
   ```
   ANTHROPIC_BASE_URL=http://127.0.0.1:8091  ANTHROPIC_AUTH_TOKEN=<비밀이 아닌 proxy placeholder> \
     claude [--continue] [--model <선택된 모델>] \
-      --permission-mode auto --effort xhigh -p \
+      --permission-mode auto -p \
       --output-format stream-json --verbose --include-partial-messages -- "<payload>"
   ```
 
@@ -46,7 +46,7 @@
 - **구체화 대상**: AC-C3(Write API 상태별 분기)의 "write" 시맨틱 — `claude-code` 타입 버전
 - **검증 방법**: active 세션에 `payload="1+1은?"`로 write 후 pod에서 위 exact argv의 `claude` 프로세스가 1회 기동되고 응답 출력 후 종료함을 확인한다. write가 실행 완료를 기다리지 않고 반환하며, fake runner가 첫 delta 뒤 대기하는 동안에도 그 delta가 read와 SSE에 보이는지 확인한다. 연속 2회 write 시 두 실행이 겹치지 않고 순서대로 수행됨을 확인한다. 첫 실행 실패·timeout 뒤에는 `--continue`가 붙지 않고 첫 성공 뒤에만 붙음을 확인한다. prompt가 1 MiB를 넘으면 public API까지 413이고 실행되지 않으며, queue 포화 시 429, invocation 출력 초과 시 16 MiB 경계 안의 append-only truncation marker를 확인한다.
 
-> ✅ **구현 결정 (headless 권한·effort 정책, 2026-08-08; 2026-08-09 갱신)**: 전용 session pod를 실행 경계로 삼고, 모든 invocation을 `--permission-mode auto --effort xhigh`로 시작한다. 세션 HOME의 플랫폼 관리 `.claude/settings.json`에는 코딩에 필요한 `Read`·`Write`·`Edit`·`Glob`·`Grep`·`Bash`만 허용한다. `--dangerously-skip-permissions`는 사용하지 않으며 설정 파일은 파일시스템 아카이브에 포함해 복원 후에도 동일 정책을 유지한다.
+> ✅ **구현 결정 (headless 권한 정책, 2026-08-08)**: 전용 session pod를 실행 경계로 삼고, 모든 invocation을 `--permission-mode auto`로 시작한다. 세션 HOME의 플랫폼 관리 `.claude/settings.json`에는 코딩에 필요한 `Read`·`Write`·`Edit`·`Glob`·`Grep`·`Bash`만 허용한다. `--dangerously-skip-permissions`는 사용하지 않으며 설정 파일은 파일시스템 아카이브에 포함해 복원 후에도 동일 정책을 유지한다.
 
 ### AC-E3: read/stream = 실행 중 출력, offset 커서 기반 델타
 - **설명**: `claude-code` 세션의 출력은 쉘 타입(AC-D3)과 **동일한 append-only offset 커서 규약**을 따른다. `POST /sessions/{id}/read`는 요청 `offset`(직전 응답이 발급한 `nextOffset`, 생략 시 0) 이후에 누적된 출력을 반환하고 새 `nextOffset`을 발급한다. 이 JSON read는 비파괴적 catch-up·reconcile·`offset=0` 전체 replay 용으로 계속 지원한다.
