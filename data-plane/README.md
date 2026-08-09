@@ -16,7 +16,7 @@ interactive shell and Claude Code workloads.
   accumulated PTY output, and checkpoint/restore uses CRIU.
 - `claude-code` launches no resident shell. Write asynchronously queues a
   prompt for one serial worker; each job executes
-  `claude [--continue] [--model MODEL] --permission-mode auto --effort xhigh
+  `claude [--continue] [--model MODEL] --permission-mode auto
   -p --output-format stream-json --verbose --include-partial-messages -- PROMPT`.
   The agent parses stdout JSONL and
   projects ordered `text_delta` values, while diagnostic stderr is retained as
@@ -89,7 +89,7 @@ Fresh session HOME also receives a platform-managed `.claude/settings.json`
 that allows only the coding tools
 `Read`, `Write`, `Edit`, `Glob`, `Grep`, and `Bash`; the agent does not
 use `--dangerously-skip-permissions`. Every invocation starts Claude Code in
-`auto` permission mode with `xhigh` effort through explicit CLI flags.
+`auto` permission mode through an explicit CLI flag.
 
 Projected assistant text plus diagnostic stderr from one Claude invocation is
 capped at 16 MiB after incremental redaction, including the terminal line

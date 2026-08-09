@@ -74,7 +74,7 @@ docs/                 value / PRD·AC / journeys / mockups / CRIU verification n
   owner-fenced. Read/Write/Switch dispatch on state (AC-C2/C3/C4).
 - **Workloads**: `shell` (default) runs one PTY shell; `claude-code` runs one
   CLI process per prompt through a bounded serial queue. Claude is invoked with
-  `--permission-mode auto`, `--effort xhigh`, and partial `stream-json` output
+  `--permission-mode auto` and partial `stream-json` output
   enabled; the data plane incrementally redacts and UTF-8-normalizes assistant
   text deltas and diagnostic stderr before appending them to the session
   scrollback. Type and Claude model are immutable session

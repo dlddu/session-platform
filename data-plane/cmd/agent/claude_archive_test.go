@@ -206,7 +206,7 @@ func TestClaudeArchiveRestoreRoundTripPreservesStateCursorAndResume(t *testing.T
 	run := receiveClaudeRun(t, runner2.started)
 	want := []string{
 		"claude", "--continue", "--model", "claude-roundtrip", "--permission-mode", "auto",
-		"--effort", "xhigh", "-p", "--output-format",
+		"-p", "--output-format",
 		"stream-json", "--verbose", "--include-partial-messages", "--", "continue",
 	}
 	if !reflect.DeepEqual(run.argv, want) {
