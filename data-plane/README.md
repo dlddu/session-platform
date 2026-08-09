@@ -16,8 +16,9 @@ interactive shell and Claude Code workloads.
   accumulated PTY output, and checkpoint/restore uses CRIU.
 - `claude-code` launches no resident shell. Write asynchronously queues a
   prompt for one serial worker; each job executes
-  `claude [--continue] [--model MODEL] -p --output-format stream-json --verbose
-  --include-partial-messages -- PROMPT`. The agent parses stdout JSONL and
+  `claude [--continue] [--model MODEL] --permission-mode auto --effort xhigh
+  -p --output-format stream-json --verbose --include-partial-messages -- PROMPT`.
+  The agent parses stdout JSONL and
   projects ordered `text_delta` values, while diagnostic stderr is retained as
   text. Both are incrementally redacted and appended through the same offset
   cursor contract while the invocation is still running. `--continue` starts
@@ -84,7 +85,8 @@ literal name because Kubernetes does not interpolate
 Fresh session HOME also receives a platform-managed `.claude/settings.json`
 that allows only the coding tools
 `Read`, `Write`, `Edit`, `Glob`, `Grep`, and `Bash`; the agent does not
-use `--dangerously-skip-permissions`.
+use `--dangerously-skip-permissions`. Every invocation starts Claude Code in
+`auto` permission mode with `xhigh` effort through explicit CLI flags.
 
 Projected assistant text plus diagnostic stderr from one Claude invocation is
 capped at 16 MiB after incremental redaction, including the terminal line
