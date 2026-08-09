@@ -94,6 +94,12 @@ func TestClientOrchestrator_StartCreatesOnePodWithLabel(t *testing.T) {
 	if got := p.Labels[k8s.LabelSessionID]; got != "a1b2" {
 		t.Fatalf("%s label=%q want %q (AC-A2 1:1)", k8s.LabelSessionID, got, "a1b2")
 	}
+	if p.Spec.ServiceAccountName != k8s.DataPlaneServiceAccountName {
+		t.Fatalf("service account=%q want %q", p.Spec.ServiceAccountName, k8s.DataPlaneServiceAccountName)
+	}
+	if p.Spec.AutomountServiceAccountToken == nil || !*p.Spec.AutomountServiceAccountToken {
+		t.Fatal("session pod must mount its read-only Kubernetes service-account token")
+	}
 	if len(p.Spec.Containers) != 1 || p.Spec.Containers[0].Image == "" {
 		t.Fatalf("expected one container with an image, got %+v", p.Spec.Containers)
 	}
@@ -245,6 +251,11 @@ func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 	p := pods[0]
 	if p.Name != restored.Name {
 		t.Fatalf("pod name=%q want %q (RestoreInto ref)", p.Name, restored.Name)
+	}
+	if p.Spec.ServiceAccountName != k8s.DataPlaneServiceAccountName ||
+		p.Spec.AutomountServiceAccountToken == nil || !*p.Spec.AutomountServiceAccountToken {
+		t.Fatalf("restore pod service account/token = %q/%v, want %q/mounted",
+			p.Spec.ServiceAccountName, p.Spec.AutomountServiceAccountToken, k8s.DataPlaneServiceAccountName)
 	}
 	// The restore marker records the checkpoint the runtime must resume from —
 	// this is what distinguishes a restore from a fresh shell start.

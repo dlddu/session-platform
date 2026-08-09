@@ -216,8 +216,11 @@ func TestClientOrchestrator_ClaudeCredentialsAreIsolatedInSidecar(t *testing.T) 
 	if len(pod.Spec.Containers) != 2 {
 		t.Fatalf("containers = %d, want agent + credential proxy", len(pod.Spec.Containers))
 	}
-	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
-		t.Fatal("session pod must not mount a Kubernetes service-account token")
+	if pod.Spec.ServiceAccountName != k8s.DataPlaneServiceAccountName {
+		t.Fatalf("service account = %q, want %q", pod.Spec.ServiceAccountName, k8s.DataPlaneServiceAccountName)
+	}
+	if pod.Spec.AutomountServiceAccountToken == nil || !*pod.Spec.AutomountServiceAccountToken {
+		t.Fatal("session pod must mount its read-only Kubernetes service-account token")
 	}
 	if pod.Spec.ShareProcessNamespace != nil && *pod.Spec.ShareProcessNamespace {
 		t.Fatal("credential proxy must keep its separate PID namespace")

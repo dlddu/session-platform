@@ -28,6 +28,15 @@ images:
     newName: session-platform/control-plane
     newTag: dev
 patches:
+  # The production ClusterRoleBinding targets the session-platform namespace;
+  # this overlay deploys the same data-plane ServiceAccount into `default`.
+  - target:
+      kind: ClusterRoleBinding
+      name: session-platform-data-plane-view
+    patch: |-
+      - op: replace
+        path: /subjects/0/namespace
+        value: default
   - target:
       kind: Service
       name: control-plane
