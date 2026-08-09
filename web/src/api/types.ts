@@ -10,7 +10,8 @@ export type WorkloadType = "shell" | "claude-code";
 
 export interface PlatformConfig {
   claudeCode: {
-    defaultModel: "platform-default";
+    /** Concrete Secret default when configured; otherwise platform-default. */
+    defaultModel: string;
     models: string[];
   };
 }

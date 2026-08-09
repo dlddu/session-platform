@@ -52,7 +52,7 @@ const (
 
 var (
 	claudeManagedTools = []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}
-	claudeModelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
+	claudeModelPattern = regexp.MustCompile(`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$`)
 )
 
 var (
@@ -192,11 +192,11 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 	if stateDir == string(filepath.Separator) {
 		return nil, errors.New("claude state dir must not be the filesystem root")
 	}
-	model := strings.TrimSpace(cfg.Model)
+	model := cfg.Model
 	if model == "" {
 		model = platformDefaultModel
 	}
-	if !claudeModelPattern.MatchString(model) {
+	if model != strings.TrimSpace(model) || !claudeModelPattern.MatchString(model) {
 		return nil, errors.New("claude model must match the platform model identifier pattern")
 	}
 	binary := strings.TrimSpace(cfg.Binary)

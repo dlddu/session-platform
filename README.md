@@ -85,8 +85,9 @@ docs/                 value / PRD·AC / journeys / mockups / CRIU verification n
   The required `base-url` and `auth-token` Secret keys remain isolated in a
   hardened localhost proxy sidecar that accepts one configured HTTPS upstream.
   A separate optional `models` Secret key is an ordered UI soft catalog, not
-  an API allowlist. The Deployment projects only that key into the control
-  plane as `CLAUDE_CODE_MODELS`; `GET /api/v1/config` exposes its validated
+  an API allowlist. The Deployment projects the public `model` and `models`
+  keys into the control plane as `CLAUDE_CODE_DEFAULT_MODEL` and
+  `CLAUDE_CODE_MODELS`; `GET /api/v1/config` exposes their validated startup
   snapshot without exposing credentials. The proxy forwards safe SSE response
   chunks before upstream completion, holds possible credential
   suffixes across network reads for tail-safe redaction, and enforces a 64 MiB
@@ -250,34 +251,44 @@ credential-proxy sidecar. Its `model` key is optional: a non-empty value selects
 the model for `platform-default` sessions, while a missing or empty value falls
 back to the installed Claude CLI default. A concrete model supplied when the
 session is created always wins. Non-empty Secret values are validated against
-`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$` when the data-plane container starts, so
-an invalid platform default fails fast instead of being forwarded as a CLI
-option.
+`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$`
+when the data-plane container starts, so an invalid platform default fails fast
+instead of being forwarded as a CLI option. The optional leading `~` supports
+OpenRouter moving aliases such as `~anthropic/claude-opus-latest`.
 
 The separate optional `models` key is a JSON string array used only as an
-ordered UI picker catalog. The Deployment projects only this key into the
-control plane as `CLAUDE_CODE_MODELS`; it does not grant the control plane
-access to `base-url`, `auth-token`, or `model`. A non-empty value must be a
-JSON array of unique model strings that satisfy
-`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`; empty entries, surrounding whitespace,
+ordered UI picker catalog. The Deployment projects the public `model` and
+`models` keys into the control plane as `CLAUDE_CODE_DEFAULT_MODEL` and
+`CLAUDE_CODE_MODELS`; it does not grant the process access to `base-url` or
+`auth-token`. A non-empty catalog must be a JSON array of unique model strings
+that satisfy
+`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$`; empty entries, surrounding whitespace,
 duplicates, and the reserved `platform-default` alias make the control plane
 fail startup. Missing, empty, or `[]` keeps the existing free-text model UI.
 `GET /api/v1/config` returns
-`{"claudeCode":{"defaultModel":"platform-default","models":[...]}}` with
-`Cache-Control: no-store`. This catalog is advisory: the create-session API
-continues to accept valid model identifiers outside it.
+`{"claudeCode":{"defaultModel":"~deepseek/deepseek-v4-flash-latest","models":[...]}}`
+with `Cache-Control: no-store`; missing/empty `model` returns
+`platform-default`. The UI renders the concrete default once as
+`<model> (platform default)` and omits `model` from that create request, while
+other choices are pinned literally. The catalog remains advisory: the
+create-session API accepts valid model identifiers outside it.
 
 If `CLAUDE_CODE_CREDENTIALS_SECRET` is changed from its default name, also
-patch the Deployment's `CLAUDE_CODE_MODELS.valueFrom.secretKeyRef.name` to the
-same Secret. Kubernetes does not interpolate one environment variable into a
+patch the `valueFrom.secretKeyRef.name` field for both
+`CLAUDE_CODE_DEFAULT_MODEL` and `CLAUDE_CODE_MODELS` to the same Secret.
+Kubernetes does not
+interpolate one environment variable into a
 `secretKeyRef.name`.
 
 Changing the singular `model` key is observed the next time a
 `platform-default` primary container starts: in a new pod, a pod recreated
 during restore, or a container restart. It does not immediately mutate an
 already-running container, and a concrete-model session keeps its literal
-setting. Changing `models` takes effect only after the control-plane Deployment
-rolls so each process reloads its environment. See
+setting. The config API and UI read both `model` and `models` from the
+control-plane process's startup environment, so either display change requires
+a Deployment rollout. During the interval before that rollout, a newly started
+`platform-default` session may already use the new Secret model while the UI
+still shows the prior snapshot. See
 [`k8s/claude-code-credentials-secret.example.yaml`](k8s/claude-code-credentials-secret.example.yaml).
 
 The [`deploy/`](deploy/) directory remains the local `kind` setup for the

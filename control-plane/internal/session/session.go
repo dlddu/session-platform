@@ -70,7 +70,10 @@ const (
 	MaxClaudePromptBytes = 1 << 20
 )
 
-var modelNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
+// Model identifiers are at most 128 characters. In addition to ordinary
+// provider/model names, a single leading '~' is accepted for OpenRouter's
+// moving "latest" aliases (for example, ~anthropic/claude-opus-latest).
+var modelNamePattern = regexp.MustCompile(`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$`)
 
 // Valid reports whether w is a known workload type. The empty string is not
 // valid here — it means "unspecified", which NormalizeWorkloadType folds to the

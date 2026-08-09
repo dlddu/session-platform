@@ -224,11 +224,34 @@ func TestClaudePlatformDefaultOmitsModelFlag(t *testing.T) {
 	}
 }
 
+func TestClaudeOpenRouterLatestAliasIsPassedAsOneModelArgument(t *testing.T) {
+	const model = "~deepseek/deepseek-v4-flash-latest"
+	runner := newFakeClaudeRunner()
+	c, srv := newClaudeTestServer(t, runner, model, false, nil)
+
+	writeViaHTTP(t, srv, "hello", http.StatusOK)
+	run := receiveClaudeRun(t, runner.started)
+	waitClaudeIdle(t, c)
+	want := []string{
+		"claude", "--model", model, "-p", "--output-format", "stream-json",
+		"--verbose", "--include-partial-messages", "--", "hello",
+	}
+	if !reflect.DeepEqual(run.argv, want) {
+		t.Fatalf("argv = %q, want %q", run.argv, want)
+	}
+}
+
 func TestClaudeRejectsInvalidConfiguredModel(t *testing.T) {
 	for _, model := range []string{
 		"--dangerously-skip-permissions",
 		"bad model",
+		" claude-model",
+		"claude-model ",
+		"   ",
+		"~",
+		"~~anthropic/claude-opus-latest",
 		strings.Repeat("a", 129),
+		"~" + strings.Repeat("a", 128),
 	} {
 		t.Run(model, func(t *testing.T) {
 			workload, err := newClaudeWorkload(claudeConfig{

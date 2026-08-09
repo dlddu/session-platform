@@ -59,6 +59,7 @@ func main() {
 		"data_plane_image", cfg.dataPlaneImage,
 		"data_plane_claude_code_image", cfg.dataPlaneClaudeCodeImage,
 		"data_plane_shell", cfg.dataPlaneShell,
+		"claude_code_default_model", cfg.claudeCodeDefaultModel,
 		"claude_code_models", len(cfg.claudeCodeModels),
 	)
 	if cfg.dataPlaneImage == "" {
@@ -132,7 +133,7 @@ func main() {
 	mux := http.NewServeMux()
 	api.New(mgr,
 		api.WithTestEndpoints(cfg.testEndpoints),
-		api.WithClaudeCodeModels(cfg.claudeCodeModels),
+		api.WithClaudeCodeModelConfig(cfg.claudeCodeDefaultModel, cfg.claudeCodeModels),
 	).Routes(mux)
 	mux.Handle("/", static.Handler())
 
@@ -181,6 +182,10 @@ type config struct {
 	// archives to be written to CHECKPOINT_S3_* (default false).
 	claudeArchiveEnabled    bool
 	claudeCredentialsSecret string
+	// claudeCodeDefaultModel is the effective, public default shown by the SPA.
+	// It is a concrete Secret-backed model when configured, otherwise the
+	// stable platform-default alias.
+	claudeCodeDefaultModel string
 	// claudeCodeModels is the ordered, public model catalog shown by the SPA.
 	// Empty preserves the free-text model input and existing API behaviour.
 	claudeCodeModels []string
@@ -236,6 +241,10 @@ func (c config) checkpointStoreDesc() string {
 }
 
 func loadConfig() (config, error) {
+	claudeCodeDefaultModel, err := parseClaudeCodeDefaultModel(os.Getenv("CLAUDE_CODE_DEFAULT_MODEL"))
+	if err != nil {
+		return config{}, fmt.Errorf("CLAUDE_CODE_DEFAULT_MODEL: %w", err)
+	}
 	claudeCodeModels, err := parseClaudeCodeModels(os.Getenv("CLAUDE_CODE_MODELS"))
 	if err != nil {
 		return config{}, fmt.Errorf("CLAUDE_CODE_MODELS: %w", err)
@@ -249,6 +258,7 @@ func loadConfig() (config, error) {
 		dataPlaneClaudeCodeImage: env("DATA_PLANE_CLAUDE_CODE_IMAGE", ""),
 		claudeArchiveEnabled:     envBool("CLAUDE_CODE_ARCHIVE_ENABLED", false),
 		claudeCredentialsSecret:  env("CLAUDE_CODE_CREDENTIALS_SECRET", "claude-code-credentials"),
+		claudeCodeDefaultModel:   claudeCodeDefaultModel,
 		claudeCodeModels:         claudeCodeModels,
 		criuEnabled:              envBool("CRIU_ENABLED", false),
 		testEndpoints:            envBool("E2E_TEST_ENDPOINTS", false),
@@ -260,6 +270,26 @@ func loadConfig() (config, error) {
 		checkpointS3Prefix:       env("CHECKPOINT_S3_PREFIX", "checkpoints"),
 		checkpointS3SessionName:  env("CHECKPOINT_S3_SESSION_NAME", ""),
 	}, nil
+}
+
+// parseClaudeCodeDefaultModel validates the optional Secret-backed default
+// model. The reserved alias is produced only as the missing/empty fallback;
+// explicitly configuring it would hide a likely Secret projection mistake.
+func parseClaudeCodeDefaultModel(value string) (string, error) {
+	if value == "" {
+		return session.PlatformDefaultModel, nil
+	}
+	if value != strings.TrimSpace(value) {
+		return "", errors.New("must be a model without surrounding whitespace")
+	}
+	normalized, err := session.NormalizeModel(session.WorkloadTypeClaudeCode, value)
+	if err != nil {
+		return "", errors.New("must be a valid model")
+	}
+	if normalized == session.PlatformDefaultModel {
+		return "", fmt.Errorf("reserved alias %q cannot be configured explicitly", session.PlatformDefaultModel)
+	}
+	return normalized, nil
 }
 
 // parseClaudeCodeModels decodes the optional Secret-backed JSON catalog. It is

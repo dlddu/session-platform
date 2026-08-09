@@ -56,21 +56,25 @@ key. A missing or empty key omits `--model` and therefore delegates to the
 installed Claude CLI; a concrete session model is instead injected literally
 and takes precedence over the Secret default. The optional model is not exposed
 to the credential-proxy sidecar. Any non-empty effective model must match
-`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`; invalid Secret configuration is rejected
-when the agent starts instead of being forwarded as CLI options. Changes to that
-Secret default are resolved
+`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$`.
+A leading `~` supports OpenRouter moving aliases. Invalid Secret configuration
+is rejected when the agent starts instead of being forwarded as CLI options.
+Changes to that Secret default are resolved
 whenever a `platform-default` primary container starts, including a new pod,
 a pod recreated after restore, or a container restart. They do not immediately
 mutate a running container environment or a concrete session model.
 
 The plural Secret key `models` is not data-plane configuration and is never
-projected into either session container. The Deployment projects only that key
-into the control plane as `CLAUDE_CODE_MODELS`, where it becomes the ordered
-soft catalog returned by `GET /api/v1/config`; catalog changes require a
-control-plane rollout. Missing, empty, or `[]` preserves the UI's free-text
-input, and the catalog does not restrict models accepted by the session API. If
-the credentials Secret is renamed, the Deployment's
-`CLAUDE_CODE_MODELS.valueFrom.secretKeyRef.name` must be patched to the same
+projected into either session container. For UI presentation, the Deployment
+projects the public singular `model` and plural `models` keys into the control
+plane as `CLAUDE_CODE_DEFAULT_MODEL` and `CLAUDE_CODE_MODELS`. The config API
+returns their validated startup snapshot; a concrete default is rendered once
+as `<model> (platform default)`, while missing/empty falls back to the generic
+alias. Either display change requires a control-plane rollout, but a session
+pod still resolves its own `model` SecretKeyRef whenever it starts. Missing,
+empty, or `[]` preserves the UI's free-text input, and the catalog does not
+restrict models accepted by the session API. If the credentials Secret is
+renamed, both control-plane SecretKeyRef names must be patched to the same
 literal name because Kubernetes does not interpolate
 `CLAUDE_CODE_CREDENTIALS_SECRET` there.
 
