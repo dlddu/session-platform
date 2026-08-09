@@ -183,12 +183,12 @@ func TestClaudeWriteIsNonBlockingAndSerial(t *testing.T) {
 
 	wantFirst := []string{
 		"claude", "--model", "claude-test-model", "--permission-mode", "auto",
-		"--effort", "xhigh", "-p", "--output-format",
+		"-p", "--output-format",
 		"stream-json", "--verbose", "--include-partial-messages", "--", "first prompt",
 	}
 	wantSecond := []string{
 		"claude", "--continue", "--model", "claude-test-model", "--permission-mode", "auto",
-		"--effort", "xhigh", "-p", "--output-format",
+		"-p", "--output-format",
 		"stream-json", "--verbose", "--include-partial-messages", "--", "second prompt",
 	}
 	if !reflect.DeepEqual(first.argv, wantFirst) {
@@ -218,7 +218,7 @@ func TestClaudePlatformDefaultOmitsModelFlag(t *testing.T) {
 	run := receiveClaudeRun(t, runner.started)
 	waitClaudeIdle(t, c)
 	want := []string{
-		"claude", "--permission-mode", "auto", "--effort", "xhigh", "-p",
+		"claude", "--permission-mode", "auto", "-p",
 		"--output-format", "stream-json", "--verbose",
 		"--include-partial-messages", "--", "hello",
 	}
@@ -236,8 +236,7 @@ func TestClaudeOpenRouterLatestAliasIsPassedAsOneModelArgument(t *testing.T) {
 	run := receiveClaudeRun(t, runner.started)
 	waitClaudeIdle(t, c)
 	want := []string{
-		"claude", "--model", model, "--permission-mode", "auto", "--effort", "xhigh",
-		"-p", "--output-format", "stream-json",
+		"claude", "--model", model, "--permission-mode", "auto", 		"-p", "--output-format", "stream-json",
 		"--verbose", "--include-partial-messages", "--", "hello",
 	}
 	if !reflect.DeepEqual(run.argv, want) {
@@ -305,7 +304,7 @@ func TestClaudePromptCannotInjectCLIOptions(t *testing.T) {
 	waitClaudeIdle(t, c)
 	want := []string{
 		"claude", "--model", "immutable-model", "--permission-mode", "auto",
-		"--effort", "xhigh", "-p", "--output-format",
+		"-p", "--output-format",
 		"stream-json", "--verbose", "--include-partial-messages", "--", prompt,
 	}
 	if !reflect.DeepEqual(run.argv, want) {
