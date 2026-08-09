@@ -33,21 +33,22 @@ const (
 	platformDefaultModel  = "platform-default"
 	claudePermissionMode  = "auto"
 
-	claudeRuntimeStateFile     = ".session-platform-claude.json"
-	claudeSettingsDir          = ".claude"
-	claudeSettingsFile         = "settings.json"
-	maxClaudePromptBytes       = 1 << 20
-	maxClaudeQueuedPrompts     = 64
-	maxClaudeQueuedBytes       = 8 << 20
-	maxClaudeRunOutputBytes    = 16 << 20
-	maxClaudeArchiveBytes      = int64(4 << 30)
-	maxClaudeScrollbackBytes   = int64(256 << 20)
-	maxClaudeArchiveEntries    = 200_000
-	maxClaudeArchivePathBytes  = 4 << 10
-	redactedLiteral            = "[REDACTED]"
-	claudeCheckpointIDHeader   = "X-Session-Checkpoint-ID"
-	claudeRunOutputLimitMarker = "\n[session-platform: invocation output truncated at 16 MiB]\n"
-	claudeOutputLimitMarker    = "\n[session-platform: session output limit reached; further prompts are disabled]\n"
+	claudeRuntimeStateFile      = ".session-platform-claude.json"
+	claudeSettingsDir           = ".claude"
+	claudeSettingsFile          = "settings.json"
+	claudeSessionPlatformPlugin = "session-platform@dlddu-plugins"
+	maxClaudePromptBytes        = 1 << 20
+	maxClaudeQueuedPrompts      = 64
+	maxClaudeQueuedBytes        = 8 << 20
+	maxClaudeRunOutputBytes     = 16 << 20
+	maxClaudeArchiveBytes       = int64(4 << 30)
+	maxClaudeScrollbackBytes    = int64(256 << 20)
+	maxClaudeArchiveEntries     = 200_000
+	maxClaudeArchivePathBytes   = 4 << 10
+	redactedLiteral             = "[REDACTED]"
+	claudeCheckpointIDHeader    = "X-Session-Checkpoint-ID"
+	claudeRunOutputLimitMarker  = "\n[session-platform: invocation output truncated at 16 MiB]\n"
+	claudeOutputLimitMarker     = "\n[session-platform: session output limit reached; further prompts are disabled]\n"
 
 	claudeProcessGroupDrainTimeout      = 5 * time.Second
 	defaultClaudeRunTimeout             = 30 * time.Minute
@@ -626,6 +627,7 @@ func credentialLiteralsFromEnv() []string {
 		os.Getenv("ANTHROPIC_AUTH_TOKEN"),
 		os.Getenv("ANTHROPIC_API_KEY"),
 		os.Getenv("CLAUDE_CODE_OAUTH_TOKEN"),
+		os.Getenv("K3S_MCP_TOKEN"),
 	})
 }
 
@@ -724,6 +726,7 @@ type claudeManagedSettings struct {
 	Permissions struct {
 		Allow []string `json:"allow"`
 	} `json:"permissions"`
+	EnabledPlugins map[string]bool `json:"enabledPlugins"`
 }
 
 func ensureClaudeManagedSettings(homeDir string) error {
@@ -733,17 +736,39 @@ func ensureClaudeManagedSettings(homeDir string) error {
 	}
 	settingsPath := filepath.Join(settingsDir, claudeSettingsFile)
 	if _, err := os.Lstat(settingsPath); err == nil {
-		return validateClaudeManagedSettings(homeDir)
+		settings, err := loadClaudeManagedSettings(homeDir, false)
+		if err != nil {
+			return err
+		}
+		if len(settings.EnabledPlugins) == 1 && settings.EnabledPlugins[claudeSessionPlatformPlugin] {
+			return nil
+		}
+		// Snapshots produced before the managed plugin was introduced contain the
+		// same restricted permissions but no enabledPlugins entry. Upgrade that one
+		// safe legacy shape during restore/container restart.
+		settings.EnabledPlugins = map[string]bool{claudeSessionPlatformPlugin: true}
+		return storeClaudeManagedSettings(settingsDir, settingsPath, settings)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 
-	f, err := os.OpenFile(settingsPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	settings := claudeManagedSettings{}
+	settings.Permissions.Allow = append([]string(nil), claudeManagedTools...)
+	settings.EnabledPlugins = map[string]bool{claudeSessionPlatformPlugin: true}
+	return storeClaudeManagedSettings(settingsDir, settingsPath, settings)
+}
+
+func storeClaudeManagedSettings(settingsDir, settingsPath string, settings claudeManagedSettings) error {
+	f, err := os.CreateTemp(settingsDir, ".settings-*")
 	if err != nil {
 		return fmt.Errorf("create claude managed settings: %w", err)
 	}
-	settings := claudeManagedSettings{}
-	settings.Permissions.Allow = append([]string(nil), claudeManagedTools...)
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return err
+	}
 	if err := json.NewEncoder(f).Encode(settings); err != nil {
 		f.Close()
 		return fmt.Errorf("encode claude managed settings: %w", err)
@@ -755,66 +780,80 @@ func ensureClaudeManagedSettings(homeDir string) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
+	if err := os.Rename(tmp, settingsPath); err != nil {
+		return fmt.Errorf("install claude managed settings: %w", err)
+	}
 	return nil
 }
 
 func validateClaudeManagedSettings(homeDir string) error {
+	_, err := loadClaudeManagedSettings(homeDir, true)
+	return err
+}
+
+func loadClaudeManagedSettings(homeDir string, requirePlugin bool) (claudeManagedSettings, error) {
+	var settings claudeManagedSettings
 	settingsDir := filepath.Join(homeDir, claudeSettingsDir)
 	dirInfo, err := os.Lstat(settingsDir)
 	if errors.Is(err, os.ErrNotExist) {
-		return errors.New("claude archive is missing managed settings directory")
+		return settings, errors.New("claude archive is missing managed settings directory")
 	}
 	if err != nil {
-		return err
+		return settings, err
 	}
 	if !dirInfo.IsDir() {
-		return errors.New("claude managed settings path is not a directory")
+		return settings, errors.New("claude managed settings path is not a directory")
 	}
 	settingsPath := filepath.Join(settingsDir, claudeSettingsFile)
 	info, err := os.Lstat(settingsPath)
 	if errors.Is(err, os.ErrNotExist) {
-		return errors.New("claude archive is missing managed settings")
+		return settings, errors.New("claude archive is missing managed settings")
 	}
 	if err != nil {
-		return err
+		return settings, err
 	}
 	if !info.Mode().IsRegular() {
-		return errors.New("claude managed settings is not a regular file")
+		return settings, errors.New("claude managed settings is not a regular file")
 	}
 	f, err := os.Open(settingsPath)
 	if err != nil {
-		return err
+		return settings, err
 	}
 	defer f.Close()
 	decoder := json.NewDecoder(f)
 	decoder.DisallowUnknownFields()
-	var settings claudeManagedSettings
 	if err := decoder.Decode(&settings); err != nil {
-		return fmt.Errorf("decode claude managed settings: %w", err)
+		return settings, fmt.Errorf("decode claude managed settings: %w", err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		if err == nil {
-			return errors.New("claude managed settings has trailing JSON")
+			return settings, errors.New("claude managed settings has trailing JSON")
 		}
-		return fmt.Errorf("decode claude managed settings trailer: %w", err)
+		return settings, fmt.Errorf("decode claude managed settings trailer: %w", err)
 	}
 	allowed := make(map[string]struct{}, len(settings.Permissions.Allow))
 	for _, tool := range settings.Permissions.Allow {
 		if _, duplicate := allowed[tool]; duplicate {
-			return fmt.Errorf("claude managed settings repeats %s permission", tool)
+			return settings, fmt.Errorf("claude managed settings repeats %s permission", tool)
 		}
 		allowed[tool] = struct{}{}
 	}
 	if len(allowed) != len(claudeManagedTools) {
-		return errors.New("claude managed settings contains non-platform permissions")
+		return settings, errors.New("claude managed settings contains non-platform permissions")
 	}
 	for _, tool := range claudeManagedTools {
 		if _, ok := allowed[tool]; !ok {
-			return fmt.Errorf("claude managed settings is missing %s permission", tool)
+			return settings, fmt.Errorf("claude managed settings is missing %s permission", tool)
 		}
 	}
-	return nil
+	if len(settings.EnabledPlugins) == 0 && !requirePlugin {
+		return settings, nil
+	}
+	if len(settings.EnabledPlugins) != 1 || !settings.EnabledPlugins[claudeSessionPlatformPlugin] {
+		return settings, fmt.Errorf("claude managed settings must enable only %s", claudeSessionPlatformPlugin)
+	}
+	return settings, nil
 }
 
 func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {

@@ -10,7 +10,8 @@
 //     state plus scrollback without CRIU (AC-E2~E5).
 //   - credential-proxy is the localhost-only sidecar that holds the real
 //     Anthropic gateway URL/token. It pins all requests to that upstream and
-//     keeps credentials out of the Claude/Bash process environment (AC-E6).
+//     keeps provider credentials out of the Claude/Bash process environment
+//     (AC-E6); plugin-specific K3S_MCP_TOKEN is separately Secret-backed.
 //
 // Shell and Claude modes expose /healthz and the reachability-only /attach
 // WebSocket. A DATA_PLANE_RESTORE_MODE=1 pod reports healthy while awaiting

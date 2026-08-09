@@ -197,10 +197,10 @@ func TestClientOrchestrator_ModelIsValidatedAndCopiedToPod(t *testing.T) {
 
 // AC-E6: the tool-running Claude container must never receive provider
 // credential values. Only a hardened, separate-PID-namespace localhost proxy
-// holds them; the main container sees a non-secret placeholder and the
-// optional model key, but cannot recover the real token with Read/Bash or
-// transformed output.
-func TestClientOrchestrator_ClaudeCredentialsAreIsolatedInSidecar(t *testing.T) {
+// holds them; the main container sees a non-secret provider placeholder, the
+// optional model key, and its separate required K3s MCP SecretKeyRef. Provider
+// credentials cannot be recovered with Read/Bash or transformed output.
+func TestClientOrchestrator_ClaudeProviderCredentialsAreIsolatedAndK3sTokenIsSecretBacked(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t,
 		k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, claudeCodeImage),
@@ -235,8 +235,13 @@ func TestClientOrchestrator_ClaudeCredentialsAreIsolatedInSidecar(t *testing.T) 
 			continue
 		}
 		ref := env.ValueFrom.SecretKeyRef
-		if env.Name != k8s.ClaudeCodeModelEnvVar || ref.Name != "provider-credentials" ||
-			ref.Key != k8s.ClaudeCodeModelSecretKey || ref.Optional == nil || !*ref.Optional {
+		isOptionalModel := env.Name == k8s.ClaudeCodeModelEnvVar &&
+			ref.Name == "provider-credentials" && ref.Key == k8s.ClaudeCodeModelSecretKey &&
+			ref.Optional != nil && *ref.Optional
+		isRequiredK3SToken := env.Name == k8s.K3SMCPTokenEnvVar &&
+			ref.Name == "provider-credentials" && ref.Key == k8s.ClaudeCodeK3SMCPTokenSecretKey &&
+			(ref.Optional == nil || !*ref.Optional)
+		if !isOptionalModel && !isRequiredK3SToken {
 			t.Fatalf("main container has unexpected Secret env %s: %+v", env.Name, env)
 		}
 	}
@@ -251,6 +256,16 @@ func TestClientOrchestrator_ClaudeCredentialsAreIsolatedInSidecar(t *testing.T) 
 	model, ok := envVarOf(main, k8s.ClaudeCodeModelEnvVar)
 	if !ok || model.ValueFrom == nil || model.ValueFrom.SecretKeyRef == nil {
 		t.Fatalf("main model is not Secret-backed: %+v", model)
+	}
+	k3sToken, ok := envVarOf(main, k8s.K3SMCPTokenEnvVar)
+	if !ok || k3sToken.ValueFrom == nil || k3sToken.ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("main K3s MCP token is not Secret-backed: %+v", k3sToken)
+	}
+	k3sTokenRef := k3sToken.ValueFrom.SecretKeyRef
+	if k3sTokenRef.Name != "provider-credentials" || k3sTokenRef.Key != k8s.ClaudeCodeK3SMCPTokenSecretKey ||
+		(k3sTokenRef.Optional != nil && *k3sTokenRef.Optional) {
+		t.Fatalf("main K3s MCP token selector = %+v, want required provider-credentials/%s",
+			k3sTokenRef, k8s.ClaudeCodeK3SMCPTokenSecretKey)
 	}
 	if main.SecurityContext != nil && main.SecurityContext.Privileged != nil && *main.SecurityContext.Privileged {
 		t.Fatal("claude-code main container became privileged under the CRIU gate")
@@ -301,6 +316,9 @@ func TestClientOrchestrator_ClaudeCredentialsAreIsolatedInSidecar(t *testing.T) 
 	}
 	if _, ok := envVarOf(proxy, k8s.ClaudeCodeModelEnvVar); ok {
 		t.Fatalf("credential proxy must not receive %s", k8s.ClaudeCodeModelEnvVar)
+	}
+	if _, ok := envVarOf(proxy, k8s.K3SMCPTokenEnvVar); ok {
+		t.Fatalf("credential proxy must not receive %s", k8s.K3SMCPTokenEnvVar)
 	}
 	if proxy.ReadinessProbe == nil || proxy.ReadinessProbe.Exec == nil {
 		t.Fatal("loopback credential proxy needs an in-container readiness probe")

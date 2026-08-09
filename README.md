@@ -85,6 +85,10 @@ docs/                 value / PRD·AC / journeys / mockups / CRIU verification n
   model is injected literally and takes precedence over that Secret default.
   The required `base-url` and `auth-token` Secret keys remain isolated in a
   hardened localhost proxy sidecar that accepts one configured HTTPS upstream.
+  The data-plane image pre-installs `session-platform@dlddu-plugins` from the
+  `dlddu/plugin-marketplace` seed before runtime. Its required
+  `k3s-mcp-token` Secret key is exposed only to the tool-running container as
+  `K3S_MCP_TOKEN` and is redacted from streamed/read output.
   A separate optional `models` Secret key is an ordered UI soft catalog, not
   an API allowlist. The Deployment projects the public `model` and `models`
   keys into the control plane as `CLAUDE_CODE_DEFAULT_MODEL` and
@@ -253,7 +257,10 @@ The cluster runs this via GitOps (Flux) from the `flux-cd-apps` repo.
 Before creating Claude Code sessions, provision the Secret named by
 `CLAUDE_CODE_CREDENTIALS_SECRET` (default `claude-code-credentials`). Its
 `base-url` and `auth-token` keys are required and are exposed only to the
-credential-proxy sidecar. Its `model` key is optional: a non-empty value selects
+credential-proxy sidecar. Its required `k3s-mcp-token` key is exposed only to
+the Claude tool-running container as `K3S_MCP_TOKEN` for the pre-installed
+`session-platform@dlddu-plugins` MCP integration; the agent redacts its literal
+value from read/SSE output. Its `model` key is optional: a non-empty value selects
 the model for `platform-default` sessions, while a missing or empty value falls
 back to the installed Claude CLI default. A concrete model supplied when the
 session is created always wins. Non-empty Secret values are validated against
