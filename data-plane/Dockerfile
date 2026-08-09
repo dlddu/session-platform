@@ -50,7 +50,31 @@ RUN npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && claude --version \
  && npm cache clean --force
 
-# ---- stage 4: runtime ----
+# ---- stage 4: install the official GitHub CLI release ----
+# Debian trixie's community gh 2.46 package uses retired GitHub APIs. Download
+# a current pinned upstream release instead, verifying the release checksum.
+FROM debian:trixie AS gh-build
+ARG GH_VERSION=2.97.0
+ARG GH_AMD64_SHA256=a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112
+ARG GH_ARM64_SHA256=73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /tmp/gh
+RUN gh_arch="$(dpkg --print-architecture)" \
+ && case "$gh_arch" in \
+      amd64) gh_sha256="$GH_AMD64_SHA256" ;; \
+      arm64) gh_sha256="$GH_ARM64_SHA256" ;; \
+      *) echo "unsupported GitHub CLI architecture: $gh_arch" >&2; exit 1 ;; \
+    esac \
+ && gh_archive="gh_${GH_VERSION}_linux_${gh_arch}.tar.gz" \
+ && curl -fsSLO "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${gh_archive}" \
+ && echo "$gh_sha256  $gh_archive" | sha256sum --check --strict - \
+ && tar -xzf "$gh_archive" \
+ && install -D -m 0755 "${gh_archive%.tar.gz}/bin/gh" /out/gh \
+ && /out/gh --version
+
+# ---- stage 5: runtime ----
 # A full glibc distro rather than distroless/alpine: the session workload IS an
 # interactive /bin/bash or Node-based Claude CLI, and glibc keeps shell pods
 # CRIU-friendly (AC-B*/AC-D4, see ../docs/criu-verification.md). The pinned
@@ -66,8 +90,15 @@ FROM debian:trixie
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
+      curl git jq kubectl \
       libbsd0 libcap2 libnet1 libnl-3-200 libnl-route-3-200 libprotobuf-c1 libuuid1 \
+ && git --version \
+ && curl --version \
+ && jq --version \
+ && kubectl version --client \
  && rm -rf /var/lib/apt/lists/*
+COPY --from=gh-build /out/gh /usr/local/bin/gh
+RUN gh --version
 # The same image serves both workload modes. Copy the official Node 22 runtime,
 # npm installation metadata, and the pinned Claude Code package together.
 COPY --from=claude-build /usr/local/ /usr/local/
