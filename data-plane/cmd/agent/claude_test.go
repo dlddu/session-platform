@@ -236,7 +236,8 @@ func TestClaudeOpenRouterLatestAliasIsPassedAsOneModelArgument(t *testing.T) {
 	run := receiveClaudeRun(t, runner.started)
 	waitClaudeIdle(t, c)
 	want := []string{
-		"claude", "--model", model, "--permission-mode", "auto", 		"-p", "--output-format", "stream-json",
+		"claude", "--model", model, "--permission-mode", "auto",
+		"-p", "--output-format", "stream-json",
 		"--verbose", "--include-partial-messages", "--", "hello",
 	}
 	if !reflect.DeepEqual(run.argv, want) {
