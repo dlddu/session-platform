@@ -8,11 +8,11 @@
 // is a black box: it only knows the wire contract (the /api/v1 surface and its
 // JSON DTOs) and talks to whatever E2E_BASE_URL points at — the kind-deployed
 // control plane (default http://localhost:8080, see deploy/ + scripts/e2e). The
-// kind overlay enables real client-go adapters, the test-only snapshot endpoint,
-// agent-driven CRIU, and a shared archive store. Capability-gated tests assert
-// real pod provisioning/reclaim and the shell round trip; unsupported external
-// SUTs skip those cases. The 60-minute reaper is the product trigger, while the
-// suite uses the direct endpoint to avoid waiting for the idle window.
+// kind overlay enables real client-go adapters, agent-driven CRIU, and a shared
+// archive store. Capability-gated tests assert real pod provisioning/reclaim
+// and the shell round trip; unsupported external SUTs skip those cases. The
+// 60-minute reaper is the automatic product trigger, while the suite uses the
+// manual product snapshot endpoint to avoid waiting for the idle window.
 package e2e_test
 
 import (

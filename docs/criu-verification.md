@@ -2,9 +2,9 @@
 
 > 상태: **agent-driven in-pod CRIU 구현 + kind 배포 e2e 왕복 검증** — *2026-08-08 갱신*.
 > `shell` snapshot은 pod 에이전트가 CRIU dump/restore를 실행하고 control plane이 archive를
-> durable S3로 중계한다. `deploy/` overlay는 `CRIU_ENABLED=1`, MinIO, test-only snapshot
-> endpoint를 켜며 `TestDeferred_CRIUIntegrity`가 실제 dump→pod 회수→새 pod restore와 cursor
-> 연속성을 단언한다. production base의 게이트는 기본 off이고, 이때 snapshot 요청은 live pod를
+> durable S3로 중계한다. `deploy/` overlay는 `CRIU_ENABLED=1`과 MinIO를 켜며 제품 snapshot
+> endpoint를 호출하는 `TestDeferred_CRIUIntegrity`가 실제 dump→pod 회수→새 pod restore와 cursor
+> 연속성을 단언한다. production base의 전략 게이트는 기본 off이고, 이때 snapshot 요청은 live pod를
 > 보존한 채 실패한다. 남은 항목은 production S3/IAM 프로비저닝, 권한 최소화, 그리고 dump 성공 뒤
 > Stop/final metadata 실패를 복구하는 shell 전용 transaction/reconcile 프로토콜이다.
 
@@ -55,8 +55,8 @@
   `echo $MARKER`·`pwd`로 왕복 확인. 여기에 **커서 연속성**(복원 전 발급 커서로 델타 read) 검증을 더한다.
 - **구현**: `control-plane/test/integration_test.go`의 `TestScenario4_CRIUIntegrity`는 실 클러스터
   backend에 대해 in-process `Service.Snapshot`을 호출한다. 배포 e2e의
-  `TestDeferred_CRIUIntegrity`는 `E2E_TEST_ENDPOINTS=1` overlay의 test-only HTTP trigger로 같은
-  marker/cursor 왕복을 full stack에서 단언한다.
+  `TestDeferred_CRIUIntegrity`는 제품 `POST /sessions/{id}/snapshot` endpoint로 같은 marker/cursor
+  왕복을 full stack에서 단언한다.
 - **근거**: AC-D4가 AC-B3(무결성)의 구체 마커. in-process가 브라우저 e2e보다 결정적·저비용.
 
 ### ⑤ 복원 메커니즘 — 에이전트 주도 in-pod CRIU (2026-07-22 확정)
@@ -188,9 +188,10 @@ e2e 워크플로에 `criu check` 프로브 스텝을 추가해(비차단, `conti
 (pid floor 가드 전제 성립), `criu check` → *Looks good*. (`check --all`은 nftables 기반 locking 미지원
 경고만 — 우리 워크로드는 netns 잠금을 쓰지 않는다.) 이로써 **CRIU 라운드트립을 e2e 자동 검증으로 승격**했다:
 
-- ① **스냅샷 트리거**: `E2E_TEST_ENDPOINTS=1`에서만 등록되는
-  `POST /api/v1/sessions/{id}/snapshot`(`api.WithTestEndpoints`). 제품 API가 아니며 60분 reaper나
-  grace period 등 product timing policy를 바꾸지 않는다. 복원은 별도 endpoint가 필요 없다(접근 시 자동 복원).
+- ① **스냅샷 트리거**: 제품 `POST /api/v1/sessions/{id}/snapshot`이 동일한 workload별 전략으로
+  세션을 즉시 동결하고 pod를 회수한다. UI의 수동 archive/freeze와 e2e의 결정적 트리거가 이 경로를
+  함께 사용하며, 60분 idle reaper는 자동 동결 경로로 그대로 유지된다. 복원은 별도 endpoint가 필요
+  없다(접근 시 자동 복원).
 - ② **AWS 없는 저장소**: 클러스터 안에 **MinIO**를 띄우고 `CHECKPOINT_S3_ENDPOINT`로 가리킨다
   (`deploy/minio.yaml`). 테스트 전용 저장 백엔드를 따로 만드는 대신 **프로덕션과 동일한 S3 코드 경로**
   (`checkpointstore`)를 그대로 태우는 것이 핵심이며, 2개 replica가 같은 저장소를 보는 문제도 자연히
@@ -236,8 +237,8 @@ kind/MinIO 경로는 자동 검증된다. production에서 게이트를 켜려�
 CRIU_ENABLED=1 DATA_PLANE_IMAGE=<criu-포함 agent-image> \
   go test -tags=integration ./test/... -run TestScenario4_CRIUIntegrity -v
 ```
-- **skip**: standalone integration 실행에 cluster/image/env가 미준비(정상). `deploy/` e2e에서는 선결조건을
-  overlay가 제공하므로 snapshot endpoint 404가 아니며 실단언으로 실행된다.
+- **skip**: standalone integration 실행에 cluster/image/env가 미준비(정상). `deploy/` e2e에서는
+  overlay가 cluster/image/store 선결조건을 제공하고 제품 snapshot endpoint를 호출해 실단언한다.
 - **fail**: standalone integration은 CRIU 호출/PTY 재부착/복원 중 하나가 계약과 맞지 않음. deploy e2e는
   여기에 S3-compatible MinIO 중계까지 포함한다.
 - **pass**: 동결 전 `MARKER`·cwd가 복원 후 그대로 재개 + 복원 전 커서로 델타 read 유효 → 완료.
@@ -260,4 +261,4 @@ CRIU_ENABLED=1 DATA_PLANE_IMAGE=<criu-포함 agent-image> \
 ## 관련 문서
 - `docs/prd/shell-workload.md` — AC-D4(보존 상태), offset·복원 설계 노트(커서 유효).
 - `docs/test/shell-workload.md` 시나리오 4 / `docs/test/lifecycle.md` 시나리오 3 — 마커 왕복.
-- `deploy/kustomization.yaml` — kind overlay는 CRIU·MinIO·test-only snapshot trigger를 활성화한다.
+- `deploy/kustomization.yaml` — kind overlay는 CRIU·MinIO를 활성화하고 제품 snapshot endpoint를 검증한다.

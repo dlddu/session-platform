@@ -120,19 +120,12 @@ func main() {
 	// AC-B1: the operational idle->snapshot trigger. A background reaper scans
 	// sessions every cfg.idleScanInterval and freezes any idle (no client
 	// read/write, AC-D5) for at least session.MaxIdle, reclaiming its pod
-	// (AC-A3). It is what freezes a session on its own after the idle limit,
-	// independent of the test-only /snapshot endpoint below.
+	// (AC-A3). Manual snapshots use the same manager operation through the
+	// product API without waiting for the idle limit.
 	reaper := service.NewIdleReaper(mgr, session.MaxIdle, cfg.idleScanInterval, nil, logger)
 
-	if cfg.testEndpoints {
-		// Not a product API: it exists so an e2e SUT can freeze a session on
-		// demand and deterministically, rather than waiting on the reaper's
-		// idle window (the operational trigger itself is IdleReaper, AC-B1).
-		logger.Warn("E2E_TEST_ENDPOINTS is on; test-only endpoints are exposed")
-	}
 	mux := http.NewServeMux()
 	api.New(mgr,
-		api.WithTestEndpoints(cfg.testEndpoints),
 		api.WithClaudeCodeModelConfig(cfg.claudeCodeDefaultModel, cfg.claudeCodeModels),
 	).Routes(mux)
 	mux.Handle("/", static.Handler())
@@ -190,9 +183,6 @@ type config struct {
 	// Empty preserves the free-text model input and existing API behaviour.
 	claudeCodeModels []string
 	criuEnabled      bool
-	// testEndpoints exposes test-only HTTP endpoints (snapshot trigger). Off in
-	// deployments; the e2e SUT turns it on.
-	testEndpoints bool
 	// idleScanInterval is how often the reaper scans for sessions past their
 	// idle limit (AC-B1). The 60m limit itself is session.MaxIdle; this only
 	// bounds how promptly a newly-idle session is noticed.
@@ -261,7 +251,6 @@ func loadConfig() (config, error) {
 		claudeCodeDefaultModel:   claudeCodeDefaultModel,
 		claudeCodeModels:         claudeCodeModels,
 		criuEnabled:              envBool("CRIU_ENABLED", false),
-		testEndpoints:            envBool("E2E_TEST_ENDPOINTS", false),
 		idleScanInterval:         envDuration("IDLE_SCAN_INTERVAL", time.Minute),
 		checkpointS3Endpoint:     env("CHECKPOINT_S3_ENDPOINT", ""),
 		checkpointS3Bucket:       env("CHECKPOINT_S3_BUCKET", ""),

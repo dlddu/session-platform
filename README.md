@@ -180,6 +180,7 @@ gitignored.
 | `POST /sessions/{id}/write`  | write (state-branched)         | C3     |
 | `GET  /sessions/{id}/stream` | passive live output SSE        | E3     |
 | `POST /sessions/{id}/switch` | switch (restore if snapshot)   | C4     |
+| `POST /sessions/{id}/snapshot` | archive now and reclaim pod       | B1, A3 |
 
 ## Testing
 

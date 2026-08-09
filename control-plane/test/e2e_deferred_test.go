@@ -130,13 +130,13 @@ func TestDeferred_RealPodProvisioned(t *testing.T) {
 // This is the mirror of TestDeferred_RealPodProvisioned — that asserts create
 // provisions a real Pod; this asserts snapshot reclaims it. Both preconditions
 // are now met: the real client-go PodOrchestrator backs the SUT (its Stop
-// deletes the Pod object), and a snapshot is reachable via the test-only trigger
-// (its operational counterpart is service.IdleReaper, AC-B1).
+// deletes the Pod object), and a snapshot is reachable via the product endpoint
+// (its automatic counterpart is service.IdleReaper, AC-B1).
 //
 // It skips where the assertion is not runnable — no kube API access (a
-// non-cluster SUT), or no HTTP snapshot trigger (E2E_TEST_ENDPOINTS off) — the
+// non-cluster SUT), or a SUT that predates the product snapshot endpoint — the
 // same guards as the other real-cluster/CRIU seeds, so the suite still runs
-// anywhere.
+// against older deployments.
 func TestDeferred_RealPodReclaimed(t *testing.T) {
 	cs, _, ok := kubeClient(t)
 	if !ok {
@@ -151,11 +151,11 @@ func TestDeferred_RealPodReclaimed(t *testing.T) {
 	}
 	getPodEventually(t, cs, ns, s.Pod) // the Pod exists before the freeze
 
-	// Freeze it. The trigger is test-only (the product policy is IdleReaper's idle
-	// window); a SUT without it just means this assertion is not runnable here.
+	// Freeze it through the product endpoint. A SUT that predates the endpoint
+	// cannot run this assertion.
 	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+s.ID+"/snapshot", nil)
 	if resp.StatusCode == http.StatusNotFound {
-		t.Skip("SUT has no snapshot trigger (E2E_TEST_ENDPOINTS off) — Pod reclaim not exercisable here")
+		t.Skip("SUT predates the product snapshot endpoint — Pod reclaim not exercisable here")
 	}
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("snapshot status=%d body=%s", resp.StatusCode, body)
@@ -235,10 +235,8 @@ func TestDeferred_SnapshotRestore(t *testing.T) {
 // are now met in the e2e SUT (docs/criu-verification.md): the agent runs criu
 // in-pod so no CRIU-capable *runtime* is needed (the workflow's CRIU probe
 // confirms the runner's kernel supports it), and the deploy/ overlay turns on
-// CRIU plus the test-only snapshot trigger and a shared archive directory.
-//
-// Against a SUT without those (CRIU off, no snapshot endpoint) it skips, so the
-// suite still runs anywhere.
+// CRIU plus a shared archive store. The product snapshot endpoint supplies the
+// deterministic manual trigger.
 func TestDeferred_CRIUIntegrity(t *testing.T) {
 	s := createSession(t, uniqueName(t))
 
@@ -250,11 +248,11 @@ func TestDeferred_CRIUIntegrity(t *testing.T) {
 		return strings.Contains(p, "CRIUMARK=frozen42")
 	})
 
-	// Freeze. The endpoint is test-only (the product trigger policy is open), so
-	// a SUT without it just means this assertion is not runnable here.
+	// Freeze through the product endpoint. A SUT that predates the endpoint
+	// cannot run this assertion.
 	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+s.ID+"/snapshot", nil)
 	if resp.StatusCode == http.StatusNotFound {
-		t.Skip("SUT has no snapshot trigger (E2E_TEST_ENDPOINTS off) — CRIU round trip not exercisable here; see docs/criu-verification.md")
+		t.Skip("SUT predates the product snapshot endpoint — CRIU round trip not exercisable here; see docs/criu-verification.md")
 	}
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("snapshot status=%d body=%s", resp.StatusCode, body)
@@ -303,14 +301,14 @@ func TestDeferred_CRIUIntegrity(t *testing.T) {
 // Blocked on: idle/snapshot states (lifecycle trigger). The active-read branch
 // is covered by TestReadSession_ActivePath in e2e_test.go.
 func TestDeferred_ReadIdleAndSnapshotBranches(t *testing.T) {
-	t.Skip("deferred: the snapshot branch is now reachable via the test-only snapshot trigger (see TestDeferred_CRIUIntegrity); the idle branch still needs an idle trigger (AC-C2)")
+	t.Skip("deferred: the snapshot branch is reachable via the product snapshot endpoint (see TestDeferred_CRIUIntegrity); the idle branch still needs an idle trigger (AC-C2)")
 }
 
 // AC-C3 (idle/snapshot branches): write dispatches on a non-active state.
 // Blocked on: idle/snapshot states (lifecycle trigger). The active-write branch
 // is covered by TestWriteSession_ActivePath in e2e_test.go.
 func TestDeferred_WriteIdleAndSnapshotBranches(t *testing.T) {
-	t.Skip("deferred: the snapshot branch is now reachable via the test-only snapshot trigger (see TestDeferred_CRIUIntegrity); the idle branch still needs an idle trigger (AC-C3)")
+	t.Skip("deferred: the snapshot branch is reachable via the product snapshot endpoint (see TestDeferred_CRIUIntegrity); the idle branch still needs an idle trigger (AC-C3)")
 }
 
 // AC-C1: concurrent requests to the same session, served by a multi-replica
