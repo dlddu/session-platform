@@ -2,6 +2,7 @@
 // code works behind the Vite dev proxy and the embedded prod build.
 import type {
   CreateSessionRequest,
+  PlatformConfig,
   ReadResult,
   Session,
   WriteResult,
@@ -29,6 +30,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  getConfig: () => req<PlatformConfig>("/config", { cache: "no-store" }),
+
   listSessions: () =>
     req<{ sessions: Session[] }>("/sessions").then((r) => r.sessions ?? []),
 

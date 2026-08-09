@@ -224,6 +224,29 @@ func TestClaudePlatformDefaultOmitsModelFlag(t *testing.T) {
 	}
 }
 
+func TestClaudeRejectsInvalidConfiguredModel(t *testing.T) {
+	for _, model := range []string{
+		"--dangerously-skip-permissions",
+		"bad model",
+		strings.Repeat("a", 129),
+	} {
+		t.Run(model, func(t *testing.T) {
+			workload, err := newClaudeWorkload(claudeConfig{
+				StateDir: t.TempDir(),
+				Model:    model,
+				Runner:   newFakeClaudeRunner(),
+			})
+			if err == nil {
+				workload.Close()
+				t.Fatalf("newClaudeWorkload accepted invalid model %q", model)
+			}
+			if !strings.Contains(err.Error(), "model identifier pattern") {
+				t.Fatalf("error = %q, want model identifier pattern", err)
+			}
+		})
+	}
+}
+
 func TestClaudeManagedToolPolicyIsProvisionedUnderSessionHome(t *testing.T) {
 	runner := newFakeClaudeRunner()
 	c, _ := newClaudeTestServer(t, runner, platformDefaultModel, false, nil)

@@ -89,9 +89,13 @@
 
 ## mockup 내용의 잠정성
 
-- **명시 model 예시 (AC-E6)**: `new-session.html`의 `model-a`/`model-b`는 자리표시자다. 반면
-  `platform-default`는 특정 공급자 버전을 API에 고정하지 않고 CLI 기본 선택에 위임하는 구현 별칭으로
-  확정됐다.
+- **명시 model 예시 (AC-E6)**: `new-session.html`의 `model-a`/`model-b`는 optional
+  `models` soft catalog가 있는 상태를 그린 자리표시자다. 실제 UI는 no-store config API의
+  ordered catalog를 사용하고, missing/empty/`[]`이면 free-text 입력으로 돌아간다. catalog는
+  API allowlist가 아니다. `platform-default`는 특정 공급자 버전을 API에 고정하지 않는
+  별칭이며, 새/복원 pod 또는 container restart 때 optional Secret `model`을 우선하고
+  missing/empty면 CLI 기본 선택에 위임한다. 실행 중 컨테이너는 Secret 변경으로 즉시
+  바뀌지 않는다.
 - **대화 재개 (AC-E4)**: 실제 계약은 첫 성공 실행 뒤 `--continue`와 세션별 고정 HOME/workdir이다.
   mockup은 CLI flag 자체보다 사용자가 보는 연속 대화 결과를 표현한다.
 

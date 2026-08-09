@@ -8,12 +8,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,7 +34,11 @@ import (
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
-	cfg := loadConfig()
+	cfg, err := loadConfig()
+	if err != nil {
+		logger.Error("invalid runtime configuration", "err", err)
+		os.Exit(1)
+	}
 
 	// The control plane drives data plane pods AND stores session state via
 	// client-go, so it needs a reachable cluster: the in-cluster config as a pod,
@@ -52,6 +59,7 @@ func main() {
 		"data_plane_image", cfg.dataPlaneImage,
 		"data_plane_claude_code_image", cfg.dataPlaneClaudeCodeImage,
 		"data_plane_shell", cfg.dataPlaneShell,
+		"claude_code_models", len(cfg.claudeCodeModels),
 	)
 	if cfg.dataPlaneImage == "" {
 		// The in-code fallback image has no session agent, so session pods will
@@ -122,7 +130,10 @@ func main() {
 		logger.Warn("E2E_TEST_ENDPOINTS is on; test-only endpoints are exposed")
 	}
 	mux := http.NewServeMux()
-	api.New(mgr, api.WithTestEndpoints(cfg.testEndpoints)).Routes(mux)
+	api.New(mgr,
+		api.WithTestEndpoints(cfg.testEndpoints),
+		api.WithClaudeCodeModels(cfg.claudeCodeModels),
+	).Routes(mux)
 	mux.Handle("/", static.Handler())
 
 	srv := &http.Server{
@@ -170,7 +181,10 @@ type config struct {
 	// archives to be written to CHECKPOINT_S3_* (default false).
 	claudeArchiveEnabled    bool
 	claudeCredentialsSecret string
-	criuEnabled             bool
+	// claudeCodeModels is the ordered, public model catalog shown by the SPA.
+	// Empty preserves the free-text model input and existing API behaviour.
+	claudeCodeModels []string
+	criuEnabled      bool
 	// testEndpoints exposes test-only HTTP endpoints (snapshot trigger). Off in
 	// deployments; the e2e SUT turns it on.
 	testEndpoints bool
@@ -221,7 +235,11 @@ func (c config) checkpointStoreDesc() string {
 	return desc
 }
 
-func loadConfig() config {
+func loadConfig() (config, error) {
+	claudeCodeModels, err := parseClaudeCodeModels(os.Getenv("CLAUDE_CODE_MODELS"))
+	if err != nil {
+		return config{}, fmt.Errorf("CLAUDE_CODE_MODELS: %w", err)
+	}
 	return config{
 		addr:           env("CP_ADDR", ":8080"),
 		dataPlaneImage: env("DATA_PLANE_IMAGE", ""),
@@ -231,6 +249,7 @@ func loadConfig() config {
 		dataPlaneClaudeCodeImage: env("DATA_PLANE_CLAUDE_CODE_IMAGE", ""),
 		claudeArchiveEnabled:     envBool("CLAUDE_CODE_ARCHIVE_ENABLED", false),
 		claudeCredentialsSecret:  env("CLAUDE_CODE_CREDENTIALS_SECRET", "claude-code-credentials"),
+		claudeCodeModels:         claudeCodeModels,
 		criuEnabled:              envBool("CRIU_ENABLED", false),
 		testEndpoints:            envBool("E2E_TEST_ENDPOINTS", false),
 		idleScanInterval:         envDuration("IDLE_SCAN_INTERVAL", time.Minute),
@@ -240,7 +259,41 @@ func loadConfig() config {
 		checkpointS3Region:       env("CHECKPOINT_S3_REGION", env("AWS_REGION", "")),
 		checkpointS3Prefix:       env("CHECKPOINT_S3_PREFIX", "checkpoints"),
 		checkpointS3SessionName:  env("CHECKPOINT_S3_SESSION_NAME", ""),
+	}, nil
+}
+
+// parseClaudeCodeModels decodes the optional Secret-backed JSON catalog. It is
+// intentionally presentation configuration, not an API allowlist: existing
+// clients may still submit any model accepted by session.NormalizeModel.
+func parseClaudeCodeModels(value string) ([]string, error) {
+	if value == "" {
+		return []string{}, nil
 	}
+	var models []string
+	if err := json.Unmarshal([]byte(value), &models); err != nil {
+		return nil, fmt.Errorf("must be a JSON string array: %w", err)
+	}
+	if models == nil {
+		return nil, errors.New("must be a JSON string array, not null")
+	}
+	seen := make(map[string]struct{}, len(models))
+	for i, model := range models {
+		if model == "" || model != strings.TrimSpace(model) {
+			return nil, fmt.Errorf("entry %d must be a non-empty model without surrounding whitespace", i)
+		}
+		normalized, err := session.NormalizeModel(session.WorkloadTypeClaudeCode, model)
+		if err != nil {
+			return nil, fmt.Errorf("entry %d is not a valid model", i)
+		}
+		if normalized == session.PlatformDefaultModel {
+			return nil, fmt.Errorf("entry %d uses reserved alias %q", i, session.PlatformDefaultModel)
+		}
+		if _, duplicate := seen[normalized]; duplicate {
+			return nil, fmt.Errorf("entry %d duplicates model %q", i, normalized)
+		}
+		seen[normalized] = struct{}{}
+	}
+	return append([]string{}, models...), nil
 }
 
 func env(k, def string) string {

@@ -19,8 +19,10 @@ session (AC-A2). The control plane provisions and reclaims these pods via the
   text. Both are incrementally redacted and appended through the same offset
   cursor contract while the invocation is still running. `--continue` starts
   only after the first successful invocation; a failed or timed-out first run
-  still starts a new conversation next time. `CLAUDE_CODE_MODEL=platform-default` omits the
-  model flag. Each invocation is limited to 30 minutes by default; set
+  still starts a new conversation next time. A non-empty concrete
+  `CLAUDE_CODE_MODEL` adds `--model` with that value as one argv element;
+  an empty value or the `platform-default` sentinel omits the model flag. Each
+  invocation is limited to 30 minutes by default; set
   `CLAUDE_CODE_RUN_TIMEOUT` to another positive Go duration when needed. One
   prompt is limited to 1 MiB; an oversized write is not queued and returns 413.
   The pending queue is bounded to 64 prompts and 8 MiB; a new write that would
@@ -44,11 +46,36 @@ admission, drains accepted work, and archives that state tree plus the redacted
 scrollback; restore safely installs the archive before reopening writes. The
 image includes the official `@anthropic-ai/claude-code` npm package. Auth
 credentials are not present in the Claude container or inherited by its Bash
-tools. That container receives only
+tools. That container receives
 `ANTHROPIC_BASE_URL=http://127.0.0.1:8091` and the non-secret
 `ANTHROPIC_AUTH_TOKEN=session-platform-proxy`; the credential-proxy sidecar
-alone receives the Secret. Fresh session HOME also receives a platform-managed
-`.claude/settings.json` that allows only the coding tools
+alone receives the required Secret `base-url` and `auth-token` keys. For a
+session whose immutable model metadata is `platform-default`, the primary
+container also receives `CLAUDE_CODE_MODEL` from that Secret's optional `model`
+key. A missing or empty key omits `--model` and therefore delegates to the
+installed Claude CLI; a concrete session model is instead injected literally
+and takes precedence over the Secret default. The optional model is not exposed
+to the credential-proxy sidecar. Any non-empty effective model must match
+`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`; invalid Secret configuration is rejected
+when the agent starts instead of being forwarded as CLI options. Changes to that
+Secret default are resolved
+whenever a `platform-default` primary container starts, including a new pod,
+a pod recreated after restore, or a container restart. They do not immediately
+mutate a running container environment or a concrete session model.
+
+The plural Secret key `models` is not data-plane configuration and is never
+projected into either session container. The Deployment projects only that key
+into the control plane as `CLAUDE_CODE_MODELS`, where it becomes the ordered
+soft catalog returned by `GET /api/v1/config`; catalog changes require a
+control-plane rollout. Missing, empty, or `[]` preserves the UI's free-text
+input, and the catalog does not restrict models accepted by the session API. If
+the credentials Secret is renamed, the Deployment's
+`CLAUDE_CODE_MODELS.valueFrom.secretKeyRef.name` must be patched to the same
+literal name because Kubernetes does not interpolate
+`CLAUDE_CODE_CREDENTIALS_SECRET` there.
+
+Fresh session HOME also receives a platform-managed `.claude/settings.json`
+that allows only the coding tools
 `Read`, `Write`, `Edit`, `Glob`, `Grep`, and `Bash`; the agent does not
 use `--dangerously-skip-permissions`.
 
