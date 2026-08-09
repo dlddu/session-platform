@@ -8,6 +8,13 @@ export type State = "active" | "idle" | "snapshot";
  */
 export type WorkloadType = "shell" | "claude-code";
 
+export interface PlatformConfig {
+  claudeCode: {
+    defaultModel: "platform-default";
+    models: string[];
+  };
+}
+
 export interface Checkpoint {
   ref: string;
   sizeBytes: number;

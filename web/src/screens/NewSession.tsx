@@ -94,6 +94,8 @@ export function NewSession() {
   const [name, setName] = useState("");
   const [workloadType, setWorkloadType] = useState<WorkloadType>("shell");
   const [model, setModel] = useState("");
+  const [submittedModel, setSubmittedModel] = useState("");
+  const [configuredModels, setConfiguredModels] = useState<string[]>([]);
   const [phase, setPhase] = useState<"input" | "provisioning">("input");
   const [error, setError] = useState<string | null>(null);
   // Number of stages marked done (0..3). The stage at this index is the one
@@ -106,6 +108,29 @@ export function NewSession() {
   const sessionRef = useRef<Session | null>(null);
   const navigate = useNavigate();
   const reduce = prefersReducedMotion();
+
+  useEffect(() => {
+    let active = true;
+
+    void api
+      .getConfig()
+      .then((config) => {
+        if (!active) return;
+        const models = config.claudeCode.models;
+        setConfiguredModels(models);
+        setModel((current) =>
+          current === "" || models.includes(current) ? current : "",
+        );
+      })
+      .catch(() => {
+        // Older/unavailable control planes retain the free-text model input.
+        if (active) setConfiguredModels([]);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const close = () => {
     if (phase === "provisioning") return;
@@ -123,6 +148,7 @@ export function NewSession() {
     sessionRef.current = null;
     setPhase("provisioning");
     const trimmedModel = model.trim();
+    setSubmittedModel(trimmedModel);
     api
       .createSession({
         name: trimmed,
@@ -250,16 +276,35 @@ export function NewSession() {
             {workloadType === "claude-code" ? (
               <label className="field model-field">
                 <span>Model</span>
-                <input
-                  data-testid="new-session-model"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder="Platform default"
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <small className="field-hint">
-                  Leave blank to use the platform default.
+                {configuredModels.length > 0 ? (
+                  <select
+                    data-testid="new-session-model"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    aria-describedby="new-session-model-hint"
+                  >
+                    <option value="">Platform default</option>
+                    {configuredModels.map((configuredModel) => (
+                      <option key={configuredModel} value={configuredModel}>
+                        {configuredModel}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    data-testid="new-session-model"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    placeholder="Platform default"
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-describedby="new-session-model-hint"
+                  />
+                )}
+                <small className="field-hint" id="new-session-model-hint">
+                  {configuredModels.length > 0
+                    ? "Choose Platform default to use the platform default."
+                    : "Leave blank to use the platform default."}
                 </small>
               </label>
             ) : null}
@@ -294,7 +339,7 @@ export function NewSession() {
           <>
             <div className="provision-workload" data-testid="prov-workload">
               {workloadType === "claude-code"
-                ? `workloadType=claude-code · model=${model.trim() || "platform default"}`
+                ? `workloadType=claude-code · model=${submittedModel || "platform default"}`
                 : "workloadType=shell"}
             </div>
             <div className="steps" data-testid="prov-steps">

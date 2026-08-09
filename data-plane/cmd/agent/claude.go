@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -49,7 +50,10 @@ const (
 	defaultClaudeCheckpointDrainTimeout = 5 * time.Minute
 )
 
-var claudeManagedTools = []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}
+var (
+	claudeManagedTools = []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}
+	claudeModelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
+)
 
 var (
 	errClaudeAwaitingRestore = errors.New("claude workload is awaiting restore")
@@ -191,6 +195,9 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 	model := strings.TrimSpace(cfg.Model)
 	if model == "" {
 		model = platformDefaultModel
+	}
+	if !claudeModelPattern.MatchString(model) {
+		return nil, errors.New("claude model must match the platform model identifier pattern")
 	}
 	binary := strings.TrimSpace(cfg.Binary)
 	if binary == "" {

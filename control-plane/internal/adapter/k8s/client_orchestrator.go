@@ -79,16 +79,18 @@ const (
 	// pod is self-describing rather than inferring its role from its image.
 	workloadEnvVar = "DATA_PLANE_WORKLOAD"
 
-	// Claude Code runtime configuration. Secret values are projected only into
-	// a separate localhost credential-proxy container. The agent/CLI container
-	// gets a non-secret placeholder and cannot read or transform the real token
-	// through its coding tools (AC-E6).
+	// Claude Code runtime configuration. Provider credential values are
+	// projected only into a separate localhost credential-proxy container. The
+	// agent/CLI container gets a non-secret placeholder and cannot read or
+	// transform the real token through its coding tools (AC-E6). The non-secret
+	// platform model may be selected from the same Secret through its own key.
 	ClaudeCodeModelEnvVar        = "CLAUDE_CODE_MODEL"
 	claudeCodeStateDirEnvVar     = "CLAUDE_CODE_STATE_DIR"
 	claudeCodeStateDir           = "/session"
 	claudeCodeStateVolumeName    = "claude-state"
 	AnthropicBaseURLEnvVar       = "ANTHROPIC_BASE_URL"
 	AnthropicAuthTokenEnvVar     = "ANTHROPIC_AUTH_TOKEN"
+	ClaudeCodeModelSecretKey     = "model"
 	ClaudeCodeBaseURLSecretKey   = "base-url"
 	ClaudeCodeAuthTokenSecretKey = "auth-token"
 	// ClaudeCredentialsContainerName identifies the isolated Secret holder.
@@ -181,7 +183,9 @@ func WithWorkloadImage(workload session.WorkloadType, image string) Option {
 }
 
 // WithClaudeCredentialsSecret selects the platform-managed Secret whose
-// base-url and auth-token keys are projected only into the credential sidecar.
+// base-url and auth-token keys are projected only into the credential sidecar,
+// and whose optional model key selects the platform default in the main Claude
+// container.
 func WithClaudeCredentialsSecret(name string) Option {
 	return func(o *ClientOrchestrator) {
 		if strings.TrimSpace(name) != "" {
@@ -436,8 +440,20 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string, workload 
 			container.Env = append(container.Env, corev1.EnvVar{Name: shellEnvVar, Value: o.shell})
 		}
 	case session.WorkloadTypeClaudeCode:
+		modelEnv := corev1.EnvVar{Name: ClaudeCodeModelEnvVar, Value: model}
+		if model == session.PlatformDefaultModel {
+			// Keep platform-default as the immutable API/session alias while
+			// resolving its effective value when the pod starts. The key is
+			// optional so existing Secrets retain the previous Claude CLI default
+			// behaviour; explicit per-session models never read this key.
+			modelEnv = optionalSecretEnv(
+				ClaudeCodeModelEnvVar,
+				o.claudeCredentialsSecret,
+				ClaudeCodeModelSecretKey,
+			)
+		}
 		container.Env = append(container.Env,
-			corev1.EnvVar{Name: ClaudeCodeModelEnvVar, Value: model},
+			modelEnv,
 			corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: claudeCodeStateDir},
 			corev1.EnvVar{Name: AnthropicBaseURLEnvVar, Value: ClaudeCredentialProxyURL},
 			corev1.EnvVar{Name: AnthropicAuthTokenEnvVar, Value: credentialProxyPlaceholderToken},
@@ -551,6 +567,13 @@ func secretEnv(envName, secretName, key string) corev1.EnvVar {
 			Key:                  key,
 		}},
 	}
+}
+
+func optionalSecretEnv(envName, secretName, key string) corev1.EnvVar {
+	env := secretEnv(envName, secretName, key)
+	optional := true
+	env.ValueFrom.SecretKeyRef.Optional = &optional
+	return env
 }
 
 // podName derives a deterministic, DNS-safe pod name from the session id so the

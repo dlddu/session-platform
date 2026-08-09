@@ -60,9 +60,10 @@ const (
 	WorkloadTypeClaudeCode WorkloadType = "claude-code"
 
 	// PlatformDefaultModel is the stable session-level alias for the model
-	// selected by the platform's Claude Code installation. Keeping the alias in
-	// session metadata makes the model choice explicit and immutable without
-	// hard-coding a vendor model version into the API contract (AC-E6).
+	// selected by the platform's optional Secret configuration (falling back to
+	// the Claude Code installation default). Keeping the alias in session
+	// metadata makes the choice explicit and immutable without hard-coding a
+	// vendor model version into the API contract (AC-E6).
 	PlatformDefaultModel = "platform-default"
 
 	// MaxClaudePromptBytes is the decoded UTF-8 prompt limit.
@@ -186,7 +187,8 @@ type Session struct {
 	WorkloadType WorkloadType `json:"workloadType,omitempty"`
 	// Model is meaningful only for claude-code sessions and, like the workload
 	// type, is fixed at creation. "platform-default" delegates selection to the
-	// platform-managed Claude Code installation (AC-E6).
+	// platform-managed Secret and then the Claude Code installation fallback
+	// (AC-E6).
 	Model      string      `json:"model,omitempty"`
 	Name       string      `json:"name"`
 	State      State       `json:"state"`

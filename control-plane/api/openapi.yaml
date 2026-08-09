@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: session-platform control plane API
-  version: 0.2.0
+  version: 0.3.0
   description: >
     REST surface the SPA uses to create, list and operate sessions. Each
     session maps 1:1 to a dedicated data plane pod (AC-A2). Non-active access is
@@ -23,11 +23,17 @@ info:
     of it, allowing a full read replay before streaming resumes. Claude stdout
     is projected from partial `stream-json` text deltas
     while diagnostic stderr remains visible, so responses arrive before the
-    one-shot process exits. Claude Code credentials are projected from a
-    platform Secret only into a localhost
-    credential-proxy sidecar; the tool-running container receives no real
-    token. Its optional session model is immutable and defaults to
-    `platform-default` (AC-E6).
+    one-shot process exits. Required Claude Code credentials are projected from
+    a platform Secret only into a localhost credential-proxy sidecar; the
+    tool-running container receives no real token. Its optional session model
+    is immutable and defaults to `platform-default`: whenever that session's
+    primary container starts (new pod, restore, or container restart), the alias
+    uses the Secret's optional `model` value and then falls back to the
+    installed CLI default when the value is missing or empty. A non-empty
+    effective model must match `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`; invalid
+    Secret configuration makes the data-plane agent fail startup.
+    `GET /config` exposes a separate, optional ordered model catalog for UI
+    presentation. The catalog is not an API allowlist (AC-E6).
 servers:
   - url: /api/v1
 paths:
@@ -44,6 +50,36 @@ paths:
                 type: object
                 properties:
                   status: { type: string, example: ok }
+  /config:
+    get:
+      summary: Get non-sensitive runtime configuration
+      operationId: getRuntimeConfig
+      description: >
+        Returns the Claude Code model picker configuration captured when this
+        control-plane process started. `defaultModel` is always the stable
+        `platform-default` session alias. `models` is an ordered soft
+        catalog: clients may present its entries as choices, but session
+        creation continues to accept any model that satisfies the model syntax.
+        An empty array tells the SPA to retain its free-text model input. The
+        response exposes neither provider credentials nor the effective value
+        of the Secret's singular `model` key and must not be cached.
+      responses:
+        "200":
+          description: Runtime UI configuration
+          headers:
+            Cache-Control:
+              description: Prevents browsers and intermediaries from retaining a rollout-scoped configuration snapshot.
+              schema:
+                type: string
+                enum: [no-store]
+                example: no-store
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RuntimeConfig" }
+              example:
+                claudeCode:
+                  defaultModel: platform-default
+                  models: [sonnet, opus]
   /sessions:
     get:
       summary: List sessions
@@ -327,6 +363,34 @@ components:
         SSE reconnect cursor. When present it takes precedence over the offset
         query parameter.
   schemas:
+    RuntimeConfig:
+      type: object
+      additionalProperties: false
+      required: [claudeCode]
+      properties:
+        claudeCode:
+          $ref: "#/components/schemas/ClaudeCodeConfig"
+    ClaudeCodeConfig:
+      type: object
+      additionalProperties: false
+      required: [defaultModel, models]
+      properties:
+        defaultModel:
+          type: string
+          enum: [platform-default]
+          description: >
+            Stable alias used when a create request omits model. This is not the
+            effective provider model name.
+        models:
+          type: array
+          uniqueItems: true
+          description: >
+            Ordered, rollout-scoped soft catalog for the UI. It never includes
+            the reserved `platform-default` alias and is not an API allowlist.
+            Empty means the UI should preserve its free-text model input.
+          items:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
     State:
       type: string
       enum: [active, idle, snapshot]
@@ -359,6 +423,9 @@ components:
           description: >
             Immutable Claude Code model identifier. Present only for
             `claude-code`; omitted at creation resolves to `platform-default`.
+            Whenever the primary container starts, including a restart, that
+            alias resolves through the optional Secret model and then the CLI
+            fallback.
         pod: { type: string }
         createdAt: { type: string, format: date-time }
         lastAccess: { type: string, format: date-time }
@@ -385,8 +452,10 @@ components:
           pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
           description: >
             Claude Code model for this session. Valid only when workloadType is
-            `claude-code`; omitted resolves to `platform-default`. Credentials
-            are never accepted in this request.
+            `claude-code`; omitted resolves to `platform-default`. A concrete
+            value is passed literally and takes precedence over the platform
+            Secret default. The catalog returned by GET /config is advisory,
+            not an allowlist. Credentials are never accepted in this request.
     WriteRequest:
       type: object
       additionalProperties: false

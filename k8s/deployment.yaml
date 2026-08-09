@@ -43,12 +43,25 @@ spec:
               value: "false"
             - name: DATA_PLANE_CLAUDE_CODE_IMAGE
               value: "ghcr.io/dlddu/session-platform-data-plane:latest"
-            # Only the localhost credential-proxy sidecar in a Claude session
-            # pod references this Secret; neither the tool-running container nor
-            # the control plane reads its base URL/token (AC-E6). Provision it
-            # out of band; see claude-code-credentials-secret.example.yaml.
+            # The required base-url/auth-token keys are referenced only by the
+            # localhost credential-proxy sidecar. A platform-default Claude
+            # session may reference the optional model key from its tool-running
+            # container. The control plane receives only the optional, public
+            # models catalog below; it never receives provider credentials
+            # (AC-E6).
+            # Provision it out of band; see the example Secret manifest. If
+            # this name is changed, patch the models SecretKeyRef name below to
+            # the same literal (Kubernetes does not interpolate env values).
             - name: CLAUDE_CODE_CREDENTIALS_SECRET
               value: "claude-code-credentials"
+            # Ordered model choices shown by the SPA. This optional Secret key
+            # is a JSON string array. Missing/empty keeps the free-text input.
+            - name: CLAUDE_CODE_MODELS
+              valueFrom:
+                secretKeyRef:
+                  name: claude-code-credentials
+                  key: models
+                  optional: true
             # Explicit data-transfer gate. When enabled, Claude workspace,
             # conversation state and output archives are stored in the S3
             # destination below. Keep off until that destination is approved.

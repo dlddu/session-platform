@@ -893,7 +893,8 @@ article.card {
   color: var(--text-faint);
   margin-bottom: 7px;
 }
-.field input {
+.field input,
+.field select {
   width: 100%;
   height: 40px;
   border-radius: 10px;
@@ -904,7 +905,12 @@ article.card {
   font-family: "IBM Plex Mono", monospace;
   font-size: 13px;
 }
-.field input:focus {
+.field select {
+  color-scheme: dark;
+  cursor: pointer;
+}
+.field input:focus,
+.field select:focus {
   outline: none;
   border-color: var(--active);
 }

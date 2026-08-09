@@ -17,8 +17,9 @@ import (
 
 // API holds the dependencies the handlers need.
 type API struct {
-	mgr           session.Manager
-	testEndpoints bool
+	mgr              session.Manager
+	testEndpoints    bool
+	claudeCodeModels []string
 }
 
 const maxRequestBodyBytes = 8 << 20
@@ -32,9 +33,17 @@ func WithTestEndpoints(enabled bool) Option {
 	return func(a *API) { a.testEndpoints = enabled }
 }
 
+// WithClaudeCodeModels exposes an ordered, non-sensitive model catalog to the
+// SPA. It is a picker configuration rather than an API allowlist.
+func WithClaudeCodeModels(models []string) Option {
+	return func(a *API) {
+		a.claudeCodeModels = append([]string{}, models...)
+	}
+}
+
 // New returns an API bound to a session.Manager.
 func New(mgr session.Manager, opts ...Option) *API {
-	a := &API{mgr: mgr}
+	a := &API{mgr: mgr, claudeCodeModels: []string{}}
 	for _, opt := range opts {
 		opt(a)
 	}
@@ -45,6 +54,7 @@ func New(mgr session.Manager, opts ...Option) *API {
 // patterns keep routing dependency-free.
 func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/healthz", a.health)
+	mux.HandleFunc("GET /api/v1/config", a.runtimeConfig)
 	mux.HandleFunc("POST /api/v1/sessions", a.createSession)
 	mux.HandleFunc("GET /api/v1/sessions", a.listSessions)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", a.getSession)
@@ -97,6 +107,15 @@ type writeResp struct {
 	Path    string           `json:"path"`
 }
 
+type runtimeConfigResp struct {
+	ClaudeCode claudeCodeConfigResp `json:"claudeCode"`
+}
+
+type claudeCodeConfigResp struct {
+	DefaultModel string   `json:"defaultModel"`
+	Models       []string `json:"models"`
+}
+
 type errResp struct {
 	Error string `json:"error"`
 }
@@ -105,6 +124,17 @@ type errResp struct {
 
 func (a *API) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (a *API) runtimeConfig(w http.ResponseWriter, _ *http.Request) {
+	// The process receives this catalog from a Secret-backed environment
+	// variable at startup. Avoid browser/proxy caching so a control-plane
+	// rollout immediately exposes its new snapshot.
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, runtimeConfigResp{ClaudeCode: claudeCodeConfigResp{
+		DefaultModel: session.PlatformDefaultModel,
+		Models:       append([]string{}, a.claudeCodeModels...),
+	}})
 }
 
 func (a *API) createSession(w http.ResponseWriter, r *http.Request) {

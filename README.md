@@ -77,9 +77,18 @@ docs/                 value / PRD·AC / journeys / mockups / CRIU verification n
   partial `stream-json` output enabled; the data plane incrementally redacts and
   UTF-8-normalizes assistant text deltas and diagnostic stderr before appending
   them to the session scrollback. Type and Claude model are immutable session
-  metadata. Real provider credentials exist only in a hardened localhost proxy
-  sidecar that accepts one configured HTTPS upstream. The proxy forwards safe
-  SSE response chunks before upstream completion, holds possible credential
+  metadata. For the `platform-default` alias, the pod projects the optional
+  `model` key from the platform credentials Secret into the tool-running
+  container as `CLAUDE_CODE_MODEL`; a missing or empty key leaves `--model`
+  unset so the installed Claude CLI chooses its default. A concrete session
+  model is injected literally and takes precedence over that Secret default.
+  The required `base-url` and `auth-token` Secret keys remain isolated in a
+  hardened localhost proxy sidecar that accepts one configured HTTPS upstream.
+  A separate optional `models` Secret key is an ordered UI soft catalog, not
+  an API allowlist. The Deployment projects only that key into the control
+  plane as `CLAUDE_CODE_MODELS`; `GET /api/v1/config` exposes its validated
+  snapshot without exposing credentials. The proxy forwards safe SSE response
+  chunks before upstream completion, holds possible credential
   suffixes across network reads for tail-safe redaction, and enforces a 64 MiB
   raw-upstream SSE cap without whole-body buffering. The tool-running container
   receives a non-secret placeholder and no Kubernetes service-account token.
@@ -159,6 +168,7 @@ gitignored.
 
 | Method + path                | Purpose                        | AC     |
 | ---------------------------- | ------------------------------ | ------ |
+| `GET  /config`               | non-sensitive runtime UI config | E6     |
 | `POST /sessions`             | create (provision pod, active) | A1, A2 |
 | `GET  /sessions`             | list                           | V5     |
 | `GET  /sessions/{id}`        | get one                        | V5     |
@@ -232,6 +242,43 @@ The cluster runs this via GitOps (Flux) from the `flux-cd-apps` repo.
   leases). Session state lives in in-cluster ConfigMaps/Leases, so there is no
   separate backing-store deployment. The namespace, ingress, and VPA live on the
   cluster side in `flux-cd-apps`.
+
+Before creating Claude Code sessions, provision the Secret named by
+`CLAUDE_CODE_CREDENTIALS_SECRET` (default `claude-code-credentials`). Its
+`base-url` and `auth-token` keys are required and are exposed only to the
+credential-proxy sidecar. Its `model` key is optional: a non-empty value selects
+the model for `platform-default` sessions, while a missing or empty value falls
+back to the installed Claude CLI default. A concrete model supplied when the
+session is created always wins. Non-empty Secret values are validated against
+`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$` when the data-plane container starts, so
+an invalid platform default fails fast instead of being forwarded as a CLI
+option.
+
+The separate optional `models` key is a JSON string array used only as an
+ordered UI picker catalog. The Deployment projects only this key into the
+control plane as `CLAUDE_CODE_MODELS`; it does not grant the control plane
+access to `base-url`, `auth-token`, or `model`. A non-empty value must be a
+JSON array of unique model strings that satisfy
+`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`; empty entries, surrounding whitespace,
+duplicates, and the reserved `platform-default` alias make the control plane
+fail startup. Missing, empty, or `[]` keeps the existing free-text model UI.
+`GET /api/v1/config` returns
+`{"claudeCode":{"defaultModel":"platform-default","models":[...]}}` with
+`Cache-Control: no-store`. This catalog is advisory: the create-session API
+continues to accept valid model identifiers outside it.
+
+If `CLAUDE_CODE_CREDENTIALS_SECRET` is changed from its default name, also
+patch the Deployment's `CLAUDE_CODE_MODELS.valueFrom.secretKeyRef.name` to the
+same Secret. Kubernetes does not interpolate one environment variable into a
+`secretKeyRef.name`.
+
+Changing the singular `model` key is observed the next time a
+`platform-default` primary container starts: in a new pod, a pod recreated
+during restore, or a container restart. It does not immediately mutate an
+already-running container, and a concrete-model session keeps its literal
+setting. Changing `models` takes effect only after the control-plane Deployment
+rolls so each process reloads its environment. See
+[`k8s/claude-code-credentials-secret.example.yaml`](k8s/claude-code-credentials-secret.example.yaml).
 
 The [`deploy/`](deploy/) directory remains the local `kind` setup for the
 integration harness; `k8s/` is the deployed-cluster source of truth.
