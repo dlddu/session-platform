@@ -68,4 +68,8 @@ export const api = {
 
   switchSession: (id: string) =>
     req<Session>(`/sessions/${id}/switch`, { method: "POST" }),
+
+  /** Archive/checkpoint immediately and reclaim the workload pod. */
+  archiveSession: (id: string) =>
+    req<Session>(`/sessions/${id}/snapshot`, { method: "POST" }),
 };

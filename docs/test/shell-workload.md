@@ -29,9 +29,9 @@
 
 ### 시나리오 4: 복원 후 쉘 상태 무결성(구체 마커) + 커서 연속성
 - **사전 조건**: active 세션에 `export MARKER=42\n`, `cd /tmp\n`를 write하여 쉘 상태 세팅. 동결 직전 read로 `nextOffset` 커서를 확보(`cursorBefore`)
-- **실행 단계**: 세션 동결(스냅샷, in-process `Service.Snapshot` 직접 호출 — HTTP 스냅샷 엔드포인트 미추가) → 이후 접근으로 CRIU 복원(AC-B2) → `echo $MARKER\n`·`pwd\n`를 write → (a) `cursorBefore`로 read, (b) `offset=0`으로 read
+- **실행 단계**: 세션 동결(integration은 `Service.Snapshot` 직접 호출, deploy e2e는 제품 HTTP snapshot endpoint 호출) → 이후 접근으로 CRIU 복원(AC-B2) → `echo $MARKER\n`·`pwd\n`를 write → (a) `cursorBefore`로 read, (b) `offset=0`으로 read
 - **기대 결과**: (a) `cursorBefore` 델타 read에 `42`와 `/tmp`가 포함(동결 직전 환경 변수·작업 디렉터리 보존) — 이는 AC-B3(무결성)의 구체 마커 검증. 동시에 archive에 별도 직렬화·preload된 scrollback에서 복원 전 커서가 여전히 유효하다는 **커서 연속성**을 입증하며, 델타에는 동결 이전 입력이 재전송되지 않는다. (b) `offset=0` read에는 동결 전 입력 에코와 복원 후 출력이 실행 순서대로 모두 포함(비파괴적 전체 이력)
-- **구현**: `control-plane/test/integration_test.go`의 `TestScenario4_CRIUIntegrity`는 env/cluster가 준비된 경우 실행하고, `control-plane/test/e2e_deferred_test.go`의 `TestDeferred_CRIUIntegrity`는 CRIU·MinIO·test-only snapshot trigger를 켠 kind overlay에서 실제 dump→pod 회수→새 pod restore를 단언한다(`../criu-verification.md`)
+- **구현**: `control-plane/test/integration_test.go`의 `TestScenario4_CRIUIntegrity`는 env/cluster가 준비된 경우 실행하고, `control-plane/test/e2e_deferred_test.go`의 `TestDeferred_CRIUIntegrity`는 CRIU·MinIO를 켠 kind overlay에서 제품 snapshot endpoint를 통해 실제 dump→pod 회수→새 pod restore를 단언한다(`../criu-verification.md`)
 - **검증 AC**: AC-D4 (AC-B3 구체화)
 
 ### 시나리오 5: 유휴 판정은 클라이언트 I/O 기준

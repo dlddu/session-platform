@@ -327,6 +327,52 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+  /sessions/{id}/snapshot:
+    post:
+      summary: Archive a session on demand and reclaim its pod (AC-B1/AC-A3)
+      operationId: snapshotSession
+      description: >
+        Immediately captures the workload using its configured strategy
+        (CRIU checkpoint for shell, filesystem archive for claude-code), moves
+        the session to snapshot state, and reclaims its pod. Calling this for
+        an already-snapshotted session is idempotent.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          description: The archived session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "400":
+          description: Malformed body, trailing JSON, or a non-empty request object
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: Concurrent state change
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "503":
+          description: The workload's checkpoint or archive strategy is disabled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 components:
   responses:
     RequestEntityTooLarge:

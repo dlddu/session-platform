@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/dlddu/session-platform/control-plane/internal/api"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
@@ -174,7 +173,7 @@ func TestWorkloadTypeIsImmutableAfterCreate(t *testing.T) {
 // AC-E6: the API-visible model remains fixed while snapshot access restores a
 // new pod, and the restored provisioning request receives the same model.
 func TestModelSurvivesSnapshotRestoreOverHTTP(t *testing.T) {
-	srv, orch, _ := newServerWithOrchestrator(api.WithTestEndpoints(true))
+	srv, orch, _ := newServerWithOrchestrator()
 	defer srv.Close()
 
 	const model = "claude-sonnet-4-5"

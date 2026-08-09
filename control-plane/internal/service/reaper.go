@@ -12,9 +12,9 @@ import (
 // IdleReaper is the operational idle->snapshot trigger (AC-B1). On a fixed
 // interval it scans every session and snapshots any that has had no client
 // read/write (AC-D5) for at least maxIdle — using its workload snapshot strategy
-// and reclaiming its pod (AC-A3). It is the operational counterpart to the
-// test-only /snapshot endpoint: without it a session never freezes on its own
-// after its idle limit; a client had to trigger the snapshot explicitly.
+// and reclaiming its pod (AC-A3). It is the automatic counterpart to the
+// product /snapshot endpoint: the reaper waits for the idle limit, while a
+// client can explicitly snapshot the session immediately.
 //
 // Service.SnapshotIfIdle acquires the session Lease and reloads LastAccess,
 // closing the stale List-to-Snapshot gap. Generic managers retain Snapshot.

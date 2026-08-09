@@ -74,7 +74,7 @@ spec:
             # conversation state and output archives are stored in the S3
             # destination below. Keep off until that destination is approved.
             - name: CLAUDE_CODE_ARCHIVE_ENABLED
-              value: "false"
+              value: "true"
             # Checkpoint archive S3 store config (decision ③, docs/criu-verification.md):
             # bucket / assume-role ARN / region / key prefix. Sourced from the
             # `checkpoint-s3` Secret rather than inlined here. The Secret is

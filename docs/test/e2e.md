@@ -11,9 +11,9 @@
 > 인터랙티브 쉘이 실제로 기동되고, create는 pod Ready에 더해 **쉘 도달(Reach, attach 스트림
 > open/close)**까지 확인한 뒤에야 `active`를 반환한다(AC-D1). SUT는 **2 replica**로 배포되어
 > 상태를 공유하므로 교차-replica 원자성(AC-C1)을 실제로 검증한다. Checkpointer(CRIU)는
-> 오버레이(`deploy/`)에서 게이트 ON(agent-driven in-pod CRIU + MinIO 아카이브 저장소 +
-> test-only snapshot 트리거)으로 배포되어, **snapshot→pod 회수→접근 시 새 pod로 복원→쉘
-> 상태 보존 왕복이 실 단언으로 검증**된다(`TestDeferred_CRIUIntegrity`, AC-B2/B3/D4; e2e
+> 오버레이(`deploy/`)에서 게이트 ON(agent-driven in-pod CRIU + MinIO 아카이브 저장소)으로
+> 배포되고 제품 snapshot endpoint를 통해 **snapshot→pod 회수→접근 시 새 pod로 복원→쉘 상태
+> 보존 왕복이 실 단언으로 검증**된다(`TestDeferred_CRIUIntegrity`, AC-B2/B3/D4; e2e
 > 워크플로의 CRIU 프로브가 러너 커널의 in-pod criu 지원을 확인). 운영 reaper는 마지막
 > read/write부터 60분에 도달한 세션을 스캔해 snapshot한다. 다만 배포 e2e에는 60분 시계를
 > 가속하거나 `lastAccess`를 주입하는 제품 API가 없어 실제 시간 경계 시드는 skip이다.
@@ -103,10 +103,10 @@ Playwright 리포트/trace를 아티팩트로 올린다. ci.yml의 lint/unit/bui
 | 시드 (테스트) | 스위트 | 문서 시나리오 / 여정 | AC | 막힌 이유 (선결조건) |
 | --- | --- | --- | --- | --- |
 | ~~`TestDeferred_RealPodProvisioned`~~ → **채움** | go | architecture 시나리오 1·2 | A1, A2 | (해소: 실 client-go PodOrchestrator 적용 — 위 커버 표로 이동) |
-| ~~`TestDeferred_RealPodReclaimed`~~ → **채움** | go | architecture 시나리오 3 | A3 | (해소: 실 client-go PodOrchestrator의 Stop이 Pod를 삭제 + test-only snapshot 트리거로 동결 경로 도달 — 위 커버 표로 이동) |
+| ~~`TestDeferred_RealPodReclaimed`~~ → **채움** | go | architecture 시나리오 3 | A3 | (해소: 실 client-go PodOrchestrator의 Stop이 Pod를 삭제 + 제품 snapshot endpoint로 동결 경로 도달 — 위 커버 표로 이동) |
 | `TestDeferred_IdleToSnapshot` | go | lifecycle 시나리오 1 | B1 | reaper는 구현됨; 배포 SUT의 60분 경계를 가속할 clock/lastAccess test seam 필요 |
 | `TestDeferred_SnapshotRestore` | go | lifecycle 시나리오 2 | B2 | B2는 `TestDeferred_CRIUIntegrity`(복원→새 pod)로 이미 커버 — 이 시드는 focused restore-only 잉여 placeholder(비차단) |
-| ~~`TestDeferred_CRIUIntegrity`~~ → **채움** | go | lifecycle 시나리오 3 | B2, B3, D4 | (해소: deploy/ 오버레이가 CRIU 게이트 ON(agent-driven in-pod CRIU + MinIO) + test-only snapshot 트리거 → snapshot→복원→상태 보존 왕복 실단언; e2e CRIU 프로브가 러너 커널 지원 확인 — 위 커버 표로 이동) |
+| ~~`TestDeferred_CRIUIntegrity`~~ → **채움** | go | lifecycle 시나리오 3 | B2, B3, D4 | (해소: deploy/ 오버레이가 CRIU 게이트 ON(agent-driven in-pod CRIU + MinIO) + 제품 snapshot endpoint → snapshot→복원→상태 보존 왕복 실단언; e2e CRIU 프로브가 러너 커널 지원 확인 — 위 커버 표로 이동) |
 | `TestDeferred_ReadIdleAndSnapshotBranches` | go | state-api 시나리오 2 | C2 | idle 분기만 잔여(snapshot 분기는 `TestDeferred_CRIUIntegrity`가 커버) — operational `idle` 상태 producer 필요 |
 | `TestDeferred_WriteIdleAndSnapshotBranches` | go | state-api 시나리오 3 | C3 | idle 분기만 잔여(snapshot 분기는 `TestDeferred_CRIUIntegrity`가 커버) — operational `idle` 상태 producer 필요 |
 | ~~`TestDeferred_CrossReplicaAtomicity`~~ → **채움** | go | state-api 시나리오 1 | C1 | (해소: ConfigMap/Lease StateStore + 2-replica 오버레이로 교차-replica 일관성 단언 — 위 커버 표로 이동. 단일-승자 CAS/Lease는 envtest 스위트가 실 apiserver로 검증) |

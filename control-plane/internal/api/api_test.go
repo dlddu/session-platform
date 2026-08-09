@@ -63,37 +63,22 @@ func createForTest(t *testing.T, srv *httptest.Server, name string) session.Sess
 	return s
 }
 
-// The snapshot endpoint is test-only: it exists to let the e2e suite reach the
-// snapshot state (the product trigger policy is still undecided), so it must be
-// absent unless WithTestEndpoints is set.
-func TestSnapshotEndpointIsGated(t *testing.T) {
-	// Default (production) surface: no snapshot route.
+// The product snapshot endpoint lets a user archive a session immediately,
+// without waiting for the idle reaper, and reclaims its pod.
+func TestSnapshotEndpointArchivesSession(t *testing.T) {
 	srv := newServer()
 	defer srv.Close()
-	s := createForTest(t, srv, "gated-off")
+	s := createForTest(t, srv, "manual-archive")
 	resp, err := http.Post(srv.URL+"/api/v1/sessions/"+s.ID+"/snapshot", "application/json", nil)
 	if err != nil {
-		t.Fatalf("snapshot (gate off): %v", err)
+		t.Fatalf("snapshot: %v", err)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("snapshot with the gate off = %d, want 404 (route must not exist)", resp.StatusCode)
-	}
-
-	// With test endpoints on: the session freezes and its pod is reclaimed.
-	srvTest := newServer(api.WithTestEndpoints(true))
-	defer srvTest.Close()
-	s2 := createForTest(t, srvTest, "gated-on")
-	resp2, err := http.Post(srvTest.URL+"/api/v1/sessions/"+s2.ID+"/snapshot", "application/json", nil)
-	if err != nil {
-		t.Fatalf("snapshot (gate on): %v", err)
-	}
-	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusOK {
-		t.Fatalf("snapshot with the gate on = %d, want 200", resp2.StatusCode)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("snapshot status = %d, want 200", resp.StatusCode)
 	}
 	var frozen session.Session
-	if err := json.NewDecoder(resp2.Body).Decode(&frozen); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&frozen); err != nil {
 		t.Fatalf("decode snapshot response: %v", err)
 	}
 	if frozen.State != session.StateSnapshot {
@@ -106,7 +91,7 @@ func TestSnapshotEndpointIsGated(t *testing.T) {
 
 // A snapshot of an unknown session is a 404 like the other handlers.
 func TestSnapshotUnknownSession(t *testing.T) {
-	srv := newServer(api.WithTestEndpoints(true))
+	srv := newServer()
 	defer srv.Close()
 	resp, err := http.Post(srv.URL+"/api/v1/sessions/nope/snapshot", "application/json", nil)
 	if err != nil {
@@ -368,7 +353,7 @@ func TestDeleteConflictReturns409(t *testing.T) {
 // A snapshotted session has no live pod but its logical record is still
 // deletable through the same product endpoint.
 func TestDeleteSnapshotSession(t *testing.T) {
-	srv := newServer(api.WithTestEndpoints(true))
+	srv := newServer()
 	defer srv.Close()
 	created := createForTest(t, srv, "delete-frozen")
 
@@ -481,7 +466,7 @@ func TestStreamEndpointProxiesSSEAndPrefersLastEventID(t *testing.T) {
 }
 
 func TestStreamDoesNotRestoreSnapshot(t *testing.T) {
-	srv := newServer(api.WithTestEndpoints(true))
+	srv := newServer()
 	defer srv.Close()
 	created := createForTest(t, srv, "passive-stream")
 	snapshotResp, err := http.Post(

@@ -66,9 +66,8 @@ patches:
   # only a capable kernel and a privileged session pod — and the e2e CRIU probe
   # confirms that holds on GitHub runners. That makes the AC-D4 round trip an
   # automated assertion (TestDeferred_CRIUIntegrity) instead of a manual round.
-  # It also needs: a snapshot trigger reachable over HTTP (E2E_TEST_ENDPOINTS,
-  # test-only — the 60-minute idle reaper is the product path; finer trigger
-  # timing remains an operational policy) and an archive store
+  # It also needs the product snapshot trigger reachable over HTTP and an
+  # archive store
   # shared by both replicas (CHECKPOINT_S3_ENDPOINT → the in-cluster MinIO,
   # authenticated with the static keys from the checkpoint-s3 Secret since no
   # role is set here).
@@ -91,11 +90,6 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/env/3/value
         value: session-platform/data-plane:dev
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: E2E_TEST_ENDPOINTS
-          value: "1"
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:

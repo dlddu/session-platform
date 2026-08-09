@@ -18,7 +18,6 @@ import (
 // API holds the dependencies the handlers need.
 type API struct {
 	mgr                    session.Manager
-	testEndpoints          bool
 	claudeCodeDefaultModel string
 	claudeCodeModels       []string
 }
@@ -27,12 +26,6 @@ const maxRequestBodyBytes = 8 << 20
 
 // Option customises the API surface.
 type Option func(*API)
-
-// WithTestEndpoints registers the test-only endpoints (see Routes). Deployments
-// leave it off; the e2e SUT turns it on via E2E_TEST_ENDPOINTS.
-func WithTestEndpoints(enabled bool) Option {
-	return func(a *API) { a.testEndpoints = enabled }
-}
 
 // WithClaudeCodeModelConfig exposes the rollout-scoped, non-sensitive model
 // picker configuration to the SPA. The catalog is presentation configuration,
@@ -71,13 +64,9 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/sessions/{id}/write", a.writeSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/switch", a.switchSession)
 
-	if a.testEndpoints {
-		// Test-only: freeze on demand without waiting for IdleReaper's 60-minute
-		// product window. The e2e suite uses it to verify workload-specific archive
-		// and restore behavior; it is deliberately not a product API. Restore needs
-		// no endpoint because any access resumes a frozen session.
-		mux.HandleFunc("POST /api/v1/sessions/{id}/snapshot", a.snapshotSession)
-	}
+	// Manual counterpart to the idle reaper: archive/checkpoint the workload and
+	// reclaim its pod immediately. A later switch restores the session.
+	mux.HandleFunc("POST /api/v1/sessions/{id}/snapshot", a.snapshotSession)
 }
 
 // ---- request/response DTOs ----
@@ -309,7 +298,6 @@ func (a *API) switchSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // snapshotSession freezes a session and reclaims its pod (AC-B1/AC-A3).
-// Registered only with WithTestEndpoints — see Routes.
 func (a *API) snapshotSession(w http.ResponseWriter, r *http.Request) {
 	if err := decodeRequestBody(r.Body, &struct{}{}, false); err != nil {
 		writeErr(w, err)

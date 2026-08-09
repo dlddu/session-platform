@@ -66,6 +66,7 @@ export function Workspace() {
   const [streamState, setStreamState] =
     useState<OutputStreamState>("connecting");
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   const offsetRef = useRef(0);
   const readQueueRef = useRef<Promise<void>>(Promise.resolve());
   const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -137,6 +138,7 @@ export function Workspace() {
     setTerm("");
     setCmd("");
     setPendingSubmissions(0);
+    setArchiving(false);
     setStreamState("connecting");
     setSess(null);
     setError(null);
@@ -528,6 +530,44 @@ export function Workspace() {
     }
   }
 
+  async function archiveNow() {
+    if (!sess || sess.state === "snapshot" || archiving) return;
+
+    const generation = generationRef.current;
+    const isAgent = sess.workloadType === "claude-code";
+    const action = isAgent ? "archive" : "freeze";
+
+    setArchiving(true);
+    stopStreamRef.current?.();
+    if (isAgent) setStreamState("offline");
+
+    try {
+      const archived = await api.archiveSession(id);
+      if (generationRef.current !== generation) return;
+      if (archived.state !== "snapshot") {
+        throw new Error(
+          `archive returned unexpected session state "${archived.state}"`,
+        );
+      }
+
+      setSess(archived);
+      toast(
+        isAgent
+          ? "Session archived — pod reclaimed"
+          : "Session frozen — pod reclaimed",
+        "frozen",
+      );
+      navigate("/", { replace: true });
+    } catch (archiveError) {
+      if (generationRef.current !== generation) return;
+
+      setArchiving(false);
+      appendSys(`${action} failed: ${archiveError}`);
+      toast(`Could not ${action} session: ${archiveError}`, "warm");
+      if (isAgent) restartStreamRef.current?.();
+    }
+  }
+
   function handleDeleted(deleted: Session) {
     stopStreamRef.current?.();
     toast('Session "' + deleted.name + '" deleted');
@@ -540,6 +580,9 @@ export function Workspace() {
   const isAgent = sess.workloadType === "claude-code";
   const frozen = sess.state === "snapshot";
   const modelLabel = displayModel(sess.model?.trim());
+  const archiveButtonLabel = archiving
+    ? (isAgent ? "Archiving…" : "Freezing…")
+    : (isAgent ? "Archive now" : "Freeze now");
 
   return (
     <div className="pad" data-workload-type={sess.workloadType}>
@@ -598,7 +641,7 @@ export function Workspace() {
                 className="console-refresh"
                 data-testid="ws-refresh-output"
                 onClick={() => void refreshOutput()}
-                disabled={reading}
+                disabled={reading || archiving}
                 title={
                   isAgent
                     ? "Fallback cursor read if the live stream is interrupted"
@@ -649,7 +692,7 @@ export function Workspace() {
               spellCheck={isAgent}
               autoComplete="off"
               aria-label={isAgent ? "agent prompt" : "shell command"}
-              disabled={frozen}
+              disabled={frozen || archiving}
             />
             {isAgent && pendingSubmissions > 0 ? (
               <span
@@ -667,7 +710,7 @@ export function Workspace() {
                 type="submit"
                 className="agent-send"
                 data-testid="ws-prompt-submit"
-                disabled={frozen || !cmd.trim()}
+                disabled={frozen || archiving || !cmd.trim()}
               >
                 Send
               </button>
@@ -701,8 +744,36 @@ export function Workspace() {
             <div className="action-stack">
               <button
                 className="btn btn-ghost"
+                type="button"
+                data-testid="ws-archive-session"
+                onClick={() => void archiveNow()}
+                disabled={
+                  frozen ||
+                  archiving ||
+                  reading ||
+                  pendingSubmissions > 0
+                }
+                aria-busy={archiving}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <rect x="3" y="4" width="18" height="5" rx="1.5" />
+                  <path d="M5 9v10a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19V9M10 13h4" />
+                </svg>
+                {archiveButtonLabel}
+              </button>
+              <button
+                className="btn btn-ghost"
                 data-testid="ws-switch"
                 onClick={() => void doSwitch()}
+                disabled={archiving}
               >
                 Switch (AC-C4)
               </button>
@@ -711,6 +782,7 @@ export function Workspace() {
                 type="button"
                 data-testid="ws-delete-session"
                 onClick={() => setDeleteOpen(true)}
+                disabled={archiving}
               >
                 Delete session
               </button>
