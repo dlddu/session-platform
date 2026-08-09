@@ -32,7 +32,6 @@ const (
 	defaultClaudeBinary   = "claude"
 	platformDefaultModel  = "platform-default"
 	claudePermissionMode  = "auto"
-	claudeEffortLevel     = "xhigh"
 
 	claudeRuntimeStateFile     = ".session-platform-claude.json"
 	claudeSettingsDir          = ".claude"
@@ -393,11 +392,11 @@ func (c *claudeWorkload) argv(prompt string, resume bool) []string {
 		argv = append(argv, "--model", c.model)
 	}
 	// Partial stream-json is projected back to user-facing text by runWorker.
-	// Permission mode and effort are platform policy for every invocation. The
+	// Permission mode is platform policy for every invocation. The
 	// option delimiter still prevents a prompt beginning with "--" from changing
 	// any platform-controlled flag.
 	return append(argv,
-		"--permission-mode", claudePermissionMode, "--effort", claudeEffortLevel,
+		"--permission-mode", claudePermissionMode,
 		"-p", "--output-format", "stream-json", "--verbose",
 		"--include-partial-messages", "--", prompt,
 	)
