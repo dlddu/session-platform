@@ -65,13 +65,16 @@ a pod recreated after restore, or a container restart. They do not immediately
 mutate a running container environment or a concrete session model.
 
 The plural Secret key `models` is not data-plane configuration and is never
-projected into either session container. The Deployment projects only that key
-into the control plane as `CLAUDE_CODE_MODELS`, where it becomes the ordered
-soft catalog returned by `GET /api/v1/config`; catalog changes require a
-control-plane rollout. Missing, empty, or `[]` preserves the UI's free-text
-input, and the catalog does not restrict models accepted by the session API. If
-the credentials Secret is renamed, the Deployment's
-`CLAUDE_CODE_MODELS.valueFrom.secretKeyRef.name` must be patched to the same
+projected into either session container. For UI presentation, the Deployment
+projects the public singular `model` and plural `models` keys into the control
+plane as `CLAUDE_CODE_DEFAULT_MODEL` and `CLAUDE_CODE_MODELS`. The config API
+returns their validated startup snapshot; a concrete default is rendered once
+as `<model> (platform default)`, while missing/empty falls back to the generic
+alias. Either display change requires a control-plane rollout, but a session
+pod still resolves its own `model` SecretKeyRef whenever it starts. Missing,
+empty, or `[]` preserves the UI's free-text input, and the catalog does not
+restrict models accepted by the session API. If the credentials Secret is
+renamed, both control-plane SecretKeyRef names must be patched to the same
 literal name because Kubernetes does not interpolate
 `CLAUDE_CODE_CREDENTIALS_SECRET` there.
 

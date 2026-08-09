@@ -18,7 +18,7 @@ type runtimeConfigResponse struct {
 
 func TestRuntimeConfigExposesClaudeCodeModelCatalog(t *testing.T) {
 	models := []string{"claude-model-a", "claude-model-b"}
-	srv := newServer(api.WithClaudeCodeModels(models))
+	srv := newServer(api.WithClaudeCodeModelConfig("~anthropic/claude-opus-latest", models))
 	defer srv.Close()
 	models[0] = "mutated-after-option"
 
@@ -37,7 +37,7 @@ func TestRuntimeConfigExposesClaudeCodeModelCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read config: %v", err)
 	}
-	want := "{\"claudeCode\":{\"defaultModel\":\"platform-default\",\"models\":[\"claude-model-a\",\"claude-model-b\"]}}\n"
+	want := "{\"claudeCode\":{\"defaultModel\":\"~anthropic/claude-opus-latest\",\"models\":[\"claude-model-a\",\"claude-model-b\"]}}\n"
 	if string(body) != want {
 		t.Errorf("config body = %q, want %q", body, want)
 	}
@@ -68,5 +68,8 @@ func TestRuntimeConfigUsesEmptyArrayWithoutCatalog(t *testing.T) {
 	}
 	if got.ClaudeCode.Models == nil || len(got.ClaudeCode.Models) != 0 {
 		t.Fatalf("models = %#v, want non-nil empty array", got.ClaudeCode.Models)
+	}
+	if got.ClaudeCode.DefaultModel != "platform-default" {
+		t.Fatalf("defaultModel = %q, want platform-default", got.ClaudeCode.DefaultModel)
 	}
 }

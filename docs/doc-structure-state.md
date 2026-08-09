@@ -83,7 +83,7 @@
 
 ### 🟠 인접 사슬에서 인지된 항목 (이 스킬 관할 밖, 참고용)
 - **고아 가치(소유자 미지정)**: V1~V5·V8 전부 소유자 미지정 — `doc-tracker.md`/`values.md` 참고. product-doc-engineer 영역이라 여기서 수정하지 않음.
-- **mockup의 명시 model 예시**: `new-session.html`의 `model-a`/`model-b`는 non-empty optional `models` soft catalog 상태의 자리표시자다. 실제 UI는 catalog가 있으면 ordered picker, missing/empty/`[]`이면 free-text 입력을 사용하며 catalog는 API allowlist가 아니다. `platform-default`의 Secret `model` 우선/CLI fallback과 첫 성공 뒤 `--continue` 재개 방식은 AC-E4/E6에서 확정되어 `agent-workspace.html`은 그 사용자 관측 결과를 표현한다.
+- **mockup의 명시 model 예시**: `new-session.html`의 `model-a`/`model-b`는 non-empty optional `models` soft catalog 상태의 자리표시자다. 실제 UI는 concrete default를 `<model> (platform default)` 한 항목으로 합치고 catalog가 있으면 ordered picker, missing/empty/`[]`이면 free-text 입력을 사용하며 catalog는 API allowlist가 아니다. `platform-default`의 Secret `model` 우선/CLI fallback과 첫 성공 뒤 `--continue` 재개 방식은 AC-E4/E6에서 확정되어 `agent-workspace.html`은 그 사용자 관측 결과를 표현한다.
 - **에이전트 세션의 페르소나**: J6는 P1로 작성됐으나 전용 페르소나가 필요한지, P2(자동화 클라이언트)가 `claude-code` 세션을 쓰는 시나리오는 어떻게 다룰지 미확인 (`user-journeys/README.md` 미해결 항목).
 
 ## 수용된 위험

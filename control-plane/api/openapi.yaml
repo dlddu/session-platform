@@ -32,8 +32,11 @@ info:
     installed CLI default when the value is missing or empty. A non-empty
     effective model must match `^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$`; invalid
     Secret configuration makes the data-plane agent fail startup.
-    `GET /config` exposes a separate, optional ordered model catalog for UI
-    presentation. The catalog is not an API allowlist (AC-E6).
+    The control plane receives the same optional model as
+    `CLAUDE_CODE_DEFAULT_MODEL`; `GET /config` exposes that effective concrete
+    default (or `platform-default` when absent) together with a separate,
+    optional ordered model catalog for UI presentation. The catalog is not an
+    API allowlist (AC-E6).
 servers:
   - url: /api/v1
 paths:
@@ -56,13 +59,13 @@ paths:
       operationId: getRuntimeConfig
       description: >
         Returns the Claude Code model picker configuration captured when this
-        control-plane process started. `defaultModel` is always the stable
-        `platform-default` session alias. `models` is an ordered soft
-        catalog: clients may present its entries as choices, but session
-        creation continues to accept any model that satisfies the model syntax.
-        An empty array tells the SPA to retain its free-text model input. The
-        response exposes neither provider credentials nor the effective value
-        of the Secret's singular `model` key and must not be cached.
+        control-plane process started. `defaultModel` is the effective concrete
+        model projected from the Secret, or the stable `platform-default`
+        session alias when that value is missing or empty. `models` is an
+        ordered soft catalog: clients may present its entries as choices, but
+        session creation continues to accept any model that satisfies the model
+        syntax. An empty array tells the SPA to retain its free-text model input.
+        The response exposes no provider credentials and must not be cached.
       responses:
         "200":
           description: Runtime UI configuration
@@ -78,7 +81,7 @@ paths:
               schema: { $ref: "#/components/schemas/RuntimeConfig" }
               example:
                 claudeCode:
-                  defaultModel: platform-default
+                  defaultModel: "~anthropic/claude-opus-latest"
                   models: [sonnet, opus]
   /sessions:
     get:
@@ -377,10 +380,14 @@ components:
       properties:
         defaultModel:
           type: string
-          enum: [platform-default]
+          maxLength: 128
+          pattern: '^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$'
           description: >
-            Stable alias used when a create request omits model. This is not the
-            effective provider model name.
+            Effective platform default shown by the UI: the concrete
+            Secret-backed model when configured, otherwise the stable
+            `platform-default` session alias. Omitting model from a create
+            request still records that stable alias so future pod starts follow
+            the platform default.
         models:
           type: array
           uniqueItems: true

@@ -47,13 +47,21 @@ spec:
             # localhost credential-proxy sidecar. A platform-default Claude
             # session may reference the optional model key from its tool-running
             # container. The control plane receives only the optional, public
-            # models catalog below; it never receives provider credentials
-            # (AC-E6).
+            # default model and models catalog below; it never receives provider
+            # credentials (AC-E6).
             # Provision it out of band; see the example Secret manifest. If
-            # this name is changed, patch the models SecretKeyRef name below to
-            # the same literal (Kubernetes does not interpolate env values).
+            # this name is changed, patch both SecretKeyRef names below to the
+            # same literal (Kubernetes does not interpolate env values).
             - name: CLAUDE_CODE_CREDENTIALS_SECRET
               value: "claude-code-credentials"
+            # Public effective default shown by the SPA. The session pod still
+            # resolves its own platform-default SecretKeyRef when it starts.
+            - name: CLAUDE_CODE_DEFAULT_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: claude-code-credentials
+                  key: model
+                  optional: true
             # Ordered model choices shown by the SPA. This optional Secret key
             # is a JSON string array. Missing/empty keeps the free-text input.
             - name: CLAUDE_CODE_MODELS

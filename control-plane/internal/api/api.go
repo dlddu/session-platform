@@ -17,9 +17,10 @@ import (
 
 // API holds the dependencies the handlers need.
 type API struct {
-	mgr              session.Manager
-	testEndpoints    bool
-	claudeCodeModels []string
+	mgr                    session.Manager
+	testEndpoints          bool
+	claudeCodeDefaultModel string
+	claudeCodeModels       []string
 }
 
 const maxRequestBodyBytes = 8 << 20
@@ -33,17 +34,23 @@ func WithTestEndpoints(enabled bool) Option {
 	return func(a *API) { a.testEndpoints = enabled }
 }
 
-// WithClaudeCodeModels exposes an ordered, non-sensitive model catalog to the
-// SPA. It is a picker configuration rather than an API allowlist.
-func WithClaudeCodeModels(models []string) Option {
+// WithClaudeCodeModelConfig exposes the rollout-scoped, non-sensitive model
+// picker configuration to the SPA. The catalog is presentation configuration,
+// not an API allowlist. Copying it keeps the API's startup snapshot immutable.
+func WithClaudeCodeModelConfig(defaultModel string, models []string) Option {
 	return func(a *API) {
+		a.claudeCodeDefaultModel = defaultModel
 		a.claudeCodeModels = append([]string{}, models...)
 	}
 }
 
 // New returns an API bound to a session.Manager.
 func New(mgr session.Manager, opts ...Option) *API {
-	a := &API{mgr: mgr, claudeCodeModels: []string{}}
+	a := &API{
+		mgr:                    mgr,
+		claudeCodeDefaultModel: session.PlatformDefaultModel,
+		claudeCodeModels:       []string{},
+	}
 	for _, opt := range opts {
 		opt(a)
 	}
@@ -132,7 +139,7 @@ func (a *API) runtimeConfig(w http.ResponseWriter, _ *http.Request) {
 	// rollout immediately exposes its new snapshot.
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, runtimeConfigResp{ClaudeCode: claudeCodeConfigResp{
-		DefaultModel: session.PlatformDefaultModel,
+		DefaultModel: a.claudeCodeDefaultModel,
 		Models:       append([]string{}, a.claudeCodeModels...),
 	}})
 }

@@ -245,6 +245,9 @@ func TestClaudeRejectsInvalidConfiguredModel(t *testing.T) {
 	for _, model := range []string{
 		"--dangerously-skip-permissions",
 		"bad model",
+		" claude-model",
+		"claude-model ",
+		"   ",
 		"~",
 		"~~anthropic/claude-opus-latest",
 		strings.Repeat("a", 129),

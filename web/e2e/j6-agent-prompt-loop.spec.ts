@@ -20,8 +20,10 @@ type SessionFixture = {
 
 type ApiMockOptions = {
   model?: string;
+  defaultModel?: string;
   configuredModels?: string[];
   configFails?: boolean;
+  holdConfig?: boolean;
   snapshot?: boolean;
   writeDelayMs?: number;
   snapshotAfterFirstStream?: boolean;
@@ -96,6 +98,10 @@ async function installAgentApi(page: Page, options: ApiMockOptions = {}) {
   };
   const createBodies: Array<Record<string, unknown>> = [];
   let configRequests = 0;
+  let releaseConfig: () => void = () => undefined;
+  const configRelease = new Promise<void>((resolve) => {
+    releaseConfig = resolve;
+  });
   const writePayloads: string[] = [];
   const readOffsets: number[] = [];
   const streamOffsets: number[] = [];
@@ -121,12 +127,13 @@ async function installAgentApi(page: Page, options: ApiMockOptions = {}) {
 
     if (pathname === "/api/v1/config" && method === "GET") {
       configRequests += 1;
+      if (options.holdConfig) await configRelease;
       if (options.configFails) {
         await json(route, 503, { error: "config unavailable" });
       } else {
         await json(route, 200, {
           claudeCode: {
-            defaultModel: "platform-default",
+            defaultModel: options.defaultModel ?? "platform-default",
             models: options.configuredModels ?? [],
           },
         });
@@ -271,6 +278,7 @@ async function installAgentApi(page: Page, options: ApiMockOptions = {}) {
   return {
     createBodies,
     getConfigRequests: () => configRequests,
+    releaseConfig,
     writePayloads,
     readOffsets,
     streamOffsets,
@@ -280,11 +288,12 @@ async function installAgentApi(page: Page, options: ApiMockOptions = {}) {
   };
 }
 
-test("selects a configured claude-code model and opens its agent workspace", async ({
+test("de-duplicates the concrete default and submits another configured model", async ({
   page,
 }) => {
   const mock = await installAgentApi(page, {
-    model: "claude-sonnet-test",
+    model: "claude-opus-test",
+    defaultModel: "claude-sonnet-test",
     configuredModels: ["claude-sonnet-test", "claude-opus-test"],
   });
 
@@ -300,11 +309,10 @@ test("selects a configured claude-code model and opens its agent workspace", asy
   const model = page.getByTestId("new-session-model");
   await expect(model).toHaveRole("combobox");
   await expect(model.locator("option")).toHaveText([
-    "Platform default",
-    "claude-sonnet-test",
+    "claude-sonnet-test (platform default)",
     "claude-opus-test",
   ]);
-  await model.selectOption("claude-sonnet-test");
+  await model.selectOption("claude-opus-test");
   await page.getByTestId("new-session-submit").click();
 
   await expect(page).toHaveURL(/\/agent\/a11ce$/, { timeout: 5_000 });
@@ -312,29 +320,40 @@ test("selects a configured claude-code model and opens its agent workspace", asy
     {
       name: "review-agent",
       workloadType: "claude-code",
-      model: "claude-sonnet-test",
+      model: "claude-opus-test",
     },
   ]);
   await expect(page.getByRole("heading", { name: "review-agent", level: 1 })).toBeVisible();
   await expect(page.getByTestId("ws-model")).toHaveText(
-    "model=claude-sonnet-test",
+    "model=claude-opus-test",
   );
   await expect(page.getByTestId("ws-workload")).toContainText("claude-code");
 });
 
-test("omits the configured select default so the platform default is used", async ({
+test("omits the concrete configured default so the platform default is used", async ({
   page,
 }) => {
   const mock = await installAgentApi(page, {
+    defaultModel: "claude-sonnet-test",
     configuredModels: ["claude-sonnet-test", "claude-opus-test"],
   });
 
   await page.goto("/new");
   await page.getByTestId("new-session-workload-claude-code").click();
+  await expect(
+    page.getByText(
+      "Workload type and model choice are fixed for this session. Platform default resolves to the configured default at container start.",
+      { exact: true },
+    ),
+  ).toBeVisible();
   await page.getByTestId("new-session-name").fill("default-model-agent");
   const model = page.getByTestId("new-session-model");
   await expect(model).toHaveRole("combobox");
   await expect(model).toHaveValue("");
+  await expect(model.locator("option")).toHaveText([
+    "claude-sonnet-test (platform default)",
+    "claude-opus-test",
+  ]);
   await page.getByTestId("new-session-submit").click();
 
   await expect(page).toHaveURL(/\/agent\/a11ce$/, { timeout: 5_000 });
@@ -349,10 +368,13 @@ test("omits the configured select default so the platform default is used", asyn
   );
 });
 
-test("keeps the free-text model input when no models are configured", async ({
+test("names the concrete default in free text mode and omits a blank model", async ({
   page,
 }) => {
-  const mock = await installAgentApi(page, { configuredModels: [] });
+  const mock = await installAgentApi(page, {
+    defaultModel: "claude-sonnet-test",
+    configuredModels: [],
+  });
 
   await page.goto("/new");
   await page.getByTestId("new-session-workload-claude-code").click();
@@ -362,7 +384,15 @@ test("keeps the free-text model input when no models are configured", async ({
   await page.getByTestId("new-session-name").fill("free-text-agent");
   const model = page.getByTestId("new-session-model");
   await expect(model).toHaveRole("textbox");
-  await model.fill("claude-free-text-test");
+  await expect(model).toHaveAttribute(
+    "placeholder",
+    "claude-sonnet-test (platform default)",
+  );
+  await expect(
+    page.getByText(
+      "Leave blank to use claude-sonnet-test (platform default).",
+    ),
+  ).toBeVisible();
   await page.getByTestId("new-session-submit").click();
 
   await expect(page).toHaveURL(/\/agent\/a11ce$/, { timeout: 5_000 });
@@ -370,8 +400,99 @@ test("keeps the free-text model input when no models are configured", async ({
     {
       name: "free-text-agent",
       workloadType: "claude-code",
+    },
+  ]);
+});
+
+test("submits an explicit free-text model when no catalog is configured", async ({
+  page,
+}) => {
+  const mock = await installAgentApi(page, {
+    defaultModel: "claude-sonnet-test",
+    configuredModels: [],
+  });
+
+  await page.goto("/new");
+  await page.getByTestId("new-session-workload-claude-code").click();
+  await expect
+    .poll(() => mock.getConfigRequests())
+    .toBeGreaterThan(0);
+  await page.getByTestId("new-session-name").fill("custom-model-agent");
+  const model = page.getByTestId("new-session-model");
+  await expect(model).toHaveRole("textbox");
+  await model.fill("claude-free-text-test");
+  await page.getByTestId("new-session-submit").click();
+
+  await expect(page).toHaveURL(/\/agent\/a11ce$/, { timeout: 5_000 });
+  expect(mock.createBodies).toEqual([
+    {
+      name: "custom-model-agent",
+      workloadType: "claude-code",
       model: "claude-free-text-test",
     },
+  ]);
+});
+
+test("preserves a pending free-text model when an empty catalog arrives", async ({
+  page,
+}) => {
+  const mock = await installAgentApi(page, {
+    defaultModel: "claude-sonnet-test",
+    configuredModels: [],
+    holdConfig: true,
+  });
+
+  await page.goto("/new");
+  await page.getByTestId("new-session-workload-claude-code").click();
+  await expect
+    .poll(() => mock.getConfigRequests())
+    .toBeGreaterThan(0);
+  await page.getByTestId("new-session-name").fill("pending-model-agent");
+  const model = page.getByTestId("new-session-model");
+  await expect(model).toHaveRole("textbox");
+  await model.fill("claude-pending-test");
+
+  const configResponse = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/v1/config") &&
+      response.request().method() === "GET",
+  );
+  mock.releaseConfig();
+  await configResponse;
+  await expect(model).toHaveValue("claude-pending-test");
+  await expect(model).toHaveAttribute(
+    "placeholder",
+    "claude-sonnet-test (platform default)",
+  );
+
+  await page.getByTestId("new-session-submit").click();
+
+  await expect(page).toHaveURL(/\/agent\/a11ce$/, { timeout: 5_000 });
+  expect(mock.createBodies).toEqual([
+    {
+      name: "pending-model-agent",
+      workloadType: "claude-code",
+      model: "claude-pending-test",
+    },
+  ]);
+});
+
+test("keeps the Platform default fallback when no concrete default is configured", async ({
+  page,
+}) => {
+  await installAgentApi(page, {
+    defaultModel: "platform-default",
+    configuredModels: ["claude-sonnet-test", "claude-opus-test"],
+  });
+
+  await page.goto("/new");
+  await page.getByTestId("new-session-workload-claude-code").click();
+  const model = page.getByTestId("new-session-model");
+  await expect(model).toHaveRole("combobox");
+  await expect(model.locator("option")).toHaveText([
+    "Platform default",
+    "claude-sonnet-test",
+    "claude-opus-test",
   ]);
 });
 
@@ -385,7 +506,10 @@ test("keeps the free-text model input when config loading fails", async ({
   await expect
     .poll(() => mock.getConfigRequests())
     .toBeGreaterThan(0);
-  await expect(page.getByTestId("new-session-model")).toHaveRole("textbox");
+  const model = page.getByTestId("new-session-model");
+  await expect(model).toHaveRole("textbox");
+  await expect(model).toHaveAttribute("placeholder", "Platform default");
+  await expect(page.getByText("Leave blank to use the platform default.")).toBeVisible();
 });
 
 test("streams partial agent output, de-duplicates it, and reconnects by byte cursor", async ({

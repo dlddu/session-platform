@@ -95,6 +95,7 @@ export function NewSession() {
   const [workloadType, setWorkloadType] = useState<WorkloadType>("shell");
   const [model, setModel] = useState("");
   const [submittedModel, setSubmittedModel] = useState("");
+  const [defaultModel, setDefaultModel] = useState("platform-default");
   const [configuredModels, setConfiguredModels] = useState<string[]>([]);
   const [phase, setPhase] = useState<"input" | "provisioning">("input");
   const [error, setError] = useState<string | null>(null);
@@ -116,15 +117,25 @@ export function NewSession() {
       .getConfig()
       .then((config) => {
         if (!active) return;
-        const models = config.claudeCode.models;
-        setConfiguredModels(models);
-        setModel((current) =>
-          current === "" || models.includes(current) ? current : "",
+        const { defaultModel: configuredDefaultModel, models } =
+          config.claudeCode;
+        const selectableModels = models.filter(
+          (configuredModel) => configuredModel !== configuredDefaultModel,
         );
+        setDefaultModel(configuredDefaultModel);
+        setConfiguredModels(models);
+        if (models.length > 0) {
+          setModel((current) =>
+            current === "" || selectableModels.includes(current) ? current : "",
+          );
+        }
       })
       .catch(() => {
         // Older/unavailable control planes retain the free-text model input.
-        if (active) setConfiguredModels([]);
+        if (active) {
+          setDefaultModel("platform-default");
+          setConfiguredModels([]);
+        }
       });
 
     return () => {
@@ -148,7 +159,12 @@ export function NewSession() {
     sessionRef.current = null;
     setPhase("provisioning");
     const trimmedModel = model.trim();
-    setSubmittedModel(trimmedModel);
+    setSubmittedModel(
+      trimmedModel ||
+        (defaultModel === "platform-default"
+          ? "platform default"
+          : defaultModel),
+    );
     api
       .createSession({
         name: trimmed,
@@ -207,6 +223,15 @@ export function NewSession() {
     );
     return () => clearTimeout(t);
   }, [session, done, reduce, navigate]);
+
+  const concreteDefaultModel =
+    defaultModel === "platform-default" ? null : defaultModel;
+  const defaultModelLabel = concreteDefaultModel
+    ? `${concreteDefaultModel} (platform default)`
+    : "Platform default";
+  const selectableModels = configuredModels.filter(
+    (configuredModel) => configuredModel !== concreteDefaultModel,
+  );
 
   return (
     <div className="scrim" onClick={close}>
@@ -283,8 +308,8 @@ export function NewSession() {
                     onChange={(e) => setModel(e.target.value)}
                     aria-describedby="new-session-model-hint"
                   >
-                    <option value="">Platform default</option>
-                    {configuredModels.map((configuredModel) => (
+                    <option value="">{defaultModelLabel}</option>
+                    {selectableModels.map((configuredModel) => (
                       <option key={configuredModel} value={configuredModel}>
                         {configuredModel}
                       </option>
@@ -295,7 +320,7 @@ export function NewSession() {
                     data-testid="new-session-model"
                     value={model}
                     onChange={(e) => setModel(e.target.value)}
-                    placeholder="Platform default"
+                    placeholder={defaultModelLabel}
                     autoComplete="off"
                     spellCheck={false}
                     aria-describedby="new-session-model-hint"
@@ -303,17 +328,21 @@ export function NewSession() {
                 )}
                 <small className="field-hint" id="new-session-model-hint">
                   {configuredModels.length > 0
-                    ? "Choose Platform default to use the platform default."
-                    : "Leave blank to use the platform default."}
+                    ? concreteDefaultModel
+                      ? `Choose ${concreteDefaultModel} (platform default) to use the platform default.`
+                      : "Choose Platform default to use the platform default."
+                    : concreteDefaultModel
+                      ? `Leave blank to use ${concreteDefaultModel} (platform default).`
+                      : "Leave blank to use the platform default."}
                 </small>
               </label>
             ) : null}
             <div className="immutable-note">
               <span aria-hidden="true">▣</span>
               <span>
-                Workload type
-                {workloadType === "claude-code" ? " and model are" : " is"} fixed
-                for the lifetime of this session.
+                {workloadType === "claude-code"
+                  ? "Workload type and model choice are fixed for this session. Platform default resolves to the configured default at container start."
+                  : "Workload type is fixed for the lifetime of this session."}
               </span>
             </div>
             {error && (
@@ -339,7 +368,7 @@ export function NewSession() {
           <>
             <div className="provision-workload" data-testid="prov-workload">
               {workloadType === "claude-code"
-                ? `workloadType=claude-code · model=${submittedModel || "platform default"}`
+                ? `workloadType=claude-code · model=${submittedModel}`
                 : "workloadType=shell"}
             </div>
             <div className="steps" data-testid="prov-steps">
