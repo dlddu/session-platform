@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: session-platform control plane API
-  version: 0.1.0
+  version: 0.2.0
   description: >
     REST surface the SPA uses to create, list and operate sessions. Each
     session maps 1:1 to a dedicated data plane pod (AC-A2). Non-active access is
@@ -13,8 +13,18 @@ info:
     creating a new session. For `shell`, write injects the payload into the PTY
     stdin (AC-D2); for `claude-code`, write asynchronously queues one prompt
     execution (AC-E2). Both read paths return workload output after an offset
-    cursor, with offset=0 returning the full history (AC-D3/E3). Claude Code
-    credentials are projected from a platform Secret only into a localhost
+    cursor, with offset=0 returning the full history (AC-D3/E3). A passive
+    `GET /sessions/{id}/stream` exposes the same append-only bytes as
+    cursor-resumable SSE without restoring snapshots or refreshing idle
+    activity. Each `output` event carries its starting offset, exact base64
+    bytes, and server-issued `nextOffset`; Claude event boundaries are UTF-8
+    code-point boundaries. `Last-Event-ID` resumes a disconnected client. A
+    `reset` event reports the retained length when a requested cursor is ahead
+    of it, allowing a full read replay before streaming resumes. Claude stdout
+    is projected from partial `stream-json` text deltas
+    while diagnostic stderr remains visible, so responses arrive before the
+    one-shot process exits. Claude Code credentials are projected from a
+    platform Secret only into a localhost
     credential-proxy sidecar; the tool-running container receives no real
     token. Its optional session model is immutable and defaults to
     `platform-default` (AC-E6).
@@ -102,6 +112,75 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "409":
           description: A lifecycle operation is already in progress
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /sessions/{id}/stream:
+    get:
+      summary: Stream live workload output from a retained pod without changing lifecycle state
+      operationId: streamSessionOutput
+      description: >
+        Opens a passive Server-Sent Events feed over the same append-only byte
+        history exposed by read. It serves active and idle sessions without
+        touching lastAccess, and returns 422 for a snapshot instead of restoring
+        it. `Last-Event-ID`, when present, takes precedence over the `offset`
+        query parameter. An `output` event uses the server-issued byte cursor as
+        its SSE id and carries `{offset,payloadBase64,nextOffset}`. Base64
+        preserves the exact bytes and decoded byte length; every server-issued
+        Claude cursor and event boundary remains a UTF-8 code-point boundary.
+        If the requested cursor is greater than the retained length, `reset`
+        carries that current length as its SSE id and `data.nextOffset`. The
+        client must discard partial decoder state, replace its rendered history
+        using read at offset 0, and reconnect from that read's `nextOffset`.
+        Opening the stream and receiving output/reset/heartbeat signals remains
+        passive. The prescribed read reconciliation is the normal
+        state-branched Read API, so it can promote an idle session and refresh
+        lastAccess.
+        Comment heartbeats keep intermediaries from buffering but do not advance
+        a cursor or count as workload access. The connection remains open across
+        individual prompt runs until the client disconnects or the retained pod
+        is reclaimed.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - $ref: "#/components/parameters/StreamOffset"
+        - $ref: "#/components/parameters/LastEventID"
+      responses:
+        "200":
+          description: Cursor-resumable SSE output stream with output and stale-cursor reset events
+          headers:
+            Cache-Control:
+              schema: { type: string, example: "no-cache, no-transform" }
+            X-Accel-Buffering:
+              schema: { type: string, example: "no" }
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              examples:
+                output:
+                  summary: Exact output bytes from offsets 12 through 18
+                  value: |
+                    id: 18
+                    event: output
+                    data: {"offset":12,"payloadBase64":"aGVsbG8K","nextOffset":18}
+                staleCursorReset:
+                  summary: Requested cursor was ahead of the retained 18 bytes
+                  value: |
+                    id: 18
+                    event: reset
+                    data: {"nextOffset":18}
+        "400":
+          description: Invalid non-negative offset or Last-Event-ID cursor
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: Session not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: The session is snapshotted and has no retained pod; restore explicitly before streaming
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -222,6 +301,31 @@ components:
       in: path
       required: true
       schema: { type: string }
+    StreamOffset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+        default: 0
+      description: >
+        Server-issued nextOffset cursor for this session; 0 starts at retained
+        history. Clients must not calculate it from decoded text. A value ahead
+        of the retained byte length produces a reset event whose id and
+        data.nextOffset equal the current length.
+    LastEventID:
+      name: Last-Event-ID
+      in: header
+      required: false
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+      description: >
+        SSE reconnect cursor. When present it takes precedence over the offset
+        query parameter.
   schemas:
     State:
       type: string
@@ -302,9 +406,11 @@ components:
           default: 0
           minimum: 0
           description: >
-            Cursor issued as nextOffset by the previous read. 0 (or omitted)
-            returns the full output accumulated since session start (AC-D3);
-            an offset past the current length yields an empty payload.
+            Cursor issued as nextOffset by a previous read or output/reset
+            event for this session. Clients must use a server-issued cursor
+            rather than a decoded string length. 0 (or omitted) returns the
+            full output accumulated since session start (AC-D3); an offset past
+            the current length yields an empty payload at the current cursor.
     ReadResult:
       type: object
       properties:
@@ -314,13 +420,20 @@ components:
           description: which state branch served the read
         payload:
           type: string
-          description: workload stdout/stderr accumulated after the requested offset
+          description: >
+            Text projection of workload output accumulated after the requested
+            byte offset. Shell output is merged PTY stdout/stderr. Claude output
+            is valid UTF-8: the ordered projection of partial assistant text
+            deltas plus redacted diagnostic stderr; the CLI's stream-json
+            envelopes are not exposed.
         nextOffset:
           type: integer
           format: int64
           description: >
-            cursor to pass as offset on the next read to receive only new
-            output (the current accumulated length)
+            Server-issued byte cursor to pass as offset on the next read or
+            stream request. For Claude output it is always a UTF-8 code-point
+            boundary. Clients must use this value rather than calculating a
+            JavaScript string length.
     WriteResult:
       type: object
       properties:

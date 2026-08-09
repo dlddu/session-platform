@@ -4,8 +4,8 @@
 > 백엔드 측 사슬(`가치 → PRD → AC → 테스트`)은 별도 문서 `doc-tracker.md`에서 추적합니다.
 > 두 문서가 공유하는 단일 진실 원천은 가치 문서(`values.md`, V1~V5·V8)입니다.
 
-- **마지막 검증 시점**: 2026-08-08 (4) (디자인 시스템 셋업 — 정본을 `web/src/design/`로 확정, 주입형 스킬 2종 설치)
-- **검증 범위**: 진입점 5(디자인 시스템 셋업) 수행. 디자인 시스템 정본을 **코드 쪽 `web/src/design/`**으로 확정하고(사용자 결정: 코드가 정본·문서는 얇게), 색인 문서와 README 포인터를 추가. `.claude/skills/`에 주입형 스킬 2종 설치. 가치/여정/mockup 매트릭스는 이번 판에서 **변화 없음**(직전 판 그대로). 잔여: J2-S3·J3-S4 미시각화, mockup↔시스템 미연결(토큰 6중복)
+- **마지막 검증 시점**: 2026-08-09 (5) (J6 live output UX — 수동 확인에서 passive SSE 자동 append·cursor 재개로 갱신)
+- **검증 범위**: J6-S2·S3의 여정과 `agent-workspace.html`만 재검증했다. 응답은 workspace 수명 동안 passive SSE로 자동 append되고 연결 오류는 cursor 재개, stale cursor는 reset→전체 replay, snapshot은 자동 복원 없이 Restore 화면으로 전환한다. UI는 서버 run/queue가 아니라 연결 상태만 표현한다. 가치/여정/mockup 수와 커버리지 매트릭스는 **변화 없음**. 잔여: J2-S3·J3-S4 미시각화, mockup↔시스템 미연결(토큰 6중복)
 
 ## 현재 상태 요약
 
@@ -39,7 +39,7 @@
 | J3 | 4 | 1 | 2 | 1 | 0 | index(S1); S2·S3 부분; S4 없음 |
 | J4 | 3 | 0 | 0 | 0 | 3 | 없음 — 백엔드 동시성, 의도적 비시각화 |
 | J5 | 4 | 4 | 0 | 0 | 0 | workspace(S1~S3 쉘 콘솔, S4 Shell state 패널) |
-| J6 | 5 | 5 | 0 | 0 | 0 | new-session(S1 타입 선택), agent-workspace(S2~S5) |
+| J6 | 5 | 5 | 0 | 0 | 0 | new-session(S1 타입 선택), agent-workspace(S2~S3 live output·cursor, S4~S5 연속성) |
 | **합계** | **23** | **14** | **4** | **2** | **3** | — |
 
 ### 가치 ↔ mockup
@@ -117,3 +117,4 @@
 | 2026-08-08 (2) | 상류에서 **V8(목적에 맞는 작업 환경 선택) 신설**. 대응 여정·mockup이 없어 **시각화 없는 가치 1개** 발생. `claude-code` 미시각화 위험을 🟡→🔴 승격. | 가치 5개, 시각화 없는 가치 0 | 가치 6개, 시각화 없는 가치 1(V8) |
 | 2026-08-08 (3) | **J6(작업 환경 선택 + 에이전트 프롬프트 루프) 신설**하여 V8 연결, mockup 확충으로 시각화 확보: `agent-workspace.html` 신규(J6-S2~S5), `new-session.html`에 타입·모델 선택 추가(J6-S1), `workspace.html`에 Shell state 패널 추가(J5-S4 ❌→✅), `index.html` 타입 태그·타입별 링크 분기, `restore.html` 콘솔 쉘 기준 갱신. 여정 5→6, 단계 18→23, mockup 4→5, ✅8→14·❌3→2. **🔴 위험 전부 해소**, 임의 스타일 mockup 4→5로 증가. | 가치 6, 여정 5, 단계 18, mockup 4, 시각화 없는 가치 1 | 가치 6, 여정 6, 단계 23, mockup 5, 시각화 없는 가치 0 |
 | 2026-08-08 (4) | **디자인 시스템 셋업(진입점 5)**. 정본 위치를 **`web/src/design/`(코드)**으로 확정 — 사용자 결정: 코드가 정본, 문서는 얇게. 색인 `web/src/design/README.md` 신설, 루트 `README.md`에 정본 포인터 추가(발견 가능성 확보). `.claude/skills/`에 주입형 스킬 2종 설치. **가치/여정/mockup 매트릭스는 변화 없음** — 이번 판은 시각 언어의 소유권을 정한 작업이다. | 디자인 시스템 미정의, 주입형 스킬 미설치, 임의 스타일 mockup 5 | 디자인 시스템 정의됨(코드 정본), 주입형 스킬 2종 설치, 임의 스타일 mockup 5 (원인이 '시스템 부재'→'정본 미참조'로 변경) |
+| 2026-08-09 (5) | **J6 live output UX 갱신** — 여정·mockup을 passive workspace SSE 자동 append, UTF-8 경계 cursor 재개, stale-cursor reset 전체 replay 계약에 맞추고 snapshot 시 Restore 전환과 연결 상태 전용 표시를 명시했다. | bounded polling/수동 Refresh로 응답 확인 | 자동 live output·무손실 재연결·reset 복구; 가치/여정/mockup 매트릭스 변화 없음 |

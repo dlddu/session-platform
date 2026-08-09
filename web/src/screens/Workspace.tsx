@@ -1,12 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { Session } from "../api/types";
+import type {
+  OutputStreamEvent,
+  OutputStreamResetEvent,
+  OutputStreamState,
+  Session,
+} from "../api/types";
 import { DeleteSessionDialog } from "../app/DeleteSessionDialog";
 import { StateBadge } from "../app/StateBadge";
 import { useToast } from "../app/Toast";
 
-const READ_DELAYS_MS = [250, 700] as const;
+const SHELL_READ_DELAYS_MS = [250, 700] as const;
+const STREAM_RECONNECT_BASE_MS = 250;
+const STREAM_RECONNECT_MAX_MS = 5_000;
+const STREAM_STATE_LABEL: Record<OutputStreamState, string> = {
+  connecting: "output connecting",
+  live: "output live",
+  reconnecting: "output reconnecting",
+  offline: "output offline",
+};
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -17,14 +30,20 @@ function appendLine(current: string, line: string): string {
   return current + separator + line + "\n";
 }
 
-function formatAgentOutput(payload: string): string {
-  const body = payload.replace(/\n+$/, "");
-  if (!body) return "";
+function decodeBase64(payload: string): Uint8Array {
+  const binary = atob(payload);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function isCursor(value: unknown): value is number {
   return (
-    body
-      .split("\n")
-      .map((line, index) => `${index === 0 ? "‹agent› " : "        "}${line}`)
-      .join("\n") + "\n"
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0
   );
 }
 
@@ -33,51 +52,67 @@ function displayModel(model?: string): string {
 }
 
 // Workspace dispatches its interaction model from the immutable workloadType.
-// Shell keeps J5's stdin/stdout loop. Claude Code sends one prompt per write,
-// without a synthetic newline, and exposes an explicit output refresh because a
-// one-shot agent run may outlive the short bounded reads after submission.
+// Shell keeps J5's cursor-read loop. Claude Code writes one queued prompt at a
+// time while a passive SSE connection appends output bytes as they are emitted.
+// POST /read remains an explicit catch-up path, not the normal agent loop.
 export function Workspace() {
   const { id = "" } = useParams();
   const [sess, setSess] = useState<Session | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [term, setTerm] = useState("");
   const [cmd, setCmd] = useState("");
-  const [pendingRuns, setPendingRuns] = useState(0);
+  const [pendingSubmissions, setPendingSubmissions] = useState(0);
   const [reading, setReading] = useState(false);
+  const [streamState, setStreamState] =
+    useState<OutputStreamState>("connecting");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const offsetRef = useRef(0);
   const readQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
   const termRef = useRef<HTMLDivElement>(null);
-  const activeIdRef = useRef(id);
+  const generationRef = useRef(0);
+  const stopStreamRef = useRef<(() => void) | null>(null);
+  const restartStreamRef = useRef<(() => void) | null>(null);
   const navigate = useNavigate();
   const { toast } = useToast();
-  activeIdRef.current = id;
 
   const appendSys = useCallback((line: string) => {
     setTerm((current) => appendLine(current, `◆ ${line}`));
   }, []);
 
-  // Serialize cursor reads so a manual refresh and submission follow-up cannot
-  // issue the same offset concurrently and append duplicate output.
-  const readDelta = useCallback((): Promise<void> => {
+  // POST /read is retained for the shell loop and explicit agent catch-up. A
+  // generation guard prevents a late A -> B -> A response from reaching the
+  // new workspace, while the byte cursor gate de-duplicates an SSE race.
+  const readDelta = useCallback((generation: number): Promise<void> => {
     const request = readQueueRef.current.then(async () => {
-      if (activeIdRef.current !== id) return;
+      if (generationRef.current !== generation) return;
       setReading(true);
+      const requestedOffset = offsetRef.current;
       try {
-        const result = await api.readSession(id, offsetRef.current);
-        if (activeIdRef.current !== id) return;
-        offsetRef.current = result.nextOffset;
-        if (result.payload) {
-          setTerm((current) =>
-            current +
-            (result.session.workloadType === "claude-code"
-              ? formatAgentOutput(result.payload)
-              : result.payload),
-          );
+        const result = await api.readSession(id, requestedOffset);
+        if (generationRef.current !== generation) return;
+        if (
+          !isCursor(result.nextOffset) ||
+          result.nextOffset < requestedOffset ||
+          new TextEncoder().encode(result.payload).byteLength !==
+            result.nextOffset - requestedOffset
+        ) {
+          throw new Error("invalid output cursor returned by read");
         }
         setSess(result.session);
+
+        const localOffset = offsetRef.current;
+        if (result.nextOffset <= localOffset) return;
+        // An SSE event advanced while this JSON read was in flight. Its payload
+        // cannot be byte-sliced safely, so the live stream remains authoritative.
+        if (requestedOffset !== localOffset) return;
+
+        offsetRef.current = result.nextOffset;
+        if (result.payload) {
+          setTerm((current) => current + result.payload);
+        }
       } finally {
-        if (activeIdRef.current === id) setReading(false);
+        if (generationRef.current === generation) setReading(false);
       }
     });
     readQueueRef.current = request.then(
@@ -88,36 +123,322 @@ export function Workspace() {
   }, [id]);
 
   useEffect(() => {
-    let cancelled = false;
+    const generation = generationRef.current + 1;
+    generationRef.current = generation;
+    let disposed = false;
+    let source: EventSource | null = null;
+    let reconnectTimer: number | null = null;
+    let reconnectAttempts = 0;
+    let transportToken = 0;
+
     offsetRef.current = 0;
     readQueueRef.current = Promise.resolve();
+    writeQueueRef.current = Promise.resolve();
     setTerm("");
     setCmd("");
-    setPendingRuns(0);
+    setPendingSubmissions(0);
+    setStreamState("connecting");
     setSess(null);
     setError(null);
 
-    const getRequest = api.getSession(id);
-    const readRequest = readDelta();
+    const isCurrent = () =>
+      !disposed && generationRef.current === generation;
 
-    void Promise.allSettled([getRequest, readRequest]).then(
-      ([getResult, readResult]) => {
-        if (cancelled) return;
-        if (readResult.status === "rejected") {
-          appendSys(`read failed: ${readResult.reason}`);
-          if (getResult.status === "fulfilled") {
-            setSess(getResult.value);
-          } else {
-            setError(String(getResult.reason));
-          }
+    const closeTransport = () => {
+      transportToken += 1;
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (source) {
+        source.close();
+        source = null;
+      }
+    };
+
+    const reconnectDelay = () =>
+      Math.min(
+        STREAM_RECONNECT_BASE_MS * 2 ** Math.min(reconnectAttempts, 5),
+        STREAM_RECONNECT_MAX_MS,
+      );
+
+    const routeToRestore = (session: Session) => {
+      closeTransport();
+      setSess(session);
+      navigate(`/restore/${id}`, { replace: true });
+    };
+
+    function schedule(
+      delay: number,
+      expectedToken: number,
+      task: () => void,
+    ) {
+      if (!isCurrent() || transportToken !== expectedToken) return;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      const timer = window.setTimeout(() => {
+        if (reconnectTimer !== timer) return;
+        reconnectTimer = null;
+        if (!isCurrent() || transportToken !== expectedToken) return;
+        task();
+      }, delay);
+      reconnectTimer = timer;
+    }
+
+    function scheduleConnect(delay: number, expectedToken: number) {
+      schedule(delay, expectedToken, connect);
+    }
+
+    function reconnectFromCursor(reason: string) {
+      if (!isCurrent()) return;
+      closeTransport();
+      const reconnectToken = transportToken;
+      appendSys(`output stream reset: ${reason}`);
+      setStreamState("reconnecting");
+      const delay = reconnectDelay();
+      reconnectAttempts += 1;
+      scheduleConnect(delay, reconnectToken);
+    }
+
+    async function recoverAfterError(expectedToken: number) {
+      if (!isCurrent() || transportToken !== expectedToken) return;
+      try {
+        const session = await api.getSession(id);
+        if (!isCurrent() || transportToken !== expectedToken) return;
+        setSess(session);
+        if (session.state === "snapshot") {
+          routeToRestore(session);
+          return;
         }
-      },
-    );
+
+        setStreamState("reconnecting");
+        const delay = reconnectDelay();
+        reconnectAttempts += 1;
+        scheduleConnect(delay, expectedToken);
+      } catch {
+        if (!isCurrent() || transportToken !== expectedToken) return;
+        setStreamState("offline");
+        const delay = reconnectDelay();
+        reconnectAttempts += 1;
+        schedule(delay, expectedToken, () => {
+          void recoverAfterError(expectedToken);
+        });
+      }
+    }
+
+    async function reconcileAfterReset(expectedToken: number) {
+      if (!isCurrent() || transportToken !== expectedToken) return;
+      const request = readQueueRef.current.then(async () => {
+        if (!isCurrent() || transportToken !== expectedToken) return null;
+        setReading(true);
+        const result = await api.readSession(id, 0);
+        if (!isCurrent() || transportToken !== expectedToken) return null;
+        if (
+          !isCursor(result.nextOffset) ||
+          new TextEncoder().encode(result.payload).byteLength !==
+            result.nextOffset
+        ) {
+          throw new Error("invalid full output returned by reset read");
+        }
+        return result;
+      });
+      readQueueRef.current = request.then(
+        () => undefined,
+        () => undefined,
+      );
+
+      try {
+        const result = await request;
+        if (
+          result === null ||
+          !isCurrent() ||
+          transportToken !== expectedToken
+        ) {
+          return;
+        }
+
+        setSess(result.session);
+        if (result.session.state === "snapshot") {
+          routeToRestore(result.session);
+          return;
+        }
+
+        // A reset means retained history diverged. Replace mixed local/server
+        // scrollback with the server's authoritative replay before reconnecting.
+        offsetRef.current = result.nextOffset;
+        setTerm(result.payload);
+        reconnectAttempts = 0;
+        connect();
+      } catch (resetError) {
+        if (!isCurrent() || transportToken !== expectedToken) return;
+        appendSys(`output reset recovery failed: ${resetError}`);
+        setStreamState("offline");
+        const delay = reconnectDelay();
+        reconnectAttempts += 1;
+        schedule(delay, expectedToken, () => {
+          void recoverAfterError(expectedToken);
+        });
+      } finally {
+        if (generationRef.current === generation) setReading(false);
+      }
+    }
+
+    function connect() {
+      if (!isCurrent()) return;
+      closeTransport();
+      const candidateToken = transportToken;
+      setStreamState(reconnectAttempts === 0 ? "connecting" : "reconnecting");
+
+      const candidate = api.streamSession(id, offsetRef.current);
+      source = candidate;
+      const isCurrentCandidate = () =>
+        isCurrent() &&
+        transportToken === candidateToken &&
+        source === candidate;
+
+      candidate.onopen = () => {
+        if (!isCurrentCandidate()) return;
+        setStreamState("live");
+      };
+      candidate.addEventListener("reset", (rawEvent) => {
+        if (!isCurrentCandidate()) return;
+        const message = rawEvent as MessageEvent<string>;
+        try {
+          const event = JSON.parse(message.data) as OutputStreamResetEvent;
+          if (!isCursor(event.nextOffset)) {
+            throw new Error("invalid reset cursor");
+          }
+          if (
+            message.lastEventId === "" ||
+            message.lastEventId !== String(event.nextOffset)
+          ) {
+            throw new Error("reset event id does not match nextOffset");
+          }
+        } catch (resetError) {
+          reconnectFromCursor(`invalid reset event: ${resetError}`);
+          return;
+        }
+
+        // The server says retained history is shorter than our local cursor.
+        // Stop this source before its post-reset events, then replace the full
+        // rendered history from JSON /read and reconnect at that read cursor.
+        closeTransport();
+        const resetToken = transportToken;
+        setStreamState("reconnecting");
+        void reconcileAfterReset(resetToken);
+      });
+      candidate.addEventListener("output", (rawEvent) => {
+        if (!isCurrentCandidate()) return;
+        const message = rawEvent as MessageEvent<string>;
+        let event: OutputStreamEvent;
+        let bytes: Uint8Array;
+        try {
+          event = JSON.parse(message.data) as OutputStreamEvent;
+          if (
+            !isCursor(event.offset) ||
+            !isCursor(event.nextOffset) ||
+            event.nextOffset < event.offset ||
+            typeof event.payloadBase64 !== "string"
+          ) {
+            throw new Error("invalid cursor fields");
+          }
+          if (
+            message.lastEventId === "" ||
+            message.lastEventId !== String(event.nextOffset)
+          ) {
+            throw new Error("event id does not match nextOffset");
+          }
+          bytes = decodeBase64(event.payloadBase64);
+          if (bytes.byteLength !== event.nextOffset - event.offset) {
+            throw new Error("payload byte length does not match cursor range");
+          }
+        } catch (decodeError) {
+          reconnectFromCursor(String(decodeError));
+          return;
+        }
+
+        const localOffset = offsetRef.current;
+        if (event.nextOffset <= localOffset) return;
+        if (event.offset > localOffset) {
+          reconnectFromCursor(
+            `cursor gap ${localOffset}..${event.offset}`,
+          );
+          return;
+        }
+
+        const unseen = bytes.subarray(localOffset - event.offset);
+        let text: string;
+        try {
+          // Every issued cursor is a UTF-8 boundary, including localOffset
+          // after overlap slicing. One-shot fatal decode makes violations fail
+          // before the byte cursor advances and leaves no pending decoder state
+          // for a concurrent JSON /read catch-up.
+          text = new TextDecoder("utf-8", { fatal: true }).decode(unseen);
+        } catch (decodeError) {
+          reconnectFromCursor(`invalid UTF-8 output: ${decodeError}`);
+          return;
+        }
+
+        offsetRef.current = event.nextOffset;
+        if (text) setTerm((current) => current + text);
+        reconnectAttempts = 0;
+        setStreamState("live");
+      });
+      candidate.onerror = () => {
+        if (!isCurrentCandidate()) return;
+        closeTransport();
+        const recoveryToken = transportToken;
+        setStreamState("reconnecting");
+        void recoverAfterError(recoveryToken);
+      };
+    }
+
+    const restartStream = () => {
+      if (!isCurrent()) return;
+      closeTransport();
+      reconnectAttempts = 0;
+      connect();
+    };
+    stopStreamRef.current = closeTransport;
+    restartStreamRef.current = restartStream;
+
+    void api
+      .getSession(id)
+      .then(async (session) => {
+        if (!isCurrent()) return;
+        setSess(session);
+        if (session.state === "snapshot") {
+          routeToRestore(session);
+          return;
+        }
+        if (session.workloadType === "claude-code") {
+          connect();
+          return;
+        }
+        setStreamState("offline");
+        try {
+          await readDelta(generation);
+        } catch (readError) {
+          if (isCurrent()) appendSys(`read failed: ${readError}`);
+        }
+      })
+      .catch((loadError) => {
+        if (isCurrent()) setError(String(loadError));
+      });
 
     return () => {
-      cancelled = true;
+      disposed = true;
+      if (generationRef.current === generation) {
+        generationRef.current += 1;
+      }
+      closeTransport();
+      if (stopStreamRef.current === closeTransport) {
+        stopStreamRef.current = null;
+      }
+      if (restartStreamRef.current === restartStream) {
+        restartStreamRef.current = null;
+      }
     };
-  }, [id, readDelta, appendSys]);
+  }, [appendSys, id, navigate, readDelta]);
 
   useEffect(() => {
     const element = termRef.current;
@@ -125,16 +446,20 @@ export function Workspace() {
   }, [term]);
 
   async function refreshOutput() {
+    const generation = generationRef.current;
     try {
-      await readDelta();
+      await readDelta(generation);
     } catch (readError) {
-      appendSys(`read failed: ${readError}`);
+      if (generationRef.current === generation) {
+        appendSys(`read failed: ${readError}`);
+      }
     }
   }
 
   async function run() {
     const command = cmd;
     const isAgent = sess?.workloadType === "claude-code";
+    const generation = generationRef.current;
     setCmd("");
 
     if (command.trim() === "") {
@@ -144,36 +469,67 @@ export function Workspace() {
 
     if (isAgent) {
       setTerm((current) => appendLine(current, `▸ ${command}`));
-      setPendingRuns((count) => count + 1);
+      setPendingSubmissions((count) => count + 1);
+
+      // Serialize acceptance requests as well as the server-side executions so
+      // two rapidly submitted prompts cannot arrive out of user-visible order.
+      const submission = writeQueueRef.current.then(async () => {
+        if (generationRef.current !== generation) return;
+        const result = await api.writeSession(id, command);
+        if (generationRef.current === generation) setSess(result.session);
+      });
+      writeQueueRef.current = submission.then(
+        () => undefined,
+        () => undefined,
+      );
+
+      try {
+        await submission;
+      } catch (submissionError) {
+        if (generationRef.current === generation) {
+          appendSys(`agent submission failed; not retried: ${submissionError}`);
+        }
+      } finally {
+        if (generationRef.current === generation) {
+          setPendingSubmissions((count) => Math.max(0, count - 1));
+        }
+      }
+      return;
     }
 
     try {
-      await api.writeSession(id, isAgent ? command : command + "\n");
-      await readDelta();
-      for (const delay of READ_DELAYS_MS) {
+      const result = await api.writeSession(id, command + "\n");
+      if (generationRef.current !== generation) return;
+      setSess(result.session);
+      await readDelta(generation);
+      for (const delay of SHELL_READ_DELAYS_MS) {
         await sleep(delay);
-        await readDelta();
+        await readDelta(generation);
       }
     } catch (ioError) {
-      appendSys(`${isAgent ? "agent" : "shell"} i/o failed: ${ioError}`);
-    } finally {
-      if (isAgent) {
-        setPendingRuns((count) => Math.max(0, count - 1));
+      if (generationRef.current === generation) {
+        appendSys(`shell i/o failed: ${ioError}`);
       }
     }
   }
 
   async function doSwitch() {
+    const generation = generationRef.current;
     try {
       const active = await api.switchSession(id);
+      if (generationRef.current !== generation) return;
       setSess(active);
+      if (active.workloadType === "claude-code") restartStreamRef.current?.();
       appendSys(`switch → ${active.state}`);
     } catch (switchError) {
-      appendSys(`switch failed: ${switchError}`);
+      if (generationRef.current === generation) {
+        appendSys(`switch failed: ${switchError}`);
+      }
     }
   }
 
   function handleDeleted(deleted: Session) {
+    stopStreamRef.current?.();
     toast('Session "' + deleted.name + '" deleted');
     navigate("/", { replace: true });
   }
@@ -220,10 +576,22 @@ export function Workspace() {
             ) : null}
             <span className="console-actions">
               {!frozen ? (
-                <span className="tag">
-                  <span className="led" />
-                  {isAgent ? "agent ready" : "shell attached"}
-                </span>
+                isAgent ? (
+                  <span
+                    className={`tag stream-status ${streamState}`}
+                    data-testid="ws-stream-status"
+                    data-stream-state={streamState}
+                    role="status"
+                  >
+                    <span className="led" />
+                    {STREAM_STATE_LABEL[streamState]}
+                  </span>
+                ) : (
+                  <span className="tag">
+                    <span className="led" />
+                    shell attached
+                  </span>
+                )
               ) : null}
               <button
                 type="button"
@@ -231,8 +599,15 @@ export function Workspace() {
                 data-testid="ws-refresh-output"
                 onClick={() => void refreshOutput()}
                 disabled={reading}
+                title={
+                  isAgent
+                    ? "Fallback cursor read if the live stream is interrupted"
+                    : undefined
+                }
               >
-                {reading ? "Refreshing…" : "Refresh output"}
+                {reading
+                  ? isAgent ? "Catching up…" : "Refreshing…"
+                  : isAgent ? "Catch up" : "Refresh output"}
               </button>
             </span>
           </div>
@@ -245,7 +620,7 @@ export function Workspace() {
             {term === "" ? (
               <span className="term-empty">
                 {isAgent
-                  ? "// ready — send a prompt or refresh output to read agent responses"
+                  ? "// ready — agent responses stream here automatically"
                   : "// attached — the shell's output since session start appears here"}
               </span>
             ) : (
@@ -276,15 +651,15 @@ export function Workspace() {
               aria-label={isAgent ? "agent prompt" : "shell command"}
               disabled={frozen}
             />
-            {isAgent && pendingRuns > 0 ? (
+            {isAgent && pendingSubmissions > 0 ? (
               <span
                 className="agent-queue"
                 data-testid="agent-queue"
                 role="status"
               >
-                {pendingRuns === 1
-                  ? "1 submission · checking output"
-                  : `${pendingRuns} submissions · checking output`}
+                {pendingSubmissions === 1
+                  ? "1 submission pending"
+                  : `${pendingSubmissions} submissions pending`}
               </span>
             ) : null}
             {isAgent ? (
@@ -316,8 +691,8 @@ export function Workspace() {
                 <strong>{modelLabel}</strong>
               </div>
               <p>
-                Each prompt runs once and exits. Responses remain available
-                through the session's offset cursor.
+                Each prompt runs once and exits. Responses stream live and
+                remain replayable through the session's offset cursor.
               </p>
             </div>
           ) : null}

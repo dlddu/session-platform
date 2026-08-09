@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"k8s.io/client-go/kubernetes/fake"
@@ -403,5 +405,117 @@ func TestDeleteSnapshotSession(t *testing.T) {
 	getResp.Body.Close()
 	if getResp.StatusCode != http.StatusNotFound {
 		t.Fatalf("get after snapshot delete status = %d, want 404", getResp.StatusCode)
+	}
+}
+
+func TestStreamEndpointProxiesSSEAndPrefersLastEventID(t *testing.T) {
+	srv := newServer()
+	defer srv.Close()
+	created := createForTest(t, srv, "stream-wire")
+
+	body, _ := json.Marshal(map[string]string{"payload": "abcdef"})
+	writeResp, err := http.Post(
+		srv.URL+"/api/v1/sessions/"+created.ID+"/write",
+		"application/json",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("write before stream: %v", err)
+	}
+	writeResp.Body.Close()
+	if writeResp.StatusCode != http.StatusOK {
+		t.Fatalf("write status = %d, want 200", writeResp.StatusCode)
+	}
+
+	req, err := http.NewRequest(
+		http.MethodGet,
+		srv.URL+"/api/v1/sessions/"+created.ID+"/stream?offset=not-used",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("build stream request: %v", err)
+	}
+	req.Header.Set("Last-Event-ID", "2")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	streamBody, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("read stream: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stream status = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/event-stream") {
+		t.Fatalf("stream content type = %q", got)
+	}
+	text := string(streamBody)
+	for _, want := range []string{
+		"id: 6",
+		"event: output",
+		`"offset":2`,
+		`"payloadBase64":"Y2RlZg=="`,
+		`"nextOffset":6`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("stream body %q does not contain %q", text, want)
+		}
+	}
+
+	badReq, _ := http.NewRequest(
+		http.MethodGet,
+		srv.URL+"/api/v1/sessions/"+created.ID+"/stream?offset=0",
+		nil,
+	)
+	badReq.Header.Set("Last-Event-ID", "-1")
+	badResp, err := http.DefaultClient.Do(badReq)
+	if err != nil {
+		t.Fatalf("invalid stream cursor: %v", err)
+	}
+	badResp.Body.Close()
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid Last-Event-ID status = %d, want 400", badResp.StatusCode)
+	}
+}
+
+func TestStreamDoesNotRestoreSnapshot(t *testing.T) {
+	srv := newServer(api.WithTestEndpoints(true))
+	defer srv.Close()
+	created := createForTest(t, srv, "passive-stream")
+	snapshotResp, err := http.Post(
+		srv.URL+"/api/v1/sessions/"+created.ID+"/snapshot",
+		"application/json",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	snapshotResp.Body.Close()
+	if snapshotResp.StatusCode != http.StatusOK {
+		t.Fatalf("snapshot status = %d, want 200", snapshotResp.StatusCode)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/v1/sessions/" + created.ID + "/stream?offset=0")
+	if err != nil {
+		t.Fatalf("stream snapshot: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("snapshot stream status = %d, want 422", resp.StatusCode)
+	}
+
+	getResp, err := http.Get(srv.URL + "/api/v1/sessions/" + created.ID)
+	if err != nil {
+		t.Fatalf("get after passive stream: %v", err)
+	}
+	defer getResp.Body.Close()
+	var after session.Session
+	if err := json.NewDecoder(getResp.Body).Decode(&after); err != nil {
+		t.Fatalf("decode session after passive stream: %v", err)
+	}
+	if after.State != session.StateSnapshot || after.Pod != "" {
+		t.Fatalf("stream restored snapshot unexpectedly: state=%s pod=%q", after.State, after.Pod)
 	}
 }

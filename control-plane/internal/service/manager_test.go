@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -1132,6 +1133,9 @@ func TestReadWriteMapToAgentIO(t *testing.T) {
 type failingAgent struct{ err error }
 
 func (f failingAgent) Write(context.Context, string, string) error { return f.err }
+func (f failingAgent) Stream(context.Context, string, int64) (io.ReadCloser, error) {
+	return nil, f.err
+}
 func (f failingAgent) Read(context.Context, string, int64) (string, int64, error) {
 	return "", 0, f.err
 }

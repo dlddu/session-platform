@@ -1,6 +1,9 @@
 package session
 
-import "context"
+import (
+	"context"
+	"io"
+)
 
 // CreateRequest is the input to Manager.Create.
 type CreateRequest struct {
@@ -44,6 +47,8 @@ type WriteResult struct {
 //     AC-E1 (workload type selection: default shell, immutable afterwards).
 //   - Get/List  → V5 (single source of truth for session state).
 //   - Read      → AC-C2 plus the workload output cursor (AC-D3/AC-E3).
+//   - Stream    → passive, cursor-resumable live workload output. It never
+//     restores a snapshot or refreshes idle activity by itself.
 //   - Write     → AC-C3 plus shell stdin or queued agent prompt (AC-D2/AC-E2).
 //   - Switch    → AC-C4 (free switching; restore snapshot, no-op if active).
 //   - Snapshot  → AC-B1 (workload archive + reclaim on idle).
@@ -54,6 +59,7 @@ type Manager interface {
 	Get(ctx context.Context, id string) (*Session, error)
 	List(ctx context.Context) ([]*Session, error)
 	Read(ctx context.Context, id string, offset int64) (*ReadResult, error)
+	Stream(ctx context.Context, id string, offset int64) (io.ReadCloser, error)
 	Write(ctx context.Context, id, payload string) (*WriteResult, error)
 	Switch(ctx context.Context, id string) (*Session, error)
 	Snapshot(ctx context.Context, id string) (*Session, error)

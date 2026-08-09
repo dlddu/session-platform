@@ -254,14 +254,19 @@ func (a *agent) adopt(sh *shellProc) {
 // bytes come back at the same length, so a client resumes with only the delta
 // and offset 0 still replays the full pre- and post-snapshot history.
 type scrollback struct {
-	mu  sync.Mutex
-	buf []byte
+	mu      sync.Mutex
+	buf     []byte
+	changed chan struct{}
 }
 
 func (b *scrollback) Append(p []byte) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if len(p) == 0 {
+		return
+	}
 	b.buf = append(b.buf, p...)
+	b.notifyLocked()
 }
 
 // appendClaudeBoundedAt appends one already-bounded invocation to the Claude
@@ -282,12 +287,19 @@ func (b *scrollback) appendClaudeBoundedAt(p []byte, limit int, markerText strin
 	}
 	if len(b.buf)+len(p) <= dataLimit {
 		b.buf = append(b.buf, p...)
+		b.notifyLocked()
 		return false
 	}
 	if remaining := dataLimit - len(b.buf); remaining > 0 {
-		b.buf = append(b.buf, p[:min(remaining, len(p))]...)
+		prefix := min(remaining, len(p))
+		// Claude's projected output is valid UTF-8. Do not split its last rune
+		// merely to fill the byte quota: every issued stream cursor must remain
+		// safe to hand to the legacy JSON /read endpoint.
+		prefix = validUTF8PrefixAtMost(p, prefix)
+		b.buf = append(b.buf, p[:prefix]...)
 	}
 	b.buf = append(b.buf, marker...)
+	b.notifyLocked()
 	return true
 }
 
@@ -340,6 +352,18 @@ func (b *scrollback) restore(p []byte) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.buf = append(b.buf[:0], p...)
+	b.notifyLocked()
+}
+
+// notifyLocked wakes every output stream waiting for an append. Closing and
+// replacing the generation channel avoids lost wakeups without a goroutine per
+// scrollback; a stream that starts after an append observes the bytes directly.
+func (b *scrollback) notifyLocked() {
+	if b.changed == nil {
+		return
+	}
+	close(b.changed)
+	b.changed = make(chan struct{})
 }
 
 // shellProc is the one PTY-attached session shell (AC-D1) and its lifecycle.
@@ -545,6 +569,15 @@ func routes(logger *slog.Logger, a *agent) http.Handler {
 			"payload":    string(payload),
 			"nextOffset": next,
 		})
+	})
+
+	mux.HandleFunc("GET /stream", func(w http.ResponseWriter, r *http.Request) {
+		sh := a.current()
+		if sh == nil {
+			http.Error(w, "no shell yet (awaiting restore)", http.StatusServiceUnavailable)
+			return
+		}
+		serveOutputStream(w, r, sh.out)
 	})
 
 	// CRIU checkpoint/restore (in-pod). See checkpoint.go.

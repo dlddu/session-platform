@@ -40,6 +40,15 @@ export const api = {
   deleteSession: (id: string) =>
     req<void>(`/sessions/${id}`, { method: "DELETE" }),
 
+  /**
+   * Open the passive workload-output stream at a byte cursor. The caller owns
+   * reconnect policy and must close the returned EventSource on cleanup.
+   */
+  streamSession: (id: string, offset = 0) =>
+    new EventSource(
+      `${BASE}/sessions/${encodeURIComponent(id)}/stream?offset=${encodeURIComponent(String(offset))}`,
+    ),
+
   /** offset is the nextOffset cursor from the previous read; 0 replays the
    *  full workload output since session start (AC-D3/AC-E3). */
   readSession: (id: string, offset = 0) =>
