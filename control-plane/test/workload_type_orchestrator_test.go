@@ -255,6 +255,10 @@ func TestClientOrchestrator_ClaudeCredentialsAreIsolatedInSidecar(t *testing.T) 
 	if main.SecurityContext != nil && main.SecurityContext.Privileged != nil && *main.SecurityContext.Privileged {
 		t.Fatal("claude-code main container became privileged under the CRIU gate")
 	}
+	stateDir, ok := envVarOf(main, "CLAUDE_CODE_STATE_DIR")
+	if !ok || stateDir.Value != "/session/state" || stateDir.ValueFrom != nil {
+		t.Fatalf("claude state dir = %+v (present=%v), want /session/state", stateDir, ok)
+	}
 	if len(main.VolumeMounts) != 1 || main.VolumeMounts[0].MountPath != "/session" {
 		t.Fatalf("claude state mount = %+v, want one /session mount", main.VolumeMounts)
 	}

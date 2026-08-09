@@ -88,9 +88,13 @@ const (
 	// agent/CLI container gets a non-secret placeholder and cannot read or
 	// transform the real token through its coding tools (AC-E6). The non-secret
 	// platform model may be selected from the same Secret through its own key.
-	ClaudeCodeModelEnvVar        = "CLAUDE_CODE_MODEL"
-	claudeCodeStateDirEnvVar     = "CLAUDE_CODE_STATE_DIR"
-	claudeCodeStateDir           = "/session"
+	ClaudeCodeModelEnvVar     = "CLAUDE_CODE_MODEL"
+	claudeCodeStateDirEnvVar  = "CLAUDE_CODE_STATE_DIR"
+	claudeCodeStateVolumePath = "/session"
+	// The state root must be a child of the volume mount, not the mount point
+	// itself: archive restore atomically renames this directory into place, and
+	// Linux rejects renaming an active mount point with EBUSY.
+	claudeCodeStateDir           = claudeCodeStateVolumePath + "/state"
 	claudeCodeStateVolumeName    = "claude-state"
 	AnthropicBaseURLEnvVar       = "ANTHROPIC_BASE_URL"
 	AnthropicAuthTokenEnvVar     = "ANTHROPIC_AUTH_TOKEN"
@@ -463,7 +467,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string, workload 
 			corev1.EnvVar{Name: AnthropicAuthTokenEnvVar, Value: credentialProxyPlaceholderToken},
 		)
 		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-			Name: claudeCodeStateVolumeName, MountPath: claudeCodeStateDir,
+			Name: claudeCodeStateVolumeName, MountPath: claudeCodeStateVolumePath,
 		})
 		volumes = append(volumes, corev1.Volume{
 			Name:         claudeCodeStateVolumeName,

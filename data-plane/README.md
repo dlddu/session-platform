@@ -44,9 +44,12 @@ interactive shell and Claude Code workloads.
   rejected. Its `/healthz` endpoint never contacts the upstream.
 
 Claude's cwd (`workspace/`) and HOME (`home/`) live under
-`CLAUDE_CODE_STATE_DIR` (default `/session`). Its checkpoint closes prompt
-admission, drains accepted work, and archives that state tree plus the redacted
-scrollback; restore safely installs the archive before reopening writes. The
+`CLAUDE_CODE_STATE_DIR` (default `/session/state`). Kubernetes mounts the
+session volume at `/session`, leaving the replaceable state tree one level
+below the mount point so restore can atomically swap it without trying to
+rename an active mount. Its checkpoint closes prompt admission, drains accepted
+work, and archives that state tree plus the redacted scrollback; restore safely
+installs the archive before reopening writes. The
 image includes the official `@anthropic-ai/claude-code` npm package. Auth
 credentials are not present in the Claude container or inherited by its Bash
 tools. That container receives
