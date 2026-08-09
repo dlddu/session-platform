@@ -62,6 +62,10 @@ const (
 	// contain only it; Claude pods add an isolated credential-proxy sidecar. The
 	// CRIU checkpointer targets this container by name and only for shell sessions.
 	ContainerName = "session"
+	// DataPlaneServiceAccountName is the dedicated identity mounted into every
+	// fresh and restored session pod. Kubernetes manifests bind it to the
+	// built-in read-only `view` ClusterRole, which deliberately excludes Secrets.
+	DataPlaneServiceAccountName = "data-plane"
 
 	// defaultDataPlaneImage is the in-code fallback when no DATA_PLANE_IMAGE
 	// is injected. It cannot pass the shell readiness probe (no session agent
@@ -494,7 +498,11 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string, workload 
 		container.Env = append(container.Env, corev1.EnvVar{Name: restoreModeEnvVar, Value: "1"})
 	}
 	containers := append([]corev1.Container{container}, sidecars...)
-	automountServiceAccountToken := false
+	// Session workloads intentionally receive a Kubernetes identity so they can
+	// inspect cluster resources. Its ClusterRoleBinding uses the built-in `view`
+	// role rather than a wildcard rule because RBAC cannot subtract Secrets from
+	// an otherwise-wildcard grant.
+	automountServiceAccountToken := true
 
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -509,6 +517,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string, workload 
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy:                corev1.RestartPolicyAlways,
+			ServiceAccountName:           DataPlaneServiceAccountName,
 			AutomountServiceAccountToken: &automountServiceAccountToken,
 			Containers:                   containers,
 			Volumes:                      volumes,

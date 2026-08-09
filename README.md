@@ -92,7 +92,9 @@ docs/                 value / PRD·AC / journeys / mockups / CRIU verification n
   chunks before upstream completion, holds possible credential
   suffixes across network reads for tail-safe redaction, and enforces a 64 MiB
   raw-upstream SSE cap without whole-body buffering. The tool-running container
-  receives a non-secret placeholder and no Kubernetes service-account token.
+  receives a non-secret placeholder. Every data plane pod uses the dedicated
+  `data-plane` ServiceAccount, whose cluster-wide built-in `view` binding gives
+  read-only Kubernetes access while excluding Secrets.
 - **Lifecycle**: 60-min max idle → workload snapshot + pod reclaim (AC-B1);
   access → restore into a new pod (AC-B2). Shell uses CRIU behind
   `CRIU_ENABLED`; Claude uses a filesystem archive behind the independent,
@@ -239,10 +241,12 @@ The cluster runs this via GitOps (Flux) from the `flux-cd-apps` repo.
   (and builds/pushes for matching pull requests) that touch `control-plane/`,
   `data-plane/`, `web/`, or the workflow itself.
 - [`k8s/`](k8s/) holds the cluster manifests Flux applies: the `control-plane`
-  Deployment + Service (port 80 → 8080) and its RBAC (pods + configmaps +
-  leases). Session state lives in in-cluster ConfigMaps/Leases, so there is no
-  separate backing-store deployment. The namespace, ingress, and VPA live on the
-  cluster side in `flux-cd-apps`.
+  Deployment + Service (port 80 → 8080), control-plane RBAC (pods + configmaps
+  + leases), and the data-plane ServiceAccount with a cluster-wide built-in
+  `view` binding. The latter is read-only and deliberately cannot read Secrets.
+  Session state lives in in-cluster ConfigMaps/Leases, so there is no separate
+  backing-store deployment. The namespace, ingress, and VPA live on the cluster
+  side in `flux-cd-apps`.
 
 Before creating Claude Code sessions, provision the Secret named by
 `CLAUDE_CODE_CREDENTIALS_SECRET` (default `claude-code-credentials`). Its
