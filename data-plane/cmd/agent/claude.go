@@ -25,7 +25,10 @@ import (
 )
 
 const (
-	defaultClaudeStateDir = "/session"
+	// Keep the replaceable state tree below the Kubernetes volume mount. Linux
+	// refuses to rename an active mount point (EBUSY), while archive restore
+	// atomically swaps this directory with a staged sibling.
+	defaultClaudeStateDir = "/session/state"
 	defaultClaudeBinary   = "claude"
 	platformDefaultModel  = "platform-default"
 
