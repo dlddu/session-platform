@@ -52,7 +52,7 @@ const (
 
 var (
 	claudeManagedTools = []string{"Read", "Write", "Edit", "Glob", "Grep", "Bash"}
-	claudeModelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
+	claudeModelPattern = regexp.MustCompile(`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$`)
 )
 
 var (

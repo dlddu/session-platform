@@ -250,16 +250,17 @@ credential-proxy sidecar. Its `model` key is optional: a non-empty value selects
 the model for `platform-default` sessions, while a missing or empty value falls
 back to the installed Claude CLI default. A concrete model supplied when the
 session is created always wins. Non-empty Secret values are validated against
-`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$` when the data-plane container starts, so
-an invalid platform default fails fast instead of being forwarded as a CLI
-option.
+`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$`
+when the data-plane container starts, so an invalid platform default fails fast
+instead of being forwarded as a CLI option. The optional leading `~` supports
+OpenRouter moving aliases such as `~anthropic/claude-opus-latest`.
 
 The separate optional `models` key is a JSON string array used only as an
 ordered UI picker catalog. The Deployment projects only this key into the
 control plane as `CLAUDE_CODE_MODELS`; it does not grant the control plane
 access to `base-url`, `auth-token`, or `model`. A non-empty value must be a
 JSON array of unique model strings that satisfy
-`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`; empty entries, surrounding whitespace,
+`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$`; empty entries, surrounding whitespace,
 duplicates, and the reserved `platform-default` alias make the control plane
 fail startup. Missing, empty, or `[]` keeps the existing free-text model UI.
 `GET /api/v1/config` returns

@@ -56,9 +56,10 @@ key. A missing or empty key omits `--model` and therefore delegates to the
 installed Claude CLI; a concrete session model is instead injected literally
 and takes precedence over the Secret default. The optional model is not exposed
 to the credential-proxy sidecar. Any non-empty effective model must match
-`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`; invalid Secret configuration is rejected
-when the agent starts instead of being forwarded as CLI options. Changes to that
-Secret default are resolved
+`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$`.
+A leading `~` supports OpenRouter moving aliases. Invalid Secret configuration
+is rejected when the agent starts instead of being forwarded as CLI options.
+Changes to that Secret default are resolved
 whenever a `platform-default` primary container starts, including a new pod,
 a pod recreated after restore, or a container restart. They do not immediately
 mutate a running container environment or a concrete session model.

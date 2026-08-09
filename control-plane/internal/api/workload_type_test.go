@@ -78,7 +78,7 @@ func TestCreateSessionWorkloadType(t *testing.T) {
 	})
 
 	t.Run("explicit claude-code model", func(t *testing.T) {
-		const model = "claude-sonnet-4-5"
+		const model = "~anthropic/claude-opus-latest"
 		status, s := createRaw(t, srv.URL, map[string]any{
 			"name": "wt-cc-model", "workloadType": "claude-code", "model": model,
 		})

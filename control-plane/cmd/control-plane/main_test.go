@@ -16,9 +16,14 @@ func TestParseClaudeCodeModels(t *testing.T) {
 		{name: "unset", want: []string{}},
 		{name: "empty array", value: `[]`, want: []string{}},
 		{
-			name:  "ordered catalog",
-			value: `["claude-model-a","provider/model:b","claude.model-c"]`,
-			want:  []string{"claude-model-a", "provider/model:b", "claude.model-c"},
+			name:  "ordered catalog including OpenRouter latest aliases",
+			value: `["~deepseek/deepseek-v4-flash-latest","~anthropic/claude-opus-latest","xiaomi/mimo-v2.5","inclusionai/ling-3.0-flash"]`,
+			want: []string{
+				"~deepseek/deepseek-v4-flash-latest",
+				"~anthropic/claude-opus-latest",
+				"xiaomi/mimo-v2.5",
+				"inclusionai/ling-3.0-flash",
+			},
 		},
 		{name: "malformed JSON", value: `[`, wantErr: true},
 		{name: "not an array", value: `{"model":"claude-model-a"}`, wantErr: true},
@@ -26,6 +31,8 @@ func TestParseClaudeCodeModels(t *testing.T) {
 		{name: "empty entry", value: `[""]`, wantErr: true},
 		{name: "surrounding whitespace", value: `[" claude-model-a"]`, wantErr: true},
 		{name: "invalid model", value: `["bad model"]`, wantErr: true},
+		{name: "bare latest alias prefix", value: `["~"]`, wantErr: true},
+		{name: "repeated latest alias prefix", value: `["~~anthropic/claude-opus-latest"]`, wantErr: true},
 		{name: "reserved alias", value: `["platform-default"]`, wantErr: true},
 		{name: "duplicate", value: `["claude-model-a","claude-model-a"]`, wantErr: true},
 	}

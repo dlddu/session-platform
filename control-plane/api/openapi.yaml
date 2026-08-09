@@ -30,7 +30,7 @@ info:
     primary container starts (new pod, restore, or container restart), the alias
     uses the Secret's optional `model` value and then falls back to the
     installed CLI default when the value is missing or empty. A non-empty
-    effective model must match `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`; invalid
+    effective model must match `^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$`; invalid
     Secret configuration makes the data-plane agent fail startup.
     `GET /config` exposes a separate, optional ordered model catalog for UI
     presentation. The catalog is not an API allowlist (AC-E6).
@@ -390,7 +390,7 @@ components:
             Empty means the UI should preserve its free-text model input.
           items:
             type: string
-            pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
+            pattern: '^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$'
     State:
       type: string
       enum: [active, idle, snapshot]
@@ -449,7 +449,7 @@ components:
             rejected with 400 before any pod is provisioned.
         model:
           type: string
-          pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
+          pattern: '^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$'
           description: >
             Claude Code model for this session. Valid only when workloadType is
             `claude-code`; omitted resolves to `platform-default`. A concrete
