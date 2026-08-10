@@ -46,7 +46,7 @@ func TestEntrypointBootstrapsPrivateMarketplaceWithoutLeakingGitHubTokenToAgent(
 	cacheDir := filepath.Join(dir, "plugin-cache")
 	bootstrapHome := filepath.Join(dir, "bootstrap-home")
 	askpass := writeEntrypointTestExecutable(t, dir, "askpass", `exit 0`)
-	writeEntrypointTestExecutable(t, dir, "curl", `printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"isError":false,"content":[{"type":"resource","resource":{"uri":"file:///github-token.env","mimeType":"text/plain","text":"# Expires at: 2099-01-01T00:00:00Z\\nGITHUB_TOKEN=test-installation-token\\n"}}]}}'`)
+	writeEntrypointTestExecutable(t, dir, "curl", `printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"isError":false,"content":[{"type":"resource","resource":{"uri":"file:///github-token.env","mimeType":"text/plain","text":"# Expires at: 2099-01-01T00:00:00Z\nGITHUB_TOKEN=test-installation-token\n"}}]}}'`)
 	writeEntrypointTestExecutable(t, dir, "claude", `
 [ "$HOME" = "$EXPECTED_BOOTSTRAP_HOME" ]
 [ "$CLAUDE_CODE_PLUGIN_CACHE_DIR" = "$EXPECTED_CACHE_DIR" ]
