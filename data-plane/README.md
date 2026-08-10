@@ -54,7 +54,7 @@ installs the archive before reopening writes. The image includes the official
 `@anthropic-ai/claude-code` npm package. For a `claude-code` container only,
 `entrypoint.sh` calls K3s MCP with `K3S_MCP_TOKEN` to mint a short-lived
 `contents:read` GitHub App token scoped to `plugin-marketplace`, supplies that
-token only through Git askpass while running
+token only through a process-scoped Git HTTPS Authorization header while running
 `claude plugin marketplace add https://github.com/dlddu/plugin-marketplace.git`
 and `claude plugin install session-platform@dlddu-plugins`, then exports the
 runtime plugin seed and execs the agent. The GitHub token is unset before the

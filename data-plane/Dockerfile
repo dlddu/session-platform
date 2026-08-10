@@ -114,7 +114,6 @@ RUN /usr/local/sbin/criu --version
 ENV CRIU_BIN=/usr/local/sbin/criu
 COPY --from=build /out/agent /agent
 COPY --chmod=0755 data-plane/entrypoint.sh /entrypoint.sh
-COPY --chmod=0755 data-plane/git-askpass.sh /usr/local/bin/session-platform-git-askpass
 # Go 1.24 uses Multipath TCP for listeners by default on Linux, but CRIU cannot
 # checkpoint MPTCP sockets — the agent's :8090 listener must stay plain TCP or
 # the pod checkpoint fails (AC-B*/AC-D4). Container env is inherited by the

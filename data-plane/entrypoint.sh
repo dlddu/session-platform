@@ -10,7 +10,6 @@ if [ "$workload" = "claude-code" ]; then
   k3s_mcp_url="${K3S_MCP_URL:-https://homelab-k3s-mcp.llkm.nl/mcp}"
   plugin_cache_dir="${CLAUDE_CODE_PLUGIN_CACHE_DIR:-/tmp/session-platform-claude-plugin-seed}"
   bootstrap_home="${CLAUDE_CODE_PLUGIN_BOOTSTRAP_HOME:-/tmp/session-platform-claude-plugin-home}"
-  git_askpass="${SESSION_PLATFORM_GIT_ASKPASS_BIN:-/usr/local/bin/session-platform-git-askpass}"
 
   mkdir -p "$plugin_cache_dir" "$bootstrap_home"
   chmod 700 "$plugin_cache_dir" "$bootstrap_home"
@@ -44,22 +43,29 @@ if [ "$workload" = "claude-code" ]; then
       end
     '
   )"
+  github_auth_header="Basic $(
+    printf '%s' "x-access-token:${github_token}" | base64 | tr -d '\n'
+  )"
 
   echo "Bootstrapping Claude plugin marketplace" >&2
+  # Claude Code clears GIT_ASKPASS before it spawns Git. A process-scoped Git
+  # config survives that sanitization without persisting the short-lived token.
   HOME="$bootstrap_home" \
   CLAUDE_CODE_PLUGIN_CACHE_DIR="$plugin_cache_dir" \
-  GIT_ASKPASS="$git_askpass" \
+  GIT_CONFIG_COUNT=1 \
+  GIT_CONFIG_KEY_0='http.https://github.com/dlddu/plugin-marketplace.git.extraheader' \
+  GIT_CONFIG_VALUE_0="Authorization: ${github_auth_header}" \
   GIT_TERMINAL_PROMPT=0 \
-  SESSION_PLATFORM_GITHUB_TOKEN="$github_token" \
     claude plugin marketplace add https://github.com/dlddu/plugin-marketplace.git
   HOME="$bootstrap_home" \
   CLAUDE_CODE_PLUGIN_CACHE_DIR="$plugin_cache_dir" \
-  GIT_ASKPASS="$git_askpass" \
+  GIT_CONFIG_COUNT=1 \
+  GIT_CONFIG_KEY_0='http.https://github.com/dlddu/plugin-marketplace.git.extraheader' \
+  GIT_CONFIG_VALUE_0="Authorization: ${github_auth_header}" \
   GIT_TERMINAL_PROMPT=0 \
-  SESSION_PLATFORM_GITHUB_TOKEN="$github_token" \
     claude plugin install session-platform@dlddu-plugins
 
-  unset github_token mcp_response mcp_request
+  unset github_auth_header github_token mcp_response mcp_request
   export CLAUDE_CODE_PLUGIN_SEED_DIR="$plugin_cache_dir"
 fi
 

@@ -40,24 +40,28 @@ func TestEntrypointSkipsPluginBootstrapForShell(t *testing.T) {
 	}
 }
 
-func TestEntrypointBootstrapsPrivateMarketplaceWithoutLeakingGitHubTokenToAgent(t *testing.T) {
+func TestEntrypointBootstrapsPrivateMarketplaceWithScopedAuthHeaderWithoutLeakingGitHubTokenToAgent(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "calls.log")
 	cacheDir := filepath.Join(dir, "plugin-cache")
 	bootstrapHome := filepath.Join(dir, "bootstrap-home")
-	askpass := writeEntrypointTestExecutable(t, dir, "askpass", `exit 0`)
 	writeEntrypointTestExecutable(t, dir, "curl", `printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"isError":false,"content":[{"type":"resource","resource":{"uri":"file:///github-token.env","mimeType":"text/plain","text":"# Expires at: 2099-01-01T00:00:00Z\nGITHUB_TOKEN=test-installation-token\n"}}]}}'`)
 	writeEntrypointTestExecutable(t, dir, "claude", `
 [ "$HOME" = "$EXPECTED_BOOTSTRAP_HOME" ]
 [ "$CLAUDE_CODE_PLUGIN_CACHE_DIR" = "$EXPECTED_CACHE_DIR" ]
-[ "$GIT_ASKPASS" = "$EXPECTED_ASKPASS" ]
+[ "$GIT_CONFIG_COUNT" = "1" ]
+[ "$GIT_CONFIG_KEY_0" = "http.https://github.com/dlddu/plugin-marketplace.git.extraheader" ]
+[ "$GIT_CONFIG_VALUE_0" = "Authorization: Basic eC1hY2Nlc3MtdG9rZW46dGVzdC1pbnN0YWxsYXRpb24tdG9rZW4=" ]
 [ "$GIT_TERMINAL_PROMPT" = "0" ]
-[ "$SESSION_PLATFORM_GITHUB_TOKEN" = "test-installation-token" ]
+[ "${SESSION_PLATFORM_GITHUB_TOKEN+x}" != "x" ]
 printf 'claude:%s\n' "$*" >> "$CALL_LOG"
 `)
 	agent := writeEntrypointTestExecutable(t, dir, "agent", `
 [ "$CLAUDE_CODE_PLUGIN_SEED_DIR" = "$EXPECTED_CACHE_DIR" ]
 [ "${SESSION_PLATFORM_GITHUB_TOKEN+x}" != "x" ]
+[ "${GIT_CONFIG_COUNT+x}" != "x" ]
+[ "${GIT_CONFIG_KEY_0+x}" != "x" ]
+[ "${GIT_CONFIG_VALUE_0+x}" != "x" ]
 printf 'agent\n' >> "$CALL_LOG"
 `)
 
@@ -70,10 +74,8 @@ printf 'agent\n' >> "$CALL_LOG"
 		"K3S_MCP_URL=https://k3s-mcp.example.test/mcp",
 		"CLAUDE_CODE_PLUGIN_CACHE_DIR="+cacheDir,
 		"CLAUDE_CODE_PLUGIN_BOOTSTRAP_HOME="+bootstrapHome,
-		"SESSION_PLATFORM_GIT_ASKPASS_BIN="+askpass,
 		"EXPECTED_CACHE_DIR="+cacheDir,
 		"EXPECTED_BOOTSTRAP_HOME="+bootstrapHome,
-		"EXPECTED_ASKPASS="+askpass,
 		"CALL_LOG="+logPath,
 	)
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -91,26 +93,5 @@ printf 'agent\n' >> "$CALL_LOG"
 	}, "\n")
 	if got := string(data); got != want {
 		t.Fatalf("calls = %q, want %q", got, want)
-	}
-}
-
-func TestGitAskpassReturnsUsernameAndEphemeralToken(t *testing.T) {
-	script := filepath.Join("..", "..", "git-askpass.sh")
-	for _, tc := range []struct {
-		prompt string
-		want   string
-	}{
-		{prompt: "Username for 'https://github.com':", want: "x-access-token\n"},
-		{prompt: "Password for 'https://x-access-token@github.com':", want: "test-installation-token\n"},
-	} {
-		cmd := exec.Command("/bin/sh", script, tc.prompt)
-		cmd.Env = append(os.Environ(), "SESSION_PLATFORM_GITHUB_TOKEN=test-installation-token")
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("askpass %q: %v\n%s", tc.prompt, err, output)
-		}
-		if got := string(output); got != tc.want {
-			t.Fatalf("askpass %q = %q, want %q", tc.prompt, got, tc.want)
-		}
 	}
 }
