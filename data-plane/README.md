@@ -51,11 +51,16 @@ below the mount point so restore can atomically swap it without trying to
 rename an active mount. Its checkpoint closes prompt admission, drains accepted
 work, and archives that state tree plus the redacted scrollback; restore safely
 installs the archive before reopening writes. The image includes the official
-`@anthropic-ai/claude-code` npm package and an immutable plugin seed built by
-running `claude plugin marketplace add dlddu/plugin-marketplace` followed by
-`claude plugin install session-platform@dlddu-plugins`. Provider authentication
-credentials are not present in the Claude container or inherited by its Bash
-tools. That container receives
+`@anthropic-ai/claude-code` npm package. For a `claude-code` container only,
+`entrypoint.sh` calls K3s MCP with `K3S_MCP_TOKEN` to mint a short-lived
+`contents:read` GitHub App token scoped to `plugin-marketplace`, supplies that
+token only through Git askpass while running
+`claude plugin marketplace add https://github.com/dlddu/plugin-marketplace.git`
+and `claude plugin install session-platform@dlddu-plugins`, then exports the
+runtime plugin seed and execs the agent. The GitHub token is unset before the
+agent starts; shell and credential-proxy workloads skip this bootstrap.
+Provider authentication credentials are not present in the Claude container or
+inherited by its Bash tools. That container receives
 `ANTHROPIC_BASE_URL=http://127.0.0.1:8091` and the non-secret
 `ANTHROPIC_AUTH_TOKEN=session-platform-proxy`; the credential-proxy sidecar
 alone receives the required Secret `base-url` and `auth-token` keys. The primary

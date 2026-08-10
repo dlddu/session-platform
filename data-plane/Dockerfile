@@ -45,19 +45,10 @@ RUN curl -fsSL "https://github.com/checkpoint-restore/criu/archive/refs/tags/v${
 # moving npm "latest" tag.
 FROM node:22-trixie-slim AS claude-build
 ARG CLAUDE_CODE_VERSION=2.1.220
-ENV DISABLE_AUTOUPDATER=1 \
-    CLAUDE_CODE_PLUGIN_CACHE_DIR=/opt/claude-plugin-seed
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates git \
- && rm -rf /var/lib/apt/lists/* \
- && npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+ENV DISABLE_AUTOUPDATER=1
+RUN npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && claude --version \
  && npm cache clean --force
-# Pre-populate the marketplace and plugin cache before any data plane process
-# starts. Runtime sessions use this immutable seed with their own HOME, so pod
-# startup never depends on a live marketplace clone.
-RUN claude plugin marketplace add dlddu/plugin-marketplace \
- && claude plugin install session-platform@dlddu-plugins
 
 # ---- stage 4: install the official GitHub CLI release ----
 # Debian trixie's community gh 2.46 package uses retired GitHub APIs. Download
@@ -111,9 +102,7 @@ RUN gh --version
 # The same image serves both workload modes. Copy the official Node 22 runtime,
 # npm installation metadata, and the pinned Claude Code package together.
 COPY --from=claude-build /usr/local/ /usr/local/
-COPY --from=claude-build /opt/claude-plugin-seed/ /opt/claude-plugin-seed/
-ENV DISABLE_AUTOUPDATER=1 \
-    CLAUDE_CODE_PLUGIN_SEED_DIR=/opt/claude-plugin-seed
+ENV DISABLE_AUTOUPDATER=1
 RUN node --version && npm --version && claude --version
 COPY --from=criu-build /src/criu/criu /usr/local/sbin/criu
 # Fail the image build (i.e. in CI) if the copied binary is missing a shared
@@ -124,6 +113,8 @@ RUN /usr/local/sbin/criu --version
 # distro criu could never be picked up instead.
 ENV CRIU_BIN=/usr/local/sbin/criu
 COPY --from=build /out/agent /agent
+COPY --chmod=0755 data-plane/entrypoint.sh /entrypoint.sh
+COPY --chmod=0755 data-plane/git-askpass.sh /usr/local/bin/session-platform-git-askpass
 # Go 1.24 uses Multipath TCP for listeners by default on Linux, but CRIU cannot
 # checkpoint MPTCP sockets — the agent's :8090 listener must stay plain TCP or
 # the pod checkpoint fails (AC-B*/AC-D4). Container env is inherited by the
@@ -133,4 +124,4 @@ ENV GODEBUG=multipathtcp=0
 # Agent port; keep in sync with cmd/agent (defaultAddr) and the control plane
 # orchestrator's agentPort.
 EXPOSE 8090
-ENTRYPOINT ["/agent"]
+ENTRYPOINT ["/entrypoint.sh"]
