@@ -57,7 +57,8 @@ func TestEntrypointBootstrapsPrivateMarketplaceWithScopedAuthHeaderWithoutLeakin
 printf 'claude:%s\n' "$*" >> "$CALL_LOG"
 `)
 	agent := writeEntrypointTestExecutable(t, dir, "agent", `
-[ "$CLAUDE_CODE_PLUGIN_SEED_DIR" = "$EXPECTED_CACHE_DIR" ]
+[ "$CLAUDE_CODE_PLUGIN_CACHE_DIR" = "$EXPECTED_CACHE_DIR" ]
+[ "${CLAUDE_CODE_PLUGIN_SEED_DIR+x}" != "x" ]
 [ "${SESSION_PLATFORM_GITHUB_TOKEN+x}" != "x" ]
 [ "${GIT_CONFIG_COUNT+x}" != "x" ]
 [ "${GIT_CONFIG_KEY_0+x}" != "x" ]

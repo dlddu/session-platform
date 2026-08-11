@@ -66,7 +66,10 @@ if [ "$workload" = "claude-code" ]; then
     claude plugin install session-platform@dlddu-plugins
 
   unset github_auth_header github_token mcp_response mcp_request
-  export CLAUDE_CODE_PLUGIN_SEED_DIR="$plugin_cache_dir"
+  # The agent must resolve the plugin from the very same cache the bootstrap
+  # populated. A seed dir only syncs marketplace registrations, and only after
+  # plugin loading has already run, so the installed plugin never resolves.
+  export CLAUDE_CODE_PLUGIN_CACHE_DIR="$plugin_cache_dir"
 fi
 
 exec "$agent_bin" "$@"
