@@ -85,6 +85,13 @@ docs/                 value / PRD·AC / journeys / mockups / CRIU verification n
   model is injected literally and takes precedence over that Secret default.
   The required `base-url` and `auth-token` Secret keys remain isolated in a
   hardened localhost proxy sidecar that accepts one configured HTTPS upstream.
+  For Claude workloads, the data-plane entrypoint uses the required
+  `K3S_MCP_TOKEN` to mint a repository-scoped, read-only GitHub App token from
+  K3s MCP, installs `session-platform@dlddu-plugins` from the private
+  `dlddu/plugin-marketplace` into a runtime seed, and only then starts the
+  agent. The GitHub token is not inherited by the agent; `K3S_MCP_TOKEN` is
+  exposed only to the tool-running container and redacted from streamed/read
+  output.
   A separate optional `models` Secret key is an ordered UI soft catalog, not
   an API allowlist. The Deployment projects the public `model` and `models`
   keys into the control plane as `CLAUDE_CODE_DEFAULT_MODEL` and
@@ -253,7 +260,12 @@ The cluster runs this via GitOps (Flux) from the `flux-cd-apps` repo.
 Before creating Claude Code sessions, provision the Secret named by
 `CLAUDE_CODE_CREDENTIALS_SECRET` (default `claude-code-credentials`). Its
 `base-url` and `auth-token` keys are required and are exposed only to the
-credential-proxy sidecar. Its `model` key is optional: a non-empty value selects
+credential-proxy sidecar. Its required `k3s-mcp-token` key is exposed only to
+the Claude tool-running container as `K3S_MCP_TOKEN`. Its entrypoint uses that
+token to obtain short-lived read access to the private plugin marketplace and
+bootstrap `session-platform@dlddu-plugins`; the running plugin then uses the
+same K3s MCP credential. The agent redacts its literal value from read/SSE
+output. Its `model` key is optional: a non-empty value selects
 the model for `platform-default` sessions, while a missing or empty value falls
 back to the installed Claude CLI default. A concrete model supplied when the
 session is created always wins. Non-empty Secret values are validated against

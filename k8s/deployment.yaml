@@ -44,11 +44,12 @@ spec:
             - name: DATA_PLANE_CLAUDE_CODE_IMAGE
               value: "ghcr.io/dlddu/session-platform-data-plane:latest"
             # The required base-url/auth-token keys are referenced only by the
-            # localhost credential-proxy sidecar. A platform-default Claude
-            # session may reference the optional model key from its tool-running
-            # container. The control plane receives only the optional, public
-            # default model and models catalog below; it never receives provider
-            # credentials (AC-E6).
+            # localhost credential-proxy sidecar. The required k3s-mcp-token is
+            # referenced only by the Claude tool-running container. A
+            # platform-default Claude session may reference the optional model
+            # key from that container. The control plane receives only the
+            # optional, public default model and models catalog below; it never
+            # receives provider credentials or the K3s MCP token (AC-E6).
             # Provision it out of band; see the example Secret manifest. If
             # this name is changed, patch both SecretKeyRef names below to the
             # same literal (Kubernetes does not interpolate env values).

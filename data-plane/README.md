@@ -50,14 +50,24 @@ session volume at `/session`, leaving the replaceable state tree one level
 below the mount point so restore can atomically swap it without trying to
 rename an active mount. Its checkpoint closes prompt admission, drains accepted
 work, and archives that state tree plus the redacted scrollback; restore safely
-installs the archive before reopening writes. The
-image includes the official `@anthropic-ai/claude-code` npm package. Auth
-credentials are not present in the Claude container or inherited by its Bash
-tools. That container receives
+installs the archive before reopening writes. The image includes the official
+`@anthropic-ai/claude-code` npm package. For a `claude-code` container only,
+`entrypoint.sh` calls K3s MCP with `K3S_MCP_TOKEN` to mint a short-lived
+`contents:read` GitHub App token scoped to `plugin-marketplace`, supplies that
+token only through a process-scoped Git HTTPS Authorization header while running
+`claude plugin marketplace add https://github.com/dlddu/plugin-marketplace.git`
+and `claude plugin install session-platform@dlddu-plugins`, then exports the
+runtime plugin seed and execs the agent. The GitHub token is unset before the
+agent starts; shell and credential-proxy workloads skip this bootstrap.
+Provider authentication credentials are not present in the Claude container or
+inherited by its Bash tools. That container receives
 `ANTHROPIC_BASE_URL=http://127.0.0.1:8091` and the non-secret
 `ANTHROPIC_AUTH_TOKEN=session-platform-proxy`; the credential-proxy sidecar
-alone receives the required Secret `base-url` and `auth-token` keys. For a
-session whose immutable model metadata is `platform-default`, the primary
+alone receives the required Secret `base-url` and `auth-token` keys. The primary
+container separately receives the required
+Secret key `k3s-mcp-token` as `K3S_MCP_TOKEN`; that literal is included in
+incremental output redaction and is never projected into the credential proxy.
+For a session whose immutable model metadata is `platform-default`, the primary
 container also receives `CLAUDE_CODE_MODEL` from that Secret's optional `model`
 key. A missing or empty key omits `--model` and therefore delegates to the
 installed Claude CLI; a concrete session model is instead injected literally
@@ -86,10 +96,10 @@ literal name because Kubernetes does not interpolate
 `CLAUDE_CODE_CREDENTIALS_SECRET` there.
 
 Fresh session HOME also receives a platform-managed `.claude/settings.json`
-that allows only the coding tools
-`Read`, `Write`, `Edit`, `Glob`, `Grep`, and `Bash`; the agent does not
-use `--dangerously-skip-permissions`. Every invocation starts Claude Code in
-`auto` permission mode through an explicit CLI flag.
+that enables only `session-platform@dlddu-plugins` and allows only the coding
+tools `Read`, `Write`, `Edit`, `Glob`, `Grep`, and `Bash`; the agent does not use
+`--dangerously-skip-permissions`. Every invocation starts Claude Code in `auto`
+permission mode through an explicit CLI flag.
 
 Projected assistant text plus diagnostic stderr from one Claude invocation is
 capped at 16 MiB after incremental redaction, including the terminal line

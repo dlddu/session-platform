@@ -113,6 +113,7 @@ RUN /usr/local/sbin/criu --version
 # distro criu could never be picked up instead.
 ENV CRIU_BIN=/usr/local/sbin/criu
 COPY --from=build /out/agent /agent
+COPY --chmod=0755 data-plane/entrypoint.sh /entrypoint.sh
 # Go 1.24 uses Multipath TCP for listeners by default on Linux, but CRIU cannot
 # checkpoint MPTCP sockets — the agent's :8090 listener must stay plain TCP or
 # the pod checkpoint fails (AC-B*/AC-D4). Container env is inherited by the
@@ -122,4 +123,4 @@ ENV GODEBUG=multipathtcp=0
 # Agent port; keep in sync with cmd/agent (defaultAddr) and the control plane
 # orchestrator's agentPort.
 EXPOSE 8090
-ENTRYPOINT ["/agent"]
+ENTRYPOINT ["/entrypoint.sh"]

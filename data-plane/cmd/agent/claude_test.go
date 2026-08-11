@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -290,8 +291,58 @@ func TestClaudeManagedToolPolicyIsProvisionedUnderSessionHome(t *testing.T) {
 			t.Fatalf("managed settings %q are missing %s", data, tool)
 		}
 	}
+	if !strings.Contains(string(data), `"`+claudeSessionPlatformPlugin+`":true`) {
+		t.Fatalf("managed settings %q do not enable %s", data, claudeSessionPlatformPlugin)
+	}
 	if strings.Contains(string(data), "bypassPermissions") {
 		t.Fatalf("managed settings bypass permissions: %q", data)
+	}
+}
+
+func TestClaudeManagedSettingsUpgradeEnablesSessionPlatformPlugin(t *testing.T) {
+	homeDir := t.TempDir()
+	settingsDir := filepath.Join(homeDir, claudeSettingsDir)
+	if err := os.MkdirAll(settingsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := claudeManagedSettings{}
+	legacy.Permissions.Allow = append([]string(nil), claudeManagedTools...)
+	settingsPath := filepath.Join(settingsDir, claudeSettingsFile)
+	if err := storeClaudeManagedSettings(settingsDir, settingsPath, legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ensureClaudeManagedSettings(homeDir); err != nil {
+		t.Fatalf("upgrade managed settings: %v", err)
+	}
+	if err := validateClaudeManagedSettings(homeDir); err != nil {
+		t.Fatalf("upgraded managed settings are invalid: %v", err)
+	}
+}
+
+func TestClaudeManagedSettingsRejectsUnmanagedPlugin(t *testing.T) {
+	homeDir := t.TempDir()
+	settingsDir := filepath.Join(homeDir, claudeSettingsDir)
+	if err := os.MkdirAll(settingsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	settings := claudeManagedSettings{EnabledPlugins: map[string]bool{"unmanaged@example": true}}
+	settings.Permissions.Allow = append([]string(nil), claudeManagedTools...)
+	settingsPath := filepath.Join(settingsDir, claudeSettingsFile)
+	if err := storeClaudeManagedSettings(settingsDir, settingsPath, settings); err != nil {
+		t.Fatal(err)
+	}
+
+	err := ensureClaudeManagedSettings(homeDir)
+	if err == nil || !strings.Contains(err.Error(), "must enable only") {
+		t.Fatalf("ensure managed settings error = %v, want unmanaged plugin rejection", err)
+	}
+}
+
+func TestClaudeCredentialRedactionIncludesK3SMCPToken(t *testing.T) {
+	t.Setenv("K3S_MCP_TOKEN", "k3s-mcp-secret")
+	if got := credentialLiteralsFromEnv(); !slices.Contains(got, "k3s-mcp-secret") {
+		t.Fatalf("credential redaction literals = %q, want K3S_MCP_TOKEN", got)
 	}
 }
 

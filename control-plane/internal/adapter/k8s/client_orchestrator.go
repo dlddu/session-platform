@@ -86,21 +86,25 @@ const (
 	// Claude Code runtime configuration. Provider credential values are
 	// projected only into a separate localhost credential-proxy container. The
 	// agent/CLI container gets a non-secret placeholder and cannot read or
-	// transform the real token through its coding tools (AC-E6). The non-secret
-	// platform model may be selected from the same Secret through its own key.
+	// transform the real provider token through its coding tools (AC-E6). The
+	// session-platform plugin's K3s MCP token is intentionally projected into the
+	// tool-running container, while the non-secret platform model may be selected
+	// from the same Secret through its own key.
 	ClaudeCodeModelEnvVar     = "CLAUDE_CODE_MODEL"
+	K3SMCPTokenEnvVar         = "K3S_MCP_TOKEN"
 	claudeCodeStateDirEnvVar  = "CLAUDE_CODE_STATE_DIR"
 	claudeCodeStateVolumePath = "/session"
 	// The state root must be a child of the volume mount, not the mount point
 	// itself: archive restore atomically renames this directory into place, and
 	// Linux rejects renaming an active mount point with EBUSY.
-	claudeCodeStateDir           = claudeCodeStateVolumePath + "/state"
-	claudeCodeStateVolumeName    = "claude-state"
-	AnthropicBaseURLEnvVar       = "ANTHROPIC_BASE_URL"
-	AnthropicAuthTokenEnvVar     = "ANTHROPIC_AUTH_TOKEN"
-	ClaudeCodeModelSecretKey     = "model"
-	ClaudeCodeBaseURLSecretKey   = "base-url"
-	ClaudeCodeAuthTokenSecretKey = "auth-token"
+	claudeCodeStateDir             = claudeCodeStateVolumePath + "/state"
+	claudeCodeStateVolumeName      = "claude-state"
+	AnthropicBaseURLEnvVar         = "ANTHROPIC_BASE_URL"
+	AnthropicAuthTokenEnvVar       = "ANTHROPIC_AUTH_TOKEN"
+	ClaudeCodeModelSecretKey       = "model"
+	ClaudeCodeBaseURLSecretKey     = "base-url"
+	ClaudeCodeAuthTokenSecretKey   = "auth-token"
+	ClaudeCodeK3SMCPTokenSecretKey = "k3s-mcp-token"
 	// ClaudeCredentialsContainerName identifies the isolated Secret holder.
 	ClaudeCredentialsContainerName = "claude-credentials"
 	// ClaudeCredentialProxyURL is the loopback-only endpoint visible to the
@@ -192,8 +196,8 @@ func WithWorkloadImage(workload session.WorkloadType, image string) Option {
 
 // WithClaudeCredentialsSecret selects the platform-managed Secret whose
 // base-url and auth-token keys are projected only into the credential sidecar,
-// and whose optional model key selects the platform default in the main Claude
-// container.
+// whose required k3s-mcp-token key is projected into the main Claude container,
+// and whose optional model key selects the platform default there.
 func WithClaudeCredentialsSecret(name string) Option {
 	return func(o *ClientOrchestrator) {
 		if strings.TrimSpace(name) != "" {
@@ -462,6 +466,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef string, workload 
 		}
 		container.Env = append(container.Env,
 			modelEnv,
+			secretEnv(K3SMCPTokenEnvVar, o.claudeCredentialsSecret, ClaudeCodeK3SMCPTokenSecretKey),
 			corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: claudeCodeStateDir},
 			corev1.EnvVar{Name: AnthropicBaseURLEnvVar, Value: ClaudeCredentialProxyURL},
 			corev1.EnvVar{Name: AnthropicAuthTokenEnvVar, Value: credentialProxyPlaceholderToken},
