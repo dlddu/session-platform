@@ -57,10 +57,12 @@ jobs:
       # itself, docs/criu-verification.md decision ⑤), kind no longer needs a
       # CRIU-capable *runtime* — only a capable kernel and a privileged pod. This
       # step exposes that preflight signal on a GitHub runner's kernel with
-      # kind's nested containers. The deploy overlay already enables the
-      # test-only HTTP snapshot trigger and TestDeferred_CRIUIntegrity is the
-      # authoritative real round-trip assertion. continue-on-error keeps this
-      # duplicate diagnostic from hiding that API-test verdict.
+      # kind's nested containers. The deploy overlay enables the CRIU gate and
+      # the round trip is driven by the *product* snapshot endpoint (there is no
+      # test-only trigger any more — manual archiving promoted it), so
+      # TestDeferred_CRIUIntegrity is the authoritative real round-trip
+      # assertion. continue-on-error keeps this duplicate diagnostic from hiding
+      # that API-test verdict.
       - name: CRIU probe (in-pod criu viability on this runner)
         continue-on-error: true
         run: |

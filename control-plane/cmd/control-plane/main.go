@@ -95,6 +95,10 @@ func main() {
 		}
 	}
 
+	// mock-exception: CRIU-GATE — 검증된 런타임이 설 때까지 게이트 off가 프로덕션의 의도된
+	// 동작이고, 그 경로에서 쉘 동결은 이 no-op 스텁이다. e2e는 deploy/ 오버레이가 게이트를
+	// on으로 올려 실 경로(agent-driven in-pod checkpoint + S3 아카이브)를 탄다.
+	// 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
 	var shellCkpt criu.Checkpointer = criu.NewStubCheckpointer(false)
 	if cfg.criuEnabled {
 		shellCkpt = criu.NewAgentCheckpointer(agentClient, cstore)
