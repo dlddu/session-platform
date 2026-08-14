@@ -66,6 +66,7 @@ operational idle-state producer가 생기면 배포 e2e로 채운다.
 | CODE | 카테고리 | e2e에서 실제로 구동되는 구간 | 치환으로 검증되지 않는 잔여 |
 | --- | --- | --- | --- |
 | `CRIU-GATE` | `GATE` | e2e SUT는 항상 `deploy/` 오버레이로 뜨고(`scripts/e2e/up.sh`의 `kubectl apply -k deploy/`) 거기서 게이트가 **ON**이라 실 CRIU 경로를 탄다 — 에이전트가 pod 안에서 쉘 트리를 dump/restore하고, 아카이브는 인클러스터 MinIO를 향해 **프로덕션과 같은 S3 코드 경로**로 오간다. 동결은 제품 endpoint(`POST /api/v1/sessions/{id}/snapshot`)로 유발되고, 왕복 전체가 `TestDeferred_CRIUIntegrity`의 실 단언이다(AC-B2/B3/D4). | 프로덕션 base(`k8s/`, `CRIU_ENABLED: "false"`)의 쉘 동결·복원은 **no-op 스텁이고 어떤 e2e도 그 경로를 타지 않는다**. 검증된 런타임이 서고 base가 on으로 올라가기 전까지, 프로덕션 구성에서 쉘 세션 동결이 상태를 실제로 보존하는지는 미검증이다. |
+| `DELETE-CONFLICT-ERR` | `NET` | `web/e2e/session-deletion.spec.ts`의 스냅샷 삭제 테스트는 **실 SUT 위에서** 돈다 — 세션을 `POST /api/v1/sessions`로 실제로 만들고 제품 `POST /api/v1/sessions/{id}/snapshot`으로 진짜 `snapshot` 상태(pod 회수 포함)까지 얼린 뒤, `/restore/{id}` 렌더·세션 목록·단건 조회·**재시도 DELETE(204)** 가 모두 배포된 control-plane의 실 응답이다. 인터셉트가 만드는 것은 **첫 DELETE 한 번의 409 응답뿐**이고, 나머지 요청은 같은 핸들러에서 `route.continue()`로 그대로 흘려보낸다. | 409를 낳는 **진짜 경합** — 다른 라이프사이클 연산이 세션 Lease를 쥔 상태에서 들어온 DELETE(`service.Terminate`의 `store.Lock` → `session.ErrConflict`) — 자체는 브라우저 e2e에서 검증되지 않는다. 주입은 UI의 실패 표시·재시도 경로만 확인하고, 서버가 그 상태에서 실제로 409를 내는지는 control-plane 단위 테스트와 envtest의 CAS/Lease 충돌 케이스가 담당한다. |
 <!-- /fidelity:registry -->
 
 ### 미해소 위반 (승인된 예외가 아니다)
@@ -74,16 +75,21 @@ operational idle-state producer가 생기면 배포 e2e로 채운다.
 개수에 상한이 걸려 있어(`상한` 집계) 새 위반이 들어오면 CI가 막고, 줄어들 때만 상한을 함께
 내린다.
 
-세 파일 모두 `page.route("**/api/v1/**")`로 **control-plane API 표면 전체**를 가로채 세션
-목록·단건·SSE 스트림·snapshot·delete를 손으로 지은 픽스처로 응답한다. 그중 일부(409 충돌
-응답, config 실패, 응답 보류로 만드는 중간 UI 상태, past-end cursor `reset` 이벤트)는 `NET`
-자격을 만족하지만, 그것들이 **API 전체를 삼키는 인터셉트 안에** 들어 있어 행 단위로 승인할 수
-없다. 실 SUT가 낼 수 있는 데이터(세션 목록·상태·pod)까지 함께 위조되기 때문이다.
+남은 두 파일 모두 `page.route("**/api/v1/**")`로 **control-plane API 표면 전체**를 가로채 세션
+목록·단건·SSE 스트림·snapshot·delete를 손으로 지은 픽스처로 응답한다. 그중 일부(config 실패,
+응답 보류로 만드는 중간 UI 상태, past-end cursor `reset` 이벤트)는 `NET` 자격을 만족하지만,
+그것들이 **API 전체를 삼키는 인터셉트 안에** 들어 있어 행 단위로 승인할 수 없다. 실 SUT가 낼
+수 있는 데이터(세션 목록·상태·pod)까지 함께 위조되기 때문이다.
 
-제거가 이 슬라이스에서 끝나지 않는 이유는 j6의 검증 대상이 외부 LLM 제공자에 달려 있고 e2e
-SUT가 그 제공자를 **의도적으로 도달 불가**로 배포하기 때문이다(`deploy/claude-code-credentials-secret.yaml`:
-`base-url: https://127.0.0.1:9`, "Deliberately unroutable"). 정책의 `EXT` 규칙이 가리키는 해법은
-**MinIO 선례대로 인클러스터 가짜 provider를 배포**하고 실 세션 위에서 돌리는 것이다.
+제거가 이 슬라이스에서 끝나지 않는 이유는 두 스위트의 검증 대상이 외부 LLM 제공자에 달려
+있고 e2e SUT가 그 제공자를 **의도적으로 도달 불가**로 배포하기 때문이다
+(`deploy/claude-code-credentials-secret.yaml`: `base-url: https://127.0.0.1:9`, "Deliberately
+unroutable"). 정책의 `EXT` 규칙이 가리키는 해법은 **MinIO 선례대로 인클러스터 가짜 provider를
+배포**하고 실 세션 위에서 돌리는 것이다.
+
+*해소된 것*: `web/e2e/session-deletion.spec.ts`는 여기서 빠졌다. 세션 생성과 동결을 제품 API로
+돌려 실 SUT 위에서 돌게 만들고, 남은 인터셉트를 첫 DELETE의 409 응답 하나로 좁혀
+`DELETE-CONFLICT-ERR`(`NET`)로 **승인 등재**했다. 그만큼 상한도 6에서 4로 내려갔다.
 
 <!-- fidelity:violations -->
 | 파일 | 토큰 | 무엇을 위조하는가 | 제거 경로 (선결조건) |
@@ -92,8 +98,6 @@ SUT가 그 제공자를 **의도적으로 도달 불가**로 배포하기 때문
 | `web/e2e/j6-agent-prompt-loop.spec.ts` | `route.fulfill(` | 위와 같은 핸들러의 응답 생성부 — JSON·`text/event-stream` 본문을 직접 짓는다. | 위와 같다. `reset`·`output` 이벤트는 가짜 provider의 결정적 응답으로 실 SUT가 생성하게 한다. |
 | `web/e2e/manual-archive.spec.ts` | `.route(` | active claude-code 세션과 그 목록·단건·stream을 위조한다. | 실 SUT에서 claude-code 세션을 만들고 제품 `POST /snapshot`으로 아카이브. 중간 "Archiving…" 상태만 남으면 그 지연 주입은 `NET`(LAT)으로 **행 단위 승인 가능**하다. |
 | `web/e2e/manual-archive.spec.ts` | `route.fulfill(` | 위 핸들러의 응답 생성부 + snapshot 응답을 보류해 중간 상태를 만든다. | 위와 같다. |
-| `web/e2e/session-deletion.spec.ts` | `.route(` | 세 번째 테스트만 해당 — snapshot 상태 세션과 DELETE 409를 위조한다(앞의 두 테스트는 실 SUT를 쓴다). | snapshot 상태는 제품 `POST /snapshot`으로 실제로 만들 수 있다(이 seam이 사라진 지금은 더 쉽다). 남는 409 충돌 주입만 `NET`(ERR)으로 **행 단위 승인 가능**하다. |
-| `web/e2e/session-deletion.spec.ts` | `route.fulfill(` | 위 핸들러의 응답 생성부 — 200/404/409/204를 직접 짓는다. | 위와 같다. |
 <!-- /fidelity:violations -->
 
 ### seam 지문 회계
@@ -113,8 +117,9 @@ seam 스캔이 잡는 `(파일, 토큰)` 쌍마다 한 행이다. 등재 seam에
 | `web/e2e/j6-agent-prompt-loop.spec.ts` | `route.fulfill(` | `위반` | 미해소 위반 — 위 표 참조. |
 | `web/e2e/manual-archive.spec.ts` | `.route(` | `위반` | 미해소 위반 — 위 표 참조. |
 | `web/e2e/manual-archive.spec.ts` | `route.fulfill(` | `위반` | 미해소 위반 — 위 표 참조. |
-| `web/e2e/session-deletion.spec.ts` | `.route(` | `위반` | 미해소 위반 — 위 표 참조. |
-| `web/e2e/session-deletion.spec.ts` | `route.fulfill(` | `위반` | 미해소 위반 — 위 표 참조. |
+| `web/e2e/session-deletion.spec.ts` | `.route(` | `DELETE-CONFLICT-ERR` | 스냅샷 삭제 테스트가 첫 DELETE만 가로채려고 그 세션 URL에 거는 핸들러. |
+| `web/e2e/session-deletion.spec.ts` | `route.fulfill(` | `DELETE-CONFLICT-ERR` | 주입되는 단 하나의 응답 — 409 `session state changed concurrently`(실서버 메시지와 동일). |
+| `web/e2e/session-deletion.spec.ts` | `route.continue(` | `DELETE-CONFLICT-ERR` | 같은 핸들러의 통과 분기. 단건 GET도, **재시도 DELETE도** 실 control-plane이 응답하게 한다 — 이 줄이 없으면 승인 범위가 409 하나를 넘어선다. |
 | `.github/workflows/e2e.yml` | `test-only` | `—` | CRIU 프로브 주석이 "이제 test 전용 트리거가 없다"는 사실을 밝히는 서술. 치환이 아니다. |
 | `Makefile` | `CRIU_ENABLED` | `—` | `make test-integration` 설명 주석. 인프로세스 통합 하네스(`//go:build integration`)는 e2e SUT 경로가 아니라 이 정책의 범위 밖이다. |
 | `control-plane/test/e2e_deferred_test.go` | `E2E_SESSION_NAMESPACE` | `—` | 어서션용 kube 클라이언트가 볼 namespace 지정(기본 `default`). `E2E_BASE_URL`과 같은 성격의 배선이라 SUT 충실도를 낮추지 않는다. 지문에서 아예 빼는 편이 맞지만 그것은 정합성 모델 definition 개정 사안이라, 여기서는 비-seam으로 회계만 맞춘다. |
@@ -126,10 +131,10 @@ seam 스캔이 잡는 `(파일, 토큰)` 쌍마다 한 행이다. 등재 seam에
 ### 집계
 
 <!-- fidelity:summary -->
-- 등재 seam **1**개 — GATE **1** · TRIG **0** · EXT **0** · NET **0**
-- 코드 마커 지점 **3** / 마커 파일 **3**
-- 지문 회계 행 **16** — 등재 귀속 4 · 미해소 위반 **6** · 비-seam **6**
-- web e2e 인터셉트 **6**건 (승인 0 · 위반 6, 상한 **6**)
+- 등재 seam **2**개 — GATE **1** · TRIG **0** · EXT **0** · NET **1**
+- 코드 마커 지점 **4** / 마커 파일 **4**
+- 지문 회계 행 **17** — 등재 귀속 7 · 미해소 위반 **4** · 비-seam **6**
+- web e2e 인터셉트 **7**건 (승인 3 · 위반 4, 상한 **4**)
 <!-- /fidelity:summary -->
 
 이 숫자들도 체커가 실제와 대조한다(R8) — 표만 고치고 집계를 잊으면 실패한다. 상한을 넘는
