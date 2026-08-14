@@ -4,24 +4,136 @@
 `deploy/`로 **kind 클러스터에 배포된 control-plane(SUT)** 를 대상으로 API와 브라우저
 양쪽에서 해피패스를 종단 검증한다.
 
-> **충실도**: PodOrchestrator와 StateStore 모두 실 구현이다 — 세션 생성 시 **진짜 Pod
-> 오브젝트**가 1:1로 기동되고(client-go), 세션 상태는 **ConfigMap + Lease**에 저장된다(클러스터에
-> 배포된 SUT 기준). 세션 pod는 **실 data plane 에이전트 이미지**(`data-plane/`,
-> `session-platform/data-plane:dev`를 kind에 load)로 뜨므로 pod 안에서 PTY에 연결된
-> 인터랙티브 쉘이 실제로 기동되고, create는 pod Ready에 더해 **쉘 도달(Reach, attach 스트림
-> open/close)**까지 확인한 뒤에야 `active`를 반환한다(AC-D1). SUT는 **2 replica**로 배포되어
-> 상태를 공유하므로 교차-replica 원자성(AC-C1)을 실제로 검증한다. Checkpointer(CRIU)는
-> 오버레이(`deploy/`)에서 게이트 ON(agent-driven in-pod CRIU + MinIO 아카이브 저장소)으로
-> 배포되고 제품 snapshot endpoint를 통해 **snapshot→pod 회수→접근 시 새 pod로 복원→쉘 상태
-> 보존 왕복이 실 단언으로 검증**된다(`TestDeferred_CRIUIntegrity`, AC-B2/B3/D4; e2e
-> 워크플로의 CRIU 프로브가 러너 커널의 in-pod criu 지원을 확인). 운영 reaper는 마지막
-> read/write부터 60분에 도달한 세션을 스캔해 snapshot한다. 다만 배포 e2e에는 60분 시계를
-> 가속하거나 `lastAccess`를 주입하는 제품 API가 없어 실제 시간 경계 시드는 skip이다.
-> 검증 범위는 **생성/목록/조회/switch·read·write 해피패스 + 실 Pod 단언(AC-A1/A2) + PTY 쉘
-> 런타임 단언(AC-D1) + 쉘 stdin/stdout 시맨틱(AC-D2/D3: write→쉘 stdin 주입, read→offset
-> 커서 델타·offset=0 전체 재조회) + 교차-replica 일관성(AC-C1) + CRIU 왕복(AC-B2/B3/D4)**
-> 이다. reaper 시간 경계(B1)와 중간 `idle` 상태의 read/write 분기(C2/C3)는 각각
-> 제어 가능한 시계와 operational idle-state producer가 생기면 배포 e2e로 채운다.
+## e2e 충실도 허용목록 (모킹 최소화 정책)
+
+기본값은 **실환경**이다. PodOrchestrator와 StateStore 모두 실 구현이라 세션 생성 시 **진짜
+Pod 오브젝트**가 1:1로 기동되고(client-go), 세션 상태는 **ConfigMap + Lease**에 저장된다
+(클러스터에 배포된 SUT 기준). 세션 pod는 **실 data plane 에이전트 이미지**(`data-plane/`,
+`session-platform/data-plane:dev`를 kind에 load)로 뜨므로 pod 안에서 PTY에 연결된 인터랙티브
+쉘이 실제로 기동되고, create는 pod Ready에 더해 **쉘 도달(Reach, attach 스트림 open/close)**
+까지 확인한 뒤에야 `active`를 반환한다(AC-D1). SUT는 **2 replica**로 배포되어 상태를
+공유하므로 교차-replica 원자성(AC-C1)을 실제로 검증한다. Checkpointer(CRIU)는
+오버레이(`deploy/`)에서 게이트 ON(agent-driven in-pod CRIU + MinIO 아카이브 저장소)으로
+배포되고 **제품** snapshot endpoint(`POST /api/v1/sessions/{id}/snapshot`)를 통해
+**snapshot→pod 회수→접근 시 새 pod로 복원→쉘 상태 보존 왕복이 실 단언으로 검증**된다
+(`TestDeferred_CRIUIntegrity`, AC-B2/B3/D4; e2e 워크플로의 CRIU 프로브가 러너 커널의 in-pod
+criu 지원을 확인). 운영 reaper는 마지막 read/write부터 60분에 도달한 세션을 스캔해
+snapshot한다. 다만 배포 e2e에는 60분 시계를 가속하거나 `lastAccess`를 주입하는 제품 API가
+없어 실제 시간 경계 시드는 skip이다.
+
+검증 범위는 **생성/목록/조회/switch·read·write 해피패스 + 실 Pod 단언(AC-A1/A2) + PTY 쉘
+런타임 단언(AC-D1) + 쉘 stdin/stdout 시맨틱(AC-D2/D3: write→쉘 stdin 주입, read→offset
+커서 델타·offset=0 전체 재조회) + 교차-replica 일관성(AC-C1) + CRIU 왕복(AC-B2/B3/D4)** 이다.
+reaper 시간 경계(B1)와 중간 `idle` 상태의 read/write 분기(C2/C3)는 각각 제어 가능한 시계와
+operational idle-state producer가 생기면 배포 e2e로 채운다.
+
+충실도를 낮추는 치환은 **아래에 등재된 것만** 허용한다. 카테고리는 넷뿐이다:
+
+- `GATE` — 프로덕션 기능 게이트가 off일 때 no-op으로 떨어지는 분기. off가 **프로덕션의 의도된
+  동작**이고, 그 기능을 검증하는 e2e는 **오버레이에서 게이트를 on으로 올려** 실 경로를 탈 때만.
+- `TRIG` — 실환경에서 결정적으로 유발할 수 없는 상태 전이를 위한 test 전용 트리거. **운영
+  트리거가 별도로 실재**하고 그 대기 시간만 단축할 때. *(현재 0건 — 과거의 `SNAPSHOT-TRIG`는
+  수동 아카이브 기능이 들어오면서 제품 endpoint로 승격돼 seam 자체가 사라졌다.)*
+- `EXT` — 클러스터에 존재시킬 수 없는 외부 시스템 의존. kind에 실물로 배포 가능하면 그쪽이
+  우선이라 쓸 수 없다(MinIO가 그 예 — 실 배포이므로 모킹이 아니다).
+- `NET` — web e2e의 네트워크 인터셉트. 실 SUT가 요청 시점에 낼 수 없는 상태(서버 실패 응답·
+  응답 지연 주입)로만 한정한다.
+
+편의를 위한 치환 — 대기 시간 단축, 어서션 단순화, 플레이키 무마, **미구현 우회 stub**, 시드로
+만들 수 있는 데이터의 고정 — 은 등재 대상이 아니라 **제거** 대상이다. 판정이 애매하면 제거
+쪽으로 기운다. 예외는 늘지 않는 방향으로만 관리한다.
+
+자격을 만족하지 못하는 치환이 이미 코드에 있으면 그것은 **승인 예외가 아니라 위반**이다.
+숨기지도 승인하지도 않고 아래 「미해소 위반」에 상한과 함께 등재해, 줄어드는 방향으로만
+움직이게 한다.
+
+### 표기 규약
+
+허용된 seam은 그 지점 **직전 줄**에 사유 주석을 단다. YAML·셸·Makefile은 `#` 주석을 쓰되
+토큰은 동일하게 유지한다.
+
+```
+// mock-exception: <CODE> — <실환경으로 불가능한 이유 한 줄>
+```
+
+주석만 있고 미등재이거나, 등재만 있고 코드에 없으면 drift다. `scripts/check-fidelity-allowlist.py`가
+아래 네 블록과 코드를 **양방향으로** 대조해 강제한다 — `make check-fidelity`(= `make lint`에 포함),
+그리고 모든 PR에서 도는 `ci.yml`의 `fidelity` 잡.
+
+### 등재된 seam
+
+<!-- fidelity:registry -->
+| CODE | 카테고리 | e2e에서 실제로 구동되는 구간 | 치환으로 검증되지 않는 잔여 |
+| --- | --- | --- | --- |
+| `CRIU-GATE` | `GATE` | e2e SUT는 항상 `deploy/` 오버레이로 뜨고(`scripts/e2e/up.sh`의 `kubectl apply -k deploy/`) 거기서 게이트가 **ON**이라 실 CRIU 경로를 탄다 — 에이전트가 pod 안에서 쉘 트리를 dump/restore하고, 아카이브는 인클러스터 MinIO를 향해 **프로덕션과 같은 S3 코드 경로**로 오간다. 동결은 제품 endpoint(`POST /api/v1/sessions/{id}/snapshot`)로 유발되고, 왕복 전체가 `TestDeferred_CRIUIntegrity`의 실 단언이다(AC-B2/B3/D4). | 프로덕션 base(`k8s/`, `CRIU_ENABLED: "false"`)의 쉘 동결·복원은 **no-op 스텁이고 어떤 e2e도 그 경로를 타지 않는다**. 검증된 런타임이 서고 base가 on으로 올라가기 전까지, 프로덕션 구성에서 쉘 세션 동결이 상태를 실제로 보존하는지는 미검증이다. |
+<!-- /fidelity:registry -->
+
+### 미해소 위반 (승인된 예외가 아니다)
+
+여기 있는 치환은 **정책 위반이며 제거 대상**이다. 등재의 목적은 정당화가 아니라 회계다 —
+개수에 상한이 걸려 있어(`상한` 집계) 새 위반이 들어오면 CI가 막고, 줄어들 때만 상한을 함께
+내린다.
+
+세 파일 모두 `page.route("**/api/v1/**")`로 **control-plane API 표면 전체**를 가로채 세션
+목록·단건·SSE 스트림·snapshot·delete를 손으로 지은 픽스처로 응답한다. 그중 일부(409 충돌
+응답, config 실패, 응답 보류로 만드는 중간 UI 상태, past-end cursor `reset` 이벤트)는 `NET`
+자격을 만족하지만, 그것들이 **API 전체를 삼키는 인터셉트 안에** 들어 있어 행 단위로 승인할 수
+없다. 실 SUT가 낼 수 있는 데이터(세션 목록·상태·pod)까지 함께 위조되기 때문이다.
+
+제거가 이 슬라이스에서 끝나지 않는 이유는 j6의 검증 대상이 외부 LLM 제공자에 달려 있고 e2e
+SUT가 그 제공자를 **의도적으로 도달 불가**로 배포하기 때문이다(`deploy/claude-code-credentials-secret.yaml`:
+`base-url: https://127.0.0.1:9`, "Deliberately unroutable"). 정책의 `EXT` 규칙이 가리키는 해법은
+**MinIO 선례대로 인클러스터 가짜 provider를 배포**하고 실 세션 위에서 돌리는 것이다.
+
+<!-- fidelity:violations -->
+| 파일 | 토큰 | 무엇을 위조하는가 | 제거 경로 (선결조건) |
+| --- | --- | --- | --- |
+| `web/e2e/j6-agent-prompt-loop.spec.ts` | `.route(` | `installAgentApi`가 12개 테스트 전부에 `/api/v1/**` 핸들러를 설치해 세션·config·SSE 스트림을 위조한다. | 인클러스터 가짜 Claude provider를 `deploy/`에 배포(MinIO 선례)하고 `claude-code-credentials`의 `base-url`을 그쪽으로 돌린 뒤, 실 claude-code 세션 위에서 재작성. |
+| `web/e2e/j6-agent-prompt-loop.spec.ts` | `route.fulfill(` | 위와 같은 핸들러의 응답 생성부 — JSON·`text/event-stream` 본문을 직접 짓는다. | 위와 같다. `reset`·`output` 이벤트는 가짜 provider의 결정적 응답으로 실 SUT가 생성하게 한다. |
+| `web/e2e/manual-archive.spec.ts` | `.route(` | active claude-code 세션과 그 목록·단건·stream을 위조한다. | 실 SUT에서 claude-code 세션을 만들고 제품 `POST /snapshot`으로 아카이브. 중간 "Archiving…" 상태만 남으면 그 지연 주입은 `NET`(LAT)으로 **행 단위 승인 가능**하다. |
+| `web/e2e/manual-archive.spec.ts` | `route.fulfill(` | 위 핸들러의 응답 생성부 + snapshot 응답을 보류해 중간 상태를 만든다. | 위와 같다. |
+| `web/e2e/session-deletion.spec.ts` | `.route(` | 세 번째 테스트만 해당 — snapshot 상태 세션과 DELETE 409를 위조한다(앞의 두 테스트는 실 SUT를 쓴다). | snapshot 상태는 제품 `POST /snapshot`으로 실제로 만들 수 있다(이 seam이 사라진 지금은 더 쉽다). 남는 409 충돌 주입만 `NET`(ERR)으로 **행 단위 승인 가능**하다. |
+| `web/e2e/session-deletion.spec.ts` | `route.fulfill(` | 위 핸들러의 응답 생성부 — 200/404/409/204를 직접 짓는다. | 위와 같다. |
+<!-- /fidelity:violations -->
+
+### seam 지문 회계
+
+seam 스캔이 잡는 `(파일, 토큰)` 쌍마다 한 행이다. 등재 seam에 귀속되거나, `위반`으로
+회계되거나, 등재 대상이 아닌 이유를 밝히거나 — **셋 중 하나여야** 한다. 회계에 없는 쌍이
+코드에 생기면 그것이 미등재 seam이고 CI가 막는다(체커 R5).
+
+<!-- fidelity:ledger -->
+| 파일 | 토큰 | CODE | 역할 / 등재하지 않는 이유 |
+| --- | --- | --- | --- |
+| `control-plane/cmd/control-plane/main.go` | `CRIU_ENABLED` | `CRIU-GATE` | 게이트 값 로드(`envBool`)와 그 값에 달린 체크포인트 저장소·체크포인터 선택. |
+| `control-plane/cmd/control-plane/main.go` | `NewStubCheckpointer` | `CRIU-GATE` | 게이트 off일 때 주입되는 no-op 체크포인터. |
+| `deploy/kustomization.yaml` | `CRIU_ENABLED` | `CRIU-GATE` | base의 off를 on으로 올리는 `env/2` replace. |
+| `k8s/deployment.yaml` | `CRIU_ENABLED` | `CRIU-GATE` | 프로덕션 base의 게이트 값(`"false"`). |
+| `web/e2e/j6-agent-prompt-loop.spec.ts` | `.route(` | `위반` | 미해소 위반 — 위 표 참조. |
+| `web/e2e/j6-agent-prompt-loop.spec.ts` | `route.fulfill(` | `위반` | 미해소 위반 — 위 표 참조. |
+| `web/e2e/manual-archive.spec.ts` | `.route(` | `위반` | 미해소 위반 — 위 표 참조. |
+| `web/e2e/manual-archive.spec.ts` | `route.fulfill(` | `위반` | 미해소 위반 — 위 표 참조. |
+| `web/e2e/session-deletion.spec.ts` | `.route(` | `위반` | 미해소 위반 — 위 표 참조. |
+| `web/e2e/session-deletion.spec.ts` | `route.fulfill(` | `위반` | 미해소 위반 — 위 표 참조. |
+| `.github/workflows/e2e.yml` | `test-only` | `—` | CRIU 프로브 주석이 "이제 test 전용 트리거가 없다"는 사실을 밝히는 서술. 치환이 아니다. |
+| `Makefile` | `CRIU_ENABLED` | `—` | `make test-integration` 설명 주석. 인프로세스 통합 하네스(`//go:build integration`)는 e2e SUT 경로가 아니라 이 정책의 범위 밖이다. |
+| `control-plane/test/e2e_deferred_test.go` | `E2E_SESSION_NAMESPACE` | `—` | 어서션용 kube 클라이언트가 볼 namespace 지정(기본 `default`). `E2E_BASE_URL`과 같은 성격의 배선이라 SUT 충실도를 낮추지 않는다. 지문에서 아예 빼는 편이 맞지만 그것은 정합성 모델 definition 개정 사안이라, 여기서는 비-seam으로 회계만 맞춘다. |
+| `control-plane/test/e2e_deferred_test.go` | `test-only` | `—` | deferred skip 사유 산문("reaper 또는 test 전용 endpoint가 필요하다"). 코드 경로가 아니다. |
+| `deploy/minio.yaml` | `test-only` | `—` | MinIO가 test 전용 저장소가 **아님**을 밝히는 서술이다 — 프로덕션과 같은 S3 코드 경로를 타는 실 배포라 `EXT` 대상이 아니다. |
+| `web/e2e/deferred.spec.ts` | `test-only` | `—` | deferred skip 사유 산문. 인터셉트가 아니다. |
+<!-- /fidelity:ledger -->
+
+### 집계
+
+<!-- fidelity:summary -->
+- 등재 seam **1**개 — GATE **1** · TRIG **0** · EXT **0** · NET **0**
+- 코드 마커 지점 **3** / 마커 파일 **3**
+- 지문 회계 행 **16** — 등재 귀속 4 · 미해소 위반 **6** · 비-seam **6**
+- web e2e 인터셉트 **6**건 (승인 0 · 위반 6, 상한 **6**)
+<!-- /fidelity:summary -->
+
+이 숫자들도 체커가 실제와 대조한다(R8) — 표만 고치고 집계를 잊으면 실패한다. 상한을 넘는
+인터셉트가 들어오면 R9가 막는다.
 
 ## 빠른 실행 (로컬)
 

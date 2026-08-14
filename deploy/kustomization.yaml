@@ -71,6 +71,10 @@ patches:
   # shared by both replicas (CHECKPOINT_S3_ENDPOINT → the in-cluster MinIO,
   # authenticated with the static keys from the checkpoint-s3 Secret since no
   # role is set here).
+  #
+  # mock-exception: CRIU-GATE — 아래 patch의 env/2 replace가 base의 off를 on으로 올린다.
+  # 프로덕션 base는 검증된 런타임 전까지 off가 의도된 동작이고, 이 지점이 e2e만 실 CRIU
+  # 경로를 타게 한다. 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
   - target:
       kind: Deployment
       name: control-plane
