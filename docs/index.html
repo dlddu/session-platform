@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<!--
+  docs/index.html — 문서 포털 허브 (GitHub Pages 진입점)
+
+  design-doc-structure-validator 스킬의 hub-template.html 에서 생성했다.
+
+  허브는 "원천"이 아니라 문서·mockup 인덱스의 반영물이다.
+  문서나 mockup 이 늘거나 줄면 이 파일도 같은 커밋에서 함께 고친다.
+
+  링크 규칙:
+    - 마크다운 문서 → reader.html?doc=<docs 기준 경로>   (직접 .md 로 걸면 raw 다운로드가 된다)
+    - 여정 mockup   → journeys/<journey-id>/
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session Pod Platform 문서 포털</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d1d9e0;
+    --accent: #0969da; --card: #f6f8fa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --line: #30363d;
+      --accent: #4493f8; --card: #161b22;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+          "Noto Sans KR", Roboto, sans-serif;
+  }
+  main { max-width: 940px; margin: 0 auto; padding: 48px 20px 120px; }
+  h1 { font-size: 2em; margin: 0 0 .2em; }
+  .lede { color: var(--muted); margin: 0 0 2.5em; }
+  h2 { font-size: 1.25em; margin: 2.4em 0 .2em; }
+  h2 + .hint { color: var(--muted); font-size: .9em; margin: 0 0 1em; }
+  a { color: var(--accent); }
+  .row {
+    display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap;
+    padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px;
+    margin-bottom: 10px; background: var(--card);
+  }
+  .row .name { font-weight: 600; }
+  .row .meta { color: var(--muted); font-size: .875em; }
+  .row .spacer { flex: 1 1 auto; }
+  .row .links { display: flex; gap: 8px; flex-wrap: wrap; }
+  .row .links a {
+    display: inline-block; padding: 4px 12px; border: 1px solid var(--line);
+    border-radius: 999px; font-size: .875em; text-decoration: none; background: var(--bg);
+    white-space: nowrap;
+  }
+  .row .links a:hover { border-color: var(--accent); }
+  .row .links a.missing { color: var(--muted); border-style: dashed; pointer-events: none; }
+  code { background: var(--card); padding: .15em .4em; border-radius: 5px; font-size: .875em; }
+  footer { margin-top: 4em; padding-top: 1.5em; border-top: 1px solid var(--line); color: var(--muted); font-size: .875em; }
+</style>
+</head>
+<body>
+<main>
+
+  <h1>Session Pod Platform 문서 포털</h1>
+  <p class="lede">세션당 전용 pod 플랫폼 — 제품 가치 · PRD · 사용자 여정 · mockup · 최종 갱신 2026-08-29</p>
+
+  <h2>제품 문서</h2>
+  <p class="hint">제품이 약속하는 가치와 그 가치를 구현하는 요구사항 · 검증 계획.</p>
+
+  <div class="row">
+    <span class="name">제품 가치</span>
+    <span class="meta">가치 <code>V1</code>~<code>V8</code> · 모든 문서의 최상위 기준</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=values.md">읽기</a></span>
+  </div>
+  <div class="row">
+    <span class="name">PRD 세션 아키텍처 &amp; 격리</span>
+    <span class="meta">PRD + 대응 테스트 문서</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=prd/architecture.md">PRD</a> <a href="reader.html?doc=test/architecture.md">테스트</a></span>
+  </div>
+  <div class="row">
+    <span class="name">PRD 세션 라이프사이클 &amp; 스냅샷</span>
+    <span class="meta">PRD + 대응 테스트 문서</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=prd/lifecycle.md">PRD</a> <a href="reader.html?doc=test/lifecycle.md">테스트</a></span>
+  </div>
+  <div class="row">
+    <span class="name">PRD 세션 상태 일관성 &amp; Read/Write API</span>
+    <span class="meta">PRD + 대응 테스트 문서</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=prd/state-api.md">PRD</a> <a href="reader.html?doc=test/state-api.md">테스트</a></span>
+  </div>
+  <div class="row">
+    <span class="name">PRD 세션 워크로드 — 인터랙티브 쉘</span>
+    <span class="meta">PRD + 대응 테스트 문서</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=prd/shell-workload.md">PRD</a> <a href="reader.html?doc=test/shell-workload.md">테스트</a></span>
+  </div>
+  <div class="row">
+    <span class="name">PRD 세션 워크로드 — 클로드 코드 CLI</span>
+    <span class="meta">PRD + 대응 테스트 문서</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=prd/claude-code-workload.md">PRD</a> <a href="reader.html?doc=test/claude-code-workload.md">테스트</a></span>
+  </div>
+  <div class="row">
+    <span class="name">kind 기반 풀스택 e2e</span>
+    <span class="meta">하네스 · 시나리오 맵</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=test/e2e.md">읽기</a></span>
+  </div>
+  <div class="row">
+    <span class="name">CRIU 체크포인트/복원 검증</span>
+    <span class="meta">설계 결정 노트</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=criu-verification.md">읽기</a></span>
+  </div>
+  <div class="row">
+    <span class="name">문서 체계 상태 추적</span>
+    <span class="meta">백엔드 사슬 집계 · 디자인 문서 구조 상태</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=doc-tracker.md">문서 체계</a> <a href="reader.html?doc=doc-structure-state.md">구조 상태</a></span>
+  </div>
+
+  <h2>사용자 여정</h2>
+  <p class="hint">여정 하나 = 문서 하나 + mockup 페이지 하나. 아래 mockup 자리는 아직 비어 있다 — 현재 mockup 은 화면 단위라 여정 단위 페이지가 없다.</p>
+
+  <div class="row">
+    <span class="name">여정 인덱스</span>
+    <span class="meta">페르소나 P1·P2 · 가치 커버리지</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=user-journeys/README.md">읽기</a></span>
+  </div>
+  <div class="row">
+    <span class="name">J1 첫 세션 생성과 격리된 작업</span>
+    <span class="meta">달성 가치 <code>V1, V5</code> · 3단계</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=user-journeys/j1-session-creation.md">문서 읽기</a> <a class="missing" href="#">여정 mockup 준비 중</a></span>
+  </div>
+  <div class="row">
+    <span class="name">J2 자리 비움과 끊김 없는 재개</span>
+    <span class="meta">달성 가치 <code>V2, V3</code> · 4단계</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=user-journeys/j2-idle-resume.md">문서 읽기</a> <a class="missing" href="#">여정 mockup 준비 중</a></span>
+  </div>
+  <div class="row">
+    <span class="name">J3 여러 세션 사이 자유 전환</span>
+    <span class="meta">달성 가치 <code>V4, V3</code> · 4단계</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=user-journeys/j3-multi-session-switch.md">문서 읽기</a> <a class="missing" href="#">여정 mockup 준비 중</a></span>
+  </div>
+  <div class="row">
+    <span class="name">J4 동시 접근에서도 깨지지 않는 세션 상태</span>
+    <span class="meta">달성 가치 <code>V5</code> · 3단계</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=user-journeys/j4-concurrent-access.md">문서 읽기</a> <a class="missing" href="#">여정 mockup 준비 중</a></span>
+  </div>
+  <div class="row">
+    <span class="name">J5 쉘에서 명령을 실행하고 상태를 이어간다</span>
+    <span class="meta">달성 가치 <code>V3</code> · 4단계</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=user-journeys/j5-shell-interaction.md">문서 읽기</a> <a class="missing" href="#">여정 mockup 준비 중</a></span>
+  </div>
+  <div class="row">
+    <span class="name">J6 작업 환경을 골라 에이전트에게 일을 시킨다</span>
+    <span class="meta">달성 가치 <code>V8, V3</code> · 5단계</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=user-journeys/j6-agent-prompt-loop.md">문서 읽기</a> <a class="missing" href="#">여정 mockup 준비 중</a></span>
+  </div>
+
+  <h2>디자인 시스템</h2>
+  <p class="hint">mockup 이 따르는 시각 언어.</p>
+
+  <div class="row">
+    <span class="name">디자인 시스템</span>
+    <span class="meta">정본이 <code>web/src/design/</code> 에 있어 이 포털에서 열 수 없다 (공개 안 된 문서)</span>
+    <span class="spacer"></span>
+    <span class="links"><a class="missing" href="#">docs/ 밖 — 미공개</a></span>
+  </div>
+
+  <h2>mockup (화면 단위)</h2>
+  <p class="hint">여정 단위로 전환되기 전의 화면 단위 산출물. 현재 Pages 는 이 폴더만 배포한다.</p>
+
+  <div class="row">
+    <span class="name">화면 단위 mockup 갤러리</span>
+    <span class="meta">new-session · workspace · agent-workspace · restore</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="mockups/index.html">갤러리 열기 →</a> <a href="reader.html?doc=mockups/README.md">mockup 인덱스</a></span>
+  </div>
+
+  <footer>
+    이 페이지는 손으로 갱신한다. 여정·mockup·문서가 늘거나 줄면 같은 커밋에서 이 파일도 고친다.<br>
+    구조 점검은 <code>design-doc-structure-validator</code> 스킬로 한다.
+  </footer>
+
+</main>
+</body>
+</html>

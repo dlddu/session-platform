@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<!--
+  docs/reader.html — 마크다운 문서 뷰어 (단일 파일, 외부 네트워크 의존 없음)
+
+  이 파일은 design-doc-structure-validator 스킬의 템플릿이다.
+  사용자 레포의 docs/reader.html 로 "그대로 복사"한 뒤, 아래 CONFIG 블록만 이 레포에 맞게 고친다.
+
+  사용법:
+    reader.html?doc=product/values.md
+    reader.html?doc=user-journeys/JRN-first-subscription.md#STP-taste-test
+
+  동작 제약:
+    - fetch() 를 쓰므로 file:// 로 직접 열면 CORS 로 막힌다.
+      로컬 확인은 `cd docs && python3 -m http.server` 후 http://localhost:8000/reader.html?doc=...
+      GitHub Pages 에 올라간 뒤에는 그대로 동작한다.
+    - 여정 mockup 은 이 제약을 받지 않는다(각 mockup 은 단독 정적 파일이어야 한다).
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>문서 뷰어</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d1d9e0;
+    --accent: #0969da; --code-bg: #f6f8fa; --mark: #fff8c5;
+    --maxw: 860px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --line: #30363d;
+      --accent: #4493f8; --code-bg: #161b22; --mark: #3f2e00;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+          "Noto Sans KR", Roboto, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10; background: var(--bg);
+    border-bottom: 1px solid var(--line); padding: 10px 20px;
+    display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+  }
+  header a { color: var(--accent); text-decoration: none; }
+  header a:hover { text-decoration: underline; }
+  .crumb { color: var(--muted); font-size: 14px; word-break: break-all; }
+  .spacer { flex: 1 1 auto; }
+  .pill {
+    display: inline-block; padding: 3px 12px; border: 1px solid var(--line);
+    border-radius: 999px; font-size: 13px; white-space: nowrap;
+  }
+  main { max-width: var(--maxw); margin: 0 auto; padding: 28px 20px 120px; }
+  h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.6em 0 .6em; scroll-margin-top: 72px; }
+  h1 { font-size: 1.9em; border-bottom: 1px solid var(--line); padding-bottom: .3em; }
+  h2 { font-size: 1.45em; border-bottom: 1px solid var(--line); padding-bottom: .3em; }
+  h3 { font-size: 1.2em; }
+  h1:first-child { margin-top: 0; }
+  a { color: var(--accent); }
+  code {
+    background: var(--code-bg); padding: .2em .4em; border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em;
+  }
+  pre {
+    background: var(--code-bg); padding: 14px 16px; border-radius: 8px; overflow-x: auto;
+  }
+  pre code { background: none; padding: 0; font-size: .875em; line-height: 1.55; }
+  blockquote {
+    margin: 1em 0; padding: .2em 1em; color: var(--muted);
+    border-left: 4px solid var(--line);
+  }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; display: block; overflow-x: auto; }
+  th, td { border: 1px solid var(--line); padding: 7px 13px; text-align: left; }
+  th { background: var(--code-bg); font-weight: 600; }
+  hr { border: none; border-top: 1px solid var(--line); margin: 2em 0; }
+  img { max-width: 100%; }
+  ul, ol { padding-left: 1.6em; }
+  li { margin: .25em 0; }
+  :target { background: var(--mark); border-radius: 4px; }
+  .msg { color: var(--muted); padding: 40px 0; }
+  .msg strong { color: var(--fg); display: block; margin-bottom: .6em; font-size: 1.1em; }
+  .msg code { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+
+<header>
+  <a id="hub-link" href="index.html">← 허브</a>
+  <span class="crumb" id="crumb"></span>
+  <span class="spacer"></span>
+  <a class="pill" id="mockup-link" href="#" hidden>이 여정 mockup 열기 →</a>
+  <a class="pill" id="raw-link" href="#" hidden>원문(.md)</a>
+</header>
+
+<main id="content"><p class="msg">불러오는 중…</p></main>
+
+<script>
+/* ────────────────────────────────────────────────────────────────
+   CONFIG — 이 레포에 맞게 여기만 고친다.
+   ──────────────────────────────────────────────────────────────── */
+const CONFIG = {
+  // 허브 파일 경로 (docs/ 기준)
+  hubPath: 'index.html',
+  // 여정 mockup 이 사는 폴더 (docs/ 기준). 여정 mockup = <mockupBase><journey-id>/
+  // 현재 이 폴더는 없다. 여정 단위 mockup 을 만들 때 docs/journeys/<journey-id>/index.html 로 둔다.
+  mockupBase: 'journeys/',
+  // "이 문서가 그 여정의 문서다" 를 확정하는 두 가지 근거. 각각 1번 그룹으로 여정 ID 를 잡는다.
+  // 이 레포의 여정 식별자 규약: J1~J6 (파일 user-journeys/jN-<슬러그>.md), 단계는 J<n>-S<m>
+  // 여정 mockup 이 아직 없으므로 두 정규식은 의도적으로 아무것도 잡지 않는다
+  // (잡게 두면 존재하지 않는 mockup 으로 가는 끊긴 링크가 헤더에 뜬다).
+  // 여정 단위 mockup 을 만들면 아래 두 줄을 이 레포 규약으로 고친다:
+  //   journeyIdInMeta: /\|[^|\n]*여정\s*ID[^|\n]*\|\s*`?(J\d)`?\s*\|/
+  //   journeyIdInPath: /user-journeys\/(j\d)-[a-z-]+\.md$/
+  journeyIdInMeta: /(?!)/,
+  journeyIdInPath: /(?!)/,
+  // 문서 제목 접미사
+  siteTitle: 'Session Pod Platform 문서',
+};
+
+/* ────────────────────────────────────────────────────────────────
+   최소 마크다운 렌더러 (외부 라이브러리 없음)
+   지원: 제목 / 문단 / 목록(중첩) / 표 / 코드블록 / 인용 / 구분선 /
+        굵게 · 기울임 · 취소선 · 인라인코드 · 링크 · 이미지
+   ──────────────────────────────────────────────────────────────── */
+const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+function inline(src) {
+  let s = esc(src);
+  const code = [];
+  // 인라인 코드를 먼저 빼두어 내부가 다른 규칙에 먹히지 않게 한다.
+  s = s.replace(/`([^`]+)`/g, (_, c) => `\u0000${code.push(c) - 1}\u0000`);
+  s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, '<img src="$2" alt="$1">');
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>');
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+  s = s.replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+  s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+  s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${code[+i]}</code>`);
+  return s;
+}
+
+// 제목 → 앵커 id.
+// 맨 앞이 인라인 코드면 그 값을 그대로 쓴다: "### `STP-taste-test` 맛보기" → id="STP-taste-test"
+// 그래서 문서 앵커와 mockup 딥링크(#STP-taste-test)가 같은 식별자로 맞물린다.
+function headingId(raw, used) {
+  const m = raw.match(/^`([^`]+)`/);
+  let id = m
+    ? m[1].trim()
+    : raw.replace(/`/g, '').trim().toLowerCase()
+         .replace(/[^\w\uac00-\ud7a3\- ]/g, '').replace(/\s+/g, '-');
+  if (!id) id = 'section';
+  let out = id, n = 2;
+  while (used.has(out)) out = `${id}-${n++}`;
+  used.add(out);
+  return out;
+}
+
+function render(md) {
+  const lines = md.replace(/\r\n?/g, '\n').split('\n');
+  const out = [];
+  const usedIds = new Set();
+  let i = 0;
+  const listStack = []; // { type: 'ul'|'ol', indent: number }
+
+  const popList = () => {
+    const f = listStack.pop();
+    out.push(`</${f.type}>` + (f.nested ? '</li>' : ''));
+  };
+  const closeLists = (toIndent) => {
+    while (listStack.length && listStack[listStack.length - 1].indent >= toIndent) popList();
+  };
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // 코드 블록
+    const fence = line.match(/^\s*```+\s*(\S*)/);
+    if (fence) {
+      closeLists(0);
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
+      i++;
+      out.push(`<pre><code>${esc(buf.join('\n'))}</code></pre>`);
+      continue;
+    }
+
+    // 빈 줄
+    if (!line.trim()) { closeLists(0); i++; continue; }
+
+    // 구분선
+    if (/^\s*([-*_])\1{2,}\s*$/.test(line)) {
+      closeLists(0); out.push('<hr>'); i++; continue;
+    }
+
+    // 제목
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      closeLists(0);
+      const id = headingId(h[2], usedIds);
+      out.push(`<h${h[1].length} id="${esc(id)}">${inline(h[2])}</h${h[1].length}>`);
+      i++; continue;
+    }
+
+    // 표: 헤더 줄 + 구분 줄
+    if (/\|/.test(line) && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i + 1])) {
+      closeLists(0);
+      const cells = (r) => r.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+      const head = cells(line);
+      i += 2;
+      const body = [];
+      while (i < lines.length && /\|/.test(lines[i]) && lines[i].trim()) body.push(cells(lines[i++]));
+      out.push('<table><thead><tr>' + head.map((c) => `<th>${inline(c)}</th>`).join('') + '</tr></thead><tbody>');
+      for (const r of body) out.push('<tr>' + r.map((c) => `<td>${inline(c)}</td>`).join('') + '</tr>');
+      out.push('</tbody></table>');
+      continue;
+    }
+
+    // 인용
+    if (/^\s*>/.test(line)) {
+      closeLists(0);
+      const buf = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, ''));
+      out.push(`<blockquote>${render(buf.join('\n'))}</blockquote>`);
+      continue;
+    }
+
+    // 목록 (들여쓰기로 중첩)
+    const li = line.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
+    if (li) {
+      const indent = li[1].replace(/\t/g, '  ').length;
+      const type = /\d/.test(li[2]) ? 'ol' : 'ul';
+      while (listStack.length && listStack[listStack.length - 1].indent > indent) popList();
+      const top = listStack[listStack.length - 1];
+      if (!top || top.indent < indent) {
+        // 부모 <li> 안에 중첩 목록을 넣어야 유효한 HTML 이 된다.
+        const nested = Boolean(top) && out[out.length - 1].endsWith('</li>');
+        if (nested) out[out.length - 1] = out[out.length - 1].slice(0, -'</li>'.length);
+        listStack.push({ type, indent, nested });
+        out.push(`<${type}>`);
+      } else if (top.type !== type) {
+        popList();
+        listStack.push({ type, indent, nested: false });
+        out.push(`<${type}>`);
+      }
+      out.push(`<li>${inline(li[3])}</li>`);
+      i++; continue;
+    }
+
+    // 문단 (연속된 줄을 묶는다)
+    closeLists(0);
+    const buf = [];
+    while (
+      i < lines.length && lines[i].trim() &&
+      !/^(#{1,6}\s|\s*>|\s*([-*+]|\d+[.)])\s|\s*```)/.test(lines[i]) &&
+      !/^\s*([-*_])\1{2,}\s*$/.test(lines[i])
+    ) buf.push(lines[i++]);
+    if (buf.length) out.push(`<p>${inline(buf.join('\n'))}</p>`);
+    else i++;
+  }
+  closeLists(0);
+  return out.join('\n');
+}
+
+/* ────────────────────────────────────────────────────────────────
+   경로 처리
+   ──────────────────────────────────────────────────────────────── */
+// docs/ 밖으로 나가거나 외부 URL 을 가리키는 doc 값은 거부한다.
+function safeDoc(v) {
+  if (!v) return null;
+  if (/^[a-z]+:/i.test(v) || v.startsWith('//') || v.startsWith('/')) return null;
+  const clean = v.split('#')[0].split('?')[0];
+  if (!clean.endsWith('.md')) return null;
+  if (clean.split('/').includes('..')) return null;
+  return clean;
+}
+
+// 문서 기준 상대 경로를 docs/ 기준 경로로 바꾼다.
+function resolveFrom(docPath, rel) {
+  const dir = docPath.includes('/') ? docPath.slice(0, docPath.lastIndexOf('/') + 1) : '';
+  const url = new URL(rel, 'http://x/' + dir);
+  return url.pathname.slice(1) + url.hash;
+}
+
+/* ────────────────────────────────────────────────────────────────
+   부팅
+   ──────────────────────────────────────────────────────────────── */
+const content = document.getElementById('content');
+
+function fail(title, detail) {
+  content.innerHTML = `<p class="msg"><strong>${esc(title)}</strong>${detail || ''}</p>`;
+}
+
+async function main() {
+  document.getElementById('hub-link').href = CONFIG.hubPath;
+
+  const doc = safeDoc(new URLSearchParams(location.search).get('doc'));
+  if (!doc) {
+    fail('열 문서가 지정되지 않았습니다.',
+      `<code>reader.html?doc=product/values.md</code> 처럼 docs/ 기준 상대 경로의 .md 파일을 지정하세요.`);
+    return;
+  }
+
+  document.getElementById('crumb').textContent = doc;
+  const raw = document.getElementById('raw-link');
+  raw.href = doc; raw.hidden = false;
+
+  let md;
+  try {
+    const res = await fetch(doc);
+    if (!res.ok) { fail(`문서를 찾을 수 없습니다 (${res.status})`, `<code>${esc(doc)}</code>`); return; }
+    md = await res.text();
+  } catch (e) {
+    fail('문서를 불러오지 못했습니다.',
+      `<code>${esc(doc)}</code><br><br>가장 흔한 원인은 <code>file://</code> 로 직접 열어 브라우저 보안 정책에 막힌 경우입니다. ` +
+      `<code>cd docs &amp;&amp; python3 -m http.server</code> 로 로컬 서버를 띄우거나 Pages 에 배포된 주소로 여세요.`);
+    return;
+  }
+
+  content.innerHTML = render(md);
+
+  // 제목 추출 → 탭 제목
+  const h1 = content.querySelector('h1');
+  document.title = (h1 ? h1.textContent.trim() : doc) + ' · ' + CONFIG.siteTitle;
+
+  // 문서 안의 상대 링크 보정:
+  //  - .md 링크는 뷰어를 거치게 한다 (안 하면 클릭 시 raw 파일이 그냥 내려받아진다)
+  //  - 그 외 상대 링크는 문서 위치 기준으로 다시 계산한다
+  for (const a of content.querySelectorAll('a[href]')) {
+    const href = a.getAttribute('href');
+    if (/^[a-z]+:/i.test(href) || href.startsWith('#') || href.startsWith('//')) continue;
+    const resolved = resolveFrom(doc, href);
+    if (resolved.split('#')[0].endsWith('.md')) {
+      const [p, hash] = resolved.split('#');
+      a.href = `reader.html?doc=${encodeURI(p)}${hash ? '#' + hash : ''}`;
+    } else {
+      a.href = resolved;
+    }
+  }
+  for (const img of content.querySelectorAll('img[src]')) {
+    const src = img.getAttribute('src');
+    if (!/^[a-z]+:/i.test(src) && !src.startsWith('//')) img.src = resolveFrom(doc, src);
+  }
+
+  // 이 문서가 여정 문서일 때만 그 여정 mockup 으로 건너뛰는 링크를 띄운다 (문서 ↔ mockup 왕복).
+  // 근거는 문서 정보 표의 "여정 식별자" 행, 또는 파일명. 본문에 JRN- 이 스쳐 나오는 것으로는 띄우지 않는다.
+  const jid = (md.match(CONFIG.journeyIdInMeta) || [])[1]
+           || (doc.match(CONFIG.journeyIdInPath) || [])[1];
+  if (jid) {
+    const link = document.getElementById('mockup-link');
+    link.href = CONFIG.mockupBase + jid + '/' + location.hash;
+    link.hidden = false;
+  }
+
+  // 프래그먼트가 있으면 렌더 후 그 위치로 이동한다.
+  if (location.hash) {
+    const el = document.getElementById(decodeURIComponent(location.hash.slice(1)));
+    if (el) el.scrollIntoView();
+  }
+}
+
+main();
+</script>
+</body>
+</html>
