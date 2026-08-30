@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { Session } from "../api/types";
+import type { Session, WorkloadType } from "../api/types";
+import { liveSessionPath } from "../app/sessionRoutes";
 
-// NewSession — modal over the Sessions console. A two-phase flow: the name
-// input, then a staged provisioning view. Submit POSTs /api/v1/sessions (which
-// atomically provisions a dedicated pod, AC-A1/A2) then routes to the new
-// session's workspace at /session/:id. The three stages are a visual affordance
-// only — the create call is atomic on the backend; the stages light up on a
-// short timer and snap to fully done the moment the response lands.
+// NewSession — modal over the Sessions console. A two-phase flow: immutable
+// workload configuration, then a staged provisioning view. Submit POSTs
+// /api/v1/sessions (which atomically provisions a dedicated pod, AC-A1/A2) then
+// routes to the type-appropriate workspace. The three stages are a visual
+// affordance only — the create call is atomic on the backend.
 // [plan steps 2-6]
 
 const STEP_LABELS = [
@@ -92,6 +92,11 @@ const podIcon = (
 
 export function NewSession() {
   const [name, setName] = useState("");
+  const [workloadType, setWorkloadType] = useState<WorkloadType>("shell");
+  const [model, setModel] = useState("");
+  const [submittedModel, setSubmittedModel] = useState("");
+  const [defaultModel, setDefaultModel] = useState("platform-default");
+  const [configuredModels, setConfiguredModels] = useState<string[]>([]);
   const [phase, setPhase] = useState<"input" | "provisioning">("input");
   const [error, setError] = useState<string | null>(null);
   // Number of stages marked done (0..3). The stage at this index is the one
@@ -104,6 +109,39 @@ export function NewSession() {
   const sessionRef = useRef<Session | null>(null);
   const navigate = useNavigate();
   const reduce = prefersReducedMotion();
+
+  useEffect(() => {
+    let active = true;
+
+    void api
+      .getConfig()
+      .then((config) => {
+        if (!active) return;
+        const { defaultModel: configuredDefaultModel, models } =
+          config.claudeCode;
+        const selectableModels = models.filter(
+          (configuredModel) => configuredModel !== configuredDefaultModel,
+        );
+        setDefaultModel(configuredDefaultModel);
+        setConfiguredModels(models);
+        if (models.length > 0) {
+          setModel((current) =>
+            current === "" || selectableModels.includes(current) ? current : "",
+          );
+        }
+      })
+      .catch(() => {
+        // Older/unavailable control planes retain the free-text model input.
+        if (active) {
+          setDefaultModel("platform-default");
+          setConfiguredModels([]);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const close = () => {
     if (phase === "provisioning") return;
@@ -120,8 +158,21 @@ export function NewSession() {
     setSession(null);
     sessionRef.current = null;
     setPhase("provisioning");
+    const trimmedModel = model.trim();
+    setSubmittedModel(
+      trimmedModel ||
+        (defaultModel === "platform-default"
+          ? "platform default"
+          : defaultModel),
+    );
     api
-      .createSession({ name: trimmed })
+      .createSession({
+        name: trimmed,
+        workloadType,
+        ...(workloadType === "claude-code" && trimmedModel
+          ? { model: trimmedModel }
+          : {}),
+      })
       .then((sess) => {
         sessionRef.current = sess;
         setSession(sess);
@@ -167,11 +218,20 @@ export function NewSession() {
   useEffect(() => {
     if (!session || done < 3) return;
     const t = setTimeout(
-      () => navigate(`/session/${session.id}`),
+      () => navigate(liveSessionPath(session)),
       reduce ? 0 : SETTLE_MS,
     );
     return () => clearTimeout(t);
   }, [session, done, reduce, navigate]);
+
+  const concreteDefaultModel =
+    defaultModel === "platform-default" ? null : defaultModel;
+  const defaultModelLabel = concreteDefaultModel
+    ? `${concreteDefaultModel} (platform default)`
+    : "Platform default";
+  const selectableModels = configuredModels.filter(
+    (configuredModel) => configuredModel !== concreteDefaultModel,
+  );
 
   return (
     <div className="scrim" onClick={close}>
@@ -185,14 +245,14 @@ export function NewSession() {
         <div className="m-mark">{hexMark}</div>
         <h3>New session</h3>
         <p className="desc">
-          A dedicated pod is provisioned for this session — one session, one pod,
-          fully isolated.
+          Pick a working environment. Either way, this session gets one fully
+          isolated, dedicated pod.
         </p>
 
         {phase === "input" ? (
           <form onSubmit={submit}>
             <label className="field">
-              <span>Name</span>
+              <span>Session name</span>
               <input
                 autoFocus
                 data-testid="new-session-name"
@@ -201,6 +261,90 @@ export function NewSession() {
                 placeholder="api-gateway-dev"
               />
             </label>
+            <fieldset className="workload-field">
+              <legend>Workload type</legend>
+              <div
+                className="workload-types"
+                role="radiogroup"
+                aria-label="Workload type"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={workloadType === "shell"}
+                  className={"workload-option" + (workloadType === "shell" ? " selected" : "")}
+                  data-testid="new-session-workload-shell"
+                  onClick={() => setWorkloadType("shell")}
+                >
+                  <span className="workload-default">default</span>
+                  <span className="workload-icon" aria-hidden="true">$</span>
+                  <strong>shell</strong>
+                  <small>Interactive bash. You type the commands.</small>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={workloadType === "claude-code"}
+                  className={
+                    "workload-option" +
+                    (workloadType === "claude-code" ? " selected" : "")
+                  }
+                  data-testid="new-session-workload-claude-code"
+                  onClick={() => setWorkloadType("claude-code")}
+                >
+                  <span className="workload-icon agent" aria-hidden="true">◇</span>
+                  <strong>claude-code</strong>
+                  <small>Agent CLI. You send prompts, it does the work.</small>
+                </button>
+              </div>
+            </fieldset>
+            {workloadType === "claude-code" ? (
+              <label className="field model-field">
+                <span>Model</span>
+                {configuredModels.length > 0 ? (
+                  <select
+                    data-testid="new-session-model"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    aria-describedby="new-session-model-hint"
+                  >
+                    <option value="">{defaultModelLabel}</option>
+                    {selectableModels.map((configuredModel) => (
+                      <option key={configuredModel} value={configuredModel}>
+                        {configuredModel}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    data-testid="new-session-model"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    placeholder={defaultModelLabel}
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-describedby="new-session-model-hint"
+                  />
+                )}
+                <small className="field-hint" id="new-session-model-hint">
+                  {configuredModels.length > 0
+                    ? concreteDefaultModel
+                      ? `Choose ${concreteDefaultModel} (platform default) to use the platform default.`
+                      : "Choose Platform default to use the platform default."
+                    : concreteDefaultModel
+                      ? `Leave blank to use ${concreteDefaultModel} (platform default).`
+                      : "Leave blank to use the platform default."}
+                </small>
+              </label>
+            ) : null}
+            <div className="immutable-note">
+              <span aria-hidden="true">▣</span>
+              <span>
+                {workloadType === "claude-code"
+                  ? "Workload type and model choice are fixed for this session. Platform default resolves to the configured default at container start."
+                  : "Workload type is fixed for the lifetime of this session."}
+              </span>
+            </div>
             {error && (
               <div className="error" style={{ padding: "0 0 12px" }}>
                 {error}
@@ -222,9 +366,20 @@ export function NewSession() {
           </form>
         ) : (
           <>
+            <div className="provision-workload" data-testid="prov-workload">
+              {workloadType === "claude-code"
+                ? `workloadType=claude-code · model=${submittedModel}`
+                : "workloadType=shell"}
+            </div>
             <div className="steps" data-testid="prov-steps">
               {STEP_LABELS.map((label, i) => {
                 const status = i < done ? "ok" : i === done ? "run" : "";
+                const displayLabel =
+                  i === 1
+                    ? workloadType === "claude-code"
+                      ? "Schedule dedicated pod (agent CLI)"
+                      : "Schedule dedicated pod (shell)"
+                    : label;
                 return (
                   <div key={label} className={`step ${status}`.trimEnd()}>
                     <span className="ico">
@@ -236,7 +391,7 @@ export function NewSession() {
                         <span className="n">{i + 1}</span>
                       )}
                     </span>
-                    {label}
+                    {displayLabel}
                     <span className="mono done-t">
                       {status === "ok" ? "done" : ""}
                     </span>

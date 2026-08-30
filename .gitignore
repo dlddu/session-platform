@@ -21,6 +21,10 @@ web/playwright/.cache/
 # produced by `make build` and must not be committed.
 control-plane/internal/static/dist/assets/
 
+# --- Python (scripts/) ---
+__pycache__/
+*.pyc
+
 # --- editor / OS ---
 .DS_Store
 .idea/

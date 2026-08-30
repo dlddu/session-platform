@@ -17,6 +17,9 @@ resources:
   # The `checkpoint-s3` Secret the control plane requires, pointed at the
   # in-cluster MinIO below (production uses the k8s/ base + external-secrets).
   - checkpoint-s3-secret.yaml
+  # Throwaway credentials for creating claude-code pods in local e2e.
+  - claude-code-credentials-secret.yaml
+
   # S3-compatible backend for the CRIU checkpoint archives, so the round trip
   # runs against the real S3 code path with no cloud account.
   - minio.yaml
@@ -25,6 +28,22 @@ images:
     newName: session-platform/control-plane
     newTag: dev
 patches:
+  # The production ClusterRoleBindings target the session-platform namespace;
+  # this overlay deploys the same data-plane ServiceAccount into `default`.
+  - target:
+      kind: ClusterRoleBinding
+      name: session-platform-data-plane-view
+    patch: |-
+      - op: replace
+        path: /subjects/0/namespace
+        value: default
+  - target:
+      kind: ClusterRoleBinding
+      name: session-platform-data-plane-node-read
+    patch: |-
+      - op: replace
+        path: /subjects/0/namespace
+        value: default
   - target:
       kind: Service
       name: control-plane
@@ -40,18 +59,22 @@ patches:
   # against the shared ConfigMap/Lease store; and point DATA_PLANE_IMAGE at the
   # locally built agent image scripts/e2e/up.sh loads into kind (the base
   # references the ghcr-published tag). env/1 is DATA_PLANE_IMAGE, env/2 is
-  # CRIU_ENABLED in the base.
+  # CRIU_ENABLED, and env/3 is DATA_PLANE_CLAUDE_CODE_IMAGE in the base.
   #
   # CRIU is turned ON here: since checkpoint/restore moved into the agent
   # (docs/criu-verification.md decision ⑤) it needs no CRIU-capable *runtime*,
   # only a capable kernel and a privileged session pod — and the e2e CRIU probe
   # confirms that holds on GitHub runners. That makes the AC-D4 round trip an
   # automated assertion (TestDeferred_CRIUIntegrity) instead of a manual round.
-  # It also needs: a snapshot trigger reachable over HTTP (E2E_TEST_ENDPOINTS,
-  # test-only — the product trigger policy is still open) and an archive store
+  # It also needs the product snapshot trigger reachable over HTTP and an
+  # archive store
   # shared by both replicas (CHECKPOINT_S3_ENDPOINT → the in-cluster MinIO,
   # authenticated with the static keys from the checkpoint-s3 Secret since no
   # role is set here).
+  #
+  # mock-exception: CRIU-GATE — 아래 patch의 env/2 replace가 base의 off를 on으로 올린다.
+  # 프로덕션 base는 검증된 런타임 전까지 off가 의도된 동작이고, 이 지점이 e2e만 실 CRIU
+  # 경로를 타게 한다. 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
   - target:
       kind: Deployment
       name: control-plane
@@ -68,11 +91,9 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/env/2/value
         value: "true"
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: E2E_TEST_ENDPOINTS
-          value: "1"
+      - op: replace
+        path: /spec/template/spec/containers/0/env/3/value
+        value: session-platform/data-plane:dev
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:

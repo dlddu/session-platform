@@ -41,6 +41,8 @@ const (
 	managedByValue = "control-plane"
 	// labelSessionID ties an object 1:1 to its session.
 	labelSessionID = "session-id"
+	// annotationLifecycleOwner fences ConfigMap deletion to the current Lease holder.
+	annotationLifecycleOwner = "session-platform.io/lifecycle-owner"
 
 	// dataKey is the ConfigMap data entry holding the session.Session JSON.
 	dataKey = "session"
@@ -180,16 +182,81 @@ func (s *Store) List(ctx context.Context) ([]*session.Session, error) {
 	return out, nil
 }
 
-// Delete removes the session's ConfigMap (idempotent) and best-effort releases
-// its lock Lease so a terminated session leaves nothing behind.
-func (s *Store) Delete(ctx context.Context, id string) error {
-	err := s.client.CoreV1().ConfigMaps(s.namespace).Delete(ctx, cmName(id), metav1.DeleteOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
+// Touch advances LastAccess on the latest ConfigMap value. Unlike a Get+Put
+// from the service, this never replays stale lifecycle fields over a concurrent
+// snapshot transaction. Conflicts reload the authoritative object, preserving
+// its state and private recovery envelope.
+func (s *Store) Touch(ctx context.Context, id string, at time.Time) error {
+	cms := s.client.CoreV1().ConfigMaps(s.namespace)
+	for attempt := 0; ; attempt++ {
+		cm, err := cms.Get(ctx, cmName(id), metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return session.ErrNotFound
+			}
+			return fmt.Errorf("get configmap %s for touch: %w", cmName(id), err)
+		}
+		sess, err := decode(cm)
+		if err != nil {
+			return err
+		}
+		// LastAccess is monotonic even when an older request finishes later.
+		if !at.After(sess.LastAccess) {
+			return nil
+		}
+		sess.LastAccess = at
+		if err := encodeInto(cm, sess); err != nil {
+			return err
+		}
+		if _, err := cms.Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+			if apierrors.IsConflict(err) && attempt < putMaxRetries {
+				continue
+			}
+			if apierrors.IsNotFound(err) {
+				return session.ErrNotFound
+			}
+			return fmt.Errorf("touch configmap %s: %w", cmName(id), err)
+		}
+		return nil
+	}
+}
+
+// Delete removes the session's ConfigMap only while token owns its lifecycle
+// annotation. The Lease stays held until the caller stops renewal and releases
+// it through token-safe Unlock; deleting it here could remove a successor's
+// Lease after a concurrent takeover.
+func (s *Store) Delete(ctx context.Context, id, token string) error {
+	cms := s.client.CoreV1().ConfigMaps(s.namespace)
+	for attempt := 0; attempt <= putMaxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		cm, err := cms.Get(ctx, cmName(id), metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("get configmap %s for delete: %w", cmName(id), err)
+		}
+		if cm.Annotations[annotationLifecycleOwner] != token {
+			return session.ErrConflict
+		}
+		resourceVersion := cm.ResourceVersion
+		err = cms.Delete(ctx, cmName(id), metav1.DeleteOptions{
+			Preconditions: &metav1.Preconditions{ResourceVersion: &resourceVersion},
+		})
+		if err == nil || apierrors.IsNotFound(err) {
+			return nil
+		}
+		if apierrors.IsConflict(err) && attempt < putMaxRetries {
+			continue
+		}
+		if apierrors.IsConflict(err) {
+			return session.ErrConflict
+		}
 		return fmt.Errorf("delete configmap %s: %w", cmName(id), err)
 	}
-	// The lock Lease, if any, is no longer meaningful once the session is gone.
-	_ = s.client.CoordinationV1().Leases(s.namespace).Delete(ctx, lockName(id), metav1.DeleteOptions{})
-	return nil
+	return session.ErrConflict
 }
 
 // CompareAndSwapState atomically moves a session from->to. It returns
@@ -227,6 +294,74 @@ func (s *Store) CompareAndSwapState(ctx context.Context, id string, from, to ses
 	return nil
 }
 
+// CompareAndSwapSession commits a complete lifecycle transition with one
+// resourceVersion-guarded ConfigMap Update. expectedTxn fences archive
+// generation/phase changes: a stale holder cannot clear or advance a newer
+// transaction merely because the public lifecycle state is unchanged.
+func (s *Store) CompareAndSwapSession(
+	ctx context.Context,
+	id, token string,
+	expectedState session.State,
+	expectedTxn *session.SnapshotTransaction,
+	next *session.Session,
+) error {
+	if next == nil || next.ID != id {
+		return session.ErrInvalidInput
+	}
+	cms := s.client.CoreV1().ConfigMaps(s.namespace)
+	cm, err := cms.Get(ctx, cmName(id), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return session.ErrNotFound
+		}
+		return fmt.Errorf("get configmap %s: %w", cmName(id), err)
+	}
+	if cm.Annotations[annotationLifecycleOwner] != token {
+		return session.ErrConflict
+	}
+	current, err := decode(cm)
+	if err != nil {
+		return err
+	}
+	if current.State != expectedState || !sameSnapshotTransaction(current.SnapshotTransaction, expectedTxn) {
+		return session.ErrConflict
+	}
+	replacement := *next
+	if current.LastAccess.After(replacement.LastAccess) {
+		replacement.LastAccess = current.LastAccess
+	}
+	if err := encodeInto(cm, &replacement); err != nil {
+		return err
+	}
+	if _, err := cms.Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+		if apierrors.IsConflict(err) {
+			return session.ErrConflict
+		}
+		if apierrors.IsNotFound(err) {
+			return session.ErrNotFound
+		}
+		return fmt.Errorf("update configmap %s: %w", cmName(id), err)
+	}
+	return nil
+}
+
+func sameSnapshotTransaction(a, b *session.SnapshotTransaction) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	if a.Generation != b.Generation || a.Owner != b.Owner ||
+		a.SourcePod != b.SourcePod || a.Phase != b.Phase {
+		return false
+	}
+	if a.Checkpoint == nil || b.Checkpoint == nil {
+		return a.Checkpoint == nil && b.Checkpoint == nil
+	}
+	return a.Checkpoint.Ref == b.Checkpoint.Ref &&
+		a.Checkpoint.SizeBytes == b.Checkpoint.SizeBytes &&
+		a.Checkpoint.CreatedAt.Equal(b.Checkpoint.CreatedAt) &&
+		a.Checkpoint.Reclaimed == b.Checkpoint.Reclaimed
+}
+
 // Lock acquires the per-session occupancy Lease. Creating the Lease is the
 // atomic claim: the API server admits exactly one Create for the name, so a
 // concurrent loser gets AlreadyExists and, unless the existing lock is its own
@@ -234,7 +369,7 @@ func (s *Store) CompareAndSwapState(ctx context.Context, id string, from, to ses
 func (s *Store) Lock(ctx context.Context, id, token string) error {
 	leases := s.client.CoordinationV1().Leases(s.namespace)
 	if _, err := leases.Create(ctx, s.leaseFor(id, token), metav1.CreateOptions{}); err == nil {
-		return nil // acquired a fresh lock
+		return s.finishLock(ctx, id, token)
 	} else if !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create lease %s: %w", lockName(id), err)
 	}
@@ -261,6 +396,84 @@ func (s *Store) Lock(ctx context.Context, id, token string) error {
 			return session.ErrConflict // another taker won the race
 		}
 		return fmt.Errorf("take over lease %s: %w", lockName(id), err)
+	}
+	return s.finishLock(ctx, id, token)
+}
+
+func (s *Store) finishLock(ctx context.Context, id, token string) error {
+	if err := s.claimLifecycleOwner(ctx, id, token); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = s.Unlock(cleanupCtx, id, token)
+		return err
+	}
+	return nil
+}
+
+func (s *Store) claimLifecycleOwner(ctx context.Context, id, token string) error {
+	cms := s.client.CoreV1().ConfigMaps(s.namespace)
+	for attempt := 0; attempt <= putMaxRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		cm, err := cms.Get(ctx, cmName(id), metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("get configmap %s to claim lifecycle owner: %w", cmName(id), err)
+		}
+		if cm.Annotations == nil {
+			cm.Annotations = map[string]string{}
+		}
+		if cm.Annotations[annotationLifecycleOwner] == token {
+			return s.Renew(ctx, id, token)
+		}
+		if err := s.Renew(ctx, id, token); err != nil {
+			return err
+		}
+		cm.Annotations[annotationLifecycleOwner] = token
+		if _, err := cms.Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+			if apierrors.IsConflict(err) && attempt < putMaxRetries {
+				continue
+			}
+			if apierrors.IsConflict(err) {
+				return session.ErrConflict
+			}
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			return fmt.Errorf("claim lifecycle owner for configmap %s: %w", cmName(id), err)
+		}
+		return s.Renew(ctx, id, token)
+	}
+	return session.ErrConflict
+}
+
+// Renew extends a Lease only while token is still its holder. resourceVersion
+// makes a concurrent takeover win atomically; the stale holder receives
+// ErrConflict and must stop mutating the session.
+func (s *Store) Renew(ctx context.Context, id, token string) error {
+	leases := s.client.CoordinationV1().Leases(s.namespace)
+	existing, err := leases.Get(ctx, lockName(id), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return session.ErrConflict
+		}
+		return fmt.Errorf("get lease %s for renewal: %w", lockName(id), err)
+	}
+	if existing.Spec.HolderIdentity == nil || *existing.Spec.HolderIdentity != token {
+		return session.ErrConflict
+	}
+	now := metav1.NewMicroTime(s.now())
+	dur := leaseSeconds(s.leaseDur)
+	existing.Spec.RenewTime = &now
+	existing.Spec.LeaseDurationSeconds = &dur
+	if _, err := leases.Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+		if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+			return session.ErrConflict
+		}
+		return fmt.Errorf("renew lease %s: %w", lockName(id), err)
 	}
 	return nil
 }
@@ -356,20 +569,32 @@ func ensureLabels(cm *corev1.ConfigMap, id string) {
 	cm.Labels[labelSessionID] = id
 }
 
+// storedSession is the ConfigMap-only representation. SnapshotTransaction is
+// deliberately hidden by session.Session's public JSON contract, so the state
+// adapter carries it in this private envelope while leaving API responses clean.
+type storedSession struct {
+	session.Session
+	SnapshotTransaction *session.SnapshotTransaction `json:"snapshotTxn,omitempty"`
+}
+
 func decode(cm *corev1.ConfigMap) (*session.Session, error) {
 	raw, ok := cm.Data[dataKey]
 	if !ok {
 		return nil, fmt.Errorf("configmap %s missing %q data key", cm.Name, dataKey)
 	}
-	var sess session.Session
-	if err := json.Unmarshal([]byte(raw), &sess); err != nil {
+	var stored storedSession
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
 		return nil, fmt.Errorf("decode session from configmap %s: %w", cm.Name, err)
 	}
-	return &sess, nil
+	stored.Session.SnapshotTransaction = stored.SnapshotTransaction
+	return &stored.Session, nil
 }
 
 func encodeInto(cm *corev1.ConfigMap, sess *session.Session) error {
-	b, err := json.Marshal(sess)
+	b, err := json.Marshal(storedSession{
+		Session:             *sess,
+		SnapshotTransaction: sess.SnapshotTransaction,
+	})
 	if err != nil {
 		return fmt.Errorf("encode session %s: %w", sess.ID, err)
 	}

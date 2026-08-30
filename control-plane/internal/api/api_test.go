@@ -2,9 +2,12 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"k8s.io/client-go/kubernetes/fake"
@@ -19,15 +22,26 @@ import (
 )
 
 func newServer(opts ...api.Option) *httptest.Server {
+	srv, _, _ := newServerWithOrchestrator(opts...)
+	return srv
+}
+
+func newServerWithOrchestrator(
+	opts ...api.Option,
+) (*httptest.Server, *k8s.StubOrchestrator, *configmap.Store) {
+	orch := k8s.NewStubOrchestrator("sessions")
+	ckpt := criu.NewStubCheckpointer(true)
+	stateStore := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
 	mgr := service.New(
-		k8s.NewStubOrchestrator("sessions"),
-		configmap.NewStore(fake.NewSimpleClientset(), "sessions"),
-		criu.NewStubCheckpointer(false),
+		orch,
+		stateStore,
+		ckpt,
 		agent.NewStubClient(),
+		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 	)
 	mux := http.NewServeMux()
 	api.New(mgr, opts...).Routes(mux)
-	return httptest.NewServer(mux)
+	return httptest.NewServer(mux), orch, stateStore
 }
 
 // createForTest creates a session through the API and returns it.
@@ -49,37 +63,22 @@ func createForTest(t *testing.T, srv *httptest.Server, name string) session.Sess
 	return s
 }
 
-// The snapshot endpoint is test-only: it exists to let the e2e suite reach the
-// snapshot state (the product trigger policy is still undecided), so it must be
-// absent unless WithTestEndpoints is set.
-func TestSnapshotEndpointIsGated(t *testing.T) {
-	// Default (production) surface: no snapshot route.
+// The product snapshot endpoint lets a user archive a session immediately,
+// without waiting for the idle reaper, and reclaims its pod.
+func TestSnapshotEndpointArchivesSession(t *testing.T) {
 	srv := newServer()
 	defer srv.Close()
-	s := createForTest(t, srv, "gated-off")
+	s := createForTest(t, srv, "manual-archive")
 	resp, err := http.Post(srv.URL+"/api/v1/sessions/"+s.ID+"/snapshot", "application/json", nil)
 	if err != nil {
-		t.Fatalf("snapshot (gate off): %v", err)
+		t.Fatalf("snapshot: %v", err)
 	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("snapshot with the gate off = %d, want 404 (route must not exist)", resp.StatusCode)
-	}
-
-	// With test endpoints on: the session freezes and its pod is reclaimed.
-	srvTest := newServer(api.WithTestEndpoints(true))
-	defer srvTest.Close()
-	s2 := createForTest(t, srvTest, "gated-on")
-	resp2, err := http.Post(srvTest.URL+"/api/v1/sessions/"+s2.ID+"/snapshot", "application/json", nil)
-	if err != nil {
-		t.Fatalf("snapshot (gate on): %v", err)
-	}
-	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusOK {
-		t.Fatalf("snapshot with the gate on = %d, want 200", resp2.StatusCode)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("snapshot status = %d, want 200", resp.StatusCode)
 	}
 	var frozen session.Session
-	if err := json.NewDecoder(resp2.Body).Decode(&frozen); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&frozen); err != nil {
 		t.Fatalf("decode snapshot response: %v", err)
 	}
 	if frozen.State != session.StateSnapshot {
@@ -92,7 +91,7 @@ func TestSnapshotEndpointIsGated(t *testing.T) {
 
 // A snapshot of an unknown session is a 404 like the other handlers.
 func TestSnapshotUnknownSession(t *testing.T) {
-	srv := newServer(api.WithTestEndpoints(true))
+	srv := newServer()
 	defer srv.Close()
 	resp, err := http.Post(srv.URL+"/api/v1/sessions/nope/snapshot", "application/json", nil)
 	if err != nil {
@@ -256,5 +255,252 @@ func TestGetUnknownReturns404(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown get status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// Deleting an active session returns an empty 204 response, reclaims its pod,
+// and removes it from subsequent reads.
+func TestDeleteSession(t *testing.T) {
+	srv, orch, _ := newServerWithOrchestrator()
+	defer srv.Close()
+	created := createForTest(t, srv, "delete-me")
+
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/sessions/"+created.ID, nil)
+	if err != nil {
+		t.Fatalf("build delete request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want 204", resp.StatusCode)
+	}
+	if contentType := resp.Header.Get("Content-Type"); contentType != "" {
+		t.Errorf("delete content-type = %q, want no response body", contentType)
+	}
+	if got := orch.RunningCount(); got != 0 {
+		t.Errorf("running pods after delete = %d, want 0", got)
+	}
+
+	getResp, err := http.Get(srv.URL + "/api/v1/sessions/" + created.ID)
+	if err != nil {
+		t.Fatalf("get after delete: %v", err)
+	}
+	getResp.Body.Close()
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("get after delete status = %d, want 404", getResp.StatusCode)
+	}
+}
+
+// Unknown IDs stay distinguishable from successfully deleted sessions.
+func TestDeleteUnknownSessionReturns404(t *testing.T) {
+	srv := newServer()
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/sessions/nope", nil)
+	if err != nil {
+		t.Fatalf("build delete request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete unknown: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("delete unknown status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// A competing lifecycle holder is surfaced as 409 and leaves the session intact.
+func TestDeleteConflictReturns409(t *testing.T) {
+	srv, _, stateStore := newServerWithOrchestrator()
+	defer srv.Close()
+	created := createForTest(t, srv, "delete-conflict")
+	const owner = "snapshot-owner"
+
+	if err := stateStore.Lock(context.Background(), created.ID, owner); err != nil {
+		t.Fatalf("lock session: %v", err)
+	}
+	defer func() {
+		_ = stateStore.Unlock(context.Background(), created.ID, owner)
+	}()
+
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/sessions/"+created.ID, nil)
+	if err != nil {
+		t.Fatalf("build delete request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete conflicted session: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("delete conflict status = %d, want 409", resp.StatusCode)
+	}
+
+	getResp, err := http.Get(srv.URL + "/api/v1/sessions/" + created.ID)
+	if err != nil {
+		t.Fatalf("get after conflict: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("get after conflict status = %d, want 200", getResp.StatusCode)
+	}
+}
+
+// A snapshotted session has no live pod but its logical record is still
+// deletable through the same product endpoint.
+func TestDeleteSnapshotSession(t *testing.T) {
+	srv := newServer()
+	defer srv.Close()
+	created := createForTest(t, srv, "delete-frozen")
+
+	snapshotResp, err := http.Post(
+		srv.URL+"/api/v1/sessions/"+created.ID+"/snapshot",
+		"application/json",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("snapshot before delete: %v", err)
+	}
+	snapshotResp.Body.Close()
+	if snapshotResp.StatusCode != http.StatusOK {
+		t.Fatalf("snapshot status = %d, want 200", snapshotResp.StatusCode)
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/sessions/"+created.ID, nil)
+	if err != nil {
+		t.Fatalf("build delete request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete snapshot: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete snapshot status = %d, want 204", resp.StatusCode)
+	}
+
+	getResp, err := http.Get(srv.URL + "/api/v1/sessions/" + created.ID)
+	if err != nil {
+		t.Fatalf("get after snapshot delete: %v", err)
+	}
+	getResp.Body.Close()
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("get after snapshot delete status = %d, want 404", getResp.StatusCode)
+	}
+}
+
+func TestStreamEndpointProxiesSSEAndPrefersLastEventID(t *testing.T) {
+	srv := newServer()
+	defer srv.Close()
+	created := createForTest(t, srv, "stream-wire")
+
+	body, _ := json.Marshal(map[string]string{"payload": "abcdef"})
+	writeResp, err := http.Post(
+		srv.URL+"/api/v1/sessions/"+created.ID+"/write",
+		"application/json",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("write before stream: %v", err)
+	}
+	writeResp.Body.Close()
+	if writeResp.StatusCode != http.StatusOK {
+		t.Fatalf("write status = %d, want 200", writeResp.StatusCode)
+	}
+
+	req, err := http.NewRequest(
+		http.MethodGet,
+		srv.URL+"/api/v1/sessions/"+created.ID+"/stream?offset=not-used",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("build stream request: %v", err)
+	}
+	req.Header.Set("Last-Event-ID", "2")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	streamBody, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("read stream: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stream status = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/event-stream") {
+		t.Fatalf("stream content type = %q", got)
+	}
+	text := string(streamBody)
+	for _, want := range []string{
+		"id: 6",
+		"event: output",
+		`"offset":2`,
+		`"payloadBase64":"Y2RlZg=="`,
+		`"nextOffset":6`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("stream body %q does not contain %q", text, want)
+		}
+	}
+
+	badReq, _ := http.NewRequest(
+		http.MethodGet,
+		srv.URL+"/api/v1/sessions/"+created.ID+"/stream?offset=0",
+		nil,
+	)
+	badReq.Header.Set("Last-Event-ID", "-1")
+	badResp, err := http.DefaultClient.Do(badReq)
+	if err != nil {
+		t.Fatalf("invalid stream cursor: %v", err)
+	}
+	badResp.Body.Close()
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid Last-Event-ID status = %d, want 400", badResp.StatusCode)
+	}
+}
+
+func TestStreamDoesNotRestoreSnapshot(t *testing.T) {
+	srv := newServer()
+	defer srv.Close()
+	created := createForTest(t, srv, "passive-stream")
+	snapshotResp, err := http.Post(
+		srv.URL+"/api/v1/sessions/"+created.ID+"/snapshot",
+		"application/json",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	snapshotResp.Body.Close()
+	if snapshotResp.StatusCode != http.StatusOK {
+		t.Fatalf("snapshot status = %d, want 200", snapshotResp.StatusCode)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/v1/sessions/" + created.ID + "/stream?offset=0")
+	if err != nil {
+		t.Fatalf("stream snapshot: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("snapshot stream status = %d, want 422", resp.StatusCode)
+	}
+
+	getResp, err := http.Get(srv.URL + "/api/v1/sessions/" + created.ID)
+	if err != nil {
+		t.Fatalf("get after passive stream: %v", err)
+	}
+	defer getResp.Body.Close()
+	var after session.Session
+	if err := json.NewDecoder(getResp.Body).Decode(&after); err != nil {
+		t.Fatalf("decode session after passive stream: %v", err)
+	}
+	if after.State != session.StateSnapshot || after.Pod != "" {
+		t.Fatalf("stream restored snapshot unexpectedly: state=%s pod=%q", after.State, after.Pod)
 	}
 }

@@ -1,24 +1,35 @@
 # session-platform
 
 Per-session pod platform: each session runs in its own dedicated data plane
-pod, idle sessions freeze to a CRIU checkpoint to hand back compute, and a
-control plane is the single entry point for creating, listing, and switching
+pod as either an interactive shell or a one-shot Claude Code agent. Idle
+sessions can return compute through a workload-specific snapshot, and a control
+plane is the single entry point for creating, listing, operating, and switching
 between sessions.
 
-> **This repository is a bootstrap scaffolding.** Structure, dependencies,
-> boundaries, and the dev loop are in place. Pod orchestration (client-go),
-> session state (Kubernetes ConfigMaps + Leases), the data plane session
-> workload — one PTY-attached interactive shell per pod, reachability-checked
-> at the active transition (AC-D1), with read/write mapped onto the shell's
-> stdin/stdout (J5-S2/S3, AC-D2/D3) — and CRIU checkpoint/restore are all real.
-> CRIU is agent-driven (the pod's own agent CRIU-dumps/restores its shell tree)
-> behind the `CRIU_ENABLED` gate: off in the production default (a no-op stub),
-> on in the kind e2e overlay, where the snapshot → reclaim → restore round trip
-> runs end-to-end (the AC-B2/B3/D4 e2e files). What is not yet settled is the
-> idle→snapshot *trigger* timing policy (`TODO(policy)`, AC-B1), so AC-B1 is a
-> registered exception and the idle-state read/write branches stay unasserted.
-> See the design docs under [`docs/`](docs/) for the
-> value/PRD/AC and mockups this is built from. The **design system** — tokens,
+> Pod orchestration (client-go), shared session state (Kubernetes ConfigMaps +
+> Leases), both data plane modes, and the SPA are implemented. Shell sessions
+> map read/write to PTY stdout/stdin (J5, AC-D1~D3). Claude Code sessions queue
+> prompts through one serial worker, retain their CLI home/workspace, and project
+> Claude Code `stream-json` text deltas plus diagnostic stderr into an append-only
+> output buffer. The SPA receives that buffer live over an offset-cursored SSE
+> stream; the existing JSON read remains available for full replay and catch-up.
+> Claude sessions can archive filesystem state without CRIU (J6, AC-E1~E6).
+> Each invocation is bounded to 16 MiB and cumulative Claude
+> output to 256 MiB with explicit terminal markers; the full state and cursors
+> survive archive restore. Shell CRIU is agent-driven behind `CRIU_ENABLED`; Claude
+> archives are separately gated by `CLAUDE_CODE_ARCHIVE_ENABLED` because they
+> transfer workspace, conversation, and output data to external storage. Both
+> gates default off in production. A reaper candidate whose workload gate is off
+> stays live and an explicit snapshot returns service unavailable: the platform
+> never deletes a pod behind synthetic checkpoint metadata. The plain 60-minute reaper exists;
+> finer policy such as grace periods and busy-shell handling remains open. See
+> the design docs under [`docs/`](docs/) for the
+> value/PRD/AC and mockups this is built from. Those docs are published as a
+> portal at
+> [`dlddu.github.io/session-platform`](https://dlddu.github.io/session-platform/),
+> with the mockups under
+> [`/mockups/`](https://dlddu.github.io/session-platform/mockups/).
+> The **design system** — tokens,
 > primitives, and components — lives in code at
 > [`web/src/design/`](web/src/design/README.md) (+ `web/src/app/shell.css`);
 > that directory is the source of truth for anything visual.
@@ -47,9 +58,9 @@ web/                  React + Vite + TS SPA
   src/app/              AppShell (rail + viewport), StateBadge
   src/screens/          Sessions, NewSession, Workspace, Restore
   src/api/              typed client over /api/v1
-data-plane/           session agent: one PTY-attached shell + attach/healthz (AC-D1)
-  cmd/agent/            main: launches the shell, serves the WS attach stream
-  Dockerfile            multi-stage: static agent binary on ubuntu
+data-plane/           multi-workload agent selected by DATA_PLANE_WORKLOAD
+  cmd/agent/            PTY shell, Claude runner/archive, and credential proxy
+  Dockerfile            agent + CRIU 4.2 + Claude Code CLI runtime
 deploy/               kind config + control-plane manifests (2-replica e2e overlay)
 docs/                 value / PRD·AC / journeys / mockups / CRIU verification note
 ```
@@ -59,21 +70,93 @@ docs/                 value / PRD·AC / journeys / mockups / CRIU verification n
 - **Control plane / data plane split** (AC-A1): the control plane orchestrates;
   workloads run only in data plane pods. One dedicated pod per session (AC-A2).
 - **State model** `active | idle | snapshot` stored in per-session ConfigMaps,
-  with resourceVersion compare-and-swap for atomic transitions and
-  `coordination.k8s.io` Leases for occupancy locks (AC-C1) — shared across
-  control-plane replicas. Read/Write/Switch dispatch on state (AC-C2/C3/C4).
-- **Lifecycle**: 60-min max idle → CRIU snapshot + pod reclaim (AC-B1);
-  access → restore into a new pod (AC-B2). CRIU is **gated** (`CRIU_ENABLED`):
-  off in the production default (a no-op stub), on in the e2e overlay with the
-  real agent-driven checkpointer, where the round trip is verified
-  (the AC-B2/B3/D4 e2e files); see [`docs/criu-verification.md`](docs/criu-verification.md).
+  with resourceVersion compare-and-swap for whole-aggregate transitions and
+  renewable `coordination.k8s.io` Leases for occupancy locks (AC-C1) — shared
+  across control-plane replicas. Long Snapshot/Restore/recovery operations renew
+  the default 15-second Lease every 5 seconds; private snapshot transactions are
+  owner-fenced. Read/Write/Switch dispatch on state (AC-C2/C3/C4).
+- **Workloads**: `shell` (default) runs one PTY shell; `claude-code` runs one
+  CLI process per prompt through a bounded serial queue. Claude is invoked with
+  `--permission-mode auto` and partial `stream-json` output
+  enabled; the data plane incrementally redacts and UTF-8-normalizes assistant
+  text deltas and diagnostic stderr before appending them to the session
+  scrollback. Type and Claude model are immutable session
+  metadata. For the `platform-default` alias, the pod projects the optional
+  `model` key from the platform credentials Secret into the tool-running
+  container as `CLAUDE_CODE_MODEL`; a missing or empty key leaves `--model`
+  unset so the installed Claude CLI chooses its default. A concrete session
+  model is injected literally and takes precedence over that Secret default.
+  The required `base-url` and `auth-token` Secret keys remain isolated in a
+  hardened localhost proxy sidecar that accepts one configured HTTPS upstream.
+  For Claude workloads, the data-plane entrypoint uses the required
+  `K3S_MCP_TOKEN` to mint a repository-scoped, read-only GitHub App token from
+  K3s MCP, installs `session-platform@dlddu-plugins` from the private
+  `dlddu/plugin-marketplace` into a runtime seed, and only then starts the
+  agent. The GitHub token is not inherited by the agent; `K3S_MCP_TOKEN` is
+  exposed only to the tool-running container and redacted from streamed/read
+  output.
+  A separate optional `models` Secret key is an ordered UI soft catalog, not
+  an API allowlist. The Deployment projects the public `model` and `models`
+  keys into the control plane as `CLAUDE_CODE_DEFAULT_MODEL` and
+  `CLAUDE_CODE_MODELS`; `GET /api/v1/config` exposes their validated startup
+  snapshot without exposing credentials. The proxy forwards safe SSE response
+  chunks before upstream completion, holds possible credential
+  suffixes across network reads for tail-safe redaction, and enforces a 64 MiB
+  raw-upstream SSE cap without whole-body buffering. The tool-running container
+  receives a non-secret placeholder. Every data plane pod uses the dedicated
+  `data-plane` ServiceAccount, whose cluster-wide built-in `view` binding gives
+  read-only Kubernetes access while excluding Secrets.
+- **Lifecycle**: 60-min max idle → workload snapshot + pod reclaim (AC-B1);
+  access → restore into a new pod (AC-B2). Shell uses CRIU behind
+  `CRIU_ENABLED`; Claude uses a filesystem archive behind the independent,
+  explicit `CLAUDE_CODE_ARCHIVE_ENABLED` data-transfer gate. A disabled gate
+  returns a service-unavailable snapshot error and preserves the live pod.
+  Claude archives use a CP-owned generation and durable owner-fenced
+  `preparing→committing` transaction: prepare failures abort only that generation,
+  while committing recovery keeps admission closed and retries Stop/finalization.
+  Explicit deletion uses the same lifecycle Lease, reclaims any live pod, and
+  removes the session record.
+  Already-uploaded checkpoint/archive objects remain governed by the checkpoint
+  store's retention policy; DELETE does not currently erase them physically.
 - **Single entry point**: the control plane container serves both the REST API
-  (`/api/v1`) and the statically built SPA on one port.
+  (`/api/v1`) and the statically built SPA on one port. JSON POST bodies have an
+  8 MiB wire limit and a 30-second read timeout; Claude prompts also have the
+  workload-specific 1 MiB decoded-payload limit. The long-lived output SSE is
+  request-context bounded rather than subject to that short JSON I/O timeout.
 
-Unresolved product policy is marked in code with `TODO(policy: ...)` — the
-idle→snapshot *trigger* timing (grace periods / per-session overrides, AC-B1).
-The CRIU checkpoint/restore adapter itself is implemented (agent-driven); what
-remains open is that trigger policy and the gate default (off in production).
+Claude workspaces keep one passive session output stream open. Each `output`
+event uses the server-issued byte cursor as its SSE id and carries
+`{offset,payloadBase64,nextOffset}`; decoding the payload yields exactly
+`nextOffset-offset` bytes. Base64 preserves the exact byte range and overlap
+math on the wire; it does not make JavaScript string length a cursor. For
+Claude output, every server-issued cursor and event boundary is also a UTF-8
+code-point boundary, so the same cursor is safe for the JSON read fallback.
+Reconnection resumes from `Last-Event-ID` (preferred over the initial `offset`
+query).
+
+If a requested cursor is ahead of the retained output, the stream emits
+`event: reset` with `id=<currentLength>` and `{"nextOffset":currentLength}`.
+The client discards partial decoder state, replaces its rendered history from
+`POST /read` at offset 0, and reconnects from that read's `nextOffset`. Opening
+the SSE connection and receiving output/reset/keepalive signals remain passive:
+they do not promote state, restore a snapshot, or touch `lastAccess`. The
+prescribed reset reconciliation is a normal Read API call, so it can promote an
+idle session and touch `lastAccess`. On transport failure, the SPA checks
+session state and reconnects only active/idle sessions, routing a snapshot to
+explicit restore instead of restoring it through an automatic read retry.
+
+The reaper scans the PRD's plain “last read/write was at least 60 minutes ago”
+boundary and rechecks authoritative `lastAccess` under the lifecycle Lease.
+Read/write do not hold that Lease and their `Touch` is best-effort, so an access
+finishing between the recheck and checkpoint is a tracked freshness race.
+Two crash windows are also tracked: a hard crash after `RestoreInto` succeeds
+but before final CAS can orphan the restore-target pod, and shell CRIU has no
+durable rollback/reconcile protocol after a successful dump followed by
+upload/Stop/final-metadata failure. The Claude archive prepare/commit protocol
+does not close those workload-independent/shell-specific gaps.
+`TODO(policy: ...)` also marks finer product choices such as grace periods,
+per-session overrides, and whether a client-idle shell with a long-running
+foreground job should freeze.
 
 ## Prerequisites
 
@@ -99,16 +182,23 @@ gitignored.
 
 | Method + path                | Purpose                        | AC     |
 | ---------------------------- | ------------------------------ | ------ |
+| `GET  /config`               | non-sensitive runtime UI config | E6     |
 | `POST /sessions`             | create (provision pod, active) | A1, A2 |
 | `GET  /sessions`             | list                           | V5     |
 | `GET  /sessions/{id}`        | get one                        | V5     |
+| `DELETE /sessions/{id}`       | delete and reclaim live pod    | A3     |
 | `POST /sessions/{id}/read`   | read (state-branched)          | C2     |
 | `POST /sessions/{id}/write`  | write (state-branched)         | C3     |
+| `GET  /sessions/{id}/stream` | passive live output SSE        | E3     |
 | `POST /sessions/{id}/switch` | switch (restore if snapshot)   | C4     |
+| `POST /sessions/{id}/snapshot` | archive now and reclaim pod       | B1, A3 |
 
 ## Testing
 
-- **Unit** (`make test-unit`): API handlers + service manager with stub adapters.
+- **Unit** (`make test-unit`): both Go modules — API/service/store/orchestrator
+  adapters plus the shell/Claude/archive/credential-proxy agents. Claude tests
+  use reduced deterministic limits to exercise the production output-boundary
+  logic without allocating 256 MiB.
 - **Integration** (`make test-integration`, build tag `integration`): the
   happy-path scenarios from `docs/test/architecture.md` driven **in-process**
   (handlers mounted in a test server) with the stub adapters.
@@ -119,11 +209,17 @@ gitignored.
   real-pod provisioning (AC-A1/A2), and cross-replica state consistency over the
   shared ConfigMap store (AC-C1). With CRIU turned on in the overlay, the
   snapshot → reclaim → restore round trip is a verified assertion too
-  (AC-B2/B3/D4). Each AC has its own e2e file, declared in the file header and
-  registered in [`docs/test/e2e.md`](docs/test/e2e.md) — `make check-ac-mapping`
-  enforces the 1:1. Only the reaper-driven idle→snapshot trigger (AC-B1, a
-  registered exception) and the idle-state read/write branches remain open, both
-  waiting on the same `TODO(policy)`.
+  (AC-B2/B3/D4). J6 browser contract coverage
+  uses deterministic Playwright route fixtures, while the Claude worker,
+  cursor, live pre-exit output, reconnect, runner/proxy incremental redaction,
+  proxy pre-EOF chunk forwarding, byte boundaries, output limits, resume,
+  archive round trip, and lifecycle crash boundaries use fake-runner/adapter Go tests.
+  A deployed test against the external Claude API is intentionally not claimed.
+  Each AC has its own e2e file, declared in the file header and registered in
+  [`docs/test/e2e.md`](docs/test/e2e.md) — `make check-ac-mapping` enforces the
+  1:1. Only the reaper-driven idle→snapshot trigger (AC-B1, a registered
+  exception) and the idle-state read/write branches remain open, both waiting on
+  the same `TODO(policy)`.
 - **Conflict (envtest)** (`make test-envtest`): an isolated nested module runs
   the ConfigMap adapter against a real kube-apiserver + etcd to assert AC-C1's
   single-winner property (exactly one of N concurrent CompareAndSwap / Lease
@@ -132,7 +228,7 @@ gitignored.
   ```bash
   make e2e-up                                          # kind + build + deploy, SUT on :8080
   (cd control-plane && go test -tags=e2e ./test/...)   # API e2e
-  (cd web && npx playwright test)                      # browser e2e (J1, J3, smoke)
+  (cd web && npx playwright test)                      # browser e2e (J1, J3, J5, J6, smoke)
   make e2e-down                                         # tear down
   ```
 
@@ -140,11 +236,12 @@ gitignored.
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs lint + unit (Go),
 typecheck + build (web), the in-process integration harness, the real-apiserver
-envtest conflict suite, and the combined image build on every PR.
+envtest conflict suite, and both runtime image builds on every PR.
 
 [`.github/workflows/e2e.yml`](.github/workflows/e2e.yml) runs the kind-based
-e2e suites (Go API + Playwright) on PRs touching `control-plane/`, `web/`,
-`deploy/`, `scripts/e2e/`, or `Makefile`, and on demand (`workflow_dispatch`);
+e2e suites (Go API + Playwright) on PRs touching `control-plane/`, `data-plane/`,
+`web/`, `deploy/`, `k8s/`, `scripts/e2e/`, `Makefile`, or that workflow itself,
+and on demand (`workflow_dispatch`);
 Playwright reports/traces upload as artifacts.
 
 ## Deployment
@@ -152,14 +249,70 @@ Playwright reports/traces upload as artifacts.
 The cluster runs this via GitOps (Flux) from the `flux-cd-apps` repo.
 
 - [`.github/workflows/docker-build-push.yaml`](.github/workflows/docker-build-push.yaml)
-  publishes the combined control-plane image to
-  `ghcr.io/dlddu/session-platform:latest` on every push to `main` that touches
-  `control-plane/` or `web/`.
+  publishes the combined control-plane image as
+  `ghcr.io/dlddu/session-platform:{latest,sha}` and the multi-workload agent as
+  `ghcr.io/dlddu/session-platform-data-plane:{latest,sha}` on pushes to `main`
+  (and builds/pushes for matching pull requests) that touch `control-plane/`,
+  `data-plane/`, `web/`, or the workflow itself.
 - [`k8s/`](k8s/) holds the cluster manifests Flux applies: the `control-plane`
-  Deployment + Service (port 80 → 8080) and its RBAC (pods + configmaps +
-  leases). Session state lives in in-cluster ConfigMaps/Leases, so there is no
-  separate backing-store deployment. The namespace, ingress, and VPA live on the
-  cluster side in `flux-cd-apps`.
+  Deployment + Service (port 80 → 8080), control-plane RBAC (pods + configmaps
+  + leases), and the data-plane ServiceAccount with a cluster-wide built-in
+  `view` binding. The latter is read-only and deliberately cannot read Secrets.
+  Session state lives in in-cluster ConfigMaps/Leases, so there is no separate
+  backing-store deployment. The namespace, ingress, and VPA live on the cluster
+  side in `flux-cd-apps`.
+
+Before creating Claude Code sessions, provision the Secret named by
+`CLAUDE_CODE_CREDENTIALS_SECRET` (default `claude-code-credentials`). Its
+`base-url` and `auth-token` keys are required and are exposed only to the
+credential-proxy sidecar. Its required `k3s-mcp-token` key is exposed only to
+the Claude tool-running container as `K3S_MCP_TOKEN`. Its entrypoint uses that
+token to obtain short-lived read access to the private plugin marketplace and
+bootstrap `session-platform@dlddu-plugins`; the running plugin then uses the
+same K3s MCP credential. The agent redacts its literal value from read/SSE
+output. Its `model` key is optional: a non-empty value selects
+the model for `platform-default` sessions, while a missing or empty value falls
+back to the installed Claude CLI default. A concrete model supplied when the
+session is created always wins. Non-empty Secret values are validated against
+`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$`
+when the data-plane container starts, so an invalid platform default fails fast
+instead of being forwarded as a CLI option. The optional leading `~` supports
+OpenRouter moving aliases such as `~anthropic/claude-opus-latest`.
+
+The separate optional `models` key is a JSON string array used only as an
+ordered UI picker catalog. The Deployment projects the public `model` and
+`models` keys into the control plane as `CLAUDE_CODE_DEFAULT_MODEL` and
+`CLAUDE_CODE_MODELS`; it does not grant the process access to `base-url` or
+`auth-token`. A non-empty catalog must be a JSON array of unique model strings
+that satisfy
+`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$`; empty entries, surrounding whitespace,
+duplicates, and the reserved `platform-default` alias make the control plane
+fail startup. Missing, empty, or `[]` keeps the existing free-text model UI.
+`GET /api/v1/config` returns
+`{"claudeCode":{"defaultModel":"~deepseek/deepseek-v4-flash-latest","models":[...]}}`
+with `Cache-Control: no-store`; missing/empty `model` returns
+`platform-default`. The UI renders the concrete default once as
+`<model> (platform default)` and omits `model` from that create request, while
+other choices are pinned literally. The catalog remains advisory: the
+create-session API accepts valid model identifiers outside it.
+
+If `CLAUDE_CODE_CREDENTIALS_SECRET` is changed from its default name, also
+patch the `valueFrom.secretKeyRef.name` field for both
+`CLAUDE_CODE_DEFAULT_MODEL` and `CLAUDE_CODE_MODELS` to the same Secret.
+Kubernetes does not
+interpolate one environment variable into a
+`secretKeyRef.name`.
+
+Changing the singular `model` key is observed the next time a
+`platform-default` primary container starts: in a new pod, a pod recreated
+during restore, or a container restart. It does not immediately mutate an
+already-running container, and a concrete-model session keeps its literal
+setting. The config API and UI read both `model` and `models` from the
+control-plane process's startup environment, so either display change requires
+a Deployment rollout. During the interval before that rollout, a newly started
+`platform-default` session may already use the new Secret model while the UI
+still shows the prior snapshot. See
+[`k8s/claude-code-credentials-secret.example.yaml`](k8s/claude-code-credentials-secret.example.yaml).
 
 The [`deploy/`](deploy/) directory remains the local `kind` setup for the
 integration harness; `k8s/` is the deployed-cluster source of truth.

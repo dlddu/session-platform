@@ -4,31 +4,46 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
 // API holds the dependencies the handlers need.
 type API struct {
-	mgr           session.Manager
-	testEndpoints bool
+	mgr                    session.Manager
+	claudeCodeDefaultModel string
+	claudeCodeModels       []string
 }
+
+const maxRequestBodyBytes = 8 << 20
 
 // Option customises the API surface.
 type Option func(*API)
 
-// WithTestEndpoints registers the test-only endpoints (see Routes). Deployments
-// leave it off; the e2e SUT turns it on via E2E_TEST_ENDPOINTS.
-func WithTestEndpoints(enabled bool) Option {
-	return func(a *API) { a.testEndpoints = enabled }
+// WithClaudeCodeModelConfig exposes the rollout-scoped, non-sensitive model
+// picker configuration to the SPA. The catalog is presentation configuration,
+// not an API allowlist. Copying it keeps the API's startup snapshot immutable.
+func WithClaudeCodeModelConfig(defaultModel string, models []string) Option {
+	return func(a *API) {
+		a.claudeCodeDefaultModel = defaultModel
+		a.claudeCodeModels = append([]string{}, models...)
+	}
 }
 
 // New returns an API bound to a session.Manager.
 func New(mgr session.Manager, opts ...Option) *API {
-	a := &API{mgr: mgr}
+	a := &API{
+		mgr:                    mgr,
+		claudeCodeDefaultModel: session.PlatformDefaultModel,
+		claudeCodeModels:       []string{},
+	}
 	for _, opt := range opts {
 		opt(a)
 	}
@@ -39,29 +54,31 @@ func New(mgr session.Manager, opts ...Option) *API {
 // patterns keep routing dependency-free.
 func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/healthz", a.health)
+	mux.HandleFunc("GET /api/v1/config", a.runtimeConfig)
 	mux.HandleFunc("POST /api/v1/sessions", a.createSession)
 	mux.HandleFunc("GET /api/v1/sessions", a.listSessions)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", a.getSession)
+	mux.HandleFunc("DELETE /api/v1/sessions/{id}", a.deleteSession)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/stream", a.streamSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/read", a.readSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/write", a.writeSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/switch", a.switchSession)
 
-	if a.testEndpoints {
-		// Test-only: freeze a session on demand (AC-B1's effect without its
-		// trigger). The product's idle->snapshot *trigger policy* is still an
-		// open decision (docs/doc-tracker.md), so this deliberately is NOT part
-		// of the product API — it exists so the e2e suite can reach the snapshot
-		// state and assert the CRIU round trip (AC-B2/B3/D4), which is otherwise
-		// unreachable over HTTP. Restore needs no endpoint: any access to a
-		// frozen session restores it (resume-on-access).
-		mux.HandleFunc("POST /api/v1/sessions/{id}/snapshot", a.snapshotSession)
-	}
+	// Manual counterpart to the idle reaper: archive/checkpoint the workload and
+	// reclaim its pod immediately. A later switch restores the session.
+	mux.HandleFunc("POST /api/v1/sessions/{id}/snapshot", a.snapshotSession)
 }
 
 // ---- request/response DTOs ----
 
 type createReq struct {
 	Name string `json:"name"`
+	// WorkloadType stays raw so omitted can differ from explicit empty/null.
+	WorkloadType json.RawMessage `json:"workloadType"`
+
+	// Model is accepted only for claude-code. Omitted resolves to the stable
+	// platform-default alias and is immutable with the workload type (AC-E6).
+	Model json.RawMessage `json:"model"`
 }
 
 type writeReq struct {
@@ -86,6 +103,15 @@ type writeResp struct {
 	Path    string           `json:"path"`
 }
 
+type runtimeConfigResp struct {
+	ClaudeCode claudeCodeConfigResp `json:"claudeCode"`
+}
+
+type claudeCodeConfigResp struct {
+	DefaultModel string   `json:"defaultModel"`
+	Models       []string `json:"models"`
+}
+
 type errResp struct {
 	Error string `json:"error"`
 }
@@ -96,13 +122,44 @@ func (a *API) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (a *API) runtimeConfig(w http.ResponseWriter, _ *http.Request) {
+	// The process receives this catalog from a Secret-backed environment
+	// variable at startup. Avoid browser/proxy caching so a control-plane
+	// rollout immediately exposes its new snapshot.
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, runtimeConfigResp{ClaudeCode: claudeCodeConfigResp{
+		DefaultModel: a.claudeCodeDefaultModel,
+		Models:       append([]string{}, a.claudeCodeModels...),
+	}})
+}
+
 func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 	var req createReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, session.ErrInvalidInput)
+	if err := decodeRequestBody(r.Body, &req, true); err != nil {
+		if errors.Is(err, session.ErrRequestBodyTooLarge) {
+			writeErr(w, err)
+		} else {
+			writeErr(w, session.ErrInvalidInput)
+		}
 		return
 	}
-	sess, err := a.mgr.Create(r.Context(), session.CreateRequest{Name: req.Name})
+	var workload session.WorkloadType
+	if len(req.WorkloadType) != 0 {
+		if err := json.Unmarshal(req.WorkloadType, &workload); err != nil || !workload.Valid() {
+			writeErr(w, session.ErrInvalidInput)
+			return
+		}
+	}
+	var model string
+	if len(req.Model) != 0 {
+		if err := json.Unmarshal(req.Model, &model); err != nil || model == "" || model != strings.TrimSpace(model) {
+			writeErr(w, session.ErrInvalidInput)
+			return
+		}
+	}
+	sess, err := a.mgr.Create(r.Context(), session.CreateRequest{
+		Name: req.Name, WorkloadType: workload, Model: model,
+	})
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -128,10 +185,78 @@ func (a *API) getSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sess)
 }
 
+func (a *API) deleteSession(w http.ResponseWriter, r *http.Request) {
+	if err := a.mgr.Terminate(r.Context(), r.PathValue("id")); err != nil {
+		writeErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// streamSession proxies the selected pod's passive SSE output feed. The
+// Last-Event-ID header wins over the query cursor so a native EventSource
+// reconnect resumes from the last event the browser accepted.
+func (a *API) streamSession(w http.ResponseWriter, r *http.Request) {
+	offset, err := outputStreamOffset(r)
+	if err != nil {
+		writeErr(w, session.ErrInvalidInput)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, errResp{Error: "streaming is unsupported by this server"})
+		return
+	}
+	stream, err := a.mgr.Stream(r.Context(), r.PathValue("id"), offset)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	defer stream.Close()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+
+	buf := make([]byte, 32<<10)
+	for {
+		n, readErr := stream.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				return
+			}
+			flusher.Flush()
+		}
+		if readErr != nil {
+			return
+		}
+	}
+}
+
+func outputStreamOffset(r *http.Request) (int64, error) {
+	value := r.URL.Query().Get("offset")
+	if lastEventID := r.Header.Get("Last-Event-ID"); lastEventID != "" {
+		value = lastEventID
+	}
+	if value == "" {
+		return 0, nil
+	}
+	offset, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || offset < 0 {
+		return 0, session.ErrInvalidInput
+	}
+	return offset, nil
+}
+
 func (a *API) readSession(w http.ResponseWriter, r *http.Request) {
 	var req readReq
 	// body is optional: no body (or no offset) means "from the beginning"
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := decodeRequestBody(r.Body, &req, false); err != nil {
+		writeErr(w, err)
+		return
+	}
 	if req.Offset < 0 {
 		writeErr(w, session.ErrInvalidInput)
 		return
@@ -147,7 +272,10 @@ func (a *API) readSession(w http.ResponseWriter, r *http.Request) {
 func (a *API) writeSession(w http.ResponseWriter, r *http.Request) {
 	var req writeReq
 	// body is optional: an empty payload is a valid (no-op) shell write
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := decodeRequestBody(r.Body, &req, false); err != nil {
+		writeErr(w, err)
+		return
+	}
 	res, err := a.mgr.Write(r.Context(), r.PathValue("id"), req.Payload)
 	if err != nil {
 		writeErr(w, err)
@@ -157,6 +285,10 @@ func (a *API) writeSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) switchSession(w http.ResponseWriter, r *http.Request) {
+	if err := decodeRequestBody(r.Body, &struct{}{}, false); err != nil {
+		writeErr(w, err)
+		return
+	}
 	sess, err := a.mgr.Switch(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeErr(w, err)
@@ -166,8 +298,11 @@ func (a *API) switchSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // snapshotSession freezes a session and reclaims its pod (AC-B1/AC-A3).
-// Registered only with WithTestEndpoints — see Routes.
 func (a *API) snapshotSession(w http.ResponseWriter, r *http.Request) {
+	if err := decodeRequestBody(r.Body, &struct{}{}, false); err != nil {
+		writeErr(w, err)
+		return
+	}
 	sess, err := a.mgr.Snapshot(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeErr(w, err)
@@ -177,6 +312,58 @@ func (a *API) snapshotSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---- helpers ----
+
+func decodeRequestBody(body io.Reader, dst any, required bool) error {
+	wire, err := io.ReadAll(io.LimitReader(body, maxRequestBodyBytes+1))
+	if err != nil {
+		return session.ErrInvalidInput
+	}
+	if len(wire) > maxRequestBodyBytes {
+		return session.ErrRequestBodyTooLarge
+	}
+	decoder := json.NewDecoder(bytes.NewReader(wire))
+	var raw json.RawMessage
+	if err := decoder.Decode(&raw); err != nil {
+		if errors.Is(err, io.EOF) && !required {
+			return nil
+		}
+		return session.ErrInvalidInput
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil || containsJSONNull(value) {
+		return session.ErrInvalidInput
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return session.ErrInvalidInput
+	}
+	strict := json.NewDecoder(bytes.NewReader(raw))
+	strict.DisallowUnknownFields()
+	if err := strict.Decode(dst); err != nil {
+		return session.ErrInvalidInput
+	}
+	return nil
+}
+
+func containsJSONNull(value any) bool {
+	switch value := value.(type) {
+	case nil:
+		return true
+	case map[string]any:
+		for _, child := range value {
+			if containsJSONNull(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if containsJSONNull(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -195,6 +382,16 @@ func writeErr(w http.ResponseWriter, err error) {
 		status = http.StatusUnprocessableEntity
 	case errors.Is(err, session.ErrConflict):
 		status = http.StatusConflict
+	case errors.Is(err, session.ErrWorkloadQueueFull):
+		status = http.StatusTooManyRequests
+	case errors.Is(err, session.ErrWorkloadPromptTooLarge):
+		status = http.StatusRequestEntityTooLarge
+	case errors.Is(err, session.ErrRequestBodyTooLarge):
+		status = http.StatusRequestEntityTooLarge
+	case errors.Is(err, session.ErrWorkloadOutputFull):
+		status = http.StatusInsufficientStorage
+	case errors.Is(err, session.ErrCheckpointDisabled):
+		status = http.StatusServiceUnavailable
 	}
 	writeJSON(w, status, errResp{Error: err.Error()})
 }

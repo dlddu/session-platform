@@ -1,7 +1,9 @@
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Session } from "../api/types";
 import { StateBadge } from "./StateBadge";
 import { ClockIcon, CrystalIcon, PodIcon } from "./icons";
+import { sessionEntryPath } from "./sessionRoutes";
 
 // MaxIdle mirrors control-plane/internal/session.MaxIdle (60m). A session
 // freezes once it has been idle this long; the idle card counts down to it.
@@ -85,7 +87,9 @@ function SnapshotBody({ s, now }: { s: Session; now: number }) {
         </div>
         <div className="snap-meta">
           <div className="row">
-            <span className="k">checkpoint</span>
+            <span className="k">
+              {s.workloadType === "claude-code" ? "archive" : "checkpoint"}
+            </span>
             <span className="v">{cp ? fmtBytes(cp.sizeBytes) : "—"}</span>
           </div>
           <div className="row">
@@ -99,7 +103,10 @@ function SnapshotBody({ s, now }: { s: Session; now: number }) {
         </div>
       </div>
       <div className="snap-hint">
-        <ClockIcon size={13} /> open to thaw and resume exactly where it froze
+        <ClockIcon size={13} />{" "}
+        {s.workloadType === "claude-code"
+          ? "open to restore the archive and continue the conversation"
+          : "open to thaw and resume exactly where it froze"}
       </div>
     </>
   );
@@ -108,48 +115,178 @@ function SnapshotBody({ s, now }: { s: Session; now: number }) {
 // SessionCard — one card in the console grid. Routes to Workspace (live) or
 // Restore (snapshot). Preserves the session-card testid / data-* attributes the
 // e2e specs key off of.
-export function SessionCard({ s, now }: { s: Session; now: number }) {
+export function SessionCard({
+  s,
+  now,
+  onRequestDelete,
+}: {
+  s: Session;
+  now: number;
+  onRequestDelete: (session: Session) => void;
+}) {
   const navigate = useNavigate();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const deleteRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    deleteRef.current?.focus();
+
+    function closeOnPointerDown(event: PointerEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+        triggerRef.current?.focus();
+      }
+    }
+
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [menuOpen]);
+
   return (
-    <button
+    <article
       className="card"
       data-testid="session-card"
       data-session-id={s.id}
       data-state={s.state}
-      onClick={() =>
-        navigate(s.state === "snapshot" ? `/restore/${s.id}` : `/session/${s.id}`)
-      }
-      aria-label={`${s.name}, ${s.state}`}
+      data-workload-type={s.workloadType}
     >
-      {s.state === "snapshot" && (
-        <>
-          <div className="frost" />
-          <div className="shimmer" />
-        </>
-      )}
-      <div className="card-head">
-        <div>
-          <div className="c-name">{s.name}</div>
-          <div className="c-id">session/{s.id}</div>
+      <button
+        type="button"
+        className="card-open"
+        onClick={() => navigate(sessionEntryPath(s))}
+        aria-label={s.name + ", " + s.workloadType + ", " + s.state}
+      >
+        {s.state === "snapshot" ? (
+          <>
+            <div className="frost" />
+            <div className="shimmer" />
+          </>
+        ) : null}
+        <div className="card-head">
+          <div>
+            <div className="c-name">{s.name}</div>
+            <div className="c-id">session/{s.id}</div>
+          </div>
+          <StateBadge state={s.state} />
         </div>
-        <StateBadge state={s.state} />
-      </div>
 
-      {s.state === "active" && <ActiveBody />}
-      {s.state === "idle" && <IdleBody s={s} now={now} />}
-      {s.state === "snapshot" && <SnapshotBody s={s} now={now} />}
+        {s.state === "active" ? <ActiveBody /> : null}
+        {s.state === "idle" ? <IdleBody s={s} now={now} /> : null}
+        {s.state === "snapshot" ? <SnapshotBody s={s} now={now} /> : null}
 
-      <div className="card-foot">
-        {s.state === "snapshot" || !s.pod ? (
-          <span className="pod" style={{ color: "#5a7686" }}>
-            <PodIcon size={12} /> pod reclaimed
+        <div className="card-foot">
+          {s.state === "snapshot" || !s.pod ? (
+            <span className="pod" style={{ color: "#5a7686" }}>
+              <PodIcon size={12} /> pod reclaimed
+            </span>
+          ) : (
+            <span className="pod">
+              <PodIcon size={12} /> pod/{s.pod}
+            </span>
+          )}
+          <span
+            className={
+              "workload-tag" +
+              (s.workloadType === "claude-code" ? " workload-tag-agent" : "")
+            }
+            title={"workloadType=" + s.workloadType}
+          >
+            {s.workloadType === "claude-code" ? "◇ claude-code" : "$ shell"}
           </span>
-        ) : (
-          <span className="pod">
-            <PodIcon size={12} /> pod/{s.pod}
-          </span>
-        )}
+        </div>
+      </button>
+
+      <div
+        className="card-menu"
+        ref={menuRef}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) {
+            setMenuOpen(false);
+          }
+        }}
+      >
+        <button
+          type="button"
+          className="card-menu-trigger"
+          aria-label={"Actions for " + s.name}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen((open) => !open)}
+          ref={triggerRef}
+          data-testid="session-actions"
+        >
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <circle cx="5" cy="12" r="1.7" />
+            <circle cx="12" cy="12" r="1.7" />
+            <circle cx="19" cy="12" r="1.7" />
+          </svg>
+        </button>
+        {menuOpen ? (
+          <div
+            className="card-menu-popover"
+            role="menu"
+            onKeyDown={(event) => {
+              if (
+                event.key === "ArrowDown" ||
+                event.key === "ArrowUp" ||
+                event.key === "Home" ||
+                event.key === "End"
+              ) {
+                event.preventDefault();
+                deleteRef.current?.focus();
+              }
+            }}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              className="card-delete-action"
+              onClick={() => {
+                triggerRef.current?.focus();
+                setMenuOpen(false);
+                onRequestDelete(s);
+              }}
+              ref={deleteRef}
+              data-testid="session-delete"
+            >
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M3 6h18M8 6V4h8v2M6 6l1 15h10l1-15" />
+              </svg>
+              Delete
+            </button>
+          </div>
+        ) : null}
       </div>
-    </button>
+    </article>
   );
 }

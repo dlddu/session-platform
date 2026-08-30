@@ -4,9 +4,9 @@ name: Build and Push Docker Image to GHCR
 # the cluster (flux-cd-apps) can pull and deploy them:
 #   - the combined control-plane image (Go API + embedded React SPA, see
 #     control-plane/Dockerfile), tagged <repo>:latest/<sha>,
-#   - the data plane session agent image (PTY shell + attach/healthz, see
-#     data-plane/Dockerfile), tagged <repo>-data-plane:latest/<sha> — the tag
-#     k8s/deployment.yaml injects via DATA_PLANE_IMAGE.
+#   - the multi-workload data plane image (PTY shell, Claude runner/archive,
+#     and credential proxy; see data-plane/Dockerfile), tagged
+#     <repo>-data-plane:latest/<sha> — the tag k8s/deployment.yaml injects.
 # ci.yml only *builds* images for validation; this workflow is what actually
 # publishes pullable tags.
 

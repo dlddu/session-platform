@@ -33,14 +33,52 @@ spec:
           env:
             - name: CP_ADDR
               value: ":8080"
-            # Session pods run the published data plane agent image: a
-            # PTY-attached interactive shell behind attach/healthz endpoints
-            # (AC-D1, see data-plane/). Published alongside the control-plane
-            # image by .github/workflows/docker-build-push.yaml.
+            # Session pods run the published multi-workload data plane agent
+            # image. DATA_PLANE_WORKLOAD selects PTY shell or Claude Code mode.
             - name: DATA_PLANE_IMAGE
               value: "ghcr.io/dlddu/session-platform-data-plane:latest"
+            # mock-exception: CRIU-GATE — 검증된 런타임이 설 때까지 off가 프로덕션의 의도된
+            # 동작이다(그 경로에서 쉘 동결/복원은 no-op 스텁). e2e 오버레이(deploy/)만 on으로
+            # 올려 실 경로를 탄다. 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
             - name: CRIU_ENABLED
-              value: "false" # gated off until a verified runtime exists
+              # Production stays opt-in until node capability, privileged-pod,
+              # and durable checkpoint-store policies are explicitly approved.
+              value: "false"
+            - name: DATA_PLANE_CLAUDE_CODE_IMAGE
+              value: "ghcr.io/dlddu/session-platform-data-plane:latest"
+            # The required base-url/auth-token keys are referenced only by the
+            # localhost credential-proxy sidecar. The required k3s-mcp-token is
+            # referenced only by the Claude tool-running container. A
+            # platform-default Claude session may reference the optional model
+            # key from that container. The control plane receives only the
+            # optional, public default model and models catalog below; it never
+            # receives provider credentials or the K3s MCP token (AC-E6).
+            # Provision it out of band; see the example Secret manifest. If
+            # this name is changed, patch both SecretKeyRef names below to the
+            # same literal (Kubernetes does not interpolate env values).
+            - name: CLAUDE_CODE_CREDENTIALS_SECRET
+              value: "claude-code-credentials"
+            # Public effective default shown by the SPA. The session pod still
+            # resolves its own platform-default SecretKeyRef when it starts.
+            - name: CLAUDE_CODE_DEFAULT_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: claude-code-credentials
+                  key: model
+                  optional: true
+            # Ordered model choices shown by the SPA. This optional Secret key
+            # is a JSON string array. Missing/empty keeps the free-text input.
+            - name: CLAUDE_CODE_MODELS
+              valueFrom:
+                secretKeyRef:
+                  name: claude-code-credentials
+                  key: models
+                  optional: true
+            # Explicit data-transfer gate. When enabled, Claude workspace,
+            # conversation state and output archives are stored in the S3
+            # destination below. Keep off until that destination is approved.
+            - name: CLAUDE_CODE_ARCHIVE_ENABLED
+              value: "true"
             # Checkpoint archive S3 store config (decision ③, docs/criu-verification.md):
             # bucket / assume-role ARN / region / key prefix. Sourced from the
             # `checkpoint-s3` Secret rather than inlined here. The Secret is

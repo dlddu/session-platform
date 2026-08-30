@@ -2,18 +2,11 @@
 
 // Package integration is the opt-in happy-path harness (`make test-integration`).
 //
-// For the scaffolding it drives the control plane through its HTTP surface with
-// the in-memory stub adapters, asserting the create/list/switch/terminate
-// happy path and the session<->pod 1:1 mapping (test scenarios 1–3 in
-// docs/test/architecture.md).
-//
-// The REAL harness this replaces will, before these assertions:
-//   - bring up a kind cluster (deploy/kind-config.yaml),
-//   - point the control plane's k8s + ConfigMap state-store adapters at it,
-//   - and assert against actual pods.
-//
-// That wiring is intentionally deferred; see docs/criu-verification.md for the
-// CRIU scenario, which stays skipped until a verified runtime exists.
+// It mounts the HTTP handlers over deterministic in-memory adapters for the
+// create/list/switch/terminate and session-to-pod mapping scenarios. Scenario 4
+// additionally builds the production adapters when CRIU_ENABLED=1 and its
+// cluster, privilege, and archive-store prerequisites are configured. The full
+// deployed black-box path lives in the e2e-tagged suite.
 package integration_test
 
 import (
@@ -49,7 +42,7 @@ func harness(t *testing.T) (*httptest.Server, *service.Service) {
 	// in-process; only the pod orchestrator and CRIU remain stubs.
 	orch := k8s.NewStubOrchestrator("sessions")
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
-	ckpt := criu.NewStubCheckpointer(os.Getenv("CRIU_ENABLED") == "1")
+	ckpt := criu.NewStubCheckpointer(true)
 	svc := service.New(orch, store, ckpt, agent.NewStubClient())
 
 	mux := http.NewServeMux()
@@ -128,18 +121,12 @@ func TestScenario3_SnapshotReclaimsPod(t *testing.T) {
 // Scenario 4 (AC-D4, concretising AC-B3): a session's shell state — here an env
 // var and the working directory — survives a snapshot→restore round-trip, and
 // the read cursor issued before the freeze stays valid afterwards (the
-// scrollback rides the checkpoint, buffer-in-checkpoint).
+// agent serializes scrollback alongside the CRIU process images).
 //
-// Unlike scenarios 1–3 this cannot run on the in-memory stubs: the marker
-// round-trip (`echo $CRIUMARK` → the frozen value) needs a *real* shell frozen
-// and thawed by a real CRIU runtime, so it is wired against the real
-// cluster-backed Service (the same adapters main builds). It therefore runs only
-// where CRIU_ENABLED=1 AND a CRIU-capable runtime is reachable; runtime-less CI
-// skips (the gate is off there). Snapshot is a direct Service call — J5-S4 adds
-// no HTTP snapshot endpoint. Where a CRIU runtime exists but the restore path
-// isn't fully wired yet, this FAILS rather than skips: that is the intended
-// "finish wiring the restore mechanism" signal for the provisioning work (see
-// docs/criu-verification.md).
+// Unlike scenarios 1–3 this needs a real shell and the cluster-backed Service.
+// It runs only where CRIU_ENABLED=1 and the cluster kernel/privilege/store
+// prerequisites are configured; ordinary unit CI skips it. Snapshot is a direct
+// Service call — the public product transition is driven by the idle reaper.
 func TestScenario4_CRIUIntegrity(t *testing.T) {
 	if os.Getenv("CRIU_ENABLED") != "1" {
 		t.Skip("CRIU verification environment not configured; see docs/criu-verification.md")
@@ -193,10 +180,8 @@ func TestScenario4_CRIUIntegrity(t *testing.T) {
 	}
 }
 
-// realService builds the real, cluster-backed Service (the same adapters main
-// wires) so Scenario 4 exercises a genuine snapshot→restore against a CRIU
-// runtime. It skips — never fails — when the runtime is absent, so runtime-less
-// CI stays green while a provisioned environment runs the assertions.
+// realService builds the production adapters for a genuine shell CRIU
+// snapshot→restore and skips when its opt-in cluster prerequisites are absent.
 func realService(t *testing.T) *service.Service {
 	t.Helper()
 	client, ns, err := k8s.BuildClient()

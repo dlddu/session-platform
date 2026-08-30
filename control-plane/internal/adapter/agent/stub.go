@@ -1,7 +1,12 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
 	"sync"
 )
 
@@ -38,4 +43,37 @@ func (c *StubClient) Read(_ context.Context, pod string, offset int64) (string, 
 		return "", n, nil
 	}
 	return string(buf[offset:]), n, nil
+}
+
+func (c *StubClient) Stream(_ context.Context, pod string, offset int64) (io.ReadCloser, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	buf := append([]byte(nil), c.bufs[pod]...)
+	n := int64(len(buf))
+	if offset < 0 {
+		return nil, fmt.Errorf("negative stream offset")
+	}
+	var event bytes.Buffer
+	if offset > n {
+		body, _ := json.Marshal(struct {
+			NextOffset int64 `json:"nextOffset"`
+		}{NextOffset: n})
+		_, _ = fmt.Fprintf(&event, "id: %d\nevent: reset\ndata: %s\n\n", n, body)
+		return io.NopCloser(bytes.NewReader(event.Bytes())), nil
+	}
+	if offset == n {
+		return io.NopCloser(bytes.NewBufferString(": stub stream idle\n\n")), nil
+	}
+	payload := buf[offset:]
+	body, _ := json.Marshal(struct {
+		Offset        int64  `json:"offset"`
+		PayloadBase64 string `json:"payloadBase64"`
+		NextOffset    int64  `json:"nextOffset"`
+	}{
+		Offset:        offset,
+		PayloadBase64: base64.StdEncoding.EncodeToString(payload),
+		NextOffset:    n,
+	})
+	_, _ = fmt.Fprintf(&event, "id: %d\nevent: output\ndata: %s\n\n", n, body)
+	return io.NopCloser(bytes.NewReader(event.Bytes())), nil
 }

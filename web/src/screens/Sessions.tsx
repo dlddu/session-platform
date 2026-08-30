@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import type { Session } from "../api/types";
+import { DeleteSessionDialog } from "../app/DeleteSessionDialog";
 import { SessionCard } from "../app/SessionCard";
 import { PodIcon } from "../app/icons";
 import { useToast } from "../app/Toast";
@@ -39,6 +40,7 @@ export function Sessions() {
   const [sessions, setSessions] = useState<Session[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
   const { toast } = useToast();
 
   const load = useCallback(() => {
@@ -69,6 +71,17 @@ export function Sessions() {
     load().then(() => toast("Sessions refreshed"));
   }, [load, toast]);
 
+  const removeDeletedSession = useCallback(
+    (deleted: Session) => {
+      setSessions((current) =>
+        current ? current.filter((session) => session.id !== deleted.id) : current,
+      );
+      setSessionToDelete(null);
+      toast('Session "' + deleted.name + '" deleted');
+    },
+    [toast],
+  );
+
   const counts = {
     active: sessions?.filter((s) => s.state === "active").length ?? 0,
     idle: sessions?.filter((s) => s.state === "idle").length ?? 0,
@@ -83,8 +96,8 @@ export function Sessions() {
           <div className="eyebrow">Control plane · us-east-1</div>
           <h1>Sessions</h1>
           <div className="sub">
-            Every session runs in its own dedicated pod. Idle sessions freeze to
-            a checkpoint and hand their compute back.
+            Every session runs in its own dedicated pod. Idle sessions preserve
+            their state and hand their compute back.
           </div>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
@@ -144,9 +157,23 @@ export function Sessions() {
 
       <div className="grid">
         {sessions?.map((s) => (
-          <SessionCard key={s.id} s={s} now={now} />
+          <SessionCard
+            key={s.id}
+            s={s}
+            now={now}
+            onRequestDelete={setSessionToDelete}
+          />
         ))}
       </div>
+
+      {sessionToDelete ? (
+        <DeleteSessionDialog
+          key={sessionToDelete.id}
+          session={sessionToDelete}
+          onCancel={() => setSessionToDelete(null)}
+          onDeleted={removeDeletedSession}
+        />
+      ) : null}
     </div>
   );
 }

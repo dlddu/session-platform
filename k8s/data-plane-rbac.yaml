@@ -1,0 +1,61 @@
+# Data plane session pods need read-only Kubernetes discovery for workload
+# tasks. Bind the dedicated ServiceAccount cluster-wide to Kubernetes' built-in
+# `view` ClusterRole: it grants get/list/watch access to most resources while
+# deliberately excluding Secrets and privilege-escalating RBAC objects. Because
+# `view` does not include cluster-scoped Nodes, grant read-only Node access with
+# a separate, narrowly scoped ClusterRole.
+#
+# Kubernetes RBAC is additive and has no deny rules, so a wildcard ClusterRole
+# cannot express "all resources except Secrets" safely. Reusing `view` keeps
+# the Secret exclusion enforced by Kubernetes and lets aggregated API roles add
+# read access for their custom resources without broadening Secret access.
+#
+# Production runs in the session-platform namespace. The local kind overlay
+# patches the ClusterRoleBinding subject namespace to `default`.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: data-plane
+  labels:
+    app: data-plane
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: session-platform-data-plane-node-reader
+  labels:
+    app: data-plane
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: session-platform-data-plane-view
+  labels:
+    app: data-plane
+subjects:
+  - kind: ServiceAccount
+    name: data-plane
+    namespace: session-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: session-platform-data-plane-node-read
+  labels:
+    app: data-plane
+subjects:
+  - kind: ServiceAccount
+    name: data-plane
+    namespace: session-platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: session-platform-data-plane-node-reader

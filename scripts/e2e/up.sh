@@ -61,6 +61,14 @@ kind load docker-image "$DP_IMAGE" --name "$CLUSTER"
 echo "e2e: applying deploy/ overlay (kustomize: base k8s/ + kind patches)"
 kubectl apply -k deploy/
 
+echo "e2e: verifying data-plane read-only RBAC excludes Secrets"
+DATA_PLANE_USER="system:serviceaccount:default:data-plane"
+kubectl auth can-i get pods --all-namespaces --as="$DATA_PLANE_USER" >/dev/null
+if kubectl auth can-i get secrets --all-namespaces --as="$DATA_PLANE_USER" >/dev/null; then
+  echo "e2e: data-plane ServiceAccount unexpectedly has Secret read access" >&2
+  exit 1
+fi
+
 echo "e2e: waiting for rollouts"
 # MinIO backs the CRIU checkpoint archives (deploy/minio.yaml). Wait for it too,
 # so the first snapshot cannot race its startup or bucket creation.
