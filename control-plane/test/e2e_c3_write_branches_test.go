@@ -62,7 +62,7 @@ func TestWriteBranches_SnapshotRestoresThenWrites(t *testing.T) {
 	})
 
 	if _, ok := snapshotSession(t, s.ID); !ok {
-		t.Skip("SUT has no snapshot trigger (E2E_TEST_ENDPOINTS off) — the snapshot write branch is not exercisable here")
+		t.Skip("SUT predates the product snapshot endpoint — the snapshot write branch is not exercisable here")
 	}
 
 	w := writeAt(t, s.ID, "true\n")

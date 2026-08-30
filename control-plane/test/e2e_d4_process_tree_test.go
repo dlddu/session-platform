@@ -28,7 +28,7 @@ func TestProcessTree_EnvAndCwdSurviveTheFreeze(t *testing.T) {
 	})
 
 	if _, ok := snapshotSession(t, s.ID); !ok {
-		t.Skip("SUT has no snapshot trigger (E2E_TEST_ENDPOINTS off) — the CRIU round trip is not exercisable here; see docs/criu-verification.md")
+		t.Skip("SUT predates the product snapshot endpoint — the CRIU round trip is not exercisable here; see docs/criu-verification.md")
 	}
 
 	// Restored shell resumes on top of the frozen context: the variable and the

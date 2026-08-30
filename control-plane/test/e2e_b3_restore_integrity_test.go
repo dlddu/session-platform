@@ -31,7 +31,7 @@ func TestRestoreIntegrity_HistoryAndCursorSurviveTheFreeze(t *testing.T) {
 	}
 
 	if _, ok := snapshotSession(t, s.ID); !ok {
-		t.Skip("SUT has no snapshot trigger (E2E_TEST_ENDPOINTS off) — the CRIU round trip is not exercisable here; see docs/criu-verification.md")
+		t.Skip("SUT predates the product snapshot endpoint — the CRIU round trip is not exercisable here; see docs/criu-verification.md")
 	}
 
 	// Writing restores the session and appends after the frozen history.

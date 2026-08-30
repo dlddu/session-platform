@@ -30,7 +30,7 @@ func TestSnapshotRestore_AccessRestoresIntoANewPod(t *testing.T) {
 
 	frozen, ok := snapshotSession(t, s.ID)
 	if !ok {
-		t.Skip("SUT has no snapshot trigger (E2E_TEST_ENDPOINTS off) — the restore path is not exercisable here; see docs/criu-verification.md")
+		t.Skip("SUT predates the product snapshot endpoint — the restore path is not exercisable here; see docs/criu-verification.md")
 	}
 	if frozen.State != "snapshot" {
 		t.Fatalf("state after snapshot = %q, want snapshot", frozen.State)

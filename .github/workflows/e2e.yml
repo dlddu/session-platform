@@ -60,8 +60,8 @@ jobs:
       # kind's nested containers. The deploy overlay enables the CRIU gate and
       # the round trip is driven by the *product* snapshot endpoint (there is no
       # test-only trigger any more — manual archiving promoted it), so
-      # TestDeferred_CRIUIntegrity is the authoritative real round-trip
-      # assertion. continue-on-error keeps this duplicate diagnostic from hiding
+      # the AC-B2/B3/D4 e2e files are the authoritative real round-trip
+      # assertions. continue-on-error keeps this duplicate diagnostic from hiding
       # that API-test verdict.
       - name: CRIU probe (in-pod criu viability on this runner)
         continue-on-error: true

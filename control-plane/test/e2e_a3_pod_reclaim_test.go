@@ -7,7 +7,7 @@
 // backing Pod object is actually deleted — reclaim, not merely dropped from the
 // API's view.
 //
-// The freeze is driven by the test-only snapshot trigger; the operational
+// The freeze is driven by the product snapshot endpoint; its automatic
 // counterpart (service.IdleReaper's idle window, AC-B1) is a registered
 // exception in docs/test/e2e.md.
 package e2e_test
@@ -37,7 +37,7 @@ func TestPodReclaim_FreezeDeletesTheBackingPod(t *testing.T) {
 
 	frozen, ok := snapshotSession(t, s.ID)
 	if !ok {
-		t.Skip("SUT has no snapshot trigger (E2E_TEST_ENDPOINTS off) — Pod reclaim not exercisable here")
+		t.Skip("SUT predates the product snapshot endpoint — Pod reclaim not exercisable here")
 	}
 	if frozen.State != "snapshot" {
 		t.Fatalf("state after snapshot = %q, want snapshot", frozen.State)

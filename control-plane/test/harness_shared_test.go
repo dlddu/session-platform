@@ -137,11 +137,13 @@ func getSession(t *testing.T, id string) session {
 	return s
 }
 
-// snapshotSession drives the test-only freeze trigger. The product's
-// idle->snapshot trigger policy is still open (AC-B1, service/session.go
-// TODO(policy)), so the endpoint exists purely to let this suite reach the
-// snapshot state. It reports ok=false when the SUT was deployed without it
-// (E2E_TEST_ENDPOINTS off) so callers skip instead of failing.
+// snapshotSession freezes a session through the product snapshot endpoint
+// (POST /sessions/{id}/snapshot, the same one manual archiving uses). Only the
+// *automatic* idle->snapshot trigger policy is still open (AC-B1,
+// service/session.go TODO(policy)); the manual endpoint gives this suite a
+// deterministic way to reach the snapshot state without waiting out the idle
+// window. It reports ok=false when the SUT predates the endpoint, so callers
+// skip instead of failing.
 func snapshotSession(t *testing.T, id string) (session, bool) {
 	t.Helper()
 	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+id+"/snapshot", nil)

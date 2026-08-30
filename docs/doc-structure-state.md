@@ -83,10 +83,10 @@
 
 ### 🟠 문서화가 구현보다 뒤처진 영역 (2026-08-30 신규 인지)
 - **세션 삭제**: `DELETE /api/v1/sessions/{id}` · `web/src/app/DeleteSessionDialog.tsx` ·
-  `web/e2e/session-deletion.spec.ts`가 있는데 여정·mockup·PRD AC가 없었다.
+  `web/e2e/journeys/session-deletion.spec.ts`가 있는데 여정·mockup·PRD AC가 없었다.
   → 여정 `JRN-session-deletion` 신설로 문서 공백은 메웠고, **mockup 3단계와 PRD 전용 AC는 여전히 없음**.
 - **수동 동결**: `POST /api/v1/sessions/{id}/snapshot` · Workspace의 Freeze/Archive now ·
-  `web/e2e/manual-archive.spec.ts`가 있는데 여정이 없었다.
+  `web/e2e/journeys/manual-archive.spec.ts`가 있는데 여정이 없었다.
   → 여정 `JRN-manual-freeze` 신설. **수동 트리거 전용 AC 없음**(AC-B1/A3에 얹혀 있음).
 - **원인**: 커버리지 점검이 `가치 → 여정 → mockup` **한 방향**이라 "구현에는 있는데 문서에 없는" 흐름이 잡히지 않았다.
   다음 검증부터는 API 라우트·SPA 화면 목록에서 여정으로 거슬러 올라가는 **역방향 점검**을 함께 수행할 것.
