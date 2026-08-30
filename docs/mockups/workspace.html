@@ -224,7 +224,7 @@
   .input-row .p{color:var(--active)}
   .input-row .ph{color:#46545e}
 
-  /* accumulated shell state (J5-S4) */
+  /* accumulated shell state (STP-shell-state-carry) */
   .st-row{display:flex;gap:9px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--line)}
   .st-row:last-of-type{border-bottom:0}
   .st-row .k{font-family:"IBM Plex Mono",monospace;font-size:10.5px;color:var(--text-faint);
@@ -424,7 +424,7 @@
             <div class="bar"><i class="active" id="ws-mem-bar" style="width:0"></i></div>
           </div>
 
-          <!-- accumulated shell state (J5-S4 · AC-D4) -->
+          <!-- accumulated shell state (STP-shell-state-carry · AC-D4) -->
           <div class="panel" id="ws-state-panel">
             <h4><span class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span> Shell state</h4>
             <div class="st-row"><span class="k">cwd</span><span class="v" id="ws-st-cwd">/work</span></div>
@@ -597,7 +597,7 @@ function populate(s){
     paintTerm(termFrozen(s));
   }
 }
-// J5-S4 · 축적된 쉘 상태 (다음 명령으로 이어지고, 그대로 체크포인트된다)
+// STP-shell-state-carry · 축적된 쉘 상태 (다음 명령으로 이어지고, 그대로 체크포인트된다)
 function paintShellState(s){
   const note = document.getElementById('ws-st-note');
   const jobs = document.getElementById('ws-st-jobs');

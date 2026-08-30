@@ -255,7 +255,7 @@
   .gauge + .bar{margin-top:6px;margin-bottom:16px}
   .gauge + .bar:last-child{margin-bottom:0}
 
-  /* connections (J4) */
+  /* connections (JRN-concurrent-access) */
   .conn{display:flex;align-items:center;gap:11px;padding:10px 0;border-bottom:1px solid var(--line)}
   .conn:last-of-type{border-bottom:0}
   .conn .av{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;flex:0 0 30px;
@@ -449,7 +449,7 @@
     <div class="m-mark">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 21 7v10l-9 5-9-5V7l9-5Z"/><circle cx="12" cy="12" r="2"/></svg>
     </div>
-    <!-- ===== phase 1: configure (J6-S1 · AC-E1/AC-E6 · V8) ===== -->
+    <!-- ===== phase 1: configure (STP-workload-choice · AC-E1/AC-E6 · V8) ===== -->
     <div class="phase on" id="phase-config">
       <h3>New session</h3>
       <p class="desc">Pick the working environment for this session. Whichever you pick, it runs on its own dedicated pod.</p>
@@ -508,7 +508,7 @@
       </div>
     </div>
 
-    <!-- ===== phase 2: provisioning (J1-S2) ===== -->
+    <!-- ===== phase 2: provisioning (STP-workspace-entry) ===== -->
     <div class="phase" id="phase-prov">
       <h3>Creating session</h3>
       <p class="desc">A dedicated pod is provisioned for this session — one session, one pod, fully isolated.</p>
@@ -642,7 +642,7 @@ function startGridTick(){
   },1000);
 }
 
-/* ---------- J6-S1 · workload type selection (AC-E1 / AC-E6 · V8) ---------- */
+/* ---------- STP-workload-choice · workload type selection (AC-E1 / AC-E6 · V8) ---------- */
 let provBusy=false;
 let draft = { type:'shell', model:'platform-default' };
 

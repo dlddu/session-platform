@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 
-// J5 — running commands in the session shell and following the output.
+// JRN-shell-interaction — running commands in the session shell and following the output.
 // Value V6 (interactive shell session); AC-D2 (write → shell stdin) and AC-D3
 // (read = offset-cursored delta of the scrollback; offset 0 replays the full
 // history on re-entry).
@@ -26,7 +26,7 @@ test("commands run in the session shell and output accumulates across them", asy
   await createSession(page, `j5-${Date.now()}`);
   const log = page.getByTestId("ws-log");
 
-  // J5-S2/S3: a command's output lands in the console. The computed marker
+  // STP-command-input/STP-output-read: a command's output lands in the console. The computed marker
   // only exists once bash executed the line (the echoed input can't match).
   await runCommand(page, "echo j5-first-$((40+1))");
   await expect(log).toContainText("j5-first-41", { timeout: 15_000 });
