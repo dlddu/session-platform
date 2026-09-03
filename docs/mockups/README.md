@@ -51,6 +51,79 @@
 
 ---
 
+## 화면 ↔ mockup 매핑 (SPA 구현 대조)
+
+> 위의 표가 **mockup ↔ 여정 단계**를 잇는다면, 이 표는 **mockup ↔ SPA 구현 화면**을 잇습니다.
+> 정합성 모델 `tbm_session-platform-mockup-render`가 "구현된 화면이 대응 목업과 시각적으로
+> 일치하는가"를 판정하는 **기계 판독 가능한 매핑의 단일 소스**이며,
+> `scripts/check-render-fidelity.py`(CI `render-fidelity` 잡)가 아래 표를 코드와
+> **양방향 집합 동등성**으로 강제합니다 — 표에 없는 구현 파일도, 코드에 없는 표 행도 실패합니다.
+
+매핑된 구현 파일 = **11**
+
+| 구현 파일 | 종류 | 대응 mockup | 근거 | 상태 |
+|-----------|------|-------------|------|------|
+| `web/src/screens/Sessions.tsx` | screen | `docs/mockups/index.html` | 세션 목록 대시보드. 상태별 카드 + workloadType 태그 | ✅ 매핑 |
+| `web/src/screens/NewSession.tsx` | screen | `docs/mockups/new-session.html` | 생성 모달 · 워크로드 타입 카드 · 프로비저닝 단계 뷰 | ✅ 매핑 |
+| `web/src/screens/Workspace.tsx` | screen | `docs/mockups/workspace.html`, `docs/mockups/agent-workspace.html` | 한 화면이 `workloadType`에 따라 둘로 갈린다(`shell` / `claude-code`). `approval-gated`는 구현이 없어 아래 표 참조 | ✅ 매핑 (1:N) |
+| `web/src/screens/Restore.tsx` | screen | `docs/mockups/restore.html` | 체크포인트 복원 화면 | ✅ 매핑 |
+| `web/src/app/AppShell.tsx` | component | `docs/mockups/index.html` | 뷰포트 + 64px 하단 레일. 6개 mockup이 공유하는 셸이라 정본 출처를 `index.html`로 고정 | ✅ 매핑 |
+| `web/src/app/SessionCard.tsx` | component | `docs/mockups/index.html` | 세션 카드(vitals · freeze ring · snapshot body) | ✅ 매핑 |
+| `web/src/app/StateBadge.tsx` | component | `docs/mockups/index.html` | `session.State` 배지 | ✅ 매핑 |
+| `web/src/app/Toast.tsx` | component | `docs/mockups/index.html` | `toast-wrap` / `toast`. 6개 mockup 공통이라 `index.html`로 고정 | ✅ 매핑 |
+| `web/src/app/icons.tsx` | component | `docs/mockups/index.html` | 인라인 SVG 아이콘 1:1 이식(이 파일의 기존 주석이 이 규약의 선례) | ✅ 매핑 |
+| `web/src/app/shell.css` | style | `docs/mockups/index.html` | 셸·공용 컴포넌트 CSS. `tokens.css`·`icons.tsx`와 같은 규약으로 `index.html`을 정본 출처로 고정하고, 화면별 패널 대조는 아래 「패널 구조 차집합」이 담당 | ✅ 매핑 |
+| `web/src/app/DeleteSessionDialog.tsx` | component | — | 삭제 확인 대화상자. **SPA에만 있고 대응 mockup이 없다**(위 「미시각화 단계 메모」의 `STP-delete-confirm` ❌와 같은 사실) | ❌ 대응 mockup 없음 |
+
+각 구현 파일은 헤더에 `mockup: <경로>` 선언 주석을 갖습니다(대응이 없으면 `mockup: none — <사유>`).
+표와 선언이 어긋나면 게이트가 실패하므로, **둘 중 하나만 고치는 것은 불가능**합니다.
+
+> 스캔 스코프는 정합성 모델의 as-is와 같게 `web/src/screens` + `web/src/app`이고, 대조 단위가 되는
+> `.tsx`·`.css`만 등재합니다. `web/src/app/sessionRoutes.ts`는 경로 계산 헬퍼로 렌더 산출물이 없어
+> 제외합니다. `web/src/design/`은 이탈의 **기준점(정본)**이라 대조 대상이 아닙니다.
+
+### 구현이 없는 mockup
+
+아직 대응 화면이 없는 mockup은 이 모델의 drift가 **아닙니다**(모델 정의: "아직 구현되지 않은
+화면의 부재는 drift가 아니다"). 다만 구현이 착지하는 순간 매핑이 낡으므로, **구현 신호**를 함께
+등재해 게이트가 그 시점을 잡아냅니다 — 신호가 `web/src/screens`·`web/src/app`에서 1건이라도
+발견되면 게이트는 "매핑 표를 갱신하라"며 실패합니다.
+
+| mockup | 구현 신호 (`git grep -F`) | 비고 |
+|--------|---------------------------|------|
+| `docs/mockups/gated-workspace.html` | `approval-gated` | AC-F1~F6 구현이 `tbm_session-platform-docs-impl`에 걸려 있다. 착지하면 `Workspace.tsx`의 1:N 대응에 이 파일이 합류한다 |
+
+---
+
+## 패널 구조 차집합 (구현 대조)
+
+mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="panel…"` 직후 `<h4>` 텍스트를
+뽑아 **쌍별로** 비교한 실측 원장입니다. 게이트가 매번 다시 계산해 이 표와 대조하므로 손으로
+맞출 수 없습니다.
+
+패널 차집합 상한 = **10**
+
+| 구현 파일 | mockup | 이 쌍의 구현 패널 | mockup-only (구현에 없음) | impl-only (mockup에 없음) |
+|-----------|--------|-------------------|---------------------------|---------------------------|
+| `web/src/screens/Workspace.tsx` | `docs/mockups/workspace.html` | Actions | Vitals · Shell state · Lifecycle | Actions |
+| `web/src/screens/Workspace.tsx` | `docs/mockups/agent-workspace.html` | Workload · Actions | Vitals · Conversation · Lifecycle | Actions |
+| `web/src/screens/Restore.tsx` | `docs/mockups/restore.html` | — | Vitals · Lifecycle | — |
+
+`Workspace.tsx`는 한 파일이 두 mockup을 그리므로 **쌍마다 그 변형이 실제로 그리는 패널만** 선언합니다
+(`Workload` 패널은 `isAgent`일 때만 렌더). 게이트는 쌍별 선언의 **합집합이 파일에서 추출한 패널
+전체와 같은지**까지 확인하므로, 한 쌍에서 빼는 방식으로 차집합을 줄일 수 없습니다.
+
+**읽는 법**: `Actions`가 두 쌍 모두에서 impl-only인 것은 같은 패널 하나가 두 대조에 나타난 것이지
+패널이 둘이라는 뜻이 아닙니다. 상한 10은 (3+1)+(3+1)+(2+0)의 합입니다.
+
+> **이 표가 세는 것은 패널 층위까지입니다.** 패널 **내부**의 카피·수치(예: `Idle timer` ·
+> `Auto-freeze at` · `Pod uptime` · `process tree` · `Resuming from checkpoint` · `Session workspace`,
+> 역방향으로 `Delete session` · `Switch (AC-C4)`)는 아직 대조하지 않습니다 — 후속 작업이며,
+> `Vitals`(CPU/메모리)·`Pod uptime`처럼 **실데이터 소스가 API에 있는지**부터 확인해야 방향
+> (구현을 늘릴지 · mockup을 줄일지)이 정해지는 항목이 섞여 있습니다.
+
+---
+
 ## 여정 단계별 시각화 커버리지
 
 표기: ✅ 전용 화면 있음 · ⚠️ 부분/암시(전용 화면 없음) · ❌ 없음 · ⚪ 의도적 비시각화

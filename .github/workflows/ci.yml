@@ -21,6 +21,23 @@ jobs:
       - name: fidelity allowlist check
         run: python3 scripts/check-fidelity-allowlist.py
 
+  render-fidelity:
+    name: render fidelity (mockups <-> SPA screens)
+    runs-on: ubuntu-latest
+    # Enforces the mockup <-> implementation seam: every implemented screen and
+    # shell component must declare its mockup (and be registered in
+    # docs/mockups/README.md, both directions), every deviation from the design
+    # system canon must be in the ledger in web/src/design/README.md with a
+    # disposition, and the panel-level structural diff must match what the
+    # checker recomputes -- with budgets that can only shrink. Sibling gate to
+    # `fidelity` above: that one owns *e2e* fidelity (what tests substitute),
+    # this one owns *render* fidelity (whether screens match the mockups). Also
+    # python3 stdlib only, so it needs no toolchain.
+    steps:
+      - uses: actions/checkout@v4
+      - name: render fidelity check
+        run: python3 scripts/check-render-fidelity.py
+
   control-plane:
     name: control-plane (lint + unit)
     runs-on: ubuntu-latest
