@@ -1,3 +1,5 @@
+// mockup: none — 삭제 확인 대화상자는 SPA에만 있고 대응 목업이 없다
+// docs/mockups/README.md 의 「화면 ↔ mockup 매핑」 표와 양방향으로 일치해야 한다 (scripts/check-render-fidelity.py).
 import { useEffect, useId, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { Session } from "../api/types";

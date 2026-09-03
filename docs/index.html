@@ -32,7 +32,9 @@
     --text-dim: #9dacb7;
     --text-faint: #5e6e79;
     --active: #ffb43a;
+    --active-soft: #3a2b12;
     --frozen: #7fcdea;
+    --frozen-soft: #13313d;
     --maxw: 1240px;
     --r: 14px;
     --r-sm: 9px;
@@ -49,11 +51,42 @@
   ::selection { background: rgba(255, 180, 58, .28); }
   :focus-visible { outline: 2px solid var(--frozen); outline-offset: 2px; border-radius: 6px; }
   main { max-width: var(--maxw); margin: 0 auto; padding: 48px 20px 120px; }
+  /* .mark / .summary / .chip / .badge / .btn-primary 는 web/src/app/shell.css 와
+     web/src/design/tokens.css 의 정의를 그대로 옮긴 것이다. 새로 만든 값은 없다. */
+  .masthead { display: flex; align-items: flex-start; gap: 13px; }
+  .mark {
+    flex: 0 0 34px; height: 34px; display: grid; place-items: center;
+    filter: drop-shadow(0 2px 8px rgba(255, 180, 58, .35));
+  }
   h1 {
     font-family: "Space Grotesk", "IBM Plex Sans", system-ui, sans-serif;
     font-weight: 600; font-size: 30px; letter-spacing: -.02em; margin: 6px 0 0;
   }
-  .lede { color: var(--text-dim); font-size: 13.5px; margin: 6px 0 2.8em; max-width: 78ch; }
+  .lede { color: var(--text-dim); font-size: 13.5px; margin: 6px 0 0; max-width: 78ch; }
+  .summary { display: flex; gap: 8px; flex-wrap: wrap; margin: 26px 0 0; }
+  .chip {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 11px; padding: 11px 15px;
+  }
+  .chip .dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 9px; }
+  .chip .dot.on { background: var(--active); box-shadow: 0 0 9px var(--active); }
+  .chip .dot.part { background: var(--frozen); }
+  .chip b { font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 600; font-size: 16px; }
+  .chip em { color: var(--text-faint); font-size: 11px; letter-spacing: .04em; font-style: normal; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+    padding: 4px 8px; border-radius: 7px; border: 1px solid transparent; white-space: nowrap;
+  }
+  .badge .led { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; }
+  .badge.live { color: var(--active); border-color: rgba(255, 180, 58, .28); background: var(--active-soft); }
+  .badge.live .led { background: var(--active); box-shadow: 0 0 9px var(--active); }
+  .badge.excepted { color: var(--frozen); border-color: rgba(127, 205, 234, .32); background: var(--frozen-soft); }
+  .badge.excepted .led { background: var(--frozen); }
+  .badge.pending { color: var(--text-faint); border-color: var(--line); }
+  .badge.pending .led { background: var(--text-faint); }
   /* 구획 제목은 시스템의 .eyebrow 패턴이다.
      tokens.css 에 h2 스케일이 없어 크기를 지어내지 않았다. */
   h2 {
@@ -82,6 +115,11 @@
     transition: .18s var(--ease);
   }
   .row .links a:hover { border-color: var(--line-2); color: var(--text); }
+  .row .links a.primary {
+    background: var(--active); color: #1c1404; border-color: transparent; font-weight: 600;
+    box-shadow: 0 6px 22px -8px rgba(255, 180, 58, .6);
+  }
+  .row .links a.primary:hover { filter: brightness(1.06); color: #1c1404; border-color: transparent; }
   .row .links a.missing {
     color: var(--text-faint); border-style: dashed; background: none; pointer-events: none;
   }
@@ -99,9 +137,28 @@
 <body>
 <main>
 
-  <h1>Session Pod Platform 문서 포털</h1>
-  <p class="lede">세션당 전용 pod 플랫폼 — 제품 가치 · PRD · 사용자 여정 · mockup.
-    문서 체계의 현재 판과 남은 격차는 <a href="reader.html?doc=doc-structure-state.md">구조 상태 (10)판 · 2026-09-03</a> 이 갖는다.</p>
+  <div class="masthead">
+    <span class="mark" aria-hidden="true">
+      <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
+        <path d="M15 2.5 26 9v12L15 27.5 4 21V9L15 2.5Z" fill="#ffb43a" />
+        <path d="M15 9.5 20.5 12.7v5.6L15 21.5 9.5 18.3v-5.6L15 9.5Z" fill="#1c1404" />
+        <circle cx="15" cy="15.5" r="2.1" fill="#ffb43a" />
+      </svg>
+    </span>
+    <div>
+      <h1>Session Pod Platform 문서 포털</h1>
+      <p class="lede">세션당 전용 pod 플랫폼 — 제품 가치 · PRD · 사용자 여정 · mockup.
+        문서 체계의 현재 판과 남은 격차는 <a href="reader.html?doc=doc-structure-state.md">구조 상태 (10)판 · 2026-09-03</a> 이 갖는다.</p>
+    </div>
+  </div>
+
+  <!-- 아래 네 수치는 doc-structure-state.md 의 반영물이다. 그 문서가 바뀌면 여기도 같은 커밋에서 고친다. -->
+  <div class="summary">
+    <span class="chip"><span class="dot on"></span><b>9</b><em>여정</em></span>
+    <span class="chip"><span class="dot part"></span><b>2/8</b><em>여정 mockup</em></span>
+    <span class="chip"><b>6</b><em>가치</em></span>
+    <span class="chip"><b>33</b><em>단계</em></span>
+  </div>
 
   <h2>제품 문서</h2>
   <p class="hint">제품이 약속하는 가치와 그 가치를 구현하는 요구사항 · 검증 계획.</p>
@@ -177,55 +234,55 @@
     <span class="links"><a href="reader.html?doc=user-journeys/README.md">읽기</a></span>
   </div>
   <div class="row">
-    <span class="name">첫 세션 생성과 격리된 작업</span>
+    <span class="name">첫 세션 생성과 격리된 작업</span> <span class="badge live"><span class="led"></span>체험 가능</span>
     <span class="meta"><code>JRN-session-creation</code> · 달성 가치 <code>V1, V5</code> · 3단계</span>
     <span class="spacer"></span>
-    <span class="links"><a href="reader.html?doc=user-journeys/JRN-session-creation.md">문서 읽기</a> <a href="journeys/JRN-session-creation/">여정 mockup</a></span>
+    <span class="links"><a href="reader.html?doc=user-journeys/JRN-session-creation.md">문서 읽기</a> <a class="primary" href="journeys/JRN-session-creation/">여정 mockup</a></span>
   </div>
   <div class="row">
-    <span class="name">자리 비움과 끊김 없는 재개</span>
+    <span class="name">자리 비움과 끊김 없는 재개</span> <span class="badge pending"><span class="led"></span>예정</span>
     <span class="meta"><code>JRN-idle-resume</code> · 달성 가치 <code>V2, V3</code> · 4단계</span>
     <span class="spacer"></span>
     <span class="links"><a href="reader.html?doc=user-journeys/JRN-idle-resume.md">문서 읽기</a> <a class="missing" href="#">여정 mockup 준비 중</a></span>
   </div>
   <div class="row">
-    <span class="name">여러 세션 사이 자유 전환</span>
+    <span class="name">여러 세션 사이 자유 전환</span> <span class="badge pending"><span class="led"></span>예정</span>
     <span class="meta"><code>JRN-multi-session-switch</code> · 달성 가치 <code>V4, V3</code> · 4단계</span>
     <span class="spacer"></span>
     <span class="links"><a href="reader.html?doc=user-journeys/JRN-multi-session-switch.md">문서 읽기</a> <a class="missing" href="#">여정 mockup 준비 중</a></span>
   </div>
   <div class="row">
-    <span class="name">동시에 건드려도 깨지지 않는 세션</span>
+    <span class="name">동시에 건드려도 깨지지 않는 세션</span> <span class="badge excepted"><span class="led"></span>예외</span>
     <span class="meta"><code>JRN-concurrent-access</code> · 달성 가치 <code>V5, V3</code> · 3단계</span>
     <span class="spacer"></span>
     <span class="links"><a href="reader.html?doc=user-journeys/JRN-concurrent-access.md">문서 읽기</a> <a class="missing" href="#">의도적 비시각화 — 예외 등재</a></span>
   </div>
   <div class="row">
-    <span class="name">쉘에서 명령을 실행하고 상태를 이어간다</span>
+    <span class="name">쉘에서 명령을 실행하고 상태를 이어간다</span> <span class="badge live"><span class="led"></span>체험 가능</span>
     <span class="meta"><code>JRN-shell-interaction</code> · 달성 가치 <code>V3</code> · 4단계</span>
     <span class="spacer"></span>
-    <span class="links"><a href="reader.html?doc=user-journeys/JRN-shell-interaction.md">문서 읽기</a> <a href="journeys/JRN-shell-interaction/">여정 mockup</a></span>
+    <span class="links"><a href="reader.html?doc=user-journeys/JRN-shell-interaction.md">문서 읽기</a> <a class="primary" href="journeys/JRN-shell-interaction/">여정 mockup</a></span>
   </div>
   <div class="row">
-    <span class="name">작업 환경을 골라 에이전트에게 일을 시킨다</span>
+    <span class="name">작업 환경을 골라 에이전트에게 일을 시킨다</span> <span class="badge pending"><span class="led"></span>예정</span>
     <span class="meta"><code>JRN-agent-prompt-loop</code> · 달성 가치 <code>V8, V3</code> · 5단계</span>
     <span class="spacer"></span>
     <span class="links"><a href="reader.html?doc=user-journeys/JRN-agent-prompt-loop.md">문서 읽기</a> <a class="missing" href="#">여정 mockup 준비 중</a></span>
   </div>
   <div class="row">
-    <span class="name">다 쓴 세션을 직접 접어두기</span>
+    <span class="name">다 쓴 세션을 직접 접어두기</span> <span class="badge pending"><span class="led"></span>예정</span>
     <span class="meta"><code>JRN-manual-freeze</code> · 달성 가치 <code>V2, V3</code> · 3단계</span>
     <span class="spacer"></span>
     <span class="links"><a href="reader.html?doc=user-journeys/JRN-manual-freeze.md">문서 읽기</a> <a class="missing" href="#">여정 mockup 준비 중</a></span>
   </div>
   <div class="row">
-    <span class="name">끝난 세션을 정리하기</span>
+    <span class="name">끝난 세션을 정리하기</span> <span class="badge pending"><span class="led"></span>예정</span>
     <span class="meta"><code>JRN-session-deletion</code> · 달성 가치 <code>V2 (부분)</code> · 3단계</span>
     <span class="spacer"></span>
     <span class="links"><a href="reader.html?doc=user-journeys/JRN-session-deletion.md">문서 읽기</a> <a class="missing" href="#">여정 mockup 준비 중</a></span>
   </div>
   <div class="row">
-    <span class="name">밖으로 나가는 일마다 내가 승인하고 맡긴다</span>
+    <span class="name">밖으로 나가는 일마다 내가 승인하고 맡긴다</span> <span class="badge pending"><span class="led"></span>예정</span>
     <span class="meta"><code>JRN-approval-gated-work</code> · 달성 가치 <code>V8, V3</code> · 4단계</span>
     <span class="spacer"></span>
     <span class="links"><a href="reader.html?doc=user-journeys/JRN-approval-gated-work.md">문서 읽기</a> <a class="missing" href="#">여정 mockup 준비 중</a></span>
