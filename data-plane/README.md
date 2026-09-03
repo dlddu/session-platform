@@ -1,7 +1,8 @@
 # data-plane
 
-The data plane is where actual session workloads run — one dedicated pod per
-session (AC-A2). The control plane provisions and reclaims these pods via the
+The data plane is where actual session workloads run — one dedicated workload
+pod per session, plus any session-scoped auxiliary pods the workload type
+needs (AC-A2). The control plane provisions and reclaims these pods via the
 `PodOrchestrator` port.
 
 The runtime image includes `git`, `gh`, `curl`, `jq`, and `kubectl` for use by
