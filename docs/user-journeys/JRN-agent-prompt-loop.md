@@ -6,15 +6,18 @@
 |---|---|
 | 여정 식별자 | `JRN-agent-prompt-loop` |
 | 여정명 | 작업 환경을 골라 에이전트에게 일을 시킨다 |
-| 상태 | 초안 (v0.2) |
+| 상태 | 초안 (v0.2.1) |
 | 담당자 | 미지정 |
-| 최종 수정일 | 2026-08-30 |
+| 최종 수정일 | 2026-09-03 |
 | 달성 가치 | V8 목적에 맞는 작업 환경 선택 · V3 끊김 없는 세션 연속성 |
 | 연결 문서 | PRD [`claude-code-workload`](../prd/claude-code-workload.md)(AC-E1~E6) · [`lifecycle`](../prd/lifecycle.md)(AC-B1~B3) · mockup `new-session.html`·`agent-workspace.html` ([매핑](../mockups/README.md)) |
 
 > 이 여정은 두 가지를 함께 담는다 — **타입을 고르는 순간**(`STP-workload-choice`, V8)과
-> `claude-code` 타입의 **사용 루프**(나머지 단계). `shell` 타입의 같은 자리는
-> [`JRN-shell-interaction`](./JRN-shell-interaction.md)이며, **타입이 달라도 플랫폼 보장은 같다**는 것이 V8의 핵심이다.
+> `claude-code` 타입의 **사용 루프**(나머지 단계). 다른 타입의 같은 자리는
+> [`JRN-shell-interaction`](./JRN-shell-interaction.md)(`shell`)과
+> [`JRN-approval-gated-work`](./JRN-approval-gated-work.md)(`approval-gated`)이며,
+> **타입이 달라도 플랫폼 보장은 같다**는 것이 V8의 핵심이다.
+> 타입이 셋으로 늘어난 뒤에도 고르는 순간은 이 여정의 `STP-workload-choice` 하나가 계속 담는다.
 
 ## 1. 서비스 개요 (참고)
 
@@ -45,14 +48,17 @@ P1 멀티세션 작업자 ([README](./README.md#p1-멀티세션-작업자)).
 
 ### `STP-workload-choice` 작업 환경을 고른다
 
-- **사용자 행동**: 세션을 만들면서 작업 환경을 고른다 — 직접 명령을 치는 쉘이거나, 프롬프트로 일을 맡기는 에이전트다.
-  에이전트를 고르면 사용할 모델도 함께 정하는데, 기본값 그대로 넘어갈 수 있다.
+- **사용자 행동**: 세션을 만들면서 작업 환경을 고른다 — 직접 명령을 치는 쉘, 프롬프트로 일을 맡기는 에이전트,
+  또는 **밖으로 나갈 때마다 내 승인을 받는 에이전트** 셋 중 하나다.
+  에이전트 쪽을 고르면 사용할 모델도 함께 정하는데, 기본값 그대로 넘어갈 수 있다.
   **타입과 모델은 세션 수명 동안 바꿀 수 없다** — 바꾸려면 새 세션을 만든다.
-- **터치포인트**: New session 모달의 workload type 카드와 model 선택 (mockup `new-session.html`)
-- **생각·감정**: "뭘 골라야 하지?" — 차이를 모르면 기본값으로 넘어간다. 되돌릴 수 없다는 안내가 없으면 나중에 당황한다.
+  승인 게이트를 고른 뒤의 사용 루프는 [`JRN-approval-gated-work`](./JRN-approval-gated-work.md)가 다룬다.
+- **터치포인트**: New session 모달의 workload type 카드 3종과 model 선택 (mockup `new-session.html`)
+- **생각·감정**: "뭘 골라야 하지?" — 선택지가 셋이 되면서 차이를 읽어야 할 양이 늘었다.
+  차이를 모르면 기본값으로 넘어가고, 되돌릴 수 없다는 안내가 없으면 나중에 당황한다.
 - **페인포인트 / 이탈 위험**: 불변이라는 사실을 고른 뒤에 알게 되면 세션을 버리고 다시 만든다
   → 선택 시점에 불변임을 명시하고, 각 환경이 어떤 일에 맞는지 한 줄로 설명한다. 모델은 기본값으로 지나갈 수 있게 둔다.
-- **관련 AC**: AC-E1, AC-E6 (보조 AC-A1·A2)
+- **관련 AC**: AC-E1, AC-E6, AC-F1 (보조 AC-A1·A2)
 
 ### `STP-prompt-submit` 프롬프트로 일을 맡긴다
 
@@ -107,6 +113,7 @@ P1 멀티세션 작업자 ([README](./README.md#p1-멀티세션-작업자)).
 | 이어 붙일 수 없는 지점까지 밀림 | 전체 이력을 다시 받아 콘솔을 교체한 뒤 이어 본다 | `STP-response-watch` |
 | 보고 있는 중 세션이 접힘 | 자동 복원하지 않고 복원 화면으로 안내 | `JRN-idle-resume`의 `STP-reaccess` |
 | 다른 모델·타입이 필요해짐 | 기존 세션을 바꾸지 않고 새 세션을 만든다 | `STP-workload-choice` |
+| 외부 접근에 사람의 승인이 필요해짐 | `approval-gated` 타입으로 새 세션을 만든다 | `JRN-approval-gated-work`의 `STP-gated-prompt-submit` |
 
 ## 5. 측정 지표
 
@@ -126,3 +133,4 @@ P1 멀티세션 작업자 ([README](./README.md#p1-멀티세션-작업자)).
 | v0.1 | 2026-08-08 | 최초 작성 (구 식별자 J6) — 워크로드 타입 확장과 V8 신설에 따라 신설 | 미지정 |
 | v0.1.1 | 2026-08-09 | live output UX(자동 append·커서 재개·reset 복구) 반영 | 미지정 |
 | v0.2 | 2026-08-30 | 전면 재작성 — 슬러그 식별자 전환. CLI 플래그·커서 인코딩·바이트 상한 등 계약 서술을 AC-E2~E6으로 위임하고 사용자 관측 경험만 남김. 여정 정의·분기·지표·변경 이력 추가, 구현 상태 절은 `../doc-tracker.md`로 이관 | Claude |
+| v0.2.1 | 2026-09-03 | `approval-gated` 타입(AC-F1) 신설 반영 — `STP-workload-choice`에 세 번째 선택지 추가, 신규 여정 `JRN-approval-gated-work`로의 연결과 분기 1행 추가. 단계 수·식별자 변화 없음 | Claude |

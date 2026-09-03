@@ -4,10 +4,21 @@
 # rbac.yaml) and provisions session pods in this same namespace, resolving the
 # namespace from the mounted service account (no SESSION_NAMESPACE env needed).
 #
-# The image is published by .github/workflows/docker-build-push.yaml. The
-# namespace is created by flux-cd-apps (cluster/session-platform.yaml) with the
-# external-secrets/github label, which provisions the `ghcr` pull secret used
-# below. The `gitops-repository` pod annotation is injected by Flux.
+# 이미지는 .github/workflows/docker-build-push.yaml 이 커밋 SHA 태그로 발행하고,
+# 같은 워크플로의 `pin` job 이 main 푸시마다 아래 세 자리(컨테이너 image 1곳 +
+# DATA_PLANE_IMAGE / DATA_PLANE_CLAUDE_CODE_IMAGE env 2곳)를 그 커밋의 SHA 로 바꿔
+# main 에 되커밋한다. 그래서 이 파일이 곧 "운영이 지금 어느 커밋을 돌리는가"의 단일
+# 출처다 — 롤링 태그도 :latest 도 없다.
+#
+# 손으로 고칠 일은 롤백뿐이고, 그때는 되돌릴 커밋의 SHA 를 세 자리에 모두 적는다.
+# 태그가 불변이라 imagePullPolicy 는 기본값(IfNotPresent)이 그대로 옳다.
+#
+# PR 프리뷰 환경(flux-cd-apps 의 apps/session-platform-preview)은 이 base 를 그대로
+# 쓰되 세 자리를 PR head SHA 로 덮어쓴다.
+#
+# 네임스페이스는 flux-cd-apps(cluster/session-platform.yaml)가 만든다. GHCR 패키지는
+# 공개라 imagePullSecret 은 필요 없다. `gitops-repository` pod 애노테이션은 Flux 가
+# 주입한다.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -27,7 +38,8 @@ spec:
       serviceAccountName: control-plane
       containers:
         - name: control-plane
-          image: ghcr.io/dlddu/session-platform:latest
+          # ⚙️ CI가 관리하는 줄입니다(docker-build-push.yaml 의 `pin` job).
+          image: ghcr.io/dlddu/session-platform:8381b806448660fe9b5609d06569d171d0d0b964
           ports:
             - containerPort: 8080
           env:
@@ -35,8 +47,10 @@ spec:
               value: ":8080"
             # Session pods run the published multi-workload data plane agent
             # image. DATA_PLANE_WORKLOAD selects PTY shell or Claude Code mode.
+            # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다(env value 라 kustomize 의
+            # images 변환이 닿지 않는 자리다).
             - name: DATA_PLANE_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:latest"
+              value: "ghcr.io/dlddu/session-platform-data-plane:8381b806448660fe9b5609d06569d171d0d0b964"
             # mock-exception: CRIU-GATE — 검증된 런타임이 설 때까지 off가 프로덕션의 의도된
             # 동작이다(그 경로에서 쉘 동결/복원은 no-op 스텁). e2e 오버레이(deploy/)만 on으로
             # 올려 실 경로를 탄다. 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
@@ -44,8 +58,9 @@ spec:
               # Production stays opt-in until node capability, privileged-pod,
               # and durable checkpoint-store policies are explicitly approved.
               value: "false"
+            # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다.
             - name: DATA_PLANE_CLAUDE_CODE_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:latest"
+              value: "ghcr.io/dlddu/session-platform-data-plane:8381b806448660fe9b5609d06569d171d0d0b964"
             # The required base-url/auth-token keys are referenced only by the
             # localhost credential-proxy sidecar. The required k3s-mcp-token is
             # referenced only by the Claude tool-running container. A

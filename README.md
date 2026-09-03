@@ -68,7 +68,8 @@ docs/                 value / PRD·AC / journeys / mockups / CRIU verification n
 ## Architecture
 
 - **Control plane / data plane split** (AC-A1): the control plane orchestrates;
-  workloads run only in data plane pods. One dedicated pod per session (AC-A2).
+  workloads run only in data plane pods. One dedicated workload pod per session,
+  plus any session-scoped auxiliary pods the workload type needs (AC-A2).
 - **State model** `active | idle | snapshot` stored in per-session ConfigMaps,
   with resourceVersion compare-and-swap for whole-aggregate transitions and
   renewable `coordination.k8s.io` Leases for occupancy locks (AC-C1) — shared

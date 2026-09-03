@@ -22,26 +22,31 @@
 | 파일 | 화면(`<title>`) | 시각화하는 여정 단계 | 달성 가치 | 디자인 시스템 |
 |------|------|----------------------|-----------|----------------|
 | [`index.html`](./index.html) | Sessions — control plane (세션 목록 대시보드) | **`STP-session-list`** (보조: `STP-step-away`·`STP-switch-away`·`STP-freeze-confirm`) | V4 (보조 V1·V5·V8) | 미연결 — 인라인 임의 토큰 |
-| [`new-session.html`](./new-session.html) | New session (새 세션 생성) | **`STP-create-request`, `STP-workspace-entry`, `STP-workload-choice`** | V1, V5, **V8** | 미연결 — 인라인 임의 토큰 |
+| [`new-session.html`](./new-session.html) | New session (새 세션 생성) | **`STP-create-request`, `STP-workspace-entry`, `STP-workload-choice`**(타입 카드 3종) | V1, V5, **V8** | 미연결 — 인라인 임의 토큰 |
 | [`workspace.html`](./workspace.html) | Session workspace (활성 `shell` 세션 작업) | **`STP-isolated-work`, `STP-shell-attach`, `STP-command-input`, `STP-output-read`, `STP-shell-state-carry`, `STP-freeze-now`** | V1, V3, V2 | 미연결 — 인라인 임의 토큰 |
 | [`agent-workspace.html`](./agent-workspace.html) | Agent session workspace (활성 `claude-code` 세션 작업) | **`STP-prompt-submit`, `STP-response-watch`, `STP-conversation-carry`, `STP-agent-freeze-resume`, `STP-freeze-now`** | V8, V3, V2 (보조 V1) | 미연결 — 인라인 임의 토큰 |
+| [`gated-workspace.html`](./gated-workspace.html) | Gated agent session workspace (활성 `approval-gated` 세션 작업 · 워크로드 파드 + 헬퍼 파드) | **`STP-gated-prompt-submit`, `STP-approval-wait`, `STP-gated-result`, `STP-freeze-now`** | V8, V3, V2 (보조 V1) | 미연결 — 인라인 임의 토큰 |
 | [`restore.html`](./restore.html) | Resume from checkpoint (`shell` CRIU 복원) | **`STP-restore-resume`(`shell`)** (보조: `STP-auto-freeze`) | V3, V2 | 미연결 — 인라인 임의 토큰 |
 
-> **타입별 작업 화면이 둘로 갈립니다 (2026-08-08)**: `workspace.html`은 `shell` 타입, `agent-workspace.html`은 `claude-code` 타입 전용입니다.
-> `index.html`의 세션 카드는 workloadType 태그를 달고 타입에 따라 두 화면 중 하나로 링크합니다 — 이것이
-> `JRN-shell-interaction`(쉘)과 `JRN-agent-prompt-loop`(에이전트)가 갈리는 지점입니다.
+> **타입별 작업 화면이 셋으로 갈립니다 (2026-08-08 → 2026-09-03)**: `workspace.html`은 `shell` 타입,
+> `agent-workspace.html`은 `claude-code` 타입, `gated-workspace.html`은 `approval-gated` 타입 전용입니다.
+> `index.html`의 세션 카드는 workloadType 태그를 달고 타입에 따라 세 화면 중 하나로 링크합니다 — 이것이
+> `JRN-shell-interaction`(쉘) · `JRN-agent-prompt-loop`(에이전트) · `JRN-approval-gated-work`(승인 게이트)가
+> 갈리는 지점입니다. 고르는 순간은 셋 다 `new-session.html`의 같은 카드 묶음에서 일어납니다.
 >
 > 참고: `workspace.html`의 session shell 콘솔은 2026-07-01 쉘 명령 기준으로 갱신됨(옛 key/value write 예시 → `$ ls` / `$ npm run build` 등 쉘 입력·출력, 복원 시 env·cwd 보존 시연). `JRN-shell-interaction`과 정합.
 > `restore.html` 콘솔도 2026-08-08 같은 기준으로 갱신됨(옛 key/value read/write 예시 제거 — 이전 판의 🟡 위험 해소).
 
-> 5개 mockup 모두 인라인 CSS 변수를 사용 → 전부 **임의 스타일 mockup(🟢)**.
-> `agent-workspace.html`은 `workspace.html`의 인라인 토큰을 복사해 만들었으므로 겉보기 일관성은 있으나, **시스템에 연결된 것은 아닙니다.**
+> 6개 mockup 모두 인라인 CSS 변수를 사용 → 전부 **임의 스타일 mockup(🟢)**.
+> `agent-workspace.html`은 `workspace.html`의, `gated-workspace.html`은 `agent-workspace.html`의 인라인 토큰을
+> 복사해 만들었으므로 겉보기 일관성은 있으나, **시스템에 연결된 것은 아닙니다.**
 >
 > **2026-08-08 (4) 갱신 — 디자인 시스템 정본이 생겼습니다**: [`web/src/design/`](../../web/src/design/README.md)
 > (토큰·프리미티브 `tokens.css`, 컴포넌트·패턴 `web/src/app/shell.css`). 코드가 정본이고 문서는 색인입니다.
-> 다만 mockup 5개는 여전히 그 정본을 참조하지 않고 같은 값을 각자 인라인으로 갖고 있습니다 —
+> 다만 mockup 6개는 여전히 그 정본을 참조하지 않고 같은 값을 각자 인라인으로 갖고 있습니다 —
 > 값은 일치하지만 **연결은 아니므로 "미연결" 상태는 유지**됩니다.
-> 토큰 하나를 바꾸려면 `tokens.css` + mockup 5개 = **6곳**을 고쳐야 하며, 이 중복이 남은 🟢 위험의 실체입니다.
+> 토큰 하나를 바꾸려면 `tokens.css` + mockup 6개 = **7곳**을 고쳐야 하며, 이 중복이 남은 🟢 위험의 실체입니다.
+> `gated-workspace.html` 신설로 중복이 한 곳 더 늘었습니다.
 > 방향 규칙: **코드를 먼저 고치고 mockup이 따라옵니다.**
 
 ---
@@ -103,12 +108,21 @@
 | `STP-conversation-carry` 대화 이어짐 | ✅ | `agent-workspace.html` **Conversation 패널** — 턴 이력·작업 디렉터리·생성 파일 |
 | `STP-agent-freeze-resume` 동결·복원 건너 이어감 | ✅ | `agent-workspace.html` snapshot 상태 콘솔 — 아카이브 기반, 복원 후 옛 문맥으로 응답 |
 
+### `JRN-approval-gated-work` (2026-09-03 신설)
+
+| 단계 | 시각화 | mockup · 근거 |
+|------|:---:|------|
+| `STP-gated-prompt-submit` 게이트가 걸린 채 맡김 | ✅ | `gated-workspace.html` input-row + "outbound calls need your approval" 표시 · Egress 패널 |
+| `STP-approval-wait` 승인 대기가 보임 | ✅ | `gated-workspace.html` 콘솔의 **awaiting approval 배지** + Approvals 패널(대기 항목·요청 식별자) |
+| `STP-approval-decide` 승인·거절 결정 | ❌ | **전용 화면 없음 — 결정이 일어나는 승인 게이트웨이 화면이 이 레포 밖**이다. 세션 쪽에는 요청 식별자만 남아 두 화면을 눈으로 잇는다. ⚪(의도적 비시각화)로 볼지 ❌로 볼지 결정 대기 (`../user-journeys/README.md` 열린 결정) |
+| `STP-gated-result` 승인 결과 위에서 이어감 | ✅ | `gated-workspace.html` 콘솔의 approved/rejected verdict + Conversation 패널의 shared volume 행 |
+
 ### `JRN-manual-freeze` (2026-08-30 신설)
 
 | 단계 | 시각화 | mockup · 근거 |
 |------|:---:|------|
 | `STP-freeze-decision` 접어두기 결정 | ❌ | 전용 화면 없음 — 접기/지우기를 한자리에서 비교하는 지점이 mockup에 없다 |
-| `STP-freeze-now` 지금 접기 | ✅ | `workspace.html` "Freeze now" · `agent-workspace.html` "Archive now" |
+| `STP-freeze-now` 지금 접기 | ✅ | `workspace.html` "Freeze now" · `agent-workspace.html`·`gated-workspace.html` "Archive now" |
 | `STP-freeze-confirm` 접힘 확인 | ⚠️ | `index.html`의 `snapshot` 배지로 암시 (완료 알림·되살릴 수 있음 문구 없음) |
 
 ### `JRN-session-deletion` (2026-08-30 신설)
@@ -119,7 +133,7 @@
 | `STP-delete-confirm` 삭제 확인 | ❌ | 삭제 확인 대화상자 mockup 없음 (SPA `DeleteSessionDialog`만 존재) |
 | `STP-delete-settled` 삭제 완료 확인 | ❌ | 전용 화면 없음 |
 
-요약: ✅ 15 · ⚠️ 5 · ❌ 6 · ⚪ 3 (총 29단계 / 8여정)
+요약: ✅ 18 · ⚠️ 5 · ❌ 7 · ⚪ 3 (총 33단계 / 9여정)
 
 ---
 
@@ -130,10 +144,17 @@
   `web/src/screens/Workspace.tsx`의 Freeze/Archive now). mockup을 추가할지, "구현이 앞선 흐름은 mockup 생략"으로
   수용할지 **결정 대기 중**입니다.
 - **🟡 시각화 누락**: `STP-reaccess`(재접근), `STP-switch-back`(원래 세션 복귀). 의도적 제외인지 화면이 필요한지 **결정 대기 중**.
+- **🟠 다른 제품에 걸친 단계 (2026-09-03)**: `STP-approval-decide`는 **외부 승인 게이트웨이의 화면**에서 일어납니다.
+  이 레포가 그릴 대상이 아니므로 `JRN-concurrent-access`처럼 ⚪(의도적 비시각화)로 수용할지, 아니면
+  세션 쪽에 승인 요청을 요약해 보여주는 최소 화면을 두어 ✅로 만들지 **결정 대기 중**입니다.
+  현재는 보수적으로 ❌로 셉니다.
 - **🟡 부분 시각화**: `STP-step-away`, `STP-auto-freeze`, `STP-switch-away`, `STP-target-activation`, `STP-freeze-confirm`
   — 상태 표시·네비게이션·전환 동작으로 암시되나 단계 전용 화면은 없음.
 - **✅ 해결됨 (2026-08-08) — `STP-shell-state-carry`**: `workspace.html`에 Shell state 패널이 추가되어
   "축적된 쉘 상태가 다음 명령으로 이어지고 그대로 동결된다"를 렌더. 이전 ❌ → ✅.
+- **✅ 해결됨 (2026-09-03) — `JRN-approval-gated-work` 4단계 중 3단계**: `approval-gated` 타입(AC-F1~F6)이
+  상류에 확정되면서 `gated-workspace.html`을 신설하고 `new-session.html`에 세 번째 타입 카드를 더해
+  제출·대기·결과가 화면을 얻었습니다. 남은 ❌ 1건은 위의 "다른 제품에 걸친 단계"입니다.
 - **✅ 해결됨 (2026-08-08) — `JRN-agent-prompt-loop` 전 단계**: `claude-code` 워크로드 타입(AC-E1~E6)과 가치 V8이
   상류에 확정된 뒤 대응 화면이 없던 상태(🔴 위험)가 `new-session.html` 타입 선택 + `agent-workspace.html` 신설로 해소.
 - **✅ 해결됨 (2026-07-01) — 쉘 루프 mockup 내용**: `workspace.html`의 session shell 콘솔이 옛 key/value write 예시에서
@@ -155,11 +176,23 @@
   missing/empty면 CLI 기본 선택에 위임한다. 실행 중 컨테이너는 Secret 변경으로 즉시 바뀌지 않는다.
 - **대화 재개 (AC-E4)**: 실제 계약은 첫 성공 실행 뒤 `--continue`와 세션별 고정 HOME/workdir이다.
   mockup은 CLI flag 자체보다 사용자가 보는 연속 대화 결과를 표현한다.
+- **승인 요청 예시 (AC-F3)**: `gated-workspace.html`의 `req-2c81`·`req-4f2a`, `rates.vendor.example`,
+  `/shared` 경로는 전부 자리표시자다. 실제 외부 식별자는 `{세션ID}:{요청ID}` 규칙만 계약이고, 도구 이름·
+  마운트 경로·대기 시간 표기는 구현 시 확정된다. 결정 UI는 이 레포 밖(승인 게이트웨이)이다.
+- **보조 파드 표기 (AC-F4)**: mockup의 `helper/…` 파드 이름과 Egress 허용 목록 표기는 예시다.
+  다만 **워크로드 파드와 헬퍼 파드(MCP·credential-proxy 컨테이너)가 함께 뜨고 함께 회수된다**는 사실,
+  **자격 증명이 컨테이너 단위로 갈린다**는 사실, Egress 패널이 말하는 **"허용 목록에 외부 origin이 하나도
+  없다"**는 AC-F2/F4/F6의 실제 계약이다.
+  (2026-09-03 이전 판은 이 자리에 "공급자 HTTPS는 아직 허용 목록에 있다"는 경고를 달고 있었다 —
+  공급자 프록시를 워크로드 파드 밖으로 내면서 해소되었다.)
 
 ---
 
 ## 마지막 갱신
 
+- **2026-09-03 (9)** — **보조 파드를 헬퍼 파드 하나로 통합**: 상류에서 MCP와 credential-proxy를 별개 파드가 아니라 **한 헬퍼 파드의 컨테이너 둘**로 확정하여(AC-F4) Egress 패널을 헬퍼 파드 한 항목 + 컨테이너 두 줄로 접고, 자격 증명 행을 "mcp container / proxy container"로, 파드 표기를 둘로 줄였다. **mockup 수·커버리지·요약은 변하지 않는다.** 새 토큰 없이 기존 인라인 클래스만 재사용했다.
+- **2026-09-03 (8)** — **공급자 프록시를 보조 파드로 이관**: AC-F2의 열린 결정이 ①(프록시를 사이드카에서 보조 파드로 분리)으로 확정되어 `gated-workspace.html`의 Egress 패널에서 경고(⚠️ 공급자 HTTPS가 허용 목록에 있음)를 걷어내고 허용 항목에 프록시 파드를, 차단 항목에 "공급자 API 직접"을 넣었다. Workload 패널의 자격 증명 행을 파드별 배치(게이트웨이 키=MCP · 공급자 토큰=프록시 · 워크로드 파드=없음)로 바꾸고, 파드 표기를 셋으로 확장했다. **mockup 수·단계 커버리지·요약은 변하지 않는다** — 같은 화면의 내용 갱신이다. 새 토큰·컴포넌트 없이 기존 인라인 클래스(`.eg`·`.ctx-note`·`.kv`)만 재사용했다.
+- **2026-09-03 (7)** — **`approval-gated` 타입 신설에 따른 mockup 확충**: `gated-workspace.html` 신규 작성(승인 대기 배지·승인/거절 verdict·Approvals 패널·Egress 허용 목록 패널·공유 볼륨 행), `new-session.html`에 세 번째 타입 카드 추가(`STP-workload-choice`), `index.html` 카드의 타입 태그·링크 분기를 3종으로 확장. 여정 8→9, 단계 29→33, mockup 5→6, 요약 ✅15→18 / ❌6→7. 신규 여정의 ❌ 1건(`STP-approval-decide`)은 결정 화면이 이 레포 밖이라는 사실이 드러난 결과다. 임의 스타일 mockup 5→6(토큰 중복 6곳→7곳).
 - **2026-08-30 (6)** — **여정 문서 전면 재작성에 따른 매핑 갱신**: 단계 식별자가 순번에서 슬러그로 전환되어 이 문서의 매핑을 여정별 표로 재구성했다. 여정 6→8(`JRN-manual-freeze`·`JRN-session-deletion` 신설), 단계 23→29, 요약 ✅14→15 / ⚠️4→5 / ❌2→6 / ⚪3. **mockup 파일 자체는 변경 없음** — 늘어난 ❌는 새로 문서화된 흐름(수동 동결 결정·세션 삭제)이 mockup에 없다는 사실이 드러난 결과다.
 - **2026-08-09 (5)** — **J6 live output UX 갱신**: `agent-workspace.html`이 passive SSE 연결 상태와 실행 중 자동 append, `nextOffset` cursor 재개, snapshot Restore 전환을 표현하도록 갱신했다. 서버 run/queue 수는 추정하지 않으며 mockup 수·커버리지 합계는 변하지 않았다.
 - **2026-08-08 (3)** — **J6 신설에 따른 mockup 확충**: `agent-workspace.html` 신규 작성(J6-S2~S5), `new-session.html`에 workload type·model 선택 추가(J6-S1 · V8), `workspace.html`에 Shell state 패널 추가(J5-S4 ❌→✅), `index.html` 카드에 workloadType 태그·타입별 링크 분기 추가, `restore.html` 콘솔을 쉘 기준으로 갱신(옛 key/value 예시 제거). mockup 4→5, 단계 총계 18→23, 요약 ✅8→14 / ❌3→2. **V8 시각화 부재(🔴) 해소.**

@@ -410,18 +410,23 @@ let sessions = [
   {id:'2db8', name:'notebook-alpha', type:'shell', state:'active', pod:'sess-2db8-m04c', region:'us-east-1', up:'47m', upMin:47, cpu:12, mem:240, memMax:1024, idleMin:0},
   {id:'a92f', name:'migrate-schema', type:'claude-code', state:'idle', pod:'sess-a92f-k3md', region:'us-east-1', up:'2h 11m', upMin:131, cpu:2, mem:196, memMax:2048, idleMin:41, freezeSec:1140},
   {id:'4e5f', name:'scrape-worker', type:'shell', state:'idle', pod:'sess-4e5f-q8wd', region:'us-east-1', up:'1h 38m', upMin:98, cpu:3, mem:188, memMax:1024, idleMin:48, freezeSec:702},
+  {id:'6d40', name:'vendor-rates-sync', type:'approval-gated', state:'active', pod:'sess-6d40-p2vq', region:'us-east-1', up:'42m', upMin:42, cpu:19, mem:372, memMax:2048, idleMin:0},
   {id:'0a17', name:'model-train-7b', type:'shell', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'2h ago', checkpoint:'412 MB', reclaim:'2 vCPU · 4 GB'},
   {id:'c83d', name:'doc-migration', type:'claude-code', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'18m ago', checkpoint:'38 MB archive', reclaim:'1 vCPU · 2 GB'}
 ];
 // 타입에 따라 작업 화면이 갈린다: shell → workspace.html · claude-code → agent-workspace.html
+// · approval-gated → gated-workspace.html (AC-F1)
+const WS_PAGE = {'claude-code':'agent-workspace.html', 'approval-gated':'gated-workspace.html', 'shell':'workspace.html'};
 function wsHref(s){
   if(s.state==='snapshot') return `restore.html?id=${s.id}`;
-  return s.type==='claude-code' ? `agent-workspace.html?id=${s.id}` : `workspace.html?id=${s.id}`;
+  return `${WS_PAGE[s.type]||'workspace.html'}?id=${s.id}`;
 }
 function typeTag(s){
-  return s.type==='claude-code'
-    ? `<span class="pod" style="color:#b79ae0" title="workloadType=claude-code">◇ claude-code</span>`
-    : `<span class="pod" style="color:var(--text-faint)" title="workloadType=shell">$ shell</span>`;
+  if(s.type==='claude-code')
+    return `<span class="pod" style="color:#b79ae0" title="workloadType=claude-code">◇ claude-code</span>`;
+  if(s.type==='approval-gated')
+    return `<span class="pod" style="color:var(--idle)" title="workloadType=approval-gated">⏸ approval-gated</span>`;
+  return `<span class="pod" style="color:var(--text-faint)" title="workloadType=shell">$ shell</span>`;
 }
 function fmtSec(s){const m=Math.floor(s/60),ss=s%60;return m+':'+String(ss).padStart(2,'0');}
 function qid(){return new URLSearchParams(location.search).get('id');}
@@ -475,9 +480,9 @@ function cardHTML(s){
         <div class="row"><span class="k">frozen</span><span class="v">${s.frozenAgo}</span></div>
         <div class="row"><span class="k">reclaimed</span><span class="v">${s.reclaim}</span></div>
       </div></div>
-      <div class="snap-hint">${ic('clock',13)} ${s.type==='claude-code'
-        ? 'open to restore the archive and continue the conversation'
-        : 'open to thaw and resume exactly where it froze'}</div>`;
+      <div class="snap-hint">${ic('clock',13)} ${s.type==='shell'
+        ? 'open to thaw and resume exactly where it froze'
+        : 'open to restore the archive and continue the conversation'}</div>`;
   }
   const podLine = s.state==='snapshot'
     ? `<span class="pod" style="color:#5a7686">${ic('pod',12)} pod reclaimed</span>`
