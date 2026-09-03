@@ -3,14 +3,11 @@
 // 검증 AC: AC-C2
 //
 // Read dispatches on the session's state and always ends with the session
-// `active` (docs/prd/state-api.md, docs/test/state-api.md scenario 2). The
-// response's `path` field names the branch taken:
+// `active`. The response's `path` field names the branch taken:
 //   - active            -> "active"                    (asserted below)
 //   - snapshot          -> "snapshot->restore->read"   (asserted below)
 //   - idle              -> "idle->active->read"        (not asserted: no way to
-//     reach `idle` yet — the idle entry trigger rides on the same undecided
-//     policy as AC-B1, service/session.go TODO(policy). Registered as a gap in
-//     docs/test/e2e.md, not as a separate matching file.)
+//     reach `idle` yet. Registered as a gap in docs/test/e2e.md.)
 //
 // What read RETURNS (shell scrollback, offset cursor semantics) is AC-D3's file.
 package e2e_test

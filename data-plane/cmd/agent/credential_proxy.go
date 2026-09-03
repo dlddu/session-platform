@@ -63,7 +63,7 @@ func newCredentialProxy(rawUpstream, token string, logger *slog.Logger) (*creden
 }
 
 // newCredentialProxyWithTransport is the test seam for TLS servers with an
-// ephemeral CA. Production always enters through newCredentialProxy above.
+// ephemeral CA.
 func newCredentialProxyWithTransport(
 	rawUpstream string,
 	token string,

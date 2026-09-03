@@ -5,11 +5,8 @@ import type { Session, WorkloadType } from "../api/types";
 import { liveSessionPath } from "../app/sessionRoutes";
 
 // NewSession — modal over the Sessions console. A two-phase flow: immutable
-// workload configuration, then a staged provisioning view. Submit POSTs
-// /api/v1/sessions (which atomically provisions a dedicated pod, AC-A1/A2) then
-// routes to the type-appropriate workspace. The three stages are a visual
-// affordance only — the create call is atomic on the backend.
-// [plan steps 2-6]
+// workload configuration, then a staged provisioning view. The three stages are
+// a visual affordance only — the create call is atomic on the backend.
 
 const STEP_LABELS = [
   "Register session metadata",
@@ -206,7 +203,6 @@ export function NewSession() {
     return () => clearTimeout(timer);
   }, [phase, reduce]);
 
-  // Response landed: fill the pod callout and mark every stage done.
   useEffect(() => {
     if (!session) return;
     setPod(session.pod ?? "pod scheduled");

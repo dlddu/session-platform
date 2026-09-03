@@ -1,12 +1,8 @@
-// 매칭 단위 밖 (AC ↔ e2e 1:1): 이 디렉터리의 여정 spec은 web/e2e 최상위가 아니므로
-// AC 매칭 단위가 아니다. 여정 전체를 한 파일에서 훑는 형태를 유지하되, 각 AC의 주검증은
-// Go e2e의 전용 파일이 소유한다. 등재: docs/test/e2e.md.
+// 매칭 단위 밖 (AC ↔ e2e 1:1). 등재: docs/test/e2e.md.
 import { test, expect, type Page } from "@playwright/test";
 
-// JRN-shell-interaction — running commands in the session shell and following the output.
-// Value V6 (interactive shell session); AC-D2 (write → shell stdin) and AC-D3
-// (read = offset-cursored delta of the scrollback; offset 0 replays the full
-// history on re-entry).
+// JRN-shell-interaction — running commands in the session shell and following
+// the output.
 //
 // Output timing is non-deterministic (PTY echo, bash scheduling), so every
 // assertion is containment with a generous timeout — never an exact match.

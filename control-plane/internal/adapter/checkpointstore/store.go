@@ -3,7 +3,6 @@
 // here so it outlives the pod and can restore on another node.
 //
 // Credentials use the ambient chain and may optionally assume a configured role.
-// Local/e2e S3-compatible deployments may use ambient static environment keys.
 package checkpointstore
 
 import (
@@ -27,14 +26,13 @@ const defaultSessionName = "session-platform-checkpointer"
 // defaultPrefix is the key prefix under which archives are stored.
 const defaultPrefix = "checkpoints"
 
-// Config configures the S3 checkpoint store. Bucket and Region are required;
-// the rest are optional.
+// Config configures the S3 checkpoint store. Bucket and Region are required.
 type Config struct {
-	Bucket  string // target S3 bucket (required)
-	Region  string // AWS region (required)
-	RoleARN string // IAM role to assume for bucket access; empty uses the
-	// ambient credentials directly (instance profile / IRSA / static env keys —
-	// the last is how the S3-compatible e2e backend authenticates).
+	Bucket string // target S3 bucket (required)
+	Region string // AWS region (required)
+	// RoleARN is the IAM role to assume for bucket access; empty uses the ambient
+	// credentials directly (instance profile / IRSA / static env keys).
+	RoleARN     string
 	Prefix      string // key prefix for archives (default "checkpoints")
 	SessionName string // STS role session name (default defaultSessionName)
 	Endpoint    string // S3-compatible endpoint (e.g. MinIO); empty = AWS S3
@@ -56,9 +54,8 @@ type S3 struct {
 }
 
 // NewS3 builds an S3 store whose client authenticates by assuming Config.RoleARN
-// via STS, layered over the ambient credential chain (the node instance profile
-// or IRSA provides the base credentials). Building the client makes no network
-// call — credentials are resolved lazily on the first S3 request.
+// via STS, layered over the ambient credential chain. Building the client makes
+// no network call — credentials are resolved lazily on the first S3 request.
 func NewS3(ctx context.Context, cfg Config) (*S3, error) {
 	if cfg.Bucket == "" || cfg.Region == "" {
 		return nil, fmt.Errorf("checkpoint S3 store needs bucket and region (got bucket=%q region=%q)",
@@ -119,8 +116,7 @@ func (s *S3) Bucket() string { return s.bucket }
 // produces it while dumping — which S3 cannot take directly: the SDK needs a
 // seekable body to compute the request checksum and Content-Length, and its
 // fallback (trailing checksums over an aws-chunked body) requires TLS. So spool
-// the stream to a temp file first and upload that. A future large-archive path
-// can replace the spool with the SDK's multipart uploader.
+// the stream to a temp file first and upload that.
 func (s *S3) Put(ctx context.Context, key string, r io.Reader) (string, error) {
 	full := s.key(key)
 

@@ -1,13 +1,10 @@
-// 매칭 단위 밖 (AC ↔ e2e 1:1): 이 디렉터리의 여정 spec은 web/e2e 최상위가 아니므로
-// AC 매칭 단위가 아니다. 여정 전체를 한 파일에서 훑는 형태를 유지하되, 각 AC의 주검증은
-// Go e2e의 전용 파일이 소유한다. 등재: docs/test/e2e.md.
+// 매칭 단위 밖 (AC ↔ e2e 1:1). 등재: docs/test/e2e.md.
 import { test, expect } from "@playwright/test";
 
-// JRN-multi-session-switch — multiple sessions and free switching.
-// Value V4 (free multi-session switching) + V3 (continuity); AC-C4 (switch).
-// Sessions are created via the API so the spec focuses on list -> card ->
-// workspace navigation. In the α scope every target is active, so switching is
-// a no-op (the snapshot -> restore path is deferred; see deferred.spec.ts).
+// JRN-multi-session-switch — multiple sessions and free switching. Sessions are
+// created via the API so the spec focuses on list -> card -> workspace
+// navigation. In the α scope every target is active, so switching is a no-op
+// (the snapshot -> restore path is deferred; see deferred.spec.ts).
 test("list multiple active sessions and switch between them", async ({ page, request }) => {
   const prefix = `j3-${Date.now()}`;
   const ids: string[] = [];

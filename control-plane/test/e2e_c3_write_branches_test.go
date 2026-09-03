@@ -3,14 +3,12 @@
 // 검증 AC: AC-C3
 //
 // Write follows the same uniform rule as read — bring the session `active`
-// first, then apply (docs/prd/state-api.md, docs/test/state-api.md scenario 3).
-// A snapshot write is NOT rejected: it restores and then applies. The response's
-// `path` names the branch:
+// first, then apply. A snapshot write is NOT rejected: it restores and then
+// applies. The response's `path` names the branch:
 //   - active   -> "active"                     (asserted below)
 //   - snapshot -> "snapshot->restore->write"   (asserted below)
 //   - idle     -> "idle->active->write"        (not asserted: `idle` is not
-//     reachable yet — same undecided trigger policy as AC-B1. Registered as a
-//     gap in docs/test/e2e.md, not as a separate matching file.)
+//     reachable yet. Registered as a gap in docs/test/e2e.md.)
 //
 // What write DOES to the workload (stdin injection, non-blocking return) is
 // AC-D2's file.

@@ -2,10 +2,9 @@
 
 // 검증 AC: AC-A2
 //
-// One session ⇒ one dedicated Pod, 1:1 (docs/prd/architecture.md, docs/test/architecture.md
-// scenarios 1·2). Asserted at both levels: the wire contract (create returns an
-// active session carrying its own pod name) and the cluster ground truth (a real
-// Pod object labelled `session-id` back to that session, never shared).
+// Asserted at both levels: the wire contract (create returns an active session
+// carrying its own pod name) and the cluster ground truth (a real Pod object
+// labelled `session-id` back to that session, never shared).
 package e2e_test
 
 import (
@@ -13,8 +12,6 @@ import (
 	"testing"
 )
 
-// Creating a session yields an active session bound to a pod of its own, and
-// that pod is a real Pod object labelled 1:1 to the session.
 func TestDedicatedPod_CreatedSessionOwnsItsPod(t *testing.T) {
 	s := createSession(t, uniqueName(t))
 	if s.ID == "" {

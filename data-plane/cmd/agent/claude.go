@@ -71,8 +71,7 @@ var (
 	errClaudeCheckpointID    = errors.New("no matching claude checkpoint")
 )
 
-// commandRunner is the process-execution seam for the Claude CLI. Production
-// uses execCommandRunner; tests inject a deterministic fake.
+// CommandRunner is the process-execution seam for the Claude CLI.
 type commandRunner interface {
 	Run(ctx context.Context, argv []string, opts runnerOptions) error
 }
@@ -744,7 +743,7 @@ func ensureClaudeManagedSettings(homeDir string) error {
 			return nil
 		}
 		// Snapshots produced before the managed plugin was introduced contain the
-		// same restricted permissions but no enabledPlugins entry. Upgrade that one
+		// same restricted permissions but no enabledPlugins entry; upgrade that one
 		// safe legacy shape during restore/container restart.
 		settings.EnabledPlugins = map[string]bool{claudeSessionPlatformPlugin: true}
 		return storeClaudeManagedSettings(settingsDir, settingsPath, settings)

@@ -71,8 +71,8 @@ func TestReserveShellPIDIsBestEffort(t *testing.T) {
 	}
 }
 
-// AC-D1: the started shell is attached to a PTY — its stdin is a PTY slave —
-// and exactly one shell exists (one startShell call spawns one process).
+// The started shell is attached to a PTY — its stdin is a PTY slave — and exactly
+// one shell exists (one startShell call spawns one process).
 func TestStartShellAttachesPTY(t *testing.T) {
 	sh := startTestShell(t)
 	if !sh.alive.Load() {
@@ -151,7 +151,6 @@ func TestScrollbackSinceDeltas(t *testing.T) {
 	}
 }
 
-// readViaHTTP hits GET /read?offset=N and decodes the JSON result.
 func readViaHTTP(t *testing.T, srv *httptest.Server, offset int) (string, int) {
 	t.Helper()
 	resp, err := http.Get(fmt.Sprintf("%s/read?offset=%d", srv.URL, offset))
@@ -172,7 +171,6 @@ func readViaHTTP(t *testing.T, srv *httptest.Server, offset int) (string, int) {
 	return out.Payload, out.NextOffset
 }
 
-// writeViaHTTP posts a raw payload to /write, asserting the given status.
 func writeViaHTTP(t *testing.T, srv *httptest.Server, payload string, wantStatus int) {
 	t.Helper()
 	resp, err := http.Post(srv.URL+"/write", "application/octet-stream", strings.NewReader(payload))
@@ -204,9 +202,9 @@ func eventuallyRead(t *testing.T, srv *httptest.Server, offset int, ok func(payl
 	return "", 0
 }
 
-// AC-D2 + AC-D3 happy path: a command written to /write is executed by the
-// shell (the PTY echoes the input and the shell prints the result) and its
-// output is recovered via /read.
+// Happy path: a command written to /write is executed by the shell (the PTY
+// echoes the input and the shell prints the result) and its output is recovered
+// via /read.
 func TestWriteThenReadRecoversOutput(t *testing.T) {
 	sh := startTestShell(t)
 	srv := httptest.NewServer(routes(testLogger(), newTestAgent(sh)))
@@ -227,8 +225,8 @@ func TestWriteThenReadRecoversOutput(t *testing.T) {
 	}
 }
 
-// AC-D3: a cursor read returns only the delta after the cursor, while offset 0
-// keeps returning the full history (non-consuming).
+// A cursor read returns only the delta after the cursor, while offset 0 keeps
+// returning the full history (non-consuming).
 func TestReadCursorReturnsDelta(t *testing.T) {
 	sh := startTestShell(t)
 	srv := httptest.NewServer(routes(testLogger(), newTestAgent(sh)))
@@ -261,7 +259,6 @@ func TestReadCursorReturnsDelta(t *testing.T) {
 	}
 }
 
-// /read validates the offset parameter.
 func TestReadRejectsBadOffset(t *testing.T) {
 	sh := startTestShell(t)
 	srv := httptest.NewServer(routes(testLogger(), newTestAgent(sh)))

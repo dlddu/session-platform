@@ -1,6 +1,5 @@
 // Package api exposes the control plane REST surface (/api/v1) over a
-// session.Manager. Handlers are thin: decode, delegate to the manager, encode.
-// Domain errors are mapped to HTTP status codes here.
+// session.Manager. Handlers are thin: decode, delegate, encode.
 package api
 
 import (
@@ -28,8 +27,7 @@ const maxRequestBodyBytes = 8 << 20
 type Option func(*API)
 
 // WithClaudeCodeModelConfig exposes the rollout-scoped, non-sensitive model
-// picker configuration to the SPA. The catalog is presentation configuration,
-// not an API allowlist. Copying it keeps the API's startup snapshot immutable.
+// picker configuration to the SPA.
 func WithClaudeCodeModelConfig(defaultModel string, models []string) Option {
 	return func(a *API) {
 		a.claudeCodeDefaultModel = defaultModel
@@ -50,8 +48,7 @@ func New(mgr session.Manager, opts ...Option) *API {
 	return a
 }
 
-// Routes registers the /api/v1 endpoints on a ServeMux. Go 1.22+ method+path
-// patterns keep routing dependency-free.
+// Routes registers the /api/v1 endpoints on a ServeMux.
 func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/healthz", a.health)
 	mux.HandleFunc("GET /api/v1/config", a.runtimeConfig)
@@ -64,8 +61,6 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/sessions/{id}/write", a.writeSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/switch", a.switchSession)
 
-	// Manual counterpart to the idle reaper: archive/checkpoint the workload and
-	// reclaim its pod immediately. A later switch restores the session.
 	mux.HandleFunc("POST /api/v1/sessions/{id}/snapshot", a.snapshotSession)
 }
 
@@ -76,8 +71,7 @@ type createReq struct {
 	// WorkloadType stays raw so omitted can differ from explicit empty/null.
 	WorkloadType json.RawMessage `json:"workloadType"`
 
-	// Model is accepted only for claude-code. Omitted resolves to the stable
-	// platform-default alias and is immutable with the workload type (AC-E6).
+	// Model is accepted only for claude-code and is immutable after creation.
 	Model json.RawMessage `json:"model"`
 }
 
@@ -86,8 +80,7 @@ type writeReq struct {
 }
 
 type readReq struct {
-	// Offset is the nextOffset cursor issued by the previous read; 0 (or an
-	// omitted body) reads the full output since session start (AC-D3).
+	// Offset is the cursor from the previous read; 0 reads from the beginning.
 	Offset int64 `json:"offset"`
 }
 
@@ -123,9 +116,8 @@ func (a *API) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *API) runtimeConfig(w http.ResponseWriter, _ *http.Request) {
-	// The process receives this catalog from a Secret-backed environment
-	// variable at startup. Avoid browser/proxy caching so a control-plane
-	// rollout immediately exposes its new snapshot.
+	// Avoid browser/proxy caching so a control-plane rollout immediately exposes
+	// its new snapshot.
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, runtimeConfigResp{ClaudeCode: claudeCodeConfigResp{
 		DefaultModel: a.claudeCodeDefaultModel,
@@ -193,8 +185,7 @@ func (a *API) deleteSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// streamSession proxies the selected pod's passive SSE output feed. The
-// Last-Event-ID header wins over the query cursor so a native EventSource
+// The Last-Event-ID header wins over the query cursor so a native EventSource
 // reconnect resumes from the last event the browser accepted.
 func (a *API) streamSession(w http.ResponseWriter, r *http.Request) {
 	offset, err := outputStreamOffset(r)
@@ -297,7 +288,7 @@ func (a *API) switchSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sess)
 }
 
-// snapshotSession freezes a session and reclaims its pod (AC-B1/AC-A3).
+// SnapshotSession freezes a session and reclaims its pod.
 func (a *API) snapshotSession(w http.ResponseWriter, r *http.Request) {
 	if err := decodeRequestBody(r.Body, &struct{}{}, false); err != nil {
 		writeErr(w, err)

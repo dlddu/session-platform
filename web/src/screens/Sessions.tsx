@@ -33,9 +33,8 @@ function aggregateReclaimed(sessions: Session[]): string | null {
   return `${fmt(vcpu)} vCPU · ${fmt(gb)} GB`;
 }
 
-// Sessions console — lists every session from GET /api/v1/sessions and renders
-// the summary strip + card grid. Cards route to Workspace (live) or Restore
-// (snapshot). [plan step 5, O3]
+// Sessions console — lists every session and renders the summary strip + card
+// grid. Cards route to Workspace (live) or Restore (snapshot).
 export function Sessions() {
   const [sessions, setSessions] = useState<Session[] | null>(null);
   const [error, setError] = useState<string | null>(null);

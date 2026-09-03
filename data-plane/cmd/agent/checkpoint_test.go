@@ -268,7 +268,7 @@ func TestRestoreHandlerAdoptsCheckpointedShell(t *testing.T) {
 	}
 
 	// After restore: the restored shell is live and its buffer replays the
-	// pre-freeze history at offset 0 (AC-D4 continuity — buffer preloaded).
+	// pre-freeze history at offset 0 (the buffer was preloaded).
 	if code := healthzCode(t, srv); code != http.StatusOK {
 		t.Fatalf("post-restore healthz = %d, want 200", code)
 	}

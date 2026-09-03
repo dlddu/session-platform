@@ -2,18 +2,12 @@
 
 // 검증 AC: AC-B2
 //
-// Accessing a `snapshot` session restores it into a NEW pod and transitions it
-// back to `active` (docs/prd/lifecycle.md, docs/test/lifecycle.md scenario 2).
 // This file asserts the transition itself — that access restores rather than
 // rejects, and that the restore lands on freshly provisioned compute. What
-// survives the round trip is AC-B3's file (history/cursor integrity) and
-// AC-D4's (the shell process tree).
+// survives the round trip is AC-B3's file; the shell process tree is AC-D4's.
 //
-// The whole stack runs over HTTP: the control plane asks the session pod's agent
-// to CRIU-dump its shell tree, streams the archive to the checkpoint store,
-// reclaims the pod, then on the next access provisions a restore-target pod and
-// streams the archive back (docs/criu-verification.md). Against a SUT without
-// CRIU or the snapshot trigger this skips, so the suite still runs anywhere.
+// Against a SUT without CRIU or the snapshot trigger this skips, so the suite
+// still runs anywhere.
 package e2e_test
 
 import (

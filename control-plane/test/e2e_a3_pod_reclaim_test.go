@@ -2,14 +2,11 @@
 
 // 검증 AC: AC-A3
 //
-// Freezing a session reclaims the cluster resources it held (docs/prd/architecture.md,
-// docs/test/architecture.md scenario 3): the API clears the pod field AND the
-// backing Pod object is actually deleted — reclaim, not merely dropped from the
-// API's view.
+// The API clears the pod field AND the backing Pod object is actually deleted —
+// reclaim, not merely dropped from the API's view.
 //
 // The freeze is driven by the product snapshot endpoint; its automatic
-// counterpart (service.IdleReaper's idle window, AC-B1) is a registered
-// exception in docs/test/e2e.md.
+// counterpart is a registered exception in docs/test/e2e.md.
 package e2e_test
 
 import (

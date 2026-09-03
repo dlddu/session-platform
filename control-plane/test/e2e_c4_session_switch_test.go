@@ -2,7 +2,6 @@
 
 // 검증 AC: AC-C4
 //
-// Free switching between the sessions a user holds (docs/prd/state-api.md).
 // Switching an already-active session is a no-op, and moving back and forth
 // across several sessions leaves each one's identity and state intact — the
 // switch never breaks isolation.

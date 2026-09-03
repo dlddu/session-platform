@@ -1,10 +1,9 @@
 //go:build integration
 
-// AC-E1 on the *real* client-go orchestrator: the workload type a session was
-// created with has to reach the cluster object, not just the control plane's
-// own record. These run against the same fake clientset as
-// client_orchestrator_test.go, so they assert the pod spec the orchestrator
-// actually submits.
+// The workload type a session was created with has to reach the cluster object,
+// not just the control plane's own record. These run against the same fake
+// clientset as client_orchestrator_test.go, so they assert the pod spec the
+// orchestrator actually submits.
 package integration_test
 
 import (
@@ -49,9 +48,8 @@ func containerNamed(pod corev1.Pod, name string) (corev1.Container, bool) {
 	return corev1.Container{}, false
 }
 
-// AC-E1: "control plane은 타입에 따라 서로 다른 data plane 워크로드로 pod를
-// 프로비저닝한다" — the two types must not produce the same pod. Image, the
-// workload env var and the workload label all have to follow the type.
+// The two types must not produce the same pod: image, the workload env var and
+// the workload label all have to follow the type.
 func TestClientOrchestrator_PodSpecBranchesOnWorkloadType(t *testing.T) {
 	const shellImage = "ghcr.io/dlddu/session-platform-data-plane:dev"
 
@@ -104,9 +102,9 @@ func TestClientOrchestrator_UnspecifiedWorkloadTypeIsShell(t *testing.T) {
 	}
 }
 
-// AC-E6: Claude Code model selection is normalized at the orchestrator
-// boundary and copied into the pod. Invalid settings are rejected before a pod
-// is created, including a model on a shell workload.
+// Claude Code model selection is normalized at the orchestrator boundary and
+// copied into the pod. Invalid settings are rejected before a pod is created,
+// including a model on a shell workload.
 func TestClientOrchestrator_ModelIsValidatedAndCopiedToPod(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -195,11 +193,10 @@ func TestClientOrchestrator_ModelIsValidatedAndCopiedToPod(t *testing.T) {
 	}
 }
 
-// AC-E6: the tool-running Claude container must never receive provider
-// credential values. Only a hardened, separate-PID-namespace localhost proxy
-// holds them; the main container sees a non-secret provider placeholder, the
-// optional model key, and its separate required K3s MCP SecretKeyRef. Provider
-// credentials cannot be recovered with Read/Bash or transformed output.
+// The tool-running Claude container must never receive provider credential
+// values. Only a hardened, separate-PID-namespace localhost proxy holds them; the
+// main container sees a non-secret provider placeholder, the optional model key,
+// and its separate required K3s MCP SecretKeyRef.
 func TestClientOrchestrator_ClaudeProviderCredentialsAreIsolatedAndK3sTokenIsSecretBacked(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t,
 		k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
@@ -349,8 +346,8 @@ func TestClientOrchestrator_UnconfiguredWorkloadTypeIsRefused(t *testing.T) {
 	}
 }
 
-// AC-E1 + AC-B2: a restore never changes the type, so the restore-target pod
-// carries the same image, env and label as the pod that was frozen.
+// A restore never changes the type, so the restore-target pod carries the same
+// image, env and label as the pod that was frozen.
 func TestClientOrchestrator_RestoreKeepsWorkloadType(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t,
 		k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),

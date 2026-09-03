@@ -3,12 +3,8 @@
 // 검증 AC: AC-D4
 //
 // The shell process tree is what CRIU checkpoints, so the in-memory state it
-// carries survives the freeze (docs/prd/shell-workload.md). This is the concrete
-// marker form of AC-B3's "no data loss": AC-D4's 검증 방법 names it exactly —
-// `export MARKER=42` + `cd /tmp` before the freeze, `echo $MARKER; pwd` after
-// the restore.
-//
-// AC-B3's file owns the scrollback/cursor half; AC-B2's owns the transition.
+// carries survives the freeze. The concrete marker form: `export MARKER=42` +
+// `cd /tmp` before the freeze, `echo $MARKER; pwd` after the restore.
 package e2e_test
 
 import (

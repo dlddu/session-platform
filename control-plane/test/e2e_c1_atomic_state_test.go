@@ -5,16 +5,13 @@
 // Concurrent requests to one session, served by a multi-replica control plane
 // sharing the ConfigMap(resourceVersion CAS) + Lease state store, converge to a
 // single consistent state — no torn state, no duplicate pod, and crucially no
-// replica reporting "not found" (docs/prd/state-api.md, docs/test/state-api.md
-// scenario 1). The deploy/ overlay runs 2 replicas behind one Service, so the
-// burst below load-balances across both: with a per-replica in-memory store
-// roughly half these requests would 404.
+// replica reporting "not found". The deploy/ overlay runs 2 replicas behind one
+// Service, so the burst below load-balances across both: with a per-replica
+// in-memory store roughly half these requests would 404.
 //
-// Division of labour: the hermetic single-winner proof (exactly one of N
-// concurrent CompareAndSwap / Lock calls wins, against a real apiserver) lives
-// in the envtest suite (internal/adapter/configmap/envtest) — it is not a
-// matching unit here. This file asserts the dimension that suite cannot: two
-// real control-plane processes sharing one store.
+// The hermetic single-winner proof against a real apiserver lives in the envtest
+// suite. This file asserts the dimension that suite cannot: two real
+// control-plane processes sharing one store.
 package e2e_test
 
 import (

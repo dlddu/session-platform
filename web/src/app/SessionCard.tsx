@@ -15,7 +15,7 @@ function fmtSec(total: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-// Human-readable checkpoint size from a raw byte count (matches mockup "412 MB").
+// Human-readable checkpoint size from a raw byte count.
 function fmtBytes(n: number): string {
   const MB = 1024 * 1024;
   const GB = 1024 * MB;

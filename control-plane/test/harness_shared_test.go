@@ -4,16 +4,12 @@
 // `e2e`, run via `make e2e-up && go test -tags=e2e ./test/...`).
 //
 // Unlike integration_test.go (which mounts the handlers in-process), this suite
-// is a black box: it only knows the wire contract (the /api/v1 surface and its
-// JSON DTOs) and talks to whatever E2E_BASE_URL points at — the kind-deployed
-// control-plane (default http://localhost:8080, see deploy/ + scripts/e2e).
+// is a black box: it only knows the wire contract and talks to whatever
+// E2E_BASE_URL points at.
 //
-// LAYOUT — one AC per file. Every `e2e_*_test.go` in this directory declares
-// exactly one acceptance criterion in its header (`// 검증 AC: AC-XX`); that
-// declaration is the machine-checkable AC↔file mapping (scripts/e2e/check-ac-mapping.sh,
-// registry in docs/test/e2e.md). THIS file is deliberately NOT named `e2e_*`:
-// it holds the shared harness only, so it is not a matching unit and needs no
-// AC declaration.
+// LAYOUT — one AC per file. THIS file is deliberately NOT named `e2e_*`: it holds
+// the shared harness only, so it is not a matching unit and needs no AC
+// declaration.
 package e2e_test
 
 import (
@@ -49,9 +45,8 @@ func baseURL() string {
 	return "http://localhost:8080"
 }
 
-// session mirrors the JSON the API emits (control-plane/api/openapi.yaml). It is
-// declared locally so the e2e suite asserts the wire contract independently of
-// the internal domain types.
+// Session mirrors the JSON the API emits. It is declared locally so the e2e suite
+// asserts the wire contract independently of the internal domain types.
 type session struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
@@ -73,8 +68,7 @@ type writeResp struct {
 	Path    string  `json:"path"`
 }
 
-// do performs a request against the SUT and returns the response plus the
-// fully-read body, failing the test on transport errors.
+// Do performs a request against the SUT, failing the test on transport errors.
 func do(t *testing.T, method, path string, body any) (*http.Response, []byte) {
 	t.Helper()
 	var r io.Reader
@@ -123,7 +117,6 @@ func createSession(t *testing.T, name string) session {
 	return s
 }
 
-// getSession reads a session back from the API.
 func getSession(t *testing.T, id string) session {
 	t.Helper()
 	resp, body := do(t, http.MethodGet, "/api/v1/sessions/"+id, nil)
@@ -137,13 +130,10 @@ func getSession(t *testing.T, id string) session {
 	return s
 }
 
-// snapshotSession freezes a session through the product snapshot endpoint
-// (POST /sessions/{id}/snapshot, the same one manual archiving uses). Only the
-// *automatic* idle->snapshot trigger policy is still open (AC-B1,
-// service/session.go TODO(policy)); the manual endpoint gives this suite a
-// deterministic way to reach the snapshot state without waiting out the idle
-// window. It reports ok=false when the SUT predates the endpoint, so callers
-// skip instead of failing.
+// SnapshotSession freezes a session through the product snapshot endpoint, which
+// gives this suite a deterministic way to reach the snapshot state without
+// waiting out the idle window. It reports ok=false when the SUT predates the
+// endpoint, so callers skip instead of failing.
 func snapshotSession(t *testing.T, id string) (session, bool) {
 	t.Helper()
 	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+id+"/snapshot", nil)
@@ -161,8 +151,7 @@ func snapshotSession(t *testing.T, id string) (session, bool) {
 }
 
 // sessionNamespace is where the deployed control plane provisions its data plane
-// pods — the same namespace it runs in (default in the kind deploy/). Overridable
-// for clusters that place the control plane elsewhere.
+// pods — the same namespace it runs in. Overridable for other cluster layouts.
 func sessionNamespace() string {
 	if v := os.Getenv("E2E_SESSION_NAMESPACE"); v != "" {
 		return v
@@ -171,9 +160,9 @@ func sessionNamespace() string {
 }
 
 // kubeClient builds a client for the cluster the SUT runs in, from the ambient
-// kubeconfig (kind writes one) or the in-cluster config. It also returns the
-// rest config so callers can open exec streams. It reports ok=false when neither
-// is available, so a run pointed at a non-cluster SUT skips rather than fails.
+// kubeconfig or the in-cluster config, plus the rest config for exec streams. It
+// reports ok=false when neither is available, so a run pointed at a non-cluster
+// SUT skips rather than fails.
 func kubeClient(t *testing.T) (kubernetes.Interface, *rest.Config, bool) {
 	t.Helper()
 	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
@@ -210,7 +199,6 @@ func getPodEventually(t *testing.T, cs kubernetes.Interface, ns, name string) *c
 	}
 }
 
-// writeShell posts a payload to the session's write endpoint.
 func writeShell(t *testing.T, id, payload string) {
 	t.Helper()
 	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+id+"/write", map[string]string{"payload": payload})
@@ -219,7 +207,6 @@ func writeShell(t *testing.T, id, payload string) {
 	}
 }
 
-// readShellAt reads the session's shell output after offset.
 func readShellAt(t *testing.T, id string, offset int64) readResp {
 	t.Helper()
 	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+id+"/read", map[string]int64{"offset": offset})

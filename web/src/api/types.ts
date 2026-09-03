@@ -3,7 +3,7 @@
 export type State = "active" | "idle" | "snapshot";
 
 /**
- * Which data plane workload the session runs (AC-E1). Chosen at creation and
+ * Which data plane workload the session runs. Chosen at creation and
  * immutable afterwards. NewSession offers shell (the default) and claude-code.
  */
 export type WorkloadType = "shell" | "claude-code";
@@ -38,16 +38,16 @@ export interface Session {
 
 export interface CreateSessionRequest {
   name: string;
-  /** omitted means "shell" (AC-E1) */
+    /** omitted means "shell" */
   workloadType?: WorkloadType;
-  /** Only applies to claude-code. Omitted means the platform default (AC-E6). */
+    /** Only applies to claude-code. Omitted means the platform default. */
   model?: string;
 }
 
 export interface ReadResult {
   session: Session;
   path: string;
-  /** workload output accumulated after the requested offset (AC-D3/AC-E3) */
+    /** workload output accumulated after the requested offset */
   payload: string;
   /** cursor to pass as offset on the next read to receive only new output */
   nextOffset: number;

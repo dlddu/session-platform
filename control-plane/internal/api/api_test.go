@@ -44,7 +44,6 @@ func newServerWithOrchestrator(
 	return httptest.NewServer(mux), orch, stateStore
 }
 
-// createForTest creates a session through the API and returns it.
 func createForTest(t *testing.T, srv *httptest.Server, name string) session.Session {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"name": name})
@@ -89,7 +88,6 @@ func TestSnapshotEndpointArchivesSession(t *testing.T) {
 	}
 }
 
-// A snapshot of an unknown session is a 404 like the other handlers.
 func TestSnapshotUnknownSession(t *testing.T) {
 	srv := newServer()
 	defer srv.Close()
@@ -103,8 +101,7 @@ func TestSnapshotUnknownSession(t *testing.T) {
 	}
 }
 
-// TestHappyPath exercises create -> list -> switch end-to-end through the HTTP
-// surface with stub adapters (AC-A1/A2 create, V5 list, AC-C4 switch).
+// Create -> list -> switch end-to-end through the HTTP surface with stub adapters.
 func TestHappyPath(t *testing.T) {
 	srv := newServer()
 	defer srv.Close()
@@ -157,9 +154,8 @@ func TestHappyPath(t *testing.T) {
 	resp.Body.Close()
 }
 
-// TestReadWriteWireContract drives write→read over HTTP: the write payload
-// comes back from the (stub) agent and read honours the offset/nextOffset
-// cursor contract (AC-D2/D3 wire shape).
+// Drives write→read over HTTP: the write payload comes back from the (stub) agent
+// and read honours the offset/nextOffset cursor contract.
 func TestReadWriteWireContract(t *testing.T) {
 	srv := newServer()
 	defer srv.Close()

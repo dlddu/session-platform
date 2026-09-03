@@ -1,9 +1,7 @@
 // Command control-plane is the single entrypoint for the session platform
-// control plane: it serves the REST API (/api/v1) and the embedded React SPA
-// on one port. Domain logic is delegated to a session.Manager built from the
-// k8s pod orchestrator, the ConfigMap/Lease state store, and workload-specific
-// snapshot strategies. Disabled strategies fail closed and never reclaim a
-// live pod.
+// control plane: it serves the REST API (/api/v1) and the embedded React SPA on
+// one port. Domain logic is delegated to a session.Manager built from the k8s pod
+// orchestrator, the ConfigMap/Lease state store, and workload snapshot strategies.
 package main
 
 import (
@@ -42,11 +40,7 @@ func main() {
 
 	// The control plane drives data plane pods AND stores session state via
 	// client-go, so it needs a reachable cluster: the in-cluster config as a pod,
-	// or the ambient kubeconfig for local development against a kind cluster. The
-	// same client backs the pod orchestrator and ConfigMap/Lease state store.
-	// Enabled snapshot strategies ask the session pod agent to produce either a
-	// shell CRIU bundle or Claude filesystem archive, then persist it in the
-	// configured durable store; disabled strategies fail closed before reclaim.
+	// or the ambient kubeconfig for local development against a kind cluster.
 	client, namespace, err := k8s.BuildClient()
 	if err != nil {
 		logger.Error("k8s: no reachable cluster (in-cluster config or kubeconfig required)", "err", err)
@@ -63,24 +57,19 @@ func main() {
 		"claude_code_models", len(cfg.claudeCodeModels),
 	)
 	if cfg.dataPlaneImage == "" {
-		// The in-code fallback image has no session agent, so session pods will
-		// never pass the shell readiness probe (AC-D1). Deployments must inject
-		// the published data plane agent image.
 		logger.Warn("DATA_PLANE_IMAGE is not set; falling back to a placeholder image that cannot run session shells")
 	}
 
 	orch := k8s.NewClientOrchestrator(client, namespace,
 		k8s.WithImage(cfg.dataPlaneImage), k8s.WithShell(cfg.dataPlaneShell),
-		// Per-type image (AC-E1). Empty is a no-op, which leaves claude-code
-		// unconfigured — Start then refuses that type instead of provisioning a
-		// shell pod under a claude-code label.
+		// Empty is a no-op, which leaves claude-code unconfigured — Start then
+		// refuses that type instead of provisioning a shell pod under its label.
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, cfg.dataPlaneClaudeCodeImage),
 		k8s.WithClaudeCredentialsSecret(cfg.claudeCredentialsSecret),
 		k8s.WithCheckpointPrivileged(cfg.criuEnabled))
 	store := configmap.NewStore(client, namespace)
-	// Shell I/O (write→stdin, read→scrollback delta) AND checkpoint/restore ride
-	// the same agent client: it resolves pod name → IP per request and dials the
-	// session agent directly (AC-D2/D3, and /checkpoint·/restore for CRIU).
+	// Workload I/O and checkpoint/restore ride the same agent client: it resolves
+	// pod name → IP per request and dials the session agent directly.
 	agentClient := agent.NewHTTPClient(client, namespace)
 
 	// Snapshot archives may contain workspace and conversation data. They are
@@ -121,11 +110,9 @@ func main() {
 	mgr := service.New(orch, store, shellCkpt, agentClient, serviceOpts...)
 	snapshotEnabled := shellCkpt.Enabled() || cfg.claudeArchiveEnabled
 
-	// AC-B1: the operational idle->snapshot trigger. A background reaper scans
-	// sessions every cfg.idleScanInterval and freezes any idle (no client
-	// read/write, AC-D5) for at least session.MaxIdle, reclaiming its pod
-	// (AC-A3). Manual snapshots use the same manager operation through the
-	// product API without waiting for the idle limit.
+	// The operational idle->snapshot trigger. A background reaper scans sessions
+	// every cfg.idleScanInterval and freezes any idle for at least session.MaxIdle,
+	// reclaiming its pod.
 	reaper := service.NewIdleReaper(mgr, session.MaxIdle, cfg.idleScanInterval, nil, logger)
 
 	mux := http.NewServeMux()
@@ -141,11 +128,9 @@ func main() {
 		ReadTimeout:       30 * time.Second,
 	}
 
-	// graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Drive the idle->snapshot reaper until shutdown (AC-B1).
 	if snapshotEnabled {
 		go reaper.Run(ctx)
 	} else {
@@ -171,32 +156,26 @@ type config struct {
 	addr           string
 	dataPlaneImage string
 	dataPlaneShell string
-	// dataPlaneClaudeCodeImage is the image for `workloadType=claude-code`
-	// sessions (AC-E1). Unset means the type is not deployable here: creating
-	// such a session fails loudly rather than getting a shell pod.
+	// DataPlaneClaudeCodeImage is the image for claude-code sessions. Unset means
+	// the type is not deployable here: creating such a session fails loudly.
 	dataPlaneClaudeCodeImage string
 	// claudeArchiveEnabled explicitly permits workspace/conversation/output
 	// archives to be written to CHECKPOINT_S3_* (default false).
 	claudeArchiveEnabled    bool
 	claudeCredentialsSecret string
 	// claudeCodeDefaultModel is the effective, public default shown by the SPA.
-	// It is a concrete Secret-backed model when configured, otherwise the
-	// stable platform-default alias.
 	claudeCodeDefaultModel string
 	// claudeCodeModels is the ordered, public model catalog shown by the SPA.
-	// Empty preserves the free-text model input and existing API behaviour.
+	// Empty preserves the free-text model input.
 	claudeCodeModels []string
 	criuEnabled      bool
-	// idleScanInterval is how often the reaper scans for sessions past their
-	// idle limit (AC-B1). The 60m limit itself is session.MaxIdle; this only
-	// bounds how promptly a newly-idle session is noticed.
+	// IdleScanInterval bounds how promptly a newly-idle session is noticed; the
+	// idle limit itself is session.MaxIdle.
 	idleScanInterval time.Duration
-	// Checkpoint/archive store used by either explicitly enabled strategy:
-	// an S3 bucket,
-	// accessed by assuming checkpointS3RoleARN over the ambient credentials
+	// Checkpoint/archive store used by either explicitly enabled strategy: an S3
+	// bucket accessed by assuming checkpointS3RoleARN over the ambient credentials
 	// (node instance profile / IRSA). checkpointS3Endpoint targets an
-	// S3-compatible backend instead of AWS — the e2e SUT points it at MinIO and
-	// leaves the role empty, authenticating with static keys from the env.
+	// S3-compatible backend instead of AWS.
 	checkpointS3Bucket      string
 	checkpointS3RoleARN     string
 	checkpointS3Region      string
@@ -244,10 +223,8 @@ func loadConfig() (config, error) {
 		return config{}, fmt.Errorf("CLAUDE_CODE_MODELS: %w", err)
 	}
 	return config{
-		addr:           env("CP_ADDR", ":8080"),
-		dataPlaneImage: env("DATA_PLANE_IMAGE", ""),
-		// Propagated into session pods; the agent launches
-		// ${DATA_PLANE_SHELL:-/bin/bash} on a PTY (AC-D1).
+		addr:                     env("CP_ADDR", ":8080"),
+		dataPlaneImage:           env("DATA_PLANE_IMAGE", ""),
 		dataPlaneShell:           env("DATA_PLANE_SHELL", ""),
 		dataPlaneClaudeCodeImage: env("DATA_PLANE_CLAUDE_CODE_IMAGE", ""),
 		claudeArchiveEnabled:     envBool("CLAUDE_CODE_ARCHIVE_ENABLED", false),

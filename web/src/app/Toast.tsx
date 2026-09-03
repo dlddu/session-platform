@@ -1,7 +1,6 @@
-// Toast infrastructure ported from docs/mockups (toast-wrap / toast). Provides a
-// context + useToast() hook so any screen can surface a transient notice. Only
-// the component + plumbing live here; triggers are wired by user actions in the
-// screens (the mockup's demo-only simulated triggers are intentionally omitted).
+// Toast infrastructure: a context + useToast() hook so any screen can surface a
+// transient notice. Only the component + plumbing live here; triggers are wired
+// by user actions in the screens.
 import {
   createContext,
   useCallback,
@@ -64,8 +63,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const toast = useCallback((msg: string, kind: ToastKind = "ok") => {
     const id = ++seq.current;
     setItems((prev) => [...prev, { id, msg, kind, in: false }]);
-    // Next frame: flip `in` to trigger the enter transition (matches mockup's
-    // requestAnimationFrame nudge).
+      // Next frame: flip `in` to trigger the enter transition.
     requestAnimationFrame(() =>
       setItems((prev) => prev.map((t) => (t.id === id ? { ...t, in: true } : t)))
     );

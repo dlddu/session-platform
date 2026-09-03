@@ -78,7 +78,7 @@ func podOn(node, ns, name string) *corev1.Pod {
 }
 
 // Checkpoint resolves the pod's node, drives the checkpoint through the driver,
-// and returns the archive path the kubelet reported as Checkpoint.Ref (AC-B1/B3).
+// and returns the archive path the kubelet reported as Checkpoint.Ref.
 func TestContainerCheckpointer_CheckpointReturnsArchiveRef(t *testing.T) {
 	const ns = "sessions"
 	archive := "/var/lib/kubelet/checkpoints/checkpoint-sess-abcd_sessions-session-2026.tar"
@@ -126,8 +126,8 @@ func TestContainerCheckpointer_CheckpointReturnsArchiveRef(t *testing.T) {
 }
 
 // With a CheckpointStore the node-local archive is uploaded and its durable ref
-// (e.g. s3://…) and size are recorded instead of the ephemeral node path
-// (decision ③ — checkpoints survive their node).
+// and size are recorded instead of the ephemeral node path, so checkpoints
+// survive their node.
 func TestContainerCheckpointer_CheckpointUploadsToStore(t *testing.T) {
 	const ns = "sessions"
 	archive := "/var/lib/kubelet/checkpoints/checkpoint-sess-abcd_sessions-session-9.tar"
@@ -224,7 +224,7 @@ func TestContainerCheckpointer_CheckpointRejectsEmptyArchive(t *testing.T) {
 	}
 }
 
-// Restore hands the recorded ref and target pod to the driver (AC-B2).
+// Restore hands the recorded ref and target pod to the driver.
 func TestContainerCheckpointer_RestoreDrivesRefIntoPod(t *testing.T) {
 	const ns = "sessions"
 	drv := &fakeDriver{}

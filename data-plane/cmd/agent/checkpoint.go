@@ -18,24 +18,23 @@ import (
 	"github.com/creack/pty"
 )
 
-// This file implements in-pod CRIU checkpoint/restore of the session shell tree
-// (AC-B1/B2/B3, AC-D4). The agent — which already owns the shell process and its
-// PTY master — CRIU-dumps the tree on /checkpoint and CRIU-restores it on
-// /restore, rather than relying on a container-level kubelet checkpoint that the
-// containerd runtime cannot restore (verified dead-end, 2026-07-22; see
-// docs/criu-verification.md, decision ⑤).
+// This file implements in-pod CRIU checkpoint/restore of the session shell tree.
+// The agent — which already owns the shell process and its PTY master —
+// CRIU-dumps the tree on /checkpoint and CRIU-restores it on /restore, rather
+// than relying on a container-level kubelet checkpoint that the containerd
+// runtime cannot restore (see docs/criu-verification.md).
 //
 // The archive is a tar carrying the criu image directory plus the scrollback
-// bytes, so the accumulated shell output (AC-D3/D4) survives the round trip even
-// though it lives in the agent's memory, not the dumped tree. The control plane
-// streams the archive to/from durable storage (S3); the agent never touches
-// object storage or cloud credentials.
+// bytes, so the accumulated shell output survives the round trip even though it
+// lives in the agent's memory, not the dumped tree. The control plane streams the
+// archive to/from durable storage; the agent never touches object storage or
+// cloud credentials.
 //
 // RUNTIME SEAM: the actual criu invocation and PTY reattach live in
-// execCriuEngine below and are the ONE part of this path that a CRIU-capable
-// node (CAP_CHECKPOINT_RESTORE, criu installed) is required to exercise. Every
-// other part here — archive framing, scrollback (de)serialization, handler
-// gating, shell adoption — is unit-tested with a fake engine.
+// execCriuEngine below and are the ONE part of this path that a CRIU-capable node
+// (CAP_CHECKPOINT_RESTORE, criu installed) is required to exercise. Every other
+// part here — archive framing, scrollback (de)serialization, handler gating,
+// shell adoption — is unit-tested with a fake engine.
 
 // archiveScrollbackName is the tar entry holding the serialized scrollback; all
 // other entries are criu image files under an images/ prefix.
@@ -57,7 +56,7 @@ type criuEngine interface {
 }
 
 // handleCheckpoint dumps the live shell tree and streams back a tar of the criu
-// images + scrollback. The control plane persists it and reclaims the pod.
+// images + scrollback.
 func (a *agent) handleCheckpoint(logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sh := a.current()
@@ -221,12 +220,11 @@ func readArchive(r io.Reader, imagesDir string) ([]byte, error) {
 //
 // RUNTIME SEAM — being tuned against a real runtime. This is the one part of the
 // in-pod CRIU path that cannot run without a CRIU-capable node, so it is
-// exercised only during on-runtime verification, never in CI (tests inject a
-// fake engine). Fixes landed from on-cluster rounds so far: the restore now runs
+// exercised only during on-runtime verification, never in CI. The restore runs
 // detached with the restored root task as a sibling and its pid taken from a
-// pidfile, because criu's own exit is not the shell's (2026-07-23). The PTY
-// handling on restore — recreating a master and restoring the shell job against
-// that tty — remains the least-proven part. See docs/criu-verification.md.
+// pidfile, because criu's own exit is not the shell's. The PTY handling on
+// restore — recreating a master and restoring the shell job against that tty —
+// remains the least-proven part. See docs/criu-verification.md.
 type execCriuEngine struct {
 	bin string
 }

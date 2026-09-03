@@ -2,12 +2,10 @@
 
 // 검증 AC: AC-B3
 //
-// Snapshot/restore loses no session data (docs/prd/lifecycle.md, docs/test/lifecycle.md
-// scenario 3). The observable contract, per the "offset과 복원" design note in
-// docs/prd/shell-workload.md: a read cursor issued BEFORE the freeze stays a
-// valid offset into the restored buffer (it yields only post-restore output, not
-// a full replay), and offset=0 still returns the whole pre-freeze + post-restore
-// history in order.
+// The observable contract: a read cursor issued BEFORE the freeze stays a valid
+// offset into the restored buffer (it yields only post-restore output, not a full
+// replay), and offset=0 still returns the whole pre-freeze + post-restore history
+// in order.
 //
 // The in-memory shell state that survives (env, cwd, process tree) is AC-D4's
 // file; that access restores at all is AC-B2's.

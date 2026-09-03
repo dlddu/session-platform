@@ -68,7 +68,7 @@ func waitClaudeAdmissionOpen(t *testing.T, c *claudeWorkload) {
 	t.Fatal("checkpoint did not reopen write admission")
 }
 
-// AC-E5: checkpoint closes admission first, but all prompts accepted before that
+// Checkpoint closes admission first, but all prompts accepted before that
 // barrier finish in FIFO order before archive creation.
 func TestClaudeCheckpointDrainsAcceptedQueue(t *testing.T) {
 	runner := newFakeClaudeRunner()

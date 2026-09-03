@@ -67,7 +67,7 @@ func (f *fakeAgentClient) AbortCheckpoint(_ context.Context, pod, checkpointID s
 var _ criu.AgentCheckpointClient = (*fakeAgentClient)(nil)
 
 // Checkpoint pulls the archive from the pod agent and streams it to the store,
-// recording the durable ref and the streamed size (AC-B1/B3/D4).
+// recording the durable ref and the streamed size.
 func TestAgentCheckpointer_CheckpointStreamsToStore(t *testing.T) {
 	archive := []byte("CRIU-ARCHIVE-TAR-BYTES")
 	client := &fakeAgentClient{archive: archive}
@@ -205,7 +205,7 @@ func TestShellAgentCheckpointer_StoreFailureDoesNotUseArchiveAbort(t *testing.T)
 }
 
 // Restore fetches the archive from the store and streams it to the
-// restore-target pod's agent (AC-B2).
+// restore-target pod's agent.
 func TestAgentCheckpointer_RestoreStreamsFromStore(t *testing.T) {
 	store := &fakeStore{gotBytes: []byte("RESTORE-ARCHIVE")}
 	client := &fakeAgentClient{}

@@ -53,7 +53,7 @@ export const api = {
     ),
 
   /** offset is the nextOffset cursor from the previous read; 0 replays the
-   *  full workload output since session start (AC-D3/AC-E3). */
+   *  full workload output since session start. */
   readSession: (id: string, offset = 0) =>
     req<ReadResult>(`/sessions/${id}/read`, {
       method: "POST",

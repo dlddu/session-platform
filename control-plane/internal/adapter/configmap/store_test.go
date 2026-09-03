@@ -36,7 +36,7 @@ func sampleSession(id string) *session.Session {
 }
 
 // Put writes a ConfigMap, Get reads the same session back, and the underlying
-// object is named/labelled 1:1 to its session (V5: single source of truth).
+// object is named/labelled 1:1 to its session.
 func TestPutGetRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	store, cs := newStore(t)
@@ -245,7 +245,7 @@ func TestGetNotFound(t *testing.T) {
 	}
 }
 
-// Delete removes the session and is idempotent (AC-A3 reclaim hygiene).
+// Delete removes the session and is idempotent.
 func TestDeleteIdempotent(t *testing.T) {
 	ctx := context.Background()
 	store, _ := newStore(t)
@@ -303,7 +303,7 @@ func TestDeleteKeepsHeldLeaseUntilUnlock(t *testing.T) {
 }
 
 // CompareAndSwapState moves the state only when the current state matches
-// `from`; a mismatch is ErrConflict and an unknown id is ErrNotFound (AC-C1).
+// `from`; a mismatch is ErrConflict and an unknown id is ErrNotFound.
 func TestCompareAndSwapState(t *testing.T) {
 	ctx := context.Background()
 	store, _ := newStore(t)
@@ -331,7 +331,7 @@ func TestCompareAndSwapState(t *testing.T) {
 	}
 }
 
-// Lock is exclusive: a second holder conflicts until the first releases (AC-C1).
+// Lock is exclusive: a second holder conflicts until the first releases.
 func TestLockConflictAndRelease(t *testing.T) {
 	ctx := context.Background()
 	store, _ := newStore(t)

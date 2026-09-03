@@ -2,16 +2,13 @@
 
 // 검증 AC: AC-A1
 //
-// Control plane / data plane separation (docs/prd/architecture.md, docs/test/architecture.md
-// scenario 1). Two halves, both asserted against the deployed cluster:
+// Control plane / data plane separation. Two halves, both asserted against the
+// deployed cluster:
 //   - the session workload lives in its own Pod object in the session namespace,
 //     not inside the control plane;
 //   - the control-plane pod hosts no session workload at all — its distroless
 //     image ships no shell, so exec'ing one must fail (the same exec succeeds
 //     against a session pod, which e2e_d1_pty_shell_test.go proves).
-//
-// Session-to-pod cardinality (1:1, N unique pods) is AC-A2's file; reclaim on
-// freeze is AC-A3's.
 package e2e_test
 
 import (
@@ -23,8 +20,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// The session's workload runs in a data-plane Pod object of its own, separate
-// from the control-plane pods that serve the API.
 func TestPlaneSeparation_SessionWorkloadRunsOutsideControlPlane(t *testing.T) {
 	cs, _, ok := kubeClient(t)
 	if !ok {
@@ -57,8 +52,8 @@ func TestPlaneSeparation_SessionWorkloadRunsOutsideControlPlane(t *testing.T) {
 	}
 }
 
-// The control plane only orchestrates — it hosts no session workload. Its
-// distroless image ships no shell binary at all, so exec'ing one must fail.
+// The control plane's distroless image ships no shell binary at all, so exec'ing
+// one must fail.
 func TestPlaneSeparation_ControlPlaneHostsNoWorkload(t *testing.T) {
 	cs, cfg, ok := kubeClient(t)
 	if !ok {

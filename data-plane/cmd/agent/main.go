@@ -1,22 +1,14 @@
 // Command agent is the data plane entrypoint for both session workloads,
 // selected by DATA_PLANE_WORKLOAD (default "shell"):
 //
-//   - shell launches exactly one PTY-attached interactive shell. /write is
-//     stdin, /read is offset-cursored PTY output, and checkpoint/restore uses
-//     CRIU plus serialized scrollback (AC-D1~D4).
-//   - claude-code launches no resident shell or Claude process. /write queues a
-//     prompt for one serial worker, each job execs a one-shot Claude CLI, /read
-//     serves merged stdout/stderr, and checkpoint/restore archives filesystem
-//     state plus scrollback without CRIU (AC-E2~E5).
+//   - shell launches exactly one PTY-attached interactive shell.
+//   - claude-code launches no resident shell or Claude process; /write queues a
+//     prompt for one serial worker and each job execs a one-shot Claude CLI.
 //   - credential-proxy is the localhost-only sidecar that holds the real
-//     Anthropic gateway URL/token. It pins all requests to that upstream and
-//     keeps provider credentials out of the Claude/Bash process environment
-//     (AC-E6); plugin-specific K3S_MCP_TOKEN is separately Secret-backed.
+//     gateway URL/token and keeps them out of the Claude/Bash environment.
 //
-// Shell and Claude modes expose /healthz and the reachability-only /attach
-// WebSocket. A DATA_PLANE_RESTORE_MODE=1 pod reports healthy while awaiting
-// POST /restore, avoiding a readiness deadlock before the control plane streams
-// its archive. Credential-proxy exposes /healthz and the fixed-upstream proxy.
+// A DATA_PLANE_RESTORE_MODE=1 pod reports healthy while awaiting POST /restore,
+// avoiding a readiness deadlock before the control plane streams its archive.
 package main
 
 import (
@@ -48,16 +40,13 @@ const (
 	claudeProxyBaseURL          = "http://127.0.0.1:8091"
 	claudeProxyPlaceholderToken = "session-platform-proxy"
 
-	// defaultShell is the interactive shell launched when DATA_PLANE_SHELL is
-	// unset (AC-D1).
+	// DefaultShell is the interactive shell launched when DATA_PLANE_SHELL is unset.
 	defaultShell = "/bin/bash"
 	// defaultAddr is where the agent serves its endpoints. Keep the port in sync
-	// with the control plane orchestrator's agentPort
-	// (control-plane/internal/adapter/k8s/client_orchestrator.go).
+	// with the control plane orchestrator's agentPort.
 	defaultAddr = ":8090"
 	// restoreModeEnv, when "1", starts the agent without a shell: it waits for a
-	// checkpoint on POST /restore instead (in-pod CRIU restore). The control
-	// plane sets it on restore-target pods (AnnotationRestoreCheckpoint path).
+	// checkpoint on POST /restore instead.
 	restoreModeEnv = "DATA_PLANE_RESTORE_MODE"
 
 	// nsLastPIDPath is the per-pid-namespace knob for the last allocated pid: the
@@ -88,8 +77,7 @@ func main() {
 		a.shellPath = env("DATA_PLANE_SHELL", defaultShell)
 		a.engine = newExecCriuEngine()
 		if restoreMode {
-			// Restore mode: no shell yet — POST /restore brings back the
-			// checkpointed one. healthz reports 200 while awaiting it.
+			// Restore mode: no shell yet — POST /restore brings back the checkpointed one.
 			logger.Info("shell agent started in restore mode; awaiting checkpoint", "addr", addr)
 		} else {
 			// Push the next pid up before forking the shell, so a later CRIU
@@ -176,7 +164,6 @@ func main() {
 
 	select {
 	case s := <-sig:
-		// Pod shutdown: stop the selected workload and exit cleanly.
 		logger.Info("signal received; terminating", "signal", s.String())
 		if a.claude != nil {
 			a.claude.Close()
@@ -187,15 +174,14 @@ func main() {
 		os.Exit(0)
 	case <-a.exited:
 		// The adopted shell exited on its own. Exit so the kubelet restarts the
-		// container with a fresh agent+shell, keeping AC-D1 true.
+		// container with a fresh agent+shell.
 		logger.Error("session shell exited; restarting container")
 		os.Exit(1)
 	}
 }
 
 // agent holds the current session shell, which is swappable: a normal pod adopts
-// one at startup, a restore-mode pod adopts the CRIU-restored one on POST
-// /restore. It also carries the CRIU engine the checkpoint/restore handlers use.
+// one at startup, a restore-mode pod adopts the CRIU-restored one on /restore.
 type agent struct {
 	shellPath string
 	engine    criuEngine
@@ -241,19 +227,15 @@ func (a *agent) adopt(sh *shellProc) {
 }
 
 // scrollback is the append-only record of everything the shell has written to
-// its PTY since it started (stdout and stderr merged by the PTY itself, order
-// preserved). Read serves deltas from it by offset (AC-D3); nothing is ever
-// discarded, so offset 0 always replays the full session history. There is no
-// size cap — the buffer bound is a deliberately open design decision (see
-// docs/prd/shell-workload.md).
+// its PTY since it started. Nothing is ever discarded, so offset 0 always
+// replays the full session history. There is no size cap — the buffer bound is
+// a deliberately open design decision.
 //
 // The buffer lives in the agent process's memory. In-pod CRIU checkpoints the
-// shell *process tree* — not the agent — so the scrollback does not ride the
-// criu images automatically; instead /checkpoint serializes it alongside them
-// and /restore preloads it into the restored shell's buffer (AC-D4). Either way
-// a read cursor (nextOffset) issued before the snapshot stays valid: the same
-// bytes come back at the same length, so a client resumes with only the delta
-// and offset 0 still replays the full pre- and post-snapshot history.
+// shell *process tree* — not the agent — so /checkpoint serializes the
+// scrollback alongside the criu images and /restore preloads it into the
+// restored shell's buffer. Either way a read cursor issued before the snapshot
+// stays valid: the same bytes come back at the same length.
 type scrollback struct {
 	mu      sync.Mutex
 	buf     []byte
@@ -273,8 +255,7 @@ func (b *scrollback) Append(p []byte) {
 // appendClaudeBoundedAt appends one already-bounded invocation to the Claude
 // scrollback while reserving room for an explicit terminal marker. Existing
 // bytes are never rewritten, so every offset issued before the limit remains
-// valid. It reports only the transition to full; already accepted queued jobs
-// may continue to run, but their later output is discarded.
+// valid. It reports only the transition to full.
 func (b *scrollback) appendClaudeBoundedAt(p []byte, limit int, markerText string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -322,8 +303,7 @@ func (b *scrollback) claudeFullAtLocked(limit, markerBytes int) bool {
 }
 
 // Since returns a copy of the output accumulated after offset, plus the cursor
-// for the next delta read (the current accumulated length). An offset at or
-// past the current length yields an empty payload with that cursor.
+// for the next delta read.
 func (b *scrollback) Since(offset int) ([]byte, int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -336,8 +316,8 @@ func (b *scrollback) Since(offset int) ([]byte, int) {
 	return out, n
 }
 
-// snapshot returns a copy of the full accumulated buffer, for serialization into
-// a checkpoint archive (/checkpoint).
+// Snapshot returns a copy of the full accumulated buffer, for serialization
+// into a checkpoint archive.
 func (b *scrollback) snapshot() []byte {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -346,9 +326,8 @@ func (b *scrollback) snapshot() []byte {
 	return out
 }
 
-// restore replaces the complete buffer before a restored Claude workload starts
-// accepting writes. Existing cursors therefore address the same bytes after
-// the pod round trip.
+// Restore replaces the complete buffer before a restored workload accepts
+// writes, so existing cursors address the same bytes after the pod round trip.
 func (b *scrollback) restore(p []byte) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -367,10 +346,9 @@ func (b *scrollback) notifyLocked() {
 	b.changed = make(chan struct{})
 }
 
-// shellProc is the one PTY-attached session shell (AC-D1) and its lifecycle.
-// It is lifecycle-generic rather than tied to *exec.Cmd so both a freshly
-// started shell (startShell) and a CRIU-restored one (criuEngine.Restore) share
-// the same drain/reap/hangup machinery.
+// ShellProc is the one PTY-attached session shell and its lifecycle. It is
+// lifecycle-generic rather than tied to *exec.Cmd so a freshly started shell and
+// a CRIU-restored one share the same drain/reap/hangup machinery.
 type shellProc struct {
 	ptmx    *os.File    // PTY master; the shell owns the slave as its ctty
 	out     *scrollback // everything the shell has emitted (AC-D3)
@@ -384,10 +362,9 @@ type shellProc struct {
 }
 
 // newShellProc wires a started-or-restored shell: it preloads the scrollback
-// with initial (nil for a fresh shell, the checkpointed history for a restored
-// one), starts draining the PTY master into it (AC-D3), and reaps the process in
-// the background, flipping alive/done when wait returns. Constructing the buffer
-// before the drain goroutine starts keeps the preload race-free.
+// with initial, starts draining the PTY master into it, and reaps the process in
+// the background. Constructing the buffer before the drain goroutine starts
+// keeps the preload race-free.
 func newShellProc(ptmx *os.File, pid int, initial []byte, wait func() error, signal func(os.Signal) error, kill func() error) *shellProc {
 	s := &shellProc{
 		ptmx:   ptmx,
@@ -399,8 +376,7 @@ func newShellProc(ptmx *os.File, pid int, initial []byte, wait func() error, sig
 	}
 	s.alive.Store(true)
 
-	// Drain the PTY master so the shell never blocks on a full output buffer,
-	// accumulating everything into the scrollback that read serves from (AC-D3).
+	// Drain the PTY master so the shell never blocks on a full output buffer.
 	go func() {
 		buf := make([]byte, 32*1024)
 		for {
@@ -447,9 +423,8 @@ func reserveShellPID(floor int) error {
 func startShell(path string) (*shellProc, error) {
 	cmd := exec.Command(path)
 	// The PTY slave becomes the shell's stdin/stdout/stderr and controlling
-	// terminal, which is what makes the shell interactive. TERM is set for the
-	// shell's line editing; the size is a sane default until a client-driven
-	// resize exists (STP-command-input and later).
+	// terminal, which is what makes the shell interactive. The size is a sane
+	// default until a client-driven resize exists.
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
 	if err != nil {
@@ -484,11 +459,9 @@ func routes(logger *slog.Logger, a *agent) http.Handler {
 	}
 	mux := http.NewServeMux()
 
-	// The readiness probe. In restore mode before the checkpoint arrives the
-	// agent is up and ready to receive it, so it reports 200 (the restored
-	// shell's reachability is proven separately by the control plane's Reach).
-	// Once a shell is adopted, 200 only while it is alive, so pod Ready reflects
-	// shell liveness (AC-D1).
+	// The readiness probe. In restore mode before the checkpoint arrives the agent
+	// is up and ready to receive it, so it reports 200. Once a shell is adopted,
+	// 200 only while it is alive, so pod Ready reflects shell liveness.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		sh := a.current()
@@ -503,8 +476,8 @@ func routes(logger *slog.Logger, a *agent) http.Handler {
 		}
 	})
 
-	// The attach stream — reachability verification only (AC-D1): the agent
-	// holds the stream open, discarding any frames, until the peer closes.
+	// The attach stream — reachability verification only: the agent holds the
+	// stream open, discarding any frames, until the peer closes.
 	mux.HandleFunc("GET /attach", func(w http.ResponseWriter, r *http.Request) {
 		sh := a.current()
 		if sh == nil || !sh.alive.Load() {
@@ -525,9 +498,8 @@ func routes(logger *slog.Logger, a *agent) http.Handler {
 		}
 	})
 
-	// write = shell stdin (AC-D2): the raw request body goes into the PTY master
-	// verbatim and the handler returns immediately — it never waits for the
-	// shell to run the command (output is recovered via /read).
+	// Write = shell stdin: the raw request body goes into the PTY master verbatim
+	// and the handler returns immediately (output is recovered via /read).
 	mux.HandleFunc("POST /write", func(w http.ResponseWriter, r *http.Request) {
 		sh := a.current()
 		if sh == nil || !sh.alive.Load() {
@@ -547,8 +519,8 @@ func routes(logger *slog.Logger, a *agent) http.Handler {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	// read = shell output since a cursor (AC-D3): non-consuming, so it serves
-	// even after the shell has exited — the scrollback is history, not a pipe.
+	// Read = shell output since a cursor: non-consuming, so it serves even after
+	// the shell has exited — the scrollback is history, not a pipe.
 	mux.HandleFunc("GET /read", func(w http.ResponseWriter, r *http.Request) {
 		sh := a.current()
 		if sh == nil {
@@ -581,7 +553,6 @@ func routes(logger *slog.Logger, a *agent) http.Handler {
 		serveOutputStream(w, r, sh.out)
 	})
 
-	// CRIU checkpoint/restore (in-pod). See checkpoint.go.
 	mux.HandleFunc("POST /checkpoint", a.handleCheckpoint(logger))
 	mux.HandleFunc("POST /restore", a.handleRestore(logger))
 

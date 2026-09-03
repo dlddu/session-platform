@@ -3,10 +3,9 @@
 // 검증 AC: AC-D5
 //
 // Idle is measured by the absence of CLIENT shell I/O, not by the shell's
-// busyness (docs/prd/shell-workload.md). `lastAccess` — the timestamp AC-B1's
-// idle window counts from — is advanced by a read or a write, and by nothing
-// else: a shell producing output on its own (a background job's log) does not
-// reset the idle clock.
+// busyness. `lastAccess` — the timestamp the idle window counts from — is
+// advanced by a read or a write, and by nothing else: a shell producing output on
+// its own (a background job's log) does not reset the idle clock.
 //
 // GET /sessions/{id} deliberately does not count as an access, which is what
 // makes this observable from the outside: the assertions below sample

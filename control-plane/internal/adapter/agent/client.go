@@ -1,8 +1,7 @@
-// Package agent contains the control plane's workload I/O and archive client
-// for a session pod's data plane agent, plus its HTTP implementation.
-// It is deliberately separate from the k8s.PodOrchestrator port: the
-// orchestrator owns the pod *lifecycle* (start/stop/reach), while this client
-// moves workload input/output (AC-D2/D3, AC-E2/E3) once the session is active.
+// Package agent contains the control plane's workload I/O and archive client for
+// a session pod's data plane agent, plus its HTTP implementation. It is
+// deliberately separate from the k8s.PodOrchestrator port: the orchestrator owns
+// the pod lifecycle, while this client moves workload input/output.
 package agent
 
 import (
@@ -28,12 +27,6 @@ const checkpointIDHeader = "X-Session-Checkpoint-ID"
 
 // Client is the workload I/O port onto a session's data plane agent, addressed by
 // pod name (the only pod handle sessions store).
-//
-// AC mapping:
-//   - Write → AC-D2/AC-E2: shell stdin or an asynchronously accepted prompt.
-//   - Read  → AC-D3/AC-E3: output after offset plus nextOffset; offset 0
-//     replays the full history and reads are non-consuming.
-//   - Stream → the same append-only output as resumable SSE events.
 type Client interface {
 	Write(ctx context.Context, pod, payload string) error
 	Read(ctx context.Context, pod string, offset int64) (payload string, nextOffset int64, err error)
@@ -42,10 +35,8 @@ type Client interface {
 
 // HTTPClient is the real Client: it resolves the pod's current IP through the
 // Kubernetes API on every call (pod IPs are not stable across restore, and
-// sessions store only the pod name) and talks plain HTTP to the agent's
-// /write and /read endpoints. It also carries the pod's /checkpoint and /restore
-// endpoints for the agent-driven CRIU path (see Checkpoint/Restore below), so
-// the criu.AgentCheckpointer reuses this one client and its IP resolution.
+// sessions store only the pod name) and talks plain HTTP to the agent. The
+// criu.AgentCheckpointer reuses this one client and its IP resolution.
 type HTTPClient struct {
 	client    kubernetes.Interface
 	namespace string
@@ -57,14 +48,12 @@ type HTTPClient struct {
 	stream *http.Client
 }
 
-// compile-time assertion that HTTPClient satisfies the shell I/O port.
 var _ Client = (*HTTPClient)(nil)
 
 // HTTPOption customises an HTTPClient.
 type HTTPOption func(*HTTPClient)
 
-// WithPort overrides the agent port (default k8s.AgentPort). Tests point the
-// client at a local httptest agent; production keeps the default.
+// WithPort overrides the agent port (default k8s.AgentPort).
 func WithPort(port int) HTTPOption {
 	return func(c *HTTPClient) {
 		if port > 0 {
@@ -88,10 +77,9 @@ func NewHTTPClient(client kubernetes.Interface, namespace string, opts ...HTTPOp
 	return c
 }
 
-// Checkpoint drives the agent's /checkpoint: it returns the checkpoint archive
-// stream (criu images + scrollback) the agent produced by CRIU-dumping its shell
-// tree. The caller (criu.AgentCheckpointer) streams it to durable storage and
-// must Close the returned reader.
+// Checkpoint drives the agent's /checkpoint and returns the archive stream the
+// agent produced by CRIU-dumping its shell tree. The caller streams it to durable
+// storage and must Close the returned reader.
 func (c *HTTPClient) Checkpoint(ctx context.Context, pod string) (io.ReadCloser, string, error) {
 	return c.checkpoint(ctx, pod, "")
 }
@@ -198,7 +186,7 @@ func (c *HTTPClient) baseURL(ip string) string {
 	return "http://" + net.JoinHostPort(ip, strconv.Itoa(c.port))
 }
 
-// Write forwards shell stdin or a Claude prompt to the agent (AC-D2/AC-E2).
+// Write forwards shell stdin or a Claude prompt to the agent.
 func (c *HTTPClient) Write(ctx context.Context, pod, payload string) error {
 	ip, err := c.resolve(ctx, pod)
 	if err != nil {
@@ -231,7 +219,7 @@ func (c *HTTPClient) Write(ctx context.Context, pod, payload string) error {
 	return nil
 }
 
-// Read fetches workload output after offset from the agent (AC-D3/AC-E3).
+// Read fetches workload output after offset from the agent.
 func (c *HTTPClient) Read(ctx context.Context, pod string, offset int64) (string, int64, error) {
 	ip, err := c.resolve(ctx, pod)
 	if err != nil {

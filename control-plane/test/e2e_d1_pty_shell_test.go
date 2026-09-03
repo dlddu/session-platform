@@ -2,14 +2,12 @@
 
 // 검증 AC: AC-D1
 //
-// The session workload IS an interactive shell process (docs/prd/shell-workload.md,
-// docs/test/shell-workload.md scenario 1): once a session is active, its
-// dedicated pod runs exactly ONE PTY-attached interactive shell — the default
-// /bin/bash — and nothing else is attached to a PTY.
+// Once a session is active, its dedicated pod runs exactly ONE PTY-attached
+// interactive shell — the default /bin/bash — and nothing else is attached to a
+// PTY.
 //
 // This is the half of AC-D1 the fake-clientset unit suite cannot cover: that one
-// verifies the pod *spec*, this verifies the resulting *processes*. That the
-// control plane hosts no such workload is AC-A1's file.
+// verifies the pod *spec*, this verifies the resulting *processes*.
 package e2e_test
 
 import (

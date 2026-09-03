@@ -3,13 +3,10 @@
 // generation-fenced filesystem archive. Both streams go to durable storage and
 // are later streamed to the selected workload's restore endpoint.
 //
-// This replaces the kubelet ContainerCheckpoint approach (container_checkpointer.go,
-// kept only as the CRI-O alternative) because the k3s/containerd verification on
-// 2026-07-22 confirmed containerd cannot restore a container checkpoint — there
-// is no runtime component to resume the AnnotationRestoreCheckpoint pod. Doing
-// Shell CRIU in-agent keeps that path inside this repo (decision ⑤). The one
-// part that still needs a CRIU-capable node is the shell agent's criu invocation
-// (data-plane execCriuEngine); Claude archive mode does not invoke CRIU.
+// It replaces the kubelet ContainerCheckpoint approach (container_checkpointer.go,
+// kept only as the CRI-O alternative) because containerd cannot restore a
+// container checkpoint. The one part that still needs a CRIU-capable node is the
+// shell agent's criu invocation; Claude archive mode does not invoke CRIU.
 package criu
 
 import (
@@ -25,8 +22,7 @@ import (
 )
 
 // AgentCheckpointClient is the control plane's channel to a session pod's agent
-// checkpoint endpoints. The agent HTTP client implements it, resolving the pod
-// IP per call like the workload I/O client does.
+// checkpoint endpoints.
 type AgentCheckpointClient interface {
 	// Checkpoint returns the archive stream the pod's agent produces by dumping
 	// its shell tree. The caller closes it.
@@ -51,7 +47,6 @@ type AgentCheckpointer struct {
 	abortable bool
 }
 
-// compile-time assertion that AgentCheckpointer satisfies the port.
 var _ Checkpointer = (*AgentCheckpointer)(nil)
 
 // NewAgentCheckpointer builds the agent-driven checkpointer over the agent
@@ -77,7 +72,7 @@ func NewAgentArchiveCheckpointer(client AgentCheckpointClient, store CheckpointS
 func (c *AgentCheckpointer) Enabled() bool { return true }
 
 // Checkpoint asks the pod's agent to dump its shell tree and streams the archive
-// to durable storage, recording the durable ref (AC-B1, AC-B3, AC-D4).
+// to durable storage, recording the durable ref.
 func (c *AgentCheckpointer) Checkpoint(ctx context.Context, ref k8s.PodRef) (*session.Checkpoint, error) {
 	return c.checkpoint(ctx, ref, "")
 }
@@ -175,8 +170,7 @@ func (c *AgentCheckpointer) abortAfterFailure(ref k8s.PodRef, checkpointID strin
 }
 
 // Restore fetches the archive from durable storage and streams it to the
-// restore-target agent, which applies its workload-specific format (AC-B2/B3,
-// AC-E5).
+// restore-target agent, which applies its workload-specific format.
 func (c *AgentCheckpointer) Restore(ctx context.Context, cp *session.Checkpoint, into k8s.PodRef) error {
 	if cp == nil || cp.Ref == "" {
 		return fmt.Errorf("restore into pod %s: checkpoint ref is empty", into.Name)

@@ -2,13 +2,9 @@
 
 // 검증 AC: AC-D3
 //
-// read = shell stdout/stderr, offset-cursored delta (docs/prd/shell-workload.md,
-// docs/test/shell-workload.md scenario 3): a read at the previous read's
-// nextOffset returns only output produced since, and offset=0 keeps replaying
-// the full ordered history — reads are non-consuming.
-//
-// The state dispatch around read is AC-C2's file; that the cursor stays valid
-// across a snapshot/restore is AC-B3's.
+// read = shell stdout/stderr, offset-cursored delta: a read at the previous
+// read's nextOffset returns only output produced since, and offset=0 keeps
+// replaying the full ordered history — reads are non-consuming.
 package e2e_test
 
 import (

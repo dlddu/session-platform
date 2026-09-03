@@ -2,11 +2,9 @@
 
 // This file exercises the *real* client-go PodOrchestrator against a fake
 // clientset (no cluster needed), asserting the create/label/1:1/delete contract
-// and the shell-agent pod spec (AC-D1) that the in-memory stub can only
-// approximate. What the fake cannot verify — an actual PTY shell running inside
-// the pod — is asserted at runtime by the kind e2e suite (e2e_d1_pty_shell_test.go).
-// The HTTP happy-path scenarios in integration_test.go still run against the
-// stub adapters.
+// and the shell-agent pod spec that the in-memory stub can only approximate. What
+// the fake cannot verify — an actual PTY shell running inside the pod — is
+// asserted at runtime by the kind e2e suite.
 package integration_test
 
 import (
@@ -69,8 +67,6 @@ func listPods(t *testing.T, cs *fake.Clientset) []corev1.Pod {
 	return pods.Items
 }
 
-// Scenario 1 (AC-A1/A2): Start creates exactly one pod in the orchestrator's
-// namespace, labelled 1:1 to the session.
 func TestClientOrchestrator_StartCreatesOnePodWithLabel(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t)
 	ref, err := orch.Start(context.Background(), "a1b2", k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
@@ -105,7 +101,6 @@ func TestClientOrchestrator_StartCreatesOnePodWithLabel(t *testing.T) {
 	}
 }
 
-// Scenario 2 (AC-A2): N sessions => N unique pods, each labelled to its session.
 func TestClientOrchestrator_NSessionsNUniquePods(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t)
 	ids := []string{"aa01", "bb02", "cc03", "dd04"}
@@ -131,11 +126,10 @@ func TestClientOrchestrator_NSessionsNUniquePods(t *testing.T) {
 	}
 }
 
-// AC-D1 (pod spec side): the data plane image's entrypoint owns the PTY shell,
-// so the orchestrator must not override the container command; the agent port
-// is declared and readiness is the agent's /healthz — making "pod Ready" mean
-// "shell alive". The runtime side (an actual PTY shell in the pod) is asserted
-// by the kind e2e suite.
+// The data plane image's entrypoint owns the PTY shell, so the orchestrator must
+// not override the container command; the agent port is declared and readiness is
+// the agent's /healthz — making "pod Ready" mean "shell alive". The runtime side
+// is asserted by the kind e2e suite.
 func TestClientOrchestrator_PodSpecRunsShellAgent(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t)
 	if _, err := orch.Start(context.Background(), "d1a1", k8s.WorkloadSpec{Type: session.WorkloadTypeShell}); err != nil {
@@ -210,8 +204,8 @@ func TestClientOrchestrator_PullPolicyByImageTag(t *testing.T) {
 	}
 }
 
-// AC-D1 (shell override): WithShell propagates DATA_PLANE_SHELL into the pod so
-// the agent launches the configured shell instead of /bin/bash.
+// WithShell propagates DATA_PLANE_SHELL into the pod so the agent launches the
+// configured shell instead of /bin/bash.
 func TestClientOrchestrator_PodSpecPropagatesShellOverride(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t, k8s.WithShell("/bin/zsh"))
 	if _, err := orch.Start(context.Background(), "d1b2", k8s.WorkloadSpec{Type: session.WorkloadTypeShell}); err != nil {
@@ -229,12 +223,11 @@ func TestClientOrchestrator_PodSpecPropagatesShellOverride(t *testing.T) {
 	}
 }
 
-// AC-B2/AC-D4 (restore-pod spec): RestoreInto provisions a *restore target* — a
-// pod carrying AnnotationRestoreCheckpoint with the checkpoint ref so a
-// CRIU-capable runtime resumes the checkpointed process tree — not a fresh-shell
-// pod like Start. This is the branch that stops a restore from booting an empty
-// shell and losing the frozen state; the pod is otherwise the same shell-agent
-// pod, so pod-Ready still means "restored shell alive" (AC-D1).
+// RestoreInto provisions a *restore target* — a pod carrying
+// AnnotationRestoreCheckpoint with the checkpoint ref so a CRIU-capable runtime
+// resumes the checkpointed process tree — not a fresh-shell pod like Start. This
+// is the branch that stops a restore from booting an empty shell and losing the
+// frozen state.
 func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t)
 	const ref = "/var/lib/kubelet/checkpoints/checkpoint-sess-r1a2_sessions-session-1.tar"
@@ -264,7 +257,7 @@ func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 	}
 	// Still labelled 1:1 to its session and running the same shell-agent
 	// container with no entrypoint override, so once resumed the agent's
-	// /healthz reflects the *restored* shell (AC-D1).
+	// /healthz reflects the *restored* shell.
 	if got := p.Labels[k8s.LabelSessionID]; got != "r1a2" {
 		t.Fatalf("%s label=%q want r1a2", k8s.LabelSessionID, got)
 	}
@@ -317,11 +310,10 @@ func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 	}
 }
 
-// CRIU privilege (in-pod agent-driven checkpoint): WithCheckpointPrivileged runs
-// session pods privileged when the gate is on — the on-cluster-verified config
-// where `criu check` fully passes (capability sets alone are defeated by the
-// runtime's AppArmor and read-only /proc/sys, 2026-07-23). Gate-off pods stay
-// unprivileged (no securityContext).
+// WithCheckpointPrivileged runs session pods privileged when the gate is on — the
+// on-cluster-verified config where `criu check` fully passes (capability sets
+// alone are defeated by the runtime's AppArmor and read-only /proc/sys). Gate-off
+// pods stay unprivileged (no securityContext).
 func TestClientOrchestrator_CheckpointPrivilegeGated(t *testing.T) {
 	// Gate on: privileged container.
 	orchOn, cs := newReadyOrchestrator(t, k8s.WithCheckpointPrivileged(true))
@@ -343,8 +335,8 @@ func TestClientOrchestrator_CheckpointPrivilegeGated(t *testing.T) {
 	}
 }
 
-// AC-D1 (transport): Start records the Ready pod's IP so the control plane can
-// dial the session agent without re-fetching the pod.
+// Start records the Ready pod's IP so the control plane can dial the session
+// agent without re-fetching the pod.
 func TestClientOrchestrator_StartRecordsPodIP(t *testing.T) {
 	orch, _ := newReadyOrchestrator(t)
 	ref, err := orch.Start(context.Background(), "d1c3", k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
@@ -356,9 +348,9 @@ func TestClientOrchestrator_StartRecordsPodIP(t *testing.T) {
 	}
 }
 
-// AC-D1 (reachability): Reach opens the agent's /attach WebSocket stream and
-// closes it — success against a live endpoint, an error against a dead one,
-// and an error for refs without an IP.
+// Reach opens the agent's /attach WebSocket stream and closes it — success
+// against a live endpoint, an error against a dead one, and an error for refs
+// without an IP.
 func TestClientOrchestrator_ReachOpensAttachStream(t *testing.T) {
 	upgraded := make(chan struct{}, 1)
 	upgrader := websocket.Upgrader{}
@@ -418,7 +410,6 @@ func TestClientOrchestrator_ReachOpensAttachStream(t *testing.T) {
 	}
 }
 
-// Scenario 3 (AC-A3): Stop deletes the pod and is idempotent.
 func TestClientOrchestrator_StopDeletesPodIdempotently(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t)
 	ref, err := orch.Start(context.Background(), "ee05", k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
@@ -434,7 +425,7 @@ func TestClientOrchestrator_StopDeletesPodIdempotently(t *testing.T) {
 	if n := len(listPods(t, cs)); n != 0 {
 		t.Fatalf("expected 0 pods after stop, got %d", n)
 	}
-	// Deleting an already-gone pod is not an error (AC-A3 reclaim is idempotent).
+	// Deleting an already-gone pod is not an error; reclaim is idempotent.
 	if err := orch.Stop(context.Background(), ref); err != nil {
 		t.Fatalf("stop (idempotent) returned error: %v", err)
 	}

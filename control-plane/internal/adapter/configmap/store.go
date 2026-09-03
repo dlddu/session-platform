@@ -1,20 +1,13 @@
 // Package configmap is the Kubernetes-backed StateStore adapter. Session
-// metadata lives in one ConfigMap per session (name "session-<id>", the
-// session.Session JSON under a single data key), and per-session occupancy
-// locks are coordination.k8s.io/v1 Leases ("session-lock-<id>").
+// metadata lives in one ConfigMap per session ("session-<id>", the
+// session.Session JSON under a single data key), and per-session occupancy locks
+// are coordination.k8s.io/v1 Leases ("session-lock-<id>").
 //
-// Atomicity (AC-C1) comes from the API server, not a mutex:
-//   - CompareAndSwapState reads the ConfigMap (capturing its resourceVersion)
-//     and writes it back; the API server rejects the write with a 409 Conflict
-//     if the resourceVersion moved underneath us, so concurrent transitions on
-//     the same session converge to a single winner across control plane replicas.
-//   - Lock creates the Lease; the API server admits exactly one Create for a
-//     given name, so the occupancy claim is exclusive. A crashed holder's lock
-//     self-heals via leaseDurationSeconds (a stale Lease can be taken over).
-//
-// This keeps the same StateStore contract the in-memory stub had, so the
-// service layer is unchanged — only the backend (and its atomicity guarantee)
-// differs.
+// Atomicity comes from the API server, not a mutex:
+//   - CompareAndSwapState writes back the resourceVersion it read, so the API
+//     server rejects a racing write with 409 and one writer wins across replicas.
+//   - Lock creates the Lease; exactly one Create is admitted for a given name.
+//     A crashed holder's lock self-heals via leaseDurationSeconds.
 package configmap
 
 import (
@@ -34,9 +27,8 @@ import (
 )
 
 const (
-	// labelManagedBy / managedByValue mark the objects this control plane owns
-	// so List never picks up a ConfigMap it did not create, mirroring the pod
-	// orchestrator's ownership convention.
+	// LabelManagedBy / managedByValue mark the objects this control plane owns so
+	// List never picks up a ConfigMap it did not create.
 	labelManagedBy = "app.kubernetes.io/managed-by"
 	managedByValue = "control-plane"
 	// labelSessionID ties an object 1:1 to its session.
@@ -47,8 +39,7 @@ const (
 	// dataKey is the ConfigMap data entry holding the session.Session JSON.
 	dataKey = "session"
 
-	// namePrefix / lockPrefix derive DNS-safe object names from a session id so
-	// the session<->object mapping is recoverable from the id alone.
+	// NamePrefix / lockPrefix derive DNS-safe object names from a session id.
 	namePrefix = "session-"
 	lockPrefix = "session-lock-"
 
@@ -57,8 +48,7 @@ const (
 	defaultLeaseDuration = 15 * time.Second
 
 	// putMaxRetries bounds Put's optimistic-update retry loop. Put is a
-	// last-writer-wins save (the atomic guard is CompareAndSwapState/Lock), so a
-	// lost race just re-reads the current object and reapplies.
+	// last-writer-wins save, so a lost race just re-reads and reapplies.
 	putMaxRetries = 5
 )
 
@@ -70,14 +60,12 @@ type Store struct {
 	now       func() time.Time // injectable clock for lease-staleness in tests
 }
 
-// compile-time assertion that Store satisfies the port.
 var _ store.StateStore = (*Store)(nil)
 
 // Option customises a Store.
 type Option func(*Store)
 
-// WithLeaseDuration overrides how long a held lock survives without renewal
-// before it can be taken over (default 15s).
+// WithLeaseDuration overrides how long a held lock survives without renewal.
 func WithLeaseDuration(d time.Duration) Option {
 	return func(s *Store) {
 		if d > 0 {
@@ -96,9 +84,7 @@ func WithClock(now func() time.Time) Option {
 }
 
 // NewStore builds a ConfigMap-backed store bound to a namespace. Injecting
-// kubernetes.Interface lets tests drive it with a fake clientset; main builds
-// the client and namespace via k8s.BuildClient (the same client the pod
-// orchestrator uses).
+// kubernetes.Interface lets tests drive it with a fake clientset.
 func NewStore(client kubernetes.Interface, namespace string, opts ...Option) *Store {
 	s := &Store{
 		client:    client,
@@ -112,8 +98,7 @@ func NewStore(client kubernetes.Interface, namespace string, opts ...Option) *St
 	return s
 }
 
-// Put upserts the session's ConfigMap. It is a last-writer-wins save: a
-// concurrent update is retried on its fresh resourceVersion. The atomic
+// Put upserts the session's ConfigMap. It is a last-writer-wins save; the atomic
 // guarantees live in CompareAndSwapState and Lock, not here.
 func (s *Store) Put(ctx context.Context, sess *session.Session) error {
 	cms := s.client.CoreV1().ConfigMaps(s.namespace)
@@ -182,10 +167,9 @@ func (s *Store) List(ctx context.Context) ([]*session.Session, error) {
 	return out, nil
 }
 
-// Touch advances LastAccess on the latest ConfigMap value. Unlike a Get+Put
-// from the service, this never replays stale lifecycle fields over a concurrent
-// snapshot transaction. Conflicts reload the authoritative object, preserving
-// its state and private recovery envelope.
+// Touch advances LastAccess on the latest ConfigMap value. Unlike a Get+Put from
+// the service, this never replays stale lifecycle fields over a concurrent
+// snapshot transaction.
 func (s *Store) Touch(ctx context.Context, id string, at time.Time) error {
 	cms := s.client.CoreV1().ConfigMaps(s.namespace)
 	for attempt := 0; ; attempt++ {
@@ -222,9 +206,8 @@ func (s *Store) Touch(ctx context.Context, id string, at time.Time) error {
 }
 
 // Delete removes the session's ConfigMap only while token owns its lifecycle
-// annotation. The Lease stays held until the caller stops renewal and releases
-// it through token-safe Unlock; deleting it here could remove a successor's
-// Lease after a concurrent takeover.
+// annotation. The Lease stays held until the caller releases it through Unlock;
+// deleting it here could remove a successor's Lease after a concurrent takeover.
 func (s *Store) Delete(ctx context.Context, id, token string) error {
 	cms := s.client.CoreV1().ConfigMaps(s.namespace)
 	for attempt := 0; attempt <= putMaxRetries; attempt++ {
@@ -261,8 +244,7 @@ func (s *Store) Delete(ctx context.Context, id, token string) error {
 
 // CompareAndSwapState atomically moves a session from->to. It returns
 // session.ErrConflict if the current state is not `from`, or if the ConfigMap
-// changed underneath us (resourceVersion conflict) — the optimistic-concurrency
-// primitive that makes transitions atomic across replicas (AC-C1).
+// changed underneath us (resourceVersion conflict).
 func (s *Store) CompareAndSwapState(ctx context.Context, id string, from, to session.State) error {
 	cms := s.client.CoreV1().ConfigMaps(s.namespace)
 	cm, err := cms.Get(ctx, cmName(id), metav1.GetOptions{})
@@ -296,8 +278,7 @@ func (s *Store) CompareAndSwapState(ctx context.Context, id string, from, to ses
 
 // CompareAndSwapSession commits a complete lifecycle transition with one
 // resourceVersion-guarded ConfigMap Update. expectedTxn fences archive
-// generation/phase changes: a stale holder cannot clear or advance a newer
-// transaction merely because the public lifecycle state is unchanged.
+// generation/phase changes so a stale holder cannot advance a newer transaction.
 func (s *Store) CompareAndSwapSession(
 	ctx context.Context,
 	id, token string,
@@ -362,10 +343,9 @@ func sameSnapshotTransaction(a, b *session.SnapshotTransaction) bool {
 		a.Checkpoint.Reclaimed == b.Checkpoint.Reclaimed
 }
 
-// Lock acquires the per-session occupancy Lease. Creating the Lease is the
-// atomic claim: the API server admits exactly one Create for the name, so a
-// concurrent loser gets AlreadyExists and, unless the existing lock is its own
-// or has expired, session.ErrConflict.
+// Lock acquires the per-session occupancy Lease. Creating the Lease is the atomic
+// claim: a concurrent loser gets AlreadyExists and, unless the existing lock is
+// its own or has expired, session.ErrConflict.
 func (s *Store) Lock(ctx context.Context, id, token string) error {
 	leases := s.client.CoordinationV1().Leases(s.namespace)
 	if _, err := leases.Create(ctx, s.leaseFor(id, token), metav1.CreateOptions{}); err == nil {
@@ -570,8 +550,8 @@ func ensureLabels(cm *corev1.ConfigMap, id string) {
 }
 
 // storedSession is the ConfigMap-only representation. SnapshotTransaction is
-// deliberately hidden by session.Session's public JSON contract, so the state
-// adapter carries it in this private envelope while leaving API responses clean.
+// hidden by session.Session's public JSON contract, so the state adapter carries
+// it in this private envelope while leaving API responses clean.
 type storedSession struct {
 	session.Session
 	SnapshotTransaction *session.SnapshotTransaction `json:"snapshotTxn,omitempty"`

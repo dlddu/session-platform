@@ -152,7 +152,7 @@ func envValue(items []string, key string) string {
 	return ""
 }
 
-// AC-E2: /write only enqueues, and the one worker does not start prompt B until
+// /write only enqueues, and the one worker does not start prompt B until
 // prompt A has completely returned.
 func TestClaudeWriteIsNonBlockingAndSerial(t *testing.T) {
 	runner := newFakeClaudeRunner()
@@ -490,7 +490,7 @@ func slicesContain(items []string, want string) bool {
 	return false
 }
 
-// AC-E3/E6: stdout and stderr share one ordered buffer, reads use byte offsets,
+// Stdout and stderr share one ordered buffer, reads use byte offsets,
 // and credential literals are replaced before they can enter that buffer.
 func TestClaudeReadCursorAndCredentialRedaction(t *testing.T) {
 	const secret = "token-super-secret"

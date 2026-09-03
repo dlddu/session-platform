@@ -98,7 +98,7 @@ func race(n int, fn func(i int) error) []error {
 	return results
 }
 
-// AC-C1: concurrent CompareAndSwapState on one session converges to a single
+// Concurrent CompareAndSwapState on one session converges to a single
 // winner — the real API server's resourceVersion check rejects all but one
 // active->idle transition, so state never tears.
 func TestCAS_SingleWinnerUnderConcurrency(t *testing.T) {
@@ -133,7 +133,7 @@ func TestCAS_SingleWinnerUnderConcurrency(t *testing.T) {
 	}
 }
 
-// AC-C1: concurrent Lock acquisitions on one session yield a single holder —
+// Concurrent Lock acquisitions on one session yield a single holder —
 // the API server admits exactly one Lease Create, so occupancy is exclusive
 // across replicas.
 func TestLock_SingleWinnerUnderConcurrency(t *testing.T) {

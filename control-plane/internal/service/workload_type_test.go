@@ -17,8 +17,8 @@ import (
 )
 
 // newServiceWithOrch hands back the stub orchestrator too, so a test can assert
-// which workload type actually reached provisioning (AC-E1) rather than only
-// what the stored record says.
+// which workload type actually reached provisioning rather than only what the
+// stored record says.
 func newServiceWithOrch() (*service.Service, *k8s.StubOrchestrator, *configmap.Store) {
 	orch := k8s.NewStubOrchestrator("sessions")
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
@@ -30,8 +30,8 @@ func newServiceWithOrch() (*service.Service, *k8s.StubOrchestrator, *configmap.S
 	return svc, orch, store
 }
 
-// AC-E1/AC-E6: immutable workload settings are validated before provisioning,
-// copied into the pod request, and persisted on the session record.
+// Immutable workload settings are validated before provisioning, copied into the
+// pod request, and persisted on the session record.
 func TestCreateAppliesWorkloadType(t *testing.T) {
 	ctx := context.Background()
 
@@ -101,7 +101,7 @@ func TestCreateAppliesWorkloadType(t *testing.T) {
 	}
 }
 
-// AC-E1: an unknown type is rejected outright — and, importantly, before any
+// An unknown type is rejected outright — and, importantly, before any
 // pod is provisioned, so a bad request cannot leak cluster resources.
 func TestCreateRejectsUnknownWorkloadType(t *testing.T) {
 	ctx := context.Background()
@@ -119,7 +119,7 @@ func TestCreateRejectsUnknownWorkloadType(t *testing.T) {
 	}
 }
 
-// AC-E6: invalid model settings fail before provisioning. Shell has no model,
+// Invalid model settings fail before provisioning. Shell has no model,
 // and Claude Code model identifiers cannot contain whitespace or CLI flags.
 func TestCreateRejectsInvalidModel(t *testing.T) {
 	ctx := context.Background()
@@ -164,7 +164,7 @@ func TestCreateRejectsInvalidModel(t *testing.T) {
 	}
 }
 
-// AC-E1/AC-E6: immutable workload settings survive the freeze/restore round
+// Immutable workload settings survive the freeze/restore round
 // trip and reach the brand-new pod.
 func TestWorkloadTypeSurvivesSnapshotRestore(t *testing.T) {
 	ctx := context.Background()

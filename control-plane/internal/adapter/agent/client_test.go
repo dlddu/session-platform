@@ -137,8 +137,8 @@ func harness(t *testing.T, podName string) (*agent.HTTPClient, *fakeAgent) {
 	return agent.NewHTTPClient(cs, "sessions", agent.WithPort(port)), fa
 }
 
-// Write resolves the pod IP per request and forwards the payload verbatim to
-// the agent's /write (AC-D2).
+// Write resolves the pod IP per request and forwards the payload verbatim to the
+// agent's /write.
 func TestHTTPClientWriteForwardsPayload(t *testing.T) {
 	c, fa := harness(t, "sess-ab12")
 
@@ -150,8 +150,8 @@ func TestHTTPClientWriteForwardsPayload(t *testing.T) {
 	}
 }
 
-// Read passes the offset through and returns the delta plus nextOffset
-// (AC-D3) — offset 0 is the full history, the cursor read only the delta.
+// Read passes the offset through and returns the delta plus nextOffset — offset 0
+// is the full history, the cursor read only the delta.
 func TestHTTPClientReadCursor(t *testing.T) {
 	c, fa := harness(t, "sess-ab12")
 	fa.buf = []byte("alpha\n")
@@ -177,7 +177,6 @@ func TestHTTPClientReadCursor(t *testing.T) {
 	}
 }
 
-// A pod the API server does not know is an error, not a silent no-op.
 func TestHTTPClientStreamProxiesSSEAtCursor(t *testing.T) {
 	c, fa := harness(t, "sess-ab12")
 	body, err := c.Stream(context.Background(), "sess-ab12", 2)
@@ -357,7 +356,6 @@ func TestAbortCheckpointSurfacesAgentError(t *testing.T) {
 	}
 }
 
-// Restore streams the archive to the agent's /restore.
 func TestRestoreStreamsArchiveToAgent(t *testing.T) {
 	c, fa := harness(t, "sess-r")
 	if err := c.Restore(context.Background(), "sess-r", strings.NewReader("RESTORE-ARCHIVE")); err != nil {
@@ -368,7 +366,6 @@ func TestRestoreStreamsArchiveToAgent(t *testing.T) {
 	}
 }
 
-// A non-200 from /restore surfaces as an error.
 func TestRestoreSurfacesAgentError(t *testing.T) {
 	c, fa := harness(t, "sess-r")
 	fa.restoreStatus = http.StatusInternalServerError
