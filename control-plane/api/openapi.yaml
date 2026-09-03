@@ -4,7 +4,8 @@ info:
   version: 0.3.0
   description: >
     REST surface the SPA uses to create, list and operate sessions. Each
-    session maps 1:1 to a dedicated data plane pod (AC-A2). Non-active access is
+    session maps 1:1 to a dedicated data plane *workload* pod and may own
+    session-scoped auxiliary pods that serve it (AC-A2). Non-active access is
     uniform "ensure active then serve": read, write and switch promote
     idle->active (AC-C1) or restore snapshot->active (AC-B2) before serving.
     A session picks a workload type at creation (AC-E1): `shell` (the default)
@@ -479,7 +480,21 @@ components:
             Whenever the primary container starts, including a restart, that
             alias resolves through the optional Secret model and then the CLI
             fallback.
-        pod: { type: string }
+        pod:
+          type: string
+          description: >
+            The session's dedicated workload pod — the 1:1 subject of AC-A2.
+            Absent while the session is snapshotted and its pods reclaimed.
+        auxiliaryPods:
+          type: array
+          items: { type: string }
+          description: >
+            Session-scoped pods that serve the workload pod without running the
+            workload themselves (AC-A2's auxiliary-pod clause). They share the
+            workload pod's lifetime and are reclaimed with it, so this is absent
+            exactly when `pod` is. Both workload types available today
+            provision none, so it is absent for every session the API serves
+            now; AC-F4's helper pod is the first to appear here.
         createdAt: { type: string, format: date-time }
         lastAccess: { type: string, format: date-time }
         checkpoint: { $ref: "#/components/schemas/Checkpoint" }

@@ -187,31 +187,34 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 		return nil, err
 	}
 
-	pod, err := s.orch.Start(ctx, id, k8s.WorkloadSpec{Type: workload, Model: model})
+	pods, err := s.orch.Start(ctx, id, k8s.WorkloadSpec{Type: workload, Model: model})
 	if err != nil {
 		return nil, err
 	}
-	if err := s.orch.Reach(ctx, pod); err != nil {
+	// Only the workload pod runs a session agent; auxiliary pods serve it and
+	// have no attach endpoint to dial (AC-F4).
+	if err := s.orch.Reach(ctx, pods.Workload); err != nil {
 		// A pod whose workload agent is unreachable must not become active;
-		// reclaim it instead of leaking it (AC-A3 hygiene).
-		_ = s.orch.Stop(ctx, pod)
+		// reclaim the whole set instead of leaking it (AC-A3 hygiene).
+		_ = s.orch.Stop(ctx, pods.All()...)
 		return nil, err
 	}
 
 	now := s.now()
 	sess := &session.Session{
-		ID:           id,
-		WorkloadType: workload,
-		Model:        model,
-		Name:         name,
-		State:        session.StateActive,
-		Pod:          pod.Name,
-		CreatedAt:    now,
-		LastAccess:   now,
+		ID:            id,
+		WorkloadType:  workload,
+		Model:         model,
+		Name:          name,
+		State:         session.StateActive,
+		Pod:           pods.Workload.Name,
+		AuxiliaryPods: pods.Names(),
+		CreatedAt:     now,
+		LastAccess:    now,
 	}
 	if err := s.store.Put(ctx, sess); err != nil {
-		// best-effort rollback of the pod we just started
-		_ = s.orch.Stop(ctx, pod)
+		// best-effort rollback of every pod we just started
+		_ = s.orch.Stop(ctx, pods.All()...)
 		return nil, err
 	}
 	return sess, nil
@@ -457,8 +460,9 @@ func (s *Service) snapshot(ctx context.Context, id string, idleCutoff *time.Time
 		return nil, err
 	}
 	podRef := k8s.PodRef{Name: sess.Pod}
-	// reclaim the pod (AC-A3)
-	if stopErr := s.orch.Stop(ctx, podRef); stopErr != nil {
+	// reclaim every pod the session owns — the workload pod and its auxiliary
+	// pods, whose lifetime is the session's (AC-A3, AC-F4)
+	if stopErr := s.orch.Stop(ctx, sessionPodRefs(sess)...); stopErr != nil {
 		if aborter, ok := ckpt.(checkpointAborter); ok {
 			abortCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -474,6 +478,7 @@ func (s *Service) snapshot(ctx context.Context, id string, idleCutoff *time.Time
 	next := *sess
 	next.State = session.StateSnapshot
 	next.Pod = ""
+	next.AuxiliaryPods = nil
 	next.Checkpoint = cp
 	if err := s.store.CompareAndSwapSession(ctx, id, token, sess.State, sess.SnapshotTransaction, &next); err != nil {
 		return nil, err
@@ -549,7 +554,9 @@ func (s *Service) snapshotWithTransactionLocked(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := s.orch.Stop(ctx, podRef); err != nil {
+	// Reclaim the whole set: the workload pod carrying the archived state and the
+	// auxiliary pods that share its lifetime (AC-A3, AC-F4).
+	if err := s.orch.Stop(ctx, sessionPodRefs(sess)...); err != nil {
 		// DELETE errors are outcome-ambiguous. The durable commit record makes a
 		// retry safe, whereas aborting here could reopen a pod already terminating.
 		return nil, err
@@ -640,7 +647,10 @@ func (s *Service) recoverSnapshotLocked(ctx context.Context, sess *session.Sessi
 		if txn.Checkpoint == nil || txn.Checkpoint.Ref == "" {
 			return nil, session.ErrInvalidState
 		}
-		if err := s.orch.Stop(ctx, k8s.PodRef{Name: txn.SourcePod}); err != nil {
+		// Reclaim the transaction's source pod together with every pod the record
+		// still names, so a recovered snapshot leaves no auxiliary pod behind
+		// (AC-A3, AC-F4).
+		if err := s.orch.Stop(ctx, sessionReclaimRefs(sess, txn.SourcePod)...); err != nil {
 			return nil, err
 		}
 		if err := ctx.Err(); err != nil {
@@ -713,6 +723,7 @@ func (s *Service) finalizeSnapshotLocked(ctx context.Context, sess *session.Sess
 	next := *sess
 	next.State = session.StateSnapshot
 	next.Pod = ""
+	next.AuxiliaryPods = nil
 	next.Checkpoint = txn.Checkpoint
 	next.SnapshotTransaction = nil
 	if err := s.store.CompareAndSwapSession(
@@ -798,36 +809,39 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	pod, err := s.orch.RestoreInto(ctx, id, checkpointRef(sess.Checkpoint), k8s.WorkloadSpec{Type: workload, Model: model})
+	pods, err := s.orch.RestoreInto(ctx, id, checkpointRef(sess.Checkpoint), k8s.WorkloadSpec{Type: workload, Model: model})
 	if err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
-		s.stopPodBestEffort(pod)
+		s.stopPodsBestEffort(pods.All())
 		return nil, err
 	}
-	if err := ckpt.Restore(ctx, sess.Checkpoint, pod); err != nil {
-		s.stopPodBestEffort(pod)
+	// The archive is applied to the workload pod; auxiliary pods hold no
+	// session state and are started fresh alongside it (AC-B2, AC-F4).
+	if err := ckpt.Restore(ctx, sess.Checkpoint, pods.Workload); err != nil {
+		s.stopPodsBestEffort(pods.All())
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
-		s.stopPodBestEffort(pod)
+		s.stopPodsBestEffort(pods.All())
 		return nil, err
 	}
 	// Same bar as Create: the restored session only counts as active once its
 	// workload agent is reachable again (AC-D1/E1).
-	if err := s.orch.Reach(ctx, pod); err != nil {
-		s.stopPodBestEffort(pod)
+	if err := s.orch.Reach(ctx, pods.Workload); err != nil {
+		s.stopPodsBestEffort(pods.All())
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
-		s.stopPodBestEffort(pod)
+		s.stopPodsBestEffort(pods.All())
 		return nil, err
 	}
 	now := s.now()
 	next := *sess
 	next.State = session.StateActive
-	next.Pod = pod.Name
+	next.Pod = pods.Workload.Name
+	next.AuxiliaryPods = pods.Names()
 	next.Model = model
 	next.Checkpoint = nil
 	next.LastAccess = now
@@ -837,11 +851,11 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 		fresh, getErr := s.getSessionBestEffort(id)
 		if getErr == nil &&
 			fresh.State == session.StateActive &&
-			fresh.Pod == pod.Name &&
+			fresh.Pod == pods.Workload.Name &&
 			fresh.Checkpoint == nil &&
 			fresh.SnapshotTransaction == nil {
 			// The API server committed the aggregate update but the response was
-			// lost. Deleting pod here would corrupt an active session.
+			// lost. Deleting these pods here would corrupt an active session.
 			return fresh, nil
 		}
 		if getErr == nil ||
@@ -849,7 +863,7 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 			errors.Is(getErr, session.ErrNotFound) {
 			// The authoritative record proves our target was not committed, or
 			// the CAS was definitively rejected.
-			s.stopPodBestEffort(pod)
+			s.stopPodsBestEffort(pods.All())
 		}
 		return nil, errors.Join(err, getErr)
 	}
@@ -862,10 +876,43 @@ func (s *Service) getSessionBestEffort(id string) (*session.Session, error) {
 	return s.Get(readCtx, id)
 }
 
-func (s *Service) stopPodBestEffort(pod k8s.PodRef) {
+// stopPodsBestEffort reclaims a whole provisioning attempt — the workload pod
+// and any auxiliary pods started with it — so a failed create or restore leaks
+// neither (AC-A3 hygiene, AC-F4).
+func (s *Service) stopPodsBestEffort(pods []k8s.PodRef) {
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = s.orch.Stop(cleanupCtx, pod)
+	_ = s.orch.Stop(cleanupCtx, pods...)
+}
+
+// sessionPodRefs builds orchestrator refs for every pod a session record names,
+// workload pod first (AC-A2's workload pod plus AC-F4's auxiliary pods). Refs
+// rebuilt from stored state carry the name only; the orchestrator falls back to
+// its own namespace.
+func sessionPodRefs(sess *session.Session) []k8s.PodRef {
+	names := sess.Pods()
+	refs := make([]k8s.PodRef, 0, len(names))
+	for _, name := range names {
+		refs = append(refs, k8s.PodRef{Name: name})
+	}
+	return refs
+}
+
+// sessionReclaimRefs is sessionPodRefs plus an extra pod the record may no
+// longer name — the snapshot transaction's source pod, which a restore can
+// have replaced. Passing both keeps reclamation idempotent without deleting the
+// same pod twice.
+func sessionReclaimRefs(sess *session.Session, extraPod string) []k8s.PodRef {
+	refs := sessionPodRefs(sess)
+	if extraPod == "" {
+		return refs
+	}
+	for _, ref := range refs {
+		if ref.Name == extraPod {
+			return refs
+		}
+	}
+	return append(refs, k8s.PodRef{Name: extraPod})
 }
 
 func (s *Service) unlockBestEffort(id, token string) {
@@ -917,15 +964,18 @@ func (s *Service) Terminate(ctx context.Context, id string) (retErr error) {
 		sess = &next
 	}
 
-	pods := []string{sess.Pod}
-	if txn := sess.SnapshotTransaction; txn != nil && txn.SourcePod != sess.Pod {
-		pods = append(pods, txn.SourcePod)
+	// Delete reclaims every pod the session owns — its workload pod, the
+	// auxiliary pods bound to its lifetime (AC-A3, AC-F4), and a snapshot
+	// transaction's source pod when a restore has since replaced it.
+	var sourcePod string
+	if txn := sess.SnapshotTransaction; txn != nil {
+		sourcePod = txn.SourcePod
 	}
-	for _, pod := range pods {
-		if pod == "" {
+	for _, ref := range sessionReclaimRefs(sess, sourcePod) {
+		if ref.Name == "" {
 			continue
 		}
-		if err := s.orch.Stop(ctx, k8s.PodRef{Name: pod}); err != nil {
+		if err := s.orch.Stop(ctx, ref); err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {

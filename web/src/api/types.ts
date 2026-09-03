@@ -30,7 +30,15 @@ export interface Session {
   /** Claude model selected at creation; omitted means the platform default. */
   model?: string;
   state: State;
+  /** The session's dedicated workload pod — the 1:1 subject of AC-A2. */
   pod?: string;
+  /**
+   * Session-scoped pods that serve the workload pod without running the
+   * workload themselves (AC-A2's auxiliary-pod clause). They share the workload
+   * pod's lifetime, so this is absent exactly when `pod` is. Both workload types
+   * available today provision none; AC-F4's helper pod is the first to appear.
+   */
+  auxiliaryPods?: string[];
   createdAt: string;
   lastAccess: string;
   checkpoint?: Checkpoint;

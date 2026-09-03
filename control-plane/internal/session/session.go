@@ -48,7 +48,10 @@ func (s State) Valid() bool {
 // chosen at creation and immutable for the session's lifetime — changing it
 // means creating a new session. The control plane provisions a different data
 // plane workload per type; AC-A1 (the control plane never runs the workload
-// itself) and AC-A2 (one dedicated pod per session) hold for every type.
+// itself) and AC-A2 hold for every type. AC-A2 binds one dedicated *workload*
+// pod to each session and additionally allows session-scoped auxiliary pods
+// that provide side functions without running the workload themselves — see
+// Session.AuxiliaryPods and Session.Pods.
 type WorkloadType string
 
 const (
@@ -179,8 +182,9 @@ type SnapshotTransaction struct {
 }
 
 // Session is the aggregate root: one logical session mapped 1:1 to (at most)
-// one data plane pod (AC-A2). When State is StateSnapshot the pod is reclaimed
-// and Checkpoint is populated instead.
+// one data plane *workload* pod, plus any session-scoped auxiliary pods that
+// serve it (AC-A2). When State is StateSnapshot every pod of the session is
+// reclaimed and Checkpoint is populated instead.
 type Session struct {
 	ID string `json:"id"`
 	// WorkloadType is fixed at creation and never mutated afterwards (AC-E1);
@@ -192,13 +196,23 @@ type Session struct {
 	// type, is fixed at creation. "platform-default" delegates selection to the
 	// platform-managed Secret and then the Claude Code installation fallback
 	// (AC-E6).
-	Model      string      `json:"model,omitempty"`
-	Name       string      `json:"name"`
-	State      State       `json:"state"`
-	Pod        string      `json:"pod,omitempty"` // data plane pod name; empty when snapshotted/reclaimed
-	CreatedAt  time.Time   `json:"createdAt"`
-	LastAccess time.Time   `json:"lastAccess"`           // last read/write; drives idle/snapshot timing (AC-B1)
-	Checkpoint *Checkpoint `json:"checkpoint,omitempty"` // present only when State == StateSnapshot
+	Model string `json:"model,omitempty"`
+	Name  string `json:"name"`
+	State State  `json:"state"`
+	// Pod is the session's dedicated *workload* pod — the one running the
+	// workload its type selects. It is the 1:1 subject of AC-A2 and is empty
+	// when the session is snapshotted/reclaimed.
+	Pod string `json:"pod,omitempty"`
+	// AuxiliaryPods names the session-scoped pods that serve the workload pod
+	// without running the workload themselves (AC-A2's auxiliary-pod clause;
+	// AC-F4's helper pod is the first of them). They are session-exclusive,
+	// share the workload pod's lifetime, and are reclaimed with it (AC-A3) —
+	// so this is empty exactly when Pod is. The two workload types that exist
+	// today provision none, leaving it absent from the wire.
+	AuxiliaryPods []string    `json:"auxiliaryPods,omitempty"`
+	CreatedAt     time.Time   `json:"createdAt"`
+	LastAccess    time.Time   `json:"lastAccess"`           // last read/write; drives idle/snapshot timing (AC-B1)
+	Checkpoint    *Checkpoint `json:"checkpoint,omitempty"` // present only when State == StateSnapshot
 	// SnapshotTransaction is internal recovery metadata, never part of the API.
 	// The ConfigMap adapter deliberately encodes it in its durable representation
 	// even though ordinary JSON marshaling omits it.
@@ -208,6 +222,24 @@ type Session struct {
 // IdleFor returns how long the session has been without a read/write as of now.
 func (s *Session) IdleFor(now time.Time) time.Duration {
 	return now.Sub(s.LastAccess)
+}
+
+// Pods returns every pod that belongs to the session, workload pod first,
+// skipping empty names. Lifecycle code that reclaims, restores or deletes a
+// session works on this set rather than on Pod alone: AC-A3's reclamation and
+// AC-B1/AC-B2's freeze and restore hold across the workload pod *and* its
+// auxiliary pods (AC-F4). A snapshotted session has no pods, so this is empty.
+func (s *Session) Pods() []string {
+	pods := make([]string, 0, 1+len(s.AuxiliaryPods))
+	if s.Pod != "" {
+		pods = append(pods, s.Pod)
+	}
+	for _, p := range s.AuxiliaryPods {
+		if p != "" {
+			pods = append(pods, p)
+		}
+	}
+	return pods
 }
 
 // Domain errors returned by SessionManager. The API layer maps these to HTTP

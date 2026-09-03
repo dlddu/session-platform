@@ -212,10 +212,17 @@ func TestDeferred_RealPodReclaimed(t *testing.T) {
 
 // AC-B1: after 60m idle a session is checkpointed (CRIU) and transitions to
 // snapshot with its pod reclaimed.
-// Blocked on: an idle->snapshot trigger (reaper or test-only endpoint). The α SUT
-// never leaves the active state, so there is no way to drive a snapshot here.
+//
+// The trigger this test used to wait for has landed: service.IdleReaper scans
+// on IDLE_SCAN_INTERVAL and snapshots any session idle for session.MaxIdle. What
+// still blocks the *e2e* is the threshold, not the trigger — session.MaxIdle is
+// a compile-time 60m constant, so nothing here can age a session past it, and
+// the explicit /snapshot endpoint (TestDeferred_CRIUIntegrity) drives the
+// user-initiated path rather than the idle one this case exists to cover.
+// Blocked on: an injectable idle limit, or a test-only endpoint that ages a
+// session — the reaper half of the original blocker is no longer missing.
 func TestDeferred_IdleToSnapshot(t *testing.T) {
-	t.Skip("deferred: needs an idle->snapshot trigger (reaper or test endpoint) to reach the snapshot state (AC-B1); fill when the lifecycle trigger lands")
+	t.Skip("deferred: the idle->snapshot trigger exists (service.IdleReaper) but session.MaxIdle is a compile-time 60m constant, so the e2e cannot age a session past it (AC-B1); fill when the idle limit is injectable or a test-only aging endpoint lands")
 }
 
 // AC-B2: accessing a snapshot session restores it into a new pod and goes active.

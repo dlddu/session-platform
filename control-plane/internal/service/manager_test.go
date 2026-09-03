@@ -1178,8 +1178,8 @@ func (o *reachTrackingOrchestrator) Reach(context.Context, k8s.PodRef) error {
 	return o.reachErr
 }
 
-func (o *reachTrackingOrchestrator) Stop(ctx context.Context, ref k8s.PodRef) error {
-	o.stopped = append(o.stopped, ref)
+func (o *reachTrackingOrchestrator) Stop(ctx context.Context, refs ...k8s.PodRef) error {
+	o.stopped = append(o.stopped, refs...)
 	if o.beforeStop != nil {
 		o.beforeStop()
 	}
@@ -1190,7 +1190,7 @@ func (o *reachTrackingOrchestrator) Stop(ctx context.Context, ref k8s.PodRef) er
 	if o.stopErr != nil {
 		return o.stopErr
 	}
-	return o.StubOrchestrator.Stop(ctx, ref)
+	return o.StubOrchestrator.Stop(ctx, refs...)
 }
 
 func newTrackedService() (*service.Service, *reachTrackingOrchestrator, *configmap.Store) {
