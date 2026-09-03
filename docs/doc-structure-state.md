@@ -8,7 +8,7 @@
 > 구↔신 매핑표는 [`user-journeys/README.md`](./user-journeys/README.md#구-식별자-매핑-2026-08-30-전환)에 있습니다.
 > 아래 "변경 이력"의 과거 항목은 당시 기록이므로 옛 식별자를 그대로 둡니다.
 
-- **마지막 검증 시점**: 2026-09-03 (10) (여정 mockup 층위 신설 — `docs/journeys/` 파일럿 2개 + 집행 하네스)
+- **마지막 검증 시점**: 2026-09-03 (11) (여정 mockup lifecycle 클러스터 3종 신설 — `docs/journeys/` 2 → 5 / 8)
 - **검증 범위**: 상류(product-doc 사슬)에서 세 번째 워크로드 타입(AC-F1~F6)이 확정되어, 여정
   `JRN-approval-gated-work`(4단계)와 mockup `gated-workspace.html`을 신설하고 `new-session.html`·`index.html`의
   타입 분기를 3종으로 확장했다. 여정 8→9, 단계 29→33, mockup 5→6. **가치는 변하지 않았다**(V8 상속).
@@ -24,7 +24,7 @@
 - 여정 단계: **33개** (session-creation 3 · idle-resume 4 · multi-session-switch 4 · concurrent-access 3 ·
   shell-interaction 4 · agent-prompt-loop 5 · manual-freeze 3 · session-deletion 3 · approval-gated-work 4)
 - Mockup: **6개** (`mockups/`: index, new-session, workspace, agent-workspace, gated-workspace, restore) — 매핑 단일 소스는 `mockups/README.md`
-- 여정 mockup 페이지: **2개 / 판정 대상 8개** (`journeys/`: `JRN-session-creation`, `JRN-shell-interaction`) — 여정 하나 = 페이지 하나 층위. 화면 단위 mockup 6개와 **다른 지표**이며 매핑은 같은 `mockups/README.md`의 "여정 → 여정 mockup 페이지 매핑" 표. 마크업 규약 `journeys/README.md`, 집행은 CI `docs-journey-mockup`
+- 여정 mockup 페이지: **5개 / 판정 대상 8개** (`journeys/`: `JRN-session-creation`, `JRN-shell-interaction`, `JRN-idle-resume`, `JRN-manual-freeze`, `JRN-session-deletion`) — 여정 하나 = 페이지 하나 층위. 화면 단위 mockup 6개와 **다른 지표**이며 매핑은 같은 `mockups/README.md`의 "여정 → 여정 mockup 페이지 매핑" 표. 마크업 규약 `journeys/README.md`, 집행은 CI `docs-journey-mockup`
 - 디자인 시스템: **정의됨 — 정본은 코드** (`web/src/design/tokens.css` 토큰·프리미티브, `web/src/app/shell.css` 컴포넌트·패턴 약 45종, 색인 `web/src/design/README.md`). mockup 6개는 아직 **미연결**
 - 주입형 스킬(`.claude/skills/`): **설치됨** — `ui-with-design-system`, `screen-with-mockup-and-design-system`
 - **건강 상태**: 🟡 **가치 측 위험 0 · 시각화 없는 가치 0**이나, **문서화가 구현보다 뒤처진 영역이 드러남**.
@@ -66,8 +66,11 @@
 |------|:--:|------|
 | `JRN-session-creation` | ✅ | `journeys/JRN-session-creation/` |
 | `JRN-shell-interaction` | ✅ | `journeys/JRN-shell-interaction/` |
+| `JRN-idle-resume` | ✅ | `journeys/JRN-idle-resume/` |
+| `JRN-manual-freeze` | ✅ | `journeys/JRN-manual-freeze/` |
+| `JRN-session-deletion` | ✅ | `journeys/JRN-session-deletion/` |
 | `JRN-concurrent-access` | ⚪ | 없음 — 수용된 위험 등재 |
-| 나머지 6개 여정 | ⏳ | 없음 — `mockups/README.md` 매핑 표에 `⏳ 예정`으로 선언 |
+| 나머지 3개 여정 | ⏳ | 없음 — `mockups/README.md` 매핑 표에 `⏳ 예정`으로 선언 (`JRN-multi-session-switch` · `JRN-agent-prompt-loop` · `JRN-approval-gated-work`) |
 
 > 이 표의 ✅ 는 **그 여정 전용 페이지가 있다**는 뜻이다. 아래 "여정 단계 ↔ mockup" 표의 ✅ 18 은
 > **어떤 화면 단위 mockup이 그 단계를 담고 있다**는 뜻이라 서로 다른 지표다 — 합산하지 않는다.
@@ -157,8 +160,8 @@
 | 우선순위 | 항목 | 권장 대응 |
 |---------|------|-----------|
 | 🔴 | 페르소나 미검증 | 실사용자 1~2명 인터뷰로 P1 확정 또는 폐기 (product-doc-engineer) |
-| 🟠 | 세션 삭제 mockup 3단계 부재 | mockup 추가 또는 "SPA 구현으로 갈음" 결정(수용 시 본 문서에 기록) |
-| 🟠 | 여정 mockup 잔여 6개 (2026-09-03) | `journeys/` 페이지 신설. 만들 때 다른 페이지의 `data-branch-pending` 링크 승급이 CI로 강제된다 |
+| 🟠 | 세션 삭제 mockup 3단계 부재 (화면 단위 층위) | 여정 층위는 `journeys/JRN-session-deletion/`으로 해소됨(2026-09-03 (11)). `mockups/` 화면 단위 6종에는 여전히 없다 — mockup 추가 또는 "여정 페이지로 갈음" 결정 |
+| 🟠 | 여정 mockup 잔여 3개 (2026-09-03 갱신) | agent 클러스터(`JRN-multi-session-switch` · `JRN-agent-prompt-loop` · `JRN-approval-gated-work`) 페이지 신설. 이 셋은 lifecycle 클러스터로 **한 방향으로만** 링크하므로 기존 5개 페이지를 되열 필요가 없다. 남은 미승급 링크는 `JRN-multi-session-switch` 대상 1건 |
 | 🟠 | 세션 삭제·수동 동결의 PRD AC 부재 | 전용 AC 신설 여부 결정 (product-doc-engineer) |
 | 🟡 | 누락 단계 `STP-reaccess`·`STP-switch-back`·`STP-freeze-decision` | mockup 추가 또는 의도적 제외 결정 |
 | 🟠 | `STP-approval-decide`의 소유권 (2026-09-03) | 승인 결정 화면이 레포 밖 — ⚪(비대상) 수용 또는 세션 쪽 요약 화면 신설 결정 |
@@ -173,6 +176,7 @@
 
 | 시점 | 변경 내용 | 이전 상태 | 이후 상태 |
 |------|-----------|-----------|-----------|
+| 2026-09-03 (11) | **여정 mockup lifecycle 클러스터 3종 신설**. `JRN-idle-resume`(4단계) · `JRN-manual-freeze`(3단계) · `JRN-session-deletion`(3단계) 페이지를 한 슬라이스로 신설했다 — 세 여정의 분기표가 서로를 가리켜 쪼개면 앞서 만든 페이지를 되열어야 하기 때문이다. 파일럿 2종의 미승급 링크 6건 중 5건을 실링크로 승급했다. 하네스에 **승급 링크의 페이지 간 딥링크 검증**(눌러서 대상 페이지의 그 단계가 열리는지)과 **예외 등재 여정 갈래 표시(`data-branch-excepted`) 검사**를 더하고 `journeys/README.md` §6을 같은 커밋에서 맞췄다. **화면 단위 mockup 6종·그 커버리지 집계는 변하지 않는다** — 다른 층위다. | 여정 페이지 2/8, 미승급 링크 6, 승급 경로가 하네스에 막혀 있음 | 여정 페이지 5/8, 미승급 링크 1(+예외 갈래 2), 승급 경로가 CI로 집행됨 |
 | 2026-06-18 | 사용자 여정 4개(J1~J4) 신규 작성, 가치 V1~V5 전부 연결 | 여정 0개 | 여정 4개 (mockup 0, 디자인 시스템 0) |
 | 2026-06-18 | 여정 문서를 여정별 파일로 분리 (`user-journeys.md` → `user-journeys/` 폴더: README + J1~J4) | 단일 파일 | 폴더 + 5개 파일 (내용 동일, 연결 변화 없음) |
 | 2026-06-27 | mockup 4종(index/new-session/restore/workspace) 발견·매핑 기록. mockup 인덱스(`mockups/README.md`) 신설, 여정 단계별 mockup 마커 갱신. restore/workspace의 J4 동시 접근 패널 제거(UI 비대상). | mockup 0(기록상), 인덱스 없음 | mockup 4 매핑됨, J4 비시각화 수용, 임의 스타일 4 mockup |

@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<!--
+  docs/journeys/JRN-session-deletion/index.html — 여정 프로토타입
+
+  여정 문서: ../../user-journeys/JRN-session-deletion.md
+  페이지 규약: ../README.md   (하네스: tools/journey-prototype.test.mjs)
+
+  이 여정은 화면 단위 mockup 이 없는 흐름이다(../../mockups/README.md 의 "미시각화 단계 메모").
+  따라서 이 페이지의 화면은 옮겨 적은 것이 아니라 전부 여기서 처음 그린 원본이며,
+  SPA 구현(web/src/app/DeleteSessionDialog.tsx)이 이미 가진 흐름을 여정 층위로 세운 것이다.
+-->
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JRN-session-deletion — 끝난 세션을 정리하기</title>
+<style>
+  :root{
+    --ink:#0B1116; --surface:#131D24; --surface-2:#18242C; --surface-3:#1E2C35;
+    --line:#26333D; --line-2:#324250;
+    --text:#E8EFF4; --text-dim:#9DACB7; --text-faint:#5E6E79;
+    --active:#FFB43A; --active-soft:#3A2B12;
+    --frozen:#7FCDEA; --frozen-soft:#12262F; --ok:#5FD08A; --danger:#F2616B; --danger-soft:#33171A;
+    --r:14px; --r-sm:9px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%}
+  body{
+    background:var(--ink); color:var(--text);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Noto Sans KR",Roboto,sans-serif;
+  }
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+  a{color:var(--frozen)}
+  :focus-visible{outline:2px solid var(--frozen);outline-offset:2px;border-radius:6px}
+  [hidden]{display:none !important}
+
+  .app{max-width:960px;margin:0 auto;padding:0 20px 72px}
+  .topbar{
+    display:flex;align-items:center;gap:12px;padding:16px 0;border-bottom:1px solid var(--line);
+    margin-bottom:24px;
+  }
+  .brand{font-weight:600;letter-spacing:.01em}
+  .crumb{color:var(--text-faint);font-size:12.5px}
+  .spacer{flex:1 1 auto}
+  .pill{
+    display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line-2);font-size:12px;color:var(--text-dim);
+  }
+  .pill.on{color:var(--active);border-color:var(--active-soft);background:var(--active-soft)}
+  .pill.snap{color:var(--frozen);border-color:var(--frozen-soft);background:var(--frozen-soft)}
+
+  .card{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+    padding:22px;margin-bottom:16px;
+  }
+  .card.dialog{max-width:520px;margin-left:auto;margin-right:auto;border-color:var(--line-2)}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--text-dim);margin:0 0 20px;font-size:13px}
+  .lab{display:block;font-size:12.5px;color:var(--text-dim);margin-bottom:6px}
+
+  label.field{display:block;margin-bottom:16px}
+  input[type=text],select{
+    width:100%;padding:9px 12px;border-radius:var(--r-sm);
+    background:var(--surface-2);border:1px solid var(--line-2);color:var(--text);font:inherit;
+  }
+
+  .btn{padding:9px 16px;border-radius:var(--r-sm);border:1px solid var(--line-2);background:var(--surface-3)}
+  .btn.danger{background:var(--danger);color:#2A0C0F;border-color:var(--danger);font-weight:600}
+  .btn.ghost{background:none}
+  .btn.small{font-size:12px;padding:4px 11px;border-radius:999px}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+
+  .banner{border-radius:var(--r-sm);padding:12px 14px;margin-bottom:16px;font-size:13px}
+  .banner.err{background:var(--danger-soft);border:1px solid var(--danger);color:#FFD9DC}
+  .banner.warn{background:var(--danger-soft);border:1px solid var(--line-2);color:#F0CDD0}
+  .banner.info{background:var(--frozen-soft);border:1px solid var(--line-2);color:var(--text-dim)}
+  .banner.ok{background:#12281B;border:1px solid var(--ok);color:#CBF0D8}
+
+  .slist{list-style:none;margin:0 0 16px;padding:0}
+  .slist li{
+    display:flex;gap:12px;align-items:center;padding:12px 14px;margin-bottom:8px;
+    background:var(--surface-2);border:1px solid var(--line-2);border-radius:var(--r-sm);
+  }
+  .slist .nm{font-weight:600}
+  .slist .when{color:var(--text-faint);font-size:12px}
+  .slist li.gone{opacity:.35;text-decoration:line-through}
+
+  .kv{display:grid;grid-template-columns:120px 1fr;gap:4px 14px;font-size:12.5px;margin:14px 0 0}
+  .kv dt{color:var(--text-faint)}
+  .kv dd{margin:0;color:var(--text-dim)}
+
+  .proto-bar{
+    display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:18px;padding-top:14px;
+    border-top:1px dashed var(--line-2);
+  }
+  .proto-bar .cap{font-size:11.5px;color:var(--text-faint);margin-right:2px}
+  .proto-bar button,.proto-bar a[data-branch-target]{
+    font-size:12px;padding:5px 10px;border-radius:999px;text-decoration:none;
+    border:1px solid var(--line-2);color:var(--text-dim);background:var(--surface-2);
+  }
+  .proto-bar a[data-branch-target]{color:var(--frozen)}
+  .proto-bar [data-branch-pending]{border-style:dashed}
+
+  .state-note{
+    margin:14px 0 0;padding:10px 12px;border-radius:var(--r-sm);font-size:12.5px;
+    background:var(--surface-3);border:1px solid var(--line-2);color:var(--text-dim);
+  }
+
+  details.step-meta{margin-top:22px;border-top:1px solid var(--line);padding-top:12px}
+  details.step-meta summary{cursor:pointer;color:var(--text-faint);font-size:12px}
+  details.step-meta dl{margin:12px 0 0;font-size:12.5px;color:var(--text-dim)}
+  details.step-meta dt{color:var(--text-faint);margin-top:8px}
+  details.step-meta dd{margin:2px 0 0}
+
+  footer{margin-top:28px;color:var(--text-faint);font-size:12px}
+</style>
+</head>
+<body>
+<div class="app">
+
+<header class="topbar">
+  <span class="brand">Session Pod Platform</span>
+  <span class="crumb">/ sessions</span>
+  <span class="spacer"></span>
+  <span class="pill">operator@dlddu</span>
+</header>
+
+<main data-journey="JRN-session-deletion" data-step-active="STP-delete-intent">
+
+  <!-- ───────────────────────── STP-delete-intent ─────────────────────── -->
+  <section class="step" data-step="STP-delete-intent" id="STP-delete-intent">
+    <div class="card">
+      <h1>Sessions</h1>
+      <p class="sub">목록이 길어졌습니다. 마지막 활동과 상태를 보고 "이건 끝난 것"을 고릅니다.</p>
+
+      <label class="field">
+        <span class="lab">상태로 좁히기</span>
+        <select id="list-filter" data-required-input>
+          <option value="all">전체 (3)</option>
+          <option value="active">active 만 (1)</option>
+          <option value="snapshot">snapshot 만 (2)</option>
+        </select>
+      </label>
+
+      <ul class="slist" id="list">
+        <li data-state="snapshot">
+          <span class="nm mono">spike-tokenizer</span>
+          <span class="pill snap">snapshot</span>
+          <span class="when">9일 전 활동 · 실험용, 결론 남김</span>
+          <span class="spacer"></span>
+          <button class="btn small" id="btn-pick" data-advance-to="STP-delete-confirm">지우기</button>
+        </li>
+        <li data-state="snapshot">
+          <span class="nm mono">old-migration-check</span>
+          <span class="pill snap">snapshot</span>
+          <span class="when">23일 전 활동 · 접힌 채로 방치</span>
+          <span class="spacer"></span>
+          <button class="btn small" id="btn-pick-snap"
+                  data-branch-row="6"
+                  data-branch-target="STP-delete-confirm">지우기</button>
+        </li>
+        <li data-state="active">
+          <span class="nm mono">refactor-billing</span>
+          <span class="pill on">active</span>
+          <span class="when">방금 활동 · 살아 있어야 하는 세션</span>
+        </li>
+      </ul>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">여기서 갈라지는 길</span>
+        <a href="../JRN-manual-freeze/index.html#STP-freeze-now"
+           data-branch-row="5"
+           data-branch-target="JRN-manual-freeze#STP-freeze-now">지우기는 아깝고 자원만 아끼고 싶다 — 접어두기</a>
+        <button id="btn-already-gone" type="button"
+                data-branch-row="2"
+                data-branch-target="STP-delete-settled">이미 삭제된 세션을 지우려 함 (404)</button>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-delete-intent</code> 정리할 세션을 고른다</dd>
+        <dt>터치포인트</dt><dd>세션 목록의 세션 카드와 삭제 메뉴</dd>
+        <dt>연결 AC</dt><dd>전용 AC 없음 — 여정 문서의 신설 배경 참고</dd>
+        <dt>페인포인트</dt><dd>마지막 활동이나 내용 미리보기가 없으면 이름만으로 판단하게 된다 — 카드에 마지막 활동과 상태를 함께 노출하고 접어두기를 같은 자리에서 대안으로 제시한다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ──────────────────────── STP-delete-confirm ─────────────────────── -->
+  <section class="step" data-step="STP-delete-confirm" id="STP-delete-confirm" hidden>
+    <div class="card dialog">
+      <h1>세션을 지웁니다</h1>
+      <p class="sub">
+        대상: <span class="mono" id="target-name">spike-tokenizer</span>
+      </p>
+
+      <div class="banner err" id="confirm-err" hidden>
+        <span id="confirm-err-msg"></span>
+      </div>
+
+      <div class="banner warn" id="irreversible">
+        <strong>되살릴 수 없습니다.</strong>
+        세션 기록과 점유 자원이 함께 정리됩니다.
+        <span id="snapshot-warn" hidden>이 세션은 접혀 있으므로 <strong>저장된 스냅샷까지 함께 정리</strong>됩니다.</span>
+      </div>
+
+      <label class="field">
+        <span class="lab">대상 이름 확인 — 지울 세션의 이름입니다. 다르면 삭제하지 않습니다.</span>
+        <input type="text" id="confirm-name" class="mono" value="spike-tokenizer"
+               data-required-input autocomplete="off">
+      </label>
+
+      <div class="row">
+        <button class="btn danger" id="btn-delete" data-advance-to="STP-delete-settled">지우기</button>
+        <button class="btn ghost" id="btn-cancel"
+                data-branch-row="1"
+                data-branch-target="STP-delete-intent">취소</button>
+      </div>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">이 화면에서 마주치는 상태</span>
+        <button id="btn-name-mismatch" type="button">이름이 다른 채로 삭제 시도</button>
+        <button id="btn-delete-fail" type="button"
+                data-branch-row="4"
+                data-branch-target="STP-delete-confirm">삭제 실패</button>
+        <button id="btn-collision" type="button"
+                data-branch-row="3"
+                data-branch-target="JRN-concurrent-access#STP-collision"
+                data-branch-pending data-branch-excepted>삭제와 복원·동결이 동시에 발생</button>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-delete-confirm</code> 되돌릴 수 없음을 확인하고 지운다</dd>
+        <dt>터치포인트</dt><dd>삭제 확인 대화상자 — 대상 이름 · "되살릴 수 없음" 안내 · 삭제/취소</dd>
+        <dt>연결 AC</dt><dd>AC-A3, AC-C1</dd>
+        <dt>페인포인트</dt><dd>확인 문구가 일반적이면 대상을 확인하지 않고 누른다 — 대상 이름을 반드시 표시하고, 실패는 목록을 바꾸기 전에 오류로 드러낸다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ──────────────────────── STP-delete-settled ─────────────────────── -->
+  <section class="step" data-step="STP-delete-settled" id="STP-delete-settled" hidden>
+    <div class="card">
+      <h1>Sessions</h1>
+
+      <div class="banner ok">
+        <span id="settled-msg">spike-tokenizer 을(를) 지웠습니다.
+        pod와 점유 자원이 회수되고 세션 기록이 제거되었습니다.</span>
+      </div>
+
+      <ul class="slist">
+        <li class="gone" id="settled-gone">
+          <span class="nm mono" id="settled-gone-name">spike-tokenizer</span>
+          <span class="pill">없음</span>
+          <span class="when">삭제됨 — 이후 접근하면 없음(404)으로 응답합니다</span>
+        </li>
+        <li>
+          <span class="nm mono">refactor-billing</span>
+          <span class="pill on">active</span>
+          <span class="when">방금 활동</span>
+        </li>
+      </ul>
+
+      <dl class="kv">
+        <dt>정리된 것</dt><dd>세션 기록 · 워크로드 파드 · 점유 CPU·메모리<span id="settled-snap" hidden> · 저장된 스냅샷</span></dd>
+        <dt>되살아나지 않음</dt><dd>진행 중이던 복원·동결이 있어도 같은 잠금 아래에서 처리되어 삭제된 세션을 되살리지 못합니다.</dd>
+      </dl>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="row" style="margin-top:16px" data-journey-end>
+        <span class="pill" style="border-color:var(--ok);color:var(--ok)">완료 — 목록에서 사라지고, 이후 접근은 없음으로 응답</span>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-delete-settled</code> 사라진 것을 확인한다</dd>
+        <dt>터치포인트</dt><dd>삭제 완료 알림 · 갱신된 세션 목록</dd>
+        <dt>연결 AC</dt><dd>AC-A3, AC-C1</dd>
+        <dt>완료 기준</dt><dd>목록에서 사라지고 자원이 회수되며, 이후 그 세션에 접근하면 없음으로 응답된다.</dd>
+      </dl>
+    </details>
+  </section>
+
+</main>
+
+<footer>
+  여정 문서 <a href="../../user-journeys/JRN-session-deletion.md"><code>JRN-session-deletion.md</code></a> ·
+  페이지 규약 <a href="../README.md"><code>docs/journeys/README.md</code></a> ·
+  매핑 <a href="../../mockups/README.md"><code>docs/mockups/README.md</code></a>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var main = document.querySelector('[data-journey]');
+  var steps = Array.prototype.slice.call(document.querySelectorAll('[data-step]'));
+  var $ = function (id) { return document.getElementById(id); };
+
+  function show(id) {
+    var found = steps.some(function (s) { return s.getAttribute('data-step') === id; });
+    if (!found) return false;
+    steps.forEach(function (s) { s.hidden = s.getAttribute('data-step') !== id; });
+    main.setAttribute('data-step-active', id);
+    if (location.hash !== '#' + id) {
+      try { history.replaceState(null, '', '#' + id); } catch (e) { /* file:// 제약 */ }
+    }
+    return true;
+  }
+
+  function noteIn(el, text) {
+    var step = el.closest('[data-step]');
+    var n = step && step.querySelector('[data-state-note]');
+    if (!n) return;
+    n.textContent = text;
+    n.hidden = false;
+  }
+
+  var nameIn = $('confirm-name');
+  var confirmErr = $('confirm-err');
+  var confirmErrMsg = $('confirm-err-msg');
+
+  function target(name, frozen) {
+    $('target-name').textContent = name;
+    nameIn.value = name;
+    $('snapshot-warn').hidden = !frozen;
+    $('settled-snap').hidden = !frozen;
+    $('settled-gone-name').textContent = name;
+    confirmErr.hidden = true;
+  }
+
+  /* ---------- STP-delete-intent ---------- */
+  var filter = $('list-filter');
+  filter.addEventListener('change', function () {
+    var want = filter.value;
+    Array.prototype.forEach.call($('list').children, function (li) {
+      li.hidden = want !== 'all' && li.getAttribute('data-state') !== want;
+    });
+    noteIn(filter, want === 'all'
+      ? '전체 세션을 봅니다.'
+      : want + ' 상태의 세션만 봅니다 — 정리 대상은 대개 오래 접혀 있던 쪽입니다.');
+  });
+
+  $('btn-pick-snap').addEventListener('click', function () {
+    target('old-migration-check', true);
+    show('STP-delete-confirm');
+  });
+
+  $('btn-already-gone').addEventListener('click', function () {
+    $('settled-msg').textContent =
+      'old-migration-check 은 이미 지워진 세션입니다 (404). 아무것도 바꾸지 않고 목록만 갱신했습니다.';
+    $('settled-gone-name').textContent = 'old-migration-check';
+    show('STP-delete-settled');
+  });
+
+  /* ---------- STP-delete-confirm ---------- */
+  $('btn-cancel').addEventListener('click', function () {
+    confirmErr.hidden = true;
+    show('STP-delete-intent');
+    noteIn($('list-filter'), '취소했습니다 — 아무 변경 없이 목록으로 돌아왔습니다.');
+  });
+
+  $('btn-name-mismatch').addEventListener('click', function () {
+    nameIn.value = 'spike-tokeniser';
+    $('btn-delete').click();
+  });
+
+  $('btn-delete-fail').addEventListener('click', function () {
+    confirmErrMsg.textContent =
+      '지우지 못했습니다. 목록은 그대로 두었습니다 — 성공처럼 보이게 두지 않습니다. 다시 시도할 수 있습니다.';
+    confirmErr.hidden = false;
+    show('STP-delete-confirm');
+  });
+
+  $('btn-collision').addEventListener('click', function () {
+    noteIn(this, '삭제와 복원·동결이 같은 잠금 아래에서 처리되어 삭제된 세션이 되살아나지 않습니다. ' +
+      '이 갈래는 JRN-concurrent-access 로 이어지지만, 그 여정은 화면이 아니라 결과의 일관성을 지키는 ' +
+      '흐름이라 의도적으로 그리지 않기로 예외 등재된 여정입니다 — 앞으로도 페이지가 생기지 않습니다.');
+  });
+
+  /* ---------- 전진 ---------- */
+  Array.prototype.forEach.call(document.querySelectorAll('[data-advance-to]'), function (btn) {
+    btn.addEventListener('click', function () {
+      if (btn.id === 'btn-pick') {
+        target('spike-tokenizer', false);
+      }
+      if (btn.id === 'btn-delete') {
+        if (nameIn.value.trim() !== $('target-name').textContent) {
+          confirmErrMsg.textContent =
+            '입력한 이름이 대상과 다릅니다 — 지우지 않았습니다. 대상은 ' +
+            $('target-name').textContent + ' 입니다.';
+          confirmErr.hidden = false;
+          return;
+        }
+        confirmErr.hidden = true;
+        $('settled-msg').textContent =
+          $('target-name').textContent + ' 을(를) 지웠습니다. ' +
+          'pod와 점유 자원이 회수되고 세션 기록이 제거되었습니다.';
+      }
+      show(btn.getAttribute('data-advance-to'));
+    });
+  });
+
+  /* ---------- 딥링크 ---------- */
+  function fromHash() {
+    var id = (location.hash || '').replace(/^#/, '');
+    if (!id || !show(id)) show('STP-delete-intent');
+  }
+  window.addEventListener('hashchange', fromHash);
+  fromHash();
+})();
+</script>
+</body>
+</html>

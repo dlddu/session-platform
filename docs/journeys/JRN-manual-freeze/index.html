@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<!--
+  docs/journeys/JRN-manual-freeze/index.html — 여정 프로토타입
+
+  여정 문서: ../../user-journeys/JRN-manual-freeze.md
+  페이지 규약: ../README.md   (하네스: tools/journey-prototype.test.mjs)
+
+  화면 단위 mockup(../../mockups/workspace.html · index.html)의 Freeze/Archive now
+  에서 마크업을 옮겨 적었으나 스냅샷 복제가 아니다 — 이 페이지의 화면이 곧 원본이며
+  배선·입력·상태 변형을 직접 갖는다.
+-->
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JRN-manual-freeze — 다 쓴 세션을 직접 접어두기</title>
+<style>
+  :root{
+    --ink:#0B1116; --surface:#131D24; --surface-2:#18242C; --surface-3:#1E2C35;
+    --line:#26333D; --line-2:#324250;
+    --text:#E8EFF4; --text-dim:#9DACB7; --text-faint:#5E6E79;
+    --active:#FFB43A; --active-soft:#3A2B12;
+    --frozen:#7FCDEA; --frozen-soft:#12262F; --ok:#5FD08A; --danger:#F2616B; --danger-soft:#33171A;
+    --r:14px; --r-sm:9px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%}
+  body{
+    background:var(--ink); color:var(--text);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Noto Sans KR",Roboto,sans-serif;
+  }
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+  a{color:var(--frozen)}
+  :focus-visible{outline:2px solid var(--frozen);outline-offset:2px;border-radius:6px}
+  [hidden]{display:none !important}
+
+  .app{max-width:960px;margin:0 auto;padding:0 20px 72px}
+  .topbar{
+    display:flex;align-items:center;gap:12px;padding:16px 0;border-bottom:1px solid var(--line);
+    margin-bottom:24px;
+  }
+  .brand{font-weight:600;letter-spacing:.01em}
+  .crumb{color:var(--text-faint);font-size:12.5px}
+  .spacer{flex:1 1 auto}
+  .pill{
+    display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line-2);font-size:12px;color:var(--text-dim);
+  }
+  .pill.on{color:var(--active);border-color:var(--active-soft);background:var(--active-soft)}
+  .pill.snap{color:var(--frozen);border-color:var(--frozen-soft);background:var(--frozen-soft)}
+
+  .card{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+    padding:22px;margin-bottom:16px;
+  }
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--text-dim);margin:0 0 20px;font-size:13px}
+  .lab{display:block;font-size:12.5px;color:var(--text-dim);margin-bottom:6px}
+
+  label.field{display:block;margin-bottom:16px}
+  textarea{
+    width:100%;padding:9px 12px;border-radius:var(--r-sm);min-height:70px;resize:vertical;
+    background:var(--surface-2);border:1px solid var(--line-2);color:var(--text);font:inherit;
+  }
+  label.check{display:flex;gap:9px;align-items:flex-start;margin-bottom:18px;cursor:pointer}
+  label.check .t-desc{display:block;color:var(--text-dim);font-size:12px;margin-top:2px}
+
+  .btn{padding:9px 16px;border-radius:var(--r-sm);border:1px solid var(--line-2);background:var(--surface-3)}
+  .btn.primary{background:var(--frozen);color:#08161C;border-color:var(--frozen);font-weight:600}
+  .btn.ghost{background:none}
+  .btn.small{font-size:12px;padding:4px 11px;border-radius:999px}
+  .btn.danger{border-color:var(--danger);color:var(--danger)}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+
+  .banner{border-radius:var(--r-sm);padding:12px 14px;margin-bottom:16px;font-size:13px}
+  .banner.err{background:var(--danger-soft);border:1px solid var(--danger);color:#FFD9DC}
+  .banner.info{background:var(--frozen-soft);border:1px solid var(--line-2);color:var(--text-dim)}
+  .banner.ok{background:#12281B;border:1px solid var(--ok);color:#CBF0D8}
+
+  .choice{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 18px}
+  .choice .opt{
+    flex:1 1 240px;padding:14px;border-radius:var(--r-sm);
+    background:var(--surface-2);border:1px solid var(--line-2);
+  }
+  .choice .opt h2{font-size:14px;margin:0 0 4px}
+  .choice .opt p{margin:0 0 12px;color:var(--text-dim);font-size:12.5px}
+
+  .slist{list-style:none;margin:0 0 16px;padding:0}
+  .slist li{
+    display:flex;gap:12px;align-items:center;padding:12px 14px;margin-bottom:8px;
+    background:var(--surface-2);border:1px solid var(--line-2);border-radius:var(--r-sm);
+  }
+  .slist .nm{font-weight:600}
+  .slist .when{color:var(--text-faint);font-size:12px}
+
+  .prov{list-style:none;margin:0 0 18px;padding:0}
+  .prov li{display:flex;gap:10px;align-items:center;padding:7px 0;color:var(--text-dim);font-size:13px}
+  .prov li .dot{width:8px;height:8px;border-radius:50%;background:var(--line-2);flex:0 0 auto}
+  .prov li.done{color:var(--text)}
+  .prov li.done .dot{background:var(--ok)}
+  .prov li.fail{color:#FFD9DC}
+  .prov li.fail .dot{background:var(--danger)}
+
+  .kv{display:grid;grid-template-columns:120px 1fr;gap:4px 14px;font-size:12.5px;margin:14px 0 0}
+  .kv dt{color:var(--text-faint)}
+  .kv dd{margin:0;color:var(--text-dim)}
+
+  .proto-bar{
+    display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:18px;padding-top:14px;
+    border-top:1px dashed var(--line-2);
+  }
+  .proto-bar .cap{font-size:11.5px;color:var(--text-faint);margin-right:2px}
+  .proto-bar button,.proto-bar a[data-branch-target]{
+    font-size:12px;padding:5px 10px;border-radius:999px;text-decoration:none;
+    border:1px solid var(--line-2);color:var(--text-dim);background:var(--surface-2);
+  }
+  .proto-bar a[data-branch-target]{color:var(--frozen)}
+  .proto-bar [data-branch-pending]{border-style:dashed}
+
+  .state-note{
+    margin:14px 0 0;padding:10px 12px;border-radius:var(--r-sm);font-size:12.5px;
+    background:var(--surface-3);border:1px solid var(--line-2);color:var(--text-dim);
+  }
+
+  details.step-meta{margin-top:22px;border-top:1px solid var(--line);padding-top:12px}
+  details.step-meta summary{cursor:pointer;color:var(--text-faint);font-size:12px}
+  details.step-meta dl{margin:12px 0 0;font-size:12.5px;color:var(--text-dim)}
+  details.step-meta dt{color:var(--text-faint);margin-top:8px}
+  details.step-meta dd{margin:2px 0 0}
+
+  footer{margin-top:28px;color:var(--text-faint);font-size:12px}
+</style>
+</head>
+<body>
+<div class="app">
+
+<header class="topbar">
+  <span class="brand">Session Pod Platform</span>
+  <span class="crumb">/ sessions / refactor-billing</span>
+  <span class="spacer"></span>
+  <span class="pill">operator@dlddu</span>
+</header>
+
+<main data-journey="JRN-manual-freeze" data-step-active="STP-freeze-decision">
+
+  <!-- ─────────────────────── STP-freeze-decision ─────────────────────── -->
+  <section class="step" data-step="STP-freeze-decision" id="STP-freeze-decision">
+    <div class="card">
+      <div class="row" style="margin-bottom:14px">
+        <h1 style="margin:0"><span class="mono">refactor-billing</span></h1>
+        <span class="pill on">active</span>
+        <span class="pill mono">shell</span>
+        <span class="spacer"></span>
+        <span class="crumb">오늘 작업 일단락</span>
+      </div>
+
+      <div class="banner err" id="ckpt-503" hidden>
+        이 환경은 체크포인트 기능이 꺼져 있습니다 (503). 접어두기를 제공하지 않으며
+        세션은 <span class="mono">active</span> 그대로 둡니다 — 지우거나 그대로 두는 선택만 남습니다.
+      </div>
+
+      <p class="sub">이 세션을 어떻게 할지 고릅니다. 두 선택의 차이는 <strong>되살릴 수 있는가</strong>입니다.</p>
+
+      <div class="choice">
+        <div class="opt">
+          <h2>접어두기</h2>
+          <p>지금 상태를 저장하고 pod만 회수합니다. <strong>나중에 그대로 다시 열립니다.</strong></p>
+          <button class="btn primary" id="btn-freeze" data-advance-to="STP-freeze-now">접어두기 — 나중에 그대로 열립니다</button>
+        </div>
+        <div class="opt">
+          <h2>지우기</h2>
+          <p>세션과 스냅샷을 함께 정리합니다. <strong>되살릴 수 없습니다.</strong></p>
+          <a class="btn danger" style="text-decoration:none;display:inline-block"
+             href="../JRN-session-deletion/index.html#STP-delete-confirm"
+             data-branch-row="6"
+             data-branch-target="JRN-session-deletion#STP-delete-confirm">지우기 — 되돌릴 수 없습니다</a>
+        </div>
+      </div>
+
+      <label class="field">
+        <span class="lab">접어둔 이유 메모 — 나중에 목록에서 이 세션을 알아보기 위한 것입니다 (선택)</span>
+        <textarea id="freeze-memo" data-required-input placeholder="예: 청구 리팩터링 1차 — 리뷰 대기 중"></textarea>
+      </label>
+
+      <label class="check">
+        <input type="checkbox" id="freeze-notify" data-required-input>
+        <span><span>접힌 뒤 알림 받기</span>
+        <span class="t-desc">전이가 끝나면 알려 줍니다. 접기는 즉시 시작되고 알림과 무관하게 진행됩니다.</span></span>
+      </label>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">이 화면에서 마주치는 상태</span>
+        <button id="btn-ckpt-off" type="button"
+                data-branch-row="4"
+                data-branch-target="STP-freeze-decision">체크포인트 기능이 꺼진 환경 (503)</button>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-freeze-decision</code> 지금 접어두기로 한다</dd>
+        <dt>터치포인트</dt><dd>워크스페이스의 세션 상태·수명 안내</dd>
+        <dt>연결 AC</dt><dd>전용 AC 없음 — 여정 문서의 신설 배경 참고</dd>
+        <dt>페인포인트</dt><dd>접어두기라는 선택지를 모르면 방치하거나 아까운 세션을 지운다 — 두 선택을 같은 자리에서 결과 차이와 함께 제시한다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ───────────────────────── STP-freeze-now ────────────────────────── -->
+  <section class="step" data-step="STP-freeze-now" id="STP-freeze-now" hidden>
+    <div class="card">
+      <h1>Freezing <span class="mono">refactor-billing</span></h1>
+      <p class="sub">상태를 저장하고 pod와 자원을 회수하는 중입니다. 세션은 사라지지 않습니다.</p>
+
+      <div class="banner err" id="freeze-err" hidden>
+        <span id="freeze-err-msg"></span>
+      </div>
+
+      <ul class="prov" id="freeze-steps">
+        <li class="done"><span class="dot"></span>진행 중인 read/write 마감</li>
+        <li class="done"><span class="dot"></span>쉘 상태 저장 (cwd · 환경 변수 · 히스토리)</li>
+        <li class="done" id="freeze-last"><span class="dot"></span><span id="freeze-last-text"><span class="mono">snapshot</span> 전이 · pod 회수</span></li>
+      </ul>
+
+      <div class="row">
+        <button class="btn primary" id="btn-to-list" data-advance-to="STP-freeze-confirm">목록에서 확인하기</button>
+      </div>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">여기서 갈라지는 길</span>
+        <button id="btn-freeze-fail" type="button"
+                data-branch-row="1"
+                data-branch-target="STP-freeze-now">접기 실패</button>
+        <button id="btn-already" type="button"
+                data-branch-row="2"
+                data-branch-target="STP-freeze-confirm">이미 접혀 있는 세션에 접기 요청</button>
+        <button id="btn-collision" type="button"
+                data-branch-row="3"
+                data-branch-target="JRN-concurrent-access#STP-collision"
+                data-branch-pending data-branch-excepted>접기와 동시에 다른 클라이언트가 접근</button>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-freeze-now</code> 지금 접는다</dd>
+        <dt>터치포인트</dt><dd>워크스페이스의 Freeze/Archive now 버튼과 진행 표시</dd>
+        <dt>연결 AC</dt><dd>AC-B1, AC-A3</dd>
+        <dt>페인포인트</dt><dd>삭제와 헷갈리면 아예 쓰지 않는다. 진행 중 표시가 없으면 중복 클릭한다 — 진행 중에는 비활성화한다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ──────────────────────── STP-freeze-confirm ─────────────────────── -->
+  <section class="step" data-step="STP-freeze-confirm" id="STP-freeze-confirm" hidden>
+    <div class="card">
+      <h1>Sessions</h1>
+
+      <div class="banner ok" id="confirm-banner">
+        <span class="mono">refactor-billing</span> 을 접어두었습니다.
+        목록에 그대로 남아 있고, 다시 열면 접기 전 상태에서 이어집니다.
+      </div>
+
+      <ul class="slist">
+        <li>
+          <span class="nm mono">refactor-billing</span>
+          <span class="pill snap">snapshot</span>
+          <span class="when" id="confirm-when">방금 접음 · 다시 열 수 있음</span>
+          <span class="spacer"></span>
+          <a class="btn small" style="text-decoration:none"
+             href="../JRN-idle-resume/index.html#STP-reaccess"
+             data-branch-row="5"
+             data-branch-target="JRN-idle-resume#STP-reaccess">다시 열기</a>
+        </li>
+        <li>
+          <span class="nm mono">spike-tokenizer</span>
+          <span class="pill on">active</span>
+          <span class="when">방금 활동</span>
+        </li>
+      </ul>
+
+      <dl class="kv">
+        <dt>보관된 것</dt><dd>cwd · 환경 변수 · 쉘 히스토리 · 받아둔 출력 커서</dd>
+        <dt>회수된 것</dt><dd>워크로드 파드 · 점유 CPU·메모리</dd>
+        <dt>메모</dt><dd id="confirm-memo">—</dd>
+      </dl>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="row" style="margin-top:16px" data-journey-end>
+        <span class="pill" style="border-color:var(--ok);color:var(--ok)">완료 — <span class="mono">snapshot</span> 으로 전이, 되살릴 수 있는 항목으로 목록에 남음</span>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-freeze-confirm</code> 접힌 것을 확인한다</dd>
+        <dt>터치포인트</dt><dd>접기 완료 알림 · 세션 목록의 상태 배지</dd>
+        <dt>연결 AC</dt><dd>AC-A3</dd>
+        <dt>완료 기준</dt><dd>pod가 회수되고, 세션 목록에 되살릴 수 있는 항목으로 남아 있다.</dd>
+      </dl>
+    </details>
+  </section>
+
+</main>
+
+<footer>
+  여정 문서 <a href="../../user-journeys/JRN-manual-freeze.md"><code>JRN-manual-freeze.md</code></a> ·
+  페이지 규약 <a href="../README.md"><code>docs/journeys/README.md</code></a> ·
+  매핑 <a href="../../mockups/README.md"><code>docs/mockups/README.md</code></a>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var main = document.querySelector('[data-journey]');
+  var steps = Array.prototype.slice.call(document.querySelectorAll('[data-step]'));
+  var $ = function (id) { return document.getElementById(id); };
+
+  function show(id) {
+    var found = steps.some(function (s) { return s.getAttribute('data-step') === id; });
+    if (!found) return false;
+    steps.forEach(function (s) { s.hidden = s.getAttribute('data-step') !== id; });
+    main.setAttribute('data-step-active', id);
+    if (location.hash !== '#' + id) {
+      try { history.replaceState(null, '', '#' + id); } catch (e) { /* file:// 제약 */ }
+    }
+    return true;
+  }
+
+  function noteIn(el, text) {
+    var step = el.closest('[data-step]');
+    var n = step && step.querySelector('[data-state-note]');
+    if (!n) return;
+    n.textContent = text;
+    n.hidden = false;
+  }
+
+  /* ---------- STP-freeze-decision ---------- */
+  var memo = $('freeze-memo');
+  var notify = $('freeze-notify');
+
+  $('btn-ckpt-off').addEventListener('click', function () {
+    $('ckpt-503').hidden = false;
+    $('btn-freeze').disabled = true;
+    show('STP-freeze-decision');
+  });
+
+  notify.addEventListener('change', function () {
+    noteIn(notify, notify.checked
+      ? '접기가 끝나면 알림을 보냅니다. 접기 자체는 알림과 무관하게 즉시 시작됩니다.'
+      : '알림 없이 접습니다.');
+  });
+
+  /* ---------- STP-freeze-now ---------- */
+  var freezeErr = $('freeze-err');
+  var freezeErrMsg = $('freeze-err-msg');
+
+  function resetFreeze() {
+    var last = $('freeze-last');
+    last.className = 'done';
+    $('freeze-last-text').innerHTML = '<span class="mono">snapshot</span> 전이 · pod 회수';
+    freezeErr.hidden = true;
+    $('btn-to-list').disabled = false;
+  }
+
+  $('btn-freeze-fail').addEventListener('click', function () {
+    var last = $('freeze-last');
+    last.className = 'fail';
+    $('freeze-last-text').textContent = '전이 실패 — 스냅샷을 기록하지 못했습니다';
+    freezeErrMsg.textContent =
+      '접지 못했습니다. 세션을 active 그대로 되돌렸습니다 — 반쯤 접힌 상태는 남기지 않습니다. ' +
+      '다시 시도할 수 있습니다.';
+    freezeErr.hidden = false;
+    $('btn-to-list').disabled = true;
+    show('STP-freeze-now');
+  });
+
+  $('btn-already').addEventListener('click', function () {
+    $('confirm-banner').textContent =
+      'refactor-billing 은 이미 접혀 있습니다. 아무 일도 하지 않았고 현재 상태만 보여 줍니다.';
+    $('confirm-when').textContent = '32분 전에 접힘 · 다시 열 수 있음';
+    show('STP-freeze-confirm');
+  });
+
+  $('btn-collision').addEventListener('click', function () {
+    noteIn(this, '전이는 한 번만 성공하고 두 클라이언트가 같은 결과를 봅니다. ' +
+      '이 갈래는 JRN-concurrent-access 로 이어지지만, 그 여정은 화면이 아니라 결과의 일관성을 지키는 ' +
+      '흐름이라 의도적으로 그리지 않기로 예외 등재된 여정입니다 — 앞으로도 페이지가 생기지 않습니다.');
+  });
+
+  /* ---------- 전진 ---------- */
+  Array.prototype.forEach.call(document.querySelectorAll('[data-advance-to]'), function (btn) {
+    btn.addEventListener('click', function () {
+      if (btn.disabled) return;
+      if (btn.id === 'btn-freeze') {
+        resetFreeze();
+        var text = memo.value.trim();
+        $('confirm-memo').textContent = text || '—';
+        $('confirm-banner').textContent =
+          'refactor-billing 을 접어두었습니다. 목록에 그대로 남아 있고, 다시 열면 접기 전 상태에서 이어집니다.';
+        $('confirm-when').textContent = '방금 접음 · 다시 열 수 있음';
+      }
+      show(btn.getAttribute('data-advance-to'));
+    });
+  });
+
+  /* ---------- 딥링크 ---------- */
+  function fromHash() {
+    var id = (location.hash || '').replace(/^#/, '');
+    if (!id || !show(id)) show('STP-freeze-decision');
+  }
+  window.addEventListener('hashchange', fromHash);
+  fromHash();
+})();
+</script>
+</body>
+</html>

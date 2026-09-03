@@ -451,6 +451,7 @@ for (const id of pageDirs) {
           row: Number(e.getAttribute('data-branch-row')),
           target: e.getAttribute('data-branch-target'),
           pending: e.hasAttribute('data-branch-pending'),
+          excepted: e.hasAttribute('data-branch-excepted'),
           openWith: e.getAttribute('data-branch-open'),
           step: e.closest('[data-step]').dataset.step,
         }))
@@ -478,6 +479,26 @@ for (const id of pageDirs) {
             assert.ok(
               !w.pending,
               `분기 ${w.row}행: ${targetJourney} 페이지가 이미 있다 — data-branch-pending 을 걷고 실제 링크로 승급해야 한다`
+            );
+          }
+          // 미승급 갈래는 왜 페이지가 없는지가 원장과 일치해야 한다.
+          // "아직 안 만든 것"(⏳ 예정)과 "그리지 않기로 한 것"(⚪ 예외 등재)은 다른 상태이고,
+          // 뒤엣것은 영원히 pending 이므로 표시 없이 두면 미완으로 읽힌다.
+          if (w.excepted) {
+            assert.ok(
+              exceptedIds.has(targetJourney),
+              `분기 ${w.row}행: data-branch-excepted 는 예외 등재 여정에만 붙인다 — ${targetJourney} 는 doc-structure-state.md 에 등재돼 있지 않다`
+            );
+            assert.ok(
+              w.pending,
+              `분기 ${w.row}행: 예외 등재 여정(${targetJourney})은 페이지가 생기지 않으므로 data-branch-pending 을 함께 달아야 한다`
+            );
+          } else if (w.pending) {
+            const row = mapping.get(targetJourney);
+            assert.equal(
+              row && row.status,
+              'pending',
+              `분기 ${w.row}행: ${targetJourney} 를 "아직 페이지 없음"으로 표시했는데 매핑 표의 상태가 ⏳ 예정이 아니다 — 예외 등재라면 data-branch-excepted 를 붙인다`
             );
           }
         }
@@ -511,6 +532,24 @@ for (const id of pageDirs) {
             meta.target,
             `같은 여정 안의 분기는 실제로 그 단계로 이동해야 한다`
           );
+        } else if (meta.target.startsWith('JRN-') && !meta.pending) {
+          // 승급된 갈래 — 대상 페이지가 실재하므로 눌러서 실제로 그 페이지의 그 단계에 도착해야 한다.
+          // 여기까지 확인해야 "pending 을 걷었다"가 링크가 살아 있다는 뜻이 된다(페이지 간 딥링크 무결성).
+          const [targetJourney, targetStep] = meta.target.split('#');
+          const expected = pathToFileURL(path.join(PAGE_ROOT, targetJourney, 'index.html')).href;
+          await page.waitForURL((u) => u.href.split('#')[0] === expected, { timeout: 10_000 });
+          assert.equal(
+            await page.locator('[data-journey]').getAttribute('data-journey'),
+            targetJourney,
+            `분기 ${i + 1}행: 승급된 갈래가 ${targetJourney} 페이지로 데려가지 않았다`
+          );
+          if (targetStep) {
+            assert.equal(
+              await page.locator('[data-journey]').getAttribute('data-step-active'),
+              targetStep,
+              `분기 ${i + 1}행: ${targetJourney} 페이지가 ${targetStep} 로 열리지 않았다 — 페이지 간 딥링크가 끊겼다`
+            );
+          }
         } else {
           // 대상 페이지가 아직 없는 갈래(또는 "해당 없음") — 결과가 화면에 남아야 한다
           const note = page.locator(`[data-step="${meta.step}"] [data-state-note]`);
