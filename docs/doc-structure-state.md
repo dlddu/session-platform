@@ -8,20 +8,21 @@
 > 구↔신 매핑표는 [`user-journeys/README.md`](./user-journeys/README.md#구-식별자-매핑-2026-08-30-전환)에 있습니다.
 > 아래 "변경 이력"의 과거 항목은 당시 기록이므로 옛 식별자를 그대로 둡니다.
 
-- **마지막 검증 시점**: 2026-08-30 (6) (사용자 여정 문서 전면 재작성)
-- **검증 범위**: `user-journeys/` 전체를 재작성하고 mockup 매핑을 여정별 표로 재구성했다. mockup 파일 5종과
-  디자인 시스템 정본은 **이번 판에서 건드리지 않았다**. 여정 6→8, 단계 23→29로 늘었고, 늘어난 ❌ 4개는
-  새로 문서화된 흐름(수동 동결 결정·세션 삭제 3단계)이 mockup에 없다는 사실이 드러난 결과다.
-  잔여: 미시각화 6단계, mockup↔시스템 미연결(토큰 6중복), 페르소나 미검증
+- **마지막 검증 시점**: 2026-09-03 (7) (`approval-gated` 워크로드 타입 신설에 따른 하류 반영)
+- **검증 범위**: 상류(product-doc 사슬)에서 세 번째 워크로드 타입(AC-F1~F6)이 확정되어, 여정
+  `JRN-approval-gated-work`(4단계)와 mockup `gated-workspace.html`을 신설하고 `new-session.html`·`index.html`의
+  타입 분기를 3종으로 확장했다. 여정 8→9, 단계 29→33, mockup 5→6. **가치는 변하지 않았다**(V8 상속).
+  늘어난 ❌ 1개는 승인 결정 화면이 **이 레포 밖(외부 승인 게이트웨이)** 이라는 사실이 드러난 결과다.
+  잔여: 미시각화 7단계, mockup↔시스템 미연결(토큰 7중복), 페르소나 미검증
 
 ## 현재 상태 요약
 
 - 정의된 가치: **6개** (V1~V5·V8, `values.md` — 참조 전용)
-- 사용자 여정: **8개** — 전부 가치에 연결됨 (고아 여정 0). `JRN-session-deletion`은 **연결이 부분적**(아래 위험 참고)
-- 여정 단계: **29개** (session-creation 3 · idle-resume 4 · multi-session-switch 4 · concurrent-access 3 ·
-  shell-interaction 4 · agent-prompt-loop 5 · manual-freeze 3 · session-deletion 3)
-- Mockup: **5개** (`mockups/`: index, new-session, workspace, agent-workspace, restore) — 매핑 단일 소스는 `mockups/README.md`
-- 디자인 시스템: **정의됨 — 정본은 코드** (`web/src/design/tokens.css` 토큰·프리미티브, `web/src/app/shell.css` 컴포넌트·패턴 약 45종, 색인 `web/src/design/README.md`). mockup 5개는 아직 **미연결**
+- 사용자 여정: **9개** — 전부 가치에 연결됨 (고아 여정 0). `JRN-session-deletion`은 **연결이 부분적**(아래 위험 참고)
+- 여정 단계: **33개** (session-creation 3 · idle-resume 4 · multi-session-switch 4 · concurrent-access 3 ·
+  shell-interaction 4 · agent-prompt-loop 5 · manual-freeze 3 · session-deletion 3 · approval-gated-work 4)
+- Mockup: **6개** (`mockups/`: index, new-session, workspace, agent-workspace, gated-workspace, restore) — 매핑 단일 소스는 `mockups/README.md`
+- 디자인 시스템: **정의됨 — 정본은 코드** (`web/src/design/tokens.css` 토큰·프리미티브, `web/src/app/shell.css` 컴포넌트·패턴 약 45종, 색인 `web/src/design/README.md`). mockup 6개는 아직 **미연결**
 - 주입형 스킬(`.claude/skills/`): **설치됨** — `ui-with-design-system`, `screen-with-mockup-and-design-system`
 - **건강 상태**: 🟡 **가치 측 위험 0 · 시각화 없는 가치 0**이나, **문서화가 구현보다 뒤처진 영역이 드러남**.
   V1~V5·V8은 전부 여정과 mockup에 연결됩니다. 다만 2026-08-30 재작성에서 세션 삭제·수동 동결이
@@ -34,10 +35,10 @@
 |------|------|------|
 | V1 세션 격리 | `JRN-session-creation` | ✅ |
 | V2 유휴 자원 회수 | `JRN-idle-resume`, `JRN-manual-freeze`, `JRN-session-deletion`(부분) | ✅ |
-| V3 끊김 없는 세션 연속성 | `JRN-idle-resume`, `JRN-multi-session-switch`, `JRN-concurrent-access`, `JRN-shell-interaction`, `JRN-agent-prompt-loop`, `JRN-manual-freeze` | ✅ |
+| V3 끊김 없는 세션 연속성 | `JRN-idle-resume`, `JRN-multi-session-switch`, `JRN-concurrent-access`, `JRN-shell-interaction`, `JRN-agent-prompt-loop`, `JRN-manual-freeze`, `JRN-approval-gated-work` | ✅ |
 | V4 자유로운 멀티세션 전환 | `JRN-multi-session-switch` | ✅ |
 | V5 일관된 세션 상태 | `JRN-session-creation`, `JRN-concurrent-access` | ✅ |
-| V8 목적에 맞는 작업 환경 선택 | `JRN-agent-prompt-loop` | ✅ |
+| V8 목적에 맞는 작업 환경 선택 | `JRN-agent-prompt-loop`, `JRN-approval-gated-work` | ✅ |
 
 ### 여정 단계 ↔ mockup
 표기: ✅ 전용 화면 · ⚠️ 부분/암시 · ❌ 없음 · ⚪ 의도적 비시각화
@@ -52,33 +53,34 @@
 | `JRN-agent-prompt-loop` | 5 | 5 | 0 | 0 | 0 | new-session(타입 선택), agent-workspace |
 | `JRN-manual-freeze` | 3 | 1 | 1 | 1 | 0 | workspace·agent-workspace의 Freeze/Archive now |
 | `JRN-session-deletion` | 3 | 0 | 0 | 3 | 0 | 없음 — SPA에만 구현됨 |
-| **합계** | **29** | **15** | **5** | **6** | **3** | — |
+| `JRN-approval-gated-work` | 4 | 3 | 0 | 1 | 0 | gated-workspace, new-session(타입 카드); `STP-approval-decide`는 레포 밖 화면 |
+| **합계** | **33** | **18** | **5** | **7** | **3** | — |
 
 ### 가치 ↔ mockup
 | 가치 | 시각화 mockup | 상태 |
 |------|---------------|------|
-| V1 세션 격리 | new-session, workspace, agent-workspace | ✅ |
-| V2 유휴 자원 회수 | restore, agent-workspace, workspace(Freeze now) | ✅ (부분) |
-| V3 끊김 없는 연속성 | restore, workspace, agent-workspace | ✅ (부분; 동시성 몫은 비시각화) |
+| V1 세션 격리 | new-session, workspace, agent-workspace, gated-workspace(Egress 패널) | ✅ |
+| V2 유휴 자원 회수 | restore, agent-workspace, gated-workspace, workspace(Freeze now) | ✅ (부분) |
+| V3 끊김 없는 연속성 | restore, workspace, agent-workspace, gated-workspace | ✅ (부분; 동시성 몫은 비시각화) |
 | V4 멀티세션 전환 | index | ✅ (부분) |
 | V5 일관된 상태 | new-session | ✅ (생성 몫; 동시성 몫은 비시각화) |
-| V8 작업 환경 선택 | new-session(타입·모델 선택), agent-workspace | ✅ |
+| V8 작업 환경 선택 | new-session(타입 카드 3종·모델 선택), agent-workspace, gated-workspace | ✅ |
 
 > **시각화 없는 가치 0.**
 
 ### mockup ↔ 디자인 시스템
 - **디자인 시스템 정본(2026-08-08 (4) 신설)**: `web/src/design/` — 토큰·프리미티브 `tokens.css`, 컴포넌트·패턴 `web/src/app/shell.css`, 색인 `web/src/design/README.md`. 사용자 결정에 따라 **코드가 정본이고 문서는 얇은 색인**이다. 발견 가능성은 루트 `README.md`가 이 위치를 가리키는 것으로 확보(주입형 스킬이 "README가 가리키는 위치"로 정본을 찾는다).
-- **연결 상태는 여전히 미연결**: index/new-session/workspace/agent-workspace/restore **5개 전부 임의 스타일 mockup(🟢) 유지**. 각 파일이 자기 `:root`에 같은 값을 인라인으로 갖고 있을 뿐 정본을 참조하지 않는다.
+- **연결 상태는 여전히 미연결**: index/new-session/workspace/agent-workspace/gated-workspace/restore **6개 전부 임의 스타일 mockup(🟢) 유지**. 각 파일이 자기 `:root`에 같은 값을 인라인으로 갖고 있을 뿐 정본을 참조하지 않는다. `gated-workspace`는 `agent-workspace`의 인라인 토큰을 복사해 만들어 중복이 한 겹 더 늘었다.
 - **방향에 주의**: 역사적으로 mockup이 먼저였고 `tokens.css`가 거기서 1:1 이식됐다(파일 주석에 명시). 그러나 이제 정본은 코드이므로 **코드를 먼저 고치고 mockup이 따라온다**로 방향이 뒤집혔다.
-- **중복 비용**: 토큰 1개 변경 시 `tokens.css` + mockup 5개 = **6곳**. 이것이 남은 🟢 위험의 실체이며, 디자인 시스템 부재가 아니라 *동기화 부재*로 성격이 바뀌었다.
+- **중복 비용**: 토큰 1개 변경 시 `tokens.css` + mockup 6개 = **7곳**. 이것이 남은 🟢 위험의 실체이며, 디자인 시스템 부재가 아니라 *동기화 부재*로 성격이 바뀌었다.
 
 ## 위험 진단
 
 ### 🔴 가치 측 위험
-- **고아 여정**: 없음 (8개 여정 모두 유효한 가치 참조)
-- **고아 mockup**: 없음 — 인덱스(`mockups/README.md`)로 5개 전부 여정/가치에 매핑됨
+- **고아 여정**: 없음 (9개 여정 모두 유효한 가치 참조)
+- **고아 mockup**: 없음 — 인덱스(`mockups/README.md`)로 6개 전부 여정/가치에 매핑됨
 - **시각화 없는 가치**: 없음
-- **페르소나 미검증**: 여정 8개·단계 29개가 실사용자로 검증된 적 없는 P1 위에 서 있다
+- **페르소나 미검증**: 여정 9개·단계 33개가 실사용자로 검증된 적 없는 P1 위에 서 있다
   (`user-journeys/README.md` 미해결 항목). 이 사슬에서 가장 오래된 미해결 항목이다.
 
 ### 🟠 문서화가 구현보다 뒤처진 영역 (2026-08-30 신규 인지)
@@ -92,16 +94,22 @@
   다음 검증부터는 API 라우트·SPA 화면 목록에서 여정으로 거슬러 올라가는 **역방향 점검**을 함께 수행할 것.
 
 ### 🟡 시각화 누락
-- **시각화 누락 단계 (6)**: `STP-reaccess`, `STP-switch-back`, `STP-freeze-decision`,
-  `STP-delete-intent`, `STP-delete-confirm`, `STP-delete-settled` — 전용 화면 없음. **결정 필요**.
+- **시각화 누락 단계 (7)**: `STP-reaccess`, `STP-switch-back`, `STP-freeze-decision`,
+  `STP-delete-intent`, `STP-delete-confirm`, `STP-delete-settled`, `STP-approval-decide` — 전용 화면 없음. **결정 필요**.
+- **🟠 다른 제품에 걸친 단계 (2026-09-03 신규)**: `STP-approval-decide`는 결정이 **외부 승인 게이트웨이 화면**에서
+  일어나므로 이 레포가 그릴 대상이 아닐 수 있다. `JRN-concurrent-access`처럼 ⚪(의도적 비시각화)로 수용할지,
+  세션 쪽에 요약 화면을 두어 ✅로 만들지 **결정 대기**. 현재는 보수적으로 ❌로 센다.
 - **부분 시각화 단계 (5)**: `STP-step-away`, `STP-auto-freeze`, `STP-switch-away`, `STP-target-activation`,
   `STP-freeze-confirm` — 상태 표시·네비게이션으로 암시되나 단계 전용 화면 없음.
 - **✅ 해결됨 (2026-08-08)**: `STP-shell-state-carry` — `workspace.html`에 Shell state 패널 추가로 ❌→✅.
 - **✅ 해결됨 (2026-08-08)**: `restore.html` 콘솔 미갱신 — 쉘 명령·출력으로 교체하여 mockup suite 전체가 쉘 기준으로 정합.
 - **✅ 해결됨 (2026-08-08)**: `claude-code` 워크로드 타입 미시각화 — 생성 화면의 타입 선택과 프롬프트·응답 콘솔 2종 확보.
+- **✅ 해결됨 (2026-09-03)**: `approval-gated` 워크로드 타입 미시각화 — `gated-workspace.html` 신설(승인 대기 배지·
+  승인/거절 verdict·Approvals·Egress 패널)과 `new-session.html`의 세 번째 타입 카드로 4단계 중 3단계 확보.
+  상류 AC 확정과 **같은 판에서** 하류를 채웠으므로, 2026-08-08의 V8처럼 "시각화 없는 가치" 구간이 생기지 않았다.
 
 ### 🟢 디자인 시스템 측 위험
-- **임의 스타일 mockup**: **5개 전부 유지**. 정본이 생겼으므로 원인이 "시스템 부재"에서 **"정본 미참조(값 6중복)"**로 바뀌었다. 마이그레이션은 미수행 — mockup을 정본에 물릴지, 아니면 "mockup은 스케치이므로 복제를 수용"할지 **결정 대기**.
+- **임의 스타일 mockup**: **6개 전부 유지**(2026-09-03 `gated-workspace` 추가). 정본이 생겼으므로 원인이 "시스템 부재"에서 **"정본 미참조(값 7중복)"**로 바뀌었다. 마이그레이션은 미수행 — mockup을 정본에 물릴지, 아니면 "mockup은 스케치이므로 복제를 수용"할지 **결정 대기**.
 - **✅ 해결됨 (2026-08-08 (4)) — 디자인 시스템 부재**: `web/src/design/`를 정본으로 확정.
 - **✅ 해결됨 (2026-08-08 (4)) — 주입형 스킬 미설치**: `.claude/skills/` 2종 설치 완료.
 - **⚠️ SPA 자체는 검증 대상 밖**: `web/src/screens/`의 실제 화면이 정본을 얼마나 지키는지는 아직 확인하지 않았다.
@@ -112,6 +120,9 @@
 - **세션 삭제·수동 동결의 가치 연결**: V2의 서술이 "유휴 세션의 자동 회수"에 한정되어 사용자 주도 종료·동결을
   담지 못한다. V2 서술 확장 또는 새 가치 신설 여부는 product-doc-engineer 판단.
 - **mockup의 명시 model 예시**: `new-session.html`의 `model-a`/`model-b`는 soft catalog 상태의 자리표시자다.
+- **승인 게이트의 미해결 전제**: `gated-workspace.html`의 Egress 패널이 경고로 표시하는 "공급자 HTTPS origin이
+  아직 허용 목록에 있다"는 mockup의 표현이 아니라 **AC-F2의 실제 열린 결정**이다(`doc-tracker.md`).
+  참조 구현(`dlddu/pure-agent`)이 클러스터에서 검증된 적 없다는 전제도 같은 곳에서 추적한다.
 - **에이전트 세션의 페르소나**: `JRN-agent-prompt-loop`는 P1으로 작성됐으나 전용 페르소나 필요 여부 미확인.
 
 ## 수용된 위험
@@ -127,8 +138,9 @@
 | 🟠 | 세션 삭제 mockup 3단계 부재 | mockup 추가 또는 "SPA 구현으로 갈음" 결정(수용 시 본 문서에 기록) |
 | 🟠 | 세션 삭제·수동 동결의 PRD AC 부재 | 전용 AC 신설 여부 결정 (product-doc-engineer) |
 | 🟡 | 누락 단계 `STP-reaccess`·`STP-switch-back`·`STP-freeze-decision` | mockup 추가 또는 의도적 제외 결정 |
+| 🟠 | `STP-approval-decide`의 소유권 (2026-09-03) | 승인 결정 화면이 레포 밖 — ⚪(비대상) 수용 또는 세션 쪽 요약 화면 신설 결정 |
 | 🟡 | 부분 시각화 5단계 | 단계 전용 화면 필요 여부 검토 (web-artifacts-builder) |
-| 🟢 | mockup ↔ 정본 미연결 (토큰 값 6중복) | mockup을 `tokens.css`에 물릴지, 복제 수용으로 갈지 **결정 필요** |
+| 🟢 | mockup ↔ 정본 미연결 (토큰 값 7중복) | mockup을 `tokens.css`에 물릴지, 복제 수용으로 갈지 **결정 필요** |
 | 🟢 | SPA의 정본 준수 여부 미검증 | 다음 검증 시 `web/src/screens/` 인라인 스타일·하드코딩 hex 점검 |
 | 🔵 | 여정 지표 목표치 전부 TBD | 관측 파이프라인 연결 시 목표 수치 확정 |
 
@@ -151,3 +163,4 @@
 | 2026-08-08 (4) | **디자인 시스템 셋업(진입점 5)**. 정본 위치를 **`web/src/design/`(코드)**으로 확정 — 사용자 결정: 코드가 정본, 문서는 얇게. 색인 `web/src/design/README.md` 신설, 루트 `README.md`에 정본 포인터 추가(발견 가능성 확보). `.claude/skills/`에 주입형 스킬 2종 설치. **가치/여정/mockup 매트릭스는 변화 없음** — 이번 판은 시각 언어의 소유권을 정한 작업이다. | 디자인 시스템 미정의, 주입형 스킬 미설치, 임의 스타일 mockup 5 | 디자인 시스템 정의됨(코드 정본), 주입형 스킬 2종 설치, 임의 스타일 mockup 5 (원인이 '시스템 부재'→'정본 미참조'로 변경) |
 | 2026-08-09 (5) | **J6 live output UX 갱신** — 여정·mockup을 passive workspace SSE 자동 append, UTF-8 경계 cursor 재개, stale-cursor reset 전체 replay 계약에 맞추고 snapshot 시 Restore 전환과 연결 상태 전용 표시를 명시했다. | bounded polling/수동 Refresh로 응답 확인 | 자동 live output·무손실 재연결·reset 복구; 가치/여정/mockup 매트릭스 변화 없음 |
 | 2026-08-30 (6) | **사용자 여정 문서 전면 재작성**. 단계 식별자를 순번(`J1-S1`)에서 슬러그(`STP-…`)로 전환하고 구↔신 매핑표를 여정 README에 남김. 8개 문서에 문서 정보·여정 정의(완료 기준)·터치포인트·생각·감정·페인포인트·분기·예외·측정 지표·변경 이력 섹션을 채우고, PRD 사양 중복 서술은 AC 참조로 위임. 구현에는 있으나 여정에 없던 **`JRN-manual-freeze`·`JRN-session-deletion` 신설**. 여정 6→8, 단계 23→29, 요약 ✅14→15 / ⚠️4→5 / ❌2→6 / ⚪3. mockup 파일·디자인 시스템은 변경 없음. | 여정 6, 단계 23, 순번 식별자, 섹션 3종 | 여정 8, 단계 29, 슬러그 식별자, 섹션 7종 완비 |
+| 2026-09-03 (7) | **`approval-gated` 타입 하류 반영**. 상류에서 세 번째 워크로드 타입(AC-F1~F6)이 확정되어 여정 `JRN-approval-gated-work`(4단계)와 mockup `gated-workspace.html`을 신설하고, `new-session.html`에 세 번째 타입 카드를, `index.html`에 타입 태그·링크 분기를 더했다. `JRN-agent-prompt-loop`의 `STP-workload-choice`는 그대로 두고 선택지만 셋으로 넓혔다. **가치는 변하지 않았다** — V8 상속. 여정 8→9, 단계 29→33, mockup 5→6, ✅15→18 / ❌6→7. 늘어난 ❌ 1건은 승인 결정 화면이 레포 밖이라는 사실이 드러난 결과다. | 가치 6, 여정 8, 단계 29, mockup 5, 타입 2종 | 가치 6(변화 없음), 여정 9, 단계 33, mockup 6, 타입 3종, 시각화 없는 가치 0 유지 |

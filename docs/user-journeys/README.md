@@ -25,7 +25,7 @@
 여정에는 "사용자가 무엇을 하고 무엇을 보고 무엇을 느끼는가"만 적습니다. 이 규칙이 없으면 여정 문서가 PRD 요약본이 되어
 PRD가 바뀔 때마다 조용히 낡습니다.
 
-**4. 구조는 8개 문서가 동일하다.**
+**4. 구조는 9개 문서가 동일하다.**
 섹션 순서·제목을 바꾸지 않습니다. 해당 없는 항목은 지우지 말고 "해당 없음" 또는 `TBD`로 남깁니다.
 
 ### 구 식별자 매핑 (2026-08-30 전환)
@@ -43,6 +43,7 @@ PRD가 바뀔 때마다 조용히 낡습니다.
 | J6 | `JRN-agent-prompt-loop` | S1 `STP-workload-choice` · S2 `STP-prompt-submit` · S3 `STP-response-watch` · S4 `STP-conversation-carry` · S5 `STP-agent-freeze-resume` |
 | — | `JRN-manual-freeze` | 신설 (2026-08-30) |
 | — | `JRN-session-deletion` | 신설 (2026-08-30) |
+| — | `JRN-approval-gated-work` | 신설 (2026-09-03) |
 
 ---
 
@@ -58,14 +59,17 @@ PRD가 바뀔 때마다 조용히 낡습니다.
 | `JRN-agent-prompt-loop` | 작업 환경을 골라 에이전트에게 일을 시킨다 | P1 | V8, V3 | 5 | [문서](./JRN-agent-prompt-loop.md) |
 | `JRN-manual-freeze` | 다 쓴 세션을 직접 접어두기 | P1 | V2, V3 | 3 | [문서](./JRN-manual-freeze.md) |
 | `JRN-session-deletion` | 끝난 세션을 정리하기 | P1 | V2 (부분) | 3 | [문서](./JRN-session-deletion.md) |
+| `JRN-approval-gated-work` | 밖으로 나가는 일마다 내가 승인하고 맡긴다 | P1 | V8, V3 | 4 | [문서](./JRN-approval-gated-work.md) |
 
-**총 8개 여정 · 29개 단계.**
+**총 9개 여정 · 33개 단계.**
 
 여정 사이 관계는 두 축으로 읽습니다.
 
-- **타입 축**: `JRN-shell-interaction`(`shell`)과 `JRN-agent-prompt-loop`(`claude-code`)는 같은 자리의 타입별 쌍입니다.
-  타입을 고르는 순간은 `STP-workload-choice`가 담고, 그것이 V8입니다.
-- **수명 축**: 생성(`JRN-session-creation`) → 사용(위 두 여정) → 접기(`JRN-idle-resume` 자동 · `JRN-manual-freeze` 수동)
+- **타입 축**: `JRN-shell-interaction`(`shell`) · `JRN-agent-prompt-loop`(`claude-code`) ·
+  `JRN-approval-gated-work`(`approval-gated`)는 같은 자리의 타입별 세 갈래입니다.
+  타입을 고르는 순간은 (타입이 셋으로 늘어난 뒤에도) `STP-workload-choice` 하나가 담고, 그것이 V8입니다.
+  세 여정은 "무엇을 맡기고 무엇을 보는가"만 다르고, 생성·동결·복원·전환·삭제 경험은 공유합니다.
+- **수명 축**: 생성(`JRN-session-creation`) → 사용(위 세 여정) → 접기(`JRN-idle-resume` 자동 · `JRN-manual-freeze` 수동)
   → 되살리기(`STP-restore-resume`) → 정리(`JRN-session-deletion`).
 
 ---
@@ -73,7 +77,7 @@ PRD가 바뀔 때마다 조용히 낡습니다.
 ## 페르소나
 
 > ⚠️ **검증 필요 (미해결)**: 아래 두 페르소나는 실제 사용자 인터뷰가 아니라 가치 문서·PRD에서 **역으로 추론**한 것입니다.
-> 2026-06-18 최초 작성 이후 실사용자로 검증된 적이 없고, 그 사이 여정이 8개까지 늘었습니다.
+> 2026-06-18 최초 작성 이후 실사용자로 검증된 적이 없고, 그 사이 여정이 9개까지 늘었습니다.
 > 구체 서술에는 `(가정)`을 붙였습니다 — 팀이 먼저 확인해야 할 지점입니다.
 
 ### P1: 멀티세션 작업자
@@ -101,10 +105,10 @@ PRD가 바뀔 때마다 조용히 낡습니다.
 |---|---|---|
 | V1 세션 격리 | `JRN-session-creation` | ✅ |
 | V2 유휴 자원 회수 | `JRN-idle-resume`, `JRN-manual-freeze`, `JRN-session-deletion`(부분) | ✅ |
-| V3 끊김 없는 세션 연속성 | `JRN-idle-resume`, `JRN-multi-session-switch`, `JRN-concurrent-access`, `JRN-shell-interaction`, `JRN-agent-prompt-loop`, `JRN-manual-freeze` | ✅ |
+| V3 끊김 없는 세션 연속성 | `JRN-idle-resume`, `JRN-multi-session-switch`, `JRN-concurrent-access`, `JRN-shell-interaction`, `JRN-agent-prompt-loop`, `JRN-manual-freeze`, `JRN-approval-gated-work` | ✅ |
 | V4 자유로운 멀티세션 전환 | `JRN-multi-session-switch` | ✅ |
 | V5 일관된 세션 상태 | `JRN-session-creation`, `JRN-concurrent-access` | ✅ |
-| V8 목적에 맞는 작업 환경 선택 | `JRN-agent-prompt-loop` | ✅ |
+| V8 목적에 맞는 작업 환경 선택 | `JRN-agent-prompt-loop`, `JRN-approval-gated-work` | ✅ |
 
 **고아 여정 없음 · 여정 없는 가치 없음.** 단, `JRN-session-deletion`의 가치 연결은 부분적입니다(아래 미해결 항목).
 
@@ -120,7 +124,7 @@ PRD가 바뀔 때마다 조용히 낡습니다.
 ### 🔴 오래 밀려 있는 항목
 
 - **페르소나 미검증**: 위 경고 참고. 실사용자 1~2명 인터뷰로 P1을 확정하거나 폐기해야 합니다.
-  현재 여정 8개·단계 29개가 전부 검증되지 않은 P1 위에 서 있습니다.
+  현재 여정 9개·단계 33개가 전부 검증되지 않은 P1 위에 서 있습니다.
 - **제품명·소유자 미지정**: "Session Pod Platform"은 임시 작업명이고 소유자가 없어 가치 전부가 고아 상태입니다
   (`../values.md` · `../doc-tracker.md`).
 
@@ -135,11 +139,17 @@ PRD가 바뀔 때마다 조용히 낡습니다.
   P2 단독의 배치 여정이 필요한지 미확인.
 - **에이전트 세션의 전용 페르소나**: `JRN-agent-prompt-loop`는 P1으로 썼지만
   "프롬프트로 일을 맡기는 사람"이 P1과 같은 사람인지 확인 필요.
+- **승인자와 작업자의 분리 (`JRN-approval-gated-work`)**: 승인 알림 대상이 플랫폼 전역 단일 값이라
+  현재 여정은 **맡기는 사람과 승인하는 사람을 P1 한 명으로** 썼습니다. 두 역할이 실제로 다른 사람이라면
+  전용 페르소나(P3 승인자)와 `STP-approval-decide`의 재작성이 필요합니다 (AC-F6).
+- **승인 화면의 소유권**: `STP-approval-decide`가 일어나는 승인 게이트웨이 화면은 **이 레포 밖**입니다.
+  여정 단계 하나가 다른 제품 화면에 걸쳐 있어 mockup 커버리지에서 ⚪(비대상)으로 다뤄야 할지
+  ❌(누락)로 다뤄야 할지 결정이 필요합니다 (`../mockups/README.md`).
 - **`claude-code`의 `idle` 의미**: 상주 프로세스가 없는 타입에서 `active`와 `idle`의 차이는 자원 점유뿐입니다.
   별도 정책(더 짧은 유휴 한계 등)이 필요한지 미결 (`../doc-tracker.md`).
 - **동결 트리거 세부 정책**: 60분 한계는 확정(AC-B1·AC-D5)이나 grace period·per-session override,
   장시간 포그라운드 작업 중인 쉘의 동결 여부는 미결 (`../doc-tracker.md`).
-- **지표 목표치 전부 `TBD`**: 8개 문서의 지표는 정의(분자/분모)만 확정했고 목표 수치가 없습니다.
+- **지표 목표치 전부 `TBD`**: 9개 문서의 지표는 정의(분자/분모)만 확정했고 목표 수치가 없습니다.
   관측 파이프라인이 붙는 시점에 함께 정해야 합니다.
 
 ### ✅ 해소된 항목 (기록 보존)
@@ -148,5 +158,6 @@ PRD가 바뀔 때마다 조용히 낡습니다.
 - ~~**유휴 측정 기준**~~ → 2026-07-01 확정: 마지막 클라이언트 read/write 기준 (AC-B1·AC-D5).
 - ~~**idle/snapshot 상태의 read/write 정책**~~ → 2026-06-27 확정: 비-active 접근은 "active 보장 후 처리" (AC-C2/C3).
 - ~~**에이전트 재개 방식·기본 모델**~~ → 2026-08-08 확정, 2026-08-09 개정 (AC-E4/E6).
+- ~~**승인 대기 중 자동 동결 여부**~~ → 2026-09-03 확정: 승인 대기 구간에는 유휴 카운트가 진행되지 않습니다 (AC-F3).
 - ~~**세션 목록 조회 흐름이 PRD에 없음**~~ → 2026-08-30 해소: `GET /api/v1/sessions`와 Sessions 화면이 구현되어
   `STP-session-list`가 실제 구현을 가리킵니다. (전용 AC를 세울지는 여전히 product-doc-engineer 판단.)
