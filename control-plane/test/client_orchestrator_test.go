@@ -73,10 +73,16 @@ func listPods(t *testing.T, cs *fake.Clientset) []corev1.Pod {
 // namespace, labelled 1:1 to the session.
 func TestClientOrchestrator_StartCreatesOnePodWithLabel(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t)
-	ref, err := orch.Start(context.Background(), "a1b2", k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
+	started, err := orch.Start(context.Background(), "a1b2", k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	// These workload types provision no auxiliary pods, so the session's pod
+	// set is the workload pod alone (AC-A2).
+	if n := len(started.Auxiliary); n != 0 {
+		t.Fatalf("auxiliary pods = %d, want 0 for a shell session", n)
+	}
+	ref := started.Workload
 	if ref.Namespace != testNS {
 		t.Fatalf("ref namespace=%q want %q", ref.Namespace, testNS)
 	}
@@ -111,11 +117,11 @@ func TestClientOrchestrator_NSessionsNUniquePods(t *testing.T) {
 	ids := []string{"aa01", "bb02", "cc03", "dd04"}
 	names := map[string]bool{}
 	for _, id := range ids {
-		ref, err := orch.Start(context.Background(), id, k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
+		started, err := orch.Start(context.Background(), id, k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
 		if err != nil {
 			t.Fatalf("start %s: %v", id, err)
 		}
-		names[ref.Name] = true
+		names[started.Workload.Name] = true
 	}
 	if len(names) != len(ids) {
 		t.Fatalf("expected %d unique pod names, got %d: %v", len(ids), len(names), names)
@@ -239,10 +245,11 @@ func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t)
 	const ref = "/var/lib/kubelet/checkpoints/checkpoint-sess-r1a2_sessions-session-1.tar"
 
-	restored, err := orch.RestoreInto(context.Background(), "r1a2", ref, k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
+	restoredPods, err := orch.RestoreInto(context.Background(), "r1a2", ref, k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
 	if err != nil {
 		t.Fatalf("restore into: %v", err)
 	}
+	restored := restoredPods.Workload
 
 	pods := listPods(t, cs)
 	if len(pods) != 1 {
@@ -294,10 +301,11 @@ func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 		t.Fatalf("restore pod name=%q, want the session's deterministic prefix + restore suffix", restored.Name)
 	}
 	// Two restores of the same session never collide either.
-	again, err := orch.RestoreInto(context.Background(), "r1a2", ref, k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
+	againPods, err := orch.RestoreInto(context.Background(), "r1a2", ref, k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
 	if err != nil {
 		t.Fatalf("second restore into: %v", err)
 	}
+	again := againPods.Workload
 	if again.Name == restored.Name {
 		t.Fatalf("two restores produced the same pod name %q; want unique names", again.Name)
 	}
@@ -347,10 +355,11 @@ func TestClientOrchestrator_CheckpointPrivilegeGated(t *testing.T) {
 // dial the session agent without re-fetching the pod.
 func TestClientOrchestrator_StartRecordsPodIP(t *testing.T) {
 	orch, _ := newReadyOrchestrator(t)
-	ref, err := orch.Start(context.Background(), "d1c3", k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
+	started, err := orch.Start(context.Background(), "d1c3", k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	ref := started.Workload
 	if ref.IP != testPodIP {
 		t.Fatalf("ref.IP=%q want %q (pod IP recorded at Ready)", ref.IP, testPodIP)
 	}
@@ -421,10 +430,11 @@ func TestClientOrchestrator_ReachOpensAttachStream(t *testing.T) {
 // Scenario 3 (AC-A3): Stop deletes the pod and is idempotent.
 func TestClientOrchestrator_StopDeletesPodIdempotently(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t)
-	ref, err := orch.Start(context.Background(), "ee05", k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
+	started, err := orch.Start(context.Background(), "ee05", k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	ref := started.Workload
 	if n := len(listPods(t, cs)); n != 1 {
 		t.Fatalf("expected 1 pod after start, got %d", n)
 	}

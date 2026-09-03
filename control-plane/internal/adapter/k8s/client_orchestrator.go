@@ -313,15 +313,21 @@ func namespaceFromServiceAccount() string {
 // Namespace reports the namespace this orchestrator provisions pods in.
 func (o *ClientOrchestrator) Namespace() string { return o.namespace }
 
-// Start provisions a dedicated pod for sessionID, waits for its workload agent
-// to report Ready, and returns its ref with the pod IP recorded for later agent
-// calls (AC-A1/A2, AC-D1/E1).
-func (o *ClientOrchestrator) Start(ctx context.Context, sessionID string, workload WorkloadSpec) (PodRef, error) {
+// Start provisions a dedicated workload pod for sessionID, waits for its
+// workload agent to report Ready, and returns the session's pod set with the
+// pod IP recorded for later agent calls (AC-A1/A2, AC-D1/E1). The workload
+// types implemented today need no auxiliary pods, so the set holds only the
+// workload pod; AC-F4's helper pod lands here when approval-gated does.
+func (o *ClientOrchestrator) Start(ctx context.Context, sessionID string, workload WorkloadSpec) (SessionPods, error) {
 	spec, err := o.podSpec(sessionID, workload)
 	if err != nil {
-		return PodRef{}, err
+		return SessionPods{}, err
 	}
-	return o.provision(ctx, spec)
+	ref, err := o.provision(ctx, spec)
+	if err != nil {
+		return SessionPods{}, err
+	}
+	return SessionPods{Workload: ref}, nil
 }
 
 // provision creates a pod from spec, waits for its workload agent to report
@@ -343,11 +349,21 @@ func (o *ClientOrchestrator) provision(ctx context.Context, spec *corev1.Pod) (P
 	return ref, nil
 }
 
-// Stop deletes the pod and reclaims its resources (AC-A3). A missing pod is
-// treated as already reclaimed so the call is idempotent. PodRef.Namespace may
-// be empty (the service layer builds refs from the stored pod name only); it
-// falls back to the orchestrator's namespace.
-func (o *ClientOrchestrator) Stop(ctx context.Context, ref PodRef) error {
+// Stop deletes the given pods and reclaims their resources (AC-A3). A missing
+// pod is treated as already reclaimed so the call is idempotent. PodRef.Namespace
+// may be empty (the service layer builds refs from the stored pod name only); it
+// falls back to the orchestrator's namespace. Deletion stops at the first real
+// error so the caller sees it rather than a partially reclaimed session.
+func (o *ClientOrchestrator) Stop(ctx context.Context, refs ...PodRef) error {
+	for _, ref := range refs {
+		if err := o.stopOne(ctx, ref); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (o *ClientOrchestrator) stopOne(ctx context.Context, ref PodRef) error {
 	ns := ref.Namespace
 	if ns == "" {
 		ns = o.namespace
@@ -364,12 +380,16 @@ func (o *ClientOrchestrator) Stop(ctx context.Context, ref PodRef) error {
 // accept a shell CRIU archive or a Claude filesystem archive. Applying the
 // archive bytes is the Checkpointer's job; supplying the correctly shaped pod
 // is all the orchestrator owns.
-func (o *ClientOrchestrator) RestoreInto(ctx context.Context, sessionID, checkpointRef string, workload WorkloadSpec) (PodRef, error) {
+func (o *ClientOrchestrator) RestoreInto(ctx context.Context, sessionID, checkpointRef string, workload WorkloadSpec) (SessionPods, error) {
 	spec, err := o.restorePodSpec(sessionID, checkpointRef, workload)
 	if err != nil {
-		return PodRef{}, err
+		return SessionPods{}, err
 	}
-	return o.provision(ctx, spec)
+	ref, err := o.provision(ctx, spec)
+	if err != nil {
+		return SessionPods{}, err
+	}
+	return SessionPods{Workload: ref}, nil
 }
 
 // podSpec is a fresh-session pod whose image entrypoint starts the selected

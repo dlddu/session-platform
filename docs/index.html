@@ -17,60 +17,98 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Session Pod Platform 문서 포털</title>
 <style>
+  /* 색·반경·이징·타이포는 전부 정본 web/src/design/tokens.css 의 값이다.
+     정본이 docs/ 밖에 있어 <link> 로 걸 수 없으므로 값을 인라인 복제한다.
+     정본이 docs/ 아래로 공개되면 이 :root 블록은 link 한 줄로 대체한다.
+     폰트는 정본이 CDN 으로 받지만 포털은 외부 요청 없이 열려야 하므로
+     같은 패밀리를 이름으로만 지정하고 시스템 폰트로 폴백한다. */
   :root {
-    --bg: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d1d9e0;
-    --accent: #0969da; --card: #f6f8fa;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --line: #30363d;
-      --accent: #4493f8; --card: #161b22;
-    }
+    --ink: #0b1116;
+    --surface: #131d24;
+    --surface-2: #18242c;
+    --line: #26333d;
+    --line-2: #324250;
+    --text: #e8eff4;
+    --text-dim: #9dacb7;
+    --text-faint: #5e6e79;
+    --active: #ffb43a;
+    --frozen: #7fcdea;
+    --maxw: 1240px;
+    --r: 14px;
+    --r-sm: 9px;
+    --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   }
   * { box-sizing: border-box; }
+  html, body { margin: 0; }
   body {
-    margin: 0; background: var(--bg); color: var(--fg);
-    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
-          "Noto Sans KR", Roboto, sans-serif;
+    background: var(--ink); color: var(--text);
+    font-family: "IBM Plex Sans", system-ui, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+    font-size: 14px; line-height: 1.5; letter-spacing: .005em;
+    -webkit-font-smoothing: antialiased;
   }
-  main { max-width: 940px; margin: 0 auto; padding: 48px 20px 120px; }
-  h1 { font-size: 2em; margin: 0 0 .2em; }
-  .lede { color: var(--muted); margin: 0 0 2.5em; }
-  h2 { font-size: 1.25em; margin: 2.4em 0 .2em; }
-  h2 + .hint { color: var(--muted); font-size: .9em; margin: 0 0 1em; }
-  a { color: var(--accent); }
+  ::selection { background: rgba(255, 180, 58, .28); }
+  :focus-visible { outline: 2px solid var(--frozen); outline-offset: 2px; border-radius: 6px; }
+  main { max-width: var(--maxw); margin: 0 auto; padding: 48px 20px 120px; }
+  h1 {
+    font-family: "Space Grotesk", "IBM Plex Sans", system-ui, sans-serif;
+    font-weight: 600; font-size: 30px; letter-spacing: -.02em; margin: 6px 0 0;
+  }
+  .lede { color: var(--text-dim); font-size: 13.5px; margin: 6px 0 2.8em; max-width: 78ch; }
+  /* 구획 제목은 시스템의 .eyebrow 패턴이다.
+     tokens.css 에 h2 스케일이 없어 크기를 지어내지 않았다. */
+  h2 {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--text-faint); margin: 2.8em 0 .5em;
+  }
+  h2 + .hint { color: var(--text-dim); font-size: 13.5px; margin: 0 0 1.1em; max-width: 88ch; }
+  a { color: var(--text-dim); text-decoration: none; }
+  .lede a, .hint a, .row .meta a { text-decoration: underline; text-underline-offset: 2px; }
+  .lede a:hover, .hint a:hover, .row .meta a:hover { color: var(--text); }
   .row {
     display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap;
-    padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px;
-    margin-bottom: 10px; background: var(--card);
+    padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r);
+    margin-bottom: 10px; background: var(--surface);
   }
-  .row .name { font-weight: 600; }
-  .row .meta { color: var(--muted); font-size: .875em; }
+  .row .name { font-weight: 600; color: var(--text); }
+  .row .meta { color: var(--text-dim); font-size: 12px; }
   .row .spacer { flex: 1 1 auto; }
   .row .links { display: flex; gap: 8px; flex-wrap: wrap; }
   .row .links a {
-    display: inline-block; padding: 4px 12px; border: 1px solid var(--line);
-    border-radius: 999px; font-size: .875em; text-decoration: none; background: var(--bg);
-    white-space: nowrap;
+    display: inline-flex; align-items: center; padding: 5px 13px;
+    border: 1px solid var(--line); border-radius: 11px;
+    background: var(--surface-2); color: var(--text-dim);
+    font-size: 12px; font-weight: 500; white-space: nowrap;
+    transition: .18s var(--ease);
   }
-  .row .links a:hover { border-color: var(--accent); }
-  .row .links a.missing { color: var(--muted); border-style: dashed; pointer-events: none; }
-  code { background: var(--card); padding: .15em .4em; border-radius: 5px; font-size: .875em; }
-  footer { margin-top: 4em; padding-top: 1.5em; border-top: 1px solid var(--line); color: var(--muted); font-size: .875em; }
+  .row .links a:hover { border-color: var(--line-2); color: var(--text); }
+  .row .links a.missing {
+    color: var(--text-faint); border-style: dashed; background: none; pointer-events: none;
+  }
+  code {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    background: var(--surface-2); padding: .15em .4em; border-radius: var(--r-sm); font-size: .9em;
+  }
+  footer {
+    margin-top: 4em; padding-top: 1.5em; border-top: 1px solid var(--line);
+    color: var(--text-faint); font-size: 12px;
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition-duration: .01ms !important; } }
 </style>
 </head>
 <body>
 <main>
 
   <h1>Session Pod Platform 문서 포털</h1>
-  <p class="lede">세션당 전용 pod 플랫폼 — 제품 가치 · PRD · 사용자 여정 · mockup · 최종 갱신 2026-09-03</p>
+  <p class="lede">세션당 전용 pod 플랫폼 — 제품 가치 · PRD · 사용자 여정 · mockup.
+    문서 체계의 현재 판과 남은 격차는 <a href="reader.html?doc=doc-structure-state.md">구조 상태 (10)판 · 2026-09-03</a> 이 갖는다.</p>
 
   <h2>제품 문서</h2>
   <p class="hint">제품이 약속하는 가치와 그 가치를 구현하는 요구사항 · 검증 계획.</p>
 
   <div class="row">
     <span class="name">제품 가치</span>
-    <span class="meta">가치 <code>V1</code>~<code>V8</code> · 모든 문서의 최상위 기준</span>
+    <span class="meta">가치 6개 <code>V1</code>~<code>V5</code> · <code>V8</code> · 모든 문서의 최상위 기준 (<code>V6</code>·<code>V7</code> 은 삭제 후 재사용 금지)</span>
     <span class="spacer"></span>
     <span class="links"><a href="reader.html?doc=values.md">읽기</a></span>
   </div>
@@ -204,13 +242,14 @@
   </div>
 
   <h2>mockup (화면 단위)</h2>
-  <p class="hint">여정 단위로 전환되기 전의 화면 단위 산출물. 현재 Pages 는 이 폴더만 배포한다.</p>
+  <p class="hint">여정 단위로 전환되기 전의 화면 단위 산출물 6개. Pages 는 <code>docs/</code> 전체를 배포하므로 이 폴더도 그대로 열린다.
+    갤러리 페이지는 따로 없다 — 세션 목록 화면에서 카드를 눌러 나머지 화면으로 넘어간다. 목록·매핑은 mockup 인덱스가 갖는다.</p>
 
   <div class="row">
-    <span class="name">화면 단위 mockup 갤러리</span>
-    <span class="meta">new-session · workspace · agent-workspace · gated-workspace · restore</span>
+    <span class="name">화면 단위 mockup 6개</span>
+    <span class="meta"><code>index</code>(세션 목록) · <code>new-session</code> · <code>workspace</code> · <code>agent-workspace</code> · <code>gated-workspace</code> · <code>restore</code></span>
     <span class="spacer"></span>
-    <span class="links"><a href="mockups/index.html">갤러리 열기 →</a> <a href="reader.html?doc=mockups/README.md">mockup 인덱스</a></span>
+    <span class="links"><a href="mockups/index.html">세션 목록 화면부터 열기 →</a> <a href="reader.html?doc=mockups/README.md">mockup 인덱스</a></span>
   </div>
 
   <footer>
