@@ -1,40 +1,51 @@
 name: Build and Push Docker Image to GHCR
 
-# Builds and publishes the two runtime images to GitHub Container Registry so
-# the cluster (flux-cd-apps) can pull and deploy them:
-#   - the combined control-plane image (Go API + embedded React SPA, see
-#     control-plane/Dockerfile), tagged <repo>:latest/<sha>,
-#   - the multi-workload data plane image (PTY shell, Claude runner/archive,
-#     and credential proxy; see data-plane/Dockerfile), tagged
-#     <repo>-data-plane:latest/<sha> — the tag k8s/deployment.yaml injects.
-# ci.yml only *builds* images for validation; this workflow is what actually
-# publishes pullable tags.
+# 두 런타임 이미지를 GitHub Container Registry 에 **커밋 SHA 태그 하나로만** 발행하고,
+# main 푸시에서는 그 SHA 를 k8s/deployment.yaml 에 되커밋해 운영이 가리키는 이미지를
+# 고정한다(`pin` job).
+#
+#   - control-plane (Go API + 내장 React SPA, control-plane/Dockerfile)
+#       ghcr.io/dlddu/session-platform:<sha>
+#   - data plane agent (PTY shell · Claude runner/archive · credential proxy,
+#     data-plane/Dockerfile)
+#       ghcr.io/dlddu/session-platform-data-plane:<sha>
+#
+# `latest` 는 더 이상 만들지 않는다. 운영이 어느 커밋을 돌리는지는 k8s/deployment.yaml
+# 한 곳만 보면 되고, PR 프리뷰 환경(flux-cd-apps 의 apps/session-platform-preview)은
+# 같은 규칙으로 PR head SHA 태그를 그대로 가져다 쓴다. 태그가 불변이므로
+# imagePullPolicy 도 기본값(IfNotPresent)이 그대로 옳다.
+#
+# ci.yml 은 검증용으로 이미지를 *빌드만* 한다. 실제로 pull 가능한 태그를 발행하는 것은
+# 이 워크플로다.
+#
+# 경로 필터를 두지 않는 것은 의도적이다: 프리뷰는 PR head SHA 태그를 참조하므로,
+# 문서만 고친 PR 에 `deploy/preview` 라벨이 붙어도 그 SHA 에 이미지가 있어야 환경이 뜬다.
+# 소스가 그대로면 buildx 의 gha 캐시가 통째로 히트하니 비용은 크지 않다.
 
 on:
   push:
     branches: [main]
-    paths:
-      - "control-plane/**"
-      - "data-plane/**"
-      - "web/**"
-      - ".github/workflows/docker-build-push.yaml"
   pull_request:
-    paths:
-      - "control-plane/**"
-      - "data-plane/**"
-      - "web/**"
-      - ".github/workflows/docker-build-push.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-push:
     name: build & push control-plane image
     runs-on: ubuntu-24.04-arm
-    permissions:
-      contents: read
-      packages: write
-
     steps:
+      # PR 에서는 기본값이 refs/pull/N/merge(임시 머지 커밋)라 이미지 내용이
+      # 태그(head SHA)와 어긋난다. 태그가 가리키는 커밋을 그대로 빌드한다.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -42,24 +53,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v5
+      - uses: docker/build-push-action@v6
         with:
           context: .
           file: control-plane/Dockerfile
           push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:latest
-            ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.sha }}
+          tags: ghcr.io/dlddu/session-platform:${{ github.event.pull_request.head.sha || github.sha }}
+          cache-from: type=gha,scope=control-plane
+          cache-to: type=gha,mode=max,scope=control-plane
 
   build-and-push-data-plane:
     name: build & push data-plane image
     runs-on: ubuntu-24.04-arm
-    permissions:
-      contents: read
-      packages: write
-
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -67,11 +76,78 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v5
+      - uses: docker/build-push-action@v6
         with:
           context: .
           file: data-plane/Dockerfile
           push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}-data-plane:latest
-            ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}-data-plane:${{ github.sha }}
+          tags: ghcr.io/dlddu/session-platform-data-plane:${{ github.event.pull_request.head.sha || github.sha }}
+          cache-from: type=gha,scope=data-plane
+          cache-to: type=gha,mode=max,scope=data-plane
+
+  pin:
+    name: pin deployment images (main only)
+    needs: [build-and-push, build-and-push-data-plane]
+    # main 푸시에서만. PR 빌드는 이미지를 <head sha> 로 올려두기만 하고
+    # (프리뷰 환경이 그 태그를 쓴다) 운영 매니페스트는 건드리지 않는다.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    permissions:
+      # 이 job 만 main 에 커밋한다. 워크플로 전체 기본값은 contents: read 유지.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Pin k8s/deployment.yaml images to ${{ github.sha }}
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          f=k8s/deployment.yaml
+
+          # 고쳐야 할 자리는 셋이고 형태가 둘이다:
+          #   1) 컨테이너의 image: 줄 (control-plane, 1곳)
+          #   2) DATA_PLANE_IMAGE / DATA_PLANE_CLAUDE_CODE_IMAGE 의 env value (2곳)
+          # env value 는 kustomize 의 images 변환이 건드리지 못하는 자리라(문자열일
+          # 뿐 image 필드가 아니다) 여기서 함께 다뤄야 한다.
+          #
+          # control-plane 패턴은 이름 바로 뒤에 콜론을 요구하므로
+          # `session-platform-data-plane:` 을 잡지 않는다(뒤 문자가 `-`).
+          sed -i -E "s#(ghcr\.io/dlddu/session-platform-data-plane):[A-Za-z0-9._-]+#\1:${SHA}#g" "$f"
+          sed -i -E "s#(ghcr\.io/dlddu/session-platform):[A-Za-z0-9._-]+#\1:${SHA}#g" "$f"
+
+          # sed 가 조용히 빗나가지 않았는지 확인한다. 개수를 못박는 대신 "고정되지 않은
+          # 참조가 하나도 남지 않았다"를 본다 — 네 번째 참조가 생겨도 이 검사가 잡는다.
+          leftover=$(grep -oE "ghcr\.io/dlddu/session-platform[a-z-]*:[A-Za-z0-9._-]+" "$f" \
+                       | grep -v ":${SHA}\$" || true)
+          if [ -n "$leftover" ]; then
+            echo "::error::$f: 고정되지 않은 이미지 참조가 남았습니다:"
+            echo "$leftover"
+            exit 1
+          fi
+          # 최소 한 곳은 실제로 고정되어 있어야 한다(파일이 통째로 바뀐 경우 방어).
+          n=$(grep -cE "ghcr\.io/dlddu/session-platform[a-z-]*:${SHA}" "$f" || true)
+          [ "$n" -ge 3 ] || { echo "::error::$f: 고정된 참조가 ${n}개뿐입니다(3개 이상 기대)"; exit 1; }
+
+          if git diff --quiet; then
+            echo "이미 ${SHA} 로 고정되어 있음 — 커밋할 것 없음(재실행)."
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -am "chore(deploy): session-platform 이미지를 ${SHA} 로 고정 [skip ci]"
+
+          # 이 push 는 기본 GITHUB_TOKEN 으로 나가므로 새 워크플로 실행을 트리거하지
+          # 않는다(GitHub 문서화된 동작). 나중에 PAT/App 토큰으로 바꾸더라도 커밋
+          # 메시지의 [skip ci] 가 재귀를 한 번 더 막는다.
+          # 머지가 연달아 들어와 main 이 앞서 있으면 rebase 후 재시도.
+          for i in 1 2 3; do
+            git push origin HEAD:main && exit 0
+            git pull --rebase origin main
+          done
+          exit 1
