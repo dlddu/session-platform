@@ -54,10 +54,10 @@
 그리고 복제는 mockup에만 있지 않습니다 — 문서 포털 허브(`docs/index.html`)와 여정 페이지
 (`docs/journeys/*/index.html`)도 같은 값을 자기 `:root`에 갖고 있습니다.
 
-결과적으로 지금 토큰 하나를 바꾸려면 최소 **7**곳 · 최대 **10**곳을 고쳐야 합니다.
+결과적으로 지금 토큰 하나를 바꾸려면 최소 **7**곳 · 최대 **13**곳을 고쳐야 합니다.
 **하나의 숫자가 아닌 것이 핵심입니다** — 복제한 파일마다 갖고 있는 토큰이 달라서, 몇 곳을
 고쳐야 하는지는 *어느 토큰을 바꾸느냐*에 달려 있습니다. `--rail`·`--idle`·`--resume`처럼 mockup만
-쓰는 토큰은 7곳이고, `--ink`·`--line`·`--text`처럼 허브·여정 페이지까지 쓰는 토큰은 10곳입니다.
+쓰는 토큰은 7곳이고, `--ink`·`--line`·`--text`처럼 허브·여정 페이지까지 쓰는 토큰은 13곳입니다.
 이 중복은 알려진 미해소 항목이며 `docs/doc-structure-state.md`의 🟢 위험으로 추적됩니다.
 
 이 두 숫자와 아래 원장은 `scripts/check-render-fidelity.py`(R10)가 `tokens.css`를 정본으로
@@ -87,7 +87,10 @@ R10이 레포 전수 실측과 이 표를 **양방향으로** 대조합니다 �
 | 파일 | 공유 토큰 | 값 불일치 | 처분 | 사유 |
 |------|-----------|-----------|------|------|
 | `docs/index.html` | 16 | 0 | DUP | 문서 포털 허브. 2026-09-03 (#51·#52)에 디자인 시스템을 적용하면서 정본 값을 인라인 복제했다. |
+| `docs/journeys/JRN-idle-resume/index.html` | 17 | 0 | DUP | 여정 페이지(동결·재개 계열). 2026-09-03 (#56) 신설 시 허브의 인라인 토큰을 복사했고, 앞선 두 여정 페이지에 없는 `--frozen-soft`까지 써서 공유가 17개다. |
+| `docs/journeys/JRN-manual-freeze/index.html` | 17 | 0 | DUP | 여정 페이지. 위와 같다. |
 | `docs/journeys/JRN-session-creation/index.html` | 16 | 0 | DUP | 여정 페이지. 2026-09-03 (#50) 신설 시 허브의 인라인 토큰을 복사했다. |
+| `docs/journeys/JRN-session-deletion/index.html` | 17 | 0 | DUP | 여정 페이지. 위와 같다. |
 | `docs/journeys/JRN-shell-interaction/index.html` | 16 | 0 | DUP | 여정 페이지. 위와 같다. |
 | `docs/mockups/agent-workspace.html` | 24 | 0 | DUP | mockup. 정본이 여기서 1:1 이식됐고 이후 방향이 뒤집혔다(코드가 정본). |
 | `docs/mockups/gated-workspace.html` | 24 | 0 | DUP | mockup. `agent-workspace.html`의 인라인 토큰을 복사해 만들었다. |
@@ -101,6 +104,23 @@ R10이 레포 전수 실측과 이 표를 **양방향으로** 대조합니다 �
 > 사실("토큰 7중복")을 말하지만 그 문서는 자매 정합성 모델 `tbm_session-platform-journey-mockup`의
 > to-be이므로 여기서 고치지 않습니다(같은 파일을 두 모델이 동시에 고치면 충돌합니다).
 > 그 사본의 갱신은 그 모델의 후속 task 몫입니다 — 잊힌 잔여가 아니라 **등재된 후속**입니다.
+
+> **⚠️ 머지 직전에는 브랜치가 아니라 "병합 결과"에서 돌려 보세요.** R10의 모집단은 레포 전수
+> tracked `*.html`/`*.css`이므로, **당신이 건드리지 않은 파일이 이 규칙을 깨뜨릴 수 있습니다.**
+> 2026-09-03에 실제로 그랬습니다 — 이 원장을 도입한 #55와 여정 페이지 3종을 추가한 #56이 각자
+> 자기 base에서 초록이었는데(텍스트 충돌 0, `mergeable=clean`), 둘 다 머지되자 main이 빨개졌습니다.
+> #56의 새 페이지가 원장에 없었기 때문입니다(*의미* 충돌). 그러니:
+>
+> ```bash
+> git fetch origin main
+> git merge-tree --write-tree HEAD origin/main            # 병합 트리 해시
+> git worktree add --detach /tmp/wt-merge <그 해시>       # 그 트리를 꺼내
+> (cd /tmp/wt-merge && python3 scripts/check-render-fidelity.py)   # 거기서 게이트를 돌린다
+> ```
+>
+> 새 복제 파일이 잡히면 원장 행을 손으로 짓지 말고 `python3 scripts/check-render-fidelity.py --emit`
+> 이 만든 줄을 가져다 **처분과 사유만** 채우세요. 유지비 문구 두 사본도 함께 갱신해야 합니다
+> (게이트가 강제합니다).
 
 > **이 원장이 없애는 것은 중복 자체가 아니라 중복의 침묵입니다.** mockup을 `tokens.css`에
 > 물릴지, 아니면 "mockup은 스케치이므로 복제를 수용"할지는 `docs/doc-structure-state.md:148`이
