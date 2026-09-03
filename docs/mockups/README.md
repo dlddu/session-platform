@@ -137,6 +137,40 @@
 
 ---
 
+## 여정 → 여정 mockup 페이지 매핑 (`docs/journeys/`)
+
+> ⚠️ **위의 "여정 단계별 시각화 커버리지"(✅ 18 · ⚠️ 5 · ❌ 7 · ⚪ 3)와 다른 지표입니다.**
+> 저 표의 ✅ 는 *어떤 화면 단위 mockup이 그 단계를 담고 있다* 는 뜻이고,
+> 이 표의 ✅ 는 *그 여정 전용 페이지가 존재한다* 는 뜻입니다. 두 숫자를 섞어 세면
+> 커버리지를 실제보다 높게 읽게 됩니다. 완료 기준으로는 **이 표**를 씁니다.
+
+여정 하나 = `docs/journeys/<journey-id>/index.html` 하나. 페이지가 지켜야 할 마크업 규약은
+[`../journeys/README.md`](../journeys/README.md) 에 있고, 그 규약과 아래 표의 정합성은
+`tools/journey-prototype.test.mjs` 가 CI(`docs-journey-mockup`)에서 집행합니다.
+**페이지가 없는 여정도 반드시 `⏳ 예정` 또는 `⚪ 예외 등재` 로 이 표에 선언돼 있어야 합니다** —
+선언되지 않은 여정이 있으면 CI가 실패합니다(침묵으로 누락을 감출 수 없습니다).
+
+| 여정 | 단계 | 여정 mockup 페이지 | 상태 |
+|------|------|--------------------|------|
+| `JRN-session-creation` | `STP-create-request` · `STP-workspace-entry` · `STP-isolated-work` | [`journeys/JRN-session-creation/`](../journeys/JRN-session-creation/index.html) | ✅ 페이지 있음 |
+| `JRN-idle-resume` | `STP-step-away` · `STP-auto-freeze` · `STP-reaccess` · `STP-restore-resume` | — | ⏳ 예정 |
+| `JRN-multi-session-switch` | `STP-session-list` · `STP-switch-away` · `STP-target-activation` · `STP-switch-back` | — | ⏳ 예정 |
+| `JRN-concurrent-access` | `STP-parallel-clients` · `STP-collision` · `STP-consistent-result` | — (그리지 않음) | ⚪ 예외 등재 |
+| `JRN-shell-interaction` | `STP-shell-attach` · `STP-command-input` · `STP-output-read` · `STP-shell-state-carry` | [`journeys/JRN-shell-interaction/`](../journeys/JRN-shell-interaction/index.html) | ✅ 페이지 있음 |
+| `JRN-agent-prompt-loop` | `STP-workload-choice` · `STP-prompt-submit` · `STP-response-watch` · `STP-conversation-carry` · `STP-agent-freeze-resume` | — | ⏳ 예정 |
+| `JRN-manual-freeze` | `STP-freeze-decision` · `STP-freeze-now` · `STP-freeze-confirm` | — | ⏳ 예정 |
+| `JRN-session-deletion` | `STP-delete-intent` · `STP-delete-confirm` · `STP-delete-settled` | — | ⏳ 예정 |
+| `JRN-approval-gated-work` | `STP-gated-prompt-submit` · `STP-approval-wait` · `STP-approval-decide` · `STP-gated-result` | — | ⏳ 예정 |
+
+현재 **2 / 8**(예외 1건 제외한 판정 대상 8개 중 2개). `⏳ 예정` 6건은 잔여 격차이며,
+`⚪` 1건은 [`../doc-structure-state.md`](../doc-structure-state.md) 의 "수용된 위험" 등재분입니다.
+
+**여정 간 분기의 미승급 링크**: `⏳ 예정` 여정을 대상으로 하는 분기는 기존 페이지에서
+`data-branch-pending` 으로 표시돼 있습니다. 그 여정의 페이지가 생기는 순간 하네스가
+**실패로 잡아** 실제 링크로 승급하게 강제합니다 — 페이지만 늘고 갈래가 끊긴 채 남는 상태를 막습니다.
+
+---
+
 ## 미시각화 단계 메모
 
 - **🟠 신설 여정 미시각화 (2026-08-30)**: `JRN-session-deletion` 3단계 전부와 `STP-freeze-decision`이 ❌입니다.
@@ -190,6 +224,7 @@
 
 ## 마지막 갱신
 
+- **2026-09-03 (10)** — **여정 mockup 층위 신설**: 이 문서에 `docs/journeys/` 여정→페이지 매핑 표를 더하고, 여정 페이지 2종(`JRN-session-creation`·`JRN-shell-interaction`)과 마크업 규약(`../journeys/README.md`), 집행 하네스 `tools/journey-prototype.test.mjs` + CI `docs-journey-mockup` 을 신설했다. **화면 단위 mockup 6종과 위의 커버리지 표는 건드리지 않았다** — 두 층위는 별개 지표다.
 - **2026-09-03 (9)** — **보조 파드를 헬퍼 파드 하나로 통합**: 상류에서 MCP와 credential-proxy를 별개 파드가 아니라 **한 헬퍼 파드의 컨테이너 둘**로 확정하여(AC-F4) Egress 패널을 헬퍼 파드 한 항목 + 컨테이너 두 줄로 접고, 자격 증명 행을 "mcp container / proxy container"로, 파드 표기를 둘로 줄였다. **mockup 수·커버리지·요약은 변하지 않는다.** 새 토큰 없이 기존 인라인 클래스만 재사용했다.
 - **2026-09-03 (8)** — **공급자 프록시를 보조 파드로 이관**: AC-F2의 열린 결정이 ①(프록시를 사이드카에서 보조 파드로 분리)으로 확정되어 `gated-workspace.html`의 Egress 패널에서 경고(⚠️ 공급자 HTTPS가 허용 목록에 있음)를 걷어내고 허용 항목에 프록시 파드를, 차단 항목에 "공급자 API 직접"을 넣었다. Workload 패널의 자격 증명 행을 파드별 배치(게이트웨이 키=MCP · 공급자 토큰=프록시 · 워크로드 파드=없음)로 바꾸고, 파드 표기를 셋으로 확장했다. **mockup 수·단계 커버리지·요약은 변하지 않는다** — 같은 화면의 내용 갱신이다. 새 토큰·컴포넌트 없이 기존 인라인 클래스(`.eg`·`.ctx-note`·`.kv`)만 재사용했다.
 - **2026-09-03 (7)** — **`approval-gated` 타입 신설에 따른 mockup 확충**: `gated-workspace.html` 신규 작성(승인 대기 배지·승인/거절 verdict·Approvals 패널·Egress 허용 목록 패널·공유 볼륨 행), `new-session.html`에 세 번째 타입 카드 추가(`STP-workload-choice`), `index.html` 카드의 타입 태그·링크 분기를 3종으로 확장. 여정 8→9, 단계 29→33, mockup 5→6, 요약 ✅15→18 / ❌6→7. 신규 여정의 ❌ 1건(`STP-approval-decide`)은 결정 화면이 이 레포 밖이라는 사실이 드러난 결과다. 임의 스타일 mockup 5→6(토큰 중복 6곳→7곳).

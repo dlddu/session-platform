@@ -8,7 +8,7 @@
 > 구↔신 매핑표는 [`user-journeys/README.md`](./user-journeys/README.md#구-식별자-매핑-2026-08-30-전환)에 있습니다.
 > 아래 "변경 이력"의 과거 항목은 당시 기록이므로 옛 식별자를 그대로 둡니다.
 
-- **마지막 검증 시점**: 2026-09-03 (9) (보조 파드를 헬퍼 파드 하나로 통합)
+- **마지막 검증 시점**: 2026-09-03 (10) (여정 mockup 층위 신설 — `docs/journeys/` 파일럿 2개 + 집행 하네스)
 - **검증 범위**: 상류(product-doc 사슬)에서 세 번째 워크로드 타입(AC-F1~F6)이 확정되어, 여정
   `JRN-approval-gated-work`(4단계)와 mockup `gated-workspace.html`을 신설하고 `new-session.html`·`index.html`의
   타입 분기를 3종으로 확장했다. 여정 8→9, 단계 29→33, mockup 5→6. **가치는 변하지 않았다**(V8 상속).
@@ -24,6 +24,7 @@
 - 여정 단계: **33개** (session-creation 3 · idle-resume 4 · multi-session-switch 4 · concurrent-access 3 ·
   shell-interaction 4 · agent-prompt-loop 5 · manual-freeze 3 · session-deletion 3 · approval-gated-work 4)
 - Mockup: **6개** (`mockups/`: index, new-session, workspace, agent-workspace, gated-workspace, restore) — 매핑 단일 소스는 `mockups/README.md`
+- 여정 mockup 페이지: **2개 / 판정 대상 8개** (`journeys/`: `JRN-session-creation`, `JRN-shell-interaction`) — 여정 하나 = 페이지 하나 층위. 화면 단위 mockup 6개와 **다른 지표**이며 매핑은 같은 `mockups/README.md`의 "여정 → 여정 mockup 페이지 매핑" 표. 마크업 규약 `journeys/README.md`, 집행은 CI `docs-journey-mockup`
 - 디자인 시스템: **정의됨 — 정본은 코드** (`web/src/design/tokens.css` 토큰·프리미티브, `web/src/app/shell.css` 컴포넌트·패턴 약 45종, 색인 `web/src/design/README.md`). mockup 6개는 아직 **미연결**
 - 주입형 스킬(`.claude/skills/`): **설치됨** — `ui-with-design-system`, `screen-with-mockup-and-design-system`
 - **건강 상태**: 🟡 **가치 측 위험 0 · 시각화 없는 가치 0**이나, **문서화가 구현보다 뒤처진 영역이 드러남**.
@@ -57,6 +58,19 @@
 | `JRN-session-deletion` | 3 | 0 | 0 | 3 | 0 | 없음 — SPA에만 구현됨 |
 | `JRN-approval-gated-work` | 4 | 3 | 0 | 1 | 0 | gated-workspace, new-session(타입 카드); `STP-approval-decide`는 레포 밖 화면 |
 | **합계** | **33** | **18** | **5** | **7** | **3** | — |
+
+### 여정 ↔ 여정 mockup 페이지 (`journeys/`)
+표기: ✅ 전용 페이지 있음 · ⏳ 예정(잔여 격차) · ⚪ 예외 등재(그리지 않음)
+
+| 여정 | 상태 | 페이지 |
+|------|:--:|------|
+| `JRN-session-creation` | ✅ | `journeys/JRN-session-creation/` |
+| `JRN-shell-interaction` | ✅ | `journeys/JRN-shell-interaction/` |
+| `JRN-concurrent-access` | ⚪ | 없음 — 수용된 위험 등재 |
+| 나머지 6개 여정 | ⏳ | 없음 — `mockups/README.md` 매핑 표에 `⏳ 예정`으로 선언 |
+
+> 이 표의 ✅ 는 **그 여정 전용 페이지가 있다**는 뜻이다. 아래 "여정 단계 ↔ mockup" 표의 ✅ 18 은
+> **어떤 화면 단위 mockup이 그 단계를 담고 있다**는 뜻이라 서로 다른 지표다 — 합산하지 않는다.
 
 ### 가치 ↔ mockup
 | 가치 | 시각화 mockup | 상태 |
@@ -134,6 +148,9 @@
 - **`JRN-concurrent-access` 시각화 제외 (2026-06-27 수용)**: 이 여정이 지키는 것은 화면이 아니라 결과의 일관성이므로
   **UI 시각화 대상이 아님**. 따라서 3단계의 "mockup 없음"은 누락이 아니라 의도된 상태.
   이전에 `mockups/restore.html`·`workspace.html`에 있던 동시 접근(operator+automation) 패널은 UI 비대상 판단으로 제거.
+  **재검토 시점 (2026-09-03 추가)**: 2027-06-27(수용 1년) 또는 그 전이라도 이 여정에 사용자 표면이 생기는 상류 변경이
+  확정되는 시점 — 충돌·재시도가 화면에 드러나야 하는 AC가 생기거나, `STP-collision`이 UI 상태로 노출되면 즉시 재검토한다.
+  등재는 여정 단위이며, 이 여정은 `docs/journeys/`에 페이지를 두지 않는다(하네스가 강제한다).
 
 ## 권장 다음 단계 (우선순위순)
 
@@ -141,6 +158,7 @@
 |---------|------|-----------|
 | 🔴 | 페르소나 미검증 | 실사용자 1~2명 인터뷰로 P1 확정 또는 폐기 (product-doc-engineer) |
 | 🟠 | 세션 삭제 mockup 3단계 부재 | mockup 추가 또는 "SPA 구현으로 갈음" 결정(수용 시 본 문서에 기록) |
+| 🟠 | 여정 mockup 잔여 6개 (2026-09-03) | `journeys/` 페이지 신설. 만들 때 다른 페이지의 `data-branch-pending` 링크 승급이 CI로 강제된다 |
 | 🟠 | 세션 삭제·수동 동결의 PRD AC 부재 | 전용 AC 신설 여부 결정 (product-doc-engineer) |
 | 🟡 | 누락 단계 `STP-reaccess`·`STP-switch-back`·`STP-freeze-decision` | mockup 추가 또는 의도적 제외 결정 |
 | 🟠 | `STP-approval-decide`의 소유권 (2026-09-03) | 승인 결정 화면이 레포 밖 — ⚪(비대상) 수용 또는 세션 쪽 요약 화면 신설 결정 |
@@ -171,3 +189,4 @@
 | 2026-09-03 (7) | **`approval-gated` 타입 하류 반영**. 상류에서 세 번째 워크로드 타입(AC-F1~F6)이 확정되어 여정 `JRN-approval-gated-work`(4단계)와 mockup `gated-workspace.html`을 신설하고, `new-session.html`에 세 번째 타입 카드를, `index.html`에 타입 태그·링크 분기를 더했다. `JRN-agent-prompt-loop`의 `STP-workload-choice`는 그대로 두고 선택지만 셋으로 넓혔다. **가치는 변하지 않았다** — V8 상속. 여정 8→9, 단계 29→33, mockup 5→6, ✅15→18 / ❌6→7. 늘어난 ❌ 1건은 승인 결정 화면이 레포 밖이라는 사실이 드러난 결과다. | 가치 6, 여정 8, 단계 29, mockup 5, 타입 2종 | 가치 6(변화 없음), 여정 9, 단계 33, mockup 6, 타입 3종, 시각화 없는 가치 0 유지 |
 | 2026-09-03 (8) | **공급자 프록시의 보조 파드 이관 반영**. 상류에서 AC-F2의 열린 결정이 ①로 확정되어 `gated-workspace.html`의 Egress 패널·Workload 패널·파드 표기를 갱신했다. 여정·단계·mockup 수와 커버리지 합계는 **변하지 않는다** — 같은 화면의 내용 갱신이다. | 여정 9, 단계 33, mockup 6 / 프록시=사이드카 | 여정 9, 단계 33, mockup 6 / 프록시=보조 파드, Egress ⚠️ 해소 |
 | 2026-09-03 (9) | **보조 파드를 헬퍼 파드 하나로 통합 반영**. 상류에서 MCP와 credential-proxy를 별개 파드가 아니라 한 헬퍼 파드의 컨테이너 둘로 확정하여 `gated-workspace.html`의 Egress·Workload 패널과 파드 표기를 갱신했다. 여정·단계·mockup 수와 커버리지 합계는 **변하지 않는다**. | 여정 9, 단계 33, mockup 6 / 세션당 파드 3 | 여정 9, 단계 33, mockup 6 / 세션당 파드 2 |
+| 2026-09-03 (10) | **여정 mockup 층위 신설**. 여정 하나 = 페이지 하나 층위(`docs/journeys/`)를 열고 파일럿 2개(`JRN-session-creation` 3단계 · `JRN-shell-interaction` 4단계)를 클릭되는 프로토타입으로 신설했다. 마크업 규약(`journeys/README.md`), 여정→페이지 매핑 표(`mockups/README.md`), 집행 하네스(`tools/journey-prototype.test.mjs`)와 CI 게이트(`docs-journey-mockup`)를 함께 세웠다. `JRN-concurrent-access` 예외 등재에 재검토 시점을 채웠다. **화면 단위 mockup 6개와 그 커버리지 집계는 변하지 않는다** — 다른 층위다. | 여정 페이지 0, 규약·하네스 없음, 예외 등재에 재검토 시점 없음 | 여정 페이지 2/8, 규약·하네스·CI 게이트 있음, 예외 등재 규칙 8 충족 |

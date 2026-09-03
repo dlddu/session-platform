@@ -1,0 +1,60 @@
+name: docs-journey-mockup
+
+# 사용자 여정 문서 ↔ 여정 mockup(docs/journeys/) 의 1:1 정합성 게이트.
+#
+# 여정↔페이지·단계 집합·분기 배선 같은 구조는 파일을 읽어 셀 수 있지만,
+# "버튼이 실제로 다음 단계로 데려가는가" · "입력이 진짜 입력인가" ·
+# "정상 경로 밖 상태에 도달하는가" 는 DOM 을 굴려야만 알 수 있다. 그래서 이 잡은
+# Playwright chromium 으로 각 페이지를 file:// 로 열어 실제로 클릭한다.
+# 판정 기준만 있고 집행이 없으면 그 기준은 조용히 썩는다.
+#
+# path 필터: 여정 문서·여정 페이지·매핑 인덱스·허브·예외 등재·하네스가 바뀔 때만 돈다.
+# 제품 코드만 고치는 PR 은 영향받지 않는다.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/journeys/**"
+      - "docs/user-journeys/**"
+      - "docs/mockups/README.md"
+      - "docs/index.html"
+      - "docs/doc-structure-state.md"
+      - "tools/**"
+      - ".github/workflows/docs-journey-mockup.yml"
+  pull_request:
+    paths:
+      - "docs/journeys/**"
+      - "docs/user-journeys/**"
+      - "docs/mockups/README.md"
+      - "docs/index.html"
+      - "docs/doc-structure-state.md"
+      - "tools/**"
+      - ".github/workflows/docs-journey-mockup.yml"
+  workflow_dispatch:
+
+jobs:
+  journey-prototype:
+    name: 여정 ↔ 여정 mockup 1:1 (프로토타입 충실도 포함)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tools/package-lock.json
+
+      # tools/ 는 제품 코드가 아니라 문서 게이트 전용 하네스라 web/ 과 의존성을 나눈다.
+      # 락파일을 커밋해 두었으므로 ci 로 고정 설치한다.
+      - name: install harness deps
+        working-directory: tools
+        run: npm ci
+
+      - name: install chromium
+        working-directory: tools
+        run: npx playwright install --with-deps chromium
+
+      # node:test 러너. 실패 시 어느 규칙의 어느 단계인지 메시지에 나온다.
+      - name: journey prototype fidelity
+        working-directory: tools
+        run: node --test journey-prototype.test.mjs
