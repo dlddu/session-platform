@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<!--
+  docs/journeys/JRN-approval-gated-work/index.html — 여정 프로토타입
+
+  여정 문서: ../../user-journeys/JRN-approval-gated-work.md
+  페이지 규약: ../README.md   (하네스: tools/journey-prototype.test.mjs)
+
+  화면 단위 mockup(../../mockups/gated-workspace.html)에서 마크업을 옮겨 적었으나
+  스냅샷 복제가 아니다 — 이 페이지의 화면이 곧 원본이며 배선·입력·상태 변형을 직접 갖는다.
+
+  STP-approval-decide 의 결정은 세션 화면 밖(승인 게이트웨이)에서 이뤄진다. 여정 문서가
+  그 게이트웨이를 "이 레포의 mockup 대상 아님"으로 적었으므로 docs/mockups/ 에 화면 단위
+  파일을 새로 만들지 않고, 두 화면을 요청 식별자로 잇는 모습을 이 페이지 안에서 그린다.
+-->
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JRN-approval-gated-work — 밖으로 나가는 일마다 내가 승인하고 맡긴다</title>
+<style>
+  :root{
+    --ink:#0B1116; --surface:#131D24; --surface-2:#18242C; --surface-3:#1E2C35;
+    --line:#26333D; --line-2:#324250;
+    --text:#E8EFF4; --text-dim:#9DACB7; --text-faint:#5E6E79;
+    --active:#FFB43A; --active-soft:#3A2B12;
+    --frozen:#7FCDEA; --frozen-soft:#13313D; --ok:#5FD08A; --danger:#F2616B; --danger-soft:#33171A;
+    --r:14px; --r-sm:9px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%}
+  body{
+    background:var(--ink); color:var(--text);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Noto Sans KR",Roboto,sans-serif;
+  }
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+  a{color:var(--frozen)}
+  :focus-visible{outline:2px solid var(--frozen);outline-offset:2px;border-radius:6px}
+  [hidden]{display:none !important}
+
+  .app{max-width:960px;margin:0 auto;padding:0 20px 72px}
+  .topbar{
+    display:flex;align-items:center;gap:12px;padding:16px 0;border-bottom:1px solid var(--line);
+    margin-bottom:24px;
+  }
+  .brand{font-weight:600;letter-spacing:.01em}
+  .crumb{color:var(--text-faint);font-size:12.5px}
+  .spacer{flex:1 1 auto}
+  .pill{
+    display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line-2);font-size:12px;color:var(--text-dim);
+  }
+  .pill.on{color:var(--active);border-color:var(--active-soft);background:var(--active-soft)}
+  .pill.gate{color:var(--frozen);border-color:var(--frozen-soft);background:var(--frozen-soft)}
+
+  .card{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+    padding:22px;margin-bottom:16px;
+  }
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--text-dim);margin:0 0 20px;font-size:13px}
+  .lab{display:block;font-size:12.5px;color:var(--text-dim);margin-bottom:6px}
+
+  label.field{display:block;margin-bottom:16px}
+  input[type=text],textarea{
+    width:100%;padding:9px 12px;border-radius:var(--r-sm);
+    background:var(--surface-2);border:1px solid var(--line-2);color:var(--text);font:inherit;
+  }
+  textarea{min-height:74px;resize:vertical}
+
+  .btn{padding:9px 16px;border-radius:var(--r-sm);border:1px solid var(--line-2);background:var(--surface-3)}
+  .btn.primary{background:var(--ok);color:#08200F;border-color:var(--ok);font-weight:600}
+  .btn.ghost{background:none}
+  .btn.danger{border-color:var(--danger);color:var(--danger)}
+  .btn.small{font-size:12px;padding:4px 11px;border-radius:999px}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+
+  .banner{border-radius:var(--r-sm);padding:12px 14px;margin-bottom:16px;font-size:13px}
+  .banner.err{background:var(--danger-soft);border:1px solid var(--danger);color:#FFD9DC}
+  .banner.info{background:var(--frozen-soft);border:1px solid var(--line-2);color:var(--text-dim)}
+  .banner.ok{background:#12281B;border:1px solid var(--ok);color:#CBF0D8}
+  .banner.wait{background:var(--active-soft);border:1px solid var(--active);color:#FFE7BE}
+
+  .console{
+    background:#0A1015;border:1px solid var(--line);border-radius:var(--r-sm);
+    padding:12px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:12.5px;color:var(--text-dim);white-space:pre-wrap;margin-bottom:14px;min-height:120px;
+  }
+  .req{
+    background:var(--surface-2);border:1px solid var(--line-2);border-radius:var(--r-sm);
+    padding:14px;margin-bottom:16px;
+  }
+  .req h2{font-size:14px;margin:0 0 8px}
+  .req .id{color:var(--frozen)}
+
+  .two{display:flex;gap:12px;flex-wrap:wrap}
+  .two > *{flex:1 1 300px}
+  .gw{border:1px dashed var(--line-2);border-radius:var(--r-sm);padding:14px;background:var(--surface-2)}
+  .gw .tag{font-size:11.5px;color:var(--text-faint);display:block;margin-bottom:8px}
+
+  .kv{display:grid;grid-template-columns:140px 1fr;gap:4px 14px;font-size:12.5px;margin:14px 0 0}
+  .kv dt{color:var(--text-faint)}
+  .kv dd{margin:0;color:var(--text-dim)}
+
+  .proto-bar{
+    display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:18px;padding-top:14px;
+    border-top:1px dashed var(--line-2);
+  }
+  .proto-bar .cap{font-size:11.5px;color:var(--text-faint);margin-right:2px}
+  .proto-bar button,.proto-bar a[data-branch-target]{
+    font-size:12px;padding:5px 10px;border-radius:999px;text-decoration:none;
+    border:1px solid var(--line-2);color:var(--text-dim);background:var(--surface-2);
+  }
+  .proto-bar a[data-branch-target]{color:var(--frozen)}
+  .proto-bar [data-branch-pending]{border-style:dashed}
+
+  .state-note{
+    margin:14px 0 0;padding:10px 12px;border-radius:var(--r-sm);font-size:12.5px;
+    background:var(--surface-3);border:1px solid var(--line-2);color:var(--text-dim);
+  }
+
+  details.step-meta{margin-top:22px;border-top:1px solid var(--line);padding-top:12px}
+  details.step-meta summary{cursor:pointer;color:var(--text-faint);font-size:12px}
+  details.step-meta dl{margin:12px 0 0;font-size:12.5px;color:var(--text-dim)}
+  details.step-meta dt{color:var(--text-faint);margin-top:8px}
+  details.step-meta dd{margin:2px 0 0}
+
+  footer{margin-top:28px;color:var(--text-faint);font-size:12px}
+</style>
+</head>
+<body>
+<div class="app">
+
+<header class="topbar">
+  <span class="brand">Session Pod Platform</span>
+  <span class="crumb">/ sessions / vendor-sync</span>
+  <span class="spacer"></span>
+  <span class="pill">operator@dlddu</span>
+</header>
+
+<main data-journey="JRN-approval-gated-work" data-step-active="STP-gated-prompt-submit">
+
+  <!-- ─────────────────────── STP-gated-prompt-submit ─────────────────────── -->
+  <section class="step" data-step="STP-gated-prompt-submit" id="STP-gated-prompt-submit">
+    <div class="card">
+      <div class="row" style="margin-bottom:14px">
+        <h1 style="margin:0"><span class="mono">vendor-sync</span></h1>
+        <span class="pill on">active</span>
+        <span class="pill mono">approval-gated</span>
+        <span class="spacer"></span>
+        <span class="pill gate">밖으로 나갈 때 승인 필요</span>
+      </div>
+
+      <p class="sub">이 세션의 에이전트는 <strong>스스로 밖에 나갈 수 없습니다.</strong> 외부가 필요한 일이면 반드시 물어보러 옵니다 — 그래서 맡길 수 있습니다.</p>
+
+      <div class="banner err" id="reject-banner" hidden><span id="reject-msg"></span></div>
+      <div class="banner err" id="blocked-banner" hidden>
+        에이전트가 <span class="mono">api.vendor.example</span> 로 직접 나가려다
+        <strong>네트워크 경계에서 막혔습니다.</strong> 우회 경로가 없으므로 승인 요청으로만 나갈 수 있습니다.
+      </div>
+      <div class="banner ok" id="accept-banner" hidden>
+        접수됐습니다 (<span class="mono">req-3c07</span>). 실행이 시작되면 출력이 이어 붙습니다.
+      </div>
+
+      <label class="field">
+        <span class="lab">프롬프트</span>
+        <textarea id="prompt-1" data-required-input placeholder="예: 벤더 API에서 지난달 청구 내역을 받아 요약해 줘"></textarea>
+      </label>
+
+      <div class="row">
+        <button class="btn primary" id="btn-send" data-advance-to="STP-approval-wait">보내기</button>
+        <span class="crumb">대기열: <span class="mono" id="queue-depth">0</span> / 8</span>
+      </div>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">이 화면에서 마주치는 상태</span>
+        <button id="br-self-egress" type="button"
+                data-branch-row="4"
+                data-branch-target="STP-gated-prompt-submit">에이전트가 스스로 밖에 나가려 함</button>
+        <button id="br-rejected" type="button"
+                data-branch-row="7"
+                data-branch-target="STP-gated-prompt-submit">너무 큼 · 대기열 포화 · 출력 한계</button>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-gated-prompt-submit</code> 게이트가 걸린 채로 일을 맡긴다</dd>
+        <dt>터치포인트</dt><dd>승인 게이트 워크스페이스의 프롬프트 입력 행과 "외부 접근은 승인 필요" 표시</dd>
+        <dt>연결 AC</dt><dd>AC-F3, AC-F2 (보조 AC-F1)</dd>
+        <dt>페인포인트</dt><dd>게이트가 걸려 있다는 사실이 화면에 없으면 일반 에이전트 세션과 구분하지 못한다 — 상시 표시한다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ────────────────────────── STP-approval-wait ────────────────────────── -->
+  <section class="step" data-step="STP-approval-wait" id="STP-approval-wait" hidden>
+    <div class="card">
+      <div class="row" style="margin-bottom:14px">
+        <h1 style="margin:0">승인 대기</h1>
+        <span class="pill" style="border-color:var(--active);color:var(--active)">진행 중</span>
+        <span class="spacer"></span>
+        <span class="crumb">멈춘 것이 아니라 기다리는 중입니다</span>
+      </div>
+
+      <div class="banner wait">
+        무엇을 하려다 멈췄는지가 그 자리에 적혀 있어, <strong>승인할지 판단할 재료가 화면 안에 있습니다.</strong>
+      </div>
+
+      <div class="console" id="console-1">&gt; 벤더 API에서 지난달 청구 내역을 받아 요약해 줘
+
+[1/3] 자격 증명 확인
+[2/3] 외부 호출 준비 — 승인 대기
+</div>
+
+      <div class="req">
+        <h2>대기 중인 호출 <span class="mono id" id="req-id">req-3c07</span></h2>
+        <dl class="kv" style="margin:0">
+          <dt>도구</dt><dd><span class="mono">http.get</span></dd>
+          <dt>대상</dt><dd><span class="mono">https://api.vendor.example/invoices?month=last</span></dd>
+          <dt>여는 것</dt><dd>지난달 청구 내역 조회 — 읽기 전용, 비용 없음</dd>
+        </dl>
+      </div>
+
+      <div class="banner info" id="no-freeze" hidden>
+        자리를 비운 동안에도 <strong>대기 중에는 자동 동결이 진행되지 않습니다.</strong>
+        승인했을 때 실행할 자리가 사라지지 않도록 유휴 타이머를 멈춰 둡니다.
+      </div>
+
+      <dl class="kv">
+        <dt>유휴 타이머</dt><dd id="idle-timer">대기 중 — 멈춤</dd>
+        <dt>앞서 받은 출력</dt><dd>그대로 남아 있고 이어 보기가 끊기지 않습니다</dd>
+      </dl>
+
+      <div class="row" style="margin-top:16px">
+        <button class="btn ghost" id="btn-open-request" data-advance-to="STP-approval-decide">알림에서 승인 요청 열기</button>
+      </div>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">여기서 갈라지는 길</span>
+        <button id="br-away" type="button"
+                data-branch-row="5"
+                data-branch-target="STP-approval-wait">대기 중 자리를 오래 비움</button>
+        <a id="br-freeze-or-delete" href="../JRN-manual-freeze/index.html"
+           data-branch-row="6"
+           data-branch-target="JRN-manual-freeze">대기 중 직접 접거나 지움</a>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-approval-wait</code> 승인을 기다리는 것이 보인다</dd>
+        <dt>터치포인트</dt><dd>승인 게이트 워크스페이스의 출력 콘솔에 나타나는 대기 배지와 대기 항목</dd>
+        <dt>연결 AC</dt><dd>AC-F3 (상위 AC-B1)</dd>
+        <dt>페인포인트</dt><dd>대기가 실패처럼 보이면 중복 제출이 쌓이고, 대기 중 세션이 접히면 승인해도 실행할 자리가 없다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ───────────────────────── STP-approval-decide ───────────────────────── -->
+  <section class="step" data-step="STP-approval-decide" id="STP-approval-decide" hidden>
+    <div class="card">
+      <h1>승인 요청 <span class="mono id">req-3c07</span></h1>
+      <p class="sub">결정은 세션 화면 밖에서 이뤄지고, 결과는 세션 화면으로 돌아와 보입니다 — <strong>두 화면은 요청 식별자로 이어집니다.</strong></p>
+
+      <div class="two">
+        <div class="gw">
+          <span class="tag">외부 승인 게이트웨이 — 이 레포의 화면 단위 mockup 대상이 아닙니다</span>
+          <div class="req" style="margin:0">
+            <h2><span class="mono">http.get</span> 을 허용할까요?</h2>
+            <dl class="kv" style="margin:0">
+              <dt>요청</dt><dd><span class="mono id">req-3c07</span></dd>
+              <dt>대상</dt><dd><span class="mono">api.vendor.example/invoices</span></dd>
+              <dt>무엇을 여는가</dt><dd>지난달 청구 내역 읽기 — 한 줄로 읽히게 적습니다</dd>
+              <dt>세션</dt><dd><span class="mono">vendor-sync</span></dd>
+            </dl>
+          </div>
+          <label class="field" style="margin-top:12px">
+            <span class="lab">거절 사유 — 거절할 때만 씁니다 (선택)</span>
+            <input type="text" id="deny-reason" data-required-input placeholder="예: 이번 달 예산 확인 후 다시">
+          </label>
+          <div class="row">
+            <button class="btn primary" id="btn-approve"
+                    data-advance-to="STP-gated-result"
+                    data-branch-row="1"
+                    data-branch-target="STP-gated-result">승인</button>
+            <button class="btn danger" id="btn-deny"
+                    data-branch-row="2"
+                    data-branch-target="STP-gated-result">거절</button>
+          </div>
+        </div>
+
+        <div>
+          <span class="lab">세션 쪽 콘솔 — 같은 식별자가 남아 있어 눈으로 이을 수 있습니다</span>
+          <div class="console" style="min-height:150px">[2/3] 외부 호출 준비 — 승인 대기
+      요청 req-3c07 · http.get · api.vendor.example
+      (결정은 승인 게이트웨이에서 이뤄집니다)
+</div>
+          <p class="crumb">승인이 너무 잦으면 내용을 안 보고 누르게 됩니다 — 요청 하나가 무엇을 여는지 한 줄로 읽히게 적는 것이 그 대책입니다.</p>
+        </div>
+      </div>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">여기서 갈라지는 길</span>
+        <button id="br-expire" type="button"
+                data-branch-row="3"
+                data-branch-target="STP-gated-result">결정 없이 만료·시간 초과</button>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-approval-decide</code> 승인하거나 거절한다</dd>
+        <dt>터치포인트</dt><dd>외부 승인 게이트웨이의 알림과 승인 화면 · 결정 후의 콘솔 표시</dd>
+        <dt>연결 AC</dt><dd>AC-F3, AC-F6</dd>
+        <dt>페인포인트</dt><dd>승인 화면이 세션 화면과 완전히 분리되면 같은 일을 두 화면에서 따라가야 한다 — 요청 식별자와 대상을 양쪽에 남긴다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ────────────────────────── STP-gated-result ─────────────────────────── -->
+  <section class="step" data-step="STP-gated-result" id="STP-gated-result" hidden>
+    <div class="card">
+      <div class="row" style="margin-bottom:14px">
+        <h1 style="margin:0">결과</h1>
+        <span class="pill on" id="sess-pill">세션 살아 있음</span>
+        <span class="spacer"></span>
+        <span class="crumb" id="outcome-crumb">승인됨</span>
+      </div>
+
+      <div class="banner" id="outcome-banner">
+        승인한 호출이 실행됐고 결과가 콘솔에 이어 붙었습니다. 승인이 만들어낸 파일은 다음 실행이 그대로 이어 씁니다.
+      </div>
+
+      <div class="console" id="console-2">[3/3] 외부 호출 실행 — req-3c07 승인됨
+      200 OK · 항목 42건 수신
+&gt; 요약을 vendor/last-month.md 에 정리했습니다.
+</div>
+
+      <label class="field">
+        <span class="lab">이어서 다음 프롬프트를 바로 보냅니다 — 세션과 대기열은 그대로입니다</span>
+        <input type="text" id="prompt-2" data-required-input placeholder="예: 그 요약에서 초과 청구만 뽑아 줘">
+      </label>
+
+      <div class="row">
+        <button class="btn ghost" id="btn-send-2">보내기</button>
+      </div>
+
+      <dl class="kv">
+        <dt>남는 것</dt><dd><span class="mono">vendor/last-month.md</span> · 대화 맥락 — 접었다 펴도 그대로</dd>
+        <dt>거절했다면</dt><dd>그 도구 호출만 실패하고 <strong>세션과 대기열은 유지</strong>됩니다</dd>
+      </dl>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="row" style="margin-top:16px" data-journey-end>
+        <span class="pill" style="border-color:var(--ok);color:var(--ok)">완료 — 승인이 만든 결과물 위에서 후속 요청이 이어졌다</span>
+      </div>
+
+      <div class="proto-bar">
+        <span class="cap">여기서 갈라지는 길</span>
+        <a id="br-folded" href="../JRN-idle-resume/index.html#STP-reaccess"
+           data-branch-row="8"
+           data-branch-target="JRN-idle-resume#STP-reaccess">보고 있는 중 세션이 접힘</a>
+        <a id="br-no-gate" href="../JRN-agent-prompt-loop/index.html#STP-workload-choice"
+           data-branch-row="9"
+           data-branch-target="JRN-agent-prompt-loop#STP-workload-choice">게이트 없이 빠르게 쓰고 싶어짐</a>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-gated-result</code> 승인한 결과 위에서 이어간다</dd>
+        <dt>터치포인트</dt><dd>승인 게이트 워크스페이스의 출력 콘솔과 공유 작업물 패널</dd>
+        <dt>연결 AC</dt><dd>AC-F5, AC-F3 (상위 AC-B1·B2·B3, 보조 AC-F4)</dd>
+        <dt>완료 기준</dt><dd>승인이 만들어낸 결과물이 다음 프롬프트의 문맥으로 이어진다.</dd>
+      </dl>
+    </details>
+  </section>
+
+</main>
+
+<footer>
+  여정 문서 <a href="../../user-journeys/JRN-approval-gated-work.md"><code>JRN-approval-gated-work.md</code></a> ·
+  페이지 규약 <a href="../README.md"><code>docs/journeys/README.md</code></a> ·
+  매핑 <a href="../../mockups/README.md"><code>docs/mockups/README.md</code></a>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var main = document.querySelector('[data-journey]');
+  var steps = Array.prototype.slice.call(document.querySelectorAll('[data-step]'));
+  var $ = function (id) { return document.getElementById(id); };
+
+  function show(id) {
+    var found = steps.some(function (s) { return s.getAttribute('data-step') === id; });
+    if (!found) return false;
+    steps.forEach(function (s) { s.hidden = s.getAttribute('data-step') !== id; });
+    main.setAttribute('data-step-active', id);
+    if (location.hash !== '#' + id) {
+      try { history.replaceState(null, '', '#' + id); } catch (e) { /* file:// 제약 */ }
+    }
+    return true;
+  }
+
+  function noteIn(el, text) {
+    var step = el.closest('[data-step]');
+    var n = step && step.querySelector('[data-state-note]');
+    if (!n) return;
+    n.textContent = text;
+    n.hidden = false;
+  }
+
+  /* ---------- STP-gated-prompt-submit ---------- */
+  $('br-self-egress').addEventListener('click', function () {
+    $('blocked-banner').hidden = false;
+    $('reject-banner').hidden = true;
+    show('STP-gated-prompt-submit');
+  });
+
+  $('br-rejected').addEventListener('click', function () {
+    $('reject-msg').textContent =
+      '거절됐습니다 — 프롬프트가 너무 크거나(413), 대기열이 가득 찼거나(429), 누적 출력이 한계(507)입니다. ' +
+      '사유와 다음 행동을 함께 보여 주므로 재시도만 반복하지 않아도 됩니다. 게이트가 걸린 세션에서도 이 판정은 같습니다.';
+    $('reject-banner').hidden = false;
+    $('blocked-banner').hidden = true;
+    $('queue-depth').textContent = '8';
+    show('STP-gated-prompt-submit');
+  });
+
+  /* ---------- STP-approval-wait ---------- */
+  $('br-away').addEventListener('click', function () {
+    $('no-freeze').hidden = false;
+    $('idle-timer').textContent = '대기 중 — 멈춤 (자리를 40분 비웠지만 동결되지 않음)';
+    show('STP-approval-wait');
+  });
+
+  /* ---------- STP-approval-decide ---------- */
+  function settle(kind) {
+    var banner = $('outcome-banner');
+    var crumb = $('outcome-crumb');
+    var console2 = $('console-2');
+    if (kind === 'approved') {
+      crumb.textContent = '승인됨';
+      banner.className = 'banner ok';
+      banner.textContent =
+        '승인한 호출이 실행됐고 결과가 콘솔에 이어 붙었습니다. 승인이 만들어낸 파일은 다음 실행이 그대로 이어 씁니다.';
+      console2.textContent =
+        '[3/3] 외부 호출 실행 — req-3c07 승인됨\n      200 OK · 항목 42건 수신\n' +
+        '> 요약을 vendor/last-month.md 에 정리했습니다.\n';
+    } else if (kind === 'denied') {
+      var why = $('deny-reason').value.trim();
+      crumb.textContent = '거절됨';
+      banner.className = 'banner err';
+      banner.textContent =
+        '실제 호출 없이 그 도구만 실패했습니다. 세션과 대기열은 그대로이므로 다음 프롬프트를 바로 보낼 수 있습니다' +
+        (why ? ' (사유: ' + why + ')' : '') + '.';
+      console2.textContent =
+        '[3/3] 외부 호출 거절 — req-3c07\n      tool error: denied by approver' +
+        (why ? ' (' + why + ')' : '') + '\n> 다른 방법을 찾아볼까요?\n';
+    } else {
+      crumb.textContent = '만료됨';
+      banner.className = 'banner err';
+      banner.textContent =
+        '결정 없이 만료됐습니다. 거절과 동일하게 그 호출만 실패시키고 사유를 표시합니다 — 세션은 살아 있습니다.';
+      console2.textContent =
+        '[3/3] 외부 호출 만료 — req-3c07\n      tool error: approval expired (no decision)\n' +
+        '> 다시 요청할까요?\n';
+    }
+  }
+
+  $('btn-deny').addEventListener('click', function () {
+    settle('denied');
+    show('STP-gated-result');
+  });
+
+  $('br-expire').addEventListener('click', function () {
+    settle('expired');
+    show('STP-gated-result');
+  });
+
+  /* ---------- STP-gated-result ---------- */
+  $('btn-send-2').addEventListener('click', function () {
+    var t = $('prompt-2').value.trim();
+    noteIn(this, t
+      ? '접수됐습니다. 승인이 만들어낸 파일과 앞선 대화 위에서 처리됩니다.'
+      : '내용을 쓰면 승인으로 얻은 결과물 위에서 이어집니다.');
+  });
+
+  /* ---------- 전진 ---------- */
+  Array.prototype.forEach.call(document.querySelectorAll('[data-advance-to]'), function (btn) {
+    btn.addEventListener('click', function () {
+      if (btn.disabled) return;
+      if (btn.id === 'btn-send') {
+        $('accept-banner').hidden = false;
+        $('reject-banner').hidden = true;
+        $('blocked-banner').hidden = true;
+      }
+      if (btn.id === 'btn-approve') { settle('approved'); }
+      show(btn.getAttribute('data-advance-to'));
+    });
+  });
+
+  /* ---------- 딥링크 ---------- */
+  function fromHash() {
+    var id = (location.hash || '').replace(/^#/, '');
+    if (!id || !show(id)) show('STP-gated-prompt-submit');
+  }
+  window.addEventListener('hashchange', fromHash);
+  fromHash();
+})();
+</script>
+</body>
+</html>

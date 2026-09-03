@@ -54,11 +54,11 @@
 그리고 복제는 mockup에만 있지 않습니다 — 문서 포털 허브(`docs/index.html`)와 여정 페이지
 (`docs/journeys/*/index.html`)도 같은 값을 자기 `:root`에 갖고 있습니다.
 
-결과적으로 지금 토큰 하나를 바꾸려면 최소 **7**곳 · 최대 **13**곳을 고쳐야 합니다.
+결과적으로 지금 토큰 하나를 바꾸려면 최소 **7**곳 · 최대 **16**곳을 고쳐야 합니다.
 **하나의 숫자가 아닌 것이 핵심입니다** — 복제한 파일마다 갖고 있는 토큰이 달라서, 몇 곳을
 고쳐야 하는지는 *어느 토큰을 바꾸느냐*에 달려 있습니다. `--rail`·`--idle`·`--resume`처럼 mockup만
-쓰는 토큰은 7곳이고, `--ink`·`--line`·`--text`처럼 허브·여정 페이지까지 쓰는 토큰은 13곳입니다.
-상한이 10에서 13으로 오른 것은 2026-09-03 (#56)이 여정 페이지 3개를 더 신설했기 때문입니다.
+쓰는 토큰은 7곳이고, `--ink`·`--line`·`--text`처럼 허브·여정 페이지까지 쓰는 토큰은 16곳입니다.
+상한이 10에서 16으로 오른 것은 2026-09-03 (#56)과 (#59)가 여정 페이지를 각각 3개씩 신설했기 때문입니다.
 이 중복은 알려진 미해소 항목이며 `docs/doc-structure-state.md`의 🟢 위험으로 추적됩니다.
 
 이 두 숫자와 아래 원장은 `scripts/check-render-fidelity.py`(R10)가 `tokens.css`를 정본으로
@@ -88,8 +88,11 @@ R10이 레포 전수 실측과 이 표를 **양방향으로** 대조합니다 �
 | 파일 | 공유 토큰 | 값 불일치 | 처분 | 사유 |
 |------|-----------|-----------|------|------|
 | `docs/index.html` | 16 | 0 | DUP | 문서 포털 허브. 2026-09-03 (#51·#52)에 디자인 시스템을 적용하면서 정본 값을 인라인 복제했다. |
+| `docs/journeys/JRN-agent-prompt-loop/index.html` | 17 | 0 | DUP | 여정 페이지. 2026-09-03 (#59) agent 클러스터로 신설. 기존 여정 페이지의 인라인 토큰을 복사했고 `--frozen-soft`까지 17개이며 값은 정본과 일치한다. |
+| `docs/journeys/JRN-approval-gated-work/index.html` | 17 | 0 | DUP | 여정 페이지. 위와 같다. |
 | `docs/journeys/JRN-idle-resume/index.html` | 17 | 0 | DUP | 여정 페이지. 2026-09-03 (#56) lifecycle 클러스터로 신설. `--frozen-soft`까지 복제해 공유 토큰이 하나 더 많다. |
 | `docs/journeys/JRN-manual-freeze/index.html` | 17 | 0 | DUP | 여정 페이지. 위와 같다. |
+| `docs/journeys/JRN-multi-session-switch/index.html` | 17 | 0 | DUP | 여정 페이지. 2026-09-03 (#59) agent 클러스터로 신설. 위와 같다. |
 | `docs/journeys/JRN-session-creation/index.html` | 16 | 0 | DUP | 여정 페이지. 2026-09-03 (#50) 신설 시 허브의 인라인 토큰을 복사했다. |
 | `docs/journeys/JRN-session-deletion/index.html` | 17 | 0 | DUP | 여정 페이지. 위와 같다. |
 | `docs/journeys/JRN-shell-interaction/index.html` | 16 | 0 | DUP | 여정 페이지. 2026-09-03 (#50) 신설 시 허브의 인라인 토큰을 복사했다. |

@@ -230,10 +230,10 @@
 
       <div class="row">
         <button class="btn primary" id="btn-enter" data-advance-to="STP-isolated-work">워크스페이스 열기</button>
-        <button class="btn ghost" id="btn-to-list"
-                data-branch-row="3"
-                data-branch-target="JRN-multi-session-switch#STP-session-list"
-                data-branch-pending>창을 닫고 세션 목록으로</button>
+        <a class="btn ghost" style="text-decoration:none;display:inline-block" id="btn-to-list"
+           href="../JRN-multi-session-switch/index.html#STP-session-list"
+           data-branch-row="3"
+           data-branch-target="JRN-multi-session-switch#STP-session-list">창을 닫고 세션 목록으로</a>
       </div>
 
       <p class="state-note" data-state-note hidden></p>
@@ -416,11 +416,6 @@
   retryBtn.addEventListener('click', function () {
     resetProvisioning();
     show('STP-create-request');
-  });
-
-  $('btn-to-list').addEventListener('click', function () {
-    noteIn(this, '세션은 살아 있으므로 목록에서 다시 엽니다. ' +
-      'JRN-multi-session-switch 의 STP-session-list 로 이어지지만 그 여정 페이지는 아직 없습니다.');
   });
 
   /* ---------- STP-isolated-work ---------- */
