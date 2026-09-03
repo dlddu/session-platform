@@ -64,6 +64,19 @@ func TestCreateAppliesWorkloadType(t *testing.T) {
 			want:      session.WorkloadTypeClaudeCode,
 			wantModel: "claude-sonnet-4-5",
 		},
+		{
+			name:      "approval-gated defaults to platform model",
+			requested: session.WorkloadTypeApprovalGated,
+			want:      session.WorkloadTypeApprovalGated,
+			wantModel: session.PlatformDefaultModel,
+		},
+		{
+			name:      "explicit approval-gated model",
+			requested: session.WorkloadTypeApprovalGated,
+			model:     "claude-sonnet-4-5",
+			want:      session.WorkloadTypeApprovalGated,
+			wantModel: "claude-sonnet-4-5",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, orch, store := newServiceWithOrch()
@@ -285,5 +298,37 @@ func TestLegacySessionRecordRestoresAsShell(t *testing.T) {
 	}
 	if got := orch.ModelFor(sess.ID); got != "" {
 		t.Errorf("legacy shell restore provisioned with model %q, want empty", got)
+	}
+}
+
+// AC-F5 is not implemented, so an approval-gated session has no archive
+// strategy. It must therefore refuse to freeze rather than fall through to the
+// shell's CRIU checkpointer: that would reclaim the pod pair behind a
+// checkpoint that cannot restore the workload — the exact data-loss shape
+// checkpointerFor exists to prevent. The refusal is what a later slice removes
+// by registering this type's archive strategy.
+func TestSnapshotIsRefusedForApprovalGated(t *testing.T) {
+	ctx := context.Background()
+	svc, orch, _ := newServiceWithOrch()
+
+	sess, err := svc.Create(ctx, session.CreateRequest{
+		Name: "ag-no-archive", WorkloadType: session.WorkloadTypeApprovalGated,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := svc.Snapshot(ctx, sess.ID); !errors.Is(err, session.ErrCheckpointDisabled) {
+		t.Fatalf("snapshot err = %v, want ErrCheckpointDisabled", err)
+	}
+	// The session keeps its pods: a refused freeze reclaims nothing.
+	if n := orch.RunningCount(); n == 0 {
+		t.Error("refused snapshot reclaimed the session pods")
+	}
+	after, err := svc.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if after.State == session.StateSnapshot {
+		t.Errorf("state = %q after a refused snapshot, want it unchanged", after.State)
 	}
 }

@@ -58,6 +58,7 @@ func main() {
 		"criu_enabled", cfg.criuEnabled,
 		"data_plane_image", cfg.dataPlaneImage,
 		"data_plane_claude_code_image", cfg.dataPlaneClaudeCodeImage,
+		"data_plane_approval_gated_image", cfg.dataPlaneApprovalGatedImage,
 		"data_plane_shell", cfg.dataPlaneShell,
 		"claude_code_default_model", cfg.claudeCodeDefaultModel,
 		"claude_code_models", len(cfg.claudeCodeModels),
@@ -75,7 +76,13 @@ func main() {
 		// unconfigured — Start then refuses that type instead of provisioning a
 		// shell pod under a claude-code label.
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, cfg.dataPlaneClaudeCodeImage),
+		// Same for approval-gated (AC-F1). Its data plane runtime — the helper
+		// pod's session MCP — is not implemented yet, so leaving this unset is
+		// the expected deployment state: the type stays inert instead of
+		// provisioning a pod pair that cannot come up.
+		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, cfg.dataPlaneApprovalGatedImage),
 		k8s.WithClaudeCredentialsSecret(cfg.claudeCredentialsSecret),
+		k8s.WithApprovalGatewaySecret(cfg.approvalGatewaySecret),
 		k8s.WithCheckpointPrivileged(cfg.criuEnabled))
 	store := configmap.NewStore(client, namespace)
 	// Shell I/O (write→stdin, read→scrollback delta) AND checkpoint/restore ride
@@ -175,6 +182,14 @@ type config struct {
 	// sessions (AC-E1). Unset means the type is not deployable here: creating
 	// such a session fails loudly rather than getting a shell pod.
 	dataPlaneClaudeCodeImage string
+	// dataPlaneApprovalGatedImage is the image for `workloadType=approval-gated`
+	// sessions and their helper pods (AC-F1/AC-F4). Unset means the type is not
+	// deployable here, which is the current expected state: the helper pod's
+	// session MCP workload does not exist in the data plane agent yet.
+	dataPlaneApprovalGatedImage string
+	// approvalGatewaySecret names the platform Secret whose url/api-key/user-id
+	// keys are projected into the helper pod's MCP container only (AC-F6).
+	approvalGatewaySecret string
 	// claudeArchiveEnabled explicitly permits workspace/conversation/output
 	// archives to be written to CHECKPOINT_S3_* (default false).
 	claudeArchiveEnabled    bool
@@ -248,20 +263,22 @@ func loadConfig() (config, error) {
 		dataPlaneImage: env("DATA_PLANE_IMAGE", ""),
 		// Propagated into session pods; the agent launches
 		// ${DATA_PLANE_SHELL:-/bin/bash} on a PTY (AC-D1).
-		dataPlaneShell:           env("DATA_PLANE_SHELL", ""),
-		dataPlaneClaudeCodeImage: env("DATA_PLANE_CLAUDE_CODE_IMAGE", ""),
-		claudeArchiveEnabled:     envBool("CLAUDE_CODE_ARCHIVE_ENABLED", false),
-		claudeCredentialsSecret:  env("CLAUDE_CODE_CREDENTIALS_SECRET", "claude-code-credentials"),
-		claudeCodeDefaultModel:   claudeCodeDefaultModel,
-		claudeCodeModels:         claudeCodeModels,
-		criuEnabled:              envBool("CRIU_ENABLED", false),
-		idleScanInterval:         envDuration("IDLE_SCAN_INTERVAL", time.Minute),
-		checkpointS3Endpoint:     env("CHECKPOINT_S3_ENDPOINT", ""),
-		checkpointS3Bucket:       env("CHECKPOINT_S3_BUCKET", ""),
-		checkpointS3RoleARN:      env("CHECKPOINT_S3_ROLE_ARN", ""),
-		checkpointS3Region:       env("CHECKPOINT_S3_REGION", env("AWS_REGION", "")),
-		checkpointS3Prefix:       env("CHECKPOINT_S3_PREFIX", "checkpoints"),
-		checkpointS3SessionName:  env("CHECKPOINT_S3_SESSION_NAME", ""),
+		dataPlaneShell:              env("DATA_PLANE_SHELL", ""),
+		dataPlaneClaudeCodeImage:    env("DATA_PLANE_CLAUDE_CODE_IMAGE", ""),
+		dataPlaneApprovalGatedImage: env("DATA_PLANE_APPROVAL_GATED_IMAGE", ""),
+		approvalGatewaySecret:       env("APPROVAL_GATEWAY_SECRET", "approval-gateway-credentials"),
+		claudeArchiveEnabled:        envBool("CLAUDE_CODE_ARCHIVE_ENABLED", false),
+		claudeCredentialsSecret:     env("CLAUDE_CODE_CREDENTIALS_SECRET", "claude-code-credentials"),
+		claudeCodeDefaultModel:      claudeCodeDefaultModel,
+		claudeCodeModels:            claudeCodeModels,
+		criuEnabled:                 envBool("CRIU_ENABLED", false),
+		idleScanInterval:            envDuration("IDLE_SCAN_INTERVAL", time.Minute),
+		checkpointS3Endpoint:        env("CHECKPOINT_S3_ENDPOINT", ""),
+		checkpointS3Bucket:          env("CHECKPOINT_S3_BUCKET", ""),
+		checkpointS3RoleARN:         env("CHECKPOINT_S3_ROLE_ARN", ""),
+		checkpointS3Region:          env("CHECKPOINT_S3_REGION", env("AWS_REGION", "")),
+		checkpointS3Prefix:          env("CHECKPOINT_S3_PREFIX", "checkpoints"),
+		checkpointS3SessionName:     env("CHECKPOINT_S3_SESSION_NAME", ""),
 	}, nil
 }
 

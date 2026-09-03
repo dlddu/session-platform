@@ -61,6 +61,14 @@ const (
 	// WorkloadTypeClaudeCode — the Claude Code CLI workload
 	// (docs/prd/claude-code-workload.md, AC-E2~E6).
 	WorkloadTypeClaudeCode WorkloadType = "claude-code"
+	// WorkloadTypeApprovalGated — the approval-gated agent workload
+	// (docs/prd/approval-gated-workload.md, AC-F1~F6). It runs the same one-shot
+	// prompt execution model as claude-code (AC-F1 reuses AC-E2~E6 verbatim),
+	// but everything that reaches outside the pod goes through a session-scoped
+	// helper pod: the provider proxy moves out of the workload pod so a pod-level
+	// egress policy can leave no external destination on the workload pod's
+	// allowlist (AC-F2/F4/F6).
+	WorkloadTypeApprovalGated WorkloadType = "approval-gated"
 
 	// PlatformDefaultModel is the stable session-level alias for the model
 	// selected by the platform's optional Secret configuration (falling back to
@@ -83,7 +91,7 @@ var modelNamePattern = regexp.MustCompile(`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}
 // default. Use that on the way in and this to reject explicit garbage.
 func (w WorkloadType) Valid() bool {
 	switch w {
-	case WorkloadTypeShell, WorkloadTypeClaudeCode:
+	case WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeApprovalGated:
 		return true
 	default:
 		return false
@@ -109,9 +117,11 @@ func NormalizeWorkloadType(w WorkloadType) (WorkloadType, error) {
 
 // NormalizeModel validates the workload-specific model setting (AC-E6).
 // Shell sessions do not have a model and reject one rather than silently
-// accepting a meaningless immutable setting. Claude Code sessions resolve an
-// omitted model to PlatformDefaultModel; concrete model identifiers are kept
-// verbatim after trimming and are passed to the CLI as a single argv element.
+// accepting a meaningless immutable setting. The agent types resolve an omitted
+// model to PlatformDefaultModel; concrete model identifiers are kept verbatim
+// after trimming and are passed to the CLI as a single argv element.
+// approval-gated shares this contract unchanged — AC-F1 states the model field
+// follows AC-E6 exactly, so the two agent types must not drift apart here.
 func NormalizeModel(workload WorkloadType, model string) (string, error) {
 	model = strings.TrimSpace(model)
 	switch workload {
@@ -120,7 +130,7 @@ func NormalizeModel(workload WorkloadType, model string) (string, error) {
 			return "", ErrInvalidInput
 		}
 		return "", nil
-	case WorkloadTypeClaudeCode:
+	case WorkloadTypeClaudeCode, WorkloadTypeApprovalGated:
 		if model == "" {
 			return PlatformDefaultModel, nil
 		}
@@ -192,10 +202,11 @@ type Session struct {
 	// before the type axis existed decode as "" — read it through
 	// NormalizeWorkloadType, which resolves that to the shell default.
 	WorkloadType WorkloadType `json:"workloadType,omitempty"`
-	// Model is meaningful only for claude-code sessions and, like the workload
-	// type, is fixed at creation. "platform-default" delegates selection to the
-	// platform-managed Secret and then the Claude Code installation fallback
-	// (AC-E6).
+	// Model is meaningful only for the agent workload types (claude-code and
+	// approval-gated) and, like the workload type, is fixed at creation.
+	// "platform-default" delegates selection to the platform-managed Secret and
+	// then the Claude Code installation fallback (AC-E6, reused verbatim by
+	// AC-F1).
 	Model string `json:"model,omitempty"`
 	Name  string `json:"name"`
 	State State  `json:"state"`
@@ -207,8 +218,9 @@ type Session struct {
 	// without running the workload themselves (AC-A2's auxiliary-pod clause;
 	// AC-F4's helper pod is the first of them). They are session-exclusive,
 	// share the workload pod's lifetime, and are reclaimed with it (AC-A3) —
-	// so this is empty exactly when Pod is. The two workload types that exist
-	// today provision none, leaving it absent from the wire.
+	// so this is empty exactly when Pod is. shell and claude-code provision
+	// none, leaving it absent from the wire; approval-gated provisions exactly
+	// one — its helper pod.
 	AuxiliaryPods []string    `json:"auxiliaryPods,omitempty"`
 	CreatedAt     time.Time   `json:"createdAt"`
 	LastAccess    time.Time   `json:"lastAccess"`           // last read/write; drives idle/snapshot timing (AC-B1)

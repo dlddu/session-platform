@@ -92,9 +92,42 @@ func TestCreateSessionWorkloadType(t *testing.T) {
 		}
 	})
 
+	t.Run("approval-gated defaults to platform model", func(t *testing.T) {
+		status, s := createRaw(t, srv.URL, map[string]any{"name": "wt-ag", "workloadType": "approval-gated"})
+		if status != http.StatusCreated {
+			t.Fatalf("status = %d, want 201", status)
+		}
+		if s.WorkloadType != session.WorkloadTypeApprovalGated {
+			t.Errorf("workloadType = %q, want %q", s.WorkloadType, session.WorkloadTypeApprovalGated)
+		}
+		// AC-F1: the model contract is AC-E6's, unchanged.
+		if s.Model != session.PlatformDefaultModel {
+			t.Errorf("model = %q, want %q", s.Model, session.PlatformDefaultModel)
+		}
+		if got := orch.WorkloadFor(s.ID); got != session.WorkloadTypeApprovalGated {
+			t.Errorf("orchestrator workload = %q, want %q", got, session.WorkloadTypeApprovalGated)
+		}
+		if got := orch.ModelFor(s.ID); got != session.PlatformDefaultModel {
+			t.Errorf("orchestrator model = %q, want %q", got, session.PlatformDefaultModel)
+		}
+	})
+
+	t.Run("explicit approval-gated model", func(t *testing.T) {
+		const model = "anthropic/claude-opus-4-6"
+		status, s := createRaw(t, srv.URL, map[string]any{
+			"name": "wt-ag-model", "workloadType": "approval-gated", "model": model,
+		})
+		if status != http.StatusCreated {
+			t.Fatalf("status = %d, want 201", status)
+		}
+		if s.Model != model || orch.ModelFor(s.ID) != model {
+			t.Errorf("model = %q, orchestrator model = %q, want %q", s.Model, orch.ModelFor(s.ID), model)
+		}
+	})
+
 	t.Run("unknown type is rejected", func(t *testing.T) {
 		before := orch.RunningCount()
-		for _, bad := range []any{"foo", "SHELL", "claude_code", " shell", "", nil, 42} {
+		for _, bad := range []any{"foo", "SHELL", "claude_code", "approval_gated", "APPROVAL-GATED", " approval-gated", "", nil, 42} {
 			status, _ := createRaw(t, srv.URL, map[string]any{"name": "wt-bad", "workloadType": bad})
 			if status != http.StatusBadRequest {
 				t.Errorf("workloadType=%v: status = %d, want 400", bad, status)
@@ -114,6 +147,11 @@ func TestCreateSessionWorkloadType(t *testing.T) {
 			{"name": "model-number", "workloadType": "claude-code", "model": 42},
 			{"name": "model-space", "workloadType": "claude-code", "model": "bad model"},
 			{"name": "model-option", "workloadType": "claude-code", "model": "--danger"},
+			// AC-F1: approval-gated shares AC-E6's model contract, so the same
+			// inputs are refused for it.
+			{"name": "model-ag-empty", "workloadType": "approval-gated", "model": ""},
+			{"name": "model-ag-null", "workloadType": "approval-gated", "model": nil},
+			{"name": "model-ag-space", "workloadType": "approval-gated", "model": "bad model"},
 		}
 		for _, body := range cases {
 			status, _ := createRaw(t, srv.URL, body)
