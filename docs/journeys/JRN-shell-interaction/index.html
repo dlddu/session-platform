@@ -98,11 +98,12 @@
     border-top:1px dashed var(--line-2);
   }
   .proto-bar .cap{font-size:11.5px;color:var(--text-faint);margin-right:2px}
-  .proto-bar button{
-    font-size:12px;padding:5px 10px;border-radius:999px;
+  .proto-bar button,.proto-bar a[data-branch-target]{
+    font-size:12px;padding:5px 10px;border-radius:999px;text-decoration:none;
     border:1px solid var(--line-2);color:var(--text-dim);background:var(--surface-2);
   }
-  .proto-bar button[data-branch-pending]{border-style:dashed}
+  .proto-bar a[data-branch-target]{color:var(--frozen)}
+  .proto-bar [data-branch-pending]{border-style:dashed}
 
   .state-note{
     margin:14px 0 0;padding:10px 12px;border-radius:var(--r-sm);font-size:12.5px;
@@ -197,10 +198,9 @@ $ npm run build
                 data-branch-row="3"
                 data-branch-target="STP-shell-state-carry"
                 data-branch-open="trigger-longjob">실행 중인 작업을 Shell state 에서 보기</button>
-        <button id="btn-frozen-input" type="button"
-                data-branch-row="2"
-                data-branch-target="JRN-idle-resume#STP-restore-resume"
-                data-branch-pending>접혀 있는 세션에 명령 입력</button>
+        <a id="btn-frozen-input" href="../JRN-idle-resume/index.html#STP-restore-resume"
+           data-branch-row="2"
+           data-branch-target="JRN-idle-resume#STP-restore-resume">접혀 있는 세션에 명령 입력</a>
       </div>
     </div>
 
@@ -248,10 +248,9 @@ $ npm run build
       <div class="proto-bar">
         <span class="cap">여기서 갈라지는 길</span>
         <button id="trigger-trunc" type="button">출력이 누적 한계에 근접</button>
-        <button id="btn-shell-dead" type="button"
-                data-branch-row="6"
-                data-branch-target="JRN-session-deletion#STP-delete-intent"
-                data-branch-pending>쉘 프로세스가 죽음</button>
+        <a id="btn-shell-dead" href="../JRN-session-deletion/index.html#STP-delete-intent"
+           data-branch-row="6"
+           data-branch-target="JRN-session-deletion#STP-delete-intent">쉘 프로세스가 죽음</a>
       </div>
     </div>
 
@@ -319,10 +318,9 @@ stg in /work/billing</span>
       <div class="proto-bar">
         <span class="cap">여기서 갈라지는 길</span>
         <button id="trigger-restart" type="button">컨테이너 재시작(복원 아님)</button>
-        <button id="btn-idle-freeze" type="button"
-                data-branch-row="1"
-                data-branch-target="JRN-idle-resume#STP-auto-freeze"
-                data-branch-pending>작업 중 유휴 한계 도달</button>
+        <a id="btn-idle-freeze" href="../JRN-idle-resume/index.html#STP-auto-freeze"
+           data-branch-row="1"
+           data-branch-target="JRN-idle-resume#STP-auto-freeze">작업 중 유휴 한계 도달</a>
       </div>
     </div>
 
@@ -341,7 +339,7 @@ stg in /work/billing</span>
 <footer>
   여정 문서 <a href="../../user-journeys/JRN-shell-interaction.md"><code>JRN-shell-interaction.md</code></a> ·
   페이지 규약 <a href="../README.md"><code>docs/journeys/README.md</code></a> ·
-  앞 여정 <a href="../JRN-session-creation/#STP-isolated-work"><code>JRN-session-creation</code></a>
+  앞 여정 <a href="../JRN-session-creation/index.html#STP-isolated-work"><code>JRN-session-creation</code></a>
 </footer>
 
 </div>
@@ -452,13 +450,6 @@ stg in /work/billing</span>
     show('STP-shell-state-carry');
   });
 
-  $('btn-frozen-input').addEventListener('click', function () {
-    $('sh-state').textContent = 'snapshot';
-    $('sh-state').classList.remove('on');
-    noteIn(this, '접혀 있는 세션에 명령을 넣으면 먼저 복원한 뒤 이전 cwd·env 위에서 실행합니다. ' +
-      'JRN-idle-resume 의 STP-restore-resume 으로 이어지지만 그 여정 페이지는 아직 없습니다.');
-  });
-
   /* ---------- STP-output-read ---------- */
   $('trigger-trunc').addEventListener('click', function () {
     var t = $('or-term');
@@ -475,8 +466,6 @@ stg in /work/billing</span>
 
   $('btn-shell-dead').addEventListener('click', function () {
     $('or-dead').hidden = false;
-    noteIn(this, '쉘 프로세스가 죽으면 되살릴지 정리할지 고릅니다. ' +
-      'JRN-session-deletion 의 STP-delete-intent 로 이어지지만 그 여정 페이지는 아직 없습니다.');
   });
 
   var orCmd = $('or-cmd');
@@ -525,13 +514,6 @@ stg in /work/billing</span>
     $('attach-banner').textContent =
       '컨테이너 재시작으로 새 쉘이 시작되었습니다 — 복원이 아니므로 이전 상태는 이어지지 않습니다.';
     show('STP-shell-attach');
-  });
-
-  $('btn-idle-freeze').addEventListener('click', function () {
-    $('sh-state').textContent = 'snapshot';
-    $('sh-state').classList.remove('on');
-    noteIn(this, '쉘 상태를 통째로 동결하고 pod 를 회수합니다. ' +
-      'JRN-idle-resume 의 STP-auto-freeze 로 이어지지만 그 여정 페이지는 아직 없습니다.');
   });
 
   /* ---------- 전진 ---------- */
