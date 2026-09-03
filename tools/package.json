@@ -1,0 +1,13 @@
+{
+  "name": "session-platform-tools",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "문서 게이트용 하네스. 제품 코드가 아니라 docs/ 를 집행하는 도구만 둔다.",
+  "scripts": {
+    "test:journey-mockup": "node --test journey-prototype.test.mjs"
+  },
+  "dependencies": {
+    "@playwright/test": "1.61.0"
+  }
+}

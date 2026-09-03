@@ -130,7 +130,7 @@
   </div>
 
   <h2>사용자 여정</h2>
-  <p class="hint">여정 하나 = 문서 하나 + mockup 페이지 하나. 아래 mockup 자리는 아직 비어 있다 — 현재 mockup 은 화면 단위라 여정 단위 페이지가 없다. 식별자는 2026-08-30 부터 슬러그(<code>JRN-…</code> / <code>STP-…</code>) 를 쓴다.</p>
+  <p class="hint">여정 하나 = 문서 하나 + 여정 mockup 페이지 하나(<code>journeys/&lt;journey-id&gt;/</code>). 2 / 8 이 채워졌고 나머지는 <code>준비 중</code> 이다 — 매핑은 <a href="reader.html?doc=mockups/README.md">mockup 인덱스</a>, 페이지 규약은 <a href="reader.html?doc=journeys/README.md">여정 mockup 규약</a> 이 갖는다. 식별자는 2026-08-30 부터 슬러그(<code>JRN-…</code> / <code>STP-…</code>) 를 쓴다.</p>
 
   <div class="row">
     <span class="name">여정 인덱스</span>
@@ -142,7 +142,7 @@
     <span class="name">첫 세션 생성과 격리된 작업</span>
     <span class="meta"><code>JRN-session-creation</code> · 달성 가치 <code>V1, V5</code> · 3단계</span>
     <span class="spacer"></span>
-    <span class="links"><a href="reader.html?doc=user-journeys/JRN-session-creation.md">문서 읽기</a> <a class="missing" href="#">여정 mockup 준비 중</a></span>
+    <span class="links"><a href="reader.html?doc=user-journeys/JRN-session-creation.md">문서 읽기</a> <a href="journeys/JRN-session-creation/">여정 mockup</a></span>
   </div>
   <div class="row">
     <span class="name">자리 비움과 끊김 없는 재개</span>
@@ -160,13 +160,13 @@
     <span class="name">동시에 건드려도 깨지지 않는 세션</span>
     <span class="meta"><code>JRN-concurrent-access</code> · 달성 가치 <code>V5, V3</code> · 3단계</span>
     <span class="spacer"></span>
-    <span class="links"><a href="reader.html?doc=user-journeys/JRN-concurrent-access.md">문서 읽기</a> <a class="missing" href="#">여정 mockup 준비 중</a></span>
+    <span class="links"><a href="reader.html?doc=user-journeys/JRN-concurrent-access.md">문서 읽기</a> <a class="missing" href="#">의도적 비시각화 — 예외 등재</a></span>
   </div>
   <div class="row">
     <span class="name">쉘에서 명령을 실행하고 상태를 이어간다</span>
     <span class="meta"><code>JRN-shell-interaction</code> · 달성 가치 <code>V3</code> · 4단계</span>
     <span class="spacer"></span>
-    <span class="links"><a href="reader.html?doc=user-journeys/JRN-shell-interaction.md">문서 읽기</a> <a class="missing" href="#">여정 mockup 준비 중</a></span>
+    <span class="links"><a href="reader.html?doc=user-journeys/JRN-shell-interaction.md">문서 읽기</a> <a href="journeys/JRN-shell-interaction/">여정 mockup</a></span>
   </div>
   <div class="row">
     <span class="name">작업 환경을 골라 에이전트에게 일을 시킨다</span>
@@ -215,6 +215,7 @@
 
   <footer>
     이 페이지는 손으로 갱신한다. 여정·mockup·문서가 늘거나 줄면 같은 커밋에서 이 파일도 고친다.<br>
+    여정 mockup 링크가 실제 페이지 집합과 어긋나면 CI <code>docs-journey-mockup</code> 이 실패한다.<br>
     구조 점검은 <code>design-doc-structure-validator</code> 스킬로 한다.
   </footer>
 
