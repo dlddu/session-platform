@@ -28,8 +28,8 @@ func (p PodRef) String() string { return p.Namespace + "/" + p.Name }
 // without running the workload themselves (AC-A2's auxiliary-pod clause;
 // AC-F4's helper pod is the first such pod). Provisioning returns the whole set
 // because reclamation, freeze and restore hold across it, not across the
-// workload pod alone. The workload types that exist today provision no
-// auxiliary pods, so Auxiliary is nil for them.
+// workload pod alone. shell and claude-code provision no auxiliary pods, so
+// Auxiliary is nil for them; approval-gated provisions exactly one.
 type SessionPods struct {
 	Workload  PodRef
 	Auxiliary []PodRef
@@ -134,11 +134,13 @@ func NewStubOrchestrator(namespace string) *StubOrchestrator {
 }
 
 // SetAuxiliaryPods makes subsequent Start/RestoreInto calls provision n
-// auxiliary pods alongside the workload pod. No workload type asks for one yet
-// (AC-F1's approval-gated type is not implemented), so this knob is how tests
-// exercise the multi-pod half of the AC-A2/AC-A3/AC-B2 contract: that a
-// session's auxiliary pods are started with it, reclaimed with it, and restored
-// with it. Set it before the session under test is created.
+// auxiliary pods alongside the workload pod, independently of the workload type
+// the stub is asked for. It is how in-process tests exercise the multi-pod half
+// of the AC-A2/AC-A3/AC-B2 contract — that a session's auxiliary pods are
+// started with it, reclaimed with it, and restored with it — without standing up
+// the real orchestrator. The type that asks for one in production is
+// approval-gated (AC-F4), whose pod shapes are asserted against a fake clientset
+// in control-plane/test. Set it before the session under test is created.
 func (o *StubOrchestrator) SetAuxiliaryPods(n int) {
 	o.mu.Lock()
 	defer o.mu.Unlock()

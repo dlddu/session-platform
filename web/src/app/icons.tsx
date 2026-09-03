@@ -1,3 +1,5 @@
+// mockup: docs/mockups/index.html
+// docs/mockups/README.md 의 「화면 ↔ mockup 매핑」 표와 양방향으로 일치해야 한다 (scripts/check-render-fidelity.py).
 // Inline SVG icons ported 1:1 from docs/mockups/index.html (ICON map + crystal).
 // Kept as small components so cards/chips can size them via the `size` prop.
 

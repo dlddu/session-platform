@@ -450,13 +450,17 @@ components:
       enum: [active, idle, snapshot]
     WorkloadType:
       type: string
-      enum: [shell, claude-code]
+      enum: [shell, claude-code, approval-gated]
       default: shell
       description: >
-        Which data plane workload the session runs (AC-E1). Fixed at creation
-        and immutable afterwards. `shell` is an interactive PTY shell
-        (AC-D1~D5); `claude-code` is the Claude Code CLI workload (AC-E2~E6),
-        which requires the control plane to have an image configured for it.
+        Which data plane workload the session runs (AC-E1/AC-F1). Fixed at
+        creation and immutable afterwards. `shell` is an interactive PTY shell
+        (AC-D1~D5); `claude-code` is the Claude Code CLI workload (AC-E2~E6);
+        `approval-gated` is the same agent execution model behind a human
+        approval gate, provisioned as a workload pod plus a session-scoped
+        helper pod (AC-F1~F6). Each non-default type requires the control plane
+        to have an image configured for it, and creating a session of a type
+        with no configured image fails rather than falling back to a shell.
     Checkpoint:
       type: object
       properties:
@@ -475,8 +479,10 @@ components:
         model:
           type: string
           description: >
-            Immutable Claude Code model identifier. Present only for
-            `claude-code`; omitted at creation resolves to `platform-default`.
+            Immutable model identifier for the agent workload types. Present
+            for `claude-code` and `approval-gated`, which share this contract
+            (AC-E6, reused by AC-F1); omitted at creation resolves to
+            `platform-default`.
             Whenever the primary container starts, including a restart, that
             alias resolves through the optional Secret model and then the CLI
             fallback.
@@ -492,9 +498,9 @@ components:
             Session-scoped pods that serve the workload pod without running the
             workload themselves (AC-A2's auxiliary-pod clause). They share the
             workload pod's lifetime and are reclaimed with it, so this is absent
-            exactly when `pod` is. Both workload types available today
-            provision none, so it is absent for every session the API serves
-            now; AC-F4's helper pod is the first to appear here.
+            exactly when `pod` is. `shell` and `claude-code` sessions provision
+            none; an `approval-gated` session lists its one helper pod here
+            (AC-F4).
         createdAt: { type: string, format: date-time }
         lastAccess: { type: string, format: date-time }
         checkpoint: { $ref: "#/components/schemas/Checkpoint" }
@@ -519,8 +525,8 @@ components:
           type: string
           pattern: '^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$'
           description: >
-            Claude Code model for this session. Valid only when workloadType is
-            `claude-code`; omitted resolves to `platform-default`. A concrete
+            Model for this session. Valid when workloadType is `claude-code` or
+            `approval-gated`; omitted resolves to `platform-default`. A concrete
             value is passed literally and takes precedence over the platform
             Secret default. The catalog returned by GET /config is advisory,
             not an allowlist. Credentials are never accepted in this request.

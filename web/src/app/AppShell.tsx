@@ -1,3 +1,5 @@
+// mockup: docs/mockups/index.html
+// docs/mockups/README.md 의 「화면 ↔ mockup 매핑」 표와 양방향으로 일치해야 한다 (scripts/check-render-fidelity.py).
 import { NavLink, Outlet } from "react-router-dom";
 import { ToastProvider } from "./Toast";
 import "./shell.css";

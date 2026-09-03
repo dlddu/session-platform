@@ -45,9 +45,87 @@
 > (토큰·프리미티브 `tokens.css`, 컴포넌트·패턴 `web/src/app/shell.css`). 코드가 정본이고 문서는 색인입니다.
 > 다만 mockup 6개는 여전히 그 정본을 참조하지 않고 같은 값을 각자 인라인으로 갖고 있습니다 —
 > 값은 일치하지만 **연결은 아니므로 "미연결" 상태는 유지**됩니다.
-> 토큰 하나를 바꾸려면 `tokens.css` + mockup 6개 = **7곳**을 고쳐야 하며, 이 중복이 남은 🟢 위험의 실체입니다.
-> `gated-workspace.html` 신설로 중복이 한 곳 더 늘었습니다.
+> 토큰 하나를 바꾸려면 최소 **7**곳 · 최대 **10**곳을 고쳐야 하며, 이 중복이 남은 🟢 위험의 실체입니다.
+> **하나의 숫자가 아닙니다** — 고칠 곳의 수는 *어느 토큰이냐*에 따라 다릅니다. mockup만 쓰는
+> 토큰(`--rail`·`--idle`·`--resume` 등)은 7곳이고, 문서 포털 허브(`docs/index.html`)와 여정
+> 페이지(`docs/journeys/*/index.html`)까지 복제한 토큰(`--ink`·`--line`·`--text` 등)은 10곳입니다.
+> **복제는 mockup 밖에도 있습니다** — 전체 목록과 처분은
+> [디자인 시스템 README의 「토큰 복제 원장」](../../web/src/design/README.md#토큰-복제-원장)이
+> 정본이고, 이 두 숫자는 `scripts/check-render-fidelity.py`(R10)가 레포 전수 실측으로 대조합니다.
 > 방향 규칙: **코드를 먼저 고치고 mockup이 따라옵니다.**
+
+---
+
+## 화면 ↔ mockup 매핑 (SPA 구현 대조)
+
+> 위의 표가 **mockup ↔ 여정 단계**를 잇는다면, 이 표는 **mockup ↔ SPA 구현 화면**을 잇습니다.
+> 정합성 모델 `tbm_session-platform-mockup-render`가 "구현된 화면이 대응 목업과 시각적으로
+> 일치하는가"를 판정하는 **기계 판독 가능한 매핑의 단일 소스**이며,
+> `scripts/check-render-fidelity.py`(CI `render-fidelity` 잡)가 아래 표를 코드와
+> **양방향 집합 동등성**으로 강제합니다 — 표에 없는 구현 파일도, 코드에 없는 표 행도 실패합니다.
+
+매핑된 구현 파일 = **11**
+
+| 구현 파일 | 종류 | 대응 mockup | 근거 | 상태 |
+|-----------|------|-------------|------|------|
+| `web/src/screens/Sessions.tsx` | screen | `docs/mockups/index.html` | 세션 목록 대시보드. 상태별 카드 + workloadType 태그 | ✅ 매핑 |
+| `web/src/screens/NewSession.tsx` | screen | `docs/mockups/new-session.html` | 생성 모달 · 워크로드 타입 카드 · 프로비저닝 단계 뷰 | ✅ 매핑 |
+| `web/src/screens/Workspace.tsx` | screen | `docs/mockups/workspace.html`, `docs/mockups/agent-workspace.html` | 한 화면이 `workloadType`에 따라 둘로 갈린다(`shell` / `claude-code`). `approval-gated`는 구현이 없어 아래 표 참조 | ✅ 매핑 (1:N) |
+| `web/src/screens/Restore.tsx` | screen | `docs/mockups/restore.html` | 체크포인트 복원 화면 | ✅ 매핑 |
+| `web/src/app/AppShell.tsx` | component | `docs/mockups/index.html` | 뷰포트 + 64px 하단 레일. 6개 mockup이 공유하는 셸이라 정본 출처를 `index.html`로 고정 | ✅ 매핑 |
+| `web/src/app/SessionCard.tsx` | component | `docs/mockups/index.html` | 세션 카드(vitals · freeze ring · snapshot body) | ✅ 매핑 |
+| `web/src/app/StateBadge.tsx` | component | `docs/mockups/index.html` | `session.State` 배지 | ✅ 매핑 |
+| `web/src/app/Toast.tsx` | component | `docs/mockups/index.html` | `toast-wrap` / `toast`. 6개 mockup 공통이라 `index.html`로 고정 | ✅ 매핑 |
+| `web/src/app/icons.tsx` | component | `docs/mockups/index.html` | 인라인 SVG 아이콘 1:1 이식(이 파일의 기존 주석이 이 규약의 선례) | ✅ 매핑 |
+| `web/src/app/shell.css` | style | `docs/mockups/index.html` | 셸·공용 컴포넌트 CSS. `tokens.css`·`icons.tsx`와 같은 규약으로 `index.html`을 정본 출처로 고정하고, 화면별 패널 대조는 아래 「패널 구조 차집합」이 담당 | ✅ 매핑 |
+| `web/src/app/DeleteSessionDialog.tsx` | component | — | 삭제 확인 대화상자. **SPA에만 있고 대응 mockup이 없다**(위 「미시각화 단계 메모」의 `STP-delete-confirm` ❌와 같은 사실) | ❌ 대응 mockup 없음 |
+
+각 구현 파일은 헤더에 `mockup: <경로>` 선언 주석을 갖습니다(대응이 없으면 `mockup: none — <사유>`).
+표와 선언이 어긋나면 게이트가 실패하므로, **둘 중 하나만 고치는 것은 불가능**합니다.
+
+> 스캔 스코프는 정합성 모델의 as-is와 같게 `web/src/screens` + `web/src/app`이고, 대조 단위가 되는
+> `.tsx`·`.css`만 등재합니다. `web/src/app/sessionRoutes.ts`는 경로 계산 헬퍼로 렌더 산출물이 없어
+> 제외합니다. `web/src/design/`은 이탈의 **기준점(정본)**이라 대조 대상이 아닙니다.
+
+### 구현이 없는 mockup
+
+아직 대응 화면이 없는 mockup은 이 모델의 drift가 **아닙니다**(모델 정의: "아직 구현되지 않은
+화면의 부재는 drift가 아니다"). 다만 구현이 착지하는 순간 매핑이 낡으므로, **구현 신호**를 함께
+등재해 게이트가 그 시점을 잡아냅니다 — 신호가 `web/src/screens`·`web/src/app`에서 1건이라도
+발견되면 게이트는 "매핑 표를 갱신하라"며 실패합니다.
+
+| mockup | 구현 신호 (`git grep -F`) | 비고 |
+|--------|---------------------------|------|
+| `docs/mockups/gated-workspace.html` | `approval-gated` | AC-F1~F6 구현이 `tbm_session-platform-docs-impl`에 걸려 있다. 착지하면 `Workspace.tsx`의 1:N 대응에 이 파일이 합류한다 |
+
+---
+
+## 패널 구조 차집합 (구현 대조)
+
+mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="panel…"` 직후 `<h4>` 텍스트를
+뽑아 **쌍별로** 비교한 실측 원장입니다. 게이트가 매번 다시 계산해 이 표와 대조하므로 손으로
+맞출 수 없습니다.
+
+패널 차집합 상한 = **10**
+
+| 구현 파일 | mockup | 이 쌍의 구현 패널 | mockup-only (구현에 없음) | impl-only (mockup에 없음) |
+|-----------|--------|-------------------|---------------------------|---------------------------|
+| `web/src/screens/Workspace.tsx` | `docs/mockups/workspace.html` | Actions | Vitals · Shell state · Lifecycle | Actions |
+| `web/src/screens/Workspace.tsx` | `docs/mockups/agent-workspace.html` | Workload · Actions | Vitals · Conversation · Lifecycle | Actions |
+| `web/src/screens/Restore.tsx` | `docs/mockups/restore.html` | — | Vitals · Lifecycle | — |
+
+`Workspace.tsx`는 한 파일이 두 mockup을 그리므로 **쌍마다 그 변형이 실제로 그리는 패널만** 선언합니다
+(`Workload` 패널은 `isAgent`일 때만 렌더). 게이트는 쌍별 선언의 **합집합이 파일에서 추출한 패널
+전체와 같은지**까지 확인하므로, 한 쌍에서 빼는 방식으로 차집합을 줄일 수 없습니다.
+
+**읽는 법**: `Actions`가 두 쌍 모두에서 impl-only인 것은 같은 패널 하나가 두 대조에 나타난 것이지
+패널이 둘이라는 뜻이 아닙니다. 상한 10은 (3+1)+(3+1)+(2+0)의 합입니다.
+
+> **이 표가 세는 것은 패널 층위까지입니다.** 패널 **내부**의 카피·수치(예: `Idle timer` ·
+> `Auto-freeze at` · `Pod uptime` · `process tree` · `Resuming from checkpoint` · `Session workspace`,
+> 역방향으로 `Delete session` · `Switch (AC-C4)`)는 아직 대조하지 않습니다 — 후속 작업이며,
+> `Vitals`(CPU/메모리)·`Pod uptime`처럼 **실데이터 소스가 API에 있는지**부터 확인해야 방향
+> (구현을 늘릴지 · mockup을 줄일지)이 정해지는 항목이 섞여 있습니다.
 
 ---
 
@@ -153,21 +231,25 @@
 | 여정 | 단계 | 여정 mockup 페이지 | 상태 |
 |------|------|--------------------|------|
 | `JRN-session-creation` | `STP-create-request` · `STP-workspace-entry` · `STP-isolated-work` | [`journeys/JRN-session-creation/`](../journeys/JRN-session-creation/index.html) | ✅ 페이지 있음 |
-| `JRN-idle-resume` | `STP-step-away` · `STP-auto-freeze` · `STP-reaccess` · `STP-restore-resume` | — | ⏳ 예정 |
+| `JRN-idle-resume` | `STP-step-away` · `STP-auto-freeze` · `STP-reaccess` · `STP-restore-resume` | [`journeys/JRN-idle-resume/`](../journeys/JRN-idle-resume/index.html) | ✅ 페이지 있음 |
 | `JRN-multi-session-switch` | `STP-session-list` · `STP-switch-away` · `STP-target-activation` · `STP-switch-back` | — | ⏳ 예정 |
 | `JRN-concurrent-access` | `STP-parallel-clients` · `STP-collision` · `STP-consistent-result` | — (그리지 않음) | ⚪ 예외 등재 |
 | `JRN-shell-interaction` | `STP-shell-attach` · `STP-command-input` · `STP-output-read` · `STP-shell-state-carry` | [`journeys/JRN-shell-interaction/`](../journeys/JRN-shell-interaction/index.html) | ✅ 페이지 있음 |
 | `JRN-agent-prompt-loop` | `STP-workload-choice` · `STP-prompt-submit` · `STP-response-watch` · `STP-conversation-carry` · `STP-agent-freeze-resume` | — | ⏳ 예정 |
-| `JRN-manual-freeze` | `STP-freeze-decision` · `STP-freeze-now` · `STP-freeze-confirm` | — | ⏳ 예정 |
-| `JRN-session-deletion` | `STP-delete-intent` · `STP-delete-confirm` · `STP-delete-settled` | — | ⏳ 예정 |
+| `JRN-manual-freeze` | `STP-freeze-decision` · `STP-freeze-now` · `STP-freeze-confirm` | [`journeys/JRN-manual-freeze/`](../journeys/JRN-manual-freeze/index.html) | ✅ 페이지 있음 |
+| `JRN-session-deletion` | `STP-delete-intent` · `STP-delete-confirm` · `STP-delete-settled` | [`journeys/JRN-session-deletion/`](../journeys/JRN-session-deletion/index.html) | ✅ 페이지 있음 |
 | `JRN-approval-gated-work` | `STP-gated-prompt-submit` · `STP-approval-wait` · `STP-approval-decide` · `STP-gated-result` | — | ⏳ 예정 |
 
-현재 **2 / 8**(예외 1건 제외한 판정 대상 8개 중 2개). `⏳ 예정` 6건은 잔여 격차이며,
+현재 **5 / 8**(예외 1건 제외한 판정 대상 8개 중 5개). `⏳ 예정` 3건은 잔여 격차이며,
 `⚪` 1건은 [`../doc-structure-state.md`](../doc-structure-state.md) 의 "수용된 위험" 등재분입니다.
 
 **여정 간 분기의 미승급 링크**: `⏳ 예정` 여정을 대상으로 하는 분기는 기존 페이지에서
 `data-branch-pending` 으로 표시돼 있습니다. 그 여정의 페이지가 생기는 순간 하네스가
 **실패로 잡아** 실제 링크로 승급하게 강제합니다 — 페이지만 늘고 갈래가 끊긴 채 남는 상태를 막습니다.
+승급된 링크는 하네스가 실제로 눌러 **대상 페이지의 그 단계가 열리는지**까지 확인합니다.
+현재 남은 미승급 링크는 `JRN-multi-session-switch` 대상 1건뿐입니다.
+`JRN-concurrent-access`(⚪)를 향한 갈래는 페이지가 생기지 않으므로 `data-branch-excepted` 로
+"안 만든 것"이 아니라 "그리지 않기로 한 것"임을 구분해 표시합니다.
 
 ---
 
@@ -224,6 +306,7 @@
 
 ## 마지막 갱신
 
+- **2026-09-03 (11)** — **여정 mockup lifecycle 클러스터 3종 신설**: `JRN-idle-resume`(4단계) · `JRN-manual-freeze`(3단계) · `JRN-session-deletion`(3단계) 페이지를 신설해 여정 mockup 커버리지가 **2 / 8 → 5 / 8** 이 되었다. 세 여정은 분기표가 서로를 가리켜 한 슬라이스로 묶어야 재작업이 없다. 파일럿 2종이 걸어둔 미승급 링크 6건 중 5건을 실링크로 승급했고(남은 1건은 `JRN-multi-session-switch` 대상), 하네스에 **승급 링크의 페이지 간 딥링크 검증**과 **예외 등재 여정 갈래(`data-branch-excepted`) 검사**를 더했다. **화면 단위 mockup 6종과 위의 커버리지 표는 건드리지 않았다** — 두 층위는 별개 지표다.
 - **2026-09-03 (10)** — **여정 mockup 층위 신설**: 이 문서에 `docs/journeys/` 여정→페이지 매핑 표를 더하고, 여정 페이지 2종(`JRN-session-creation`·`JRN-shell-interaction`)과 마크업 규약(`../journeys/README.md`), 집행 하네스 `tools/journey-prototype.test.mjs` + CI `docs-journey-mockup` 을 신설했다. **화면 단위 mockup 6종과 위의 커버리지 표는 건드리지 않았다** — 두 층위는 별개 지표다.
 - **2026-09-03 (9)** — **보조 파드를 헬퍼 파드 하나로 통합**: 상류에서 MCP와 credential-proxy를 별개 파드가 아니라 **한 헬퍼 파드의 컨테이너 둘**로 확정하여(AC-F4) Egress 패널을 헬퍼 파드 한 항목 + 컨테이너 두 줄로 접고, 자격 증명 행을 "mcp container / proxy container"로, 파드 표기를 둘로 줄였다. **mockup 수·커버리지·요약은 변하지 않는다.** 새 토큰 없이 기존 인라인 클래스만 재사용했다.
 - **2026-09-03 (8)** — **공급자 프록시를 보조 파드로 이관**: AC-F2의 열린 결정이 ①(프록시를 사이드카에서 보조 파드로 분리)으로 확정되어 `gated-workspace.html`의 Egress 패널에서 경고(⚠️ 공급자 HTTPS가 허용 목록에 있음)를 걷어내고 허용 항목에 프록시 파드를, 차단 항목에 "공급자 API 직접"을 넣었다. Workload 패널의 자격 증명 행을 파드별 배치(게이트웨이 키=MCP · 공급자 토큰=프록시 · 워크로드 파드=없음)로 바꾸고, 파드 표기를 셋으로 확장했다. **mockup 수·단계 커버리지·요약은 변하지 않는다** — 같은 화면의 내용 갱신이다. 새 토큰·컴포넌트 없이 기존 인라인 클래스(`.eg`·`.ctx-note`·`.kv`)만 재사용했다.
