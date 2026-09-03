@@ -3,10 +3,12 @@
 export type State = "active" | "idle" | "snapshot";
 
 /**
- * Which data plane workload the session runs (AC-E1). Chosen at creation and
- * immutable afterwards. NewSession offers shell (the default) and claude-code.
+ * Which data plane workload the session runs (AC-E1/AC-F1). Chosen at creation
+ * and immutable afterwards. NewSession offers shell (the default) and
+ * claude-code; approval-gated exists in the API contract but has no screen
+ * affordance yet, so the SPA only ever renders it as a value it read back.
  */
-export type WorkloadType = "shell" | "claude-code";
+export type WorkloadType = "shell" | "claude-code" | "approval-gated";
 
 export interface PlatformConfig {
   claudeCode: {
@@ -35,8 +37,9 @@ export interface Session {
   /**
    * Session-scoped pods that serve the workload pod without running the
    * workload themselves (AC-A2's auxiliary-pod clause). They share the workload
-   * pod's lifetime, so this is absent exactly when `pod` is. Both workload types
-   * available today provision none; AC-F4's helper pod is the first to appear.
+   * pod's lifetime, so this is absent exactly when `pod` is. shell and
+   * claude-code sessions provision none; an approval-gated session lists its one
+   * helper pod here (AC-F4).
    */
   auxiliaryPods?: string[];
   createdAt: string;
