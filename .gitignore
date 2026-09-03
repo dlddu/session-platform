@@ -9,6 +9,9 @@ web/dist/
 web/tsconfig.tsbuildinfo
 *.log
 
+# --- Node / tools (문서 게이트 하네스) ---
+tools/node_modules/
+
 # --- Playwright (web e2e) ---
 web/test-results/
 web/playwright-report/

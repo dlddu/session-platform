@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<!--
+  docs/journeys/JRN-shell-interaction/index.html — 여정 프로토타입
+
+  여정 문서: ../../user-journeys/JRN-shell-interaction.md
+  페이지 규약: ../README.md   (하네스: tools/journey-prototype.test.mjs)
+
+  네 단계는 같은 워크스페이스 화면의 네 순간이다. 규약 4에 따라 단계마다
+  그 단계의 행동이 각각 배선되어 있다 — 뒤 단계만 배선하고 앞 단계의 같은
+  버튼을 죽여두지 않는다.
+-->
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JRN-shell-interaction — 쉘에서 명령을 실행하고 상태를 이어간다</title>
+<style>
+  :root{
+    --ink:#0B1116; --surface:#131D24; --surface-2:#18242C; --surface-3:#1E2C35;
+    --line:#26333D; --line-2:#324250;
+    --text:#E8EFF4; --text-dim:#9DACB7; --text-faint:#5E6E79;
+    --active:#FFB43A; --active-soft:#3A2B12;
+    --frozen:#7FCDEA; --ok:#5FD08A; --warn:#C9A24B; --danger:#F2616B; --danger-soft:#33171A;
+    --r:14px; --r-sm:9px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%}
+  body{
+    background:var(--ink); color:var(--text);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Noto Sans KR",Roboto,sans-serif;
+  }
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+  a{color:var(--frozen)}
+  :focus-visible{outline:2px solid var(--frozen);outline-offset:2px;border-radius:6px}
+  [hidden]{display:none !important}
+
+  .app{max-width:1000px;margin:0 auto;padding:0 20px 72px}
+  .topbar{
+    display:flex;align-items:center;gap:12px;padding:16px 0;border-bottom:1px solid var(--line);
+    margin-bottom:24px;
+  }
+  .brand{font-weight:600}
+  .crumb{color:var(--text-faint);font-size:12.5px}
+  .spacer{flex:1 1 auto}
+  .pill{
+    display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line-2);font-size:12px;color:var(--text-dim);
+  }
+  .pill.on{color:var(--active);border-color:var(--active-soft);background:var(--active-soft)}
+
+  .card{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+    padding:22px;margin-bottom:16px;
+  }
+  h1{font-size:19px;margin:0}
+  .sub{color:var(--text-dim);margin:8px 0 18px;font-size:13px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .cols{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
+  .cols .main{flex:1 1 460px;min-width:0}
+  .cols .side{flex:0 1 280px}
+
+  .btn{padding:9px 16px;border-radius:var(--r-sm);border:1px solid var(--line-2);background:var(--surface-3)}
+  .btn.primary{background:var(--active);color:#20160A;border-color:var(--active);font-weight:600}
+  .btn.ghost{background:none}
+  .btn.small{font-size:12px;padding:4px 11px;border-radius:999px}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+
+  .banner{border-radius:var(--r-sm);padding:11px 14px;margin-bottom:14px;font-size:12.5px}
+  .banner.info{background:var(--surface-3);border:1px solid var(--line-2);color:var(--text-dim)}
+  .banner.warn{background:#2B2614;border:1px solid var(--warn);color:#F0E2B6}
+  .banner.err{background:var(--danger-soft);border:1px solid var(--danger);color:#FFD9DC}
+
+  .term{
+    background:#0A0F13;border:1px solid var(--line);border-radius:var(--r-sm);
+    padding:14px;min-height:190px;max-height:300px;overflow:auto;
+    white-space:pre-wrap;font-size:12.5px;line-height:1.65;
+  }
+  .term .o{color:var(--text-dim)}
+  .term .warnline{color:var(--warn)}
+  .input-row{display:flex;gap:8px;align-items:center;margin-top:12px}
+  .input-row .ps1{color:var(--active)}
+  .input-row input{
+    flex:1 1 auto;padding:9px 12px;border-radius:var(--r-sm);
+    background:var(--surface-2);border:1px solid var(--line-2);color:var(--text);font:inherit;
+  }
+  .input-row input:disabled{opacity:.5}
+
+  .panel{background:var(--surface-2);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:14px}
+  .panel h3{margin:0 0 10px;font-size:12.5px;color:var(--text-faint);font-weight:600;letter-spacing:.04em}
+  .kv{display:flex;justify-content:space-between;gap:12px;padding:5px 0;font-size:12.5px;border-bottom:1px solid var(--line)}
+  .kv:last-child{border-bottom:0}
+  .kv .k{color:var(--text-faint)}
+  .kv .v{color:var(--text);text-align:right;word-break:break-all}
+
+  .proto-bar{
+    display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:18px;padding-top:14px;
+    border-top:1px dashed var(--line-2);
+  }
+  .proto-bar .cap{font-size:11.5px;color:var(--text-faint);margin-right:2px}
+  .proto-bar button{
+    font-size:12px;padding:5px 10px;border-radius:999px;
+    border:1px solid var(--line-2);color:var(--text-dim);background:var(--surface-2);
+  }
+  .proto-bar button[data-branch-pending]{border-style:dashed}
+
+  .state-note{
+    margin:14px 0 0;padding:10px 12px;border-radius:var(--r-sm);font-size:12.5px;
+    background:var(--surface-3);border:1px solid var(--line-2);color:var(--text-dim);
+  }
+
+  details.step-meta{margin-top:22px;border-top:1px solid var(--line);padding-top:12px}
+  details.step-meta summary{cursor:pointer;color:var(--text-faint);font-size:12px}
+  details.step-meta dl{margin:12px 0 0;font-size:12.5px;color:var(--text-dim)}
+  details.step-meta dt{color:var(--text-faint);margin-top:8px}
+  details.step-meta dd{margin:2px 0 0}
+
+  footer{margin-top:28px;color:var(--text-faint);font-size:12px}
+</style>
+</head>
+<body>
+<div class="app">
+
+<header class="topbar">
+  <span class="brand">Session Pod Platform</span>
+  <span class="crumb">/ sessions / <span class="mono">refactor-billing</span></span>
+  <span class="spacer"></span>
+  <span class="pill on" id="sh-state">active</span>
+  <span class="pill mono">shell</span>
+</header>
+
+<main data-journey="JRN-shell-interaction" data-step-active="STP-shell-attach">
+
+  <!-- ────────────────────────── STP-shell-attach ──────────────────────────── -->
+  <section class="step" data-step="STP-shell-attach" id="STP-shell-attach">
+    <div class="card">
+      <div class="row"><h1>session shell</h1><span class="spacer"></span>
+        <span class="crumb">pod <span class="mono">sess-refactor-billing-0</span></span></div>
+      <p class="sub">별도의 접속 절차는 없습니다 — 세션을 열면 이미 떠 있는 쉘 앞에 앉습니다.</p>
+
+      <div class="banner info" id="attach-banner">이전 출력 이력을 그대로 다시 불러왔습니다 (잘린 구간 없음).</div>
+
+      <div class="term mono" id="attach-term"><span class="o">$ cd /work/billing
+$ npm run build
+&gt; billing@0.4.1 build
+&gt; tsc -b &amp;&amp; vite build
+✓ built in 8.42s</span>
+</div>
+
+      <div class="input-row">
+        <span class="ps1 mono">$</span>
+        <input type="text" class="mono" value="" placeholder="이력 끝으로 이동하면 입력이 열립니다" disabled>
+        <button class="btn primary" id="btn-to-prompt" data-advance-to="STP-command-input">이력 끝으로 이동해 입력 시작</button>
+      </div>
+
+      <p class="state-note" data-state-note hidden></p>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-shell-attach</code> 쉘에 붙는다</dd>
+        <dt>터치포인트</dt><dd>워크스페이스의 session shell 콘솔</dd>
+        <dt>연결 AC</dt><dd>AC-D1</dd>
+        <dt>페인포인트</dt><dd>빈 콘솔로 시작하면 이전 작업이 날아간 줄 안다 → 이력을 먼저 채운 뒤 입력을 연다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ────────────────────────── STP-command-input ─────────────────────────── -->
+  <section class="step" data-step="STP-command-input" id="STP-command-input" hidden>
+    <div class="card">
+      <div class="row"><h1>session shell</h1><span class="spacer"></span>
+        <span class="crumb"><span class="mono" id="ci-cwd-crumb">/work/billing</span></span></div>
+      <p class="sub">평소 쓰던 터미널처럼 칩니다. 다른 점이 있는 지점은 콘솔이 명시적으로 알립니다.</p>
+
+      <div class="banner warn" id="ci-diff-note">붙여넣기 개행은 한 번에 실행됩니다 — 일반 터미널과 다른 유일한 지점입니다.</div>
+
+      <div class="term mono" id="ci-term"><span class="o">$ cd /work/billing
+$ npm run build
+✓ built in 8.42s</span>
+</div>
+
+      <div class="input-row">
+        <span class="ps1 mono">$</span>
+        <input type="text" id="sh-cmd" class="mono" value="ls" placeholder="예: ls  ·  cd /work  ·  export DEPLOY_ENV=stg"
+               data-required-input autocomplete="off">
+        <button class="btn primary" id="btn-run" data-advance-to="STP-output-read">Run</button>
+      </div>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">여기서 갈라지는 길</span>
+        <button id="trigger-longjob" type="button">장시간 포그라운드 작업 실행</button>
+        <button type="button" class="btn small" id="btn-longjob-state" hidden
+                data-branch-row="3"
+                data-branch-target="STP-shell-state-carry"
+                data-branch-open="trigger-longjob">실행 중인 작업을 Shell state 에서 보기</button>
+        <button id="btn-frozen-input" type="button"
+                data-branch-row="2"
+                data-branch-target="JRN-idle-resume#STP-restore-resume"
+                data-branch-pending>접혀 있는 세션에 명령 입력</button>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-command-input</code> 명령을 친다</dd>
+        <dt>터치포인트</dt><dd>콘솔의 <code>$</code> 입력 행 · 쉘 write API</dd>
+        <dt>연결 AC</dt><dd>AC-D2</dd>
+        <dt>사용자 행동</dt><dd>프롬프트에 명령을 입력해 실행한다(<code>ls</code>, <code>cd /work</code>, <code>export KEY=…</code>).</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ────────────────────────── STP-output-read ───────────────────────────── -->
+  <section class="step" data-step="STP-output-read" id="STP-output-read" hidden>
+    <div class="card">
+      <div class="row"><h1>session shell</h1><span class="spacer"></span>
+        <span class="pill" id="or-cursor">읽기는 비파괴 — 나갔다 와도 이력이 남습니다</span></div>
+      <p class="sub">계속 보고 있으면 새 출력만 이어 붙고, 나갔다 들어오면 처음부터 다시 볼 수 있습니다.</p>
+
+      <div class="banner warn" id="or-trunc" hidden>
+        누적 출력이 한계에 근접해 앞부분을 잘랐습니다 — 조용히 자르지 않고 잘림 지점을 표시합니다.
+        <button type="button" class="btn ghost small" id="btn-read-truncated" hidden
+                data-branch-row="4"
+                data-branch-target="STP-output-read"
+                data-branch-open="trigger-trunc">잘림 표시를 확인하고 계속 읽기</button>
+      </div>
+
+      <div class="banner err" id="or-dead" hidden>쉘 프로세스가 종료되었습니다 — 되살릴지 정리할지 고르세요.</div>
+
+      <div class="term mono" id="or-term"><span class="o">$ npm run build
+&gt; billing@0.4.1 build
+✓ built in 8.42s</span>
+</div>
+
+      <div class="input-row">
+        <span class="ps1 mono">$</span>
+        <input type="text" id="or-cmd" class="mono" placeholder="이 출력 위에서 다음 명령을 이어 실행" autocomplete="off">
+        <button class="btn primary" id="btn-continue" data-advance-to="STP-shell-state-carry">이어서 실행</button>
+      </div>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">여기서 갈라지는 길</span>
+        <button id="trigger-trunc" type="button">출력이 누적 한계에 근접</button>
+        <button id="btn-shell-dead" type="button"
+                data-branch-row="6"
+                data-branch-target="JRN-session-deletion#STP-delete-intent"
+                data-branch-pending>쉘 프로세스가 죽음</button>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-output-read</code> 출력을 본다</dd>
+        <dt>터치포인트</dt><dd>콘솔의 출력 영역 · 쉘 read API</dd>
+        <dt>연결 AC</dt><dd>AC-D3</dd>
+        <dt>페인포인트</dt><dd>읽었다고 출력이 사라지거나 긴 로그가 조용히 잘리면 스크롤을 신뢰하지 않게 된다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ────────────────────────── STP-shell-state-carry ─────────────────────── -->
+  <section class="step" data-step="STP-shell-state-carry" id="STP-shell-state-carry" hidden>
+    <div class="card">
+      <div class="row"><h1>session shell</h1><span class="spacer"></span>
+        <span class="crumb">이 상태가 곧 세션의 보존 대상입니다</span></div>
+      <p class="sub">앞선 명령이 만든 상태 위에서 다음 명령이 실행됩니다. 동결·복원을 거쳐도 유지됩니다.</p>
+
+      <div class="banner info" id="sc-restart" hidden>
+        컨테이너가 재시작되었습니다 — <strong>복원이 아닙니다.</strong> 새 쉘로 시작하므로 이전 상태는 이어지지 않습니다.
+        <button type="button" class="btn ghost small" id="btn-reattach" hidden
+                data-branch-row="5"
+                data-branch-target="STP-shell-attach"
+                data-branch-open="trigger-restart">새 쉘에 연결</button>
+      </div>
+
+      <div class="cols">
+        <div class="main">
+          <div class="term mono" id="sc-term"><span class="o">$ cd /work/billing
+$ export DEPLOY_ENV=stg
+$ echo "$DEPLOY_ENV in $(pwd)"
+stg in /work/billing</span>
+</div>
+          <div class="input-row">
+            <span class="ps1 mono">export</span>
+            <input type="text" id="sh-env" class="mono" value="DEPLOY_ENV=stg"
+                   placeholder="KEY=value" data-required-input autocomplete="off">
+            <button class="btn" id="btn-set-env">설정</button>
+          </div>
+          <div class="input-row">
+            <span class="ps1 mono">$</span>
+            <input type="text" id="sc-cmd" class="mono"
+                   value="echo &quot;$DEPLOY_ENV in $(pwd)&quot;" autocomplete="off">
+            <button class="btn primary" id="btn-run-stateful">상태에 의존하는 명령 실행</button>
+          </div>
+          <p class="state-note" data-state-note hidden></p>
+          <div class="row" style="margin-top:16px" data-journey-end>
+            <span class="pill" style="border-color:var(--ok);color:var(--ok)" id="sc-done">완료 — 상태에 의존하는 명령 연쇄 성공</span>
+          </div>
+        </div>
+
+        <aside class="side panel">
+          <h3>SHELL STATE</h3>
+          <div class="kv"><span class="k">cwd</span><span class="v mono" id="st-cwd">/work/billing</span></div>
+          <div class="kv"><span class="k">env</span><span class="v mono" id="st-env">DEPLOY_ENV=stg</span></div>
+          <div class="kv"><span class="k">shell var</span><span class="v mono">RETRIES=3</span></div>
+          <div class="kv"><span class="k">background job</span><span class="v mono" id="st-job">없음</span></div>
+          <div class="kv"><span class="k">동결 시 보존</span><span class="v" style="color:var(--ok)">위 전부</span></div>
+        </aside>
+      </div>
+
+      <div class="proto-bar">
+        <span class="cap">여기서 갈라지는 길</span>
+        <button id="trigger-restart" type="button">컨테이너 재시작(복원 아님)</button>
+        <button id="btn-idle-freeze" type="button"
+                data-branch-row="1"
+                data-branch-target="JRN-idle-resume#STP-auto-freeze"
+                data-branch-pending>작업 중 유휴 한계 도달</button>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-shell-state-carry</code> 상태가 다음 명령으로 이어진다</dd>
+        <dt>터치포인트</dt><dd>콘솔 · 워크스페이스의 Shell state 패널</dd>
+        <dt>완료 기준</dt><dd>디렉터리를 옮기고 환경 변수를 설정한 뒤 그 둘에 의존하는 명령이 의도대로 실행된다.</dd>
+      </dl>
+    </details>
+  </section>
+
+</main>
+
+<footer>
+  여정 문서 <a href="../../user-journeys/JRN-shell-interaction.md"><code>JRN-shell-interaction.md</code></a> ·
+  페이지 규약 <a href="../README.md"><code>docs/journeys/README.md</code></a> ·
+  앞 여정 <a href="../JRN-session-creation/#STP-isolated-work"><code>JRN-session-creation</code></a>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var main = document.querySelector('[data-journey]');
+  var steps = Array.prototype.slice.call(document.querySelectorAll('[data-step]'));
+  var $ = function (id) { return document.getElementById(id); };
+
+  function show(id) {
+    var found = steps.some(function (s) { return s.getAttribute('data-step') === id; });
+    if (!found) return false;
+    steps.forEach(function (s) { s.hidden = s.getAttribute('data-step') !== id; });
+    main.setAttribute('data-step-active', id);
+    if (location.hash !== '#' + id) {
+      try { history.replaceState(null, '', '#' + id); } catch (e) { /* file:// 제약 */ }
+    }
+    return true;
+  }
+
+  function noteIn(el, text) {
+    var step = el.closest('[data-step]');
+    var n = step && step.querySelector('[data-state-note]');
+    if (!n) return;
+    n.textContent = text;
+    n.hidden = false;
+  }
+
+  function append(term, text, cls) {
+    var line = document.createElement('div');
+    if (cls) line.className = cls;
+    line.textContent = text;
+    term.appendChild(line);
+    term.scrollTop = term.scrollHeight;
+  }
+
+  /* 세션 쉘 상태 — 단계를 건너 이어진다 */
+  var shell = { cwd: '/work/billing', env: 'DEPLOY_ENV=stg', lastCmd: 'ls', lastOut: '' };
+
+  function execute(cmd) {
+    if (cmd.indexOf('cd ') === 0) {
+      shell.cwd = cmd.slice(3).trim() || '/';
+      return '';
+    }
+    if (cmd.indexOf('export ') === 0) {
+      shell.env = cmd.slice(7).trim();
+      return '';
+    }
+    if (cmd === 'ls') {
+      return 'Makefile  package.json  src/  dist/';
+    }
+    if (cmd.indexOf('echo') === 0) {
+      return shell.env.split('=').slice(1).join('=') + ' in ' + shell.cwd;
+    }
+    return 'ok';
+  }
+
+  function syncStatePanel() {
+    $('st-cwd').textContent = shell.cwd;
+    $('st-env').textContent = shell.env;
+    $('ci-cwd-crumb').textContent = shell.cwd;
+  }
+
+  /* ---------- STP-shell-attach ---------- */
+  $('btn-to-prompt').addEventListener('click', function () {
+    noteIn(this, '이력 끝으로 이동했습니다 — 입력이 열렸습니다.');
+  });
+
+  /* ---------- STP-command-input ---------- */
+  var cmdIn = $('sh-cmd');
+
+  function runFromInput() {
+    var cmd = cmdIn.value.trim();
+    if (!cmd) {
+      noteIn(cmdIn, '빈 명령은 보내지 않습니다.');
+      return false;
+    }
+    shell.lastCmd = cmd;
+    shell.lastOut = execute(cmd);
+    append($('ci-term'), '$ ' + cmd + (shell.lastOut ? '\n' + shell.lastOut : ''));
+    syncStatePanel();
+    var orTerm = $('or-term');
+    orTerm.textContent = '';
+    append(orTerm, '$ ' + cmd + (shell.lastOut ? '\n' + shell.lastOut : ''));
+    cmdIn.value = '';
+    return true;
+  }
+
+  cmdIn.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (runFromInput()) show('STP-output-read');
+    }
+  });
+
+  $('trigger-longjob').addEventListener('click', function () {
+    shell.lastCmd = 'npm run watch';
+    append($('ci-term'), '$ npm run watch\n[watch] 포그라운드에서 실행 중… (Ctrl-C 로 중단)');
+    $('st-job').textContent = 'npm run watch (foreground)';
+    $('btn-longjob-state').hidden = false;
+    noteIn(this, '이 상태가 동결 대상이 되는지는 아직 미결입니다 — user-journeys/README.md 의 열린 결정 참고.');
+  });
+
+  $('btn-longjob-state').addEventListener('click', function () {
+    show('STP-shell-state-carry');
+  });
+
+  $('btn-frozen-input').addEventListener('click', function () {
+    $('sh-state').textContent = 'snapshot';
+    $('sh-state').classList.remove('on');
+    noteIn(this, '접혀 있는 세션에 명령을 넣으면 먼저 복원한 뒤 이전 cwd·env 위에서 실행합니다. ' +
+      'JRN-idle-resume 의 STP-restore-resume 으로 이어지지만 그 여정 페이지는 아직 없습니다.');
+  });
+
+  /* ---------- STP-output-read ---------- */
+  $('trigger-trunc').addEventListener('click', function () {
+    var t = $('or-term');
+    append(t, '… 앞부분 12,480 줄이 잘렸습니다 (누적 한계) …', 'warnline');
+    append(t, '$ ' + shell.lastCmd + '\n' + (shell.lastOut || 'ok'));
+    $('or-trunc').hidden = false;
+    $('btn-read-truncated').hidden = false;
+  });
+
+  $('btn-read-truncated').addEventListener('click', function () {
+    noteIn(this, '이미 받은 출력 위치는 계속 유효합니다 — 잘림 지점만 표시하고 읽기는 이어집니다.');
+    show('STP-output-read');
+  });
+
+  $('btn-shell-dead').addEventListener('click', function () {
+    $('or-dead').hidden = false;
+    noteIn(this, '쉘 프로세스가 죽으면 되살릴지 정리할지 고릅니다. ' +
+      'JRN-session-deletion 의 STP-delete-intent 로 이어지지만 그 여정 페이지는 아직 없습니다.');
+  });
+
+  var orCmd = $('or-cmd');
+  $('btn-continue').addEventListener('click', function () {
+    var cmd = orCmd.value.trim();
+    if (cmd) {
+      shell.lastCmd = cmd;
+      shell.lastOut = execute(cmd);
+      append($('or-term'), '$ ' + cmd + (shell.lastOut ? '\n' + shell.lastOut : ''));
+      orCmd.value = '';
+      syncStatePanel();
+    }
+  });
+
+  /* ---------- STP-shell-state-carry ---------- */
+  $('btn-set-env').addEventListener('click', function () {
+    var v = $('sh-env').value.trim();
+    if (!v || v.indexOf('=') < 0) {
+      noteIn(this, 'KEY=value 형태로 입력하세요.');
+      return;
+    }
+    shell.env = v;
+    append($('sc-term'), '$ export ' + v);
+    syncStatePanel();
+    noteIn(this, '환경 변수가 이 쉘에 남았습니다 — 다음 명령과 동결·복원을 건너 이어집니다.');
+  });
+
+  $('btn-run-stateful').addEventListener('click', function () {
+    var cmd = $('sc-cmd').value.trim() || 'echo "$DEPLOY_ENV in $(pwd)"';
+    var out = execute(cmd);
+    append($('sc-term'), '$ ' + cmd + (out ? '\n' + out : ''));
+    syncStatePanel();
+    noteIn(this, '앞선 cd 와 export 가 만든 상태 위에서 실행되었습니다.');
+  });
+
+  $('trigger-restart').addEventListener('click', function () {
+    $('sc-restart').hidden = false;
+    $('btn-reattach').hidden = false;
+    $('st-job').textContent = '없음';
+  });
+
+  $('btn-reattach').addEventListener('click', function () {
+    shell.cwd = '/';
+    shell.env = '';
+    syncStatePanel();
+    $('attach-banner').textContent =
+      '컨테이너 재시작으로 새 쉘이 시작되었습니다 — 복원이 아니므로 이전 상태는 이어지지 않습니다.';
+    show('STP-shell-attach');
+  });
+
+  $('btn-idle-freeze').addEventListener('click', function () {
+    $('sh-state').textContent = 'snapshot';
+    $('sh-state').classList.remove('on');
+    noteIn(this, '쉘 상태를 통째로 동결하고 pod 를 회수합니다. ' +
+      'JRN-idle-resume 의 STP-auto-freeze 로 이어지지만 그 여정 페이지는 아직 없습니다.');
+  });
+
+  /* ---------- 전진 ---------- */
+  Array.prototype.forEach.call(document.querySelectorAll('[data-advance-to]'), function (btn) {
+    btn.addEventListener('click', function () {
+      if (btn.id === 'btn-run' && !runFromInput()) return;
+      show(btn.getAttribute('data-advance-to'));
+    });
+  });
+
+  /* ---------- 딥링크 ---------- */
+  function fromHash() {
+    var id = (location.hash || '').replace(/^#/, '');
+    if (!id || !show(id)) show('STP-shell-attach');
+  }
+  window.addEventListener('hashchange', fromHash);
+  syncStatePanel();
+  fromHash();
+})();
+</script>
+</body>
+</html>

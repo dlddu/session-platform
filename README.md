@@ -210,15 +210,17 @@ gitignored.
   real-pod provisioning (AC-A1/A2), and cross-replica state consistency over the
   shared ConfigMap store (AC-C1). With CRIU turned on in the overlay, the
   snapshot → reclaim → restore round trip is a verified assertion too
-  (`TestDeferred_CRIUIntegrity`, AC-B2/B3/D4). J6 browser contract coverage
+  (AC-B2/B3/D4). J6 browser contract coverage
   uses deterministic Playwright route fixtures, while the Claude worker,
   cursor, live pre-exit output, reconnect, runner/proxy incremental redaction,
   proxy pre-EOF chunk forwarding, byte boundaries, output limits, resume,
   archive round trip, and lifecycle crash boundaries use fake-runner/adapter Go tests.
   A deployed test against the external Claude API is intentionally not claimed.
-  The seeded idle-state cases still lack an operational producer for the
-  intermediate `idle` state. Details and the deferred-seed ↔ scenario map:
-  [`docs/test/e2e.md`](docs/test/e2e.md).
+  Each AC has its own e2e file, declared in the file header and registered in
+  [`docs/test/e2e.md`](docs/test/e2e.md) — `make check-ac-mapping` enforces the
+  1:1. Only the reaper-driven idle→snapshot trigger (AC-B1, a registered
+  exception) and the idle-state read/write branches remain open, both waiting on
+  the same `TODO(policy)`.
 - **Conflict (envtest)** (`make test-envtest`): an isolated nested module runs
   the ConfigMap adapter against a real kube-apiserver + etcd to assert AC-C1's
   single-winner property (exactly one of N concurrent CompareAndSwap / Lease

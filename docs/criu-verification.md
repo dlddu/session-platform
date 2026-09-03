@@ -3,7 +3,8 @@
 > 상태: **agent-driven in-pod CRIU 구현 + kind 배포 e2e 왕복 검증** — *2026-08-08 갱신*.
 > `shell` snapshot은 pod 에이전트가 CRIU dump/restore를 실행하고 control plane이 archive를
 > durable S3로 중계한다. `deploy/` overlay는 `CRIU_ENABLED=1`과 MinIO를 켜며 제품 snapshot
-> endpoint를 호출하는 `TestDeferred_CRIUIntegrity`가 실제 dump→pod 회수→새 pod restore와 cursor
+> endpoint를 호출하는 AC별 e2e 파일(`e2e_b2_snapshot_restore_test.go`·`e2e_b3_restore_integrity_test.go`·
+> `e2e_d4_process_tree_test.go`)이 실제 dump→pod 회수→새 pod restore와 cursor
 > 연속성을 단언한다. production base의 전략 게이트는 기본 off이고, 이때 snapshot 요청은 live pod를
 > 보존한 채 실패한다. 남은 항목은 production S3/IAM 프로비저닝, 권한 최소화, 그리고 dump 성공 뒤
 > Stop/final metadata 실패를 복구하는 shell 전용 transaction/reconcile 프로토콜이다.
@@ -55,8 +56,9 @@
   `echo $MARKER`·`pwd`로 왕복 확인. 여기에 **커서 연속성**(복원 전 발급 커서로 델타 read) 검증을 더한다.
 - **구현**: `control-plane/test/integration_test.go`의 `TestScenario4_CRIUIntegrity`는 실 클러스터
   backend에 대해 in-process `Service.Snapshot`을 호출한다. 배포 e2e의
-  `TestDeferred_CRIUIntegrity`는 제품 `POST /sessions/{id}/snapshot` endpoint로 같은 marker/cursor
-  왕복을 full stack에서 단언한다.
+  `TestSnapshotRestore_AccessRestoresIntoANewPod`(B2)·`TestRestoreIntegrity_HistoryAndCursorSurviveTheFreeze`(B3)·
+  `TestProcessTree_EnvAndCwdSurviveTheFreeze`(D4)는 제품 `POST /sessions/{id}/snapshot` endpoint로 같은
+  marker/cursor 왕복을 full stack에서 AC별로 나눠 단언한다.
 - **근거**: AC-D4가 AC-B3(무결성)의 구체 마커. in-process가 브라우저 e2e보다 결정적·저비용.
 
 ### ⑤ 복원 메커니즘 — 에이전트 주도 in-pod CRIU (2026-07-22 확정)
@@ -116,8 +118,10 @@
   Go 1.24가 Linux 리스너에 MPTCP를 기본 활성화하는데 CRIU는 MPTCP 소켓을 체크포인트하지 못하므로,
   에이전트 :8090 리스너(및 세션 쉘이 상속하는 환경)를 plain TCP로 고정.
 - `control-plane/test/integration_test.go` — `TestScenario4_CRIUIntegrity`(마커 왕복 + 커서 연속성).
-- `control-plane/test/e2e_deferred_test.go` — `TestDeferred_CRIUIntegrity`(이름은 유지되지만 deploy overlay에서
-  실행되는 B2/B3/D4 실단언).
+- `control-plane/test/e2e_b2_snapshot_restore_test.go`·`e2e_b3_restore_integrity_test.go`·
+  `e2e_d4_process_tree_test.go` — 배포 SUT 대상 CRIU 왕복을 AC별로 나눠 단언한다(B2 = 접근 시
+  새 pod로 복원, B3 = 이력·커서 무결성, D4 = env/cwd 등 쉘 프로세스 트리 보존). AC ↔ 파일
+  매핑은 `docs/test/e2e.md`.
 
 ## 실검증 현황 (2026-07-22, k3s)
 
@@ -198,9 +202,9 @@ e2e 워크플로에 `criu check` 프로브 스텝을 추가해(비차단, `conti
   해결된다(스냅샷과 복원이 서로 다른 replica로 갈 수 있음). e2e SUT는 role을 비워 두고 static key로
   인증한다(=MinIO root) — 프로덕션은 role ARN을 설정해 인스턴스 프로파일 위에서 assume-role 한다.
   즉 이 경로에서 미검증으로 남는 것은 assume-role 홉 하나뿐이다.
-- ③ **검증**: `TestDeferred_CRIUIntegrity`가 HTTP만으로 전 스택을 구동 — 마커 세팅 → 스냅샷 → 접근으로
-  복원 → 복원 전 커서 델타에 `frozen42`·`/tmp` 확인 + `offset=0` 전체 이력 순서 확인. 트리거가 없는
-  SUT에서는 skip한다.
+- ③ **검증**: AC-B2/B3/D4의 e2e 파일이 HTTP만으로 전 스택을 구동 — 마커 세팅 → 스냅샷 → 접근으로
+  복원 → 새 pod 확인(B2) + 복원 전 커서 델타·`offset=0` 전체 이력 순서 확인(B3) + `$D4MARK`·`pwd`
+  보존 확인(D4). 트리거가 없는 SUT에서는 skip한다.
 
 즉 지금까지 수동 라운드로 잡던 종류의 회귀(pid 충돌, 조기 재시작 등)가 **CI에서 자동으로** 잡힌다.
 
@@ -222,7 +226,9 @@ kind/MinIO 경로는 자동 검증된다. production에서 게이트를 켜려�
       `procMount`)는 라운드트립 green 후의 후속 항목.
 - [x] `DATA_PLANE_IMAGE` + `CRIU_ENABLED=1` — *2026-07-22 검증 환경에서 수행됨(criu 미포함 이미지 → 위 항목 필요)*.
 - [x] **`execCriuEngine` dump/restore + PTY 재부착** — kind 배포 e2e의
-      `TestDeferred_CRIUIntegrity`가 실제 marker/cwd/cursor 왕복으로 검증한다.
+      B2/B3/D4 AC 파일(`TestSnapshotRestore_AccessRestoresIntoANewPod`·
+      `TestRestoreIntegrity_HistoryAndCursorSurviveTheFreeze`·`TestProcessTree_EnvAndCwdSurviveTheFreeze`)이
+      실제 marker/cwd/cursor 왕복으로 검증한다.
 - [ ] S3 저장소(결정 ③, **배포된 control-plane 실동작용**): 버킷 + `checkpoint-s3` Secret(`bucket`/`role-arn`/
       `region`/`prefix`) + IAM(노드 프로파일 → `sts:AssumeRole` → `s3:PutObject`·`GetObject`). Deployment가 이
       Secret을 `secretKeyRef`(필수)로 읽으므로 Secret 없으면 pod 미기동(CRIU off라도). in-process Scenario4는
