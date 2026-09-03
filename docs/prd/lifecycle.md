@@ -2,7 +2,7 @@
 
 > 대상 요구사항: ② CRIU 기술 기반, ③ 세션 maximum idle 60분 이후 스냅샷
 >
-> 📌 **범위 (2026-08-08 개정, 2026-09-03 갱신)**: 아래 AC-B1~B3의 **동결·복원 메커니즘은 워크로드 타입(AC-E1)에 따라 분기**한다. `shell`은 CRIU 체크포인트(AC-D4), `claude-code`와 `approval-gated`는 파일시스템 아카이브(AC-E5·AC-F5, CRIU 비대상)다. 유휴 한계·상태 전이·pod 회수 등 **타이밍과 관측 가능한 계약은 세 타입이 동일**하며, 아래 CRIU 서술은 `shell` 타입 기준이다. `approval-gated`는 회수·복원 대상에 보조 파드(AC-F4)와 공유 볼륨(AC-F5)이 더해지고, 승인 대기 구간에서 유휴 기준이 구체화된다(AC-F3).
+> 📌 **범위 (2026-08-08 개정, 2026-09-03 갱신)**: 아래 AC-B1~B3의 **동결·복원 메커니즘은 워크로드 타입(AC-E1)에 따라 분기**한다. `shell`은 CRIU 체크포인트(AC-D4), `claude-code`와 `approval-gated`는 파일시스템 아카이브(AC-E5·AC-F5, CRIU 비대상)다. 유휴 한계·상태 전이·pod 회수 등 **타이밍과 관측 가능한 계약은 세 타입이 동일**하며, 아래 CRIU 서술은 `shell` 타입 기준이다. `approval-gated`는 회수·복원 대상에 보조 파드 2종(MCP·credential-proxy, AC-F4)과 공유 볼륨(AC-F5)이 더해지고, 승인 대기 구간에서 유휴 기준이 구체화된다(AC-F3).
 
 ## 달성 가치
 - **V2 유휴 자원 회수** — 유휴 세션을 동결하여 pod 자원 회수
@@ -13,11 +13,11 @@
 ### AC-B1: 60분 유휴 후 스냅샷
 - **설명**: 세션의 유휴 시간(마지막 read/write 이후 경과 시간)이 60분에 도달하면, 시스템은 세션 pod의 체크포인트(스냅샷)를 타입별 메커니즘으로 생성하고 세션 상태를 `snapshot`으로 전이한 뒤 pod를 회수한다. 60분은 **최대 유휴 한계**이다.
 - **달성 가치**: V2, V3
-- **구체화**: "마지막 read/write" = 마지막 클라이언트 workload I/O로 확정한다. `shell`은 쉘 read/write(AC-D5), `claude-code`는 state-branched output read와 prompt write(AC-E2/E3)다. `approval-gated`도 같은 기준을 쓰되, **승인 대기가 진행되는 동안에는 클라이언트 I/O가 없어도 `lastAccess`를 갱신해 유휴 카운트를 멈춘다**(AC-F3 — 이 타입에서만 성립하는 의도적 예외). passive SSE 연결·output/reset event·comment keepalive는 상태를 바꾸거나 `lastAccess`를 touch하지 않으며 활동이 아니다. 단, reset 뒤 전체 replay를 위한 `POST /read`는 일반 workload read이므로 활동으로 세고 idle을 승격할 수 있다. 동결 메커니즘: `shell`=CRIU(AC-D4) / `claude-code`=파일시스템 아카이브(AC-E5, `claude-code-workload.md`) / `approval-gated`=파일시스템 아카이브 + 공유 볼륨(AC-F5) 및 보조 파드 동반 회수(AC-F4, `approval-gated-workload.md`)
+- **구체화**: "마지막 read/write" = 마지막 클라이언트 workload I/O로 확정한다. `shell`은 쉘 read/write(AC-D5), `claude-code`는 state-branched output read와 prompt write(AC-E2/E3)다. `approval-gated`도 같은 기준을 쓰되, **승인 대기가 진행되는 동안에는 클라이언트 I/O가 없어도 `lastAccess`를 갱신해 유휴 카운트를 멈춘다**(AC-F3 — 이 타입에서만 성립하는 의도적 예외). passive SSE 연결·output/reset event·comment keepalive는 상태를 바꾸거나 `lastAccess`를 touch하지 않으며 활동이 아니다. 단, reset 뒤 전체 replay를 위한 `POST /read`는 일반 workload read이므로 활동으로 세고 idle을 승격할 수 있다. 동결 메커니즘: `shell`=CRIU(AC-D4) / `claude-code`=파일시스템 아카이브(AC-E5, `claude-code-workload.md`) / `approval-gated`=파일시스템 아카이브 + 공유 볼륨(AC-F5) 및 보조 파드 2종 동반 회수(AC-F4, `approval-gated-workload.md`)
 - **검증 방법**: 세션을 60분간 미사용으로 두면 스냅샷이 생성되고 상태가 `snapshot`으로 바뀌며 pod가 회수됨을 확인한다. 경계값(예: 59분)에서는 동결되지 않으며 output 없는 SSE keepalive만으로 동결이 영구 차단되지 않음을 확인한다. snapshot으로 stream이 끊긴 뒤 SPA가 자동 read/stream으로 즉시 복원하지 않고 Restore 화면으로 이동하는지도 확인한다.
 
 ### AC-B2: 스냅샷 복원
-- **설명**: `snapshot` 상태의 세션에 접근(read/write/전환)하면, 시스템은 새 pod에 체크포인트를 복원하고 세션을 `active`로 전이한다. 복원 메커니즘은 타입별로 다르다 — `shell`은 CRIU 복원, `claude-code`는 아카이브 전개(AC-E5), `approval-gated`는 아카이브 전개에 더해 보조 파드와 공유 볼륨을 함께 되살린다(AC-F4/F5).
+- **설명**: `snapshot` 상태의 세션에 접근(read/write/전환)하면, 시스템은 새 pod에 체크포인트를 복원하고 세션을 `active`로 전이한다. 복원 메커니즘은 타입별로 다르다 — `shell`은 CRIU 복원, `claude-code`는 아카이브 전개(AC-E5), `approval-gated`는 아카이브 전개에 더해 보조 파드 2종과 공유 볼륨을 함께 되살린다(AC-F4/F5).
 - **달성 가치**: V3
 - **검증 방법**: `snapshot` 세션 접근 시 복원이 수행되어 `active`로 전이되고 응답 가능 상태가 됨을 확인한다.
 

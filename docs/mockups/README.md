@@ -25,7 +25,7 @@
 | [`new-session.html`](./new-session.html) | New session (새 세션 생성) | **`STP-create-request`, `STP-workspace-entry`, `STP-workload-choice`**(타입 카드 3종) | V1, V5, **V8** | 미연결 — 인라인 임의 토큰 |
 | [`workspace.html`](./workspace.html) | Session workspace (활성 `shell` 세션 작업) | **`STP-isolated-work`, `STP-shell-attach`, `STP-command-input`, `STP-output-read`, `STP-shell-state-carry`, `STP-freeze-now`** | V1, V3, V2 | 미연결 — 인라인 임의 토큰 |
 | [`agent-workspace.html`](./agent-workspace.html) | Agent session workspace (활성 `claude-code` 세션 작업) | **`STP-prompt-submit`, `STP-response-watch`, `STP-conversation-carry`, `STP-agent-freeze-resume`, `STP-freeze-now`** | V8, V3, V2 (보조 V1) | 미연결 — 인라인 임의 토큰 |
-| [`gated-workspace.html`](./gated-workspace.html) | Gated agent session workspace (활성 `approval-gated` 세션 작업) | **`STP-gated-prompt-submit`, `STP-approval-wait`, `STP-gated-result`, `STP-freeze-now`** | V8, V3, V2 (보조 V1) | 미연결 — 인라인 임의 토큰 |
+| [`gated-workspace.html`](./gated-workspace.html) | Gated agent session workspace (활성 `approval-gated` 세션 작업 · 워크로드 + 보조 파드 2) | **`STP-gated-prompt-submit`, `STP-approval-wait`, `STP-gated-result`, `STP-freeze-now`** | V8, V3, V2 (보조 V1) | 미연결 — 인라인 임의 토큰 |
 | [`restore.html`](./restore.html) | Resume from checkpoint (`shell` CRIU 복원) | **`STP-restore-resume`(`shell`)** (보조: `STP-auto-freeze`) | V3, V2 | 미연결 — 인라인 임의 토큰 |
 
 > **타입별 작업 화면이 셋으로 갈립니다 (2026-08-08 → 2026-09-03)**: `workspace.html`은 `shell` 타입,
@@ -179,14 +179,17 @@
 - **승인 요청 예시 (AC-F3)**: `gated-workspace.html`의 `req-2c81`·`req-4f2a`, `rates.vendor.example`,
   `/shared` 경로는 전부 자리표시자다. 실제 외부 식별자는 `{세션ID}:{요청ID}` 규칙만 계약이고, 도구 이름·
   마운트 경로·대기 시간 표기는 구현 시 확정된다. 결정 UI는 이 레포 밖(승인 게이트웨이)이다.
-- **보조 파드 표기 (AC-F4)**: mockup의 `mcp/…` 파드 이름과 Egress 허용 목록 표기는 예시다. 다만 **워크로드 파드와
-  MCP 파드가 함께 뜨고 함께 회수된다**는 사실 자체는 계약이다. Egress 패널이 경고로 표시하는 "공급자 HTTPS는
-  아직 허용 목록에 있다"도 AC-F2의 실제 미해결 항목이다.
+- **보조 파드 표기 (AC-F4)**: mockup의 `mcp/…`·`proxy/…` 파드 이름과 Egress 허용 목록 표기는 예시다.
+  다만 **워크로드 파드와 보조 파드 둘(MCP·credential-proxy)이 함께 뜨고 함께 회수된다**는 사실과,
+  Egress 패널이 말하는 **"허용 목록에 외부 origin이 하나도 없다"**는 AC-F2/F4의 실제 계약이다.
+  (2026-09-03 이전 판은 이 자리에 "공급자 HTTPS는 아직 허용 목록에 있다"는 경고를 달고 있었다 —
+  공급자 프록시를 보조 파드로 옮기면서 해소되었다.)
 
 ---
 
 ## 마지막 갱신
 
+- **2026-09-03 (8)** — **공급자 프록시를 보조 파드로 이관**: AC-F2의 열린 결정이 ①(프록시를 사이드카에서 보조 파드로 분리)으로 확정되어 `gated-workspace.html`의 Egress 패널에서 경고(⚠️ 공급자 HTTPS가 허용 목록에 있음)를 걷어내고 허용 항목에 프록시 파드를, 차단 항목에 "공급자 API 직접"을 넣었다. Workload 패널의 자격 증명 행을 파드별 배치(게이트웨이 키=MCP · 공급자 토큰=프록시 · 워크로드 파드=없음)로 바꾸고, 파드 표기를 셋으로 확장했다. **mockup 수·단계 커버리지·요약은 변하지 않는다** — 같은 화면의 내용 갱신이다. 새 토큰·컴포넌트 없이 기존 인라인 클래스(`.eg`·`.ctx-note`·`.kv`)만 재사용했다.
 - **2026-09-03 (7)** — **`approval-gated` 타입 신설에 따른 mockup 확충**: `gated-workspace.html` 신규 작성(승인 대기 배지·승인/거절 verdict·Approvals 패널·Egress 허용 목록 패널·공유 볼륨 행), `new-session.html`에 세 번째 타입 카드 추가(`STP-workload-choice`), `index.html` 카드의 타입 태그·링크 분기를 3종으로 확장. 여정 8→9, 단계 29→33, mockup 5→6, 요약 ✅15→18 / ❌6→7. 신규 여정의 ❌ 1건(`STP-approval-decide`)은 결정 화면이 이 레포 밖이라는 사실이 드러난 결과다. 임의 스타일 mockup 5→6(토큰 중복 6곳→7곳).
 - **2026-08-30 (6)** — **여정 문서 전면 재작성에 따른 매핑 갱신**: 단계 식별자가 순번에서 슬러그로 전환되어 이 문서의 매핑을 여정별 표로 재구성했다. 여정 6→8(`JRN-manual-freeze`·`JRN-session-deletion` 신설), 단계 23→29, 요약 ✅14→15 / ⚠️4→5 / ❌2→6 / ⚪3. **mockup 파일 자체는 변경 없음** — 늘어난 ❌는 새로 문서화된 흐름(수동 동결 결정·세션 삭제)이 mockup에 없다는 사실이 드러난 결과다.
 - **2026-08-09 (5)** — **J6 live output UX 갱신**: `agent-workspace.html`이 passive SSE 연결 상태와 실행 중 자동 append, `nextOffset` cursor 재개, snapshot Restore 전환을 표현하도록 갱신했다. 서버 run/queue 수는 추정하지 않으며 mockup 수·커버리지 합계는 변하지 않았다.

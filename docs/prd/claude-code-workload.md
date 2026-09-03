@@ -21,11 +21,16 @@
 > 대한 **타입별 구체화**로 나란히 존재한다.
 >
 > 📌 **역참조 (2026-09-03)**: `approval-gated` 타입은 이 문서의 배선을 **복제하지 않고 재사용한다** —
-> credential-proxy 사이드카의 provider 자격 증명 주입, 주 컨테이너의 `k3s-mcp-token`과 private
-> marketplace plugin 부트스트랩, optional `model`/`models` 기본값·soft catalog, 출력 증분 redaction
-> (AC-E6)과, 원샷 실행·직렬 큐·offset 커서·파일시스템 아카이브(AC-E2/E3/E5)가 그대로 적용된다.
+> 원샷 실행·직렬 큐·offset 커서·파일시스템 아카이브(AC-E2/E3/E5), credential-proxy의 **동작 계약**과
+> optional `model`/`models` 기본값·soft catalog, 출력 증분 redaction(AC-E6)이 그대로 적용된다.
 > 그 위에 얹히는 차이(egress 제한·승인 게이트·보조 파드·공유 볼륨·게이트웨이 자격 증명)만
 > AC-F2~F6이 정의한다. **따라서 AC-E2·E3·E5·E6을 고칠 때는 `approval-gated`도 함께 바뀐다.**
+>
+> ⚠️ **두 가지는 재사용하지 않는다 (2026-09-03 확정)**: ① credential-proxy의 **배치** — 이 문서는 워크로드
+> 파드 안의 loopback 사이드카이고, `approval-gated`는 같은 계약의 프록시를 **보조 파드**로 분리해 파드 IP에
+> 바인딩한다(AC-F2·F4·F6). 동작 계약이 갈라지지 않도록 **정본은 계속 AC-E6**이며 배치만 타입별로 다르다.
+> ② 주 컨테이너의 `k3s-mcp-token`과 **런타임 plugin 부트스트랩** — 부트스트랩이 K3s MCP·`github.com`으로
+> 직접 나가야 하는데 `approval-gated`의 egress 허용 목록에 그 목적지가 없어 성립하지 않는다(AC-F6의 열린 항목).
 
 ## Acceptance Criteria
 

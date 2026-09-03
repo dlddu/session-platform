@@ -8,11 +8,13 @@
 > 구↔신 매핑표는 [`user-journeys/README.md`](./user-journeys/README.md#구-식별자-매핑-2026-08-30-전환)에 있습니다.
 > 아래 "변경 이력"의 과거 항목은 당시 기록이므로 옛 식별자를 그대로 둡니다.
 
-- **마지막 검증 시점**: 2026-09-03 (7) (`approval-gated` 워크로드 타입 신설에 따른 하류 반영)
+- **마지막 검증 시점**: 2026-09-03 (8) (공급자 프록시의 보조 파드 이관 반영)
 - **검증 범위**: 상류(product-doc 사슬)에서 세 번째 워크로드 타입(AC-F1~F6)이 확정되어, 여정
   `JRN-approval-gated-work`(4단계)와 mockup `gated-workspace.html`을 신설하고 `new-session.html`·`index.html`의
   타입 분기를 3종으로 확장했다. 여정 8→9, 단계 29→33, mockup 5→6. **가치는 변하지 않았다**(V8 상속).
   늘어난 ❌ 1개는 승인 결정 화면이 **이 레포 밖(외부 승인 게이트웨이)** 이라는 사실이 드러난 결과다.
+  이어서 (8)판에서 상류의 프록시 배치 확정(사이드카 → 보조 파드)을 `gated-workspace.html`에 반영했다 —
+  **수치는 변하지 않고 내용만 갱신**되었다.
   잔여: 미시각화 7단계, mockup↔시스템 미연결(토큰 7중복), 페르소나 미검증
 
 ## 현재 상태 요약
@@ -120,9 +122,11 @@
 - **세션 삭제·수동 동결의 가치 연결**: V2의 서술이 "유휴 세션의 자동 회수"에 한정되어 사용자 주도 종료·동결을
   담지 못한다. V2 서술 확장 또는 새 가치 신설 여부는 product-doc-engineer 판단.
 - **mockup의 명시 model 예시**: `new-session.html`의 `model-a`/`model-b`는 soft catalog 상태의 자리표시자다.
-- **승인 게이트의 미해결 전제**: `gated-workspace.html`의 Egress 패널이 경고로 표시하는 "공급자 HTTPS origin이
-  아직 허용 목록에 있다"는 mockup의 표현이 아니라 **AC-F2의 실제 열린 결정**이다(`doc-tracker.md`).
-  참조 구현(`dlddu/pure-agent`)이 클러스터에서 검증된 적 없다는 전제도 같은 곳에서 추적한다.
+- **승인 게이트의 파드 구성**: `gated-workspace.html`이 그리는 **워크로드 파드 + 보조 파드 2(MCP·credential-proxy)**
+  구성과 "허용 목록에 외부 origin이 하나도 없다"는 표기는 mockup의 표현이 아니라 **AC-F2/F4의 계약**이다.
+  (2026-09-03 이전 판의 ⚠️ 경고는 프록시를 보조 파드로 옮기면서 해소되었다.)
+  남은 전제 — 워크로드↔프록시 홉이 평문이라는 점, 참조 구현(`dlddu/pure-agent`)이 클러스터에서 검증된 적
+  없다는 점 — 은 `doc-tracker.md`에서 추적한다.
 - **에이전트 세션의 페르소나**: `JRN-agent-prompt-loop`는 P1으로 작성됐으나 전용 페르소나 필요 여부 미확인.
 
 ## 수용된 위험
@@ -164,3 +168,4 @@
 | 2026-08-09 (5) | **J6 live output UX 갱신** — 여정·mockup을 passive workspace SSE 자동 append, UTF-8 경계 cursor 재개, stale-cursor reset 전체 replay 계약에 맞추고 snapshot 시 Restore 전환과 연결 상태 전용 표시를 명시했다. | bounded polling/수동 Refresh로 응답 확인 | 자동 live output·무손실 재연결·reset 복구; 가치/여정/mockup 매트릭스 변화 없음 |
 | 2026-08-30 (6) | **사용자 여정 문서 전면 재작성**. 단계 식별자를 순번(`J1-S1`)에서 슬러그(`STP-…`)로 전환하고 구↔신 매핑표를 여정 README에 남김. 8개 문서에 문서 정보·여정 정의(완료 기준)·터치포인트·생각·감정·페인포인트·분기·예외·측정 지표·변경 이력 섹션을 채우고, PRD 사양 중복 서술은 AC 참조로 위임. 구현에는 있으나 여정에 없던 **`JRN-manual-freeze`·`JRN-session-deletion` 신설**. 여정 6→8, 단계 23→29, 요약 ✅14→15 / ⚠️4→5 / ❌2→6 / ⚪3. mockup 파일·디자인 시스템은 변경 없음. | 여정 6, 단계 23, 순번 식별자, 섹션 3종 | 여정 8, 단계 29, 슬러그 식별자, 섹션 7종 완비 |
 | 2026-09-03 (7) | **`approval-gated` 타입 하류 반영**. 상류에서 세 번째 워크로드 타입(AC-F1~F6)이 확정되어 여정 `JRN-approval-gated-work`(4단계)와 mockup `gated-workspace.html`을 신설하고, `new-session.html`에 세 번째 타입 카드를, `index.html`에 타입 태그·링크 분기를 더했다. `JRN-agent-prompt-loop`의 `STP-workload-choice`는 그대로 두고 선택지만 셋으로 넓혔다. **가치는 변하지 않았다** — V8 상속. 여정 8→9, 단계 29→33, mockup 5→6, ✅15→18 / ❌6→7. 늘어난 ❌ 1건은 승인 결정 화면이 레포 밖이라는 사실이 드러난 결과다. | 가치 6, 여정 8, 단계 29, mockup 5, 타입 2종 | 가치 6(변화 없음), 여정 9, 단계 33, mockup 6, 타입 3종, 시각화 없는 가치 0 유지 |
+| 2026-09-03 (8) | **공급자 프록시의 보조 파드 이관 반영**. 상류에서 AC-F2의 열린 결정이 ①로 확정되어 `gated-workspace.html`의 Egress 패널·Workload 패널·파드 표기를 갱신했다. 여정·단계·mockup 수와 커버리지 합계는 **변하지 않는다** — 같은 화면의 내용 갱신이다. | 여정 9, 단계 33, mockup 6 / 프록시=사이드카 | 여정 9, 단계 33, mockup 6 / 프록시=보조 파드, Egress ⚠️ 해소 |

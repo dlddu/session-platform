@@ -460,7 +460,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M12 2 9 5M12 2l3 3M12 22l-3-3M12 22l3-3M2.7 7l17.3 10M2.7 7l1.1 4M2.7 7l4-1.1M21.3 17l-1.1-4M21.3 17l-4 1.1M21.3 7 4 17M21.3 7l-4-1.1M21.3 7l-1.1 4M2.7 17l4-1.1M2.7 17l1.1-4"/></svg>
               </div>
               <h3>Resuming from archive</h3>
-              <p>Restoring both pods from the session archive. Conversation history, working directory, the accumulated output buffer <em>and the shared volume</em> come back exactly as frozen &mdash; no CRIU involved.</p>
+              <p>Restoring all three pods from the session archive. Conversation history, working directory, the accumulated output buffer <em>and the shared volume</em> come back exactly as frozen &mdash; no CRIU involved.</p>
               <div class="pbar"><i id="ws-pbar"></i></div>
               <div class="rlog mono" id="ws-rlog"></div>
             </div>
@@ -510,14 +510,16 @@
             <h4><span class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18Z"/></svg></span> Egress</h4>
             <div class="eg"><span class="y"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> cluster DNS <span class="m" style="margin-left:auto;color:var(--text-faint)">kube-dns</span></div>
             <div class="eg"><span class="y"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> this session&rsquo;s MCP pod <span class="m" style="margin-left:auto;color:var(--text-faint)" id="ws-mcp-pod">&mdash;</span></div>
+            <div class="eg"><span class="y"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span> this session&rsquo;s proxy pod <span class="m" style="margin-left:auto;color:var(--text-faint)" id="ws-proxy-pod">&mdash;</span></div>
+            <div class="eg off"><span class="n"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span> the provider API, directly</div>
             <div class="eg off"><span class="n"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span> anything else on the internet</div>
-            <div class="eg off"><span class="n"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span> other sessions&rsquo; MCP pods</div>
+            <div class="eg off"><span class="n"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span> other sessions&rsquo; helper pods</div>
             <div class="eg off"><span class="n"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span> the approval gateway itself</div>
             <div class="ctx-note" style="margin-top:12px">
-              <span class="ic" style="color:var(--danger)">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 2.4 17.5A1.9 1.9 0 0 0 4 20.4h16a1.9 1.9 0 0 0 1.6-2.9L13.7 3.9a1.9 1.9 0 0 0-3.4 0Z"/></svg>
+              <span class="ic" style="color:var(--ok)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 21 6v6c0 5-3.8 8.9-9 10-5.2-1.1-9-5-9-10V6l9-4Z"/><path d="M9 12l2 2 4-4"/></svg>
               </span>
-              <span class="tx">The provider HTTPS origin the credential sidecar needs is still on the allowlist &mdash; network policy is per pod, not per container. Open decision (AC-F2).</span>
+              <span class="tx"><b>No external origin is on this list.</b> The credential proxy is a helper pod of its own, so every connection out of the workload pod ends at one of this session&rsquo;s two helpers &mdash; the MCP pod (behind the gate) or the proxy pod (one pinned provider origin).</span>
             </div>
           </div>
 
@@ -528,13 +530,13 @@
             <div class="kv"><span class="k">Model</span><span class="v" id="ws-model-v">platform default</span></div>
             <div class="kv"><span class="k">Gateway key</span><span class="v masked">MCP pod only</span></div>
             <div class="kv"><span class="k">Notify target</span><span class="v masked">MCP pod only</span></div>
-            <div class="kv"><span class="k">Base URL</span><span class="v masked">from Secret</span></div>
+            <div class="kv"><span class="k">Provider creds</span><span class="v masked">proxy pod only</span></div>
             <div class="kv"><span class="k">Auth token</span><span class="v masked">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;<span class="lock"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M20 6 9 17l-5-5"/></svg></span></span></div>
             <div class="ctx-note" style="margin-top:12px">
               <span class="ic" style="color:var(--ok)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 21 6v6c0 5-3.8 8.9-9 10-5.2-1.1-9-5-9-10V6l9-4Z"/></svg>
               </span>
-              <span class="tx">The gateway key and the notify target live <b>only on the MCP pod</b> &mdash; the agent cannot reach the gateway, let alone approve itself. Provider credentials reuse the <span class="mono">claude-code</span> wiring. Type and model are <b>immutable</b> for this session.</span>
+              <span class="tx">The workload pod holds <b>no external credential at all</b> &mdash; the gateway key and notify target live on the MCP pod, the provider token on the proxy pod. The agent cannot reach the gateway, approve itself, or call the provider directly. Type and model are <b>immutable</b> for this session.</span>
             </div>
           </div>
 
@@ -579,16 +581,17 @@ function ic(n,s){return ICON[n].replace('viewBox',`width="${s}" height="${s}" vi
 const STATE_LABEL = {active:'active', idle:'idle', snapshot:'snapshot'};
 // 이 화면은 workloadType=approval-gated 세션 전용이다
 // (shell 타입은 workspace.html · claude-code 타입은 agent-workspace.html)
-// 세션마다 워크로드 파드 + 보조 MCP 파드 한 쌍이 있고(AC-F4), 둘이 공유 볼륨을 마운트한다(AC-F5).
+// 세션마다 워크로드 파드 + 보조 파드 2개(MCP · credential-proxy)가 있고(AC-F4),
+// 공유 볼륨은 워크로드 파드와 MCP 파드만 마운트한다(AC-F5).
 let sessions = [
   {id:'6d40', name:'vendor-rates-sync', type:'approval-gated', model:'platform default', state:'active',
-   pod:'sess-6d40-p2vq', mcp:'sess-6d40-mcp-l9xt', region:'us-east-1', up:'42m', upMin:42, cpu:19, mem:372, memMax:2048, idleMin:0,
+   pod:'sess-6d40-p2vq', mcp:'sess-6d40-mcp-l9xt', proxy:'sess-6d40-px-r4wb', region:'us-east-1', up:'42m', upMin:42, cpu:19, mem:372, memMax:2048, idleMin:0,
    turns:3, cwd:'/work', vol:'/shared', files:'rates-2026-09-03.json', cursor:'nextOffset=6120'},
   {id:'b715', name:'partner-api-probe', type:'approval-gated', model:'model-a', state:'idle',
-   pod:'sess-b715-c8rm', mcp:'sess-b715-mcp-t3kd', region:'us-east-1', up:'1h 54m', upMin:114, cpu:2, mem:204, memMax:2048, idleMin:37, freezeSec:1380,
+   pod:'sess-b715-c8rm', mcp:'sess-b715-mcp-t3kd', proxy:'sess-b715-px-w7hn', region:'us-east-1', up:'1h 54m', upMin:114, cpu:2, mem:204, memMax:2048, idleMin:37, freezeSec:1380,
    turns:6, cwd:'/work', vol:'/shared', files:'probe-log.txt', cursor:'nextOffset=14208'},
   {id:'e2a9', name:'license-audit', type:'approval-gated', model:'platform default', state:'snapshot',
-   pod:'— reclaimed —', mcp:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'26m ago', checkpoint:'54 MB archive', reclaim:'2 vCPU · 4 GB',
+   pod:'— reclaimed —', mcp:'— reclaimed —', proxy:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'26m ago', checkpoint:'54 MB archive', reclaim:'2 vCPU · 4 GB',
    turns:11, cwd:'/work', vol:'/shared', files:'9 fetched files', cursor:'nextOffset=27740'}
 ];
 // 승인 이력은 게이트웨이가 진실 원천이다 — 화면은 이 세션에 걸린 요청만 비춘다 (AC-F3/AC-F6)
@@ -630,7 +633,7 @@ function buildTimeline(s){
 // 콘솔은 append-only 바이트열 하나다 — 대기·승인·거절이 별도 event가 아니라 in-band 마커로 섞인다 (AC-F3)
 const termActive = (s)=>[
   {c:'sys',t:`◆ attached to session/${s.id} · pod/${s.pod} — workloadType=approval-gated`},
-  {c:'sys',t:`◆ egress: kube-dns + mcp/${s.mcp} only — the agent has no route out on its own`},
+  {c:'sys',t:`◆ egress: kube-dns + mcp/${s.mcp} + proxy/${s.proxy} only — no external origin at all`},
   {c:'sep'},
   {c:'prompt',t:`<span class="op">▸</span> grab that bundle from the CDN link in the ticket and read it`},
   {c:'gate',t:`<span class="op">⏸</span> web_fetch_get · https://unknown-cdn.example/bundle.js<span class="verdict no">rejected · 00:12</span>`},
@@ -646,11 +649,11 @@ const termActive = (s)=>[
   {c:'meta',t:`        blocked at the pod boundary, not by the agent — there is no bypass to try`}
 ];
 const termFrozen = (s)=>[
-  {c:'sys',t:`◆ session/${s.id} is frozen — workload pod and its MCP pod both reclaimed`},
+  {c:'sys',t:`◆ session/${s.id} is frozen — workload pod and both helper pods reclaimed`},
   {c:'sys',t:`◆ no CRIU checkpoint — one-shot runs leave no resident process tree to dump`},
   {c:'sys',t:`◆ archived instead (${s.checkpoint}) · frozen ${s.frozenAgo}`},
   {c:'meta',t:`  archive contents: working dir (${s.cwd}) · shared volume (${s.vol}) · conversation history (${s.turns} turns) · output buffer`},
-  {c:'res',t:`the next prompt restores the archive onto a fresh pod pair → active, with every approved file still there`},
+  {c:'res',t:`the next prompt restores the archive onto a fresh pod trio → active, with every approved file still there`},
   {c:'meta',t:`  ${s.cursor} stays valid across the freeze — waits and verdicts are part of the same buffer`}
 ];
 let curLines = [];
@@ -675,12 +678,13 @@ function setGauge(cpu, mem, memMax){
 function metaLine(s){
   if(s.state==='snapshot'){
     return `<span class="it">${ic('pod',13)} <b>checkpoint ${s.checkpoint}</b></span>
-      <span class="it">${ic('pod',13)} <b>both pods reclaimed</b></span>
+      <span class="it">${ic('pod',13)} <b>all three pods reclaimed</b></span>
       <span class="it">${ic('clock',13)} <b>frozen ${s.frozenAgo}</b></span>
       <span class="it">${ic('pin',13)} <b>${s.region}</b></span>`;
   }
   return `<span class="it">${ic('pod',13)} <b>pod/${s.pod}</b></span>
       <span class="it">${ic('pod',13)} <b>mcp/${s.mcp}</b></span>
+      <span class="it">${ic('pod',13)} <b>proxy/${s.proxy}</b></span>
       <span class="it">${ic('clock',13)} up <b>${s.up}</b></span>
       <span class="it">${ic('pin',13)} <b>${s.region}</b></span>`;
 }
@@ -689,8 +693,9 @@ function populate(s){
   clearRestore();
   document.getElementById('ws-crumb-id').textContent = 'session/'+s.id;
   document.getElementById('ws-name').textContent = s.name;
-  document.getElementById('ws-console-pod').textContent = s.state==='snapshot' ? 'both pods reclaimed' : 'pod/'+s.pod;
+  document.getElementById('ws-console-pod').textContent = s.state==='snapshot' ? 'all three pods reclaimed' : 'pod/'+s.pod;
   document.getElementById('ws-mcp-pod').textContent = s.state==='snapshot' ? 'reclaimed' : 'mcp/'+s.mcp;
+  document.getElementById('ws-proxy-pod').textContent = s.state==='snapshot' ? 'reclaimed' : 'proxy/'+s.proxy;
   document.getElementById('ws-badge').className = 'badge '+s.state;
   document.getElementById('ws-badge-t').textContent = STATE_LABEL[s.state];
   document.getElementById('ws-meta').innerHTML = metaLine(s);
@@ -700,14 +705,14 @@ function populate(s){
   if(s.state==='snapshot'){
     lcState.classList.add('frozen');
     document.getElementById('ws-lc-big').textContent='snapshot';
-    document.getElementById('ws-lc-sub').textContent='both pods reclaimed · archive on cold storage';
+    document.getElementById('ws-lc-sub').textContent='all three pods reclaimed · archive on cold storage';
     document.getElementById('ws-lc-idle').textContent='frozen';
     document.getElementById('ws-lc-up').textContent='—';
     freezeBtn.style.display='none';
   } else {
     lcState.classList.remove('frozen');
     document.getElementById('ws-lc-big').textContent=s.state;
-    document.getElementById('ws-lc-sub').textContent=s.state==='idle'?'no runs — both pods still held':'ready · outbound calls need approval';
+    document.getElementById('ws-lc-sub').textContent=s.state==='idle'?'no runs — all three pods still held':'ready · outbound calls need approval';
     document.getElementById('ws-lc-idle').textContent=s.state==='idle'?`${s.idleMin}:00 / 60:00`:'00:00 / 60:00';
     document.getElementById('ws-lc-up').textContent=s.up;
     freezeBtn.style.display='';
@@ -810,7 +815,7 @@ function runRestore(s){
   const pbar=document.getElementById('ws-pbar');
   const rlog=document.getElementById('ws-rlog');
   ov.classList.add('show');
-  const logs=['fetching archive '+s.checkpoint+' …','scheduling fresh workload pod + MCP pod …','unpacking working dir · shared volume · conversation history · output buffer …','archive verified — gate armed, resuming'];
+  const logs=['fetching archive '+s.checkpoint+' …','scheduling fresh workload pod + MCP pod + proxy pod …','unpacking working dir · shared volume · conversation history · output buffer …','archive verified — gate armed, resuming'];
   const reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const dur=reduce?0:2400; let step=0;
   const tick=()=>{rlog.textContent=logs[Math.min(step,logs.length-1)];step++;}; tick();
@@ -827,21 +832,24 @@ function promote(s){
   s.state='active';
   s.pod='sess-'+s.id+'-'+Math.random().toString(36).slice(2,6);
   s.mcp='sess-'+s.id+'-mcp-'+Math.random().toString(36).slice(2,6);
+  s.proxy='sess-'+s.id+'-px-'+Math.random().toString(36).slice(2,6);
   s.up='0m'; s.upMin=0; s.idleMin=0;
   s.cpu=22+Math.floor(Math.random()*20);
   s.mem=280+Math.floor(Math.random()*180); s.memMax=2048;
   document.getElementById('ws-console-pod').textContent='pod/'+s.pod;
   document.getElementById('ws-mcp-pod').textContent='mcp/'+s.mcp;
+  document.getElementById('ws-proxy-pod').textContent='proxy/'+s.proxy;
   document.getElementById('ws-badge').className='badge active';
   document.getElementById('ws-badge-t').textContent='active';
   document.getElementById('ws-meta').innerHTML = `<span class="it">${ic('pod',13)} <b>pod/${s.pod}</b></span>
     <span class="it">${ic('pod',13)} <b>mcp/${s.mcp}</b></span>
+    <span class="it">${ic('pod',13)} <b>proxy/${s.proxy}</b></span>
     <span class="it">${ic('clock',13)} up <b>just now</b></span>
     <span class="it">${ic('pin',13)} <b>${s.region}</b></span>`;
   document.getElementById('ws-timeline').outerHTML = buildTimeline(s).replace('class="timeline"','class="timeline" id="ws-timeline"');
   document.getElementById('ws-lc-state').classList.remove('frozen');
   document.getElementById('ws-lc-big').textContent='active';
-  document.getElementById('ws-lc-sub').textContent='restored — new pod pair, gate armed';
+  document.getElementById('ws-lc-sub').textContent='restored — new pod trio, gate armed';
   document.getElementById('ws-lc-idle').textContent='00:00 / 60:00';
   document.getElementById('ws-lc-up').textContent='0m';
   document.getElementById('ws-freeze-btn').style.display='';
@@ -855,7 +863,7 @@ function promote(s){
   paintContext(s);
   paintTerm([
     {c:'ok',t:`\u2713 restored from archive \u2014 conversation, working dir and shared volume intact`},
-    {c:'sys',t:`\u25c6 session/${s.id} \u00b7 pod/${s.pod} \u00b7 mcp/${s.mcp} \u2014 workloadType=approval-gated`},
+    {c:'sys',t:`\u25c6 session/${s.id} \u00b7 pod/${s.pod} \u00b7 mcp/${s.mcp} \u00b7 proxy/${s.proxy} \u2014 workloadType=approval-gated`},
     {c:'prompt',t:`<span class="op">\u25b8</span> what did we end up fetching before the pause?`},
     {c:'agent',t:`<span class="op">\u2039agent\u203a</span> The approved vendor pull \u2014 ${s.vol}/rates-2026-09-03.json is still here,`},
     {c:'agent',t:`        and the CDN request you rejected never ran.`},
@@ -864,7 +872,7 @@ function promote(s){
   toast('Session resumed — approvals, files and the gate came back with it','frozen');
 }
 function freezeNow(){
-  toast('Session archived — workload pod and MCP pod reclaimed','ok');
+  toast('Session archived — workload pod and both helper pods reclaimed','ok');
   setTimeout(()=>location.href='index.html', 950);
 }
 function startWsTick(){
