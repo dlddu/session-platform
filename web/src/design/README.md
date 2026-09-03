@@ -51,12 +51,61 @@
 `docs/mockups/*.html`은 이 시스템을 **참조하지 않습니다.** 각 파일이 자기 `:root`에 같은 값을 인라인으로 복사해 갖고 있습니다.
 역사적으로는 mockup이 먼저였고 `tokens.css`가 거기서 1:1로 이식됐습니다 — 그래서 값은 같지만 **연결된 것은 아닙니다.**
 
-결과적으로 지금 토큰 하나를 바꾸려면 `tokens.css` + mockup **6개**, 총 **7곳**을 고쳐야 합니다.
+그리고 복제는 mockup에만 있지 않습니다 — 문서 포털 허브(`docs/index.html`)와 여정 페이지
+(`docs/journeys/*/index.html`)도 같은 값을 자기 `:root`에 갖고 있습니다.
+
+결과적으로 지금 토큰 하나를 바꾸려면 최소 **7**곳 · 최대 **10**곳을 고쳐야 합니다.
+**하나의 숫자가 아닌 것이 핵심입니다** — 복제한 파일마다 갖고 있는 토큰이 달라서, 몇 곳을
+고쳐야 하는지는 *어느 토큰을 바꾸느냐*에 달려 있습니다. `--rail`·`--idle`·`--resume`처럼 mockup만
+쓰는 토큰은 7곳이고, `--ink`·`--line`·`--text`처럼 허브·여정 페이지까지 쓰는 토큰은 10곳입니다.
 이 중복은 알려진 미해소 항목이며 `docs/doc-structure-state.md`의 🟢 위험으로 추적됩니다.
-(이 숫자는 `scripts/check-render-fidelity.py`가 `1 + docs/mockups/*.html 개수`로 계산해 대조합니다 —
-mockup이 늘어도 이 문장만 stale해질 수 없습니다.)
+
+이 두 숫자와 아래 원장은 `scripts/check-render-fidelity.py`(R10)가 `tokens.css`를 정본으로
+**레포 전수를 실측해** 대조합니다. 손으로 세지 않으므로 실제와 어긋날 수 없고, 갱신은
+`python3 scripts/check-render-fidelity.py --emit`이 만들어 줍니다.
 
 **당분간의 규칙**: 코드(`tokens.css`)를 먼저 고치고, mockup은 그 값을 따라옵니다. 반대 방향이 아닙니다.
+
+---
+
+## 토큰 복제 원장
+
+`tokens.css` `:root`의 정본 토큰을 자기 `:root`에 다시 선언하는 **모든** tracked 파일입니다.
+R10이 레포 전수 실측과 이 표를 **양방향으로** 대조합니다 — 표에 없는 복제 파일도, 실제로는
+복제하지 않는 표 행도 실패합니다. 즉 **새 복제가 조용히 들어올 수 없습니다.**
+
+- **처분 `DUP`** — 정본 팔레트를 그대로 복제한 파일. **값 불일치가 0이어야 하며**, 하나라도
+  어긋나면 R10이 즉시 실패합니다("값은 같지만 연결은 아니므로 어느 한쪽만 바뀌면 조용히
+  어긋난다"는 위험을 실제로 집행하는 자리입니다). 유지비 계산에 들어갑니다.
+- **처분 `IND`** — 이름만 겹치는 **독립 팔레트**. 정본을 따라갈 이유가 없으므로 값 불일치가
+  허용되고 유지비에서 빠지지만, **사유가 없으면 실패**합니다(사유 없는 예외 금지).
+
+값 비교는 표기 차이(hex 대소문자, `cubic-bezier(.22,…)`의 선행 0·공백)를 정규화한 뒤에 합니다.
+정규화가 없으면 mockup 6개가 각 19건씩 "불일치"로 잡히는데, 그건 값이 다른 게 아니라 다르게
+적힌 것입니다.
+
+| 파일 | 공유 토큰 | 값 불일치 | 처분 | 사유 |
+|------|-----------|-----------|------|------|
+| `docs/index.html` | 16 | 0 | DUP | 문서 포털 허브. 2026-09-03 (#51·#52)에 디자인 시스템을 적용하면서 정본 값을 인라인 복제했다. |
+| `docs/journeys/JRN-session-creation/index.html` | 16 | 0 | DUP | 여정 페이지. 2026-09-03 (#50) 신설 시 허브의 인라인 토큰을 복사했다. |
+| `docs/journeys/JRN-shell-interaction/index.html` | 16 | 0 | DUP | 여정 페이지. 위와 같다. |
+| `docs/mockups/agent-workspace.html` | 24 | 0 | DUP | mockup. 정본이 여기서 1:1 이식됐고 이후 방향이 뒤집혔다(코드가 정본). |
+| `docs/mockups/gated-workspace.html` | 24 | 0 | DUP | mockup. `agent-workspace.html`의 인라인 토큰을 복사해 만들었다. |
+| `docs/mockups/index.html` | 24 | 0 | DUP | mockup(세션 목록). 정본 `tokens.css`의 이식 원본이다. |
+| `docs/mockups/new-session.html` | 24 | 0 | DUP | mockup. |
+| `docs/mockups/restore.html` | 24 | 0 | DUP | mockup. |
+| `docs/mockups/workspace.html` | 24 | 0 | DUP | mockup. |
+| `docs/reader.html` | 2 | 2 | IND | 마크다운 리더 전용 페이지. 이 시스템과 무관한 자기 팔레트(`--bg`·`--fg`·`--accent`…)를 쓰며 `--line`(`#30363d`)·`--maxw`(`860px`)만 이름이 겹친다. 정본을 따라갈 이유가 없으므로 유지비에서 뺀다. |
+
+> **범위 밖 — 강제하지 않는 제3 사본이 하나 있습니다.** `docs/doc-structure-state.md`도 같은
+> 사실("토큰 7중복")을 말하지만 그 문서는 자매 정합성 모델 `tbm_session-platform-journey-mockup`의
+> to-be이므로 여기서 고치지 않습니다(같은 파일을 두 모델이 동시에 고치면 충돌합니다).
+> 그 사본의 갱신은 그 모델의 후속 task 몫입니다 — 잊힌 잔여가 아니라 **등재된 후속**입니다.
+
+> **이 원장이 없애는 것은 중복 자체가 아니라 중복의 침묵입니다.** mockup을 `tokens.css`에
+> 물릴지, 아니면 "mockup은 스케치이므로 복제를 수용"할지는 `docs/doc-structure-state.md:148`이
+> **제품 결정 대기**로 둔 항목이라 게이트가 정할 수 없습니다. 결정 전까지 할 수 있는 최선은
+> 복제가 늘거나 어긋날 때 **반드시 보이게** 만드는 것입니다.
 
 ---
 
