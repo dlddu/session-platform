@@ -65,9 +65,11 @@ test("archives a session from the workspace and reclaims its pod", async ({
 // Deferred: the claude-code wording of the same action ("Archive now" /
 // "Session archived — pod reclaimed", plus the agent output stream going
 // offline and restarting when the archive fails). Blocked on the kind SUT being
-// able to provision a claude-code session at all — see the two preconditions in
-// the fidelity allowlist («미해소 위반») of docs/test/e2e.md. Seeded as a skip so
-// a future PR removes the skip and fills the body.
+// able to provision a claude-code session at all — the three causes are the
+// «차단 요인» ledger of docs/test/e2e.md, machine-checked by R10 of
+// scripts/check-fidelity-allowlist.py. This is a gap that gets filled, not a
+// coverage trade: once those are cleared the real session verifies this wording
+// directly. Seeded as a skip so a future PR removes the skip and fills the body.
 test.skip("archives a claude-code session from the workspace", async () => {
   // fill when the kind SUT can provision a claude-code session.
 });

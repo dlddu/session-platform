@@ -57,7 +57,8 @@ operational idle-state producer가 생기면 배포 e2e로 채운다.
 ```
 
 주석만 있고 미등재이거나, 등재만 있고 코드에 없으면 drift다. `scripts/check-fidelity-allowlist.py`가
-아래 네 블록과 코드를 **양방향으로** 대조해 강제한다 — `make check-fidelity`(= `make lint`에 포함),
+아래 다섯 블록과 코드를 **양방향으로** 대조해 강제한다(등재 · 미해소 위반 · 차단 요인 · 회계 ·
+집계) — `make check-fidelity`(= `make lint`에 포함),
 그리고 모든 PR에서 도는 `ci.yml`의 `fidelity` 잡.
 
 ### 등재된 seam
@@ -82,23 +83,7 @@ operational idle-state producer가 생기면 배포 e2e로 채운다.
 데이터(세션 목록·상태·pod)까지 함께 위조되기 때문이다.
 
 제거가 이 슬라이스에서 끝나지 않는 이유는 j6의 검증 대상이 **실 claude-code 세션**을 요구하고
-kind SUT가 그것을 띄우지 못하기 때문이다. 선결조건은 **두 개이며 순서가 있다**:
-
-1. **세션 pod가 기동하지 못한다(먼저 걸리는 벽).** `data-plane/entrypoint.sh`는
-   `DATA_PLANE_WORKLOAD=claude-code`일 때 agent를 exec하기 **전에** `K3S_MCP_TOKEN`으로 K3s MCP를
-   호출해 단명 GitHub token을 받고 **비공개** `dlddu/plugin-marketplace`에서 플러그인을 설치한다.
-   `set -eu` + `curl --fail`이라 이 단계의 실패는 곧 컨테이너 종료다. kind e2e가 주입하는
-   `k3s-mcp-token`은 `deploy/claude-code-credentials-secret.yaml`의 placeholder이고
-   `.github/workflows/e2e.yml`도 실토큰을 넣지 않으므로 bootstrap은 **항상** 실패한다 → pod가
-   Ready에 이르지 못해 `POST /api/v1/sessions`(`workloadType: claude-code`)가 애초에 성공할 수
-   없다. `K3S_MCP_URL`은 환경 변수로 갈아끼울 수 있지만 marketplace의 GitHub URL은 entrypoint에
-   상수로 박혀 있다. e2e 전용 우회 스위치를 새로 다는 것은 이 정책이 명시적으로 금지하는
-   **"미구현 우회 stub"**이므로 해법이 될 수 없다 — 남는 길은 CI에 실자격을 넣거나(운영 결정),
-   plugin bootstrap을 기동 필수 조건에서 떼어내는 제품 설계 변경이다.
-2. **제공자에 도달할 수 없다.** 1이 풀려도 `claude-code-credentials`의
-   `base-url: https://127.0.0.1:9`("Deliberately unroutable")가 남는다. 정책의 `EXT` 규칙이
-   가리키는 해법은 **MinIO 선례대로 인클러스터 가짜 provider를 배포**하고 `base-url`을 그쪽으로
-   돌려 실 세션이 결정적 응답을 받게 하는 것이다.
+kind SUT가 그것을 띄우지 못하기 때문이다. 그 원인은 아래 「차단 요인」에 원장으로 있다.
 
 *해소된 것*: 직전 슬라이스의 `web/e2e/journeys/session-deletion.spec.ts`에 이어
 `web/e2e/journeys/manual-archive.spec.ts`도 여기서 빠졌다. session-deletion은 세션 생성과 동결을
@@ -109,17 +94,40 @@ kind SUT가 그것을 띄우지 못하기 때문이다. 선결조건은 **두 �
 실 SUT에 만든 **실 shell 세션**을 그 버튼으로 얼려 워크스페이스·진행 중 버튼 상태·목록 복귀·
 토스트·카드 상태·pod 회수를 전부 배포된 control-plane이 응답하게 했다. 인터셉트가 **0건**이
 되어 이 파일은 회계 표에서도 사라졌고 상한은 4→2로 내려갔다. 브라우저 커버리지에서 빠지는 것은
-claude-code **문구** 분기(`Archive now` / `Session archived — pod reclaimed`)뿐이고, 그것은 위
-선결조건 1·2와 함께 같은 파일에 `test.skip` 시드로 남겼다. 앞의 두 전환 모두 **개수를 줄이려고
+claude-code **문구** 분기(`Archive now` / `Session archived — pod reclaimed`)뿐이고, 그것은 같은
+파일에 `test.skip` 시드로 남겼다. 이 시드는 **영구 교환이 아니라 아래 「차단 요인」이 풀리면
+채워지는 공백**이다 — 차단이 풀리면 실 claude-code 세션으로 그 문구를 검증할 수 있으므로
+커버리지를 맞바꿀 이유가 없어진다. 앞의 두 전환 모두 **개수를 줄이려고
 인터셉트를 다른 파일로 옮긴 것이 아니다** — 옮기기는 회계 행만 줄이고 치환은 그대로 남기므로 이
 정책이 세는 대상을 속이는 짓이다.
 
 <!-- fidelity:violations -->
 | 파일 | 토큰 | 무엇을 위조하는가 | 제거 경로 (선결조건) |
 | --- | --- | --- | --- |
-| `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` | `.route(` | `installAgentApi`가 12개 테스트 전부에 `/api/v1/**` 핸들러를 설치해 세션·config·SSE 스트림을 위조한다. | 위 본문의 **선결조건 1**(entrypoint의 K3s MCP + 비공개 marketplace bootstrap 없이는 claude-code pod가 Ready에 못 간다)과 **2**(unroutable `base-url`)를 차례로 해소한 뒤, 실 claude-code 세션 위에서 재작성. 1이 남아 있는 한 2만 고쳐도 세션을 만들 수 없다. |
-| `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` | `route.fulfill(` | 위와 같은 핸들러의 응답 생성부 — JSON·`text/event-stream` 본문을 직접 짓는다. | 위와 같다. `reset`·`output` 이벤트는 인클러스터 가짜 provider의 결정적 응답으로 실 SUT가 생성하게 한다. |
+| `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` | `.route(` | `installAgentApi`가 12개 테스트 전부에 `/api/v1/**` 핸들러를 설치해 세션·config·SSE 스트림을 위조한다. | 아래 「차단 요인」 3행을 그 표의 '해소 시' 칸대로 해소한 뒤(등재 2 + 실배포 1), 실 claude-code 세션 위에서 재작성. 순서가 있다: `PLUGIN-*` 두 행이 먼저 서지 않으면 pod가 Ready에 못 가 세션 자체를 만들 수 없고, 그러면 `CLAUDE-PROVIDER`만 고쳐도 소용이 없다. |
+| `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` | `route.fulfill(` | 위와 같은 핸들러의 응답 생성부 — JSON·`text/event-stream` 본문을 직접 짓는다. | 위와 같다. 다만 **전량 제거는 이 파일의 목표가 아니다** — 재작성 뒤 남는 것 중 config 503·응답 보류·past-end cursor `reset` 재생처럼 실 SUT가 요청 시점에 낼 수 없는 주입은 `NET` 자격을 만족하므로, session-deletion 선례대로 **행 단위로 좁혀 승인 등재**한다. |
 <!-- /fidelity:violations -->
+
+### 차단 요인 (seam 이 아니다 — 치환조차 없는 공백의 원인)
+
+위 「미해소 위반」이 *치환이 있어서* 생긴 drift라면, 여기 있는 것은 *치환조차 없어서* e2e가 그
+경로를 **아예 밟지 못하는** 이유다. claude-code 워크로드 AC(AC-E1~E6)가 「집계」에서 통째로
+공백인 근거가 이 표다. seam 이 아니므로 코드에 `mock-exception:` 마커도, 스캔 토큰도 남지
+않는다 — R5 는 이것들에 대해 영원히 침묵한다. 그래서 리터럴 단위로 대조하는 R10 을 따로 둔다:
+원인이 고쳐지면 선언한 리터럴이 사라져 게이트가 빨개지고, 그때 '해소 시' 칸이 예고한 등재 또는
+실배포를 반드시 함께 반영해야 한다.
+
+**판정은 미리 확정한다**(등재는 아니다 — 대체물이 서기 전에는 등재할 것이 없다). 카테고리 판정의
+기준은 정의의 `EXT` 배제 조항 하나다: *"kind 에 실물로 배포 가능하면 EXT 를 쓸 수 없다"*(MinIO
+선례). 그래서 같은 부트스트랩 안에서도 **자격 발급**과 **호스팅**의 판정이 갈린다.
+
+<!-- fidelity:blockers -->
+| 무엇이 막는가 | 코드 위치 | 리터럴 | 판정 | 해소 시 |
+| --- | --- | --- | --- | --- |
+| claude-code 세션 pod 가 Ready 에 못 간다 ①: `entrypoint.sh` 가 agent 를 exec 하기 전에 K3s MCP(`homelab-k3s-mcp.llkm.nl`)를 호출해 단명 GitHub token 을 받는다. `set -eu` + `curl --fail` 이라 실패가 곧 컨테이너 종료이고, kind 가 넣는 토큰은 placeholder 다. | `data-plane/entrypoint.sh` | `${K3S_MCP_TOKEN:?` | `EXT` | 그 MCP 는 **실 GitHub App 개인키를 쥔 조직 서비스**라 인클러스터에 기능하는 실물을 세울 수 없다(복제해도 자격이 없어 토큰을 못 만든다) → EXT 자격을 만족한다. 인클러스터 대체 발급 경로를 세우고 `PLUGIN-CRED`(EXT)로 등재. 잔여는 "프로덕션의 실제 자격 발급 왕복은 미검증". |
+| claude-code 세션 pod 가 Ready 에 못 간다 ②: 그 토큰으로 **비공개** `dlddu/plugin-marketplace` 에서 플러그인을 설치한다. URL 이 entrypoint 에 상수로 박혀 있어 갈아끼울 수 없다. | `data-plane/entrypoint.sh` | `https://github.com/dlddu/plugin-marketplace.git` | `없음` | marketplace 는 **git 원격일 뿐**이고 `claude plugin marketplace add <url>` 는 호스트를 가리지 않는다 — MinIO 가 S3 를 실물로 세웠듯 인클러스터 git 원격을 세우면 **같은 코드 경로**가 그대로 돈다. 실물 배포가 가능하므로 EXT 를 쓸 수 없다: URL 을 설정값으로 빼고 인클러스터 원격을 배포해 **등재 없이** 해소한다. |
+| 제공자에 도달할 수 없다: ①② 가 풀려도 `claude-code-credentials` 의 base-url 이 의도적으로 unroutable 이라 실 세션이 어떤 응답도 받지 못한다. | `deploy/claude-code-credentials-secret.yaml` | `https://127.0.0.1:9` | `EXT` | Anthropic API 는 클러스터에 존재시킬 수 없다(MinIO 를 EXT 에서 뺀 근거가 여기엔 해당하지 않는다) → EXT 자격을 만족한다. 결정적 응답을 내는 인클러스터 가짜 provider 를 `deploy/` 에 배포하고 base-url 을 그리로 돌린 뒤 `CLAUDE-PROVIDER`(EXT)로 등재. 잔여는 "실 provider 의 스트리밍·에러 계약은 미검증". |
+<!-- /fidelity:blockers -->
 
 ### seam 지문 회계
 
@@ -153,6 +161,7 @@ seam 스캔이 잡는 `(파일, 토큰)` 쌍마다 한 행이다. 등재 seam에
 - 코드 마커 지점 **4** / 마커 파일 **4**
 - 지문 회계 행 **14** — 등재 귀속 7 · 미해소 위반 **2** · 비-seam **5**
 - web e2e 인터셉트 **5**건 (승인 3 · 위반 2, 상한 **2**)
+- 차단 요인 **3**건 (seam 이 아니다 — 판정만 확정, 등재 0)
 <!-- /fidelity:summary -->
 
 이 숫자들도 체커가 실제와 대조한다(R8) — 표만 고치고 집계를 잊으면 실패한다. 상한을 넘는

@@ -20,6 +20,15 @@
   R8  집계 줄의 숫자가 실제와 일치한다.
   R9  「미해소 위반」 원장 == 승인되지 않은 인터셉트 쌍 집합이고, 각 행에 위조 내용과 제거
       경로가 적혀 있으며, 개수가 선언된 상한과 정확히 같다(늘면 실패, 줄이면 상한도 내린다).
+  R10 「차단 요인」 원장의 각 행이 가리키는 리터럴이 그 파일에 실제로 있다. 카테고리 판정이
+      GATE/TRIG/EXT/NET/없음 중 하나이고, '해소 시' 칸이 예고한 CODE 가 아직 등재 표에
+      없다(= 차단이 남아 있다). 차단이 풀려 리터럴이 사라지거나 CODE 가 등재되면 행을
+      갱신해야 한다.
+
+R10 이 다루는 것은 seam 이 **아니다**. seam 은 "실환경을 치환한 흔적"이라 스캔에 잡히지만,
+차단 요인은 "치환조차 없어서 e2e 가 그 경로를 아예 밟지 못하는 이유"라 코드 어디에도 토큰을
+남기지 않는다(그래서 R5 가 영원히 침묵한다). 그 공백의 원인을 산문에만 적어 두면 원인이
+고쳐져도 문서가 낡을 뿐 아무도 모르므로, 원장으로 옮겨 리터럴 단위로 대조한다.
 
 스캔 스코프와 토큰 정규식은 정합성 모델 `tbm_session-platform-e2e-mock-policy`의 as-is
 버전 스크립트와 **동일하게** 유지한다(둘 중 하나만 바뀌면 감지 루프와 CI 게이트가 서로
@@ -83,11 +92,18 @@ INTERCEPT_TOKENS = {
 }
 
 CATEGORIES = {"GATE", "TRIG", "EXT", "NET"}
+# 차단 요인의 카테고리 판정. '없음'은 "해소는 실배포로 하고 등재는 하지 않는다"는 판정이다
+# (MinIO 선례 — 실물을 클러스터에 세울 수 있으면 EXT 를 쓸 수 없다).
+NO_CATEGORY = "없음"
+BLOCKER_VERDICTS = CATEGORIES | {NO_CATEGORY}
 NON_SEAM = {"-", "—", "–"}  # 회계 표에서 '등재 대상 아님'을 뜻하는 CODE 자리표
 VIOLATION_CODE = "위반"  # 회계 표에서 '승인되지 않은, 제거 대상인 치환'을 뜻하는 CODE 자리표
 
 MARKER_RE = re.compile(r"mock-exception:\s*([A-Z][A-Z0-9-]*)")
 SECTION_RE = re.compile(r"^##+\s+.*(?:충실도|모킹|허용목록)")
+# 차단 요인 행의 '해소 시' 칸에서 예고된 CODE 를 뽑는다: `CLAUDE-PROVIDER` 처럼 백틱에 싸인
+# 대문자 토큰만 본다(산문 속 낱말이 CODE 로 오인되지 않게).
+PROMISED_CODE_RE = re.compile(r"`([A-Z][A-Z0-9-]{2,})`")
 
 failures: list[str] = []
 
@@ -120,6 +136,19 @@ def scoped_files() -> list[str]:
                     continue
         files.append(f)
     return sorted(files)
+
+
+def tracked_files() -> set[str]:
+    """레포 전체의 tracked 파일. 차단 요인은 스캔 스코프 **밖**도 가리킬 수 있다 —
+    애초에 스코프 안에 토큰을 남기지 않는다는 것이 차단 요인의 성질이다."""
+    out = subprocess.run(
+        ["git", "ls-files"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    return {f for f in out if f}
 
 
 def scan() -> tuple[set[tuple[str, str]], dict[str, set[str]]]:
@@ -200,17 +229,25 @@ def main() -> int:
 
     reg_block = block(section, "registry")
     vio_block = block(section, "violations")
+    blk_block = block(section, "blockers")
     led_block = block(section, "ledger")
     sum_block = block(section, "summary")
     for name, blk in (
         ("registry", reg_block),
         ("violations", vio_block),
+        ("blockers", blk_block),
         ("ledger", led_block),
         ("summary", sum_block),
     ):
         if blk is None:
             fail("R1", f"허용목록 섹션에 <!-- fidelity:{name} --> 블록이 없다")
-    if reg_block is None or vio_block is None or led_block is None or sum_block is None:
+    if (
+        reg_block is None
+        or vio_block is None
+        or blk_block is None
+        or led_block is None
+        or sum_block is None
+    ):
         return report()
 
     # --- 등재 표 (registry): CODE | 카테고리 | 구동 구간 | 잔여 -------------------
@@ -250,6 +287,54 @@ def main() -> int:
                 f"{f} · {tok}: '제거 경로' 칸이 비어 있다 — 위반 등재는 제거 경로를 적어야 "
                 "회계가 되고, 안 적으면 그냥 영구 면제다",
             )
+
+    # --- 차단 요인 (blockers): 치환조차 없어서 e2e가 못 밟는 경로의 원인 -----------
+    # seam 이 아니므로 스캔에 잡히지 않는다. 리터럴로 대조해 "원인이 고쳐졌는데 문서만
+    # 낡는" 경우를 막는다. 여기 있는 동안은 아직 등재가 아니다 — 판정만 미리 확정한다.
+    tracked = tracked_files()
+    blockers = 0
+    for cells in table_rows(blk_block):
+        if len(cells) < 5:
+            fail("R10", f"차단 요인 표 행의 칸이 모자란다(5칸 필요): {cells}")
+            continue
+        what, path, literal, verdict, on_close = (
+            cells[0],
+            unquote(cells[1]),
+            unquote(cells[2]),
+            unquote(cells[3]),
+            cells[4],
+        )
+        blockers += 1
+        if not what.strip() or what.strip() in NON_SEAM:
+            fail("R10", f"{path}: '무엇이 막는가' 칸이 비어 있다")
+        if not on_close.strip() or on_close.strip() in NON_SEAM:
+            fail(
+                "R10",
+                f"{path}: '해소 시' 칸이 비어 있다 — 해소가 등재로 끝나는지 실배포로 끝나는지 "
+                "미리 못 박아야 나중에 아무 방향으로나 흐르지 않는다",
+            )
+        if verdict not in BLOCKER_VERDICTS:
+            fail(
+                "R10",
+                f"{path}: 카테고리 판정 {verdict!r} 는 허용되지 않는다 "
+                f"(허용: {sorted(BLOCKER_VERDICTS)})",
+            )
+        if path not in tracked:
+            fail("R10", f"차단 요인이 가리키는 {path} 가 tracked 파일이 아니다")
+        elif literal not in (ROOT / path).read_text(encoding="utf-8", errors="replace"):
+            fail(
+                "R10",
+                f"{path} 에 선언한 리터럴 {literal!r} 가 없다 — 차단 요인이 사라졌거나 형태가 "
+                "바뀌었다. 행을 갱신하거나 지우고, 해소됐으면 '해소 시' 칸이 예고한 등재/실배포를 "
+                "함께 반영할 것",
+            )
+        for code in PROMISED_CODE_RE.findall(on_close):
+            if code in registry:
+                fail(
+                    "R10",
+                    f"{path}: 차단 요인이 아직 남아 있는데 예고 CODE `{code}` 는 이미 등재 표에 "
+                    "있다 — 등재됐으면 이 행은 차단 요인이 아니라 seam 이다. 행을 지울 것",
+                )
 
     # --- 회계 표 (ledger): 파일 | 토큰 | CODE | 사유 -----------------------------
     ledger: set[tuple[str, str]] = set()
@@ -356,6 +441,7 @@ def main() -> int:
         "ledger": len(ledger),
         "non_seam": non_seam_rows,
         "violation": len(violations),
+        "blocker": blockers,
         "intercept": len(intercepts),
     }
     declared = parse_summary(sum_block)
@@ -401,6 +487,7 @@ def main() -> int:
         f"web 네트워크 인터셉트 {expect['intercept']}건 "
         f"(승인 {len(approved_intercepts)} · 위반 {len(violations)}, 상한 {budget})"
     )
+    print(f"  차단 요인 {expect['blocker']}건 (아직 seam 이 아니다 — 판정만 확정돼 있다)")
     return 0
 
 
@@ -415,6 +502,7 @@ SUMMARY_KEYS = {
     "ledger": "회계 행",
     "non_seam": "비-seam",
     "violation": "미해소 위반",
+    "blocker": "차단 요인",
     "intercept": "인터셉트",
 }
 
