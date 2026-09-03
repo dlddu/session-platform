@@ -2,6 +2,17 @@
 # directory directly; the kind-based e2e SUT reuses it through the deploy/
 # overlay (deploy/kustomization.yaml), which patches in the kind-only
 # differences. Keep environment-neutral defaults here.
+#
+# 이 base 를 소비하는 곳이 셋이다:
+#   1) 운영    flux-cd-apps/cluster/session-platform.yaml — main 브랜치를 추적하되,
+#              돌아가는 이미지는 deployment.yaml 에 SHA 로 고정되어 있다(CI 의 `pin`).
+#   2) PR 프리뷰 flux-cd-apps/apps/session-platform-preview — PR head SHA 에 고정하고
+#              S3 체크포인트 저장소는 주입하지 않는다(아카이브 게이트 off).
+#   3) e2e     deploy/ 오버레이 — 로컬 빌드 이미지 + MinIO.
+#
+# 2)·3)은 base 의 env 를 **이름으로** 또는 **인덱스로** 덮어쓴다. deploy/ 오버레이가
+# env/1·env/2·env/3 을 인덱스로 잡고 있으니, deployment.yaml 의 env 순서를 바꾸거나
+# 앞쪽에 항목을 끼워 넣으면 그 오버레이도 함께 고쳐야 한다.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
