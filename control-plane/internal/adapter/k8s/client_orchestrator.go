@@ -155,8 +155,16 @@ const (
 	// helperProxyListenAddr binds the helper pod's proxy to the pod network
 	// rather than loopback: its client is the *workload* pod, one network hop
 	// away (AC-F6). What keeps that reachable-from-anywhere bind safe is AC-F2's
-	// ingress policy, which is not implemented yet — see docs/doc-tracker.md.
+	// ingress policy, created with the pod in network_policy.go — subject to the
+	// cluster's CNI actually enforcing NetworkPolicy (docs/doc-tracker.md).
 	helperProxyListenAddr = "0.0.0.0:8091"
+	// CredentialProxyPlacementEnvVar tells a credential-proxy container which of
+	// its two sanctioned placements it is in, so the data plane can open the
+	// pod-network bind for the helper without opening it for the sidecar too.
+	// Keep the values in sync with data-plane/cmd/agent (proxyPlacementEnv).
+	CredentialProxyPlacementEnvVar = "DATA_PLANE_PROXY_PLACEMENT"
+	proxyPlacementSidecar          = "sidecar"
+	proxyPlacementHelper           = "helper"
 	// ApprovalGatewayURLEnvVar, ApprovalGatewayAPIKeyEnvVar and
 	// ApprovalGatewayUserIDEnvVar are projected into the MCP container only, so
 	// the agent can neither address the gateway nor approve its own requests.
@@ -393,7 +401,8 @@ func (o *ClientOrchestrator) Start(ctx context.Context, sessionID string, worklo
 // with their addresses: AC-F4 states the restored workload pod is injected with
 // the helper pod created for that restore, which is only knowable once it is
 // Ready and has an IP. If the workload pod then fails, the auxiliary pods are
-// reclaimed with it rather than left behind (AC-A3 hygiene).
+// reclaimed with it rather than left behind (AC-A3 hygiene) — and AC-F2's
+// network policies go with them, because the helper pod owns them.
 func (o *ClientOrchestrator) startSet(ctx context.Context, sessionID, checkpointRef string, workload WorkloadSpec) (SessionPods, error) {
 	workloadType, err := session.NormalizeWorkloadType(workload.Type)
 	if err != nil {
@@ -413,7 +422,9 @@ func (o *ClientOrchestrator) startSet(ctx context.Context, sessionID, checkpoint
 		if err != nil {
 			return SessionPods{}, err
 		}
-		ref, err := o.provision(ctx, spec)
+		ref, err := o.provision(ctx, spec, func(created *corev1.Pod) error {
+			return o.applySessionNetworkPolicies(ctx, sessionID, created)
+		})
 		if err != nil {
 			return SessionPods{}, err
 		}
@@ -430,7 +441,7 @@ func (o *ClientOrchestrator) startSet(ctx context.Context, sessionID, checkpoint
 		o.cleanup(auxiliary...)
 		return SessionPods{}, err
 	}
-	ref, err := o.provision(ctx, spec)
+	ref, err := o.provision(ctx, spec, nil)
 	if err != nil {
 		o.cleanup(auxiliary...)
 		return SessionPods{}, err
@@ -456,12 +467,21 @@ func endpointsFor(podIP string) helperEndpoints {
 // provision creates a pod from spec, waits for its workload agent to report
 // Ready, and returns its ref with the pod IP recorded. Start and RestoreInto
 // differ only in the fresh-workload or restore-target spec they hand in.
-func (o *ClientOrchestrator) provision(ctx context.Context, spec *corev1.Pod) (PodRef, error) {
+func (o *ClientOrchestrator) provision(ctx context.Context, spec *corev1.Pod, afterCreate func(created *corev1.Pod) error) (PodRef, error) {
 	created, err := o.client.CoreV1().Pods(o.namespace).Create(ctx, spec, metav1.CreateOptions{})
 	if err != nil {
 		return PodRef{}, fmt.Errorf("create pod %s: %w", spec.Name, err)
 	}
 	ref := PodRef{Name: created.Name, Namespace: o.namespace}
+	// afterCreate runs against the created object — the only point where its UID
+	// is known and the pod is not yet Ready. AC-F2's policies are attached here
+	// so the boundary predates any traffic the pod could carry.
+	if afterCreate != nil {
+		if err := afterCreate(created); err != nil {
+			o.cleanup(ref)
+			return PodRef{}, err
+		}
+	}
 	pod, err := o.waitReady(ctx, ref.Name)
 	if err != nil {
 		// Don't leak a pod that never came up (AC-A3 hygiene).
@@ -734,13 +754,16 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 			secretEnv(ApprovalGatewayAPIKeyEnvVar, o.approvalGatewaySecret, ApprovalGatewayAPIKeySecretKey),
 			secretEnv(ApprovalGatewayUserIDEnvVar, o.approvalGatewaySecret, ApprovalGatewayUserIDSecretKey),
 		},
+		// An exec probe for the same reason the proxy container uses one, plus
+		// one specific to this pod: an HTTP probe originates at the kubelet, not
+		// at a pod, and AC-F2's ingress policy admits only this session's
+		// workload pod. Under a CNI that enforces the policy, an HTTP probe
+		// would be the one caller the boundary is designed to reject — and the
+		// helper pod would never reach Ready.
 		ReadinessProbe: &corev1.Probe{
-			ProbeHandler: corev1.ProbeHandler{
-				HTTPGet: &corev1.HTTPGetAction{
-					Path: agentHealthzPath,
-					Port: intstr.FromInt32(SessionMCPPort),
-				},
-			},
+			ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{
+				"/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/" + strconv.Itoa(SessionMCPPort),
+			}}},
 			InitialDelaySeconds: 1,
 			PeriodSeconds:       2,
 		},
@@ -763,7 +786,7 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 			AutomountServiceAccountToken: &automountServiceAccountToken,
 			Containers: []corev1.Container{
 				mcp,
-				o.credentialProxyContainer(HelperCredentialProxyContainerName, image, helperProxyListenAddr),
+				o.credentialProxyContainer(HelperCredentialProxyContainerName, image, helperProxyListenAddr, proxyPlacementHelper),
 			},
 		},
 	}, nil
@@ -774,7 +797,7 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 // separate PID/filesystem namespaces, so Claude can call this loopback service
 // without being able to read its Secret-backed environment or /proc entries.
 func (o *ClientOrchestrator) claudeCredentialProxy(image string) corev1.Container {
-	return o.credentialProxyContainer(ClaudeCredentialsContainerName, image, credentialProxyListenAddr)
+	return o.credentialProxyContainer(ClaudeCredentialsContainerName, image, credentialProxyListenAddr, proxyPlacementSidecar)
 }
 
 // credentialProxyContainer builds the provider proxy in either of its two
@@ -783,7 +806,7 @@ func (o *ClientOrchestrator) claudeCredentialProxy(image string) corev1.Containe
 // workload pod, approval-gated runs it in the session's helper pod bound to the
 // pod network, because its client is a pod away. The Secret projection is the
 // same in both — the provider token exists only in this container's environment.
-func (o *ClientOrchestrator) credentialProxyContainer(name, image, listenAddr string) corev1.Container {
+func (o *ClientOrchestrator) credentialProxyContainer(name, image, listenAddr, placement string) corev1.Container {
 	return corev1.Container{
 		Name:            name,
 		Image:           image,
@@ -791,6 +814,10 @@ func (o *ClientOrchestrator) credentialProxyContainer(name, image, listenAddr st
 		Env: []corev1.EnvVar{
 			{Name: workloadEnvVar, Value: credentialProxyWorkload},
 			{Name: agentAddrEnvVar, Value: listenAddr},
+			// Declared rather than inferred from the bind address: the data
+			// plane refuses a bind its placement does not sanction, and a
+			// missing declaration means the restrictive one.
+			{Name: CredentialProxyPlacementEnvVar, Value: placement},
 			secretEnv(AnthropicBaseURLEnvVar, o.claudeCredentialsSecret, ClaudeCodeBaseURLSecretKey),
 			secretEnv(AnthropicAuthTokenEnvVar, o.claudeCredentialsSecret, ClaudeCodeAuthTokenSecretKey),
 		},

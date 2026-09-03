@@ -8,9 +8,9 @@ needs (AC-A2). The control plane provisions and reclaims these pods via the
 The runtime image includes `git`, `gh`, `curl`, `jq`, and `kubectl` for use by
 interactive shell and Claude Code workloads.
 
-## Status: shell, claude-code, and credential-proxy agents built
+## Status: shell, claude-code, approval-gated, mcp, and credential-proxy agents built
 
-`DATA_PLANE_WORKLOAD` selects one of three modes in the dedicated session pod:
+`DATA_PLANE_WORKLOAD` selects one of five modes across a session's pods:
 
 - `shell` (default) launches one PTY-attached interactive shell
   (`DATA_PLANE_SHELL`, default `/bin/bash`). Write is shell stdin, read is
@@ -32,7 +32,27 @@ interactive shell and Claude Code workloads.
   prompt is limited to 1 MiB; an oversized write is not queued and returns 413.
   The pending queue is bounded to 64 prompts and 8 MiB; a new write that would
   exceed either bound returns 429 while already accepted prompts keep draining.
-- `credential-proxy` is the localhost-only sidecar mode. It reads the real
+- `approval-gated` runs the same one-shot execution model as `claude-code` —
+  the queue, cursor, archive and model contracts are reused unchanged — with the
+  tool surface AC-F6 prescribes for that type. It receives no `K3S_MCP_TOKEN`
+  and enables no marketplace plugin; instead the managed `settings.json`
+  registers the session MCP at `SESSION_MCP_URL` as an `http` server and permits
+  it alongside the same six file tools. Its `ANTHROPIC_BASE_URL` points at the
+  session helper pod's proxy (port 8091) rather than loopback, and the agent
+  refuses to start if that endpoint is loopback, is on the wrong port, or if any
+  real provider credential or the K3s MCP token is present. Because the helper
+  pod is rebuilt with a new address on every restore, the registered MCP URL is
+  rewritten from the environment at startup rather than trusted from the
+  archive.
+- `mcp` is the session MCP that runs in the helper pod's other container
+  (AC-F4). It serves `/healthz` and a JSON-RPC endpoint at `/mcp` that answers
+  `initialize`, `ping` and `tools/list`. **It offers no tools yet**: every tool
+  it will expose has to pass the human approval gate (AC-F3), which is not
+  implemented, so an approval-gated agent currently has no route out of its own
+  pod at all. It keeps no state — the helper pod is discarded on freeze and
+  rebuilt on restore.
+- `credential-proxy` holds the provider credentials outside the tool-running
+  container. It reads the real
   `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, pins every request to that
   configured HTTPS upstream (plain HTTP is rejected), forwards only an explicit
   Anthropic/Claude/Stainless header allowlist, rejects tunnels/upgrades, and
@@ -42,8 +62,15 @@ interactive shell and Claude Code workloads.
   redactor holds possible token suffixes across response reads so a split
   credential is never exposed transiently. This does not buffer the full
   Anthropic SSE response. Set
-  `DATA_PLANE_AGENT_ADDR=127.0.0.1:8091`; non-loopback bind addresses are
-  rejected. Its `/healthz` endpoint never contacts the upstream.
+  `DATA_PLANE_AGENT_ADDR` to match its placement, declared by
+  `DATA_PLANE_PROXY_PLACEMENT`: `sidecar` (the default when unset) is the
+  `claude-code` arrangement and accepts loopback binds only, while `helper` is
+  the `approval-gated` arrangement in the session helper pod and requires a
+  pod-network bind because its client is a pod away (AC-F6). Each placement
+  rejects the other's address, so opening the wider bind for the helper cannot
+  reach the sidecar. What keeps the wider bind safe is AC-F2's ingress policy,
+  which the control plane creates with the helper pod and which admits only that
+  session's workload pod. Its `/healthz` endpoint never contacts the upstream.
 
 Claude's cwd (`workspace/`) and HOME (`home/`) live under
 `CLAUDE_CODE_STATE_DIR` (default `/session/state`). Kubernetes mounts the
@@ -59,7 +86,8 @@ token only through a process-scoped Git HTTPS Authorization header while running
 `claude plugin marketplace add https://github.com/dlddu/plugin-marketplace.git`
 and `claude plugin install session-platform@dlddu-plugins`, then exports the
 runtime plugin seed and execs the agent. The GitHub token is unset before the
-agent starts; shell and credential-proxy workloads skip this bootstrap.
+agent starts; every other workload — `shell`, `approval-gated`, `mcp` and
+`credential-proxy` — skips this bootstrap.
 Provider authentication credentials are not present in the Claude container or
 inherited by its Bash tools. That container receives
 `ANTHROPIC_BASE_URL=http://127.0.0.1:8091` and the non-secret

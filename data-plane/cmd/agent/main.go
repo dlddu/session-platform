@@ -8,10 +8,22 @@
 //     prompt for one serial worker, each job execs a one-shot Claude CLI, /read
 //     serves merged stdout/stderr, and checkpoint/restore archives filesystem
 //     state plus scrollback without CRIU (AC-E2~E5).
-//   - credential-proxy is the localhost-only sidecar that holds the real
-//     Anthropic gateway URL/token. It pins all requests to that upstream and
-//     keeps provider credentials out of the Claude/Bash process environment
-//     (AC-E6); plugin-specific K3S_MCP_TOKEN is separately Secret-backed.
+//   - approval-gated runs the same one-shot execution model as claude-code
+//     (AC-E2~E5 are reused verbatim) with the tool surface AC-F6 prescribes:
+//     no marketplace plugin and no K3s MCP token, the provider proxy reached
+//     across the pod network in the session helper pod instead of loopback,
+//     and that helper pod's session MCP registered as the only tool surface
+//     that leaves the pod.
+//   - mcp is the session MCP that runs in the helper pod's other container. It
+//     serves the readiness endpoint and the MCP endpoint the workload agent
+//     registers. Its external tools and the approval gate they pass through
+//     (AC-F3) are not implemented yet, so it currently advertises no tools.
+//   - credential-proxy holds the real Anthropic gateway URL/token and pins all
+//     requests to that upstream, keeping provider credentials out of the
+//     Claude/Bash process environment (AC-E6); plugin-specific K3S_MCP_TOKEN is
+//     separately Secret-backed. It runs in one of two placements: a
+//     loopback-bound sidecar for claude-code, or a pod-network-bound container
+//     of the session helper pod for approval-gated (AC-F6).
 //
 // Shell and Claude modes expose /healthz and the reachability-only /attach
 // WebSocket. A DATA_PLANE_RESTORE_MODE=1 pod reports healthy while awaiting
@@ -43,10 +55,26 @@ const (
 	workloadEnv             = "DATA_PLANE_WORKLOAD"
 	workloadShell           = "shell"
 	workloadClaudeCode      = "claude-code"
+	workloadApprovalGated   = "approval-gated"
+	workloadSessionMCP      = "mcp"
 	workloadCredentialProxy = "credential-proxy"
 
 	claudeProxyBaseURL          = "http://127.0.0.1:8091"
 	claudeProxyPlaceholderToken = "session-platform-proxy"
+	// helperProxyPort and sessionMCPPort are the two ports an approval-gated
+	// workload pod may reach on its session helper pod, and the only
+	// destinations AC-F2's egress allowlist admits besides kube-dns. Keep them
+	// in sync with the control plane orchestrator (credentialProxyPort,
+	// SessionMCPPort).
+	helperProxyPort = 8091
+	sessionMCPPort  = 8092
+	// proxyPlacementEnv tells a credential-proxy container which of its two
+	// sanctioned placements it is in (AC-E6 sidecar vs AC-F6 helper pod). Unset
+	// means the restrictive sidecar placement.
+	proxyPlacementEnv = "DATA_PLANE_PROXY_PLACEMENT"
+	// sessionMCPURLEnv carries the address of this session's MCP (AC-F6). It is
+	// the approval-gated agent's only tool surface that leaves the pod.
+	sessionMCPURLEnv = "SESSION_MCP_URL"
 
 	// defaultShell is the interactive shell launched when DATA_PLANE_SHELL is
 	// unset (AC-D1).
@@ -108,9 +136,10 @@ func main() {
 			a.adopt(sh)
 			logger.Info("session shell started", "shell", a.shellPath, "pid", sh.pid, "addr", addr)
 		}
-	case workloadClaudeCode:
-		if err := validateClaudeProxyClientEnv(); err != nil {
-			logger.Error("unsafe claude-code credential configuration", "err", err)
+	case workloadClaudeCode, workloadApprovalGated:
+		tools, err := agentToolSurface(workload)
+		if err != nil {
+			logger.Error("unsafe agent credential configuration", "workload", workload, "err", err)
 			os.Exit(1)
 		}
 		runTimeout, err := durationEnv("CLAUDE_CODE_RUN_TIMEOUT", defaultClaudeRunTimeout)
@@ -127,17 +156,29 @@ func main() {
 			Logger:      logger,
 			Redact:      credentialLiteralsFromEnv(),
 			RunTimeout:  runTimeout,
+			Tools:       tools,
 		})
 		if err != nil {
-			logger.Error("failed to initialise claude-code workload", "err", err)
+			logger.Error("failed to initialise agent workload", "workload", workload, "err", err)
 			os.Exit(1)
 		}
 		a.claude = claude
-		logger.Info("claude-code agent started", "addr", addr, "model", claude.model,
-			"state_dir", claude.stateDir, "restore_mode", restoreMode)
+		logger.Info("agent workload started", "workload", workload, "addr", addr,
+			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode)
+	case workloadSessionMCP:
+		// AC-F4's helper pod container. It runs no session workload — it is the
+		// tool surface the workload pod calls into — so it gets its own handler
+		// rather than the workload agent's routes.
+		handler = sessionMCPRoutes(logger)
+		logger.Info("session MCP started", "addr", addr)
 	case workloadCredentialProxy:
-		if err := validateCredentialProxyBindAddr(addr); err != nil {
-			logger.Error("invalid credential-proxy bind address", "err", err)
+		placement, err := credentialProxyPlacementFromEnv()
+		if err != nil {
+			logger.Error("invalid credential-proxy placement", "err", err)
+			os.Exit(1)
+		}
+		if err := validateCredentialProxyBindAddr(addr, placement); err != nil {
+			logger.Error("invalid credential-proxy bind address", "placement", string(placement), "err", err)
 			os.Exit(1)
 		}
 		proxy, err := newCredentialProxy(
@@ -150,7 +191,7 @@ func main() {
 			os.Exit(1)
 		}
 		handler = proxy
-		logger.Info("credential proxy started", "addr", addr)
+		logger.Info("credential proxy started", "addr", addr, "placement", string(placement))
 	default:
 		logger.Error("unknown data plane workload", "workload", workload)
 		os.Exit(1)
@@ -605,4 +646,28 @@ func durationEnv(k string, def time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("%s must be a positive duration, got %q", k, value)
 	}
 	return duration, nil
+}
+
+// agentToolSurface validates the credential wiring of a one-shot agent workload
+// and reports the platform-managed tool surface it must run with. The two
+// agent types share an execution model and differ only here: claude-code
+// reaches its provider proxy over loopback and gets the marketplace plugin,
+// approval-gated reaches a proxy one pod away, gets no plugin and no K3s MCP
+// token, and instead registers its session MCP (AC-F6).
+func agentToolSurface(workload string) (toolSurface, error) {
+	switch workload {
+	case workloadClaudeCode:
+		if err := validateClaudeProxyClientEnv(); err != nil {
+			return toolSurface{}, err
+		}
+		return toolSurface{Plugin: true}, nil
+	case workloadApprovalGated:
+		mcpURL, err := validateApprovalGatedClientEnv()
+		if err != nil {
+			return toolSurface{}, err
+		}
+		return toolSurface{SessionMCP: mcpURL}, nil
+	default:
+		return toolSurface{}, fmt.Errorf("workload %q has no agent tool surface", workload)
+	}
 }

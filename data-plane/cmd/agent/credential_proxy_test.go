@@ -337,12 +337,12 @@ func TestCredentialProxyConfigurationValidation(t *testing.T) {
 		})
 	}
 	for _, addr := range []string{"127.0.0.1:8091", "[::1]:8091"} {
-		if err := validateCredentialProxyBindAddr(addr); err != nil {
+		if err := validateCredentialProxyBindAddr(addr, proxyPlacementSidecar); err != nil {
 			t.Fatalf("loopback address %q rejected: %v", addr, err)
 		}
 	}
 	for _, addr := range []string{":8091", "0.0.0.0:8091", "192.0.2.10:8091", "localhost:8091", "127.0.0.1:0"} {
-		if err := validateCredentialProxyBindAddr(addr); err == nil {
+		if err := validateCredentialProxyBindAddr(addr, proxyPlacementSidecar); err == nil {
 			t.Fatalf("unsafe bind address %q accepted", addr)
 		}
 	}

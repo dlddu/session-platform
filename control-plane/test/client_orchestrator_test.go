@@ -23,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
@@ -45,6 +46,9 @@ func newReadyOrchestrator(t *testing.T, opts ...k8s.Option) (*k8s.ClientOrchestr
 	cs := fake.NewSimpleClientset()
 	cs.PrependReactor("create", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		pod := action.(k8stesting.CreateAction).GetObject().(*corev1.Pod)
+		// The apiserver assigns a UID on create; the fake tracker does not.
+		// Owner references to a session's pods are only meaningful with one.
+		pod.UID = types.UID("uid-" + pod.Name)
 		pod.Status.Phase = corev1.PodRunning
 		pod.Status.PodIP = testPodIP
 		pod.Status.Conditions = append(pod.Status.Conditions, corev1.PodCondition{
