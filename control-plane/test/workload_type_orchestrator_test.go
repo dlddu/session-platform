@@ -357,10 +357,11 @@ func TestClientOrchestrator_RestoreKeepsWorkloadType(t *testing.T) {
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, claudeCodeImage))
 
 	const model = "claude-sonnet-4-5"
-	ref, err := orch.RestoreInto(context.Background(), "wt04", "s3://bucket/wt04.tar", k8s.WorkloadSpec{Type: session.WorkloadTypeClaudeCode, Model: model})
+	restoredPods, err := orch.RestoreInto(context.Background(), "wt04", "s3://bucket/wt04.tar", k8s.WorkloadSpec{Type: session.WorkloadTypeClaudeCode, Model: model})
 	if err != nil {
 		t.Fatalf("restore into: %v", err)
 	}
+	ref := restoredPods.Workload
 	var pod *corev1.Pod
 	pods := listPods(t, cs)
 	for i := range pods {
@@ -398,13 +399,14 @@ func TestClientOrchestrator_RestorePlatformDefaultModelUsesSecret(t *testing.T) 
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, claudeCodeImage),
 		k8s.WithClaudeCredentialsSecret("provider-credentials"))
 
-	ref, err := orch.RestoreInto(context.Background(), "wt05", "s3://bucket/wt05.tar", k8s.WorkloadSpec{
+	restoredPods, err := orch.RestoreInto(context.Background(), "wt05", "s3://bucket/wt05.tar", k8s.WorkloadSpec{
 		Type:  session.WorkloadTypeClaudeCode,
 		Model: session.PlatformDefaultModel,
 	})
 	if err != nil {
 		t.Fatalf("restore into: %v", err)
 	}
+	ref := restoredPods.Workload
 	var restored *corev1.Pod
 	pods := listPods(t, cs)
 	for i := range pods {
