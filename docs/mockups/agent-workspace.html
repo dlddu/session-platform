@@ -228,7 +228,7 @@
     color:#b79ae0;background:#241b33;border:1px solid #3a2c52;border-radius:6px;padding:3px 7px;display:none}
   .input-row .stream-state.on{display:inline-block}
 
-  /* ---------- agent conversation (J6-S2~S4) ---------- */
+  /* ---------- agent conversation (STP-prompt-submit~STP-conversation-carry) ---------- */
   .ln.prompt{color:#d6c9ea}
   .ln.prompt .op{color:#b79ae0;font-weight:600}
   .ln.agent{color:var(--text-dim)}
@@ -442,7 +442,7 @@
             <div class="bar"><i class="active" id="ws-mem-bar" style="width:0"></i></div>
           </div>
 
-          <!-- conversation context (J6-S4 · AC-E4) -->
+          <!-- conversation context (STP-conversation-carry · AC-E4) -->
           <div class="panel">
             <h4><span class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.4 7.2L3 21l1.8-6.6A8 8 0 1 1 21 12Z"/></svg></span> Conversation</h4>
             <div id="ws-ctx-turns"></div>
@@ -658,7 +658,7 @@ function populate(s){
     paintTerm(termFrozen(s));
   }
 }
-// J6-S4 · 대화 문맥 패널 (AC-E4)
+// STP-conversation-carry · 대화 문맥 패널 (AC-E4)
 function paintContext(s){
   const turns = [
     {n:'1', t:'read invoice.go and tell me what the rounding bug is'},
@@ -754,7 +754,7 @@ function startWsTick(){
   let s = sessions.find(x=>x.id===qid());
   if(!s) s = sessions.find(x=>x.state==='active');
   populate(s); startWsTick();
-  // J6-S5 데모: snapshot 세션으로 들어오면 아카이브 복원을 재생한다
+  // STP-agent-freeze-resume 데모: snapshot 세션으로 들어오면 아카이브 복원을 재생한다
   if(s.state==='snapshot'){ setTimeout(()=>runRestore(s), 700); }
 })();
 

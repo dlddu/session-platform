@@ -449,7 +449,7 @@ func startShell(path string) (*shellProc, error) {
 	// The PTY slave becomes the shell's stdin/stdout/stderr and controlling
 	// terminal, which is what makes the shell interactive. TERM is set for the
 	// shell's line editing; the size is a sane default until a client-driven
-	// resize exists (J5-S2+).
+	// resize exists (STP-command-input and later).
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
 	if err != nil {

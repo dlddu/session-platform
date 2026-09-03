@@ -294,7 +294,7 @@ func TestWriteDeadShell503ReadStillServes(t *testing.T) {
 }
 
 // /attach upgrades to a WebSocket and survives an immediate open/close — the
-// exact reachability handshake the control plane performs (J5-S1).
+// exact reachability handshake the control plane performs (STP-shell-attach).
 func TestAttachUpgradesAndCloses(t *testing.T) {
 	sh := startTestShell(t)
 	srv := httptest.NewServer(routes(testLogger(), newTestAgent(sh)))

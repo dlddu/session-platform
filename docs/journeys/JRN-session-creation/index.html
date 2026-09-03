@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<!--
+  docs/journeys/JRN-session-creation/index.html — 여정 프로토타입
+
+  여정 문서: ../../user-journeys/JRN-session-creation.md
+  페이지 규약: ../README.md   (하네스: tools/journey-prototype.test.mjs)
+
+  이 파일은 화면 단위 mockup(../../mockups/new-session.html · workspace.html)에서
+  마크업을 옮겨 적었으나 스냅샷 복제가 아니다 — 이 페이지의 화면이 곧 원본이며
+  배선·입력·상태 변형을 직접 갖는다.
+-->
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JRN-session-creation — 첫 세션 생성과 격리된 작업</title>
+<style>
+  :root{
+    --ink:#0B1116; --surface:#131D24; --surface-2:#18242C; --surface-3:#1E2C35;
+    --line:#26333D; --line-2:#324250;
+    --text:#E8EFF4; --text-dim:#9DACB7; --text-faint:#5E6E79;
+    --active:#FFB43A; --active-soft:#3A2B12;
+    --frozen:#7FCDEA; --ok:#5FD08A; --danger:#F2616B; --danger-soft:#33171A;
+    --r:14px; --r-sm:9px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%}
+  body{
+    background:var(--ink); color:var(--text);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Noto Sans KR",Roboto,sans-serif;
+  }
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+  a{color:var(--frozen)}
+  :focus-visible{outline:2px solid var(--frozen);outline-offset:2px;border-radius:6px}
+  [hidden]{display:none !important}
+
+  .app{max-width:960px;margin:0 auto;padding:0 20px 72px}
+  .topbar{
+    display:flex;align-items:center;gap:12px;padding:16px 0;border-bottom:1px solid var(--line);
+    margin-bottom:24px;
+  }
+  .brand{font-weight:600;letter-spacing:.01em}
+  .crumb{color:var(--text-faint);font-size:12.5px}
+  .spacer{flex:1 1 auto}
+  .pill{
+    display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line-2);font-size:12px;color:var(--text-dim);
+  }
+  .pill.on{color:var(--active);border-color:var(--active-soft);background:var(--active-soft)}
+
+  .card{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+    padding:22px;margin-bottom:16px;
+  }
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--text-dim);margin:0 0 20px;font-size:13px}
+  .lab{display:block;font-size:12.5px;color:var(--text-dim);margin-bottom:6px}
+
+  label.field{display:block;margin-bottom:16px}
+  input[type=text],select{
+    width:100%;padding:9px 12px;border-radius:var(--r-sm);
+    background:var(--surface-2);border:1px solid var(--line-2);color:var(--text);font:inherit;
+  }
+  input[type=text]:disabled,select:disabled{opacity:.5}
+  .types{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+  .types label{
+    flex:1 1 180px;display:flex;gap:9px;align-items:flex-start;padding:12px;
+    background:var(--surface-2);border:1px solid var(--line-2);border-radius:var(--r-sm);cursor:pointer;
+  }
+  .types .t-name{font-weight:600}
+  .types .t-desc{display:block;color:var(--text-dim);font-size:12px;margin-top:2px}
+
+  .btn{padding:9px 16px;border-radius:var(--r-sm);border:1px solid var(--line-2);background:var(--surface-3)}
+  .btn.primary{background:var(--active);color:#20160A;border-color:var(--active);font-weight:600}
+  .btn.ghost{background:none}
+  .btn.small{font-size:12px;padding:4px 11px;border-radius:999px}
+  .btn.danger{border-color:var(--danger);color:var(--danger)}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+
+  .banner{border-radius:var(--r-sm);padding:12px 14px;margin-bottom:16px;font-size:13px}
+  .banner.err{background:var(--danger-soft);border:1px solid var(--danger);color:#FFD9DC}
+
+  .prov{list-style:none;margin:0 0 18px;padding:0}
+  .prov li{display:flex;gap:10px;align-items:center;padding:7px 0;color:var(--text-dim);font-size:13px}
+  .prov li .dot{width:8px;height:8px;border-radius:50%;background:var(--line-2);flex:0 0 auto}
+  .prov li.done{color:var(--text)}
+  .prov li.done .dot{background:var(--ok)}
+  .prov li.fail{color:#FFD9DC}
+  .prov li.fail .dot{background:var(--danger)}
+
+  .term{
+    background:#0A0F13;border:1px solid var(--line);border-radius:var(--r-sm);
+    padding:14px;min-height:170px;max-height:280px;overflow:auto;
+    white-space:pre-wrap;font-size:12.5px;line-height:1.65;
+  }
+  .term .o{color:var(--text-dim)}
+  .input-row{display:flex;gap:8px;align-items:center;margin-top:12px}
+  .input-row .ps1{color:var(--active)}
+  .input-row input{flex:1 1 auto}
+
+  .proto-bar{
+    display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:18px;padding-top:14px;
+    border-top:1px dashed var(--line-2);
+  }
+  .proto-bar .cap{font-size:11.5px;color:var(--text-faint);margin-right:2px}
+  .proto-bar button{
+    font-size:12px;padding:5px 10px;border-radius:999px;
+    border:1px solid var(--line-2);color:var(--text-dim);background:var(--surface-2);
+  }
+  .proto-bar button[data-branch-pending]{border-style:dashed}
+
+  .state-note{
+    margin:14px 0 0;padding:10px 12px;border-radius:var(--r-sm);font-size:12.5px;
+    background:var(--surface-3);border:1px solid var(--line-2);color:var(--text-dim);
+  }
+
+  details.step-meta{margin-top:22px;border-top:1px solid var(--line);padding-top:12px}
+  details.step-meta summary{cursor:pointer;color:var(--text-faint);font-size:12px}
+  details.step-meta dl{margin:12px 0 0;font-size:12.5px;color:var(--text-dim)}
+  details.step-meta dt{color:var(--text-faint);margin-top:8px}
+  details.step-meta dd{margin:2px 0 0}
+
+  footer{margin-top:28px;color:var(--text-faint);font-size:12px}
+</style>
+</head>
+<body>
+<div class="app">
+
+<header class="topbar">
+  <span class="brand">Session Pod Platform</span>
+  <span class="crumb">/ sessions</span>
+  <span class="spacer"></span>
+  <span class="pill">operator@dlddu</span>
+</header>
+
+<main data-journey="JRN-session-creation" data-step-active="STP-create-request">
+
+  <!-- ────────────────────────── STP-create-request ────────────────────────── -->
+  <section class="step" data-step="STP-create-request" id="STP-create-request">
+    <div class="card">
+      <h1>New session</h1>
+      <p class="sub">전용 pod 하나가 이 세션만을 위해 뜹니다. 이름 말고는 전부 기본값으로 넘어가도 됩니다.</p>
+
+      <div class="banner err" id="create-err" hidden>
+        <span id="create-err-msg"></span>
+        <button type="button" class="btn ghost small" id="btn-fix-model" hidden
+                data-branch-row="1"
+                data-branch-target="STP-create-request"
+                data-branch-open="trigger-400">값을 고쳐 다시 만들기</button>
+      </div>
+
+      <label class="field">
+        <span class="lab">Session name</span>
+        <input type="text" id="sess-name" class="mono" value="refactor-billing"
+               placeholder="my-session" data-required-input autocomplete="off">
+      </label>
+
+      <span class="lab">Workload type — 만든 뒤에는 바꿀 수 없습니다</span>
+      <div class="types">
+        <label>
+          <input type="radio" name="wtype" value="shell" checked data-required-input>
+          <span><span class="t-name">shell</span><span class="t-desc">인터랙티브 쉘. 명령을 직접 친다.</span></span>
+        </label>
+        <label>
+          <input type="radio" name="wtype" value="claude-code">
+          <span><span class="t-name">claude-code</span><span class="t-desc">에이전트에게 프롬프트로 일을 시킨다.</span></span>
+        </label>
+        <label>
+          <input type="radio" name="wtype" value="approval-gated">
+          <span><span class="t-name">approval-gated</span><span class="t-desc">밖으로 나가는 호출마다 사람이 승인한다.</span></span>
+        </label>
+      </div>
+
+      <label class="field">
+        <span class="lab">Model — <span class="mono">claude-code</span> · <span class="mono">approval-gated</span> 에서만 씁니다</span>
+        <select id="sess-model" data-required-input disabled>
+          <option value="platform-default">platform default</option>
+          <option value="model-a">model-a</option>
+          <option value="model-b">model-b</option>
+          <option value="model-retired">model-retired (지원 종료)</option>
+        </select>
+      </label>
+
+      <div class="row">
+        <button class="btn primary" id="btn-create" data-advance-to="STP-workspace-entry">Create session</button>
+        <button class="btn ghost" id="btn-cancel">Cancel</button>
+      </div>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">이 화면에서 마주치는 상태</span>
+        <button id="trigger-400" type="button">지원 종료된 모델로 제출 (400)</button>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-create-request</code> 세션 만들기</dd>
+        <dt>터치포인트</dt><dd>세션 목록 화면의 New session 모달 · 세션 생성 API</dd>
+        <dt>연결 AC</dt><dd>AC-A1</dd>
+        <dt>사용자 행동</dt><dd>세션 이름을 정하고 작업 환경(워크로드 타입)을 고른 뒤 생성을 요청한다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ────────────────────────── STP-workspace-entry ───────────────────────── -->
+  <section class="step" data-step="STP-workspace-entry" id="STP-workspace-entry" hidden>
+    <div class="card">
+      <h1>Provisioning <span class="mono" id="prov-name">refactor-billing</span></h1>
+      <p class="sub">이 세션 전용 워크로드 파드가 정확히 하나 뜹니다.</p>
+
+      <div class="banner err" id="prov-err" hidden>
+        <span id="prov-err-msg"></span>
+        <button type="button" class="btn ghost small" id="btn-retry-create" hidden
+                data-branch-row="2"
+                data-branch-target="STP-create-request"
+                data-branch-open="trigger-sched-fail">입력 화면으로 돌아가 다시 만들기</button>
+      </div>
+
+      <ul class="prov">
+        <li class="done"><span class="dot"></span>세션 레코드 생성</li>
+        <li class="done"><span class="dot"></span>전용 파드 스케줄</li>
+        <li class="done" id="prov-last"><span class="dot"></span><span id="prov-last-text">워크로드 기동 · <span class="mono">active</span> 등록</span></li>
+      </ul>
+
+      <div class="row">
+        <button class="btn primary" id="btn-enter" data-advance-to="STP-isolated-work">워크스페이스 열기</button>
+        <button class="btn ghost" id="btn-to-list"
+                data-branch-row="3"
+                data-branch-target="JRN-multi-session-switch#STP-session-list"
+                data-branch-pending>창을 닫고 세션 목록으로</button>
+      </div>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">이 화면에서 마주치는 상태</span>
+        <button id="trigger-sched-fail" type="button">파드 스케줄 실패 (재시도 가능)</button>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-workspace-entry</code> 작업 공간에 들어가기</dd>
+        <dt>터치포인트</dt><dd>생성 모달의 프로비저닝 단계 표시 → 워크스페이스 화면</dd>
+        <dt>연결 AC</dt><dd>AC-A1, AC-A2</dd>
+        <dt>사용자 행동</dt><dd>생성 진행을 잠깐 지켜보다가 새 세션의 작업 공간으로 들어간다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ────────────────────────── STP-isolated-work ─────────────────────────── -->
+  <section class="step" data-step="STP-isolated-work" id="STP-isolated-work" hidden>
+    <div class="card">
+      <div class="row" style="margin-bottom:14px">
+        <h1 style="margin:0"><span class="mono" id="ws-name">refactor-billing</span></h1>
+        <span class="pill on" id="ws-state">active</span>
+        <span class="pill mono">shell</span>
+        <span class="spacer"></span>
+        <span class="crumb">pod <span class="mono">sess-refactor-billing-0</span></span>
+      </div>
+
+      <div class="term mono" id="ws-term"><span class="o">session shell — 이 pod 안에서만 도는 쉘입니다.
+옆 세션의 부하·장애는 여기에 닿지 않습니다.</span>
+</div>
+
+      <div class="input-row">
+        <span class="ps1 mono">$</span>
+        <input type="text" id="ws-cmd" class="mono" placeholder="명령을 입력하고 Enter"
+               data-required-input autocomplete="off">
+        <button class="btn" id="btn-run">Run</button>
+      </div>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="row" style="margin-top:16px" data-journey-end>
+        <span class="pill" style="border-color:var(--ok);color:var(--ok)">완료 — 첫 read/write 성공</span>
+        <a href="../JRN-shell-interaction/#STP-shell-attach">쉘 작업 루프 계속하기 →</a>
+      </div>
+
+      <div class="proto-bar">
+        <span class="cap">여기서 갈라지는 길</span>
+        <button id="btn-idle" type="button"
+                data-branch-row="4"
+                data-branch-target="JRN-idle-resume#STP-auto-freeze"
+                data-branch-pending>자리를 비운 채 유휴 한계 도달</button>
+        <button id="btn-delete" type="button"
+                data-branch-row="5"
+                data-branch-target="JRN-session-deletion#STP-delete-intent"
+                data-branch-pending>잘못 만들었다 — 지우기</button>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-isolated-work</code> 내 세션에서만 일하기</dd>
+        <dt>터치포인트</dt><dd>워크스페이스 화면의 콘솔 · read/write API</dd>
+        <dt>연결 AC</dt><dd>AC-A2, AC-C2, AC-C3</dd>
+        <dt>완료 기준</dt><dd>세션이 <code>active</code> 로 전이되고 첫 read/write 를 한 번 성공한다.</dd>
+      </dl>
+    </details>
+  </section>
+
+</main>
+
+<footer>
+  여정 문서 <a href="../../user-journeys/JRN-session-creation.md"><code>JRN-session-creation.md</code></a> ·
+  페이지 규약 <a href="../README.md"><code>docs/journeys/README.md</code></a> ·
+  매핑 <a href="../../mockups/README.md"><code>docs/mockups/README.md</code></a>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var main = document.querySelector('[data-journey]');
+  var steps = Array.prototype.slice.call(document.querySelectorAll('[data-step]'));
+  var $ = function (id) { return document.getElementById(id); };
+
+  function show(id) {
+    var found = steps.some(function (s) { return s.getAttribute('data-step') === id; });
+    if (!found) return false;
+    steps.forEach(function (s) { s.hidden = s.getAttribute('data-step') !== id; });
+    main.setAttribute('data-step-active', id);
+    if (location.hash !== '#' + id) {
+      try { history.replaceState(null, '', '#' + id); } catch (e) { /* file:// 제약 */ }
+    }
+    return true;
+  }
+
+  function noteIn(el, text) {
+    var step = el.closest('[data-step]');
+    var n = step && step.querySelector('[data-state-note]');
+    if (!n) return;
+    n.textContent = text;
+    n.hidden = false;
+  }
+
+  /* ---------- STP-create-request ---------- */
+  var nameIn = $('sess-name');
+  var modelSel = $('sess-model');
+  var errBox = $('create-err');
+  var errMsg = $('create-err-msg');
+  var fixBtn = $('btn-fix-model');
+
+  function clearCreateError() {
+    errBox.hidden = true;
+    fixBtn.hidden = true;
+    errMsg.textContent = '';
+  }
+
+  function createError(msg, withFix) {
+    errMsg.textContent = msg;
+    fixBtn.hidden = !withFix;
+    errBox.hidden = false;
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('input[name=wtype]'), function (r) {
+    r.addEventListener('change', function () {
+      modelSel.disabled = document.querySelector('input[name=wtype]:checked').value === 'shell';
+      clearCreateError();
+    });
+  });
+
+  nameIn.addEventListener('input', clearCreateError);
+
+  $('btn-cancel').addEventListener('click', function () {
+    noteIn(this, '아무것도 만들지 않고 목록으로 돌아갑니다 — 반쯤 만들어진 세션은 남지 않습니다.');
+  });
+
+  $('trigger-400').addEventListener('click', function () {
+    document.querySelector('input[name=wtype][value=claude-code]').checked = true;
+    modelSel.disabled = false;
+    modelSel.value = 'model-retired';
+    $('btn-create').click();
+  });
+
+  fixBtn.addEventListener('click', function () {
+    modelSel.value = 'platform-default';
+    clearCreateError();
+    show('STP-create-request');
+  });
+
+  /* ---------- STP-workspace-entry ---------- */
+  var provErr = $('prov-err');
+  var provErrMsg = $('prov-err-msg');
+  var retryBtn = $('btn-retry-create');
+
+  function resetProvisioning() {
+    var last = $('prov-last');
+    last.className = 'done';
+    $('prov-last-text').innerHTML = '워크로드 기동 · <span class="mono">active</span> 등록';
+    provErr.hidden = true;
+    retryBtn.hidden = true;
+    $('btn-enter').disabled = false;
+  }
+
+  $('trigger-sched-fail').addEventListener('click', function () {
+    var last = $('prov-last');
+    last.className = 'fail';
+    $('prov-last-text').textContent = '파드 스케줄 실패 — 배치 가능한 노드가 없습니다';
+    provErrMsg.textContent =
+      '세션을 만들지 못했습니다. 반쯤 만들어진 세션은 목록에 남기지 않았습니다. ';
+    retryBtn.hidden = false;
+    provErr.hidden = false;
+    $('btn-enter').disabled = true;
+  });
+
+  retryBtn.addEventListener('click', function () {
+    resetProvisioning();
+    show('STP-create-request');
+  });
+
+  $('btn-to-list').addEventListener('click', function () {
+    noteIn(this, '세션은 살아 있으므로 목록에서 다시 엽니다. ' +
+      'JRN-multi-session-switch 의 STP-session-list 로 이어지지만 그 여정 페이지는 아직 없습니다.');
+  });
+
+  /* ---------- STP-isolated-work ---------- */
+  var term = $('ws-term');
+  var cmdIn = $('ws-cmd');
+
+  function run() {
+    var cmd = cmdIn.value.trim();
+    if (!cmd) {
+      noteIn(cmdIn, '빈 명령은 보내지 않습니다.');
+      return;
+    }
+    var body;
+    if (cmd === 'ls') {
+      body = 'Makefile  control-plane/  data-plane/  docs/  web/';
+    } else if (cmd.indexOf('cd ') === 0 || cmd.indexOf('export ') === 0) {
+      body = '';
+    } else {
+      body = 'ok — 이 세션의 pod 안에서만 실행되었습니다.';
+    }
+    var line = document.createElement('div');
+    line.textContent = '$ ' + cmd + (body ? '\n' + body : '');
+    term.appendChild(line);
+    cmdIn.value = '';
+    term.scrollTop = term.scrollHeight;
+  }
+
+  $('btn-run').addEventListener('click', run);
+  cmdIn.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); run(); }
+  });
+
+  $('btn-idle').addEventListener('click', function () {
+    $('ws-state').textContent = 'snapshot';
+    $('ws-state').classList.remove('on');
+    noteIn(this, '유휴 한계에 닿아 이 세션은 자동으로 접혔습니다. ' +
+      'JRN-idle-resume 의 STP-auto-freeze 로 이어지지만 그 여정 페이지는 아직 없습니다.');
+  });
+
+  $('btn-delete').addEventListener('click', function () {
+    noteIn(this, '잘못 만든 세션은 즉시 정리합니다. ' +
+      'JRN-session-deletion 의 STP-delete-intent 로 이어지지만 그 여정 페이지는 아직 없습니다.');
+  });
+
+  /* ---------- 전진 ---------- */
+  Array.prototype.forEach.call(document.querySelectorAll('[data-advance-to]'), function (btn) {
+    btn.addEventListener('click', function () {
+      if (btn.id === 'btn-create') {
+        var name = nameIn.value.trim();
+        var type = document.querySelector('input[name=wtype]:checked').value;
+        if (!name) {
+          createError('세션 이름이 필요합니다 (400) — pod 를 만들기 전에 거부했습니다.', false);
+          return;
+        }
+        if (type !== 'shell' && modelSel.value === 'model-retired') {
+          createError('지원이 끝난 모델입니다 (400) — pod 를 만들기 전에 거부했습니다.', true);
+          return;
+        }
+        clearCreateError();
+        $('prov-name').textContent = name;
+        $('ws-name').textContent = name;
+        resetProvisioning();
+      }
+      if (btn.id === 'btn-enter' && btn.disabled) return;
+      show(btn.getAttribute('data-advance-to'));
+    });
+  });
+
+  /* ---------- 딥링크 ---------- */
+  function fromHash() {
+    var id = (location.hash || '').replace(/^#/, '');
+    if (!id || !show(id)) show('STP-create-request');
+  }
+  window.addEventListener('hashchange', fromHash);
+  fromHash();
+})();
+</script>
+</body>
+</html>

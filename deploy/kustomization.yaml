@@ -65,7 +65,7 @@ patches:
   # (docs/criu-verification.md decision ⑤) it needs no CRIU-capable *runtime*,
   # only a capable kernel and a privileged session pod — and the e2e CRIU probe
   # confirms that holds on GitHub runners. That makes the AC-D4 round trip an
-  # automated assertion (TestDeferred_CRIUIntegrity) instead of a manual round.
+  # automated assertion (e2e_d4_process_tree_test.go) instead of a manual round.
   # It also needs the product snapshot trigger reachable over HTTP and an
   # archive store
   # shared by both replicas (CHECKPOINT_S3_ENDPOINT → the in-cluster MinIO,

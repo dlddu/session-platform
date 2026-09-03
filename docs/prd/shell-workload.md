@@ -3,10 +3,10 @@
 > 대상 요구사항: 세션 워크로드의 정체 확정 — **세션 = 전용 pod에서 실행되는 인터랙티브 쉘**
 > (data plane 워크로드 미정의 상태 해소, `../../data-plane/README.md` 참고)
 >
-> 📌 **범위 (2026-08-08 개정)**: 아래 AC-D1~D5는 **`workloadType=shell` 세션에만** 적용된다. 워크로드 타입이 복수가 되면서(AC-E1) 쉘은 유일한 워크로드가 아니라 **기본 타입**이 되었다. `claude-code` 타입의 대응 명세는 `claude-code-workload.md`(AC-E1~E6)이며, 두 문서는 같은 상위 AC(AC-A1·B1·B2·B3·C2·C3)에 대한 타입별 구체화로 나란히 존재한다.
+> 📌 **범위 (2026-08-08 개정, 2026-09-03 갱신)**: 아래 AC-D1~D5는 **`workloadType=shell` 세션에만** 적용된다. 워크로드 타입이 복수가 되면서(AC-E1) 쉘은 유일한 워크로드가 아니라 **기본 타입**이 되었다. 다른 타입의 대응 명세는 `claude-code-workload.md`(AC-E1~E6)와 `approval-gated-workload.md`(AC-F1~F6)이며, 세 문서는 같은 상위 AC(AC-A1·B1·B2·B3·C2·C3)에 대한 타입별 구체화로 나란히 존재한다.
 
 ## 달성 가치
-- **V1 세션 격리** — 쉘 프로세스 트리를 세션 전용 pod에 가둠 (AC-A1/A2 구체화)
+- **V1 세션 격리** — 쉘 프로세스 트리를 세션 전용 워크로드 파드에 가둠 (AC-A1/A2 구체화)
 - **V2 유휴 자원 회수** — 유휴 판정 기준을 클라이언트 쉘 I/O로 확정 (AC-B1 구체화)
 - **V3 끊김 없는 세션 연속성** — CRIU 체크포인트/복원의 대상이 쉘 프로세스 트리임을 확정하고(AC-B3 구체화), read/write를 쉘 입출력 시맨틱으로 확정 (AC-C2/C3 구체화)
 - **V4 자유로운 멀티세션 전환** — 전환 후에도 동일한 offset 커서 규약으로 출력을 이어 읽음 (AC-C2 구체화)
@@ -20,7 +20,7 @@
 ### AC-D1: 세션 워크로드 = 인터랙티브 쉘 프로세스
 - **설명**: `workloadType=shell` 세션의 data plane pod가 Ready가 되면, 그 pod 안에서 정확히 하나의 **인터랙티브 쉘**이 PTY(pseudo-terminal)에 연결되어 기동된다. 기본 쉘은 `/bin/bash`이며 `DATA_PLANE_SHELL` 환경변수로 오버라이드할 수 있다. 이 쉘 프로세스와 그 자식 프로세스 트리가 세션 워크로드의 전부다. control plane은 쉘을 직접 실행하지 않고 pod 오케스트레이션만 담당한다(AC-A1 유지).
 - **달성 가치**: V1
-- **구체화 대상**: AC-A1의 "실제 세션 워크로드", AC-A2의 "전용 pod"
+- **구체화 대상**: AC-A1의 "실제 세션 워크로드", AC-A2의 "전용 워크로드 파드" (이 타입은 보조 파드를 갖지 않는다)
 - **검증 방법**: 세션 생성 → pod Ready 후 해당 pod 안에 PTY에 연결된 쉘 프로세스가 정확히 1개 존재함을 확인한다. control plane 프로세스에는 쉘이 없음을 확인한다.
 
 ### AC-D2: write = 쉘 입력(stdin)
@@ -37,7 +37,7 @@
 
 > 📌 **설계 노트 (버퍼 증가)**: 페이지네이션은 `offset` 커서로 해소되어 반복 read의 `payload` 크기는 델타만큼으로 유지된다. shell 누적 버퍼 자체의 상한/ring buffer는 계속 보류 항목이다. snapshot 때는 `/checkpoint`가 scrollback을 CRIU images와 같은 archive에 별도 직렬화하고 `/restore`가 preload한다. `../doc-tracker.md`의 열린 항목 참고.
 
-> 📌 **설계 노트 (offset과 복원)** — *2026-08-08 갱신 (J5-S4/CRIU)*: snapshot→restore(AC-B2/AC-D4)를 거친 세션에서 복원 전 발급된 `nextOffset` 커서는 **유효하게 유지된다**. scrollback은 에이전트 메모리에 있지만 CRIU 대상은 쉘 프로세스 트리이므로, `/checkpoint`가 버퍼를 archive에 별도 직렬화하고 `/restore`가 CRIU restore 전에 동일 바이트열로 preload한다. 따라서 복원 후 클라이언트는 복원 전 `nextOffset`으로 read하면 델타만 받고(전체 재전송 아님), `offset=0`은 여전히 동결 전·후 전체 이력을 반환한다. (컨테이너 *재시작*(RestartPolicy Always)은 빈 버퍼의 새 에이전트로 시작하므로 이와 다르다 — 복원은 이어지고, 재시작은 이어지지 않는다.) 누적 버퍼 자체의 상한/ring buffer는 계속 열린 항목(`../doc-tracker.md`).
+> 📌 **설계 노트 (offset과 복원)** — *2026-08-08 갱신 (STP-shell-state-carry/CRIU)*: snapshot→restore(AC-B2/AC-D4)를 거친 세션에서 복원 전 발급된 `nextOffset` 커서는 **유효하게 유지된다**. scrollback은 에이전트 메모리에 있지만 CRIU 대상은 쉘 프로세스 트리이므로, `/checkpoint`가 버퍼를 archive에 별도 직렬화하고 `/restore`가 CRIU restore 전에 동일 바이트열로 preload한다. 따라서 복원 후 클라이언트는 복원 전 `nextOffset`으로 read하면 델타만 받고(전체 재전송 아님), `offset=0`은 여전히 동결 전·후 전체 이력을 반환한다. (컨테이너 *재시작*(RestartPolicy Always)은 빈 버퍼의 새 에이전트로 시작하므로 이와 다르다 — 복원은 이어지고, 재시작은 이어지지 않는다.) 누적 버퍼 자체의 상한/ring buffer는 계속 열린 항목(`../doc-tracker.md`).
 
 ### AC-D4: 쉘 프로세스 트리 = 보존 대상 상태
 - **설명**: 세션이 snapshot으로 동결될 때 CRIU 체크포인트의 대상은 이 쉘 프로세스 트리이며, 보존되는 "인메모리 상태"(AC-B3)는 구체적으로 다음을 포함한다: 환경 변수, 현재 작업 디렉터리, 쉘 변수·함수·alias, 실행 중인 포그라운드 자식 프로세스, 열린 파일 디스크립터. 복원(AC-B2) 후 쉘은 동결 직전의 프롬프트·작업 맥락 그대로 재개되어, 이어서 write하면 동결 이전 문맥 위에서 실행된다.

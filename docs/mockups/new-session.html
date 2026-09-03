@@ -255,7 +255,7 @@
   .gauge + .bar{margin-top:6px;margin-bottom:16px}
   .gauge + .bar:last-child{margin-bottom:0}
 
-  /* connections (J4) */
+  /* connections (JRN-concurrent-access) */
   .conn{display:flex;align-items:center;gap:11px;padding:10px 0;border-bottom:1px solid var(--line)}
   .conn:last-of-type{border-bottom:0}
   .conn .av{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;flex:0 0 30px;
@@ -332,6 +332,7 @@
   .field .name-in:focus{outline:none;border-color:var(--line-2)}
 
   .types{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .type.wide{grid-column:1 / -1}
   .type{position:relative;text-align:left;padding:13px;border-radius:12px;background:var(--ink-2);
     border:1px solid var(--line);transition:.18s var(--ease);display:block;width:100%}
   .type:hover{border-color:var(--line-2)}
@@ -449,7 +450,7 @@
     <div class="m-mark">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 21 7v10l-9 5-9-5V7l9-5Z"/><circle cx="12" cy="12" r="2"/></svg>
     </div>
-    <!-- ===== phase 1: configure (J6-S1 · AC-E1/AC-E6 · V8) ===== -->
+    <!-- ===== phase 1: configure (STP-workload-choice · AC-E1/AC-E6 · V8) ===== -->
     <div class="phase on" id="phase-config">
       <h3>New session</h3>
       <p class="desc">Pick the working environment for this session. Whichever you pick, it runs on its own dedicated pod.</p>
@@ -477,6 +478,13 @@
             <span class="t-n">claude-code</span>
             <span class="t-d">Agent CLI. You send prompts, it does the work.</span>
           </button>
+          <button class="type wide" data-type="approval-gated" onclick="pickType('approval-gated')">
+            <span class="t-ic">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 21 6v6c0 5-3.8 8.9-9 10-5.2-1.1-9-5-9-10V6l9-4Z"/><path d="M9 12l2 2 4-4"/></svg>
+            </span>
+            <span class="t-n">approval-gated</span>
+            <span class="t-d">Same agent, but it cannot reach the outside on its own — every outbound call waits for your approval.</span>
+          </button>
         </div>
 
         <div class="model-field" id="model-field">
@@ -496,7 +504,7 @@
       </div>
 
       <div class="guarantee">
-        <b>Same guarantees either way</b> — dedicated pod isolation, idle reclaim, restore-on-access, free switching, and consistent state apply to every workload type. Only the freeze mechanism differs under the hood.
+        <b>Same guarantees whichever you pick</b> — dedicated pod isolation, idle reclaim, restore-on-access, free switching, and consistent state apply to every workload type. Only the freeze mechanism, and whether outbound calls need your approval, differ.
       </div>
 
       <div class="modal-foot">
@@ -508,7 +516,7 @@
       </div>
     </div>
 
-    <!-- ===== phase 2: provisioning (J1-S2) ===== -->
+    <!-- ===== phase 2: provisioning (STP-workspace-entry) ===== -->
     <div class="phase" id="phase-prov">
       <h3>Creating session</h3>
       <p class="desc">A dedicated pod is provisioned for this session — one session, one pod, fully isolated.</p>
@@ -544,15 +552,18 @@ let sessions = [
   {id:'0a17', name:'model-train-7b', type:'shell', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'2h ago', checkpoint:'412 MB', reclaim:'2 vCPU · 4 GB'},
   {id:'c83d', name:'doc-migration', type:'claude-code', model:'platform default', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'18m ago', checkpoint:'38 MB archive', reclaim:'1 vCPU · 2 GB'}
 ];
-// workloadType은 세션 수명 동안 불변 (AC-E1) · 링크 대상이 타입에 따라 갈린다
+// workloadType은 세션 수명 동안 불변 (AC-E1/AC-F1) · 링크 대상이 타입에 따라 갈린다
+const WS_PAGE = {'claude-code':'agent-workspace.html', 'approval-gated':'gated-workspace.html', 'shell':'workspace.html'};
 function wsHref(s){
   if(s.state==='snapshot') return `restore.html?id=${s.id}`;
-  return s.type==='claude-code' ? `agent-workspace.html?id=${s.id}` : `workspace.html?id=${s.id}`;
+  return `${WS_PAGE[s.type]||'workspace.html'}?id=${s.id}`;
 }
 function typeTag(s){
-  return s.type==='claude-code'
-    ? `<span class="pod" style="color:#b79ae0" title="workloadType=claude-code">◇ claude-code</span>`
-    : `<span class="pod" style="color:var(--text-faint)" title="workloadType=shell">$ shell</span>`;
+  if(s.type==='claude-code')
+    return `<span class="pod" style="color:#b79ae0" title="workloadType=claude-code">◇ claude-code</span>`;
+  if(s.type==='approval-gated')
+    return `<span class="pod" style="color:var(--idle)" title="workloadType=approval-gated">⏸ approval-gated</span>`;
+  return `<span class="pod" style="color:var(--text-faint)" title="workloadType=shell">$ shell</span>`;
 }
 function fmtSec(s){const m=Math.floor(s/60),ss=s%60;return m+':'+String(ss).padStart(2,'0');}
 function qid(){return new URLSearchParams(location.search).get('id');}
@@ -606,9 +617,9 @@ function cardHTML(s){
         <div class="row"><span class="k">frozen</span><span class="v">${s.frozenAgo}</span></div>
         <div class="row"><span class="k">reclaimed</span><span class="v">${s.reclaim}</span></div>
       </div></div>
-      <div class="snap-hint">${ic('clock',13)} ${s.type==='claude-code'
-        ? 'open to restore the archive and continue the conversation'
-        : 'open to thaw and resume exactly where it froze'}</div>`;
+      <div class="snap-hint">${ic('clock',13)} ${s.type==='shell'
+        ? 'open to thaw and resume exactly where it froze'
+        : 'open to restore the archive and continue the conversation'}</div>`;
   }
   const podLine = s.state==='snapshot'
     ? `<span class="pod" style="color:#5a7686">${ic('pod',12)} pod reclaimed</span>`
@@ -642,16 +653,17 @@ function startGridTick(){
   },1000);
 }
 
-/* ---------- J6-S1 · workload type selection (AC-E1 / AC-E6 · V8) ---------- */
+/* ---------- STP-workload-choice · workload type selection (AC-E1 / AC-E6 · V8) ---------- */
 let provBusy=false;
 let draft = { type:'shell', model:'platform-default' };
 
+// 에이전트 계열 타입(claude-code · approval-gated)만 model을 고른다 (AC-E6 · AC-F1)
+const AGENT_TYPES = ['claude-code','approval-gated'];
 function pickType(t){
   if(provBusy) return;
   draft.type = t;
   document.querySelectorAll('.type').forEach(b=>b.classList.toggle('sel', b.dataset.type===t));
-  // model은 claude-code 타입에만 해당 (AC-E6)
-  document.getElementById('model-field').classList.toggle('on', t==='claude-code');
+  document.getElementById('model-field').classList.toggle('on', AGENT_TYPES.includes(t));
 }
 function pickModel(m){
   if(provBusy) return;
@@ -670,16 +682,18 @@ const MODEL_LABEL = {'platform-default':'platform default','model-a':'model-a','
 
 function startProvision(){
   if(provBusy) return; provBusy=true;
-  const isAgent = draft.type==='claude-code';
+  const isAgent = AGENT_TYPES.includes(draft.type);
   const rawName = (document.getElementById('sess-name').value||'').trim();
 
   document.getElementById('phase-config').classList.remove('on');
   document.getElementById('phase-prov').classList.add('on');
   document.getElementById('prov-type').textContent =
-    isAgent ? `workloadType=claude-code · model=${MODEL_LABEL[draft.model]}` : 'workloadType=shell';
-  // control plane은 타입에 따라 서로 다른 워크로드로 pod를 프로비저닝한다 (AC-E1)
+    isAgent ? `workloadType=${draft.type} · model=${MODEL_LABEL[draft.model]}` : 'workloadType=shell';
+  // control plane은 타입에 따라 서로 다른 워크로드로 pod를 프로비저닝한다 (AC-E1/AC-F1)
+  // approval-gated는 워크로드 파드와 함께 세션 전용 MCP 보조 파드를 세운다 (AC-F4)
   document.getElementById('prov-step-2').textContent =
-    isAgent ? 'Schedule dedicated pod (agent CLI image)' : 'Schedule dedicated pod (shell image)';
+    draft.type==='approval-gated' ? 'Schedule dedicated pod + session MCP pod'
+    : isAgent ? 'Schedule dedicated pod (agent CLI image)' : 'Schedule dedicated pod (shell image)';
 
   const steps=[...document.querySelectorAll('#prov-steps .step')];
   steps.forEach(s=>{s.className='step'; s.querySelector('.done-t').textContent='';
@@ -707,7 +721,8 @@ function startProvision(){
       sessions.unshift(s);
       setTimeout(()=>{
         closeModal(); provBusy=false; renderGrid(); renderSummary();
-        toast(isAgent ? 'claude-code session created on a dedicated pod' : 'shell session created on a dedicated pod','warm');
+        toast(draft.type==='approval-gated' ? 'approval-gated session created — outbound calls will need your approval'
+          : isAgent ? 'claude-code session created on a dedicated pod' : 'shell session created on a dedicated pod','warm');
       }, reduce?80:480);
     }
   };

@@ -675,7 +675,7 @@ func (o *ClientOrchestrator) waitReady(ctx context.Context, name string) (*corev
 
 // Reach proves the control plane can reach the session shell (AC-D1): it opens
 // the agent's attach WebSocket stream at the pod IP and closes it immediately.
-// No payload moves — the stdin/stdout semantics on this stream are J5-S2/S3.
+// No payload moves — the stdin/stdout semantics on this stream are STP-command-input/STP-output-read.
 // The control plane dials over the pod network; it never execs into the pod.
 func (o *ClientOrchestrator) Reach(ctx context.Context, ref PodRef) error {
 	if ref.IP == "" {
