@@ -75,6 +75,15 @@ const (
 	// sessionMCPURLEnv carries the address of this session's MCP (AC-F6). It is
 	// the approval-gated agent's only tool surface that leaves the pod.
 	sessionMCPURLEnv = "SESSION_MCP_URL"
+	// The MCP container's own environment (AC-F6): the gateway triple that lets
+	// it ask a human, and the session id that makes AC-F3's external identifier
+	// unique. None of these is projected into the workload pod. Keep in sync
+	// with control-plane/internal/adapter/k8s (ApprovalGateway*EnvVar,
+	// SessionIDEnvVar).
+	approvalGatewayURLEnv    = "APPROVAL_GATEWAY_URL"
+	approvalGatewayAPIKeyEnv = "APPROVAL_GATEWAY_API_KEY"
+	approvalGatewayUserIDEnv = "APPROVAL_GATEWAY_USER_ID"
+	sessionIDEnv             = "SESSION_ID"
 
 	// defaultShell is the interactive shell launched when DATA_PLANE_SHELL is
 	// unset (AC-D1).
