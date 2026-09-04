@@ -98,11 +98,11 @@
 | 판정일 | 범위 | 주석 줄 | 지문 | 결과 |
 | --- | --- | ---: | --- | --- |
 | 2026-09-04 | `control-plane/internal/session/session.go` · `control-plane/internal/session/manager.go` | 143 | `b43d405ac066` | 첫 판정 패스 — **162줄 판정, 제거 19 · 유지 143**. 상세 ↓ |
-| 2026-09-04 | `control-plane/internal/service/manager.go` · `control-plane/internal/service/manager_test.go` · `control-plane/internal/service/reaper.go` · `control-plane/internal/service/reaper_test.go` · `control-plane/internal/service/auxiliary_pods_test.go` · `control-plane/internal/service/workload_type_test.go` | 229 | `f708d58cdb19` | 2차 판정 패스 — **299줄 판정, 제거 75 · 유지 224**(지문 기준 304 → 229, 오검출 5줄 포함). 상세 ↓ |
+| 2026-09-04 | `control-plane/internal/service/manager.go` · `control-plane/internal/service/manager_test.go` · `control-plane/internal/service/reaper.go` · `control-plane/internal/service/reaper_test.go` · `control-plane/internal/service/auxiliary_pods_test.go` · `control-plane/internal/service/workload_type_test.go` | 239 | `1d85544cb83a` | 2차 판정 패스 — **299줄 판정, 제거 75 · 유지 224**(지문 기준 304 → 229, 오검출 5줄 포함). *2026-09-04 증분 재판정: AC-F3 유휴 예외가 더한 23줄 판정 — 제거 13 · 유지 10 (229 → 239).* 상세 ↓ |
 | 2026-09-04 | `control-plane/internal/adapter/k8s/client_orchestrator.go` · `control-plane/internal/adapter/k8s/orchestrator.go` · `control-plane/internal/adapter/k8s/network_policy.go` · `control-plane/internal/adapter/k8s/orchestrator_test.go` | 328 | `b09a85723f8c` | 3차 판정 패스 — **473줄 판정, 제거 153 · 유지 320**. 이후 #66이 더한 14줄을 재판정(제거 6 · 유지 8) — 누적 **487줄 판정, 제거 159 · 유지 328**. 상세 ↓ |
 <!-- /판정-원장 -->
 
-판정 완료 합계 **<!-- 판정-합계 -->700<!-- /판정-합계 -->줄**(등재 범위의 현재 줄 수 합).
+판정 완료 합계 **<!-- 판정-합계 -->710<!-- /판정-합계 -->줄**(등재 범위의 현재 줄 수 합).
 전체 대비 비율과 미판정 잔량은 **게이트가 출력한다** — 프로즈에 적으면 낡는다.
 
 ### 2026-09-04 — `control-plane/internal/session/` (판정 162줄)
@@ -223,6 +223,23 @@ replays the full session history`. 이 문서의 「포인터는 남기고 사�
 > 교집합**이라 열어 둔 채로는 어떤 범위도 안전하게 집을 수 없으며, ③ 2026-09-03 이후 무변경인
 > 채로 main이 여러 번 전진해 `mergeable:false`다. 그 PR이 만졌던 경로는 이 원장이 하나씩
 > 정책 기준으로 다시 판정한다 — `internal/adapter/k8s/`가 3차 패스로 그 첫 사례다.
+
+#### 증분 재판정 — AC-F3 유휴 예외가 더한 23줄 (2026-09-04)
+
+유휴 예외 슬라이스가 `manager.go`에 주석 23줄을 더해 이 범위가 R2에 걸렸다. 게이트가 요구한
+대로 **더해진 23줄만** 같은 절차로 판정했다 — **제거 13 · 유지 10**(229 → 239).
+
+| 자리 | 판정 | 근거 |
+| --- | --- | --- |
+| `approvalWaitReporter` doc (3→1) | 2줄 제거 | 「선택적 능력 인터페이스인 이유」는 ③ PR 본문·④ 커밋 메시지에 있다. 게다가 **바로 옆 형제 셋**(`checkpointAborter` · `generationCheckpointer` · `agentCheckpointAborter`)은 주석이 **0줄**이다 — 같은 형태에 다른 기준을 적용하지 않는다. AC 포인터 한 줄만 남겼다 |
+| `WithClock` doc (4→2) | 2줄 제거 | 「대기 중에는 카운트가 진행되지 않고, 끝나면 진행된다」는 인용은 `test/approval-gated-workload.md` 시나리오 5의 **기대 결과를 그대로 옮겨 적은 사본**이다. 운영 규칙대로 **경로(포인터)는 남기고 사본을 지웠다.** exported 라 식별자로 시작하는 doc 첫 줄은 유지 |
+| `snapshot()` 인라인 (6→2) | 4줄 제거 | 「결정이 나면 갱신이 멈추고 일반 카운트로 돌아간다」는 `prd/approval-gated-workload.md:81`의 사본이다. 반면 **「플랫폼이 클라이언트 접근 없이 `lastAccess`를 전진시키는 유일한 자리」**는 한 지점의 코드로는 보이지 않는 사실(모든 `Touch` 호출자를 훑어야 안다)이라 유지 |
+| `holdingForApproval` doc (10→5) | 5줄 제거 | 세 좁힘 중 **둘은 바로 아래 코드가 말한다**(`if sess.WorkloadType != …` 가드 · `if err != nil { return false }`) → 복원 경로 ①. 남긴 하나는 **호출자의 성질**(「유일한 호출자가 리퍼 경로다」)이라 이 자리에서 보이지 않고, 수동 동결이 여전히 어는 이유를 지탱한다 |
+
+**갈린 판정**: `snapshot()`의 「유일한 자리」와 `holdingForApproval`의 「유일한 호출자」는 둘 다
+*지금은* 참이지만 **코드가 바뀌면 조용히 거짓이 되는 형태**다(정책이 경계하는 바로 그 종류).
+그럼에도 남긴 이유는 둘 다 **한 지점을 읽어서는 확인할 수 없는 전역 사실**이고, 틀렸을 때의
+비용이 「없어서 다시 전수 조사하는」 비용보다 작다고 봤기 때문이다. 뒤집고 싶으면 이 표를 고친다.
 
 ### 2026-09-04 — `control-plane/internal/adapter/k8s/` (판정 473줄)
 
