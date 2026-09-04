@@ -261,6 +261,44 @@ func (c *HTTPClient) Read(ctx context.Context, pod string, offset int64) (string
 	return out.Payload, out.NextOffset, nil
 }
 
+// AwaitingApproval reports whether the pod is blocked on a human decision
+// right now (AC-F3), which is what lets the idle path hold the count instead
+// of freezing a session mid-approval.
+//
+// It is deliberately not on the Client interface. Only one workload type has a
+// gate, only the idle path asks, and widening the port every session I/O fake
+// implements would buy nothing: the service reaches it through an optional
+// capability assertion, the same way it reaches CheckpointWithGeneration.
+func (c *HTTPClient) AwaitingApproval(ctx context.Context, pod string) (bool, error) {
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL(ip)+"/approval", nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("read approval wait from session pod %s: %w", pod, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return false, fmt.Errorf(
+			"read approval wait from session pod %s: agent returned %d: %s",
+			pod, resp.StatusCode, strings.TrimSpace(string(body)),
+		)
+	}
+	var out struct {
+		Awaiting bool `json:"awaiting"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return false, fmt.Errorf("decode approval wait from session pod %s: %w", pod, err)
+	}
+	return out.Awaiting, nil
+}
+
 // Stream opens the data plane's long-lived SSE output feed at offset. Unlike
 // the short Read client, it uses the context-bounded streaming HTTP client so
 // an otherwise healthy workspace connection has no 30-second deadline.
