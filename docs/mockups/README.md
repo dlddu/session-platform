@@ -45,10 +45,10 @@
 > (토큰·프리미티브 `tokens.css`, 컴포넌트·패턴 `web/src/app/shell.css`). 코드가 정본이고 문서는 색인입니다.
 > 다만 mockup 6개는 여전히 그 정본을 참조하지 않고 같은 값을 각자 인라인으로 갖고 있습니다 —
 > 값은 일치하지만 **연결은 아니므로 "미연결" 상태는 유지**됩니다.
-> 토큰 하나를 바꾸려면 최소 **7**곳 · 최대 **13**곳을 고쳐야 하며, 이 중복이 남은 🟢 위험의 실체입니다.
+> 토큰 하나를 바꾸려면 최소 **7**곳 · 최대 **16**곳을 고쳐야 하며, 이 중복이 남은 🟢 위험의 실체입니다.
 > **하나의 숫자가 아닙니다** — 고칠 곳의 수는 *어느 토큰이냐*에 따라 다릅니다. mockup만 쓰는
 > 토큰(`--rail`·`--idle`·`--resume` 등)은 7곳이고, 문서 포털 허브(`docs/index.html`)와 여정
-> 페이지(`docs/journeys/*/index.html`)까지 복제한 토큰(`--ink`·`--line`·`--text` 등)은 13곳입니다.
+> 페이지(`docs/journeys/*/index.html`)까지 복제한 토큰(`--ink`·`--line`·`--text` 등)은 16곳입니다.
 > **복제는 mockup 밖에도 있습니다** — 전체 목록과 처분은
 > [디자인 시스템 README의 「토큰 복제 원장」](../../web/src/design/README.md#토큰-복제-원장)이
 > 정본이고, 이 두 숫자는 `scripts/check-render-fidelity.py`(R10)가 레포 전수 실측으로 대조합니다.
@@ -232,22 +232,24 @@ mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="pane
 |------|------|--------------------|------|
 | `JRN-session-creation` | `STP-create-request` · `STP-workspace-entry` · `STP-isolated-work` | [`journeys/JRN-session-creation/`](../journeys/JRN-session-creation/index.html) | ✅ 페이지 있음 |
 | `JRN-idle-resume` | `STP-step-away` · `STP-auto-freeze` · `STP-reaccess` · `STP-restore-resume` | [`journeys/JRN-idle-resume/`](../journeys/JRN-idle-resume/index.html) | ✅ 페이지 있음 |
-| `JRN-multi-session-switch` | `STP-session-list` · `STP-switch-away` · `STP-target-activation` · `STP-switch-back` | — | ⏳ 예정 |
+| `JRN-multi-session-switch` | `STP-session-list` · `STP-switch-away` · `STP-target-activation` · `STP-switch-back` | [`journeys/JRN-multi-session-switch/`](../journeys/JRN-multi-session-switch/index.html) | ✅ 페이지 있음 |
 | `JRN-concurrent-access` | `STP-parallel-clients` · `STP-collision` · `STP-consistent-result` | — (그리지 않음) | ⚪ 예외 등재 |
 | `JRN-shell-interaction` | `STP-shell-attach` · `STP-command-input` · `STP-output-read` · `STP-shell-state-carry` | [`journeys/JRN-shell-interaction/`](../journeys/JRN-shell-interaction/index.html) | ✅ 페이지 있음 |
-| `JRN-agent-prompt-loop` | `STP-workload-choice` · `STP-prompt-submit` · `STP-response-watch` · `STP-conversation-carry` · `STP-agent-freeze-resume` | — | ⏳ 예정 |
+| `JRN-agent-prompt-loop` | `STP-workload-choice` · `STP-prompt-submit` · `STP-response-watch` · `STP-conversation-carry` · `STP-agent-freeze-resume` | [`journeys/JRN-agent-prompt-loop/`](../journeys/JRN-agent-prompt-loop/index.html) | ✅ 페이지 있음 |
 | `JRN-manual-freeze` | `STP-freeze-decision` · `STP-freeze-now` · `STP-freeze-confirm` | [`journeys/JRN-manual-freeze/`](../journeys/JRN-manual-freeze/index.html) | ✅ 페이지 있음 |
 | `JRN-session-deletion` | `STP-delete-intent` · `STP-delete-confirm` · `STP-delete-settled` | [`journeys/JRN-session-deletion/`](../journeys/JRN-session-deletion/index.html) | ✅ 페이지 있음 |
-| `JRN-approval-gated-work` | `STP-gated-prompt-submit` · `STP-approval-wait` · `STP-approval-decide` · `STP-gated-result` | — | ⏳ 예정 |
+| `JRN-approval-gated-work` | `STP-gated-prompt-submit` · `STP-approval-wait` · `STP-approval-decide` · `STP-gated-result` | [`journeys/JRN-approval-gated-work/`](../journeys/JRN-approval-gated-work/index.html) | ✅ 페이지 있음 |
 
-현재 **5 / 8**(예외 1건 제외한 판정 대상 8개 중 5개). `⏳ 예정` 3건은 잔여 격차이며,
+현재 **8 / 8**(예외 1건 제외한 판정 대상 8개 전부). `⏳ 예정` 은 0건이고,
 `⚪` 1건은 [`../doc-structure-state.md`](../doc-structure-state.md) 의 "수용된 위험" 등재분입니다.
 
 **여정 간 분기의 미승급 링크**: `⏳ 예정` 여정을 대상으로 하는 분기는 기존 페이지에서
 `data-branch-pending` 으로 표시돼 있습니다. 그 여정의 페이지가 생기는 순간 하네스가
 **실패로 잡아** 실제 링크로 승급하게 강제합니다 — 페이지만 늘고 갈래가 끊긴 채 남는 상태를 막습니다.
 승급된 링크는 하네스가 실제로 눌러 **대상 페이지의 그 단계가 열리는지**까지 확인합니다.
-현재 남은 미승급 링크는 `JRN-multi-session-switch` 대상 1건뿐입니다.
+현재 남은 미승급 링크는 **0건**입니다 — 판정 대상 8개가 모두 페이지를 가지므로 여정 간 갈래는
+전부 실링크입니다. 남아 있는 `data-branch-pending` 3건은 모두 `JRN-concurrent-access`(⚪) 대상이며
+`data-branch-excepted` 를 동반합니다(앞으로도 페이지가 생기지 않는 갈래).
 `JRN-concurrent-access`(⚪)를 향한 갈래는 페이지가 생기지 않으므로 `data-branch-excepted` 로
 "안 만든 것"이 아니라 "그리지 않기로 한 것"임을 구분해 표시합니다.
 

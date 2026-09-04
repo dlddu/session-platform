@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<!--
+  docs/journeys/JRN-multi-session-switch/index.html — 여정 프로토타입
+
+  여정 문서: ../../user-journeys/JRN-multi-session-switch.md
+  페이지 규약: ../README.md   (하네스: tools/journey-prototype.test.mjs)
+
+  화면 단위 mockup(../../mockups/index.html · workspace.html · restore.html)에서
+  마크업을 옮겨 적었으나 스냅샷 복제가 아니다 — 이 페이지의 화면이 곧 원본이며
+  배선·입력·상태 변형을 직접 갖는다.
+-->
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JRN-multi-session-switch — 여러 세션 사이 자유 전환</title>
+<style>
+  :root{
+    --ink:#0B1116; --surface:#131D24; --surface-2:#18242C; --surface-3:#1E2C35;
+    --line:#26333D; --line-2:#324250;
+    --text:#E8EFF4; --text-dim:#9DACB7; --text-faint:#5E6E79;
+    --active:#FFB43A; --active-soft:#3A2B12;
+    --frozen:#7FCDEA; --frozen-soft:#13313D; --ok:#5FD08A; --danger:#F2616B; --danger-soft:#33171A;
+    --r:14px; --r-sm:9px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%}
+  body{
+    background:var(--ink); color:var(--text);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Noto Sans KR",Roboto,sans-serif;
+  }
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+  a{color:var(--frozen)}
+  :focus-visible{outline:2px solid var(--frozen);outline-offset:2px;border-radius:6px}
+  [hidden]{display:none !important}
+
+  .app{max-width:960px;margin:0 auto;padding:0 20px 72px}
+  .topbar{
+    display:flex;align-items:center;gap:12px;padding:16px 0;border-bottom:1px solid var(--line);
+    margin-bottom:24px;
+  }
+  .brand{font-weight:600;letter-spacing:.01em}
+  .crumb{color:var(--text-faint);font-size:12.5px}
+  .spacer{flex:1 1 auto}
+  .pill{
+    display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line-2);font-size:12px;color:var(--text-dim);
+  }
+  .pill.on{color:var(--active);border-color:var(--active-soft);background:var(--active-soft)}
+  .pill.snap{color:var(--frozen);border-color:var(--frozen-soft);background:var(--frozen-soft)}
+  .pill.idle{color:var(--text-dim)}
+
+  .card{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+    padding:22px;margin-bottom:16px;
+  }
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--text-dim);margin:0 0 20px;font-size:13px}
+  .lab{display:block;font-size:12.5px;color:var(--text-dim);margin-bottom:6px}
+
+  label.field{display:block;margin-bottom:16px}
+  input[type=text],input[type=search],select,textarea{
+    width:100%;padding:9px 12px;border-radius:var(--r-sm);
+    background:var(--surface-2);border:1px solid var(--line-2);color:var(--text);font:inherit;
+  }
+  .filters{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+  .filters label.field{flex:1 1 220px;margin:0}
+
+  .btn{padding:9px 16px;border-radius:var(--r-sm);border:1px solid var(--line-2);background:var(--surface-3)}
+  .btn.primary{background:var(--frozen);color:#08161C;border-color:var(--frozen);font-weight:600}
+  .btn.ghost{background:none}
+  .btn.small{font-size:12px;padding:4px 11px;border-radius:999px}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+
+  .banner{border-radius:var(--r-sm);padding:12px 14px;margin-bottom:16px;font-size:13px}
+  .banner.err{background:var(--danger-soft);border:1px solid var(--danger);color:#FFD9DC}
+  .banner.info{background:var(--frozen-soft);border:1px solid var(--line-2);color:var(--text-dim)}
+  .banner.ok{background:#12281B;border:1px solid var(--ok);color:#CBF0D8}
+
+  .slist{list-style:none;margin:0 0 16px;padding:0}
+  .slist li{
+    display:flex;gap:12px;align-items:center;padding:12px 14px;margin-bottom:8px;
+    background:var(--surface-2);border:1px solid var(--line-2);border-radius:var(--r-sm);
+  }
+  .slist .nm{font-weight:600}
+  .slist .when{color:var(--text-faint);font-size:12px}
+  .empty{padding:18px;text-align:center;color:var(--text-faint);font-size:13px;
+    border:1px dashed var(--line-2);border-radius:var(--r-sm);margin-bottom:16px}
+
+  .term{
+    background:#0A1015;border:1px solid var(--line);border-radius:var(--r-sm);
+    padding:12px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:12.5px;color:var(--text-dim);white-space:pre-wrap;margin-bottom:14px;min-height:96px;
+  }
+  .prov{list-style:none;margin:0 0 18px;padding:0}
+  .prov li{display:flex;gap:10px;align-items:center;padding:7px 0;color:var(--text-dim);font-size:13px}
+  .prov li .dot{width:8px;height:8px;border-radius:50%;background:var(--line-2);flex:0 0 auto}
+  .prov li.done{color:var(--text)}
+  .prov li.done .dot{background:var(--ok)}
+
+  .kv{display:grid;grid-template-columns:120px 1fr;gap:4px 14px;font-size:12.5px;margin:14px 0 0}
+  .kv dt{color:var(--text-faint)}
+  .kv dd{margin:0;color:var(--text-dim)}
+
+  .proto-bar{
+    display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:18px;padding-top:14px;
+    border-top:1px dashed var(--line-2);
+  }
+  .proto-bar .cap{font-size:11.5px;color:var(--text-faint);margin-right:2px}
+  .proto-bar button,.proto-bar a[data-branch-target]{
+    font-size:12px;padding:5px 10px;border-radius:999px;text-decoration:none;
+    border:1px solid var(--line-2);color:var(--text-dim);background:var(--surface-2);
+  }
+  .proto-bar a[data-branch-target]{color:var(--frozen)}
+  .proto-bar [data-branch-pending]{border-style:dashed}
+
+  .state-note{
+    margin:14px 0 0;padding:10px 12px;border-radius:var(--r-sm);font-size:12.5px;
+    background:var(--surface-3);border:1px solid var(--line-2);color:var(--text-dim);
+  }
+
+  details.step-meta{margin-top:22px;border-top:1px solid var(--line);padding-top:12px}
+  details.step-meta summary{cursor:pointer;color:var(--text-faint);font-size:12px}
+  details.step-meta dl{margin:12px 0 0;font-size:12.5px;color:var(--text-dim)}
+  details.step-meta dt{color:var(--text-faint);margin-top:8px}
+  details.step-meta dd{margin:2px 0 0}
+
+  footer{margin-top:28px;color:var(--text-faint);font-size:12px}
+</style>
+</head>
+<body>
+<div class="app">
+
+<header class="topbar">
+  <span class="brand">Session Pod Platform</span>
+  <span class="crumb" id="crumb">/ sessions</span>
+  <span class="spacer"></span>
+  <span class="pill">operator@dlddu</span>
+</header>
+
+<main data-journey="JRN-multi-session-switch" data-step-active="STP-session-list">
+
+  <!-- ────────────────────────── STP-session-list ────────────────────────── -->
+  <section class="step" data-step="STP-session-list" id="STP-session-list">
+    <div class="card">
+      <h1>Sessions</h1>
+      <p class="sub">지금 살아 있는 것과 접혀 있는 것을 한 화면에서 봅니다 — <strong>어느 것이 살아 있는지 계산할 필요가 없습니다.</strong></p>
+
+      <div class="banner err" id="gone-404" hidden>
+        <span class="mono">spike-tokenizer</span> 는 이미 삭제된 세션입니다 (404).
+        빈 세션을 새로 만들지 않고 목록으로 되돌렸습니다.
+      </div>
+
+      <div class="filters">
+        <label class="field">
+          <span class="lab">상태로 좁히기</span>
+          <select id="filter-state" data-required-input>
+            <option value="all">전체</option>
+            <option value="active">지금 살아 있음 (active)</option>
+            <option value="snapshot">접혀 있음 — 다시 열 수 있음 (snapshot)</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="lab">이름으로 찾기</span>
+          <input type="text" id="filter-name" data-required-input placeholder="예: refactor">
+        </label>
+      </div>
+
+      <ul class="slist" id="session-list">
+        <li data-state="active" data-name="refactor-billing">
+          <span class="nm mono">refactor-billing</span>
+          <span class="pill on">active</span>
+          <span class="pill mono">shell</span>
+          <span class="when">2분 전 활동 · 빌드 실행 중</span>
+          <span class="spacer"></span>
+          <button class="btn small primary" id="btn-open-a" data-advance-to="STP-switch-away">이어서 작업하기</button>
+        </li>
+        <li data-state="snapshot" data-name="spike-tokenizer">
+          <span class="nm mono">spike-tokenizer</span>
+          <span class="pill snap">snapshot</span>
+          <span class="pill mono">claude-code</span>
+          <span class="when">3시간 전 접힘 · 다시 열 수 있음</span>
+        </li>
+        <li data-state="active" data-name="docs-portal">
+          <span class="nm mono">docs-portal</span>
+          <span class="pill on">active</span>
+          <span class="pill mono">shell</span>
+          <span class="when">어제 활동</span>
+        </li>
+      </ul>
+
+      <p class="empty" id="list-empty" hidden>조건에 맞는 세션이 없습니다. 조건을 지우면 전체가 다시 보입니다.</p>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">여기서 갈라지는 길</span>
+        <a id="br-too-many" href="../JRN-session-deletion/index.html#STP-delete-intent"
+           data-branch-row="5"
+           data-branch-target="JRN-session-deletion#STP-delete-intent">세션이 너무 많아 고르기 어렵다 — 정리하기</a>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-session-list</code> 내 세션들을 훑어본다</dd>
+        <dt>터치포인트</dt><dd>세션 목록 화면 — 이름 · 워크로드 타입 태그 · 상태 배지</dd>
+        <dt>연결 AC</dt><dd>전용 AC 없음 — 여정 README 의 열린 결정 참고</dd>
+        <dt>페인포인트</dt><dd>상태 배지의 뜻이 불분명하면 접힌 세션을 죽은 것으로 오해해 새로 만든다 — "다시 열 수 있음"이라는 말로 적는다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ────────────────────────── STP-switch-away ────────────────────────── -->
+  <section class="step" data-step="STP-switch-away" id="STP-switch-away" hidden>
+    <div class="card">
+      <div class="row" style="margin-bottom:14px">
+        <h1 style="margin:0"><span class="mono">refactor-billing</span></h1>
+        <span class="pill on">active</span>
+        <span class="pill mono">shell</span>
+        <span class="spacer"></span>
+        <span class="crumb">세션 A</span>
+      </div>
+
+      <p class="sub">떠나기 전에 할 일은 없습니다 — <strong>저장 버튼이 없는 것이 설계입니다.</strong></p>
+
+      <div class="term" id="term-a">$ npm run build
+&gt; building… (계속 진행 중)
+</div>
+
+      <div class="banner info">
+        나가도 이 세션의 실행은 계속됩니다. 돌아오면 그 사이의 출력까지 이어서 봅니다.
+      </div>
+
+      <div class="row">
+        <button class="btn primary" id="btn-goto-b" data-advance-to="STP-target-activation">목록으로 나가서 <span class="mono">spike-tokenizer</span> 열기</button>
+      </div>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">이 화면에서 마주치는 상태</span>
+        <button id="br-target-frozen" type="button"
+                data-branch-row="1"
+                data-branch-target="STP-target-activation">대상 세션이 접혀 있었다</button>
+        <button id="br-target-gone" type="button"
+                data-branch-row="2"
+                data-branch-target="STP-session-list">대상 세션이 이미 삭제됐다 (404)</button>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-switch-away</code> 다른 세션으로 옮겨간다</dd>
+        <dt>터치포인트</dt><dd>목록 ↔ 워크스페이스 네비게이션</dd>
+        <dt>연결 AC</dt><dd>AC-C4</dd>
+        <dt>페인포인트</dt><dd>떠나기 전 확인 절차를 요구하면 전환 비용이 생겨 세션을 덜 쓰게 된다 — 절차를 두지 않고 "계속 돈다"는 사실만 알린다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ─────────────────────── STP-target-activation ─────────────────────── -->
+  <section class="step" data-step="STP-target-activation" id="STP-target-activation" hidden>
+    <div class="card">
+      <div class="row" style="margin-bottom:14px">
+        <h1 style="margin:0"><span class="mono">spike-tokenizer</span></h1>
+        <span class="pill" id="b-state">active</span>
+        <span class="pill mono">claude-code</span>
+        <span class="spacer"></span>
+        <span class="crumb">세션 B</span>
+      </div>
+
+      <div class="banner info" id="restoring" hidden>
+        접혀 있던 세션이라 <strong>복원 중</strong>입니다. 입구는 같고, 차이는 이 표시 하나뿐입니다.
+      </div>
+
+      <ul class="prov" id="b-steps" hidden>
+        <li class="done"><span class="dot"></span>스냅샷에서 파일시스템 복구</li>
+        <li class="done"><span class="dot"></span>프로세스 트리 복원 · cwd·환경 변수 되돌림</li>
+        <li class="done"><span class="dot"></span><span class="mono">active</span> 전이</li>
+      </ul>
+
+      <p class="sub" id="b-sub">바로 들어왔습니다. 작업자가 한 일은 어느 경우든 같습니다 — 그냥 클릭했습니다.</p>
+
+      <div class="term">&gt; 토크나이저 벤치 결과를 표로 정리해 줘
+(이전 대화 맥락 그대로 이어짐)
+</div>
+
+      <div class="row">
+        <button class="btn primary" id="btn-back-a" data-advance-to="STP-switch-back">다시 <span class="mono">refactor-billing</span> 으로 돌아가기</button>
+      </div>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">여기서 갈라지는 길</span>
+        <button id="br-collision" type="button"
+                data-branch-row="3"
+                data-branch-target="JRN-concurrent-access#STP-collision"
+                data-branch-pending data-branch-excepted>전환 중 다른 클라이언트가 같은 세션을 건드렸다</button>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-target-activation</code> 고른 세션이 깨어난다</dd>
+        <dt>터치포인트</dt><dd>워크스페이스 화면 · 접혀 있었다면 복원 안내</dd>
+        <dt>연결 AC</dt><dd>AC-C4, AC-B2</dd>
+        <dt>페인포인트</dt><dd>대상 상태에 따라 진입 경험이 갈리는 것 자체가 전환의 가치를 깎는다 — 같은 입구를 쓰고 차이는 "복원 중" 표시 하나로만 드러낸다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ────────────────────────── STP-switch-back ────────────────────────── -->
+  <section class="step" data-step="STP-switch-back" id="STP-switch-back" hidden>
+    <div class="card">
+      <div class="row" style="margin-bottom:14px">
+        <h1 style="margin:0"><span class="mono">refactor-billing</span></h1>
+        <span class="pill on">active</span>
+        <span class="pill mono">shell</span>
+        <span class="spacer"></span>
+        <span class="crumb">세션 A — 돌아옴</span>
+      </div>
+
+      <div class="banner ok">
+        떠나 있는 동안에도 계속 돌았습니다. 빌드가 끝나 있고, 그 사이 출력이 빠짐없이 남아 있습니다.
+      </div>
+
+      <div class="term" id="term-back">$ npm run build
+&gt; building…
+&gt; build finished in 2m 41s
+$ </div>
+
+      <label class="field">
+        <span class="lab">이어서 명령을 칩니다 — cwd·환경 변수·히스토리가 떠날 때 그대로입니다</span>
+        <input type="text" id="back-cmd" data-required-input placeholder="예: npm test -- --changed">
+      </label>
+
+      <div class="row">
+        <button class="btn ghost" id="btn-run-back">실행</button>
+      </div>
+
+      <dl class="kv">
+        <dt>왕복 후 상태</dt><dd>cwd <span class="mono">/work/billing</span> · <span class="mono">STAGE=dev</span> · 히스토리 유지</dd>
+        <dt>격리</dt><dd>세션 A·B는 각자의 워크로드 파드 — 전환은 격리를 깨지 않습니다</dd>
+      </dl>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="row" style="margin-top:16px" data-journey-end>
+        <span class="pill" style="border-color:var(--ok);color:var(--ok)">완료 — 두 세션 모두 전환 직전 상태 그대로 이어짐</span>
+      </div>
+
+      <div class="proto-bar">
+        <span class="cap">여기서 갈라지는 길</span>
+        <a id="br-idle" href="../JRN-idle-resume/index.html#STP-auto-freeze"
+           data-branch-row="4"
+           data-branch-target="JRN-idle-resume#STP-auto-freeze">떠나 있는 동안 A가 유휴 한계에 도달했다면</a>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-switch-back</code> 원래 세션으로 돌아온다</dd>
+        <dt>터치포인트</dt><dd>목록 → 워크스페이스 (전용 화면 없음)</dd>
+        <dt>연결 AC</dt><dd>AC-C4, AC-B3</dd>
+        <dt>완료 기준</dt><dd>서로 다른 세션 두 개를 오간 뒤 두 세션 모두에서 전환 직전 상태 그대로 작업이 이어진다.</dd>
+      </dl>
+    </details>
+  </section>
+
+</main>
+
+<footer>
+  여정 문서 <a href="../../user-journeys/JRN-multi-session-switch.md"><code>JRN-multi-session-switch.md</code></a> ·
+  페이지 규약 <a href="../README.md"><code>docs/journeys/README.md</code></a> ·
+  매핑 <a href="../../mockups/README.md"><code>docs/mockups/README.md</code></a>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var main = document.querySelector('[data-journey]');
+  var steps = Array.prototype.slice.call(document.querySelectorAll('[data-step]'));
+  var $ = function (id) { return document.getElementById(id); };
+
+  function show(id) {
+    var found = steps.some(function (s) { return s.getAttribute('data-step') === id; });
+    if (!found) return false;
+    steps.forEach(function (s) { s.hidden = s.getAttribute('data-step') !== id; });
+    main.setAttribute('data-step-active', id);
+    if (location.hash !== '#' + id) {
+      try { history.replaceState(null, '', '#' + id); } catch (e) { /* file:// 제약 */ }
+    }
+    return true;
+  }
+
+  function noteIn(el, text) {
+    var step = el.closest('[data-step]');
+    var n = step && step.querySelector('[data-state-note]');
+    if (!n) return;
+    n.textContent = text;
+    n.hidden = false;
+  }
+
+  /* ---------- STP-session-list ---------- */
+  var fState = $('filter-state');
+  var fName = $('filter-name');
+  var rows = Array.prototype.slice.call($('session-list').querySelectorAll('li'));
+
+  function applyFilter() {
+    var st = fState.value;
+    var q = fName.value.trim().toLowerCase();
+    var shown = 0;
+    rows.forEach(function (li) {
+      var ok = (st === 'all' || li.getAttribute('data-state') === st) &&
+               (!q || li.getAttribute('data-name').indexOf(q) >= 0);
+      li.hidden = !ok;
+      if (ok) shown += 1;
+    });
+    $('list-empty').hidden = shown !== 0;
+  }
+  fState.addEventListener('change', applyFilter);
+  fName.addEventListener('input', applyFilter);
+
+  /* ---------- STP-switch-away ---------- */
+  var frozenTarget = false;
+
+  $('br-target-frozen').addEventListener('click', function () {
+    frozenTarget = true;
+    show('STP-target-activation');
+    paintTarget();
+  });
+
+  $('br-target-gone').addEventListener('click', function () {
+    $('gone-404').hidden = false;
+    show('STP-session-list');
+  });
+
+  /* ---------- STP-target-activation ---------- */
+  function paintTarget() {
+    var pill = $('b-state');
+    if (frozenTarget) {
+      pill.textContent = 'restoring';
+      pill.className = 'pill snap';
+      $('restoring').hidden = false;
+      $('b-steps').hidden = false;
+      $('b-sub').textContent =
+        '접혀 있던 세션이라 복원을 기다린 뒤 들어왔습니다. 그다음은 방금과 완전히 같습니다.';
+    } else {
+      pill.textContent = 'active';
+      pill.className = 'pill on';
+      $('restoring').hidden = true;
+      $('b-steps').hidden = true;
+      $('b-sub').textContent =
+        '바로 들어왔습니다. 작업자가 한 일은 어느 경우든 같습니다 — 그냥 클릭했습니다.';
+    }
+  }
+
+  $('br-collision').addEventListener('click', function () {
+    noteIn(this, '두 클라이언트가 같은 세션을 건드려도 상태는 하나로 수렴하고, 양쪽이 같은 결과를 봅니다. ' +
+      '이 갈래는 JRN-concurrent-access 로 이어지지만 그 여정은 화면이 아니라 결과의 일관성을 지키는 ' +
+      '흐름이라 의도적으로 그리지 않기로 예외 등재돼 있습니다 — 앞으로도 페이지가 생기지 않습니다.');
+  });
+
+  /* ---------- STP-switch-back ---------- */
+  $('btn-run-back').addEventListener('click', function () {
+    var cmd = $('back-cmd').value.trim();
+    if (!cmd) {
+      noteIn(this, '명령을 입력하면 떠날 때의 cwd 와 환경 변수 위에서 그대로 실행됩니다.');
+      return;
+    }
+    $('term-back').textContent += cmd + '\n(같은 cwd · 같은 환경 변수에서 실행됨)\n$ ';
+    $('back-cmd').value = '';
+  });
+
+  /* ---------- 전진 ---------- */
+  Array.prototype.forEach.call(document.querySelectorAll('[data-advance-to]'), function (btn) {
+    btn.addEventListener('click', function () {
+      if (btn.disabled) return;
+      if (btn.id === 'btn-goto-b') { frozenTarget = false; paintTarget(); }
+      if (btn.id === 'btn-open-a') { $('gone-404').hidden = true; }
+      show(btn.getAttribute('data-advance-to'));
+    });
+  });
+
+  /* ---------- 딥링크 ---------- */
+  function fromHash() {
+    var id = (location.hash || '').replace(/^#/, '');
+    if (!id || !show(id)) show('STP-session-list');
+  }
+  window.addEventListener('hashchange', fromHash);
+  fromHash();
+  applyFilter();
+  paintTarget();
+})();
+</script>
+</body>
+</html>
