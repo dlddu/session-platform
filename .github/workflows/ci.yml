@@ -38,6 +38,22 @@ jobs:
       - name: render fidelity check
         run: python3 scripts/check-render-fidelity.py
 
+  comment-policy:
+    name: comment policy ledger (docs <-> comments)
+    runs-on: ubuntu-latest
+    # Enforces docs/comment-policy.md's judgement ledger against the comments it
+    # claims to have judged: every registered range exists in the policy's scan
+    # scope, its line count and fingerprint still match a re-measurement using
+    # the same extraction the drift model uses, no file is registered twice, and
+    # the total mirrors the rows. Without it the ledger is prose that goes stale
+    # silently -- a PR adding comments to an already-judged range would leave
+    # that increment unjudged forever. Sibling to the two fidelity gates above
+    # and, like them, python3 stdlib only.
+    steps:
+      - uses: actions/checkout@v4
+      - name: comment policy ledger check
+        run: python3 scripts/check_comment_policy.py
+
   control-plane:
     name: control-plane (lint + unit)
     runs-on: ubuntu-latest

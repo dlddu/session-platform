@@ -66,9 +66,7 @@ func TestStubOrchestratorStopAcceptsNamespaceOptionalRef(t *testing.T) {
 }
 
 // TestStubOrchestratorStartsAuxiliaryPods: a session's pod set is the workload
-// pod plus the auxiliary pods its type requires (AC-A2's auxiliary-pod clause,
-// AC-F4). The names are distinct so reclamation can address each one, and All
-// puts the workload pod first.
+// pod plus the auxiliary pods its type requires (AC-A2, AC-F4).
 func TestStubOrchestratorStartsAuxiliaryPods(t *testing.T) {
 	orch := k8s.NewStubOrchestrator("sessions")
 	orch.SetAuxiliaryPods(1)
@@ -94,9 +92,8 @@ func TestStubOrchestratorStartsAuxiliaryPods(t *testing.T) {
 	}
 }
 
-// TestStubOrchestratorPartialStopKeepsSessionVisible: stopping only the
-// workload pod must not make the session look fully reclaimed — AC-A3 is
-// satisfied when every pod of the session is gone, not just the first one.
+// TestStubOrchestratorPartialStopKeepsSessionVisible: AC-A3 is satisfied when
+// every pod of the session is gone, not just the first one.
 func TestStubOrchestratorPartialStopKeepsSessionVisible(t *testing.T) {
 	orch := k8s.NewStubOrchestrator("sessions")
 	orch.SetAuxiliaryPods(1)

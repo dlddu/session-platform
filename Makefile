@@ -13,7 +13,7 @@ ENVTEST_K8S_VERSION ?= 1.30.0
 
 .DEFAULT_GOAL := build
 
-.PHONY: build web embed control-plane run dev test test-unit test-integration test-envtest lint check-fidelity check-ac-mapping fmt docker docker-data-plane clean tidy e2e-up e2e-down e2e-api e2e-web e2e
+.PHONY: build web embed control-plane run dev test test-unit test-integration test-envtest lint check-fidelity check-ac-mapping check-comment-policy fmt docker docker-data-plane clean tidy e2e-up e2e-down e2e-api e2e-web e2e
 
 ## build: web -> embed -> control-plane binary
 build: control-plane
@@ -105,8 +105,14 @@ check-fidelity:
 check-ac-mapping:
 	./scripts/e2e/check-ac-mapping.sh
 
-## lint: go vet + gofmt check (both Go modules) + web typecheck + 정적 등재 게이트 2종
-lint: check-fidelity check-ac-mapping
+## check-comment-policy: 주석 판정 원장(docs/comment-policy.md) <-> 실제 주석 대조.
+## 등재된 범위의 줄 수·지문을 모델 as-is 지문과 같은 추출로 재측정해, 판정 이후 그 범위에
+## 주석이 더해졌으면 실패한다. python3 표준 라이브러리만 쓴다.
+check-comment-policy:
+	python3 scripts/check_comment_policy.py
+
+## lint: go vet + gofmt check (both Go modules) + web typecheck + 정적 등재 게이트 3종
+lint: check-fidelity check-ac-mapping check-comment-policy
 	cd $(CP_DIR) && go vet ./... && test -z "$$(gofmt -l . | tee /dev/stderr)"
 	cd $(DP_DIR) && go vet ./... && test -z "$$(gofmt -l . | tee /dev/stderr)"
 	cd $(WEB_DIR) && (test -d node_modules || npm install) && npm run lint
