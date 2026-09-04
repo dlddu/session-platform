@@ -99,10 +99,10 @@
 | --- | --- | ---: | --- | --- |
 | 2026-09-04 | `control-plane/internal/session/session.go` · `control-plane/internal/session/manager.go` | 143 | `b43d405ac066` | 첫 판정 패스 — **162줄 판정, 제거 19 · 유지 143**. 상세 ↓ |
 | 2026-09-04 | `control-plane/internal/service/manager.go` · `control-plane/internal/service/manager_test.go` · `control-plane/internal/service/reaper.go` · `control-plane/internal/service/reaper_test.go` · `control-plane/internal/service/auxiliary_pods_test.go` · `control-plane/internal/service/workload_type_test.go` | 229 | `f708d58cdb19` | 2차 판정 패스 — **299줄 판정, 제거 75 · 유지 224**(지문 기준 304 → 229, 오검출 5줄 포함). 상세 ↓ |
-| 2026-09-04 | `control-plane/internal/adapter/k8s/client_orchestrator.go` · `control-plane/internal/adapter/k8s/orchestrator.go` · `control-plane/internal/adapter/k8s/network_policy.go` · `control-plane/internal/adapter/k8s/orchestrator_test.go` | 320 | `9cdef98eca26` | 3차 판정 패스 — **473줄 판정, 제거 153 · 유지 320**. 상세 ↓ |
+| 2026-09-04 | `control-plane/internal/adapter/k8s/client_orchestrator.go` · `control-plane/internal/adapter/k8s/orchestrator.go` · `control-plane/internal/adapter/k8s/network_policy.go` · `control-plane/internal/adapter/k8s/orchestrator_test.go` | 328 | `b09a85723f8c` | 3차 판정 패스 — **473줄 판정, 제거 153 · 유지 320**. 이후 #66이 더한 14줄을 재판정(제거 6 · 유지 8) — 누적 **487줄 판정, 제거 159 · 유지 328**. 상세 ↓ |
 <!-- /판정-원장 -->
 
-판정 완료 합계 **<!-- 판정-합계 -->692<!-- /판정-합계 -->줄**(등재 범위의 현재 줄 수 합).
+판정 완료 합계 **<!-- 판정-합계 -->700<!-- /판정-합계 -->줄**(등재 범위의 현재 줄 수 합).
 전체 대비 비율과 미판정 잔량은 **게이트가 출력한다** — 프로즈에 적으면 낡는다.
 
 ### 2026-09-04 — `control-plane/internal/session/` (판정 162줄)
@@ -305,6 +305,34 @@ replays the full session history`. 이 문서의 「포인터는 남기고 사�
 후속 항목이며, 지금은 **게이트가 지문을 강제하므로 사각지대를 넓히는 변경은 지문을 바꾸지 못한다** —
 패턴을 넓히려면 게이트·모델 정의·이 문서를 한 번에 고쳐야 한다(그 세 곳이 글자 그대로 같아야 한다는
 요구를 스크립트 상단에 못박아 두었다).
+
+#### 재판정 — #66이 더한 14줄 (게이트의 첫 양성)
+
+이 패스를 실은 PR(#69)이 머지되기 5분 전에 형제 PR #66이 같은 범위에 주석 **14줄**을 더했다.
+게이트는 머지 직후 main에서 즉시 R2로 그 사실을 보고했다(등재 320 != 실측 334). **이것이 이
+게이트를 세운 이유 그 자체다** — 게이트가 없었다면 그 14줄은 「판정 완료」로 표시된 범위 안에
+조용히 들어앉아, 어느 행에도 속하지 않은 채 영원히 미판정으로 남았을 증분이다. 아래는 그
+증분에 대한 재판정이고, 이 행의 줄 수·지문 갱신이 곧 그 기록이다.
+
+**제거 6줄**
+
+| 위치 | 제거한 것 | 이미 말하는 곳 (복원 경로) |
+| --- | --- | --- |
+| `client_orchestrator.go` `AnthropicCACertEnvVar` doc (9→8) | 「Secret 키가 optional이라 생략하면 프록시는 시스템 풀에 남고 `k8s/`는 그대로다」 | ① 같은 파일 `optionalSecretEnv`(선언 자체가 `Optional=true`를 세운다) · ① **바로 아래 이웃 블록**이 optional 키 일반에 대해 *「absent, the entrypoint keeps its built-in defaults, so k8s/ needs no change」* 로 이미 말한다 |
+| `credentialProxyContainer` 인라인 (5→0) | 「private gateway일 때만 존재한다」 · 「자격 증명과 같은 컨테이너에 실려 두 배치가 이 한 함수에서 같이 받는다」 · 「tool-running 컨테이너는 loopback 주소 말고는 공급자에 대해 아무것도 모른다(AC-E6/AC-F6)」 | ① 바로 위 `AnthropicCACertEnvVar` doc(private gateway 근거, 유지했다) · ① **그 함수 자신의 doc** *「builds the provider proxy in either of its two placements. One behaviour contract (AC-E6) for both; only the placement and bind address differ (AC-F6)」* · ② AC-E6 *「주 컨테이너에는 실제 공급자 자격 증명을 주입하지 않고, localhost URL과 비밀이 아닌 proxy placeholder만 준다」* + ① `claudeCredentialProxy` doc |
+
+**유지 8줄** — `AnthropicCACertEnvVar` doc의 나머지.
+
+- **존재 이유**(「공개 저장소가 모르는 CA가 발급한 private gateway를 시스템 루트에 *더해* 신뢰한다」)는
+  상수 이름이 말하지 않고 어느 AC에도 없다. AC-E6은 `base-url`·`auth-token`·`model`만 다루고
+  `ca-cert`를 언급하지 않는다.
+- **분류 근거**(「주소류 설정이지 자격 증명이 아니다 — CA 인증서는 구성상 공개된 값이다」)는
+  이 파일의 credential/address 이분법이 왜 이쪽으로 갈렸는지를 말한다. 어느 문서에도 없어 남겼다.
+  **「Like the two bootstrap URLs below」의 상호참조는 rebase 후 다시 확인했다** — 이 패스가 그
+  이웃 블록을 7줄 → 3줄로 줄였지만 블록과 「optional 키」 성질은 남아 있어 참조가 성립한다.
+- **포인터**(`docs/test/e2e.md`의 `CLAUDE-PROVIDER`)는 SSOT로 가는 길이라 남긴다.
+- **「Keep in sync with data-plane/cmd/agent (providerCACertEnv)」** — 컴파일러가 잡지 못하는
+  cross-module 계약. 이 패스가 같은 형태 4건을 남긴 것과 같은 이유다.
 
 ## 범위 밖
 
