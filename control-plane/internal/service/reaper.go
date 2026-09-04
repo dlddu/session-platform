@@ -9,21 +9,11 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// IdleReaper is the operational idle->snapshot trigger (AC-B1). On a fixed
-// interval it scans every session and snapshots any that has had no client
-// read/write (AC-D5) for at least maxIdle — using its workload snapshot strategy
-// and reclaiming its pod (AC-A3). It is the automatic counterpart to the
-// product /snapshot endpoint: the reaper waits for the idle limit, while a
-// client can explicitly snapshot the session immediately.
+// IdleReaper is the operational idle->snapshot trigger (AC-B1, AC-D5, AC-A3).
 //
-// Service.SnapshotIfIdle acquires the session Lease and reloads LastAccess,
-// closing the stale List-to-Snapshot gap. Generic managers retain Snapshot.
-//
-// Scope: this implements only the plain "idle >= maxIdle -> snapshot" rule. The
-// finer trigger *policy* — grace periods, per-session overrides, and whether to
-// freeze a shell running a long foreground job that has merely gone
-// client-idle (AC-D5, see docs/prd/shell-workload.md) — remains the deferred
-// TODO(policy) in package session and is out of scope here.
+// Scope: it implements only the plain "idle >= maxIdle -> snapshot" rule. The
+// finer trigger policy stays deferred — see the TODO(policy) on session.MaxIdle,
+// which docs/doc-tracker.md anchors to.
 type IdleReaper struct {
 	mgr      session.Manager
 	maxIdle  time.Duration
@@ -37,8 +27,7 @@ type idleSnapshotManager interface {
 }
 
 // NewIdleReaper builds a reaper over the session manager. now defaults to
-// time.Now().UTC() and log to slog.Default() when nil; tests inject a
-// controllable clock to age sessions past maxIdle deterministically.
+// time.Now().UTC() and log to slog.Default() when nil.
 func NewIdleReaper(mgr session.Manager, maxIdle, interval time.Duration, now func() time.Time, log *slog.Logger) *IdleReaper {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
@@ -49,8 +38,7 @@ func NewIdleReaper(mgr session.Manager, maxIdle, interval time.Duration, now fun
 	return &IdleReaper{mgr: mgr, maxIdle: maxIdle, interval: interval, now: now, log: log}
 }
 
-// Run scans once per interval until ctx is cancelled (the process shutdown
-// context), so the reaper stops cleanly on SIGINT/SIGTERM.
+// Run scans once per interval until ctx is cancelled.
 func (r *IdleReaper) Run(ctx context.Context) {
 	t := time.NewTicker(r.interval)
 	defer t.Stop()
@@ -67,8 +55,7 @@ func (r *IdleReaper) Run(ctx context.Context) {
 // ScanOnce snapshots every session whose idle time has reached maxIdle and
 // returns how many it snapshotted. Per-session errors are logged and skipped so
 // one bad session does not block the rest; only a failure to list sessions
-// aborts the scan. It is exported so a single deterministic tick can be driven
-// directly (tests, or a future one-shot mode).
+// aborts the scan.
 func (r *IdleReaper) ScanOnce(ctx context.Context) (int, error) {
 	sessions, err := r.mgr.List(ctx)
 	if err != nil {
