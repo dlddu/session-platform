@@ -23,21 +23,16 @@ type PodRef struct {
 
 func (p PodRef) String() string { return p.Namespace + "/" + p.Name }
 
-// SessionPods is the set of pods one session owns: exactly one workload pod
-// (AC-A2's 1:1 subject) and any session-scoped auxiliary pods that serve it
-// without running the workload themselves (AC-A2's auxiliary-pod clause;
-// AC-F4's helper pod is the first such pod). Provisioning returns the whole set
-// because reclamation, freeze and restore hold across it, not across the
-// workload pod alone. shell and claude-code provision no auxiliary pods, so
-// Auxiliary is nil for them; approval-gated provisions exactly one.
+// SessionPods is the set of pods one session owns (AC-A2, AC-F4).
+// Provisioning returns the whole set because reclamation, freeze and restore
+// hold across it, not across the workload pod alone.
 type SessionPods struct {
 	Workload  PodRef
 	Auxiliary []PodRef
 }
 
 // All returns every pod in the set, workload pod first, skipping unset refs so
-// a partially reclaimed set never yields a nameless pod. Callers reclaiming a
-// whole session pass it straight to Stop.
+// a partially reclaimed set never yields a nameless pod.
 func (s SessionPods) All() []PodRef {
 	refs := make([]PodRef, 0, 1+len(s.Auxiliary))
 	if s.Workload.Name != "" {
@@ -66,8 +61,7 @@ func (s SessionPods) Names() []string {
 }
 
 // WorkloadSpec is the immutable runtime configuration copied from a session
-// into every fresh or restored pod. Model is empty for shell and contains a
-// concrete identifier or session.PlatformDefaultModel for claude-code (AC-E6).
+// into every fresh or restored pod (Model: see session.NormalizeModel).
 type WorkloadSpec struct {
 	Type  session.WorkloadType
 	Model string
@@ -77,29 +71,17 @@ type WorkloadSpec struct {
 // dedicated workload pod and any session-scoped auxiliary pods.
 //
 // AC mapping:
-//   - Start   → AC-A1 (control plane orchestrates, workload runs in the pod),
-//     AC-A2 (one dedicated workload pod per session, auxiliary pods session-
-//     scoped), AC-E1 (the workload provisioned is the one the session's type
-//     selects), AC-F4 (the helper pod is started with the workload pod).
-//   - Stop    → AC-A3 (resources reclaimed on terminate/snapshot — across the
-//     whole set, since a session's auxiliary pods share its lifetime).
-//   - RestoreInto → AC-B2 (restore a checkpoint into a *new* pod set).
-//   - Reach   → AC-D1/AC-E1 (the selected workload agent is reachable before
-//     the session counts as active). Only the workload pod runs an agent.
+//   - Start       → AC-A1, AC-A2, AC-E1, AC-F4
+//   - Stop        → AC-A3
+//   - RestoreInto → AC-B2
+//   - Reach       → AC-D1/AC-E1
 type PodOrchestrator interface {
-	// Start provisions a new dedicated workload pod for sessionID running the
-	// workload its type selects (AC-E1), together with the auxiliary pods that
-	// type requires, and returns the whole set.
+	// Start provisions the session's fresh pod set.
 	Start(ctx context.Context, sessionID string, workload WorkloadSpec) (SessionPods, error)
-	// Stop tears down the given pods and reclaims their CPU/memory (AC-A3). It
-	// is variadic so a caller reclaiming a whole session passes SessionPods.All()
-	// and a caller reclaiming one stray pod passes just that ref.
+	// Stop tears down the given pods and reclaims their CPU/memory.
 	Stop(ctx context.Context, refs ...PodRef) error
 	// RestoreInto provisions a fresh restore-target pod set carrying
-	// checkpointRef. It keeps the session's immutable workload type and gets
-	// unique names so a terminating source pod cannot collide. The selected
-	// Checkpointer applies either CRIU state or a filesystem archive
-	// (AC-B2/AC-E1).
+	// checkpointRef, under unique names (see restorePodName).
 	RestoreInto(ctx context.Context, sessionID, checkpointRef string, workload WorkloadSpec) (SessionPods, error)
 	// Reach opens and closes the workload agent's attach endpoint to prove
 	// readiness. It moves no user I/O; Client.Read/Write own those semantics.
@@ -136,11 +118,9 @@ func NewStubOrchestrator(namespace string) *StubOrchestrator {
 // SetAuxiliaryPods makes subsequent Start/RestoreInto calls provision n
 // auxiliary pods alongside the workload pod, independently of the workload type
 // the stub is asked for. It is how in-process tests exercise the multi-pod half
-// of the AC-A2/AC-A3/AC-B2 contract — that a session's auxiliary pods are
-// started with it, reclaimed with it, and restored with it — without standing up
-// the real orchestrator. The type that asks for one in production is
-// approval-gated (AC-F4), whose pod shapes are asserted against a fake clientset
-// in control-plane/test. Set it before the session under test is created.
+// of the AC-A2/AC-A3/AC-B2 contract without standing up the real orchestrator —
+// whose pod shapes are asserted against a fake clientset in control-plane/test.
+// Set it before the session under test is created.
 func (o *StubOrchestrator) SetAuxiliaryPods(n int) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -150,9 +130,6 @@ func (o *StubOrchestrator) SetAuxiliaryPods(n int) {
 func (o *StubOrchestrator) Start(_ context.Context, sessionID string, workload WorkloadSpec) (SessionPods, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	// Model unique pod refs and the one-live-workload-pod-per-session mapping
-	// without a cluster; ClientOrchestrator performs the real create/readiness
-	// wait.
 	pods := SessionPods{Workload: o.newRefLocked(sessionID)}
 	for i := 0; i < o.auxiliary; i++ {
 		pods.Auxiliary = append(pods.Auxiliary, o.newRefLocked(sessionID))
@@ -183,11 +160,9 @@ func (o *StubOrchestrator) ModelFor(sessionID string) string {
 	return o.models[sessionID]
 }
 
-// RunningCount reports how many pods the stub believes are running — the
-// counterpart of the 1:1 mapping and reclamation assertions this stub exists
-// for (AC-A2/AC-A3), and what proves a rejected create provisioned nothing. It
-// counts individual pods, not sessions, so a session with auxiliary pods is
-// only fully reclaimed when this reaches zero.
+// RunningCount reports how many pods the stub believes are running. It counts
+// individual pods, not sessions, so a session with auxiliary pods is only fully
+// reclaimed when this reaches zero.
 func (o *StubOrchestrator) RunningCount() int {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -198,9 +173,7 @@ func (o *StubOrchestrator) RunningCount() int {
 	return n
 }
 
-// SessionsCount reports how many sessions still hold at least one pod, the
-// eye-level view of the 1:1 mapping that RunningCount used to report before
-// sessions could own more than one pod.
+// SessionsCount reports how many sessions still hold at least one pod.
 func (o *StubOrchestrator) SessionsCount() int {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -234,8 +207,6 @@ func (o *StubOrchestrator) stopLocked(ref PodRef) {
 			}
 		}
 		pods.Auxiliary = kept
-		// The session drops out of the map only once every pod it owns is gone,
-		// so a partial reclaim stays visible to RunningCount (AC-A3).
 		if pods.Workload.Name == "" && len(pods.Auxiliary) == 0 {
 			delete(o.running, id)
 			continue
@@ -246,8 +217,6 @@ func (o *StubOrchestrator) stopLocked(ref PodRef) {
 
 func (o *StubOrchestrator) RestoreInto(ctx context.Context, sessionID, checkpointRef string, workload WorkloadSpec) (SessionPods, error) {
 	// The stub cannot apply an archive, so it models only the fresh target pods.
-	// ClientOrchestrator shapes the real restore target and the Checkpointer
-	// streams CRIU or filesystem state into its agent.
 	_ = checkpointRef
 	return o.Start(ctx, sessionID, workload)
 }

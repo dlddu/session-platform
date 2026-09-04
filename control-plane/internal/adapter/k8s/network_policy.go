@@ -1,8 +1,5 @@
 // AC-F2's network boundary for an approval-gated session, as Kubernetes
-// objects. The PRD states the property in terms of what the *workload* pod may
-// reach: kube-dns and its own session's helper pod, and nothing else — not the
-// provider API origin, not another session's helper, not the approval gateway.
-// Two policies express that, and both are created with the session:
+// objects — two policies, both created with the session:
 //
 //   - a workload egress allowlist, which is the property itself, and
 //   - a helper ingress restriction, which is what makes the helper pod's
@@ -13,11 +10,9 @@
 // The two ship together for that reason — splitting them would leave the
 // second half of the boundary open while the first half looked done.
 //
-// NOT verified here: whether the cluster *enforces* any of this. Enforcement is
-// the CNI's job and the e2e cluster's kindnet does not implement NetworkPolicy,
-// so "the object exists, selects the right pods, and is reclaimed with them" is
-// what this code and its tests establish. docs/doc-tracker.md carries the
-// remainder as an open item.
+// Whether the cluster *enforces* any of this is not established here; only that
+// the objects exist, select the right pods, and are reclaimed with them
+// (docs/doc-tracker.md carries the remainder as an open item).
 package k8s
 
 import (
@@ -95,9 +90,8 @@ func sessionNetworkPolicies(namespace, sessionID string, owner *corev1.Pod) []*n
 				PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
 				Egress: []networkingv1.NetworkPolicyEgressRule{
 					{
-						// (a) name resolution only — the agent may look a name
-						// up, but the allowlist below decides what it can then
-						// connect to.
+						// (a) looking a name up is not connecting to it — the
+						// allowlist below decides the latter.
 						To: []networkingv1.NetworkPolicyPeer{{
 							NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{
 								kubeDNSNamespaceLabel: kubeSystemNamespace,

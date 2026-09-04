@@ -1,10 +1,4 @@
-// This file is the real, client-go backed PodOrchestrator. It drives one
-// dedicated data plane pod per session in the control plane's own namespace
-// (AC-A1/A2), reclaims it on stop (AC-A3), and proves the selected workload
-// agent is reachable (AC-D1/E1). The workload itself is started by the data
-// plane image's entrypoint, never by the control plane. The port and the
-// in-memory stub live in orchestrator.go; main builds the client and namespace
-// via BuildClient.
+// The real, client-go backed PodOrchestrator (port and stub: orchestrator.go).
 package k8s
 
 import (
@@ -30,19 +24,17 @@ import (
 )
 
 const (
-	// LabelSessionID ties a data plane pod 1:1 to its session (AC-A2). The
-	// orchestrator's selectors and the deferred e2e suite both key off it.
+	// LabelSessionID ties a data plane pod 1:1 to its session (AC-A2).
 	LabelSessionID = "session-id"
 	// LabelWorkloadType records which workload type the pod runs (AC-E1), so
 	// the type a session was created with is observable on the cluster object
 	// and not only in control plane state.
 	LabelWorkloadType = "session-platform.dev/workload-type"
-	// LabelPodRole separates a session's *workload* pod — AC-A2's 1:1 subject —
-	// from the session-scoped auxiliary pods that only serve it (AC-A2's
-	// auxiliary-pod clause, AC-F4's helper pod). Every pod carries the session
-	// id, so a selector that keyed off LabelSessionID alone would count a helper
-	// pod as a second workload pod for the session; this label is what lets such
-	// a selector stay narrow.
+	// LabelPodRole separates a session's workload pod from the session-scoped
+	// auxiliary pods that serve it (AC-A2's auxiliary-pod clause, AC-F4). Every
+	// pod carries the session id, so a selector that keyed off LabelSessionID
+	// alone would count a helper pod as a second workload pod for the session;
+	// this label is what lets such a selector stay narrow.
 	LabelPodRole = "session-platform.dev/pod-role"
 	// PodRoleWorkload marks the pod running the session's workload.
 	PodRoleWorkload = "workload"
@@ -55,12 +47,8 @@ const (
 
 	// AnnotationRestoreCheckpoint marks a pod the orchestrator provisions as a
 	// CRIU *restore target* and records the checkpoint archive it must resume
-	// from (RestoreInto). A CRIU-capable runtime maps this to its concrete
-	// restore mechanism (e.g. CRI-O's io.kubernetes.cri-o.restore annotation or
-	// a checkpoint OCI image built from the archive) so the container comes up
-	// as the restored process tree instead of running the image entrypoint's
-	// fresh shell. It is exported because that runtime mapping is part of the
-	// restore contract the provisioning work wires up. See docs/criu-verification.md.
+	// from (RestoreInto). The runtime-side mapping that makes it take effect is
+	// unwired — see docs/criu-verification.md.
 	AnnotationRestoreCheckpoint = "session-platform.dev/restore-checkpoint"
 
 	// AnnotationRestoreArchive marks a claude-code restore target. Unlike the
@@ -69,13 +57,11 @@ const (
 	AnnotationRestoreArchive = "session-platform.dev/restore-archive"
 
 	defaultClaudeCredentialsSecret = "claude-code-credentials"
-	// ContainerName is the workload container in each data plane pod. Shell pods
-	// contain only it; Claude pods add an isolated credential-proxy sidecar. The
-	// CRIU checkpointer targets this container by name and only for shell sessions.
+	// ContainerName is the workload container in each data plane pod; the CRIU
+	// checkpointer targets it by name and only for shell sessions.
 	ContainerName = "session"
 	// DataPlaneServiceAccountName is the dedicated identity mounted into every
-	// fresh and restored session pod. Kubernetes manifests bind it to the
-	// built-in read-only `view` ClusterRole, which deliberately excludes Secrets.
+	// fresh and restored session pod (AC-E6).
 	DataPlaneServiceAccountName = "data-plane"
 
 	// defaultDataPlaneImage is the in-code fallback when no DATA_PLANE_IMAGE
@@ -90,17 +76,9 @@ const (
 	shellEnvVar = "DATA_PLANE_SHELL"
 
 	// workloadEnvVar tells the pod which workload type it is running (AC-E1).
-	// The data plane agent branches on it and it is set unconditionally so the
-	// pod is self-describing rather than inferring its role from its image.
 	workloadEnvVar = "DATA_PLANE_WORKLOAD"
 
-	// Claude Code runtime configuration. Provider credential values are
-	// projected only into a separate localhost credential-proxy container. The
-	// agent/CLI container gets a non-secret placeholder and cannot read or
-	// transform the real provider token through its coding tools (AC-E6). The
-	// session-platform plugin's K3s MCP token is intentionally projected into the
-	// tool-running container, while the non-secret platform model may be selected
-	// from the same Secret through its own key.
+	// Claude Code runtime configuration (AC-E6).
 	ClaudeCodeModelEnvVar     = "CLAUDE_CODE_MODEL"
 	K3SMCPTokenEnvVar         = "K3S_MCP_TOKEN"
 	claudeCodeStateDirEnvVar  = "CLAUDE_CODE_STATE_DIR"
@@ -128,13 +106,9 @@ const (
 	AnthropicCACertEnvVar     = "ANTHROPIC_CA_CERT"
 	ClaudeCodeCACertSecretKey = "ca-cert"
 
-	// The plugin bootstrap reaches two endpoints before the agent starts: the
-	// K3s MCP that issues the marketplace read token, and the marketplace git
-	// remote itself. Both are *addresses*, not credentials, and both are
-	// optional keys — when the Secret omits them the entrypoint keeps its
-	// built-in production defaults, so k8s/ needs no change. Projecting them
-	// lets an environment that cannot reach the organisation endpoints (the kind
-	// e2e SUT) point the same code path at in-cluster stand-ins.
+	// The plugin bootstrap's two endpoints, as optional keys: absent, the
+	// entrypoint keeps its built-in defaults, so k8s/ needs no change
+	// (docs/test/e2e.md's PLUGIN-CRED row is why they are overridable).
 	K3SMCPURLEnvVar                         = "K3S_MCP_URL"
 	ClaudeCodePluginMarketplaceURLEnvVar    = "CLAUDE_CODE_PLUGIN_MARKETPLACE_URL"
 	ClaudeCodeK3SMCPURLSecretKey            = "k3s-mcp-url"
@@ -151,20 +125,13 @@ const (
 	credentialProxyPlaceholderToken = "session-platform-proxy"
 	agentAddrEnvVar                 = "DATA_PLANE_AGENT_ADDR"
 
-	// Approval-gated runtime configuration (AC-F4/AC-F6). The session's helper
-	// pod holds both external credentials, split per container: the approval
-	// gateway's URL/key/user id reach only the session MCP container, and the
-	// provider base-url/auth-token reach only the credential-proxy container.
-	// The workload pod itself receives neither — only this pod's addresses and
-	// the same non-secret placeholder claude-code uses.
+	// Approval-gated runtime configuration (AC-F4/AC-F6).
 	defaultApprovalGatewaySecret = "approval-gateway-credentials"
-	// SessionMCPContainerName is the helper pod container that will expose the
-	// session's external tools behind the approval gate (AC-F3). This slice
-	// provisions the container; the gate itself is not implemented yet.
+	// SessionMCPContainerName is the helper pod container that exposes the
+	// session's external tools behind the approval gate (AC-F3).
 	SessionMCPContainerName = "session-mcp"
-	// HelperCredentialProxyContainerName is the helper pod's provider proxy. It
-	// runs the same credential-proxy workload as claude-code's sidecar (AC-E6);
-	// only its placement and bind address differ (AC-F6).
+	// HelperCredentialProxyContainerName is the helper pod's provider proxy
+	// (AC-F6; contract AC-E6 — see credentialProxyContainer).
 	HelperCredentialProxyContainerName = "credential-proxy"
 	sessionMCPWorkload                 = "mcp"
 	// SessionMCPPort is where the helper pod's MCP container serves the session
@@ -172,14 +139,12 @@ const (
 	SessionMCPPort     = 8092
 	sessionMCPPortName = "mcp"
 	// SessionMCPURLEnvVar tells the workload pod's agent where its session MCP
-	// is. AC-F6 makes this MCP the only tool surface that reaches outside the
-	// pod, so no marketplace plugin and no K3s MCP token are projected here.
+	// is (AC-F6).
 	SessionMCPURLEnvVar = "SESSION_MCP_URL"
 	// helperProxyListenAddr binds the helper pod's proxy to the pod network
-	// rather than loopback: its client is the *workload* pod, one network hop
-	// away (AC-F6). What keeps that reachable-from-anywhere bind safe is AC-F2's
-	// ingress policy, created with the pod in network_policy.go — subject to the
-	// cluster's CNI actually enforcing NetworkPolicy (docs/doc-tracker.md).
+	// rather than loopback (AC-F6). What keeps that reachable-from-anywhere bind
+	// safe is AC-F2's ingress policy in network_policy.go — and only where the
+	// CNI enforces NetworkPolicy (docs/doc-tracker.md).
 	helperProxyListenAddr = "0.0.0.0:8091"
 	// CredentialProxyPlacementEnvVar tells a credential-proxy container which of
 	// its two sanctioned placements it is in, so the data plane can open the
@@ -188,26 +153,20 @@ const (
 	CredentialProxyPlacementEnvVar = "DATA_PLANE_PROXY_PLACEMENT"
 	proxyPlacementSidecar          = "sidecar"
 	proxyPlacementHelper           = "helper"
-	// ApprovalGatewayURLEnvVar, ApprovalGatewayAPIKeyEnvVar and
-	// ApprovalGatewayUserIDEnvVar are projected into the MCP container only, so
-	// the agent can neither address the gateway nor approve its own requests.
+	// The gateway triple (AC-F6) — see helperPodSpec for where it is projected.
 	ApprovalGatewayURLEnvVar       = "APPROVAL_GATEWAY_URL"
 	ApprovalGatewayAPIKeyEnvVar    = "APPROVAL_GATEWAY_API_KEY"
 	ApprovalGatewayUserIDEnvVar    = "APPROVAL_GATEWAY_USER_ID"
 	ApprovalGatewayURLSecretKey    = "url"
 	ApprovalGatewayAPIKeySecretKey = "api-key"
 	ApprovalGatewayUserIDSecretKey = "user-id"
-	// SessionIDEnvVar tells the MCP container which session it serves. AC-F3
-	// builds each approval request's external identifier as
-	// {sessionID}:{requestID}, and the gateway rejects a duplicate, so the
-	// session half has to reach the container that talks to the gateway. It is
-	// not a credential — it is the same id the pod already carries as a label.
+	// SessionIDEnvVar tells the MCP container which session it serves — the
+	// session half of AC-F3's external identifier.
 	// Keep in sync with data-plane/cmd/agent (sessionIDEnv).
 	SessionIDEnvVar = "SESSION_ID"
 
 	// restoreModeEnvVar tells a restore-target agent to wait for POST /restore
-	// instead of starting a fresh workload. Shell restores use CRIU; Claude Code
-	// restores unpack the filesystem/output archive (AC-D4, AC-E5).
+	// instead of starting a fresh workload (AC-D4, AC-E5).
 	// Keep in sync with data-plane/cmd/agent (restoreModeEnv).
 	restoreModeEnvVar = "DATA_PLANE_RESTORE_MODE"
 
@@ -218,8 +177,7 @@ const (
 	// agentHealthzPath backs the pod readiness probe, so pod Ready implies a
 	// live workload agent (AC-D1/E1).
 	agentHealthzPath = "/healthz"
-	// agentAttachPath is the readiness stream Reach opens and closes. User I/O
-	// uses the workload-neutral /read and /write endpoints instead.
+	// agentAttachPath is the readiness stream Reach opens and closes.
 	agentAttachPath = "/attach"
 
 	// serviceAccountNamespaceFile is where the kubelet mounts the pod's own
@@ -234,12 +192,9 @@ const (
 // dedicated data plane pod per session through client-go, and dials the pod's
 // session agent to prove the shell is reachable (AC-D1).
 type ClientOrchestrator struct {
-	client    kubernetes.Interface
-	namespace string
-	image     string
-	// workloadImages holds the per-type image overrides (AC-E1). The default
-	// type falls back to `image`; a type with no image configured is refused
-	// rather than silently provisioned from the shell image.
+	client                  kubernetes.Interface
+	namespace               string
+	image                   string
 	claudeCredentialsSecret string // platform Secret referenced by claude-code pods
 	approvalGatewaySecret   string // platform Secret referenced by approval-gated helper pods
 	workloadImages          map[session.WorkloadType]string
@@ -250,14 +205,12 @@ type ClientOrchestrator struct {
 	readyTimeout            time.Duration
 }
 
-// compile-time assertion that ClientOrchestrator satisfies the port.
 var _ PodOrchestrator = (*ClientOrchestrator)(nil)
 
 // Option customises a ClientOrchestrator.
 type Option func(*ClientOrchestrator)
 
-// WithImage overrides the data plane pod image (default: alpine fallback,
-// which cannot pass the shell readiness probe — see defaultDataPlaneImage).
+// WithImage overrides the data plane pod image (default: defaultDataPlaneImage).
 func WithImage(image string) Option {
 	return func(o *ClientOrchestrator) {
 		if image != "" {
@@ -267,11 +220,7 @@ func WithImage(image string) Option {
 }
 
 // WithWorkloadImage overrides the data plane image for one workload type
-// (AC-E1: the control plane provisions a different data plane workload per
-// type). An empty image is ignored, which is what leaves a type unconfigured —
-// and an unconfigured non-default type is refused by Start rather than being
-// provisioned from the shell image, so a session can never claim a type whose
-// workload is not actually there.
+// (AC-E1). An empty image leaves the type unconfigured — see imageFor.
 func WithWorkloadImage(workload session.WorkloadType, image string) Option {
 	return func(o *ClientOrchestrator) {
 		if image == "" {
@@ -284,10 +233,8 @@ func WithWorkloadImage(workload session.WorkloadType, image string) Option {
 	}
 }
 
-// WithClaudeCredentialsSecret selects the platform-managed Secret whose
-// base-url and auth-token keys are projected only into the credential sidecar,
-// whose required k3s-mcp-token key is projected into the main Claude container,
-// and whose optional model key selects the platform default there.
+// WithClaudeCredentialsSecret selects the platform-managed Secret claude-code
+// pods project their keys from (AC-E6).
 func WithClaudeCredentialsSecret(name string) Option {
 	return func(o *ClientOrchestrator) {
 		if strings.TrimSpace(name) != "" {
@@ -296,11 +243,8 @@ func WithClaudeCredentialsSecret(name string) Option {
 	}
 }
 
-// WithApprovalGatewaySecret selects the platform-managed Secret whose url,
-// api-key and user-id keys are projected only into the session MCP container of
-// an approval-gated session's helper pod (AC-F6). It never reaches the workload
-// pod, so the agent can neither address the approval gateway nor approve its
-// own requests.
+// WithApprovalGatewaySecret selects the platform-managed Secret the session MCP
+// container projects the gateway triple from (AC-F6).
 func WithApprovalGatewaySecret(name string) Option {
 	return func(o *ClientOrchestrator) {
 		if strings.TrimSpace(name) != "" {
@@ -320,21 +264,16 @@ func WithShell(shell string) Option {
 }
 
 // WithCheckpointPrivileged runs session pods privileged so the in-pod CRIU path
-// (agent-driven checkpoint/restore) works. The 2026-07-23 on-cluster
-// verification showed capabilities alone are not enough: CHECKPOINT_RESTORE +
-// SYS_PTRACE hit netns EPERM, and even with SYS_ADMIN + NET_ADMIN added,
-// containerd's default AppArmor blocks mounts and /proc/sys/kernel/ns_last_pid
-// stays read-only — while a privileged pod passes `criu check` completely.
-// Wired from CRIU_ENABLED so gate-off pods stay unprivileged. Narrowing this
-// (caps + AppArmor unconfined + unmasked /proc) is a documented follow-up.
+// (agent-driven checkpoint/restore) works — capabilities alone are not enough,
+// see docs/criu-verification.md's 2026-07-23 2차. Wired from CRIU_ENABLED so
+// gate-off pods stay unprivileged.
 func WithCheckpointPrivileged(enabled bool) Option {
 	return func(o *ClientOrchestrator) {
 		o.checkpointPrivileged = enabled
 	}
 }
 
-// WithAgentPort overrides the session agent port (default 8090). Tests point
-// Reach at a local mock agent; production keeps the default.
+// WithAgentPort overrides the session agent port (default 8090).
 func WithAgentPort(port int) Option {
 	return func(o *ClientOrchestrator) {
 		if port > 0 {
@@ -343,8 +282,7 @@ func WithAgentPort(port int) Option {
 	}
 }
 
-// WithReadiness tunes how Start waits for a pod to report Ready. Tests inject a
-// short interval/timeout; production keeps the defaults.
+// WithReadiness tunes how Start waits for a pod to report Ready.
 func WithReadiness(pollInterval, timeout time.Duration) Option {
 	return func(o *ClientOrchestrator) {
 		if pollInterval > 0 {
@@ -357,8 +295,7 @@ func WithReadiness(pollInterval, timeout time.Duration) Option {
 }
 
 // NewClientOrchestrator builds a real orchestrator from an injected client and
-// namespace. Injecting kubernetes.Interface lets tests drive it with a fake
-// clientset; main builds the client and namespace via BuildClient.
+// namespace (see BuildClient).
 func NewClientOrchestrator(client kubernetes.Interface, namespace string, opts ...Option) *ClientOrchestrator {
 	o := &ClientOrchestrator{
 		client:                  client,
@@ -377,13 +314,11 @@ func NewClientOrchestrator(client kubernetes.Interface, namespace string, opts .
 }
 
 // BuildClient builds a Kubernetes client and resolves the namespace the control
-// plane operates in. It uses the in-cluster config when running as a pod, and
-// otherwise the ambient kubeconfig (KUBECONFIG / ~/.kube/config) — so local
-// development can drive a kind cluster.
+// plane operates in.
 //
-// Namespace resolution prefers the pod's own service account namespace (the
-// real namespace in-cluster — the deferred kubeconfig loader does NOT read it),
-// and falls back to the kubeconfig context for local runs.
+// Namespace resolution prefers the pod's own service account namespace, because
+// the deferred kubeconfig loader does NOT read it in-cluster, and falls back to
+// the kubeconfig context for local runs.
 func BuildClient() (kubernetes.Interface, string, error) {
 	cc := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{})
@@ -417,17 +352,13 @@ func namespaceFromServiceAccount() string {
 // Namespace reports the namespace this orchestrator provisions pods in.
 func (o *ClientOrchestrator) Namespace() string { return o.namespace }
 
-// Start provisions the pod set for sessionID — its dedicated workload pod and,
-// for the workload types that require them, the session-scoped auxiliary pods
-// that serve it — waits for each to report Ready, and returns the set with pod
-// IPs recorded for later agent calls (AC-A1/A2, AC-D1/E1, AC-F4).
+// Start provisions the session's fresh pod set (AC-A1/A2, AC-F4).
 func (o *ClientOrchestrator) Start(ctx context.Context, sessionID string, workload WorkloadSpec) (SessionPods, error) {
 	return o.startSet(ctx, sessionID, "", workload)
 }
 
-// startSet provisions a session's whole pod set. checkpointRef == "" yields a
-// fresh set; a non-empty ref yields a restore-target set under fresh unique
-// names. Auxiliary pods come up *first* because the workload pod is configured
+// startSet provisions a session's whole pod set, fresh or restore-target
+// (see buildPod). Auxiliary pods come up *first* because the workload pod is configured
 // with their addresses: AC-F4 states the restored workload pod is injected with
 // the helper pod created for that restore, which is only knowable once it is
 // Ready and has an IP. If the workload pod then fails, the auxiliary pods are
@@ -495,17 +426,14 @@ func endpointsFor(podIP string) helperEndpoints {
 }
 
 // provision creates a pod from spec, waits for its workload agent to report
-// Ready, and returns its ref with the pod IP recorded. Start and RestoreInto
-// differ only in the fresh-workload or restore-target spec they hand in.
+// Ready, and returns its ref with the pod IP recorded.
 func (o *ClientOrchestrator) provision(ctx context.Context, spec *corev1.Pod, afterCreate func(created *corev1.Pod) error) (PodRef, error) {
 	created, err := o.client.CoreV1().Pods(o.namespace).Create(ctx, spec, metav1.CreateOptions{})
 	if err != nil {
 		return PodRef{}, fmt.Errorf("create pod %s: %w", spec.Name, err)
 	}
 	ref := PodRef{Name: created.Name, Namespace: o.namespace}
-	// afterCreate runs against the created object — the only point where its UID
-	// is known and the pod is not yet Ready. AC-F2's policies are attached here
-	// so the boundary predates any traffic the pod could carry.
+	// afterCreate runs against the created object — see applySessionNetworkPolicies.
 	if afterCreate != nil {
 		if err := afterCreate(created); err != nil {
 			o.cleanup(ref)
@@ -514,7 +442,6 @@ func (o *ClientOrchestrator) provision(ctx context.Context, spec *corev1.Pod, af
 	}
 	pod, err := o.waitReady(ctx, ref.Name)
 	if err != nil {
-		// Don't leak a pod that never came up (AC-A3 hygiene).
 		o.cleanup(ref)
 		return PodRef{}, err
 	}
@@ -522,8 +449,8 @@ func (o *ClientOrchestrator) provision(ctx context.Context, spec *corev1.Pod, af
 	return ref, nil
 }
 
-// Stop deletes the given pods and reclaims their resources (AC-A3). A missing
-// pod is treated as already reclaimed so the call is idempotent. PodRef.Namespace
+// Stop reclaims the given pods (AC-A3). A missing pod is treated as already
+// reclaimed so the call is idempotent. PodRef.Namespace
 // may be empty (the service layer builds refs from the stored pod name only); it
 // falls back to the orchestrator's namespace. Deletion stops at the first real
 // error so the caller sees it rather than a partially reclaimed session.
@@ -549,11 +476,8 @@ func (o *ClientOrchestrator) stopOne(ctx context.Context, ref PodRef) error {
 }
 
 // RestoreInto provisions the pod set a session archive is restored into
-// (AC-B2). The workload-specific annotation and restore mode tell the agent
-// whether to accept a shell CRIU archive or a filesystem archive. Applying the
-// archive bytes is the Checkpointer's job; supplying the correctly shaped pods
-// is all the orchestrator owns. A type with auxiliary pods gets a fresh set of
-// those too — helper pods keep no state of their own (AC-F4).
+// (AC-B2). Applying the archive bytes is the Checkpointer's job; supplying the
+// correctly shaped pods is all the orchestrator owns.
 func (o *ClientOrchestrator) RestoreInto(ctx context.Context, sessionID, checkpointRef string, workload WorkloadSpec) (SessionPods, error) {
 	return o.startSet(ctx, sessionID, checkpointRef, workload)
 }
@@ -577,10 +501,6 @@ func (o *ClientOrchestrator) imageFor(workload session.WorkloadType) (string, er
 // fresh session pod (no annotation) under the session's deterministic name; a
 // non-empty ref yields a restore-target pod named with the provisioning round's
 // suffix, which its helper pod shares so a set is recognisable as one round.
-// The workload type picks the image and is recorded on the pod (label + env) so
-// the pod runs — and advertises — the workload its session selected (AC-E1).
-// helper carries the addresses of the session's helper pod for the types that
-// have one; it is the zero value otherwise.
 func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, workload WorkloadSpec, helper helperEndpoints) (*corev1.Pod, error) {
 	workloadType, err := session.NormalizeWorkloadType(workload.Type)
 	if err != nil {
@@ -595,8 +515,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		return nil, err
 	}
 	// No command override: the data plane image's entrypoint owns starting the
-	// selected agent. In restore mode that agent waits for the Checkpointer to
-	// stream the workload archive. The control plane only orchestrates.
+	// selected agent (AC-A1).
 	container := corev1.Container{
 		Name:            ContainerName,
 		Image:           image,
@@ -606,8 +525,6 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			ContainerPort: AgentPort,
 			Protocol:      corev1.ProtocolTCP,
 		}},
-		// The agent answers /healthz only while it can serve the selected
-		// workload, so pod Ready is a workload-neutral readiness signal.
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				HTTPGet: &corev1.HTTPGetAction{
@@ -630,10 +547,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 	case session.WorkloadTypeClaudeCode:
 		modelEnv := corev1.EnvVar{Name: ClaudeCodeModelEnvVar, Value: model}
 		if model == session.PlatformDefaultModel {
-			// Keep platform-default as the immutable API/session alias while
-			// resolving its effective value when the pod starts. The key is
-			// optional so existing Secrets retain the previous Claude CLI default
-			// behaviour; explicit per-session models never read this key.
+			// platform-default resolves at pod start from the optional key (AC-E6).
 			modelEnv = optionalSecretEnv(
 				ClaudeCodeModelEnvVar,
 				o.claudeCredentialsSecret,
@@ -663,13 +577,9 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 
 		sidecars = append(sidecars, o.claudeCredentialProxy(image))
 	case session.WorkloadTypeApprovalGated:
-		// AC-F6: this container holds *no* external credential. The provider
-		// token stays in the helper pod's proxy container and the gateway key in
-		// its MCP container, so the workload pod only learns two in-cluster
-		// addresses and the same non-secret placeholder claude-code uses. The
-		// K3s MCP token and the marketplace plugin bootstrap are deliberately
-		// absent (AC-F6's 2026-09-03 decision): the session MCP is this type's
-		// only tool surface that leaves the pod.
+		// AC-F6: this container holds *no* external credential. The K3s MCP
+		// token and the marketplace plugin bootstrap are deliberately absent —
+		// their omission is the decision, not an oversight.
 		modelEnv := corev1.EnvVar{Name: ClaudeCodeModelEnvVar, Value: model}
 		if model == session.PlatformDefaultModel {
 			modelEnv = optionalSecretEnv(
@@ -693,14 +603,11 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		})
 		// No sidecar: moving the proxy out of this pod is the whole point of
-		// AC-F2's arrangement. AC-F5's shared RWX volume is not implemented yet.
+		// AC-F2's arrangement.
 	}
 	if o.checkpointPrivileged && workloadType == session.WorkloadTypeShell {
-		// In-pod CRIU needs a privileged container: the verified-on-cluster
-		// configuration where `criu check` fully passes (capability sets alone
-		// are defeated by the runtime's AppArmor profile and read-only
-		// /proc/sys — see WithCheckpointPrivileged). This makes CRIU-enabled
-		// session shells node-root; narrowing is a documented follow-up.
+		// See WithCheckpointPrivileged. This makes CRIU-enabled session shells
+		// node-root; narrowing is a documented follow-up.
 		privileged := true
 		container.SecurityContext = &corev1.SecurityContext{Privileged: &privileged}
 	}
@@ -713,13 +620,9 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		name = restorePodName(sessionID, suffix)
 		annotation := AnnotationRestoreCheckpoint
 		if workloadType != session.WorkloadTypeShell {
-			// The agent types unpack a filesystem archive and never invoke CRIU
-			// (AC-E5; AC-F5 adds the shared volume to that archive once it lands).
 			annotation = AnnotationRestoreArchive
 		}
 		annotations = map[string]string{annotation: checkpointRef}
-		// The agent waits for the shell checkpoint or Claude filesystem archive
-		// on POST /restore before accepting workload I/O.
 		container.Env = append(container.Env, corev1.EnvVar{Name: restoreModeEnvVar, Value: "1"})
 	}
 	containers := append([]corev1.Container{container}, sidecars...)
@@ -751,13 +654,9 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 	}, nil
 }
 
-// helperPodSpec assembles an approval-gated session's helper pod: one
-// session-scoped auxiliary pod holding two containers — the session MCP that
-// will front the approval gate (AC-F3) and the provider credential proxy that
-// AC-F2 moved out of the workload pod (AC-F4/AC-F6). It runs no session
-// workload, so it is an auxiliary pod under AC-A2 rather than a second workload
-// pod, and it keeps no state of its own: freeze discards it and restore builds
-// a new one.
+// helperPodSpec assembles an approval-gated session's helper pod: the session
+// MCP that fronts the approval gate (AC-F3) and the provider credential proxy
+// AC-F2 moved out of the workload pod (AC-F4/AC-F6).
 //
 // Unlike the workload pod it gets no Kubernetes identity — nothing in it needs
 // the API server, and the pod holds both of the platform's external secrets.
@@ -784,7 +683,6 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 		Env: []corev1.EnvVar{
 			{Name: workloadEnvVar, Value: sessionMCPWorkload},
 			{Name: agentAddrEnvVar, Value: ":" + strconv.Itoa(SessionMCPPort)},
-			// Not a secret: the session half of AC-F3's external identifier.
 			{Name: SessionIDEnvVar, Value: sessionID},
 			// AC-F6: the gateway triple lives here and nowhere else. The
 			// notification target is a platform-wide value, never per session.
@@ -831,19 +729,14 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 }
 
 // claudeCredentialProxy holds provider credentials outside the tool-running
-// container. Kubernetes gives pod containers a shared network namespace but
-// separate PID/filesystem namespaces, so Claude can call this loopback service
-// without being able to read its Secret-backed environment or /proc entries.
+// container (AC-E6).
 func (o *ClientOrchestrator) claudeCredentialProxy(image string) corev1.Container {
 	return o.credentialProxyContainer(ClaudeCredentialsContainerName, image, credentialProxyListenAddr, proxyPlacementSidecar)
 }
 
 // credentialProxyContainer builds the provider proxy in either of its two
-// placements. AC-F6 keeps one behaviour contract (AC-E6) for both and lets only
-// the placement differ: claude-code runs it as a loopback sidecar in the
-// workload pod, approval-gated runs it in the session's helper pod bound to the
-// pod network, because its client is a pod away. The Secret projection is the
-// same in both — the provider token exists only in this container's environment.
+// placements. One behaviour contract (AC-E6) for both; only the placement and
+// bind address differ (AC-F6).
 func (o *ClientOrchestrator) credentialProxyContainer(name, image, listenAddr, placement string) corev1.Container {
 	return corev1.Container{
 		Name:            name,
@@ -880,9 +773,8 @@ func (o *ClientOrchestrator) credentialProxyContainer(name, image, listenAddr, p
 	}
 }
 
-// hardenedSecurityContext is the non-root, no-capability profile the platform's
-// own helper containers run under. They execute no user or model code, so
-// nothing in them needs to write to the root filesystem or keep a capability.
+// hardenedSecurityContext is the profile the platform's own helper containers
+// run under: they execute no user or model code.
 func hardenedSecurityContext() *corev1.SecurityContext {
 	runAsNonRoot := true
 	runAsUser := int64(65532)
@@ -924,9 +816,7 @@ func podName(sessionID string) string {
 	return "sess-" + sessionID
 }
 
-// helperPodName derives the deterministic name of a session's helper pod
-// (AC-F4). It is distinct from the workload pod's name and, like it, recoverable
-// from the session id alone.
+// helperPodName derives the deterministic name of a session's helper pod (AC-F4).
 func helperPodName(sessionID string) string {
 	return podName(sessionID) + "-helper"
 }
@@ -956,9 +846,8 @@ func restorePodName(sessionID, suffix string) string {
 	return podName(sessionID) + "-r" + suffix
 }
 
-// helperRestorePodName names a restore round's helper pod. It shares the
-// workload pod's suffix and differs only in the role letter, so both stay
-// inside the 63-char DNS label limit and stay obviously paired.
+// helperRestorePodName names a restore round's helper pod, sharing the workload
+// pod's suffix so the two stay obviously paired.
 func helperRestorePodName(sessionID, suffix string) string {
 	return podName(sessionID) + "-h" + suffix
 }
@@ -1020,7 +909,6 @@ func (o *ClientOrchestrator) waitReady(ctx context.Context, name string) (*corev
 
 // Reach proves the control plane can reach the session shell (AC-D1): it opens
 // the agent's attach WebSocket stream at the pod IP and closes it immediately.
-// No payload moves — the stdin/stdout semantics on this stream are STP-command-input/STP-output-read.
 // The control plane dials over the pod network; it never execs into the pod.
 func (o *ClientOrchestrator) Reach(ctx context.Context, ref PodRef) error {
 	if ref.IP == "" {
@@ -1034,7 +922,6 @@ func (o *ClientOrchestrator) Reach(ctx context.Context, ref PodRef) error {
 		}
 		return fmt.Errorf("open attach stream %s for pod %s: %w", url, ref.Name, err)
 	}
-	// Opening the stream is the proof; close it politely and hang up.
 	_ = conn.WriteControl(websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return conn.Close()
