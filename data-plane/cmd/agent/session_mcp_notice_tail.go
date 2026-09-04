@@ -36,6 +36,15 @@ const (
 	maxNoticeFeedResponseBytes = 1 << 20
 )
 
+// noticeSink is the workload half of the feed. One poll yields two things the
+// workload needs — the marker text for AC-E3's byte stream, and the wait state
+// behind it for AC-F3's idle exception — and they arrive together, so they are
+// handed over together.
+type noticeSink interface {
+	appendPlatformNotice(text string)
+	observeApprovalNotices(notices []approvalNotice, dropped int)
+}
+
 // noticeTailer follows one session MCP's notice feed. It owns no session state:
 // its cursor restarts at zero whenever the process does, which is correct,
 // because a new agent process means a new helper pod with a feed that also
@@ -43,19 +52,18 @@ const (
 type noticeTailer struct {
 	baseURL string
 	client  *http.Client
-	// emit receives one rendered marker. It is the workload's bounded
-	// scrollback append in production, injected so a test can read what would
-	// have been written.
-	emit   func(string)
+	// sink receives what one poll found. It is the workload in production,
+	// injected so a test can read what would have been recorded.
+	sink   noticeSink
 	logger *slog.Logger
 	retry  time.Duration
 }
 
-func newNoticeTailer(baseURL string, emit func(string), logger *slog.Logger) *noticeTailer {
+func newNoticeTailer(baseURL string, sink noticeSink, logger *slog.Logger) *noticeTailer {
 	return &noticeTailer{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		client:  &http.Client{Timeout: noticeTailRequestTimeout},
-		emit:    emit,
+		sink:    sink,
 		logger:  logger,
 		retry:   noticeTailRetryInterval,
 	}
@@ -79,15 +87,20 @@ func (t *noticeTailer) run(ctx context.Context) {
 			}
 			continue
 		}
+		// State before markers. Both come from this one answer, and of the two
+		// only the state can cost a pod: a wait recorded a moment late is a
+		// freeze the control plane should not have performed, while a marker
+		// written a moment late is only a marker written a moment late.
+		t.sink.observeApprovalNotices(body.Notices, body.Dropped)
 		if body.Dropped > 0 {
 			// Say so rather than leave a silent hole: the byte stream is the
 			// record a client reads, and an unexplained gap in it is worse
 			// than an admitted one.
-			t.emit(fmt.Sprintf("\n[session-platform: %d approval notices were dropped]\n", body.Dropped))
+			t.sink.appendPlatformNotice(fmt.Sprintf("\n[session-platform: %d approval notices were dropped]\n", body.Dropped))
 		}
 		for _, notice := range body.Notices {
 			if rendered := renderApprovalNotice(notice); rendered != "" {
-				t.emit(rendered)
+				t.sink.appendPlatformNotice(rendered)
 			}
 		}
 		if body.NextSeq > after {

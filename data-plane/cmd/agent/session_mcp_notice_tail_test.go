@@ -26,6 +26,19 @@ func callInBackground(mcpURL, target string) {
 	}()
 }
 
+// recordingSink is a noticeSink that hands markers to a callback and keeps the
+// wait state, so a test can assert on either half of one poll.
+type recordingSink struct {
+	emit  func(string)
+	waits approvalWaits
+}
+
+func (r *recordingSink) appendPlatformNotice(text string) { r.emit(text) }
+
+func (r *recordingSink) observeApprovalNotices(notices []approvalNotice, dropped int) {
+	r.waits.observe(notices, dropped)
+}
+
 // collectMarkers runs a tailer against a session MCP until want markers have
 // arrived or the deadline passes, and returns everything appended.
 func collectMarkers(t *testing.T, mcpURL string, want int) string {
@@ -35,7 +48,7 @@ func collectMarkers(t *testing.T, mcpURL string, want int) string {
 		ctx, stop = context.WithCancel(context.Background())
 	)
 	t.Cleanup(stop)
-	tailer := newNoticeTailer(mcpURL, func(s string) { appended <- s }, testLogger())
+	tailer := newNoticeTailer(mcpURL, &recordingSink{emit: func(s string) { appended <- s }}, testLogger())
 	tailer.retry = 10 * time.Millisecond
 	go tailer.run(ctx)
 
@@ -157,9 +170,9 @@ func TestApprovalNoticesOnlyAppend(t *testing.T) {
 // costs the session its markers and nothing else.
 func TestNoticeTailerSurvivesAnUnreachableFeed(t *testing.T) {
 	ctx, stop := context.WithCancel(context.Background())
-	tailer := newNoticeTailer("http://127.0.0.1:1", func(string) {
+	tailer := newNoticeTailer("http://127.0.0.1:1", &recordingSink{emit: func(string) {
 		t.Error("an unreachable feed produced a marker")
-	}, testLogger())
+	}}, testLogger())
 	tailer.retry = time.Millisecond
 
 	done := make(chan struct{})

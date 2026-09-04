@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -43,6 +44,13 @@ type agentCheckpointAborter interface {
 	AbortCheckpoint(context.Context, string, string) error
 }
 
+// approvalWaitReporter is the agent client's answer to "is this session
+// blocked on a human right now" (AC-F3). Optional, because only the
+// approval-gated type can be.
+type approvalWaitReporter interface {
+	AwaitingApproval(context.Context, string) (bool, error)
+}
+
 // Option customises workload-specific service behaviour.
 type Option func(*Service)
 
@@ -53,6 +61,18 @@ func WithWorkloadCheckpointer(workload session.WorkloadType, ckpt criu.Checkpoin
 	return func(s *Service) {
 		if ckpt != nil {
 			s.ckpts[workload] = ckpt
+		}
+	}
+}
+
+// WithClock replaces the service clock. AC-F3's idle exception is a statement
+// about time passing without a client — a test can only pin "the count did not
+// advance while waiting, and did once the wait ended" if it owns the clock the
+// refresh is stamped with (docs/test/approval-gated-workload.md scenario 5).
+func WithClock(now func() time.Time) Option {
+	return func(s *Service) {
+		if now != nil {
+			s.now = now
 		}
 	}
 }
@@ -406,6 +426,15 @@ func (s *Service) snapshot(ctx context.Context, id string, idleCutoff *time.Time
 		}
 		if sess.LastAccess.After(*idleCutoff) {
 			return sess, nil
+		}
+		if s.holdingForApproval(ctx, sess) {
+			// AC-F3's exception to AC-B1, and the only place the platform
+			// advances lastAccess without a client having accessed anything.
+			// Refreshing rather than merely declining to freeze is what the
+			// requirement asks for and what makes the wait's end observable:
+			// once the decision lands the refresh stops, and the ordinary
+			// count resumes from here rather than from an hour ago.
+			return s.touchGet(ctx, id)
 		}
 	}
 	if sess.State == session.StateSnapshot {
@@ -949,6 +978,33 @@ func (s *Service) Terminate(ctx context.Context, id string) (retErr error) {
 	retErr = s.store.Delete(ctx, id, token)
 	deleteCommitted = retErr == nil
 	return retErr
+}
+
+// holdingForApproval reports whether the idle count must be held for this
+// session because it is waiting on a human (AC-F3).
+//
+// Three narrowings keep the blast radius at this one workload type. The
+// caller reaches here only on the reaper's path (idleCutoff != nil), so a
+// user-driven Snapshot still freezes a waiting session, as AC-F3's
+// "동결·삭제와의 충돌" requires. Only approval-gated sessions are asked, so
+// shell and claude-code keep AC-D5/AC-B1 unchanged and never pay for the
+// call. And an error answers false: an agent that cannot be reached is one
+// whose session should freeze on schedule, not one that pins a pod forever.
+func (s *Service) holdingForApproval(ctx context.Context, sess *session.Session) bool {
+	if sess.WorkloadType != session.WorkloadTypeApprovalGated || sess.Pod == "" {
+		return false
+	}
+	reporter, ok := s.agent.(approvalWaitReporter)
+	if !ok {
+		return false
+	}
+	awaiting, err := reporter.AwaitingApproval(ctx, sess.Pod)
+	if err != nil {
+		slog.Warn("approval wait unreadable; applying the ordinary idle rule",
+			"session", sess.ID, "pod", sess.Pod, "err", err)
+		return false
+	}
+	return awaiting
 }
 
 // touch updates LastAccess without changing state.

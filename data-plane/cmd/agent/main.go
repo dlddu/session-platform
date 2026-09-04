@@ -179,7 +179,7 @@ func main() {
 			// MCP's notice feed and appends what it finds to the same output
 			// byte stream the agent writes to. It runs under the workload's
 			// context, so it stops when the workload does.
-			tailer := newNoticeTailer(tools.SessionMCP, claude.appendPlatformNotice, logger)
+			tailer := newNoticeTailer(tools.SessionMCP, claude, logger)
 			go tailer.run(claude.ctx)
 		}
 		logger.Info("agent workload started", "workload", workload, "addr", addr,

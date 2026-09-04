@@ -182,6 +182,10 @@ type claudeWorkload struct {
 	tools    toolSurface
 	out      scrollback
 
+	// approvals is what AC-F3's idle exception is decided from. It stays empty
+	// for claude-code, which has no gate to wait on.
+	approvals approvalWaits
+
 	mu                      sync.Mutex
 	cond                    *sync.Cond
 	queue                   *list.List
@@ -1020,6 +1024,15 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 			return
 		}
 		_, _ = w.Write([]byte(`{"status":"awaiting restore","workload":"claude-code"}`))
+	})
+
+	// AC-F3's idle exception, read side. It answers whether a human is being
+	// waited on right now, so the control plane can hold the idle count
+	// instead of freezing a session that has an approval in flight. It stays
+	// answerable while the workload is awaiting restore — an unready agent is
+	// simply not waiting on anyone.
+	mux.HandleFunc("GET "+approvalWaitPath, func(w http.ResponseWriter, _ *http.Request) {
+		serveApprovalWait(w, &c.approvals)
 	})
 
 	mux.HandleFunc("GET /attach", func(w http.ResponseWriter, r *http.Request) {
