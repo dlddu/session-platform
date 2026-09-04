@@ -59,6 +59,9 @@ type jsonRPCResponse struct {
 // registers. It holds no session state — the helper pod is discarded on freeze
 // and rebuilt on restore (AC-F4).
 func sessionMCPRoutes(logger *slog.Logger, config sessionMCPConfig) http.Handler {
+	if config.notices == nil {
+		config.notices = newNoticeFeed()
+	}
 	mux := http.NewServeMux()
 
 	// Readiness. The MCP container is ready as soon as it can answer, because
@@ -66,6 +69,15 @@ func sessionMCPRoutes(logger *slog.Logger, config sessionMCPConfig) http.Handler
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	// The approval notice feed (AC-F3). Its only client is this session's own
+	// workload agent, which tails it to write the wait marker and the decision
+	// into AC-E3's output byte stream. It is a plain GET rather than part of
+	// the JSON-RPC surface because its reader is the agent process, not the
+	// model: the tail must keep running between tool calls.
+	mux.HandleFunc("GET "+noticesPath, func(w http.ResponseWriter, r *http.Request) {
+		serveApprovalNotices(w, r, config.notices)
 	})
 
 	mux.HandleFunc(sessionMCPPath, func(w http.ResponseWriter, r *http.Request) {

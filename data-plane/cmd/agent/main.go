@@ -15,9 +15,10 @@
 //     and that helper pod's session MCP registered as the only tool surface
 //     that leaves the pod.
 //   - mcp is the session MCP that runs in the helper pod's other container. It
-//     serves the readiness endpoint and the MCP endpoint the workload agent
-//     registers. Its external tools and the approval gate they pass through
-//     (AC-F3) are not implemented yet, so it currently advertises no tools.
+//     serves the readiness endpoint, the MCP endpoint the workload agent
+//     registers, and the approval notice feed that agent tails. Its external
+//     tools sit behind the AC-F3 approval gate; a container started without the
+//     gateway triple advertises no tools at all rather than ungated ones.
 //   - credential-proxy holds the real Anthropic gateway URL/token and pins all
 //     requests to that upstream, keeping provider credentials out of the
 //     Claude/Bash process environment (AC-E6); plugin-specific K3S_MCP_TOKEN is
@@ -172,6 +173,15 @@ func main() {
 			os.Exit(1)
 		}
 		a.claude = claude
+		if workload == workloadApprovalGated {
+			// AC-F3's wait marker. Only this type has a gate to report on, and
+			// only it has a helper pod to ask: the tailer follows the session
+			// MCP's notice feed and appends what it finds to the same output
+			// byte stream the agent writes to. It runs under the workload's
+			// context, so it stops when the workload does.
+			tailer := newNoticeTailer(tools.SessionMCP, claude.appendPlatformNotice, logger)
+			go tailer.run(claude.ctx)
+		}
 		logger.Info("agent workload started", "workload", workload, "addr", addr,
 			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode)
 	case workloadSessionMCP:

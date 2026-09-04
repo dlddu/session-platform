@@ -52,10 +52,15 @@ type sessionMCPConfig struct {
 	// whether the network was reached at all, which is the single most important
 	// assertion about a gate.
 	fetch func(ctx context.Context, target string) (*http.Response, error)
+	// notices carries the wait and its decision to whoever is tailing, which in
+	// a real session is the workload pod's agent putting them into AC-E3's
+	// output byte stream. It is advisory: publishing to a nil feed is a no-op,
+	// because a gate that cannot announce a wait must still gate the call.
+	notices *noticeFeed
 }
 
 func newSessionMCPConfig(gateway *approvalGateway) sessionMCPConfig {
-	return sessionMCPConfig{gateway: gateway, fetch: fetchURL}
+	return sessionMCPConfig{gateway: gateway, fetch: fetchURL, notices: newNoticeFeed()}
 }
 
 // gated reports whether this container can offer external tools at all.
@@ -132,15 +137,25 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 		return nil, &jsonRPCError{Code: jsonRPCInternalError, Message: "could not encode the approval context"}
 	}
 
-	logger.Info("awaiting approval", "tool", webFetchGetTool, "external_id", c.gateway.externalID(requestID))
+	externalID := c.gateway.externalID(requestID)
+	logger.Info("awaiting approval", "tool", webFetchGetTool, "external_id", externalID)
+	// Announce the wait before entering it, not after: the marker's purpose is
+	// to tell a watching client that this session is blocked on a human, which
+	// is only useful while the block is still happening (AC-F3).
+	c.notices.publish(approvalNotice{Kind: noticeAwaiting, Tool: webFetchGetTool, ExternalID: externalID})
 	outcome, err := c.gateway.await(ctx, requestID, string(approvalContext))
 	if err != nil {
 		// The gateway could not be asked. That is not a refusal, but the agent
 		// still has to hear about it as a tool failure rather than as a dead
 		// connection, or the invocation ends instead of continuing (AC-F3).
 		logger.Error("approval could not be obtained", "tool", webFetchGetTool, "err", err)
+		c.notices.publish(approvalNotice{Kind: noticeUnavailable, Tool: webFetchGetTool, ExternalID: externalID})
 		return mcpToolError("approval could not be obtained: " + err.Error()), nil
 	}
+	c.notices.publish(approvalNotice{
+		Kind: noticeDecided, Tool: webFetchGetTool, ExternalID: externalID,
+		Decision: string(outcome.Decision),
+	})
 	if outcome.Decision != approvalApproved {
 		logger.Info("approval refused", "tool", webFetchGetTool, "decision", string(outcome.Decision))
 		return mcpToolError(fmt.Sprintf("web fetch request %s", strings.ToLower(string(outcome.Decision)))), nil
