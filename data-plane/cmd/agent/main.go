@@ -75,6 +75,15 @@ const (
 	// sessionMCPURLEnv carries the address of this session's MCP (AC-F6). It is
 	// the approval-gated agent's only tool surface that leaves the pod.
 	sessionMCPURLEnv = "SESSION_MCP_URL"
+	// The MCP container's own environment (AC-F6): the gateway triple that lets
+	// it ask a human, and the session id that makes AC-F3's external identifier
+	// unique. None of these is projected into the workload pod. Keep in sync
+	// with control-plane/internal/adapter/k8s (ApprovalGateway*EnvVar,
+	// SessionIDEnvVar).
+	approvalGatewayURLEnv    = "APPROVAL_GATEWAY_URL"
+	approvalGatewayAPIKeyEnv = "APPROVAL_GATEWAY_API_KEY"
+	approvalGatewayUserIDEnv = "APPROVAL_GATEWAY_USER_ID"
+	sessionIDEnv             = "SESSION_ID"
 
 	// defaultShell is the interactive shell launched when DATA_PLANE_SHELL is
 	// unset (AC-D1).
@@ -169,8 +178,23 @@ func main() {
 		// AC-F4's helper pod container. It runs no session workload — it is the
 		// tool surface the workload pod calls into — so it gets its own handler
 		// rather than the workload agent's routes.
-		handler = sessionMCPRoutes(logger)
-		logger.Info("session MCP started", "addr", addr)
+		//
+		// A container without the gateway triple starts and serves, but with no
+		// tools (AC-F3): the external tools exist only behind the gate, so a
+		// missing Secret costs the session its outward reach rather than its
+		// approval requirement.
+		gateway, err := newApprovalGateway(
+			os.Getenv(approvalGatewayURLEnv),
+			os.Getenv(approvalGatewayAPIKeyEnv),
+			os.Getenv(approvalGatewayUserIDEnv),
+			os.Getenv(sessionIDEnv),
+		)
+		if err != nil {
+			logger.Warn("session MCP has no approval gate; it will offer no tools", "err", err)
+			gateway = nil
+		}
+		handler = sessionMCPRoutes(logger, newSessionMCPConfig(gateway))
+		logger.Info("session MCP started", "addr", addr, "gated", gateway != nil)
 	case workloadCredentialProxy:
 		placement, err := credentialProxyPlacementFromEnv()
 		if err != nil {
