@@ -1,0 +1,260 @@
+# kind e2e ONLY: an in-cluster stand-in for the Anthropic provider endpoint.
+#
+# mock-exception: CLAUDE-PROVIDER — 실 provider(Anthropic API)는 클러스터 안에 실물을 세울 수
+# 없다. MinIO 를 EXT 에서 뺀 근거(S3 의 실물 구현이 배포 가능하다)가 여기엔 해당하지 않는다 —
+# 구현이 공개돼 있지 않고 모델 가중치가 그 서비스의 본체다. 등재: docs/test/e2e.md
+# 「e2e 충실도 허용목록」의 `CLAUDE-PROVIDER`(EXT).
+#
+# 이것이 무엇을 대신하고 무엇을 대신하지 **않는지**:
+#   - 대신하는 것은 **응답을 만드는 주체** 하나뿐이다. 자격 증명 격리(AC-E6)의 왕복은 전부
+#     실물이다 — 세션 pod 의 credential-proxy 가 프로덕션 코드 그대로 헤더 허용목록을 적용하고
+#     플랫폼 토큰을 주입하며, 여기에 **TLS 를 검증하고** 붙는다(아래 사설 CA). 대역이 bearer 를
+#     검사해 틀리면 401 을 내므로 그 주입이 실제로 일어났는지도 대역 쪽에서 확인된다.
+#   - 대신하지 **않는** 것: 실 provider 의 스트리밍·오류·토큰 회계 계약. 여기 응답은 결정적
+#     상수이고, 실 Claude CLI 의 프롬프트 루프가 이 표면으로 만족되는지는 이 배선이 단언하지
+#     않는다(등재 행의 '잔여' 칸에 명시).
+#
+# test-only 라는 말이 붙는 것은 이 대역 자체다. `deploy/minio.yaml` 이나
+# `deploy/plugin-marketplace-git.yaml` 과 달리 프로덕션과 같은 코드 경로가 도는 실물이 아니다.
+#
+# 왜 HTTPS 인가: 선택이 아니다. credential-proxy 는 upstream 스킴을 https 로 강제한다
+# (data-plane/cmd/agent/credential_proxy.go 의 parseCredentialProxyUpstream). 그래서 대역은
+# 사설 CA 로 서명한 인증서로 TLS 를 종단하고, 그 CA 를 플랫폼 Secret 의 optional `ca-cert`
+# 키로 프록시 컨테이너에만 넘긴다. 프로덕션 base(k8s/)는 그 키가 없어 시스템 풀 그대로다.
+#
+# 아래 키 자료는 이 레포 전용 일회용이다 — 실 자격 증명이 아니고, 실 호스트를 위한 것도
+# 아니며(SAN 은 인클러스터 이름과 loopback 뿐), 외부에서 신뢰되지 않는다.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: anthropic-fake-tls
+  labels:
+    app: anthropic-fake
+type: kubernetes.io/tls
+stringData:
+  tls.crt: |
+    -----BEGIN CERTIFICATE-----
+    MIICdzCCAhygAwIBAgIIU1BFMkVDQTIwCgYIKoZIzj0EAwIwRjEpMCcGA1UEAwwg
+    c2Vzc2lvbi1wbGF0Zm9ybSBlMmUgcHJvdmlkZXIgQ0ExGTAXBgNVBAoMEHNlc3Np
+    b24tcGxhdGZvcm0wIBcNMjYwOTA0MTUxMTE4WhgPMjA5NTAyMTQxNTExMThaMDQx
+    FzAVBgNVBAMMDmFudGhyb3BpYy1mYWtlMRkwFwYDVQQKDBBzZXNzaW9uLXBsYXRm
+    b3JtMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEA+e0SERgLxD42Bp6LnJEpAU/
+    RuXV+sqwQOPGp3i+9eJn/mAgJ7/KchPAAyy14Cmfp5SSOcR/0IIAMLgpq91Qb6OC
+    AQIwgf8wDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCBaAwEwYDVR0lBAwwCgYI
+    KwYBBQUHAwEwgYkGA1UdEQSBgTB/gg5hbnRocm9waWMtZmFrZYIWYW50aHJvcGlj
+    LWZha2UuZGVmYXVsdIIaYW50aHJvcGljLWZha2UuZGVmYXVsdC5zdmOCKGFudGhy
+    b3BpYy1mYWtlLmRlZmF1bHQuc3ZjLmNsdXN0ZXIubG9jYWyCCWxvY2FsaG9zdIcE
+    fwAAATAdBgNVHQ4EFgQUuqaNSPXl76N+PLE+1kqnNdhdAVYwHwYDVR0jBBgwFoAU
+    tse64tPfpRHvLTh7N7BBtKniZyQwCgYIKoZIzj0EAwIDSQAwRgIhAPE/ffq2yb9N
+    tBJLf2QabRzW0VhjnTQ6CsPhqi570fb/AiEA91g4nCmLec2vbI8mlI0UoD8kFoW3
+    1er0aDFjIhvj48o=
+    -----END CERTIFICATE-----
+  tls.key: |
+    -----BEGIN EC PRIVATE KEY-----
+    MHcCAQEEIEmKo4gCv5MudJ52qpUWW44KKzY0BWRpMr858HAsfPELoAoGCCqGSM49
+    AwEHoUQDQgAEA+e0SERgLxD42Bp6LnJEpAU/RuXV+sqwQOPGp3i+9eJn/mAgJ7/K
+    chPAAyy14Cmfp5SSOcR/0IIAMLgpq91Qbw==
+    -----END EC PRIVATE KEY-----
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: anthropic-fake
+  labels:
+    app: anthropic-fake
+data:
+  server.js: |
+    // A deterministic Anthropic Messages endpoint over TLS. Two shapes only:
+    // a buffered JSON reply and the SSE event sequence, because the platform
+    // contract this SUT exercises (data-plane/cmd/agent/credential_proxy.go and
+    // credential_proxy_stream*.go) distinguishes exactly those two — a buffered
+    // body under the 64 MiB cap, and chunks that must reach the client before
+    // EOF. Everything else the real provider does is out of this stand-in's
+    // scope and is recorded as unverified in the allowlist row.
+    const https = require("https");
+    const fs = require("fs");
+
+    const PORT = Number(process.env.PORT || 8443);
+    const EXPECTED_BEARER = process.env.EXPECTED_BEARER || "";
+    // The marker the e2e asserts on. It exists nowhere else in the tree, so
+    // seeing it in a session pod proves the bytes came from this deployment and
+    // not from a cached or default response somewhere along the way.
+    const REPLY = "session-platform-e2e-provider-ok";
+    const MODEL = process.env.REPLY_MODEL || "claude-e2e-model";
+
+    function send(res, status, payload) {
+      const body = JSON.stringify(payload);
+      res.writeHead(status, {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(body),
+      });
+      res.end(body);
+    }
+
+    function messageBody() {
+      return {
+        id: "msg_e2e0000000000000000000000",
+        type: "message",
+        role: "assistant",
+        model: MODEL,
+        content: [{ type: "text", text: REPLY }],
+        stop_reason: "end_turn",
+        stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      };
+    }
+
+    // Written out one event at a time and flushed, so a client that buffers the
+    // whole body would look different from one that streams. That difference is
+    // the thing the proxy's stream tests care about.
+    function streamMessage(res) {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-store",
+        Connection: "keep-alive",
+      });
+      const emit = (event, data) => {
+        res.write("event: " + event + "\n");
+        res.write("data: " + JSON.stringify(data) + "\n\n");
+      };
+      const message = messageBody();
+      emit("message_start", {
+        type: "message_start",
+        message: { ...message, content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } },
+      });
+      emit("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+      emit("content_block_delta", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: REPLY },
+      });
+      emit("content_block_stop", { type: "content_block_stop", index: 0 });
+      emit("message_delta", {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { output_tokens: 1 },
+      });
+      emit("message_stop", { type: "message_stop" });
+      res.end();
+    }
+
+    const server = https.createServer(
+      {
+        cert: fs.readFileSync("/etc/anthropic-fake-tls/tls.crt"),
+        key: fs.readFileSync("/etc/anthropic-fake-tls/tls.key"),
+      },
+      (req, res) => {
+        const path = (req.url || "").split("?")[0];
+        if (req.method === "GET" && path === "/healthz") {
+          res.writeHead(200, { "Content-Type": "text/plain" });
+          return res.end("ok\n");
+        }
+        // The credential proxy injects the platform token as a bearer. Rejecting
+        // anything else keeps the substitute honest about the injection step it
+        // stands behind, instead of answering every caller.
+        if (EXPECTED_BEARER && req.headers.authorization !== "Bearer " + EXPECTED_BEARER) {
+          return send(res, 401, { type: "error", error: { type: "authentication_error", message: "unauthorized" } });
+        }
+        if (req.method !== "POST") {
+          return send(res, 404, { type: "error", error: { type: "not_found_error", message: "not found" } });
+        }
+        const chunks = [];
+        req.on("data", (c) => chunks.push(c));
+        req.on("end", () => {
+          let msg = {};
+          try {
+            msg = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+          } catch (e) {
+            return send(res, 400, {
+              type: "error",
+              error: { type: "invalid_request_error", message: "could not parse body" },
+            });
+          }
+          if (path === "/v1/messages/count_tokens") {
+            return send(res, 200, { input_tokens: 1 });
+          }
+          if (path !== "/v1/messages") {
+            return send(res, 404, { type: "error", error: { type: "not_found_error", message: "not found" } });
+          }
+          if (msg && msg.stream === true) {
+            return streamMessage(res);
+          }
+          return send(res, 200, messageBody());
+        });
+      },
+    );
+
+    server.listen(PORT, "0.0.0.0", () => {
+      console.log("anthropic-fake listening on " + PORT);
+    });
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anthropic-fake
+  labels:
+    app: anthropic-fake
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anthropic-fake
+  template:
+    metadata:
+      labels:
+        app: anthropic-fake
+    spec:
+      containers:
+        # Same reasoning as deploy/e2e-k3s-mcp-fake.yaml: the data-plane image
+        # already carries the Node 22 runtime and scripts/e2e/up.sh has already
+        # loaded it into kind, so the stand-in costs no extra build and no pull.
+        - name: server
+          image: session-platform/data-plane:dev
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/opt/anthropic-fake/server.js"]
+          env:
+            - name: PORT
+              value: "8443"
+            # The very token the credential proxy injects, read from the same
+            # Secret key the proxy container reads.
+            - name: EXPECTED_BEARER
+              valueFrom:
+                secretKeyRef:
+                  name: claude-code-credentials
+                  key: auth-token
+          ports:
+            - containerPort: 8443
+              name: https
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 1
+            periodSeconds: 2
+          volumeMounts:
+            - name: script
+              mountPath: /opt/anthropic-fake
+            - name: tls
+              mountPath: /etc/anthropic-fake-tls
+      volumes:
+        - name: script
+          configMap:
+            name: anthropic-fake
+        - name: tls
+          secret:
+            secretName: anthropic-fake-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anthropic-fake
+  labels:
+    app: anthropic-fake
+spec:
+  selector:
+    app: anthropic-fake
+  ports:
+    - name: https
+      port: 8443
+      targetPort: 8443

@@ -208,6 +208,7 @@ func main() {
 		proxy, err := newCredentialProxy(
 			os.Getenv("ANTHROPIC_BASE_URL"),
 			os.Getenv("ANTHROPIC_AUTH_TOKEN"),
+			os.Getenv(providerCACertEnv),
 			logger,
 		)
 		if err != nil {
