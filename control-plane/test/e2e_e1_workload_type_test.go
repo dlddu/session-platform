@@ -142,11 +142,20 @@ func TestWorkloadType_ClaudeCodeSessionRunsTheClaudeCLI(t *testing.T) {
 	}
 }
 
-// The plugin bootstrap really ran against the endpoints the overlay deploys:
-// the marketplace is registered and the platform plugin is installed inside the
-// pod. Without the in-cluster K3s MCP stand-in and marketplace remote this
-// container would have exited before the agent ever started.
-func TestWorkloadType_ClaudeCodePluginBootstrapCompleted(t *testing.T) {
+// The plugin bootstrap resolved against the endpoints THIS overlay deploys, not
+// against github.com. Pod Ready already proves the bootstrap ran to completion —
+// entrypoint.sh is `set -eu`, so a failed token request or a failed
+// `claude plugin marketplace add` kills the container before the agent starts.
+// What this test adds is *which remote answered*: the in-cluster fixture carries
+// a marker string that exists in no other marketplace, so finding it in the pod's
+// plugin cache is decisive.
+//
+// The paths are entrypoint.sh's documented defaults, which the control plane does
+// not override: the bootstrap runs the CLI under its own HOME and hands the agent
+// the plugin cache it populated (a fresh `claude` invocation with a different HOME
+// sees neither, which is why this asserts on the filesystem rather than on
+// `claude plugin marketplace list`).
+func TestWorkloadType_ClaudeCodePluginBootstrapUsedTheInClusterMarketplace(t *testing.T) {
 	status, s := createTyped(t, map[string]any{
 		"name": uniqueName(t), "workloadType": "claude-code",
 	})
@@ -160,15 +169,28 @@ func TestWorkloadType_ClaudeCodePluginBootstrapCompleted(t *testing.T) {
 	ns := sessionNamespace()
 	getPodEventually(t, cs, ns, s.Pod)
 
+	const (
+		pluginCacheDir = "/tmp/session-platform-claude-plugin-seed"
+		bootstrapHome  = "/tmp/session-platform-claude-plugin-home"
+		// Present only in deploy/plugin-marketplace-git.yaml's fixture.
+		fixtureMarker = "kind e2e fixture"
+	)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	stdout, stderr, err := execInContainer(ctx, cs, cfg, ns, s.Pod, workloadContainer,
-		[]string{"/bin/sh", "-c", "claude plugin marketplace list 2>&1 || true"})
+		[]string{"/bin/sh", "-c",
+			"grep -rl '" + fixtureMarker + "' " + pluginCacheDir + " " + bootstrapHome +
+				" 2>/dev/null | head -5; " +
+				"echo '--- cache tree ---'; find " + pluginCacheDir + " " + bootstrapHome +
+				" -maxdepth 4 2>/dev/null | head -40"})
 	if err != nil {
-		t.Fatalf("list marketplaces in %s/%s: %v (stderr=%q)", ns, s.Pod, err, stderr)
+		t.Fatalf("probe plugin cache in %s/%s: %v (stderr=%q)", ns, s.Pod, err, stderr)
 	}
-	if !strings.Contains(stdout, "dlddu-plugins") {
-		t.Fatalf("marketplace `dlddu-plugins` is not registered in the session pod: %q", stdout)
+	hits, _, _ := strings.Cut(stdout, "--- cache tree ---")
+	if strings.TrimSpace(hits) == "" {
+		t.Fatalf("the in-cluster marketplace fixture is not in the session pod's plugin cache "+
+			"— the bootstrap resolved some other remote.\n%s", stdout)
 	}
 }
 
