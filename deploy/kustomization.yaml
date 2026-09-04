@@ -23,6 +23,16 @@ resources:
   # S3-compatible backend for the CRIU checkpoint archives, so the round trip
   # runs against the real S3 code path with no cloud account.
   - minio.yaml
+
+  # The two endpoints a claude-code session pod reaches during its plugin
+  # bootstrap, before the agent starts. Without them the pod dies in
+  # entrypoint.sh and no claude-code session can exist in the SUT.
+  #   - the K3s MCP stand-in is an approved mock exception (PLUGIN-CRED, EXT):
+  #     the real service holds an organisation GitHub App private key.
+  #   - the marketplace git remote is a *real* remote, deployed like MinIO, so
+  #     `claude plugin marketplace add` runs its production code path.
+  - e2e-k3s-mcp-fake.yaml
+  - plugin-marketplace-git.yaml
 images:
   - name: ghcr.io/dlddu/session-platform
     newName: session-platform/control-plane

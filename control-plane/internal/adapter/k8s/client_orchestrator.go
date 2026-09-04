@@ -116,6 +116,18 @@ const (
 	ClaudeCodeBaseURLSecretKey     = "base-url"
 	ClaudeCodeAuthTokenSecretKey   = "auth-token"
 	ClaudeCodeK3SMCPTokenSecretKey = "k3s-mcp-token"
+
+	// The plugin bootstrap reaches two endpoints before the agent starts: the
+	// K3s MCP that issues the marketplace read token, and the marketplace git
+	// remote itself. Both are *addresses*, not credentials, and both are
+	// optional keys — when the Secret omits them the entrypoint keeps its
+	// built-in production defaults, so k8s/ needs no change. Projecting them
+	// lets an environment that cannot reach the organisation endpoints (the kind
+	// e2e SUT) point the same code path at in-cluster stand-ins.
+	K3SMCPURLEnvVar                         = "K3S_MCP_URL"
+	ClaudeCodePluginMarketplaceURLEnvVar    = "CLAUDE_CODE_PLUGIN_MARKETPLACE_URL"
+	ClaudeCodeK3SMCPURLSecretKey            = "k3s-mcp-url"
+	ClaudeCodePluginMarketplaceURLSecretKey = "plugin-marketplace-url"
 	// ClaudeCredentialsContainerName identifies the isolated Secret holder.
 	ClaudeCredentialsContainerName = "claude-credentials"
 	// ClaudeCredentialProxyURL is the loopback-only endpoint visible to the
@@ -620,6 +632,12 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		container.Env = append(container.Env,
 			modelEnv,
 			secretEnv(K3SMCPTokenEnvVar, o.claudeCredentialsSecret, ClaudeCodeK3SMCPTokenSecretKey),
+			optionalSecretEnv(K3SMCPURLEnvVar, o.claudeCredentialsSecret, ClaudeCodeK3SMCPURLSecretKey),
+			optionalSecretEnv(
+				ClaudeCodePluginMarketplaceURLEnvVar,
+				o.claudeCredentialsSecret,
+				ClaudeCodePluginMarketplaceURLSecretKey,
+			),
 			corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: claudeCodeStateDir},
 			corev1.EnvVar{Name: AnthropicBaseURLEnvVar, Value: ClaudeCredentialProxyURL},
 			corev1.EnvVar{Name: AnthropicAuthTokenEnvVar, Value: credentialProxyPlaceholderToken},

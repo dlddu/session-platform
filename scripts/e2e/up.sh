@@ -73,6 +73,12 @@ echo "e2e: waiting for rollouts"
 # MinIO backs the CRIU checkpoint archives (deploy/minio.yaml). Wait for it too,
 # so the first snapshot cannot race its startup or bucket creation.
 kubectl rollout status deploy/minio --timeout=180s
+# The two endpoints a claude-code session pod contacts during its plugin
+# bootstrap, before its agent starts. Waiting here for the same reason as MinIO:
+# the first claude-code session must not race their startup (the marketplace
+# remote also has to finish seeding its bare repo in an init container).
+kubectl rollout status deploy/k3s-mcp-fake --timeout=120s
+kubectl rollout status deploy/plugin-marketplace-git --timeout=180s
 kubectl rollout status deploy/control-plane --timeout=120s
 
 echo "e2e: polling $BASE_URL/api/v1/healthz"
