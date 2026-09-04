@@ -3,13 +3,14 @@
 // makes it that type's *only* outward tool surface, and AC-F3 puts a human
 // approval gate in front of every external tool it will offer.
 //
-// This file lands the container's own contract — it starts, reports ready, and
-// speaks the MCP endpoint the workload agent registers — and stops there. The
-// external tools and the approval gate they must pass through are NOT
-// implemented: tools/list is empty and nothing here calls the approval gateway
-// or the network. That is deliberate and visible rather than stubbed behind a
-// flag: an agent that registers this server today discovers a server with no
-// tools, which is exactly the state docs/doc-tracker.md records.
+// This file is the endpoint itself: the readiness probe, the handshake, and the
+// JSON-RPC dispatch. The tools it offers and the gate they pass through live in
+// session_mcp_tools.go.
+//
+// One invariant crosses both files: the tool list is empty exactly when there
+// is no gate. A container started without the gateway triple offers nothing, so
+// a missing Secret can never turn into an ungated call — it turns into a server
+// with no tools, which is the safe end of a misconfiguration.
 package main
 
 import (
@@ -30,6 +31,8 @@ const (
 	jsonRPCParseError     = -32700
 	jsonRPCInvalidRequest = -32600
 	jsonRPCMethodNotFound = -32601
+	jsonRPCInvalidParams  = -32602
+	jsonRPCInternalError  = -32603
 )
 
 type jsonRPCRequest struct {
@@ -55,7 +58,7 @@ type jsonRPCResponse struct {
 // endpoint the kubelet polls and the MCP endpoint the session's workload agent
 // registers. It holds no session state — the helper pod is discarded on freeze
 // and rebuilt on restore (AC-F4).
-func sessionMCPRoutes(logger *slog.Logger) http.Handler {
+func sessionMCPRoutes(logger *slog.Logger, config sessionMCPConfig) http.Handler {
 	mux := http.NewServeMux()
 
 	// Readiness. The MCP container is ready as soon as it can answer, because
@@ -99,11 +102,16 @@ func sessionMCPRoutes(logger *slog.Logger) http.Handler {
 				},
 			})
 		case "tools/list":
-			// Empty until AC-F3 lands. The gate has to exist before a tool that
-			// reaches outside the pod may be offered, so an approval-gated
-			// session currently has no way out of its pod at all — which is the
-			// safe end of that missing piece, not the dangerous one.
-			writeJSONRPCResult(w, req.ID, map[string]any{"tools": []any{}})
+			writeJSONRPCResult(w, req.ID, map[string]any{"tools": config.toolDefinitions()})
+		case "tools/call":
+			// The handler's own context: an approval wait ends when the client
+			// hangs up or the pod goes away, and never outlives either.
+			result, rpcErr := config.callTool(r.Context(), logger, req.Params)
+			if rpcErr != nil {
+				writeJSONRPCError(w, req.ID, rpcErr.Code, rpcErr.Message)
+				return
+			}
+			writeJSONRPCResult(w, req.ID, result)
 		case "ping":
 			writeJSONRPCResult(w, req.ID, map[string]any{})
 		default:
@@ -120,9 +128,10 @@ func sessionMCPRoutes(logger *slog.Logger) http.Handler {
 // request rather than a product limit.
 const maxSessionMCPRequestBytes = 1 << 20
 
-// sessionMCPServerVersion is reported in the handshake. It stays at 0 while the
-// server has no tools, so a client can tell an empty gate from a real one.
-const sessionMCPServerVersion = "0"
+// sessionMCPServerVersion is reported in the handshake. It went to 1 when the
+// approval gate and its first external tool landed; 0 meant a server that could
+// only shake hands.
+const sessionMCPServerVersion = "1"
 
 func writeJSONRPCResult(w http.ResponseWriter, id json.RawMessage, result any) {
 	writeJSONRPC(w, jsonRPCResponse{JSONRPC: "2.0", ID: id, Result: result})

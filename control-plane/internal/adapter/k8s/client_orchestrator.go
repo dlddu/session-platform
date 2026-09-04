@@ -174,6 +174,13 @@ const (
 	ApprovalGatewayURLSecretKey    = "url"
 	ApprovalGatewayAPIKeySecretKey = "api-key"
 	ApprovalGatewayUserIDSecretKey = "user-id"
+	// SessionIDEnvVar tells the MCP container which session it serves. AC-F3
+	// builds each approval request's external identifier as
+	// {sessionID}:{requestID}, and the gateway rejects a duplicate, so the
+	// session half has to reach the container that talks to the gateway. It is
+	// not a credential — it is the same id the pod already carries as a label.
+	// Keep in sync with data-plane/cmd/agent (sessionIDEnv).
+	SessionIDEnvVar = "SESSION_ID"
 
 	// restoreModeEnvVar tells a restore-target agent to wait for POST /restore
 	// instead of starting a fresh workload. Shell restores use CRIU; Claude Code
@@ -748,6 +755,8 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 		Env: []corev1.EnvVar{
 			{Name: workloadEnvVar, Value: sessionMCPWorkload},
 			{Name: agentAddrEnvVar, Value: ":" + strconv.Itoa(SessionMCPPort)},
+			// Not a secret: the session half of AC-F3's external identifier.
+			{Name: SessionIDEnvVar, Value: sessionID},
 			// AC-F6: the gateway triple lives here and nowhere else. The
 			// notification target is a platform-wide value, never per session.
 			secretEnv(ApprovalGatewayURLEnvVar, o.approvalGatewaySecret, ApprovalGatewayURLSecretKey),
