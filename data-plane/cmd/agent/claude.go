@@ -340,6 +340,24 @@ func (c *claudeWorkload) enqueue(prompt string) error {
 	return nil
 }
 
+// appendPlatformNotice writes one platform-generated in-band marker into the
+// same append-only record the agent's own output goes to (AC-F3's approval
+// markers today). It goes through the bounded append, so the cumulative
+// scrollback limit and its terminal marker hold exactly as they do for agent
+// output — a marker cannot push the buffer past the bound or land after the
+// stream has been closed by it (AC-E3).
+//
+// It deliberately does not consume the per-invocation output quota: that quota
+// is defined over assistant text and diagnostic stderr, and a platform notice
+// is neither. It also does not pass through the invocation's redaction sink,
+// because a notice is assembled here from a tool name and an external
+// identifier and never carries provider or gateway material (AC-F6).
+func (c *claudeWorkload) appendPlatformNotice(text string) {
+	if c.out.appendClaudeBoundedAt([]byte(text), c.scrollbackLimit, claudeOutputLimitMarker) {
+		c.logger.Warn("claude session output limit reached; rejecting new prompts")
+	}
+}
+
 func (c *claudeWorkload) runWorker() {
 	defer close(c.workerDone)
 	for {
