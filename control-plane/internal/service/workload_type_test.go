@@ -17,8 +17,7 @@ import (
 )
 
 // newServiceWithOrch hands back the stub orchestrator too, so a test can assert
-// which workload type actually reached provisioning (AC-E1) rather than only
-// what the stored record says.
+// which workload type actually reached provisioning (AC-E1).
 func newServiceWithOrch() (*service.Service, *k8s.StubOrchestrator, *configmap.Store) {
 	orch := k8s.NewStubOrchestrator("sessions")
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
@@ -30,8 +29,7 @@ func newServiceWithOrch() (*service.Service, *k8s.StubOrchestrator, *configmap.S
 	return svc, orch, store
 }
 
-// AC-E1/AC-E6: immutable workload settings are validated before provisioning,
-// copied into the pod request, and persisted on the session record.
+// AC-E1/AC-E6: immutable workload settings reach provisioning and the record.
 func TestCreateAppliesWorkloadType(t *testing.T) {
 	ctx := context.Background()
 
@@ -114,8 +112,8 @@ func TestCreateAppliesWorkloadType(t *testing.T) {
 	}
 }
 
-// AC-E1: an unknown type is rejected outright — and, importantly, before any
-// pod is provisioned, so a bad request cannot leak cluster resources.
+// AC-E1: an unknown type is rejected before any pod is provisioned, so a bad
+// request cannot leak cluster resources.
 func TestCreateRejectsUnknownWorkloadType(t *testing.T) {
 	ctx := context.Background()
 	svc, orch, _ := newServiceWithOrch()
@@ -132,8 +130,7 @@ func TestCreateRejectsUnknownWorkloadType(t *testing.T) {
 	}
 }
 
-// AC-E6: invalid model settings fail before provisioning. Shell has no model,
-// and Claude Code model identifiers cannot contain whitespace or CLI flags.
+// AC-E6: invalid model settings fail before provisioning.
 func TestCreateRejectsInvalidModel(t *testing.T) {
 	ctx := context.Background()
 	cases := []struct {
@@ -246,9 +243,8 @@ func TestOversizedClaudePromptIsRejectedBeforeRestore(t *testing.T) {
 	}
 }
 
-// Sessions written before the type axis existed have no workloadType at all.
-// Reading one back must yield the shell default — the only type they could have
-// been — rather than an empty type that would fail provisioning on restore.
+// Sessions written before the type axis existed have no workloadType at all;
+// reading one back must yield the shell default (AC-E1).
 func TestLegacySessionRecordRestoresAsShell(t *testing.T) {
 	ctx := context.Background()
 	svc, orch, store := newServiceWithOrch()

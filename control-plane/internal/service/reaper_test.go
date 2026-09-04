@@ -20,12 +20,9 @@ func (m *accessBeforeSnapshotManager) SnapshotIfIdle(ctx context.Context, id str
 }
 
 // TestIdleReaperSnapshotsIdleSessions covers the operational idle->snapshot
-// trigger (AC-B1). A session idle for at least MaxIdle is checkpointed and its
-// pod reclaimed (AC-A3); a session just under the threshold — the 59-minute
-// boundary from docs/test/lifecycle.md Scenario 1 — is left active. It drives a
-// single deterministic ScanOnce with an injected clock rather than waiting on
-// the ticker, and ages each session relative to its own LastAccess so the
-// assertions are independent of the wall clock.
+// trigger (AC-B1, AC-A3), including the boundary case from
+// docs/test/lifecycle.md Scenario 1. It ages each session relative to its own
+// LastAccess so the assertions are independent of the wall clock.
 func TestIdleReaperSnapshotsIdleSessions(t *testing.T) {
 	ctx := context.Background()
 
