@@ -252,6 +252,39 @@ func TestApprovalGated_CredentialsAreSplitAcrossHelperContainers(t *testing.T) {
 	}
 }
 
+// AC-F3 builds every approval request's external identifier as
+// {sessionID}:{requestID}, and the gateway refuses a duplicate. The session half
+// is only knowable to the container that talks to the gateway if the control
+// plane hands it over, so the MCP container carries the session id as a plain
+// value — it is not a credential, it is the same id the pod already wears as a
+// label. The proxy container has no business with the gateway, so it does not
+// get it.
+func TestApprovalGated_MCPContainerKnowsItsSession(t *testing.T) {
+	_, set := newApprovalGatedOrchestrator(t)
+	mcp := container(t, set.helper, k8s.SessionMCPContainerName)
+	proxy := container(t, set.helper, k8s.HelperCredentialProxyContainerName)
+
+	sessionID := set.helper.Labels[k8s.LabelSessionID]
+	if sessionID == "" {
+		t.Fatal("helper pod has no session label to compare the injected id against")
+	}
+	got, ok := envValue(mcp, k8s.SessionIDEnvVar)
+	if !ok {
+		t.Fatalf("MCP container is missing %s; AC-F3 cannot build {sessionID}:{requestID} without it", k8s.SessionIDEnvVar)
+	}
+	if got != sessionID {
+		t.Errorf("%s = %q, want the session this helper pod serves (%q)", k8s.SessionIDEnvVar, got, sessionID)
+	}
+	// A plain value, never a Secret projection: an id is not a credential, and
+	// projecting it as one would put it in the same bucket AC-F6 keeps audited.
+	if _, _, ok := secretKey(mcp, k8s.SessionIDEnvVar); ok {
+		t.Errorf("%s is projected from a Secret; the session id is not a credential", k8s.SessionIDEnvVar)
+	}
+	if _, ok := envValue(proxy, k8s.SessionIDEnvVar); ok {
+		t.Errorf("%s reached the proxy container, which never addresses the gateway (AC-F6)", k8s.SessionIDEnvVar)
+	}
+}
+
 // The workload pod of an approval-gated session must not carry the credential
 // proxy sidecar: moving it out is what lets AC-F2 leave no external destination
 // on that pod's egress allowlist.
