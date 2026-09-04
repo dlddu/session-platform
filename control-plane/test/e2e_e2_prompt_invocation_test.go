@@ -171,34 +171,47 @@ func eventuallyClaudeOutput(t *testing.T, id string, within time.Duration, ok fu
 // `claude` invocation ran and the agent projected its assistant text — the
 // whole AC-E2 loop, not just a reachable endpoint.
 //
-// It also shows the write did not wait for that invocation. The agent projects
-// the reply *while* the process runs, so a blocking write could not have
-// returned before the marker existed. Observing the buffer without the marker
-// at the moment write returned, and with it afterwards, is that ordering.
-func TestClaudePromptWrite_RunsAnInvocationWithoutWaitingForIt(t *testing.T) {
+// It also shows write does not wait for that invocation, and it uses the queue
+// rather than a stopwatch to show it. Prompts to one session run one at a time,
+// so a write that waited for its own invocation would leave every reply of a
+// burst already in the buffer by the time the last write returned. Finding
+// fewer than that many is only possible if writes returned while invocations
+// were still outstanding.
+//
+// Timing the single write is not enough, and a first attempt that did exactly
+// that failed on the SUT: the reply was in the buffer 390ms after the call
+// returned, which a blocking and a non-blocking write can both produce. The
+// count is a causal observation instead of a race — it needs only that an
+// invocation (launching a process) outlasts an HTTP enqueue, never a particular
+// duration for either.
+func TestClaudePromptWrite_RunsInvocationsWithoutWaitingForThem(t *testing.T) {
 	s := claudeSession(t)
 
 	before := readShellAt(t, s.ID, 0)
 
+	const burst = 4
 	start := time.Now()
-	writePromptOK(t, s.ID, e2PromptFirst)
-	took := time.Since(start)
-	if took > 5*time.Second {
-		t.Fatalf("write blocked for %v — it must return without waiting for the invocation (AC-E2)", took)
+	for i := 0; i < burst; i++ {
+		writePromptOK(t, s.ID, e2PromptFirst)
+	}
+	issued := time.Since(start)
+
+	pending := readShellAt(t, s.ID, 0)
+	if done := strings.Count(pending.Payload, providerReplyMarker); done >= burst {
+		t.Fatalf("all %d replies were already in the buffer %v after the last write returned, so write "+
+			"waited for its invocation (AC-E2); payload=%q", burst, issued, pending.Payload)
 	}
 
-	if got := readShellAt(t, s.ID, 0); strings.Contains(got.Payload, providerReplyMarker) {
-		t.Fatalf("the reply was already in the buffer %v after write returned, so write waited for the "+
-			"invocation to finish (AC-E2); payload=%q", took, got.Payload)
-	}
-
-	after := eventuallyClaudeOutput(t, s.ID, 3*time.Minute, func(p string) bool {
-		return strings.Contains(p, providerReplyMarker)
+	// Every queued prompt still runs, in its own invocation.
+	after := eventuallyClaudeOutput(t, s.ID, 5*time.Minute, func(p string) bool {
+		return strings.Count(p, providerReplyMarker) >= burst
 	})
 	if after.NextOffset <= before.NextOffset {
-		t.Fatalf("cursor did not advance across the invocation: before=%d after=%d",
-			before.NextOffset, after.NextOffset)
+		t.Fatalf("cursor did not advance across %d invocations: before=%d after=%d",
+			burst, before.NextOffset, after.NextOffset)
 	}
+	t.Logf("issued %d prompts in %v; all %d replies present after %v",
+		burst, issued, burst, time.Since(start))
 }
 
 // The AC's argv, its one-shot lifetime and its serial queue are all properties
