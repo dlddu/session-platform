@@ -33,6 +33,13 @@ resources:
   #     `claude plugin marketplace add` runs its production code path.
   - e2e-k3s-mcp-fake.yaml
   - plugin-marketplace-git.yaml
+
+  # The provider endpoint a claude-code session reaches *after* it is running.
+  # Without it the session pod stands but every prompt dies against an
+  # unroutable base-url, which is why AC-E2~E6 had no e2e at all. It is an
+  # approved mock exception (CLAUDE-PROVIDER, EXT): unlike MinIO there is no
+  # real implementation to deploy — the service *is* the model.
+  - e2e-anthropic-fake.yaml
 images:
   - name: ghcr.io/dlddu/session-platform
     newName: session-platform/control-plane

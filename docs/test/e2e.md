@@ -69,6 +69,7 @@ operational idle-state producer가 생기면 배포 e2e로 채운다.
 | `CRIU-GATE` | `GATE` | e2e SUT는 항상 `deploy/` 오버레이로 뜨고(`scripts/e2e/up.sh`의 `kubectl apply -k deploy/`) 거기서 게이트가 **ON**이라 실 CRIU 경로를 탄다 — 에이전트가 pod 안에서 쉘 트리를 dump/restore하고, 아카이브는 인클러스터 MinIO를 향해 **프로덕션과 같은 S3 코드 경로**로 오간다. 동결은 제품 endpoint(`POST /api/v1/sessions/{id}/snapshot`)로 유발되고, 왕복 전체가 AC-B2/B3/D4 전용 파일의 실 단언이다. | 프로덕션 base(`k8s/`, `CRIU_ENABLED: "false"`)의 쉘 동결·복원은 **no-op 스텁이고 어떤 e2e도 그 경로를 타지 않는다**. 검증된 런타임이 서고 base가 on으로 올라가기 전까지, 프로덕션 구성에서 쉘 세션 동결이 상태를 실제로 보존하는지는 미검증이다. |
 | `PLUGIN-CRED` | `EXT` | claude-code 세션 pod는 agent 를 띄우기 전에 `data-plane/entrypoint.sh` 가 K3s MCP 에서 마켓플레이스 읽기 토큰을 받아 플러그인을 설치한다. e2e SUT 에서는 그 **자격 발급 한 지점만** 인클러스터 대역(`deploy/e2e-k3s-mcp-fake.yaml`)으로 바꾸고 나머지는 전부 실물이다 — 토큰 요청은 pod 안의 **실 curl·실 jq**가 프로덕션과 같은 JSON-RPC 왕복으로 보내고, 받은 토큰은 같은 `http.<url>.extraheader` 로 좁혀져 **실 git 클론**(인클러스터 원격, 아래 비-seam)에 쓰이며, `claude plugin marketplace add`·`claude plugin install` 은 실 Claude CLI 가 실행한다. 대역이 bearer 를 검사해 틀리면 401 을 내므로 인증 단계도 그대로 밟는다. 이 경로가 서야 pod 가 Ready 에 이르고, `control-plane/test/e2e_e1_workload_type_test.go` 가 그 위에서 claude-code 세션 생성과 pod 안 `claude --version` 실행을 단언하고, **인클러스터 픽스처에만 있는 마커 문자열이 그 pod의 플러그인 캐시에 있음**을 확인해 *어느 원격이 응답했는지*까지 못 박는다. | **프로덕션의 실제 자격 발급 왕복은 미검증**이다 — 실 K3s MCP 의 GitHub App 설치 토큰 발급, 그 토큰의 스코프·만료, github.com 에 대한 인증 클론은 어떤 e2e 도 밟지 않는다. 대역이 돌려주는 것은 형태만 같은 가짜 토큰이라, 발급이 실패하거나 권한이 모자랄 때의 동작도 여기서는 드러나지 않는다. |
 | `DELETE-CONFLICT-ERR` | `NET` | `web/e2e/journeys/session-deletion.spec.ts`의 스냅샷 삭제 테스트는 **실 SUT 위에서** 돈다 — 세션을 `POST /api/v1/sessions`로 실제로 만들고 제품 `POST /api/v1/sessions/{id}/snapshot`으로 진짜 `snapshot` 상태(pod 회수 포함)까지 얼린 뒤, `/restore/{id}` 렌더·세션 목록·단건 조회·**재시도 DELETE(204)** 가 모두 배포된 control-plane의 실 응답이다. 인터셉트가 만드는 것은 **첫 DELETE 한 번의 409 응답뿐**이고, 나머지 요청은 같은 핸들러에서 `route.continue()`로 그대로 흘려보낸다. | 409를 낳는 **진짜 경합** — 다른 라이프사이클 연산이 세션 Lease를 쥔 상태에서 들어온 DELETE(`service.Terminate`의 `store.Lock` → `session.ErrConflict`) — 자체는 브라우저 e2e에서 검증되지 않는다. 주입은 UI의 실패 표시·재시도 경로만 확인하고, 서버가 그 상태에서 실제로 409를 내는지는 control-plane 단위 테스트와 envtest의 CAS/Lease 충돌 케이스가 담당한다. |
+| `CLAUDE-PROVIDER` | `EXT` | claude-code 세션의 프롬프트 왕복에서 **응답을 만드는 주체 하나만** 인클러스터 대역(`deploy/e2e-anthropic-fake.yaml`)으로 바꾸고 나머지는 전부 실물이다. 요청은 주 컨테이너가 오케스트레이터가 주입한 loopback `ANTHROPIC_BASE_URL`로 보내고, credential-proxy 사이드카가 **프로덕션 코드 그대로** 헤더 허용목록을 적용하고 호출자가 붙인 `Authorization`을 버린 뒤 자기 Secret 환경의 플랫폼 토큰을 주입하며, 대역의 인증서를 **실제로 검증한다** — 사설 발급자를 신뢰하는 근거는 플랫폼 Secret의 optional `ca-cert` 키 하나뿐이고 시스템 루트는 대체되지 않는다. 대역은 bearer가 틀리면 401을 내므로 주입이 실제로 일어났는지가 대역 쪽에서도 확인된다. `control-plane/test/e2e_provider_reachability_test.go`가 배포 SUT의 세션 pod 안에서 이 왕복을 **버퍼드·SSE 두 형태**로 단언하고, 위조 `Authorization`이 대체되는 것까지 확인한다. | **실 provider의 계약은 미검증**이다 — 스트리밍 타이밍·오류 응답·토큰 회계·모델 라우팅은 대역이 결정적 상수로 답하므로 드러나지 않는다. 특히 **이미지에 핀된 실 Claude CLI(2.1.220)의 프롬프트 루프가 이 표면으로 만족되는지는 이 등재가 단언하지 않는다** — 그 프로토콜의 정본은 이 레포 소스에 없다(외부 바이너리). AC-E2~E6 전용 파일을 세우는 슬라이스가 그 계약을 먼저 실물로 확인해야 하고, 그때 이 행의 '구동 구간'이 넓어진다. |
 <!-- /fidelity:registry -->
 
 ### 미해소 위반 (승인된 예외가 아니다)
@@ -84,9 +85,12 @@ operational idle-state producer가 생기면 배포 e2e로 채운다.
 수 있는 데이터(세션 목록·상태·pod)까지 함께 위조되기 때문이다.
 
 제거가 이 슬라이스에서 끝나지 않는 이유는 두 스위트가 모두 **claude-code 세션**을 검증 대상으로
-삼기 때문이다. 세션 pod 자체는 이제 SUT에서 선다(`PLUGIN-CRED` 등재 + 인클러스터 마켓플레이스
-원격). 남은 것은 **프롬프트에 대한 응답**이고, 그 원인 하나가 아래 「차단 요인」에 원장으로 있다.
-여기에 사본을 두지 않는다(그 표가 정본이다).
+삼기 때문이었다. 그 선행은 2026-09-04에 **모두 풀렸다** — 세션 pod가 SUT에서 서고(`PLUGIN-CRED`
+등재 + 인클러스터 마켓플레이스 원격), 프롬프트에 답하는 provider도 인클러스터에 있다
+(`CLAUDE-PROVIDER` 등재). 그래서 아래 「차단 요인」 표는 비었다.
+
+**그럼에도 상한은 4 그대로다.** 남은 것은 선행이 아니라 **재작성 노동**이고, 래칫은 실제로 줄였을
+때만 내린다 — "곧 줄어든다"로 상한을 미리 내리면 그때부터 게이트가 붉은 채로 산다.
 
 *해소된 것*: `web/e2e/journeys/session-deletion.spec.ts`는 여기서 빠졌다. 세션 생성과 동결을 제품 API로
 돌려 실 SUT 위에서 돌게 만들고, 남은 인터셉트를 첫 DELETE의 409 응답 하나로 좁혀
@@ -95,7 +99,7 @@ operational idle-state producer가 생기면 배포 e2e로 채운다.
 <!-- fidelity:violations -->
 | 파일 | 토큰 | 무엇을 위조하는가 | 제거 경로 (선결조건) |
 | --- | --- | --- | --- |
-| `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` | `.route(` | `installAgentApi`가 12개 테스트 전부에 `/api/v1/**` 핸들러를 설치해 세션·config·SSE 스트림을 위조한다. | 세션 pod는 이제 SUT에서 선다(`PLUGIN-CRED` 등재 + 인클러스터 마켓플레이스 원격). 남은 선결조건은 「차단 요인」 ③ 하나 — 결정적 응답을 내는 인클러스터 provider를 세워 `CLAUDE-PROVIDER`(EXT)로 등재한 뒤, **claude-code 세션을 대상으로 유지한 채** 실 SUT 위에서 재작성한다. |
+| `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` | `.route(` | `installAgentApi`가 12개 테스트 전부에 `/api/v1/**` 핸들러를 설치해 세션·config·SSE 스트림을 위조한다. | **선결조건은 없다** — 세션 pod가 SUT에서 서고(`PLUGIN-CRED`), 프롬프트에 답하는 provider도 인클러스터에 있다(`CLAUDE-PROVIDER`). 남은 것은 재작성 노동뿐이다: **claude-code 세션을 대상으로 유지한 채** 실 SUT 위에서 다시 쓴다. 재작성에 앞서 실 Claude CLI가 그 대역 표면으로 실제 프롬프트 루프를 도는지부터 확인해야 한다 — `CLAUDE-PROVIDER` 등재 행이 그 계약을 미검증으로 남겨 두었다. |
 | `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` | `route.fulfill(` | 위와 같은 핸들러의 응답 생성부 — JSON·`text/event-stream` 본문을 직접 짓는다. | 위와 같다. 재작성 뒤에도 실 SUT가 요청 시점에 낼 수 없는 주입(config 503, 응답 보류, past-end cursor `reset` 재생)은 남으므로, 그것들은 `session-deletion` 선례대로 **행 단위로 좁혀 `NET` 승인 등재**로 닫는다 — 전량 제거가 목표가 아니다. |
 | `web/e2e/journeys/manual-archive.spec.ts` | `.route(` | active claude-code 세션과 그 목록·단건·stream을 위조한다. | 위와 같다. **워크로드를 shell로 바꿔 우회하지 않는다** — 이 스위트의 검증 대상은 claude-code 아카이브 UI 경로이고, 대상을 바꾸면 위반은 사라져도 그 경로는 영영 미검증으로 남는다. |
 | `web/e2e/journeys/manual-archive.spec.ts` | `route.fulfill(` | 위 핸들러의 응답 생성부 + snapshot 응답을 보류해 중간 상태를 만든다. | 위와 같다. 재작성 뒤 남는 중간 "Archiving…" 상태의 지연 주입은 `NET`(LAT)으로 **행 단위 승인 가능**하다. |
@@ -105,7 +109,9 @@ operational idle-state producer가 생기면 배포 e2e로 채운다.
 
 위 「미해소 위반」이 *치환이 있어서* 생긴 drift라면, 여기 있는 것은 *치환조차 없어서* e2e가 그
 경로를 **아예 밟지 못하는** 이유다. claude-code 워크로드 AC(AC-E1~E6)가 「AC 검증 범위」에서
-통째로 공백인 근거가 이 표다. seam이 아니므로 코드에 `mock-exception:` 마커도, 스캔 토큰도 남지
+통째로 공백이던 근거가 이 표였다 — 세 행이 차례로 나가면서 AC-E1이 먼저 공백을 벗었고, 남은
+E2~E6은 이제 **전용 파일 저작**만 남아 있다(원인이 아니라 순서다). seam이 아니므로 코드에
+`mock-exception:` 마커도, 스캔 토큰도 남지
 않는다 — R5는 이것들에 대해 영원히 침묵한다. 그래서 리터럴 단위로 대조하는 R10을 따로 둔다:
 원인이 고쳐지면 선언한 리터럴이 사라져 게이트가 빨개지고, 그때 '해소 시' 칸이 예고한 등재 또는
 실배포를 반드시 함께 반영해야 한다.
@@ -119,12 +125,21 @@ operational idle-state producer가 생기면 배포 e2e로 채운다.
 *나간 행*: ①**K3s MCP 자격 발급**은 대역을 세워 `PLUGIN-CRED`(EXT)로 **등재**했고,
 ②**마켓플레이스 호스팅**은 인클러스터 git 원격(`deploy/plugin-marketplace-git.yaml`)을 실물로
 배포해 **등재 없이** 해소했다. 둘이 함께 풀리며 claude-code 세션 pod가 처음으로 Ready에 이르고,
-AC-E1이 공백에서 전용 파일을 갖게 됐다.
+AC-E1이 공백에서 전용 파일을 갖게 됐다. ③**제공자 도달**은 2026-09-04에 인클러스터 대역
+(`deploy/e2e-anthropic-fake.yaml`)을 세워 `CLAUDE-PROVIDER`(EXT)로 **등재**하며 나갔다 — 판정이
+예고한 그대로다. 그 해소에는 딸린 조건이 하나 있었다: 프록시가 upstream 스킴을 **https로
+강제**하므로(`parseCredentialProxyUpstream`) 대역을 세우는 것만으로는 부족했고, 사설 발급자를
+신뢰할 길이 필요했다. 그 길은 플랫폼 Secret의 **optional `ca-cert` 키**로 냈다 — `k3s-mcp-url`과
+같은 형태의 주소류 optional 키이고, 키가 없으면 프록시는 시스템 풀 그대로라 `k8s/` base는 한 줄도
+바뀌지 않는다. **https 요구를 낮추는 길은 택하지 않았다**: 프로덕션 보안 게이트를 테스트 편의로
+내리는 것이라 해소가 아니라 새 위반이 됐을 것이다.
+
+**표는 지금 비어 있다.** 비어 있다는 것이 이 표의 목적이 달성됐다는 뜻은 아니다 — 새로 발견되는
+"치환조차 없는 공백"의 원인은 여기에 다시 쌓인다.
 
 <!-- fidelity:blockers -->
 | 무엇이 막는가 | 코드 위치 | 리터럴 | 판정 | 해소 시 |
 | --- | --- | --- | --- | --- |
-| ③ 제공자에 도달할 수 없다: 세션 pod는 이제 서지만 `claude-code-credentials`의 base-url이 의도적으로 unroutable이라, 프롬프트를 보내도 실 세션이 어떤 응답도 받지 못한다(AC-E2~E6). | `deploy/claude-code-credentials-secret.yaml` | `https://127.0.0.1:9` | `EXT` | Anthropic API는 클러스터에 존재시킬 수 없다(MinIO를 EXT에서 뺀 근거가 여기엔 해당하지 않는다) → EXT 자격을 만족한다. 결정적 응답을 내는 인클러스터 가짜 provider를 `deploy/`에 배포하고 base-url을 그리로 돌린 뒤 `CLAUDE-PROVIDER`(EXT)로 등재. 잔여는 "실 provider의 스트리밍·에러 계약은 미검증". |
 <!-- /fidelity:blockers -->
 
 ### seam 지문 회계
@@ -148,6 +163,7 @@ seam 스캔이 잡는 `(파일, 토큰)` 쌍마다 한 행이다. 등재 seam에
 | `web/e2e/journeys/session-deletion.spec.ts` | `route.fulfill(` | `DELETE-CONFLICT-ERR` | 주입되는 단 하나의 응답 — 409 `session state changed concurrently`(실서버 메시지와 동일). |
 | `web/e2e/journeys/session-deletion.spec.ts` | `route.continue(` | `DELETE-CONFLICT-ERR` | 같은 핸들러의 통과 분기. 단건 GET도, **재시도 DELETE도** 실 control-plane이 응답하게 한다 — 이 줄이 없으면 승인 범위가 409 하나를 넘어선다. |
 | `deploy/e2e-k3s-mcp-fake.yaml` | `test-only` | `PLUGIN-CRED` | 조직 K3s MCP 대역. 자격 발급만 흉내 내는 치환이라 MinIO(실물 S3 구현)와 달리 승인된 모킹 예외로 등재한다. |
+| `deploy/e2e-anthropic-fake.yaml` | `test-only` | `CLAUDE-PROVIDER` | 인클러스터 provider 대역. MinIO가 S3의 **실물 구현**이라 EXT를 못 쓰는 것과 반대로, 여기에는 세울 실물이 없다 — 그 서비스의 본체가 모델 자체다. 그래서 승인된 모킹 예외로 등재한다. TLS는 진짜다(사설 CA 서명): 프록시가 https를 강제하므로 대역도 인증서를 내야 하고, 그 덕분에 검증 경로가 실물로 남는다. |
 | `deploy/plugin-marketplace-git.yaml` | `test-only` | `—` | 인클러스터 git 원격. MinIO와 같은 성격의 **실물 배포**라 치환이 아니다 — `claude plugin marketplace add` 가 프로덕션과 같은 코드 경로로 클론한다. 담기는 마켓플레이스 문서는 픽스처 데이터이고, 정의상 시드·fixture 는 모킹이 아니다. |
 | `.github/workflows/e2e.yml` | `test-only` | `—` | CRIU 프로브 주석이 "이제 test 전용 트리거가 없다"는 사실을 밝히는 서술. 치환이 아니다. |
 | `Makefile` | `CRIU_ENABLED` | `—` | `make test-integration` 설명 주석. 인프로세스 통합 하네스(`//go:build integration`)는 e2e SUT 경로가 아니라 이 정책의 범위 밖이다. |
@@ -159,11 +175,11 @@ seam 스캔이 잡는 `(파일, 토큰)` 쌍마다 한 행이다. 등재 seam에
 ### 집계
 
 <!-- fidelity:summary -->
-- 등재 seam **3**개 — GATE **1** · TRIG **0** · EXT **1** · NET **1**
-- 코드 마커 지점 **5** / 마커 파일 **5**
-- 지문 회계 행 **18** — 등재 귀속 8 · 미해소 위반 **4** · 비-seam **6**
+- 등재 seam **4**개 — GATE **1** · TRIG **0** · EXT **2** · NET **1**
+- 코드 마커 지점 **6** / 마커 파일 **6**
+- 지문 회계 행 **19** — 등재 귀속 9 · 미해소 위반 **4** · 비-seam **6**
 - web e2e 인터셉트 **7**건 (승인 3 · 위반 4, 상한 **4**)
-- 차단 요인 **1**건 (seam이 아니다 — 판정만 확정, 등재 0)
+- 차단 요인 **0**건 (seam이 아니다 — 셋 다 등재 또는 실배포로 나갔다)
 <!-- /fidelity:summary -->
 
 이 숫자들도 체커가 실제와 대조한다(R8) — 표만 고치고 집계를 잊으면 실패한다. 상한을 넘는
@@ -307,6 +323,7 @@ AC 대신 스모크/인프라를 검증하는 매칭 단위 파일(규칙 3).
 | --- | --- | --- |
 | `control-plane/test/e2e_smoke_test.go` | go | healthz 200 / `{"status":"ok"}`, 생성→목록→조회 API 표면 왕복, 없는 id → 404 에러 매핑 |
 | `web/e2e/smoke.spec.ts` | playwright | SPA 부팅·baseURL 배선(Sessions 콘솔 헤딩 + New session 진입점) |
+| `control-plane/test/e2e_provider_reachability_test.go` | go | 배포 SUT의 claude-code 세션 pod가 credential-proxy를 거쳐 인클러스터 provider에 도달하는지 — 버퍼드·SSE 두 응답 형태와, 호출자가 붙인 `Authorization`이 플랫폼 토큰으로 대체되는 것 |
 <!-- ac-nonac:end -->
 
 ## 매칭 단위 밖
@@ -338,8 +355,12 @@ AC-F1~F6(approval-gated 워크로드)가 여기 남는다.
 > 비공개 마켓플레이스에 도달해야 했고 kind 안에서는 둘 다 닿지 않아 컨테이너가 죽었다.
 > 오버레이가 그 둘을 인클러스터로 세우면서(하나는 `PLUGIN-CRED`로 등재한 대역, 하나는 실물
 > git 원격) 세션이 서고, AC-E1의 검증 방법 네 갈래가 모두 배포 SUT 위에서 단언 가능해졌다.
-> 나머지 E 계열(E2~E6)은 **프롬프트에 대한 응답**이 필요해 「차단 요인」 ③이 남아 있는 동안은
-> 그대로 공백이다.
+> **나머지 E 계열(E2~E6)의 선행도 같은 날 풀렸다.** 필요한 것은 **프롬프트에 대한 응답**이었고,
+> 인클러스터 provider 대역을 세워 `CLAUDE-PROVIDER`(EXT)로 등재하면서 「차단 요인」 표가 비었다.
+> 그래서 E2~E6이 아직 공백인 이유는 이제 **원인이 아니라 순서**다 — 전용 파일을 저작하는 일이
+> 남아 있고, 그 슬라이스는 먼저 실 Claude CLI가 그 대역으로 프롬프트 루프를 도는지 확인해야 한다
+> (등재 행이 그 계약을 미검증으로 남겨 두었다). 그때까지는 j6·`manual-archive`의 인터셉트가
+> 「미해소 위반」에 그대로 남는다.
 
 > **왜 이번에도 E 계열을 범위 밖에 두는가** *(2026-08-30 재판정)*. 원래 근거였던 "구현 전무"는
 > #24 *Implement Claude Code workload end to end* 로 **더 이상 성립하지 않는다**. 그럼에도 범위

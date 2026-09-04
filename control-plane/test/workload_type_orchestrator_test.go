@@ -322,6 +322,20 @@ func TestClientOrchestrator_ClaudeProviderCredentialsAreIsolatedAndK3sTokenIsSec
 			t.Fatalf("proxy credential env %s must remain required", tc.name)
 		}
 	}
+	// The provider CA rides with the credentials it is paired with and is
+	// optional: a deployment whose gateway has a publicly issued certificate
+	// omits the key entirely and the proxy stays on the system pool.
+	caEnv, ok := envVarOf(proxy, k8s.AnthropicCACertEnvVar)
+	if !ok || caEnv.ValueFrom == nil || caEnv.ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("proxy env %s is not Secret-backed: %+v", k8s.AnthropicCACertEnvVar, caEnv)
+	}
+	if sel := caEnv.ValueFrom.SecretKeyRef; sel.Name != "provider-credentials" ||
+		sel.Key != k8s.ClaudeCodeCACertSecretKey || sel.Optional == nil || !*sel.Optional {
+		t.Fatalf("proxy CA selector = %+v, want optional provider-credentials/%s", sel, k8s.ClaudeCodeCACertSecretKey)
+	}
+	if _, ok := envVarOf(main, k8s.AnthropicCACertEnvVar); ok {
+		t.Fatalf("tool-running container must not receive %s", k8s.AnthropicCACertEnvVar)
+	}
 	if _, ok := envVarOf(proxy, k8s.ClaudeCodeModelEnvVar); ok {
 		t.Fatalf("credential proxy must not receive %s", k8s.ClaudeCodeModelEnvVar)
 	}

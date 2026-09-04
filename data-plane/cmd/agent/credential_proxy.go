@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -55,12 +57,52 @@ func (p *credentialProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.handler.ServeHTTP(w, r)
 }
 
-func newCredentialProxy(rawUpstream, token string, logger *slog.Logger) (*credentialProxy, error) {
+// providerCACertEnv optionally carries a PEM bundle the proxy must trust in
+// addition to the system roots, for a deployment whose provider `base-url` is a
+// private gateway issued by a CA no public store knows. It is an address-class
+// setting, not a credential: a CA certificate is public by construction, and
+// the platform Secret key behind it is optional exactly like `k3s-mcp-url` —
+// omit it and the proxy keeps the system pool it has always used. The kind e2e
+// SUT is the first such deployment (docs/test/e2e.md `CLAUDE-PROVIDER`).
+const providerCACertEnv = "ANTHROPIC_CA_CERT"
+
+func newCredentialProxy(rawUpstream, token, caPEM string, logger *slog.Logger) (*credentialProxy, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	// A provider endpoint is an explicitly configured security boundary. Never
 	// let ambient HTTP_PROXY/HTTPS_PROXY variables redirect the real credential.
 	transport.Proxy = nil
+	if err := trustProviderCA(transport, caPEM); err != nil {
+		return nil, err
+	}
 	return newCredentialProxyWithTransport(rawUpstream, token, logger, transport)
+}
+
+// trustProviderCA adds pem to the transport's roots. It *appends to* the system
+// pool rather than replacing it: a private gateway is an addition to the set of
+// trustworthy issuers, not a reason to stop trusting the public ones, and
+// replacing the pool would silently break any deployment that later moves back
+// to a publicly issued endpoint. An empty pem leaves the transport untouched so
+// the default path keeps using the system pool the standard library resolves
+// lazily. A non-empty pem that yields no certificate is a configuration error
+// and fails loudly here rather than at the first request: a proxy that silently
+// ignored it would fall back to system-only trust and reject every call to the
+// gateway it was configured for.
+func trustProviderCA(transport *http.Transport, pem string) error {
+	if pem == "" {
+		return nil
+	}
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		return fmt.Errorf("credential proxy could not load system CA pool: %w", err)
+	}
+	if !roots.AppendCertsFromPEM([]byte(pem)) {
+		return errors.New("credential proxy CA bundle contains no certificate")
+	}
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	transport.TLSClientConfig.RootCAs = roots
+	return nil
 }
 
 // newCredentialProxyWithTransport is the test seam for TLS servers with an

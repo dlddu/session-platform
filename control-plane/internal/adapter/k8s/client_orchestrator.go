@@ -116,6 +116,17 @@ const (
 	ClaudeCodeBaseURLSecretKey     = "base-url"
 	ClaudeCodeAuthTokenSecretKey   = "auth-token"
 	ClaudeCodeK3SMCPTokenSecretKey = "k3s-mcp-token"
+	// AnthropicCACertEnvVar carries an optional PEM bundle the credential proxy
+	// must trust *in addition to* the system roots, for a deployment whose
+	// provider `base-url` is a private gateway issued by a CA no public store
+	// knows. Like the two bootstrap URLs below it is an address-class setting
+	// rather than a credential — a CA certificate is public by construction —
+	// and the Secret key is optional, so omitting it leaves the proxy on the
+	// system pool and `k8s/` unchanged. The kind e2e SUT is the first such
+	// deployment (docs/test/e2e.md 「e2e 충실도 허용목록」의 `CLAUDE-PROVIDER`).
+	// Keep in sync with data-plane/cmd/agent (providerCACertEnv).
+	AnthropicCACertEnvVar     = "ANTHROPIC_CA_CERT"
+	ClaudeCodeCACertSecretKey = "ca-cert"
 
 	// The plugin bootstrap reaches two endpoints before the agent starts: the
 	// K3s MCP that issues the marketplace read token, and the marketplace git
@@ -847,6 +858,12 @@ func (o *ClientOrchestrator) credentialProxyContainer(name, image, listenAddr, p
 			{Name: CredentialProxyPlacementEnvVar, Value: placement},
 			secretEnv(AnthropicBaseURLEnvVar, o.claudeCredentialsSecret, ClaudeCodeBaseURLSecretKey),
 			secretEnv(AnthropicAuthTokenEnvVar, o.claudeCredentialsSecret, ClaudeCodeAuthTokenSecretKey),
+			// Optional: present only where the provider endpoint is a private
+			// gateway. It rides the same container as the credentials it is
+			// paired with, so both placements get it from this one function and
+			// the tool-running container still learns nothing about the
+			// provider beyond the loopback address (AC-E6/AC-F6).
+			optionalSecretEnv(AnthropicCACertEnvVar, o.claudeCredentialsSecret, ClaudeCodeCACertSecretKey),
 		},
 		// An exec probe reaches the proxy over loopback from inside its own
 		// container, which works for both placements. An HTTP probe would come

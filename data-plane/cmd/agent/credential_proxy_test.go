@@ -39,7 +39,7 @@ func credentialProxyServer(
 	var proxy *credentialProxy
 	var err error
 	if transport == nil {
-		proxy, err = newCredentialProxy(upstream, token, logger)
+		proxy, err = newCredentialProxy(upstream, token, "", logger)
 	} else {
 		proxy, err = newCredentialProxyWithTransport(upstream, token, logger, transport)
 	}
@@ -329,7 +329,7 @@ func TestCredentialProxyConfigurationValidation(t *testing.T) {
 		"https://gateway.example#fragment",
 	} {
 		t.Run(raw, func(t *testing.T) {
-			if _, err := newCredentialProxy(raw, "real-secret", testLogger()); err == nil {
+			if _, err := newCredentialProxy(raw, "real-secret", "", testLogger()); err == nil {
 				t.Fatalf("upstream %q was accepted", raw)
 			} else if strings.Contains(err.Error(), "real-secret") || strings.Contains(err.Error(), "user:secret") {
 				t.Fatalf("validation error leaked configuration: %v", err)
