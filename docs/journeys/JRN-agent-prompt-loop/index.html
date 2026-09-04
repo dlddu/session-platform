@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<!--
+  docs/journeys/JRN-agent-prompt-loop/index.html — 여정 프로토타입
+
+  여정 문서: ../../user-journeys/JRN-agent-prompt-loop.md
+  페이지 규약: ../README.md   (하네스: tools/journey-prototype.test.mjs)
+
+  화면 단위 mockup(../../mockups/new-session.html · agent-workspace.html)에서
+  마크업을 옮겨 적었으나 스냅샷 복제가 아니다 — 이 페이지의 화면이 곧 원본이며
+  배선·입력·상태 변형을 직접 갖는다.
+-->
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JRN-agent-prompt-loop — 작업 환경을 골라 에이전트에게 일을 시킨다</title>
+<style>
+  :root{
+    --ink:#0B1116; --surface:#131D24; --surface-2:#18242C; --surface-3:#1E2C35;
+    --line:#26333D; --line-2:#324250;
+    --text:#E8EFF4; --text-dim:#9DACB7; --text-faint:#5E6E79;
+    --active:#FFB43A; --active-soft:#3A2B12;
+    --frozen:#7FCDEA; --frozen-soft:#13313D; --ok:#5FD08A; --danger:#F2616B; --danger-soft:#33171A;
+    --r:14px; --r-sm:9px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%}
+  body{
+    background:var(--ink); color:var(--text);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Noto Sans KR",Roboto,sans-serif;
+  }
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+  a{color:var(--frozen)}
+  :focus-visible{outline:2px solid var(--frozen);outline-offset:2px;border-radius:6px}
+  [hidden]{display:none !important}
+
+  .app{max-width:960px;margin:0 auto;padding:0 20px 72px}
+  .topbar{
+    display:flex;align-items:center;gap:12px;padding:16px 0;border-bottom:1px solid var(--line);
+    margin-bottom:24px;
+  }
+  .brand{font-weight:600;letter-spacing:.01em}
+  .crumb{color:var(--text-faint);font-size:12.5px}
+  .spacer{flex:1 1 auto}
+  .pill{
+    display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line-2);font-size:12px;color:var(--text-dim);
+  }
+  .pill.on{color:var(--active);border-color:var(--active-soft);background:var(--active-soft)}
+  .pill.snap{color:var(--frozen);border-color:var(--frozen-soft);background:var(--frozen-soft)}
+
+  .card{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+    padding:22px;margin-bottom:16px;
+  }
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--text-dim);margin:0 0 20px;font-size:13px}
+  .lab{display:block;font-size:12.5px;color:var(--text-dim);margin-bottom:6px}
+
+  label.field{display:block;margin-bottom:16px}
+  input[type=text],select,textarea{
+    width:100%;padding:9px 12px;border-radius:var(--r-sm);
+    background:var(--surface-2);border:1px solid var(--line-2);color:var(--text);font:inherit;
+  }
+  textarea{min-height:74px;resize:vertical}
+
+  .types{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 16px}
+  .types label{
+    flex:1 1 240px;padding:14px;border-radius:var(--r-sm);cursor:pointer;
+    background:var(--surface-2);border:1px solid var(--line-2);display:block;
+  }
+  .types label .tt{font-weight:600;display:block;margin-bottom:3px}
+  .types label .td{color:var(--text-dim);font-size:12.5px;display:block}
+  .types input[type=radio]{margin-right:8px}
+
+  .btn{padding:9px 16px;border-radius:var(--r-sm);border:1px solid var(--line-2);background:var(--surface-3)}
+  .btn.primary{background:var(--active);color:#1C1404;border-color:var(--active);font-weight:600}
+  .btn.ghost{background:none}
+  .btn.small{font-size:12px;padding:4px 11px;border-radius:999px}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+
+  .banner{border-radius:var(--r-sm);padding:12px 14px;margin-bottom:16px;font-size:13px}
+  .banner.err{background:var(--danger-soft);border:1px solid var(--danger);color:#FFD9DC}
+  .banner.info{background:var(--frozen-soft);border:1px solid var(--line-2);color:var(--text-dim)}
+  .banner.ok{background:#12281B;border:1px solid var(--ok);color:#CBF0D8}
+
+  .console{
+    background:#0A1015;border:1px solid var(--line);border-radius:var(--r-sm);
+    padding:12px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:12.5px;color:var(--text-dim);white-space:pre-wrap;margin-bottom:14px;min-height:120px;
+  }
+  .convo{list-style:none;margin:0 0 16px;padding:0}
+  .convo li{
+    padding:10px 12px;margin-bottom:8px;border-radius:var(--r-sm);
+    background:var(--surface-2);border:1px solid var(--line-2);font-size:13px;
+  }
+  .convo li .who{display:block;color:var(--text-faint);font-size:11.5px;margin-bottom:3px}
+
+  .conn{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim)}
+  .conn .dot{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+  .conn.off .dot{background:var(--danger)}
+
+  .kv{display:grid;grid-template-columns:130px 1fr;gap:4px 14px;font-size:12.5px;margin:14px 0 0}
+  .kv dt{color:var(--text-faint)}
+  .kv dd{margin:0;color:var(--text-dim)}
+
+  .proto-bar{
+    display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:18px;padding-top:14px;
+    border-top:1px dashed var(--line-2);
+  }
+  .proto-bar .cap{font-size:11.5px;color:var(--text-faint);margin-right:2px}
+  .proto-bar button,.proto-bar a[data-branch-target]{
+    font-size:12px;padding:5px 10px;border-radius:999px;text-decoration:none;
+    border:1px solid var(--line-2);color:var(--text-dim);background:var(--surface-2);
+  }
+  .proto-bar a[data-branch-target]{color:var(--frozen)}
+  .proto-bar [data-branch-pending]{border-style:dashed}
+
+  .state-note{
+    margin:14px 0 0;padding:10px 12px;border-radius:var(--r-sm);font-size:12.5px;
+    background:var(--surface-3);border:1px solid var(--line-2);color:var(--text-dim);
+  }
+
+  details.step-meta{margin-top:22px;border-top:1px solid var(--line);padding-top:12px}
+  details.step-meta summary{cursor:pointer;color:var(--text-faint);font-size:12px}
+  details.step-meta dl{margin:12px 0 0;font-size:12.5px;color:var(--text-dim)}
+  details.step-meta dt{color:var(--text-faint);margin-top:8px}
+  details.step-meta dd{margin:2px 0 0}
+
+  footer{margin-top:28px;color:var(--text-faint);font-size:12px}
+</style>
+</head>
+<body>
+<div class="app">
+
+<header class="topbar">
+  <span class="brand">Session Pod Platform</span>
+  <span class="crumb">/ sessions / new</span>
+  <span class="spacer"></span>
+  <span class="pill">operator@dlddu</span>
+</header>
+
+<main data-journey="JRN-agent-prompt-loop" data-step-active="STP-workload-choice">
+
+  <!-- ───────────────────────── STP-workload-choice ───────────────────────── -->
+  <section class="step" data-step="STP-workload-choice" id="STP-workload-choice">
+    <div class="card">
+      <h1>New session</h1>
+      <p class="sub">작업 환경을 고릅니다. <strong>타입과 모델은 세션 수명 동안 바꿀 수 없습니다</strong> — 바꾸려면 새 세션을 만듭니다.</p>
+
+      <label class="field">
+        <span class="lab">세션 이름</span>
+        <input type="text" id="sess-name" data-required-input placeholder="예: bench-tokenizer">
+      </label>
+
+      <span class="lab">작업 환경</span>
+      <div class="types">
+        <label>
+          <span class="tt"><input type="radio" name="wl" value="shell" id="wl-shell" data-required-input>쉘</span>
+          <span class="td">명령을 직접 칩니다. 손에 익은 도구를 그대로 씁니다.</span>
+        </label>
+        <label>
+          <span class="tt"><input type="radio" name="wl" value="claude-code" id="wl-agent" data-required-input checked>에이전트</span>
+          <span class="td">목표를 설명하고 맡깁니다. 보낸 뒤 다른 일을 봐도 됩니다.</span>
+        </label>
+        <label>
+          <span class="tt"><input type="radio" name="wl" value="approval-gated" id="wl-gated" data-required-input>승인 게이트 에이전트</span>
+          <span class="td">밖으로 나가는 호출마다 내 승인을 받습니다.</span>
+        </label>
+      </div>
+
+      <label class="field">
+        <span class="lab">모델 — 기본값 그대로 넘어가도 됩니다</span>
+        <select id="sess-model" data-required-input>
+          <option value="sonnet">기본값 (균형)</option>
+          <option value="opus">더 큰 모델 (느리고 정확)</option>
+          <option value="haiku">더 작은 모델 (빠름)</option>
+        </select>
+      </label>
+
+      <div class="banner info" id="immutable-note">
+        고른 타입과 모델은 <strong>되돌릴 수 없습니다</strong>. 이 안내를 만든 이유는, 고른 뒤에 알게 되면
+        세션을 버리고 다시 만들게 되기 때문입니다.
+      </div>
+
+      <div class="row">
+        <button class="btn primary" id="btn-create" data-advance-to="STP-prompt-submit">Create session</button>
+      </div>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">여기서 갈라지는 길</span>
+        <a id="br-need-gate" href="../JRN-approval-gated-work/index.html#STP-gated-prompt-submit"
+           data-branch-row="8"
+           data-branch-target="JRN-approval-gated-work#STP-gated-prompt-submit">외부 접근에 사람의 승인이 필요하다면</a>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-workload-choice</code> 작업 환경을 고른다</dd>
+        <dt>터치포인트</dt><dd>New session 모달의 workload type 카드 3종과 model 선택</dd>
+        <dt>연결 AC</dt><dd>AC-E1, AC-E6, AC-F1 (보조 AC-A1·A2)</dd>
+        <dt>페인포인트</dt><dd>불변이라는 사실을 고른 뒤에 알면 세션을 버리고 다시 만든다 — 선택 시점에 명시하고, 각 환경이 어떤 일에 맞는지 한 줄로 적는다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ────────────────────────── STP-prompt-submit ────────────────────────── -->
+  <section class="step" data-step="STP-prompt-submit" id="STP-prompt-submit" hidden>
+    <div class="card">
+      <div class="row" style="margin-bottom:14px">
+        <h1 style="margin:0"><span class="mono" id="ws-name">bench-tokenizer</span></h1>
+        <span class="pill on">active</span>
+        <span class="pill mono" id="ws-type">claude-code</span>
+        <span class="spacer"></span>
+        <span class="crumb" id="ws-model">기본값 (균형)</span>
+      </div>
+
+      <p class="sub">하려는 일을 자연어로 씁니다. 보낸 뒤 응답을 기다리지 않고 다른 일을 봐도 됩니다.</p>
+
+      <div class="banner err" id="reject-banner" hidden><span id="reject-msg"></span></div>
+      <div class="banner ok" id="accept-banner" hidden>
+        접수됐습니다 (<span class="mono" id="accept-id">req-8f21</span>). 실행이 시작되면 출력이 이어 붙습니다 —
+        <strong>접수와 실행 시작은 다른 일</strong>이라 이 표시가 먼저 뜹니다.
+      </div>
+
+      <label class="field">
+        <span class="lab">프롬프트</span>
+        <textarea id="prompt-1" data-required-input placeholder="예: tokenizer 벤치를 돌리고 결과를 표로 정리해 줘"></textarea>
+      </label>
+
+      <div class="row">
+        <button class="btn primary" id="btn-send" data-advance-to="STP-response-watch">보내기</button>
+        <span class="crumb">대기열: <span class="mono" id="queue-depth">0</span> / 8</span>
+      </div>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">이 화면에서 마주치는 상태</span>
+        <button id="br-too-big" type="button"
+                data-branch-row="1"
+                data-branch-target="STP-prompt-submit">프롬프트가 너무 큼 (413)</button>
+        <button id="br-queue-full" type="button"
+                data-branch-row="2"
+                data-branch-target="STP-prompt-submit">대기열 포화 (429)</button>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-prompt-submit</code> 프롬프트로 일을 맡긴다</dd>
+        <dt>터치포인트</dt><dd>에이전트 워크스페이스의 프롬프트 입력 행 · 프롬프트 write API</dd>
+        <dt>연결 AC</dt><dd>AC-E2</dd>
+        <dt>페인포인트</dt><dd>접수와 실행 시작을 구분하지 못하면 중복 제출이 쌓인다 — 접수를 즉시 보여주고, 거절은 사유와 다음 행동을 함께 알린다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ────────────────────────── STP-response-watch ───────────────────────── -->
+  <section class="step" data-step="STP-response-watch" id="STP-response-watch" hidden>
+    <div class="card">
+      <div class="row" style="margin-bottom:14px">
+        <h1 style="margin:0">응답</h1>
+        <span class="conn" id="conn"><span class="dot"></span><span id="conn-text">연결됨 · 실행 중에 이어서 나타납니다</span></span>
+        <span class="spacer"></span>
+        <span class="crumb">새로고침이나 수동 조회는 필요 없습니다</span>
+      </div>
+
+      <div class="banner info" id="resume-banner" hidden><span id="resume-msg"></span></div>
+
+      <div class="console" id="console-1">&gt; tokenizer 벤치를 돌리고 결과를 표로 정리해 줘
+
+[1/3] 벤치 스크립트 준비
+[2/3] 3개 구현 실행 중…
+</div>
+
+      <div class="row">
+        <button class="btn primary" id="btn-next-prompt" data-advance-to="STP-conversation-carry">이어서 다음 프롬프트 보내기</button>
+      </div>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">여기서 갈라지는 길</span>
+        <button id="br-drop" type="button"
+                data-branch-row="4"
+                data-branch-target="STP-response-watch">응답 연결이 끊김</button>
+        <button id="br-far-behind" type="button"
+                data-branch-row="5"
+                data-branch-target="STP-response-watch">이어 붙일 수 없는 지점까지 밀림</button>
+        <a id="br-folded" href="../JRN-idle-resume/index.html#STP-reaccess"
+           data-branch-row="6"
+           data-branch-target="JRN-idle-resume#STP-reaccess">보고 있는 중 세션이 접힘</a>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-response-watch</code> 응답이 쌓이는 것을 본다</dd>
+        <dt>터치포인트</dt><dd>에이전트 워크스페이스의 출력 콘솔과 연결 상태 표시</dd>
+        <dt>연결 AC</dt><dd>AC-E3</dd>
+        <dt>페인포인트</dt><dd>연결이 끊겼는데 조용하면 결과가 유실됐다고 판단해 같은 일을 다시 시킨다 — 연결 상태를 드러내고 끊김은 자동으로 이어 붙인다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ──────────────────────── STP-conversation-carry ─────────────────────── -->
+  <section class="step" data-step="STP-conversation-carry" id="STP-conversation-carry" hidden>
+    <div class="card">
+      <h1>대화가 하나로 이어집니다</h1>
+      <p class="sub">앞선 요청·응답이 문맥으로 남아 있어 <strong>"아까 그거"라고만 해도 통합니다.</strong> 이전 실행이 만든 파일도 그대로 남습니다.</p>
+
+      <div class="banner err" id="cap-507" hidden>
+        누적 출력이 한계에 도달했습니다 (507). 새 프롬프트를 받지 않습니다 —
+        <strong>복원 후에도 같은 상태가 유지</strong>되므로, 이어서 하려면 출력을 비워야 합니다.
+      </div>
+
+      <ul class="convo">
+        <li><span class="who">나</span>tokenizer 벤치를 돌리고 결과를 표로 정리해 줘</li>
+        <li><span class="who">에이전트</span>3개 구현 벤치 완료. <span class="mono">bench/result.md</span> 에 표로 남겼습니다.</li>
+      </ul>
+
+      <label class="field">
+        <span class="lab">이어서 보내기 — 앞의 결과물 위에서 처리됩니다</span>
+        <input type="text" id="prompt-2" data-required-input placeholder="예: 아까 그 표에 메모리 열도 추가해 줘">
+      </label>
+
+      <div class="row">
+        <button class="btn ghost" id="btn-send-2">보내기</button>
+        <button class="btn primary" id="btn-step-away" data-advance-to="STP-agent-freeze-resume">한동안 두었다가 다시 열기</button>
+      </div>
+
+      <dl class="kv">
+        <dt>이어지는 문맥</dt><dd>대화 이력 2건 · 작업 디렉터리 <span class="mono">/work/bench</span></dd>
+        <dt>남아 있는 파일</dt><dd><span class="mono">bench/result.md</span> — 다음 실행이 이어 씁니다</dd>
+      </dl>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="proto-bar">
+        <span class="cap">이 화면에서 마주치는 상태</span>
+        <button id="br-out-cap" type="button"
+                data-branch-row="3"
+                data-branch-target="STP-conversation-carry">누적 출력이 한계에 도달 (507)</button>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-conversation-carry</code> 대화가 하나로 이어진다</dd>
+        <dt>터치포인트</dt><dd>에이전트 워크스페이스의 conversation 패널</dd>
+        <dt>연결 AC</dt><dd>AC-E4</dd>
+        <dt>페인포인트</dt><dd>어디까지 기억하는지 보이지 않으면 방어적으로 맥락을 반복 입력한다 — 대화 이력과 작업 디렉터리를 화면에 드러낸다.</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ─────────────────────── STP-agent-freeze-resume ─────────────────────── -->
+  <section class="step" data-step="STP-agent-freeze-resume" id="STP-agent-freeze-resume" hidden>
+    <div class="card">
+      <div class="row" style="margin-bottom:14px">
+        <h1 style="margin:0"><span class="mono">bench-tokenizer</span></h1>
+        <span class="pill snap">snapshot → active</span>
+        <span class="pill mono">claude-code</span>
+        <span class="spacer"></span>
+        <span class="crumb">4시간 만에 다시 열었습니다</span>
+      </div>
+
+      <div class="banner ok">
+        접히기 전 대화 맥락과 작업 디렉터리 위에서 이어집니다. 받아둔 출력 위치도 그대로 유효합니다 —
+        <strong>쉘 세션과 똑같이 동작합니다.</strong>
+      </div>
+
+      <ul class="convo">
+        <li><span class="who">나 (접히기 전)</span>아까 그 표에 메모리 열도 추가해 줘</li>
+        <li><span class="who">에이전트 (복원 후 이어서)</span>메모리 열을 더해 <span class="mono">bench/result.md</span> 를 갱신했습니다.</li>
+      </ul>
+
+      <dl class="kv">
+        <dt>이어진 것</dt><dd>대화 이력 · <span class="mono">/work/bench</span> · 출력 커서</dd>
+        <dt>사용자가 한 일</dt><dd>목록에서 <span class="mono">snapshot</span> 배지를 눌러 열었을 뿐</dd>
+      </dl>
+
+      <p class="state-note" data-state-note hidden></p>
+
+      <div class="row" style="margin-top:16px" data-journey-end>
+        <span class="pill" style="border-color:var(--ok);color:var(--ok)">완료 — 앞선 요청의 결과에 의존하는 후속 요청이 성공했다</span>
+      </div>
+
+      <div class="proto-bar">
+        <span class="cap">여기서 갈라지는 길</span>
+        <button id="br-new-type" type="button"
+                data-branch-row="7"
+                data-branch-target="STP-workload-choice">다른 모델·타입이 필요해졌다</button>
+      </div>
+    </div>
+
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-agent-freeze-resume</code> 접혔다 돌아와도 이어진다</dd>
+        <dt>터치포인트</dt><dd>세션 목록의 <span class="mono">snapshot</span> 배지 → 복원 후 에이전트 워크스페이스</dd>
+        <dt>연결 AC</dt><dd>AC-E5 (상위 AC-B1·B2·B3)</dd>
+        <dt>완료 기준</dt><dd>두 번째 프롬프트가 첫 번째의 대화 맥락과 그 결과물 위에서 처리된다.</dd>
+      </dl>
+    </details>
+  </section>
+
+</main>
+
+<footer>
+  여정 문서 <a href="../../user-journeys/JRN-agent-prompt-loop.md"><code>JRN-agent-prompt-loop.md</code></a> ·
+  페이지 규약 <a href="../README.md"><code>docs/journeys/README.md</code></a> ·
+  매핑 <a href="../../mockups/README.md"><code>docs/mockups/README.md</code></a>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var main = document.querySelector('[data-journey]');
+  var steps = Array.prototype.slice.call(document.querySelectorAll('[data-step]'));
+  var $ = function (id) { return document.getElementById(id); };
+
+  function show(id) {
+    var found = steps.some(function (s) { return s.getAttribute('data-step') === id; });
+    if (!found) return false;
+    steps.forEach(function (s) { s.hidden = s.getAttribute('data-step') !== id; });
+    main.setAttribute('data-step-active', id);
+    if (location.hash !== '#' + id) {
+      try { history.replaceState(null, '', '#' + id); } catch (e) { /* file:// 제약 */ }
+    }
+    return true;
+  }
+
+  function noteIn(el, text) {
+    var step = el.closest('[data-step]');
+    var n = step && step.querySelector('[data-state-note]');
+    if (!n) return;
+    n.textContent = text;
+    n.hidden = false;
+  }
+
+  /* ---------- STP-workload-choice ---------- */
+  var TYPE_LABEL = { 'shell': 'shell', 'claude-code': 'claude-code', 'approval-gated': 'approval-gated' };
+
+  function chosenType() {
+    var r = document.querySelector('input[name="wl"]:checked');
+    return r ? r.value : 'claude-code';
+  }
+
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="wl"]'), function (r) {
+    r.addEventListener('change', function () {
+      noteIn(r, r.value === 'approval-gated'
+        ? '승인 게이트를 고르면 사용 루프는 별도 여정으로 이어집니다 — 이 화면은 고르는 순간만 담습니다.'
+        : '고른 타입은 세션 수명 동안 고정됩니다. 바꾸려면 새 세션을 만듭니다.');
+    });
+  });
+
+  /* ---------- STP-prompt-submit ---------- */
+  var queue = 0;
+
+  function reject(msg) {
+    $('reject-msg').textContent = msg;
+    $('reject-banner').hidden = false;
+    $('accept-banner').hidden = true;
+    $('btn-send').disabled = false;
+    show('STP-prompt-submit');
+  }
+
+  $('br-too-big').addEventListener('click', function () {
+    reject('프롬프트가 너무 큽니다 (413). 대기열에 넣지 않았습니다 — 내용을 줄여 다시 보내면 됩니다. ' +
+      '거절이므로 같은 요청이 몰래 실행 중인 상태는 없습니다.');
+  });
+
+  $('br-queue-full').addEventListener('click', function () {
+    queue = 8;
+    $('queue-depth').textContent = String(queue);
+    reject('대기열이 가득 찼습니다 (429). 앞선 실행이 끝나면 자리가 납니다 — 잠시 후 다시 보내 주세요.');
+  });
+
+  /* ---------- STP-response-watch ---------- */
+  $('br-drop').addEventListener('click', function () {
+    var c = $('conn');
+    c.className = 'conn off';
+    $('conn-text').textContent = '연결 끊김 — 놓친 지점부터 자동으로 이어 붙이는 중';
+    $('resume-msg').textContent =
+      '끊긴 동안의 출력을 커서 위치부터 이어 붙였습니다. 중간이 비거나 겹치지 않습니다.';
+    $('resume-banner').hidden = false;
+    $('console-1').textContent += '[연결 끊김 · 커서 12480 에서 재개]\n[3/3] 표 정리 완료\n';
+    show('STP-response-watch');
+  });
+
+  $('br-far-behind').addEventListener('click', function () {
+    var c = $('conn');
+    c.className = 'conn off';
+    $('conn-text').textContent = '이어 붙일 수 없음 — 전체 이력을 다시 받는 중';
+    $('resume-msg').textContent =
+      '이어 붙일 수 있는 지점을 지나 밀렸습니다. 전체 이력을 다시 받아 콘솔을 교체한 뒤 이어 봅니다.';
+    $('resume-banner').hidden = false;
+    $('console-1').textContent =
+      '[콘솔 교체 — 전체 이력 재수신]\n> tokenizer 벤치를 돌리고 결과를 표로 정리해 줘\n\n' +
+      '[1/3] 벤치 스크립트 준비\n[2/3] 3개 구현 실행\n[3/3] 표 정리 완료\n';
+    show('STP-response-watch');
+  });
+
+  /* ---------- STP-conversation-carry ---------- */
+  $('br-out-cap').addEventListener('click', function () {
+    $('cap-507').hidden = false;
+    $('btn-send-2').disabled = true;
+    show('STP-conversation-carry');
+  });
+
+  $('btn-send-2').addEventListener('click', function () {
+    var t = $('prompt-2').value.trim();
+    noteIn(this, t
+      ? '접수됐습니다. 앞선 대화와 ' + '/work/bench' + ' 의 파일 위에서 처리됩니다.'
+      : '내용을 쓰면 앞선 대화 맥락 위에서 이어집니다.');
+  });
+
+  /* ---------- STP-agent-freeze-resume ---------- */
+  $('br-new-type').addEventListener('click', function () {
+    show('STP-workload-choice');
+    noteIn($('sess-name'), '기존 세션은 그대로 두고 새 세션을 만듭니다 — 타입·모델은 세션 수명 동안 바뀌지 않습니다.');
+  });
+
+  /* ---------- 전진 ---------- */
+  Array.prototype.forEach.call(document.querySelectorAll('[data-advance-to]'), function (btn) {
+    btn.addEventListener('click', function () {
+      if (btn.disabled) return;
+      if (btn.id === 'btn-create') {
+        var name = $('sess-name').value.trim();
+        $('ws-name').textContent = name || 'bench-tokenizer';
+        $('ws-type').textContent = TYPE_LABEL[chosenType()];
+        $('ws-model').textContent = $('sess-model').selectedOptions[0].textContent;
+      }
+      if (btn.id === 'btn-send') {
+        $('reject-banner').hidden = true;
+        $('accept-banner').hidden = false;
+        queue = queue > 0 ? queue : 1;
+        $('queue-depth').textContent = String(queue);
+      }
+      show(btn.getAttribute('data-advance-to'));
+    });
+  });
+
+  /* ---------- 딥링크 ---------- */
+  function fromHash() {
+    var id = (location.hash || '').replace(/^#/, '');
+    if (!id || !show(id)) show('STP-workload-choice');
+  }
+  window.addEventListener('hashchange', fromHash);
+  fromHash();
+})();
+</script>
+</body>
+</html>
