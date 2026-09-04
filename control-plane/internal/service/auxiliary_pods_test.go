@@ -18,9 +18,7 @@ import (
 // These tests cover the half of AC-A2 that only became expressible once the
 // session record stopped naming a single pod: a session owns one *workload*
 // pod plus the session-scoped auxiliary pods that serve it (AC-F4's helper pod
-// is the first such pod), and the lifecycle holds across that whole set —
-// reclamation on freeze and terminate (AC-A3), re-provisioning on restore
-// (AC-B2), and no leaks when provisioning fails part way.
+// is the first such pod), and the lifecycle holds across that whole set.
 //
 // No workload type provisions an auxiliary pod yet: AC-F1's approval-gated type
 // is not implemented, and shell/claude-code need none. The stub's
@@ -35,8 +33,7 @@ func newAuxService(aux int) (*service.Service, *k8s.StubOrchestrator, *configmap
 }
 
 // TestCreateRecordsTheWholePodSet: creating a session with auxiliary pods
-// records the workload pod as Pod and the rest as AuxiliaryPods, and Pods()
-// returns the set workload-pod-first (AC-A2).
+// records the workload pod as Pod and the rest as AuxiliaryPods (AC-A2).
 func TestCreateRecordsTheWholePodSet(t *testing.T) {
 	ctx := context.Background()
 	svc, orch, store := newAuxService(1)
@@ -74,8 +71,7 @@ func TestCreateRecordsTheWholePodSet(t *testing.T) {
 }
 
 // TestSnapshotReclaimsTheWholePodSet: freezing a session reclaims every pod it
-// owns, not just the workload pod — AC-A3's reclamation and AC-F4's "the helper
-// pod's lifetime is the session's" hold together. The record must forget both,
+// owns, not just the workload pod (AC-A3, AC-F4). The record must forget both,
 // so a snapshotted session names no pod at all.
 func TestSnapshotReclaimsTheWholePodSet(t *testing.T) {
 	ctx := context.Background()
@@ -101,8 +97,7 @@ func TestSnapshotReclaimsTheWholePodSet(t *testing.T) {
 }
 
 // TestRestoreProvisionsAFreshPodSet: restoring brings back the whole set, with
-// new names (AC-B2). The auxiliary pod holds no session state, so it is
-// recreated rather than restored — but the session must end up owning it again.
+// new names (AC-B2) — the session must end up owning the auxiliary pod again.
 func TestRestoreProvisionsAFreshPodSet(t *testing.T) {
 	ctx := context.Background()
 	svc, orch, _ := newAuxService(1)
