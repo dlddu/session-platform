@@ -351,7 +351,7 @@ AC-F1~F6(approval-gated 워크로드)가 여기 남는다.
 > (`manual-archive`는 PR #42). 그 전환이 끝난 뒤 E 계열 전용 파일을 신설하거나, 외부 LLM
 > 자격증명·비결정 산출물처럼 곤란한 것은 예외로 등재해 이 표를 0으로 만든다.
 
-> **왜 F 계열은 「예외」가 아니라 「공백」인가** *(2026-09-03 판정 · 같은 날 구현 착지로 근거 갱신)*.
+> **왜 F 계열은 「예외」가 아니라 「공백」인가** *(2026-09-03 판정 · **2026-09-04 선행 재판정**)*.
 > #46이 `approval-gated` 워크로드 타입을 문서로 신설하며 AC가 **21 → 27**로 늘었다(AC-F1~F6).
 > 여섯 건 모두 전용 파일도 예외 등재도 없이 공백에 놓는다. 두 갈래를 다 검토했고 **지금은 어느
 > 쪽도 성립하지 않는다**.
@@ -359,26 +359,83 @@ AC-F1~F6(approval-gated 워크로드)가 여기 남는다.
 > - **전용 파일 신설 불가 — e2e SUT에서 이 타입의 세션이 아직 서지 않는다.** 최초 판정의 근거는
 >   "구현이 0줄"이었고 그것은 **더 이상 사실이 아니다**: #48이 pod 참조를 집합으로 바꿨고, 이어진
 >   슬라이스가 타입 축(AC-F1의 제어 평면 절반)과 **헬퍼 파드 쌍 프로비저닝·컨테이너별 자격 증명
->   분리**(AC-F4/F6의 pod 스펙 절반)를 착지시켰다. 그러나 헬퍼 파드의 **세션 MCP 워크로드가 data
->   plane 에이전트에 아직 없어** 그 파드가 Ready에 이르지 못하고, 따라서 배포된 SUT에서
->   `workloadType=approval-gated` 세션을 만드는 e2e는 지금 만들면 **전부 실패한다**. 현재 그 절반을
->   지키는 것은 `control-plane/test/approval_gated_orchestrator_test.go`(fake clientset · pod 스펙
->   단언)와 `internal/api/workload_type_test.go`(타입 허용값·400 거부)다 — e2e가 아니므로 이 표의
->   매칭 파일로는 세지 않는다.
+>   분리**(AC-F4/F6의 pod 스펙 절반)를 착지시켰다.
+>
+>   **✅ 2026-09-03 판정이 「유일한 선행」으로 지목했던 「헬퍼 파드의 세션 MCP 워크로드가 data plane
+>   에이전트에 아직 없다」는 해소됐다** — `data-plane/cmd/agent/main.go:59`에
+>   `workloadSessionMCP = "mcp"`가 있고 `:177-197`이 그 워크로드를 실제로 서브한다(#60이 헬퍼 파드
+>   쌍을 기동시키고, #64가 그 MCP 컨테이너에 도구 표면과 승인 게이트웨이 왕복을 넣었다).
+>   **그 문장을 근거로 남겨 두면 이 원장은 「선행이 풀렸으니 지금 저작해도 된다」고 읽힌다** — 그러나
+>   세션은 여전히 서지 않는다. 실제로 남아 있는 선행은 아래 둘이고, 둘 다 **SUT 오버레이 쪽**이다.
+>
+>   **선행 ⓐ — `DATA_PLANE_APPROVAL_GATED_IMAGE`가 어디에도 설정돼 있지 않다.** base
+>   `k8s/deployment.yaml`이 선언하는 이미지 env는 `DATA_PLANE_IMAGE`(`:52`)와
+>   `DATA_PLANE_CLAUDE_CODE_IMAGE`(`:62`) **둘뿐**이고 이 env는 **선언 자체가 없다**. e2e 오버레이
+>   `deploy/kustomization.yaml`의 control-plane patch도 `env/1`·`env/2`·`env/3`만 replace한다.
+>   따라서 제어면은 `control-plane/cmd/control-plane/main.go:268`의 기본값 `""`를 쓰고,
+>   `WithWorkloadImage`가 빈 값을 no-op으로 버리며
+>   (`control-plane/internal/adapter/k8s/client_orchestrator.go:264-274`) `imageFor`가 shell 아닌
+>   미설정 타입에 에러를 돌린다(`:555-563`). 즉 `workloadType=approval-gated` 생성 요청은 **타입
+>   검증을 통과한 뒤**(400이 아니다) **프로비저닝에서 500으로 실패하고, 파드가 하나도 서지 않는다.**
+>
+>   **선행 ⓑ — 게이트웨이 Secret이 없고, 그 참조는 optional이 아니다.**
+>   `git grep 'approval-gateway' -- deploy k8s`가 **0 hits**다 — `approval-gateway-credentials`
+>   매니페스트가 오버레이에도 base에도 없다. 그런데 헬퍼 파드의 MCP 컨테이너는 게이트웨이 3종을
+>   **`secretEnv`**로 투영한다(`client_orchestrator.go:780-782`, 정의 `:887-895`). 이 자리는
+>   `Optional`을 세우지 않으므로(세우는 쪽은 같은 파일의 `optionalSecretEnv` `:897-902`이고 여기
+>   쓰이지 않았다) Secret이 없으면 kubelet이 컨테이너 구성 단계에서 실패해 **헬퍼 파드가 Ready에
+>   이르지 못한다.**
+>   ⚠️ `doc-tracker.md`의 「게이트웨이 3종 env가 없으면 컨테이너는 뜨되 **도구 목록이 빈다**」와
+>   겹쳐 읽어 "이미지만 채우면 선다"로 결론 내지 말 것 — 그 관용은 **agent 프로세스 층위**의 것이고
+>   (`data-plane/cmd/agent/main.go:182-195`), **필수 SecretKeyRef가 걸린 이 배포에서는 프로세스가
+>   시작조차 못 해 그 경로에 도달하지 않는다.**
+>
+>   📌 같은 낡음이 `control-plane/cmd/control-plane/main.go:79-82`의 Go 주석에도 있다("its data
+>   plane runtime — the helper pod's session MCP — is not implemented yet"). **코드 주석은 이 렌즈의
+>   산출물이 아니라 손대지 않았다** — 지목만 남긴다(소관: `tbm_session-platform-docs-impl` ·
+>   `tbm_session-platform-comment-redundancy`).
+>
+>   현재 F 계열의 절반을 지키는 것은 `control-plane/test/approval_gated_orchestrator_test.go`
+>   (fake clientset · pod 스펙 단언)와 `internal/api/workload_type_test.go`(타입 허용값·400 거부)다
+>   — e2e가 아니므로 이 표의 매칭 파일로는 세지 않는다.
 > - **규칙 4 예외 등재도 부적격 — 예외로 올릴 이유가 아니라 순서를 기다리는 것이다.** 예외는 사유와
->   함께 **대체 검증 수단**을 요구하는데(AC-B1이 `reaper_test.go`를 갖는 것처럼), F 계열에서 대체
->   수단이 성립하는 것은 위 두 파일이 덮는 범위뿐이고 나머지(승인 게이트·공유 볼륨·egress 차단)는
->   여전히 단위·통합·envtest 어느 것도 없다. `approval-gated-workload.md`가 AC-F2·F4를 "코드 단언이
+>   함께 **대체 검증 수단**을 요구하는데(AC-B1이 `reaper_test.go`를 갖는 것처럼), F 계열의 대체
+>   수단은 아직 고르지 않다 — *2026-09-04 갱신*: 승인 게이트는 `data-plane/cmd/agent/`의
+>   `approval_gateway_test.go`·`session_mcp_gate_test.go`·`session_mcp_test.go`·
+>   `approval_gated_test.go`가, egress 정책 **오브젝트**(존재·셀렉터·동반 회수)는
+>   `control-plane/test/approval_gated_network_policy_test.go`가 덮게 됐다(#60·#64). 그러나
+>   **AC-F5의 공유 볼륨은 구현 자체가 없고**
+>   (`control-plane/internal/adapter/k8s/client_orchestrator.go:685`), 정책의 **실집행**은 여전히
+>   어느 테스트도 보지 않는다. `approval-gated-workload.md`가 AC-F2·F4를 "코드 단언이
 >   아니라 **실클러스터 확인**"으로 적은 것은 사실이지만, 그 문장이 가리키는 것은 참조 구현
 >   (`dlddu/pure-agent`)이 **클러스터에 배선된 적 없다는 미검증 전제**이지 "자동화가 원리적으로
 >   곤란하다"가 아니다. 지금 예외로 올리면 구현이 착지한 뒤에도 1:1 원장에서 **영구 면제**되는 거짓
 >   예외가 박힌다. 공백은 원장에 보이고 집계가 세지만, 예외는 보이지 않는다.
 >
-> **승격 조건(다음 감지가 이 논점을 다시 열지 않도록 못박는다)**. `approval-gated` 구현이 착지하면:
-> ① **AC-F1·F3·F5·F6** → 전용 파일 신설. F1(타입 허용값·400 거부·불변성)은 AC-E1과 같은 모양이라
-> Go 스위트이고 **선결 조건은 하나뿐이다 — 헬퍼 파드가 Ready에 이르는 data plane MCP 워크로드**.
+> **승격 조건(다음 감지가 이 논점을 다시 열지 않도록 못박는다)** *(2026-09-04 재작성 — 해제 조건을
+> 위 선행 ⓐ·ⓑ 기준으로 옮긴다. 이전 판은 「data plane MCP 워크로드」 하나를 걸었고 그것은 이미
+> 발화했다)*.
+> ① **AC-F1·F3·F5·F6** → 전용 파일 신설. **해제 조건은 ⓐ와 ⓑ가 함께 충족되는 것이다** — SUT
+> 오버레이가 `DATA_PLANE_APPROVAL_GATED_IMAGE`를 채우고, 같은 네임스페이스에
+> `approval-gateway-credentials`(`url`·`api-key`·`user-id`)가 있어 헬퍼 파드가 Ready에 이르는 것.
+> 그 둘이 서면 F1(타입 허용값·400 거부·불변성)은 AC-E1과 같은 모양이라 Go 스위트이고,
 > F3(승인 대기 중 write 즉시 반환·in-band 마커·`lastAccess` 갱신)·F5(공유 볼륨 왕복)·
-> F6(컨테이너별 Secret 분리)도 API·pod 스펙 단언이므로 Go 스위트다.
+> F6(컨테이너별 Secret 분리)도 API·pod 스펙 단언이므로 Go 스위트다. **이 해제는 e2e 하네스
+> (오버레이) 작업이라 이 렌즈의 산출물이 아니다** — 이 루프가 내는 것은 e2e 파일과 등재 문서뿐이다.
+>
+> ⚠️ **AC-F1을 「400 거부 갈래만」으로 먼저 끊지 말 것.** 타입 검증은 pod 생성 전에 끝나므로 그
+> 갈래만은 이미지 없이도 관측된다 — 그래서 매번 "F1만은 지금 되지 않나"라는 물음이 다시 올라온다.
+> 답은 아니오다: AC-F1의 검증 방법(`../prd/approval-gated-workload.md`)은 **첫 갈래가 「세션을
+> 생성하면 워크로드 파드와 세션 전용 헬퍼 파드(컨테이너 둘)가 함께 기동되고 세션 조회 응답의 타입이
+> `approval-gated`임을 확인한다」**이고, 그것이 정확히 ⓐ·ⓑ에 막힌다. 반쪽만 단언하는 파일은 규칙 1이
+> 요구하는 **그 AC의 주검증**이 아니다. 선례가 같은 말을 한다 —
+> `control-plane/test/e2e_e1_workload_type_test.go`는 헤더에 "네 갈래를 **전부** 단언한다"고 적고
+> 실제로 파드 기동 갈래를 갖는데, 그 갈래는 부트스트랩 두 대역이 선 뒤에야(#62) 도달 가능해졌다.
+>
+> ⚠️ **AC-F5에는 선행이 하나 더 있다.** 공유 RWX 볼륨은 아직 구현되지 않았다
+> (`control-plane/internal/adapter/k8s/client_orchestrator.go:685`, `../doc-tracker.md`의 같은 항목).
+> ⓐ·ⓑ가 풀려도 F5 전용 파일은 그 구현이 착지한 뒤다 — 구현은 `tbm_session-platform-docs-impl`의
+> 몫이고, 그때까지 F5는 규칙 7의 성격(순서를 기다리는 공백)을 그대로 갖는다.
 > ② **AC-F2·F4** → 그때 비로소 규칙 4 예외의 근거가 선다. F2(egress 차단)는 **현재 e2e 하네스에서
 > 검증할 수 없다** — `deploy/kind-config.yaml`이 `disableDefaultCNI`를 켜지 않아 클러스터가 기본
 > kindnet으로 뜨고, kindnet은 **NetworkPolicy를 집행하지 않는다**. 따라서 정책 오브젝트의 존재·셀렉터·
