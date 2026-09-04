@@ -10,11 +10,8 @@ import (
 	"testing"
 )
 
-// The provider CA hook exists for one reason: a deployment whose `base-url` is
-// a private gateway. These tests pin the three outcomes that matter — without
-// the CA the handshake must fail, with it the same request must go through, and
-// a bundle that carries no certificate must be refused at construction instead
-// of degrading to system-only trust.
+// The three outcomes providerCACertEnv and trustProviderCA promise, pinned
+// against a real TLS handshake.
 
 // tlsUpstreamCAPEM re-encodes an httptest TLS server's own certificate as the
 // PEM a platform Secret would carry. httptest signs with an ephemeral CA whose
@@ -103,9 +100,7 @@ func TestCredentialProxyRejectsCABundleWithoutCertificate(t *testing.T) {
 	}
 }
 
-// The hook only widens trust: it never turns verification off, and it starts
-// from the system pool so a deployment that later moves its gateway to a
-// publicly issued certificate keeps working without a configuration change.
+// trustProviderCA's widen-never-weaken rule, asserted on the transport.
 func TestProviderCAWidensTrustWithoutWeakeningIt(t *testing.T) {
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer upstream.Close()

@@ -91,8 +91,7 @@ func TestSessionMCPPublishesGatewayOutageAsItsOwnKind(t *testing.T) {
 }
 
 // The cursor is what makes the feed tailable: reconnecting with the last seq
-// returns only what came after it, and an idle feed ends the poll empty instead
-// of replaying.
+// returns only what came after it.
 func TestSessionMCPNoticeFeedIsTailable(t *testing.T) {
 	g := newGatedMCP(t, "APPROVED")
 	g.call(t, "https://rates.vendor.example/v1/latest")
@@ -143,8 +142,7 @@ func TestSessionMCPNoticeFeedEndsAnIdlePoll(t *testing.T) {
 	}
 }
 
-// A tailer that fell behind the ring is told how many it missed. A silent hole
-// in the output byte stream would be worse than an admitted one.
+// A tailer that fell behind the ring is told how many it missed.
 func TestSessionMCPNoticeFeedReportsWhatItEvicted(t *testing.T) {
 	feed := newNoticeFeed()
 	for i := 0; i < noticeFeedCapacity+5; i++ {
@@ -183,9 +181,7 @@ func TestSessionMCPNoticesCarryNoSecrets(t *testing.T) {
 	}
 }
 
-// The feed is advisory. A gate assembled without one still refuses an
-// unapproved call and still keeps the network untouched: losing the marker must
-// never mean losing the gate.
+// The feed is advisory: losing the marker must never mean losing the gate.
 func TestSessionMCPGateRunsWithoutANoticeFeed(t *testing.T) {
 	gate := newFakeGateway(t, "REJECTED").gate(t)
 	gate.sleep = func(context.Context, time.Duration) error { return nil }

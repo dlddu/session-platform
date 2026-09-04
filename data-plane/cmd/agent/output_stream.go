@@ -59,11 +59,9 @@ func (b *scrollback) streamChunk(offset, limit int) (payload []byte, start, next
 	return payload, start, end, false, changed
 }
 
-// serveOutputStream exposes the same append-only byte record as /read over
-// SSE. Payload bytes are base64 so JSON encoding cannot corrupt a cursor when a
-// process Write happens to split a multibyte code point. The stream is passive:
-// it never consumes bytes, mutates session state, or cancels the workload when
-// its request context ends.
+// serveOutputStream exposes the same append-only byte record as /read over SSE,
+// passively (AC-E3). It never cancels the workload when its request context
+// ends, which is the one thing the AC does not spell out for the server side.
 func serveOutputStream(w http.ResponseWriter, r *http.Request, out *scrollback) {
 	offset := 0
 	value := r.URL.Query().Get("offset")

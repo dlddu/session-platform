@@ -1,13 +1,10 @@
 // The approval gateway client (AC-F3). Every external tool the session MCP
-// offers has to come through here first: the gate creates a request on the
-// external gateway, waits for a human decision, and only an APPROVED decision
-// lets the caller go on to make the real outbound call.
+// offers has to come through here first.
 //
-// The wire contract is not invented here. It is the one the PRD's named
+// The wire contract is not invented here: it is the one the PRD's named
 // reference implementation speaks (dlddu/pure-agent,
-// mcp-server/src/services/gatekeeper.ts): POST /api/requests to create,
-// GET /api/requests/{id} to poll, `x-api-key` on both, and the four decision
-// values below. Keeping it identical is what lets one gateway serve both.
+// mcp-server/src/services/gatekeeper.ts). Keeping it identical is what lets one
+// gateway serve both.
 package main
 
 import (
@@ -40,8 +37,7 @@ const (
 	// so the timeout is minutes, not seconds.
 	defaultApprovalPollInterval = 3 * time.Second
 	defaultApprovalTimeout      = 10 * time.Minute
-	// approvalRequestsPath is the gateway's collection. Both calls hang off it.
-	approvalRequestsPath = "/api/requests"
+	approvalRequestsPath        = "/api/requests"
 	// approvalAPIKeyHeader carries the gateway key. It never goes in a body, so
 	// it cannot end up in the approval context a human reads (AC-F6).
 	approvalAPIKeyHeader = "x-api-key"
@@ -53,8 +49,7 @@ const (
 )
 
 // approvalGateway talks to the external gateway on behalf of one session. It is
-// created once at container start from the Secret-backed environment AC-F6
-// projects into the MCP container, and it holds no per-call state.
+// created once at container start and holds no per-call state.
 type approvalGateway struct {
 	baseURL      string
 	apiKey       string
@@ -63,10 +58,8 @@ type approvalGateway struct {
 	pollInterval time.Duration
 	timeout      time.Duration
 	client       *http.Client
-	// now and sleep are injected so the tests can drive the clock without
-	// waiting out a real poll interval.
-	now   func() time.Time
-	sleep func(context.Context, time.Duration) error
+	now          func() time.Time
+	sleep        func(context.Context, time.Duration) error
 }
 
 // approvalOutcome is a settled wait. RequestID is the gateway's own id for the
@@ -108,10 +101,8 @@ func newApprovalGateway(baseURL, apiKey, userID, sessionID string) (*approvalGat
 	}, nil
 }
 
-// externalID is the identifier the gateway dedupes on (AC-F3): the session it
-// belongs to, then the id of the one tool call that asked for it. The session
-// half separates two sessions asking the same thing; the request half separates
-// two calls in one session.
+// externalID is the identifier the gateway dedupes on: `{sessionID}:{requestID}`
+// exactly as AC-F3 specifies it.
 func (g *approvalGateway) externalID(requestID string) string {
 	return g.sessionID + ":" + requestID
 }
@@ -121,10 +112,7 @@ func (g *approvalGateway) externalID(requestID string) string {
 // itself failed — a REJECTED or EXPIRED decision is a successful wait with an
 // unfavourable answer, and the caller must be able to tell those apart.
 //
-// Blocking is the point rather than a limitation: the MCP call the agent is
-// waiting on holds its place in AC-E2's serial queue for exactly as long as the
-// human takes, which is what makes "the tool did not run until you said so"
-// true from the agent's side.
+// Blocking is the point rather than a limitation — see AC-F3's 대기 위치.
 func (g *approvalGateway) await(ctx context.Context, requestID, approvalContext string) (approvalOutcome, error) {
 	gatewayRequestID, err := g.create(ctx, g.externalID(requestID), approvalContext)
 	if err != nil {
@@ -149,8 +137,7 @@ func (g *approvalGateway) await(ctx context.Context, requestID, approvalContext 
 }
 
 // create opens the request a human will decide on. The context string is what
-// that human sees, so it carries what is being asked for and nothing else —
-// no gateway key, no provider token (AC-F6).
+// that human sees, and carries no credential material (AC-F6).
 func (g *approvalGateway) create(ctx context.Context, externalID, approvalContext string) (string, error) {
 	body, err := json.Marshal(map[string]string{
 		"externalId":    externalID,
@@ -228,8 +215,7 @@ func (g *approvalGateway) do(req *http.Request, what string) (map[string]any, er
 }
 
 // sleepContext waits out d unless ctx ends first. A cancelled wait returns the
-// context's error, which is how a torn-down pod or a disconnected client stops
-// a pending approval from ever reaching its outbound call.
+// context's error, which is how a torn-down pod stops a pending approval.
 func sleepContext(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()

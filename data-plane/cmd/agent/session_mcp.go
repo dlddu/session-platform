@@ -1,7 +1,5 @@
-// Session MCP (AC-F4). This is the helper pod container an approval-gated
-// session's workload pod talks to for anything that leaves its own pod: AC-F6
-// makes it that type's *only* outward tool surface, and AC-F3 puts a human
-// approval gate in front of every external tool it will offer.
+// Session MCP (AC-F4): the helper pod container an approval-gated session's
+// workload pod talks to for anything that leaves its own pod (AC-F6).
 //
 // This file is the endpoint itself: the readiness probe, the handshake, and the
 // JSON-RPC dispatch. The tools it offers and the gate they pass through live in
@@ -56,8 +54,7 @@ type jsonRPCResponse struct {
 
 // sessionMCPRoutes serves the helper pod's MCP container: the readiness
 // endpoint the kubelet polls and the MCP endpoint the session's workload agent
-// registers. It holds no session state — the helper pod is discarded on freeze
-// and rebuilt on restore (AC-F4).
+// registers. It holds no session state (AC-F4).
 func sessionMCPRoutes(logger *slog.Logger, config sessionMCPConfig) http.Handler {
 	if config.notices == nil {
 		config.notices = newNoticeFeed()
@@ -71,11 +68,9 @@ func sessionMCPRoutes(logger *slog.Logger, config sessionMCPConfig) http.Handler
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	// The approval notice feed (AC-F3). Its only client is this session's own
-	// workload agent, which tails it to write the wait marker and the decision
-	// into AC-E3's output byte stream. It is a plain GET rather than part of
-	// the JSON-RPC surface because its reader is the agent process, not the
-	// model: the tail must keep running between tool calls.
+	// The approval notice feed (session_mcp_notices.go). It is a plain GET rather
+	// than part of the JSON-RPC surface because its reader is the agent process,
+	// not the model: the tail must keep running between tool calls.
 	mux.HandleFunc("GET "+noticesPath, func(w http.ResponseWriter, r *http.Request) {
 		serveApprovalNotices(w, r, config.notices)
 	})
@@ -140,9 +135,7 @@ func sessionMCPRoutes(logger *slog.Logger, config sessionMCPConfig) http.Handler
 // request rather than a product limit.
 const maxSessionMCPRequestBytes = 1 << 20
 
-// sessionMCPServerVersion is reported in the handshake. It went to 1 when the
-// approval gate and its first external tool landed; 0 meant a server that could
-// only shake hands.
+// sessionMCPServerVersion is reported in the handshake.
 const sessionMCPServerVersion = "1"
 
 func writeJSONRPCResult(w http.ResponseWriter, id json.RawMessage, result any) {

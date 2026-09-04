@@ -9,8 +9,7 @@ import (
 )
 
 // The two sanctioned proxy placements, and the guarantee that opening one does
-// not open the other. Before this split the proxy accepted loopback only, which
-// is why the helper pod's proxy container exited on start (AC-F6).
+// not open the other.
 func TestCredentialProxyBindRulesAreScopedToItsPlacement(t *testing.T) {
 	for _, tc := range []struct {
 		placement credentialProxyPlacement
@@ -25,8 +24,6 @@ func TestCredentialProxyBindRulesAreScopedToItsPlacement(t *testing.T) {
 		{proxyPlacementHelper, "0.0.0.0:8091", true},
 		{proxyPlacementHelper, ":8091", true},
 		{proxyPlacementHelper, "10.42.0.7:8091", true},
-		// A loopback bind in the helper pod is not a safety win but an outage:
-		// the only client is a pod away.
 		{proxyPlacementHelper, "127.0.0.1:8091", false},
 		{proxyPlacementHelper, "0.0.0.0:0", false},
 	} {
@@ -72,8 +69,7 @@ func TestApprovalGatedWorkloadAcceptsItsHelperEndpoints(t *testing.T) {
 	if tools.SessionMCP != "http://10.42.0.9:8092" {
 		t.Fatalf("session MCP = %q, want the injected helper address", tools.SessionMCP)
 	}
-	// AC-F6's 2026-09-03 decision: no marketplace plugin in this type, because
-	// AC-F2's allowlist has neither the K3s MCP endpoint nor github.com in it.
+	// AC-F6's 2026-09-03 decision: no marketplace plugin in this type.
 	if tools.Plugin {
 		t.Fatal("approval-gated enabled the marketplace plugin")
 	}
@@ -166,10 +162,8 @@ func TestApprovalGatedManagedSettingsRegisterOnlyTheSessionMCP(t *testing.T) {
 	}
 }
 
-// The helper pod is rebuilt with a new address on every restore (AC-F4), so a
-// restored settings file always names the previous round's MCP. The agent must
-// re-point it rather than trust the archive, or a restored session talks to a
-// pod that no longer exists.
+// ensureClaudeManagedSettings' normalise-rather-than-trust rule, across two
+// rounds of helper pod addresses (AC-F4).
 func TestRestoredManagedSettingsArePointedAtTheCurrentSessionMCP(t *testing.T) {
 	homeDir := t.TempDir()
 	if err := ensureClaudeManagedSettings(homeDir, toolSurface{SessionMCP: "http://10.42.0.9:8092"}); err != nil {

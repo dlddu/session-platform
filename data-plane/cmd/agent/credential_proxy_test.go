@@ -134,8 +134,6 @@ func TestCredentialProxyPinsTargetOverwritesAuthAndRedactsResponse(t *testing.T)
 	req.Header.Set("X-Claude-Code-Agent-Id", "agent-id")
 	req.Header.Set("X-Claude-Code-Parent-Agent-Id", "parent-agent-id")
 	req.Header.Set("X-Stainless-Retry-Count", "1")
-	// ReverseProxy removes headers named by Connection. The credential must be
-	// installed after that removal, or this can strip the real authorization.
 	req.Header.Set("Connection", "Authorization, X-Api-Key")
 	req.Header.Set("Accept-Encoding", "gzip")
 	resp, err := http.DefaultClient.Do(req)

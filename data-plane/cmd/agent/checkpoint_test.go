@@ -94,8 +94,7 @@ func TestArchiveRoundTrip(t *testing.T) {
 	}
 }
 
-// readArchive rejects a path-traversal entry rather than writing outside the
-// images dir.
+// readArchive rejects a path-traversal entry.
 func TestReadArchiveRejectsTraversal(t *testing.T) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
@@ -109,8 +108,7 @@ func TestReadArchiveRejectsTraversal(t *testing.T) {
 	}
 }
 
-// /checkpoint dumps the live shell (passing its pid to the engine) and streams a
-// tar carrying the scrollback plus the criu images.
+// /checkpoint passes the live shell's pid to the engine and streams the archive.
 func TestCheckpointHandlerStreamsArchive(t *testing.T) {
 	sh := startTestShell(t)
 	fake := &fakeCriuEngine{}
@@ -148,9 +146,7 @@ func TestCheckpointHandlerStreamsArchive(t *testing.T) {
 }
 
 // The dump freezes and kills the shell, but that must NOT trip the container
-// restart path until the archive has streamed — otherwise the agent os.Exit(1)s
-// mid-response and truncates the checkpoint. The exit watch is suppressed while
-// a checkpoint is in flight.
+// restart path until the archive has streamed (handleCheckpoint says why).
 func TestCheckpointDefersRestartWhileStreaming(t *testing.T) {
 	sh := startTestShell(t)
 	// The fake dump mimics criu: it freezes/kills the shell tree, closing sh.done

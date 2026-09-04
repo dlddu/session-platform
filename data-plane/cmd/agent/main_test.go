@@ -35,9 +35,7 @@ func startTestShell(t *testing.T) *shellProc {
 	return sh
 }
 
-// The shell pid floor comes from CRIU_PID_FLOOR when it is a positive integer,
-// and falls back to the default for unset/garbage/non-positive values — a bad
-// override must not silently disable the CRIU pid-collision guard.
+// shellPIDFloor's fallback rule, case by case.
 func TestShellPIDFloor(t *testing.T) {
 	for _, tc := range []struct {
 		env  string
@@ -56,10 +54,8 @@ func TestShellPIDFloor(t *testing.T) {
 	}
 }
 
-// Reserving the pid floor is best-effort: on an unprivileged host ns_last_pid is
-// read-only (or absent), which must surface as an error the caller can log — not
-// a panic, and never a blocked shell start. startShell itself does not depend on
-// it, which is what keeps the gate-off path working.
+// startShell does not depend on the pid floor, which is what keeps the gate-off
+// path working when ns_last_pid is read-only.
 func TestReserveShellPIDIsBestEffort(t *testing.T) {
 	if err := reserveShellPID(300); err != nil {
 		t.Logf("ns_last_pid not writable here (expected unprivileged): %v", err)
@@ -87,8 +83,8 @@ func TestStartShellAttachesPTY(t *testing.T) {
 	}
 }
 
-// /healthz mirrors shell liveness: 200 while the shell runs, 503 once it has
-// exited — which is what makes the pod readiness probe mean "shell alive".
+// /healthz mirrors shell liveness, which is what makes pod readiness mean
+// "shell alive" (AC-D1).
 func TestHealthzReflectsShellLiveness(t *testing.T) {
 	sh := startTestShell(t)
 	h := routes(testLogger(), newTestAgent(sh))
@@ -109,9 +105,7 @@ func TestHealthzReflectsShellLiveness(t *testing.T) {
 	}
 }
 
-// scrollback accumulates appends in order and Since serves offset deltas:
-// 0 replays everything, a prior cursor yields only what came after it, and an
-// offset at/past the end yields an empty payload with the current cursor.
+// AC-D3's offset cursor rules, at the buffer level.
 func TestScrollbackSinceDeltas(t *testing.T) {
 	var b scrollback
 	b.Append([]byte("alpha\n"))
@@ -205,8 +199,7 @@ func eventuallyRead(t *testing.T, srv *httptest.Server, offset int, ok func(payl
 }
 
 // AC-D2 + AC-D3 happy path: a command written to /write is executed by the
-// shell (the PTY echoes the input and the shell prints the result) and its
-// output is recovered via /read.
+// shell and its output is recovered via /read.
 func TestWriteThenReadRecoversOutput(t *testing.T) {
 	sh := startTestShell(t)
 	srv := httptest.NewServer(routes(testLogger(), newTestAgent(sh)))
@@ -227,8 +220,7 @@ func TestWriteThenReadRecoversOutput(t *testing.T) {
 	}
 }
 
-// AC-D3: a cursor read returns only the delta after the cursor, while offset 0
-// keeps returning the full history (non-consuming).
+// AC-D3's cursor rules again, this time over real shell output.
 func TestReadCursorReturnsDelta(t *testing.T) {
 	sh := startTestShell(t)
 	srv := httptest.NewServer(routes(testLogger(), newTestAgent(sh)))

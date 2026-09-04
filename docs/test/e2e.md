@@ -383,8 +383,9 @@ AC-F1~F6(approval-gated 워크로드)가 여기 남는다.
 >   분리**(AC-F4/F6의 pod 스펙 절반)를 착지시켰다.
 >
 >   **✅ 2026-09-03 판정이 「유일한 선행」으로 지목했던 「헬퍼 파드의 세션 MCP 워크로드가 data plane
->   에이전트에 아직 없다」는 해소됐다** — `data-plane/cmd/agent/main.go:59`에
->   `workloadSessionMCP = "mcp"`가 있고 `:177-197`이 그 워크로드를 실제로 서브한다(#60이 헬퍼 파드
+>   에이전트에 아직 없다」는 해소됐다** — `data-plane/cmd/agent/main.go`에
+>   `workloadSessionMCP = "mcp"` 상수가 있고 `main`의 `case workloadSessionMCP:`가 그 워크로드를
+>   실제로 서브한다(#60이 헬퍼 파드
 >   쌍을 기동시키고, #64가 그 MCP 컨테이너에 도구 표면과 승인 게이트웨이 왕복을 넣었다).
 >   **그 문장을 근거로 남겨 두면 이 원장은 「선행이 풀렸으니 지금 저작해도 된다」고 읽힌다** — 그러나
 >   세션은 여전히 서지 않는다. 실제로 남아 있는 선행은 아래 둘이고, 둘 다 **SUT 오버레이 쪽**이다.
@@ -408,7 +409,8 @@ AC-F1~F6(approval-gated 워크로드)가 여기 남는다.
 >   이르지 못한다.**
 >   ⚠️ `doc-tracker.md`의 「게이트웨이 3종 env가 없으면 컨테이너는 뜨되 **도구 목록이 빈다**」와
 >   겹쳐 읽어 "이미지만 채우면 선다"로 결론 내지 말 것 — 그 관용은 **agent 프로세스 층위**의 것이고
->   (`data-plane/cmd/agent/main.go:182-195`), **필수 SecretKeyRef가 걸린 이 배포에서는 프로세스가
+>   (`data-plane/cmd/agent/main.go`의 `case workloadSessionMCP:`), **필수 SecretKeyRef가 걸린 이
+>   배포에서는 프로세스가
 >   시작조차 못 해 그 경로에 도달하지 않는다.**
 >
 >   📌 같은 낡음이 `control-plane/cmd/control-plane/main.go:79-82`의 Go 주석에도 있다("its data

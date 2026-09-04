@@ -9,10 +9,9 @@ import (
 )
 
 // claudeStreamProjector turns Claude Code's --output-format=stream-json stdout
-// into the user-facing text stream retained by the session. Partial text events
-// are emitted immediately; the later full assistant/result records are ignored
-// so they cannot duplicate already projected text. A non-JSON line is passed
-// through for backwards-compatible diagnostics and deterministic fake runners.
+// into the user-facing text stream retained by the session (AC-E3). A non-JSON
+// line is passed through for backwards-compatible diagnostics and deterministic
+// fake runners.
 type claudeStreamProjector struct {
 	dst io.Writer
 	buf []byte

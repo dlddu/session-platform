@@ -137,9 +137,7 @@ func newCredentialProxyWithTransport(
 		// important for credentials: an inbound `Connection: Authorization`
 		// must not remove the platform header after we install it.
 		proxyRequest.SetURL(upstream)
-		// The configured upstream is the only possible destination and virtual
-		// host. Only documented Anthropic/Claude Code protocol and telemetry
-		// headers survive; client-controlled routing/auth headers never reach it.
+		// The configured upstream is the only possible destination and virtual host.
 		request.Host = upstream.Host
 		for name := range request.Header {
 			if !credentialProxyRequestHeaderAllowed(name) {
@@ -309,8 +307,7 @@ func validateCredentialProxyBindAddr(addr string, placement credentialProxyPlace
 		// hop away (AC-F6), so this proxy binds the pod network instead. A
 		// loopback bind here is not a safety win but an outage: nothing outside
 		// the helper pod could reach it. What keeps the wider bind safe is
-		// AC-F2's ingress policy, which the control plane creates alongside the
-		// helper pod and which admits only that session's workload pod.
+		// AC-F2's ingress policy.
 		if host == "" {
 			return nil // ":8091" — the unspecified address, every pod interface
 		}
@@ -326,12 +323,9 @@ func validateCredentialProxyBindAddr(addr string, placement credentialProxyPlace
 	return nil
 }
 
-// credentialProxyPlacement is where this proxy container runs. The behaviour
-// contract is one (AC-E6) and only the placement differs (AC-F6): claude-code
-// keeps it a loopback sidecar inside the workload pod, approval-gated moves it
-// into the session helper pod where it must be reachable across the pod
-// network. The distinction exists so that opening the bind for the helper can
-// never silently open it for a sidecar as well.
+// credentialProxyPlacement is where this proxy container runs; one behaviour
+// contract (AC-E6), two placements (AC-F6). It is a type so that opening the
+// bind for the helper can never silently open it for a sidecar as well.
 type credentialProxyPlacement string
 
 const (
@@ -366,12 +360,9 @@ func validateClaudeProxyClientEnv() error {
 	return nil
 }
 
-// validateApprovalGatedClientEnv is the approval-gated counterpart. The
-// workload pod holds no external credential at all (AC-F6): its provider
-// endpoint is its own session helper pod's proxy rather than loopback, its
-// token is the same non-secret placeholder, and neither the K3s MCP token nor
-// any provider credential is projected here. It returns the session MCP URL,
-// which is this type's only tool surface that leaves the pod.
+// validateApprovalGatedClientEnv is the approval-gated counterpart: the workload
+// pod holds no external credential at all (AC-F6). It returns the session MCP
+// URL, which is this type's only tool surface that leaves the pod.
 func validateApprovalGatedClientEnv() (string, error) {
 	if err := validateHelperEndpoint(os.Getenv("ANTHROPIC_BASE_URL"), helperProxyPort); err != nil {
 		return "", fmt.Errorf("approval-gated provider endpoint: %w", err)
@@ -395,10 +386,9 @@ func validateApprovalGatedClientEnv() (string, error) {
 }
 
 // validateHelperEndpoint checks one of the two in-cluster addresses the control
-// plane injects into an approval-gated workload pod. Both must be plain http on
-// the expected helper port and must not be loopback: a loopback value would
-// mean the proxy or MCP had been folded back into this pod, which is exactly
-// the arrangement AC-F2 moved away from.
+// plane injects into an approval-gated workload pod. A loopback value would mean
+// the proxy or MCP had been folded back into this pod, which is exactly the
+// arrangement AC-F2 moved away from.
 func validateHelperEndpoint(raw string, wantPort int) error {
 	if raw == "" {
 		return errors.New("must be set")

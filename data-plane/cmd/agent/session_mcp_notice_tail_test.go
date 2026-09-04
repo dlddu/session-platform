@@ -26,8 +26,6 @@ func callInBackground(mcpURL, target string) {
 	}()
 }
 
-// recordingSink is a noticeSink that hands markers to a callback and keeps the
-// wait state, so a test can assert on either half of one poll.
 type recordingSink struct {
 	emit  func(string)
 	waits approvalWaits
@@ -109,18 +107,15 @@ func TestApprovalRefusalsAreMarkedToo(t *testing.T) {
 	}
 }
 
-// A notice this agent does not understand renders as nothing rather than as a
-// malformed marker: a helper pod one version ahead must not be able to write
-// garbage into a byte stream whose offsets have already been handed out.
+// renderApprovalNotice's unknown-kind rule.
 func TestUnknownNoticeKindsRenderNothing(t *testing.T) {
 	if got := renderApprovalNotice(approvalNotice{Kind: "something-newer"}); got != "" {
 		t.Fatalf("rendered %q, want nothing", got)
 	}
 }
 
-// The marker goes through the bounded append, so AC-E3's cumulative limit and
-// its terminal marker hold: once the stream has been closed by the bound,
-// a platform notice cannot reopen it or push past it.
+// appendPlatformNotice's bound, at the buffer level: once the stream has been
+// closed by AC-E3's limit, a notice cannot reopen it or push past it.
 func TestApprovalNoticesRespectTheCumulativeOutputLimit(t *testing.T) {
 	limit := len(claudeOutputLimitMarker) + 32
 	var out scrollback
@@ -166,8 +161,7 @@ func TestApprovalNoticesOnlyAppend(t *testing.T) {
 	}
 }
 
-// The tailer must not be able to take the workload down. An unreachable feed
-// costs the session its markers and nothing else.
+// noticeTailer.run's never-take-the-workload-down rule.
 func TestNoticeTailerSurvivesAnUnreachableFeed(t *testing.T) {
 	ctx, stop := context.WithCancel(context.Background())
 	tailer := newNoticeTailer("http://127.0.0.1:1", &recordingSink{emit: func(string) {

@@ -19,26 +19,17 @@ import (
 )
 
 // This file implements in-pod CRIU checkpoint/restore of the session shell tree
-// (AC-B1/B2/B3, AC-D4). The agent — which already owns the shell process and its
-// PTY master — CRIU-dumps the tree on /checkpoint and CRIU-restores it on
-// /restore, rather than relying on a container-level kubelet checkpoint that the
-// containerd runtime cannot restore (verified dead-end, 2026-07-22; see
-// docs/criu-verification.md, decision ⑤).
+// (AC-B1/B2/B3, AC-D4), done by the agent because it already owns the shell
+// process and its PTY master. Why not a container-level kubelet checkpoint:
+// docs/criu-verification.md, decision ⑤.
 //
 // The archive is a tar carrying the criu image directory plus the scrollback
 // bytes, so the accumulated shell output (AC-D3/D4) survives the round trip even
 // though it lives in the agent's memory, not the dumped tree. The control plane
 // streams the archive to/from durable storage (S3); the agent never touches
 // object storage or cloud credentials.
-//
-// RUNTIME SEAM: the actual criu invocation and PTY reattach live in
-// execCriuEngine below and are the ONE part of this path that a CRIU-capable
-// node (CAP_CHECKPOINT_RESTORE, criu installed) is required to exercise. Every
-// other part here — archive framing, scrollback (de)serialization, handler
-// gating, shell adoption — is unit-tested with a fake engine.
 
-// archiveScrollbackName is the tar entry holding the serialized scrollback; all
-// other entries are criu image files under an images/ prefix.
+// archiveScrollbackName is the tar entry holding the serialized scrollback.
 const archiveScrollbackName = "scrollback"
 const archiveImagesPrefix = "images/"
 
@@ -83,7 +74,6 @@ func (a *agent) handleCheckpoint(logger *slog.Logger) http.HandlerFunc {
 			http.Error(w, "criu dump: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		// The tree is frozen now, so this captures the complete output history.
 		sb := sh.out.snapshot()
 
 		w.Header().Set("Content-Type", "application/x-tar")
@@ -176,8 +166,7 @@ func writeArchive(w io.Writer, imagesDir string, scrollback []byte) error {
 	return tw.Close()
 }
 
-// readArchive unpacks an archive written by writeArchive: it restores the criu
-// image files under imagesDir and returns the scrollback bytes.
+// readArchive unpacks an archive written by writeArchive.
 func readArchive(r io.Reader, imagesDir string) ([]byte, error) {
 	tr := tar.NewReader(r)
 	var scrollback []byte
@@ -222,11 +211,9 @@ func readArchive(r io.Reader, imagesDir string) ([]byte, error) {
 // RUNTIME SEAM — being tuned against a real runtime. This is the one part of the
 // in-pod CRIU path that cannot run without a CRIU-capable node, so it is
 // exercised only during on-runtime verification, never in CI (tests inject a
-// fake engine). Fixes landed from on-cluster rounds so far: the restore now runs
-// detached with the restored root task as a sibling and its pid taken from a
-// pidfile, because criu's own exit is not the shell's (2026-07-23). The PTY
-// handling on restore — recreating a master and restoring the shell job against
-// that tty — remains the least-proven part. See docs/criu-verification.md.
+// fake engine). The PTY handling on restore — recreating a master and restoring
+// the shell job against that tty — remains the least-proven part. See
+// docs/criu-verification.md.
 type execCriuEngine struct {
 	bin string
 }
@@ -264,14 +251,12 @@ func (e *execCriuEngine) Restore(ctx context.Context, imagesDir string, initial 
 		return nil, err
 	}
 
-	// --restore-detached: criu exits as soon as the tree is running, so criu's own
-	// lifetime is NOT the shell's — waiting on criu would report "shell exited"
-	// the instant the restore succeeded and restart the container out from under
-	// the restored session (observed on-cluster 2026-07-23).
-	// --restore-sibling: the restored root task becomes a child of criu's parent,
-	// i.e. of this agent, so the agent can signal and reap it.
-	// --pidfile: criu records the restored root task's real pid, which is what we
-	// then watch/signal instead of criu's.
+	// --restore-detached: criu exits as soon as the tree is running, so criu's
+	// own lifetime is NOT the shell's. --restore-sibling: the restored root task
+	// becomes a child of criu's parent, i.e. of this agent, so the agent can
+	// signal and reap it. --pidfile: criu records the restored root task's real
+	// pid, which is what we then watch/signal instead of criu's. The incident
+	// these three answer is docs/criu-verification.md 5차 (2026-07-23).
 	pidfile := filepath.Join(imagesDir, "restored.pid")
 	cmd := exec.CommandContext(ctx, e.bin, "restore",
 		"--images-dir", imagesDir,

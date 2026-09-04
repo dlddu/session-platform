@@ -1,8 +1,5 @@
-// The session MCP's tool surface (AC-F3). One tool, `web_fetch_get`, and the
-// gate it has to pass through: an approval request is created, a human decides,
-// and only APPROVED reaches the network. Everything else returns a tool failure
-// — never a transport error — because AC-F3 requires the agent to receive the
-// refusal as a tool result and carry on, with the session still `active`.
+// The session MCP's tool surface (AC-F3): one tool, `web_fetch_get`, and the
+// approval gate it has to pass through.
 //
 // The tool's name, arguments and response shape are the reference
 // implementation's (dlddu/pure-agent, mcp-server/src/tools/web-fetch-get.ts),
@@ -27,10 +24,8 @@ const (
 	// webFetchGetTool is the one external tool an approval-gated session has.
 	// Adding a second one means adding a second gated handler, never a bypass.
 	webFetchGetTool = "web_fetch_get"
-	// maxFetchedBodyBytes bounds what a fetch may hand back inline. AC-F5's
-	// shared volume is where a large result is supposed to go instead; until it
-	// lands, the body is truncated rather than streamed through the tool
-	// response.
+	// maxFetchedBodyBytes bounds what a fetch may hand back inline, standing in
+	// for AC-F5's shared volume until it lands (docs/doc-tracker.md).
 	maxFetchedBodyBytes = 100_000
 	// fetchTimeout bounds the approved call itself. The wait before it is
 	// bounded separately by the gateway's own timeout.
@@ -43,19 +38,13 @@ const (
 	requestIDBytes  = 4
 )
 
-// sessionMCPConfig is what the MCP container was started with. A nil gateway
-// means the container has no approval gate, which is reported as an empty tool
-// list rather than as an ungated tool.
+// sessionMCPConfig is what the MCP container was started with.
 type sessionMCPConfig struct {
 	gateway *approvalGateway
-	// fetch performs the approved outbound call. Injected so a test can observe
-	// whether the network was reached at all, which is the single most important
-	// assertion about a gate.
+	// fetch performs the approved outbound call.
 	fetch func(ctx context.Context, target string) (*http.Response, error)
 	// notices carries the wait and its decision to whoever is tailing, which in
-	// a real session is the workload pod's agent putting them into AC-E3's
-	// output byte stream. It is advisory: publishing to a nil feed is a no-op,
-	// because a gate that cannot announce a wait must still gate the call.
+	// a real session is the workload pod's agent (session_mcp_notice_tail.go).
 	notices *noticeFeed
 }
 
@@ -66,10 +55,8 @@ func newSessionMCPConfig(gateway *approvalGateway) sessionMCPConfig {
 // gated reports whether this container can offer external tools at all.
 func (c sessionMCPConfig) gated() bool { return c.gateway != nil }
 
-// toolDefinitions is what tools/list answers. It is empty without a gate: a
-// misconfigured MCP container must look like one with nothing to offer, because
-// the alternative — a tool whose gate silently does not run — is the failure
-// this whole type exists to prevent.
+// toolDefinitions is what tools/list answers. It is empty without a gate, for
+// the reason this file's header gives.
 func (c sessionMCPConfig) toolDefinitions() []any {
 	if !c.gated() {
 		return []any{}
@@ -93,10 +80,9 @@ func (c sessionMCPConfig) toolDefinitions() []any {
 }
 
 // callTool runs one tools/call. The returned value is normally an MCP tool
-// result — success or `isError` — so that a refusal reaches the model as
-// something it can respond to and the invocation continues. The JSON-RPC error
-// return is reserved for faults that are not tool outcomes at all: a call this
-// server cannot parse, and a failure inside the server itself.
+// result (mcpToolText/mcpToolError). The JSON-RPC error return is reserved for
+// faults that are not tool outcomes at all: a call this server cannot parse,
+// and a failure inside the server itself.
 func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, params json.RawMessage) (any, *jsonRPCError) {
 	var call struct {
 		Name      string          `json:"name"`
@@ -145,9 +131,8 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 	c.notices.publish(approvalNotice{Kind: noticeAwaiting, Tool: webFetchGetTool, ExternalID: externalID})
 	outcome, err := c.gateway.await(ctx, requestID, string(approvalContext))
 	if err != nil {
-		// The gateway could not be asked. That is not a refusal, but the agent
-		// still has to hear about it as a tool failure rather than as a dead
-		// connection, or the invocation ends instead of continuing (AC-F3).
+		// The gateway could not be asked — see approvalGateway.do for why that is
+		// not a refusal. It still reaches the agent as a tool failure (AC-F3).
 		logger.Error("approval could not be obtained", "tool", webFetchGetTool, "err", err)
 		c.notices.publish(approvalNotice{Kind: noticeUnavailable, Tool: webFetchGetTool, ExternalID: externalID})
 		return mcpToolError("approval could not be obtained: " + err.Error()), nil

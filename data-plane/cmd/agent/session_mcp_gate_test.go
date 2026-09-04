@@ -60,8 +60,7 @@ func (g *gatedMCP) call(t *testing.T, rawURL string) map[string]any {
 	return decoded
 }
 
-// toolResult unwraps a successful JSON-RPC response into the MCP tool result,
-// which is where a refusal lives: `isError` on a 200, not a transport failure.
+// toolResult unwraps a successful JSON-RPC response into the MCP tool result.
 func toolResult(t *testing.T, body map[string]any) (result map[string]any, isError bool, text string) {
 	t.Helper()
 	if body["error"] != nil {
@@ -139,8 +138,7 @@ func TestSessionMCPFetchesOnlyAfterApproval(t *testing.T) {
 }
 
 // Scenario 4: every refusal path reaches the model as a tool failure and leaves
-// the network untouched. A JSON-RPC error here would end the invocation instead
-// of letting the agent decide what to do next.
+// the network untouched.
 func TestSessionMCPRefusalsNeverReachTheNetwork(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -200,8 +198,7 @@ func TestSessionMCPTimeoutIsARefusal(t *testing.T) {
 }
 
 // A gateway outage is not a decision, but the agent still has to hear it as a
-// tool failure so the invocation continues (AC-F3: a tool failure does not kill
-// the session or the queue).
+// tool failure (AC-F3).
 func TestSessionMCPGatewayOutageIsAToolFailure(t *testing.T) {
 	g := newGatedMCP(t, "PENDING")
 	g.gateway.createStatus = http.StatusServiceUnavailable
