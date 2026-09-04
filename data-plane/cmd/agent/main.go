@@ -178,8 +178,23 @@ func main() {
 		// AC-F4's helper pod container. It runs no session workload — it is the
 		// tool surface the workload pod calls into — so it gets its own handler
 		// rather than the workload agent's routes.
-		handler = sessionMCPRoutes(logger)
-		logger.Info("session MCP started", "addr", addr)
+		//
+		// A container without the gateway triple starts and serves, but with no
+		// tools (AC-F3): the external tools exist only behind the gate, so a
+		// missing Secret costs the session its outward reach rather than its
+		// approval requirement.
+		gateway, err := newApprovalGateway(
+			os.Getenv(approvalGatewayURLEnv),
+			os.Getenv(approvalGatewayAPIKeyEnv),
+			os.Getenv(approvalGatewayUserIDEnv),
+			os.Getenv(sessionIDEnv),
+		)
+		if err != nil {
+			logger.Warn("session MCP has no approval gate; it will offer no tools", "err", err)
+			gateway = nil
+		}
+		handler = sessionMCPRoutes(logger, newSessionMCPConfig(gateway))
+		logger.Info("session MCP started", "addr", addr, "gated", gateway != nil)
 	case workloadCredentialProxy:
 		placement, err := credentialProxyPlacementFromEnv()
 		if err != nil {

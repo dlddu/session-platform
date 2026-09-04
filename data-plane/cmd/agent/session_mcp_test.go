@@ -27,7 +27,12 @@ func postMCP(t *testing.T, srv *httptest.Server, body string) (int, map[string]a
 
 func newSessionMCPServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(sessionMCPRoutes(testLogger()))
+	return newSessionMCPServerWith(t, sessionMCPConfig{})
+}
+
+func newSessionMCPServerWith(t *testing.T, config sessionMCPConfig) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(sessionMCPRoutes(testLogger(), config))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -73,11 +78,10 @@ func TestSessionMCPCompletesTheHandshake(t *testing.T) {
 	}
 }
 
-// AC-F3 is not implemented, and this asserts that honestly rather than hiding
-// it: an approval-gated agent that registers this server finds no tool at all,
-// which is the safe end of the missing gate. When AC-F3 lands, this expectation
-// is meant to change.
-func TestSessionMCPOffersNoToolsUntilTheApprovalGateExists(t *testing.T) {
+// A container that was never given the gateway triple has no gate, and a tool
+// whose gate does not run is the one failure this type exists to prevent. So it
+// offers nothing at all — the safe end of a misconfiguration.
+func TestSessionMCPOffersNoToolsWithoutAnApprovalGate(t *testing.T) {
 	srv := newSessionMCPServer(t)
 	status, body := postMCP(t, srv, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	if status != http.StatusOK {
@@ -105,7 +109,9 @@ func TestSessionMCPRejectsMalformedAndUnknownCalls(t *testing.T) {
 	}{
 		{"not json", `{`, jsonRPCParseError},
 		{"not jsonrpc 2.0", `{"jsonrpc":"1.0","id":1,"method":"initialize"}`, jsonRPCInvalidRequest},
-		{"unknown method", `{"jsonrpc":"2.0","id":1,"method":"tools/call"}`, jsonRPCMethodNotFound},
+		// resources/read was never in this server's capabilities: everything it
+		// offers has to pass the tool-call boundary the gate sits on (AC-F3).
+		{"unknown method", `{"jsonrpc":"2.0","id":1,"method":"resources/read"}`, jsonRPCMethodNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			status, body := postMCP(t, srv, tc.body)
