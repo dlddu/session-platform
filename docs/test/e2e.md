@@ -302,7 +302,7 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 | AC-D4 | `control-plane/test/e2e_d4_process_tree_test.go` | go | 동결 전 `export`/`cd`가 복원 후 그대로(`$D4MARK`, `pwd`) — B3의 인메모리 구체 마커 |
 | AC-D5 | `control-plane/test/e2e_d5_idle_definition_test.go` | go | read만 해도 `lastAccess` 갱신 / 쉘 자체 출력만으로는 미갱신(GET은 접근으로 세지 않음) |
 | AC-E1 | `control-plane/test/e2e_e1_workload_type_test.go` | go | `workloadType=claude-code` 세션이 SUT에서 서고 그 pod에서 Claude CLI가 실제로 실행됨 / 필드 생략은 shell / 잘못된 값은 pod 생성 전 400 / 타입·모델은 생성 후 불변 |
-| AC-E2 | `control-plane/test/e2e_e2_prompt_invocation_test.go` | go | write = 프롬프트 1회 실행 — 배포 SUT에서 실 `claude` 프로세스가 기동되고 응답이 세션 출력에 투영됨 / write는 실행 완료를 기다리지 않음 / 프로세스 테이블에서 본 exact argv·원샷 수명·직렬 큐(동시 실행 없음)·첫 성공 뒤에만 `--continue` / 1 MiB 초과 프롬프트는 public API 413이고 실행되지 않음 |
+| AC-E2 | `control-plane/test/e2e_e2_prompt_invocation_test.go` | go | write = 프롬프트 1회 실행 — 배포 SUT에서 실 `claude` 프로세스가 기동되고 응답이 세션 출력에 투영됨 / burst의 모든 프롬프트가 큐에 수락돼 각각 1회씩 실행됨 / 프로세스 테이블에서 본 exact argv·원샷 수명·직렬 큐(동시 실행 없음)·첫 성공 뒤에만 `--continue` / 1 MiB 초과 프롬프트는 public API 413이고 실행되지 않음 (비블로킹 반환 자체는 SUT에서 관측 불가 — invocation이 write 왕복보다 느리지 않다. `data-plane/cmd/agent/claude_test.go`의 `TestClaudeWriteIsNonBlockingAndSerial`이 fake runner로 소유) |
 <!-- ac-mapping:end -->
 
 ## AC 예외 목록
