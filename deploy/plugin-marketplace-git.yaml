@@ -1,0 +1,273 @@
+# kind e2e ONLY: an in-cluster git remote that serves a `dlddu-plugins`
+# marketplace over the **smart HTTP** protocol.
+#
+# 이것은 모킹이 **아니다** — deploy/minio.yaml 과 같은 자리에 있다. `claude plugin
+# marketplace add <url>` 은 호스트를 가리지 않고 그냥 git 원격을 클론하므로, 원격을
+# 클러스터 안에 실물로 세우면 프로덕션과 **같은 코드 경로**가 그대로 돈다. 모델 정의의
+# EXT 배제 조항("kind에 실물로 배포 가능하면 EXT를 쓸 수 없다", MinIO 선례)이 바로 이
+# 경우를 가리키므로, 이 파일에는 예외 마커가 없고 등재도 하지 않는다(마커를 달면 R6가
+# 미등록 CODE로 막는다). 회계 표에는 test-only 스텁이 아님을 밝히는 비-seam 행으로만
+# 올라간다.
+#
+# 담기는 것은 픽스처 데이터다(정의: "시드·fixture로 만들 수 있는 데이터"는 모킹이 아니라
+# 실환경 준비다). 마켓플레이스 문서의 모양은 손으로 짓지 않고 실제
+# `dlddu/plugin-marketplace` 의 `.claude-plugin/marketplace.json` 에서 가져왔다 —
+# `session-platform` 플러그인의 source/skills/mcpServers 구성이 그대로다.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: plugin-marketplace-fixture
+  labels:
+    app: plugin-marketplace-git
+data:
+  marketplace.json: |
+    {
+      "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+      "name": "dlddu-plugins",
+      "owner": {
+        "name": "dlddu"
+      },
+      "plugins": [
+        {
+          "name": "session-platform",
+          "description": "세션 플랫폼 번들 (kind e2e 픽스처).",
+          "source": "./",
+          "author": {
+            "name": "dlddu"
+          },
+          "strict": false,
+          "skills": [
+            "./skillset/aws-sso-sandbox-setup",
+            "./skillset/k8s-kubeconfig-setup",
+            "./skillset/git-repo-cloner",
+            "./skillset/opensearch-work-journal"
+          ],
+          "mcpServers": [
+            "./mcp/k3s.json"
+          ]
+        }
+      ]
+    }
+  mcp-k3s.json: |
+    {
+      "mcpServers": {
+        "k3s": {
+          "type": "http",
+          "url": "http://k3s-mcp-fake:8080/mcp",
+          "headers": {
+            "Authorization": "Bearer ${K3S_MCP_TOKEN}"
+          }
+        }
+      }
+    }
+  seed.sh: |
+    #!/bin/sh
+    # Build the marketplace working tree from this ConfigMap, commit it, and
+    # publish a bare clone for git-http-backend to serve.
+    set -eu
+
+    SRC=/fixture
+    WORK=/tmp/plugin-marketplace
+    OUT=/srv/plugin-marketplace.git
+
+    rm -rf "$WORK" "$OUT"
+    mkdir -p "$WORK/.claude-plugin" "$WORK/mcp" "$WORK/skillset"
+    cp "$SRC/marketplace.json" "$WORK/.claude-plugin/marketplace.json"
+    cp "$SRC/mcp-k3s.json" "$WORK/mcp/k3s.json"
+
+    # One SKILL.md per skill the fixture plugin declares. The frontmatter `name`
+    # must match the directory name, same as the real marketplace.
+    for skill in aws-sso-sandbox-setup k8s-kubeconfig-setup git-repo-cloner opensearch-work-journal; do
+      mkdir -p "$WORK/skillset/$skill"
+      {
+        printf -- '---\n'
+        printf 'name: %s\n' "$skill"
+        printf 'description: "kind e2e fixture skill %s."\n' "$skill"
+        printf -- '---\n\n'
+        printf '# %s\n\nkind e2e fixture.\n' "$skill"
+      } >"$WORK/skillset/$skill/SKILL.md"
+    done
+
+    printf '# dlddu-plugins (kind e2e fixture)\n' >"$WORK/README.md"
+
+    git -C "$WORK" init -q -b main
+    git -C "$WORK" config user.name 'session-platform e2e'
+    git -C "$WORK" config user.email 'e2e@session-platform.invalid'
+    git -C "$WORK" add -A
+    git -C "$WORK" -c commit.gpgsign=false commit -q -m 'kind e2e marketplace fixture'
+
+    git clone -q --bare "$WORK" "$OUT"
+    git -C "$OUT" update-server-info
+    # Serve read-only: the platform only ever clones this remote.
+    git -C "$OUT" config http.receivepack false
+    git -C "$OUT" config http.uploadpack true
+    echo "seeded $OUT"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: plugin-marketplace-git-server
+  labels:
+    app: plugin-marketplace-git
+data:
+  server.js: |
+    // Minimal CGI host for `git http-backend` — the smart HTTP protocol, so a
+    // shallow clone (`--depth`) works exactly as it does against github.com.
+    const http = require("http");
+    const { spawn, execFileSync } = require("child_process");
+    const path = require("path");
+
+    const PORT = Number(process.env.PORT || 8080);
+    const ROOT = process.env.GIT_PROJECT_ROOT || "/srv";
+    const BACKEND = path.join(
+      execFileSync("git", ["--exec-path"], { encoding: "utf8" }).trim(),
+      "git-http-backend"
+    );
+
+    // CGI output is a header block terminated by a blank line, then the body.
+    function splitHead(buf) {
+      const rn = buf.indexOf("\r\n\r\n");
+      if (rn !== -1) return [buf.slice(0, rn).toString("utf8"), buf.slice(rn + 4), true];
+      const n = buf.indexOf("\n\n");
+      if (n !== -1) return [buf.slice(0, n).toString("utf8"), buf.slice(n + 2), true];
+      return ["", buf, false];
+    }
+
+    const server = http.createServer((req, res) => {
+      const u = new URL(req.url || "/", "http://localhost");
+      if (req.method === "GET" && u.pathname === "/healthz") {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        return res.end("ok\n");
+      }
+      const env = {
+        PATH: process.env.PATH,
+        GIT_PROJECT_ROOT: ROOT,
+        GIT_HTTP_EXPORT_ALL: "1",
+        REQUEST_METHOD: req.method,
+        PATH_INFO: decodeURIComponent(u.pathname),
+        QUERY_STRING: u.search.replace(/^\?/, ""),
+        CONTENT_TYPE: req.headers["content-type"] || "",
+        CONTENT_LENGTH: req.headers["content-length"] || "",
+        HTTP_CONTENT_ENCODING: req.headers["content-encoding"] || "",
+        REMOTE_ADDR: req.socket.remoteAddress || "",
+        SERVER_PROTOCOL: "HTTP/1.1",
+      };
+      const cgi = spawn(BACKEND, [], { env });
+      req.pipe(cgi.stdin);
+      cgi.stdin.on("error", () => {});
+
+      let buf = Buffer.alloc(0);
+      let headersSent = false;
+      cgi.stdout.on("data", (chunk) => {
+        if (headersSent) return void res.write(chunk);
+        buf = Buffer.concat([buf, chunk]);
+        const [head, rest, done] = splitHead(buf);
+        if (!done) return;
+        headersSent = true;
+        let status = 200;
+        const headers = {};
+        for (const line of head.split(/\r?\n/)) {
+          const i = line.indexOf(":");
+          if (i === -1) continue;
+          const key = line.slice(0, i).trim();
+          const value = line.slice(i + 1).trim();
+          if (key.toLowerCase() === "status") status = parseInt(value, 10) || 200;
+          else headers[key] = value;
+        }
+        res.writeHead(status, headers);
+        if (rest.length) res.write(rest);
+      });
+      cgi.stderr.on("data", (chunk) => console.error("git-http-backend: " + chunk));
+      cgi.on("close", () => {
+        if (!headersSent) res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end();
+      });
+      cgi.on("error", (err) => {
+        console.error("spawn git-http-backend: " + err);
+        if (!headersSent) {
+          headersSent = true;
+          res.writeHead(500, { "Content-Type": "text/plain" });
+        }
+        res.end();
+      });
+    });
+
+    server.listen(PORT, "0.0.0.0", () => {
+      console.log("plugin-marketplace-git listening on " + PORT + " (root " + ROOT + ")");
+    });
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: plugin-marketplace-git
+  labels:
+    app: plugin-marketplace-git
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: plugin-marketplace-git
+  template:
+    metadata:
+      labels:
+        app: plugin-marketplace-git
+    spec:
+      # The data-plane image carries both git (with git-http-backend) and the
+      # Node 22 runtime, and kind already has it loaded — no extra build, no pull.
+      initContainers:
+        - name: seed
+          image: session-platform/data-plane:dev
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "/fixture/seed.sh"]
+          volumeMounts:
+            - name: fixture
+              mountPath: /fixture
+            - name: repos
+              mountPath: /srv
+      containers:
+        - name: git-http
+          image: session-platform/data-plane:dev
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/opt/git-http/server.js"]
+          env:
+            - name: PORT
+              value: "8080"
+            - name: GIT_PROJECT_ROOT
+              value: /srv
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 1
+            periodSeconds: 2
+          volumeMounts:
+            - name: server
+              mountPath: /opt/git-http
+            - name: repos
+              mountPath: /srv
+      volumes:
+        - name: fixture
+          configMap:
+            name: plugin-marketplace-fixture
+        - name: server
+          configMap:
+            name: plugin-marketplace-git-server
+        - name: repos
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: plugin-marketplace-git
+  labels:
+    app: plugin-marketplace-git
+spec:
+  selector:
+    app: plugin-marketplace-git
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

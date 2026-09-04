@@ -8,6 +8,11 @@ if [ "$workload" = "claude-code" ]; then
   : "${K3S_MCP_TOKEN:?K3S_MCP_TOKEN is required for Claude plugin bootstrap}"
 
   k3s_mcp_url="${K3S_MCP_URL:-https://homelab-k3s-mcp.llkm.nl/mcp}"
+  # The marketplace is a plain git remote, so the platform can point this at any
+  # host that serves the same repository shape — production keeps github.com and
+  # the kind e2e SUT points it at an in-cluster remote (deploy/). Both run the
+  # identical `claude plugin marketplace add` code path.
+  marketplace_url="${CLAUDE_CODE_PLUGIN_MARKETPLACE_URL:-https://github.com/dlddu/plugin-marketplace.git}"
   plugin_cache_dir="${CLAUDE_CODE_PLUGIN_CACHE_DIR:-/tmp/session-platform-claude-plugin-seed}"
   bootstrap_home="${CLAUDE_CODE_PLUGIN_BOOTSTRAP_HOME:-/tmp/session-platform-claude-plugin-home}"
 
@@ -50,17 +55,20 @@ if [ "$workload" = "claude-code" ]; then
   echo "Bootstrapping Claude plugin marketplace" >&2
   # Claude Code clears GIT_ASKPASS before it spawns Git. A process-scoped Git
   # config survives that sanitization without persisting the short-lived token.
+  # The extraheader is scoped to the marketplace URL itself, so pointing the URL
+  # elsewhere moves the scope with it and never widens it.
+  marketplace_auth_key="http.${marketplace_url}.extraheader"
   HOME="$bootstrap_home" \
   CLAUDE_CODE_PLUGIN_CACHE_DIR="$plugin_cache_dir" \
   GIT_CONFIG_COUNT=1 \
-  GIT_CONFIG_KEY_0='http.https://github.com/dlddu/plugin-marketplace.git.extraheader' \
+  GIT_CONFIG_KEY_0="$marketplace_auth_key" \
   GIT_CONFIG_VALUE_0="Authorization: ${github_auth_header}" \
   GIT_TERMINAL_PROMPT=0 \
-    claude plugin marketplace add https://github.com/dlddu/plugin-marketplace.git
+    claude plugin marketplace add "$marketplace_url"
   HOME="$bootstrap_home" \
   CLAUDE_CODE_PLUGIN_CACHE_DIR="$plugin_cache_dir" \
   GIT_CONFIG_COUNT=1 \
-  GIT_CONFIG_KEY_0='http.https://github.com/dlddu/plugin-marketplace.git.extraheader' \
+  GIT_CONFIG_KEY_0="$marketplace_auth_key" \
   GIT_CONFIG_VALUE_0="Authorization: ${github_auth_header}" \
   GIT_TERMINAL_PROMPT=0 \
     claude plugin install session-platform@dlddu-plugins

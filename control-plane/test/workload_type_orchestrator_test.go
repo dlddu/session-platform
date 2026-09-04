@@ -241,7 +241,15 @@ func TestClientOrchestrator_ClaudeProviderCredentialsAreIsolatedAndK3sTokenIsSec
 		isRequiredK3SToken := env.Name == k8s.K3SMCPTokenEnvVar &&
 			ref.Name == "provider-credentials" && ref.Key == k8s.ClaudeCodeK3SMCPTokenSecretKey &&
 			(ref.Optional == nil || !*ref.Optional)
-		if !isOptionalModel && !isRequiredK3SToken {
+		// Bootstrap *addresses*, not credentials: optional so a Secret without
+		// them leaves the entrypoint's production defaults in place.
+		isOptionalK3SURL := env.Name == k8s.K3SMCPURLEnvVar &&
+			ref.Name == "provider-credentials" && ref.Key == k8s.ClaudeCodeK3SMCPURLSecretKey &&
+			ref.Optional != nil && *ref.Optional
+		isOptionalMarketplaceURL := env.Name == k8s.ClaudeCodePluginMarketplaceURLEnvVar &&
+			ref.Name == "provider-credentials" && ref.Key == k8s.ClaudeCodePluginMarketplaceURLSecretKey &&
+			ref.Optional != nil && *ref.Optional
+		if !isOptionalModel && !isRequiredK3SToken && !isOptionalK3SURL && !isOptionalMarketplaceURL {
 			t.Fatalf("main container has unexpected Secret env %s: %+v", env.Name, env)
 		}
 	}

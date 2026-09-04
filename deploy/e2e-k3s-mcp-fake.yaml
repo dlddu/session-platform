@@ -1,0 +1,163 @@
+# kind e2e ONLY: a stand-in for the organisation's K3s MCP service.
+#
+# mock-exception: PLUGIN-CRED — 실 K3s MCP는 GitHub App 개인키를 쥔 조직 서비스라
+# 클러스터 안에 기능하는 실물을 세울 수 없다(복제해도 자격이 없어 설치 토큰을 만들지
+# 못한다). 등재: docs/test/e2e.md 「e2e 충실도 허용목록」의 `PLUGIN-CRED`(EXT).
+#
+# 이것은 MinIO와 다르다. MinIO는 S3의 *실물 구현*이라 프로덕션과 같은 코드 경로가 그대로
+# 돌아 test-only 스텁이 아니지만, 여기 있는 것은 자격 발급 자체를 흉내 내는 치환이다 —
+# 그래서 승인된 모킹 예외로 등재하고, 등재 행의 '잔여' 칸에 "프로덕션의 실제 자격 발급
+# 왕복은 미검증"을 명시한다.
+#
+# 응답 모양은 손으로 지은 것이 아니라 소스에서 가져왔다:
+# data-plane/entrypoint.sh 의 jq 표현식이 읽는 경로(.result.content[] | select(.type ==
+# "resource") | .resource.text 의 GITHUB_TOKEN= 줄)와, 그 계약을 이미 고정해 둔 단위 테스트
+# data-plane/cmd/agent/entrypoint_test.go 의 가짜 curl 응답이 정본이다.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k3s-mcp-fake
+  labels:
+    app: k3s-mcp-fake
+data:
+  server.js: |
+    // JSON-RPC 2.0 over HTTP: the one tool data-plane/entrypoint.sh calls.
+    const http = require("http");
+
+    const PORT = Number(process.env.PORT || 8080);
+    const EXPECTED_BEARER = process.env.EXPECTED_BEARER || "";
+    const ISSUED_TOKEN = process.env.ISSUED_GITHUB_TOKEN || "e2e-fake-installation-token";
+
+    function send(res, status, payload) {
+      const body = JSON.stringify(payload);
+      res.writeHead(status, {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(body),
+      });
+      res.end(body);
+    }
+
+    const server = http.createServer((req, res) => {
+      const path = (req.url || "").split("?")[0];
+      if (req.method === "GET" && path === "/healthz") {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        return res.end("ok\n");
+      }
+      if (req.method !== "POST" || path !== "/mcp") {
+        return send(res, 404, { error: "not found" });
+      }
+      // The entrypoint sends the platform Secret's k3s-mcp-token as a bearer.
+      // Rejecting anything else keeps the substitute honest about the auth step
+      // it stands in for, instead of accepting every caller.
+      if (EXPECTED_BEARER && req.headers.authorization !== "Bearer " + EXPECTED_BEARER) {
+        return send(res, 401, {
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32001, message: "unauthorized" },
+        });
+      }
+      const chunks = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => {
+        let msg;
+        try {
+          msg = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        } catch (e) {
+          return send(res, 400, { jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } });
+        }
+        const id = msg && msg.id !== undefined ? msg.id : null;
+        const tool = msg && msg.params ? msg.params.name : undefined;
+        if (msg.method !== "tools/call" || tool !== "github_app_installation_token") {
+          return send(res, 200, {
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32601, message: "unsupported method or tool" },
+          });
+        }
+        const text =
+          "# Expires at: 2099-01-01T00:00:00Z\n" +
+          "# Repository selection: selected\n" +
+          "# Permissions: contents=read\n" +
+          "GITHUB_TOKEN=" + ISSUED_TOKEN + "\n";
+        send(res, 200, {
+          jsonrpc: "2.0",
+          id,
+          result: {
+            isError: false,
+            content: [
+              {
+                type: "resource",
+                resource: { uri: "file:///github-token.env", mimeType: "text/plain", text },
+              },
+            ],
+          },
+        });
+      });
+    });
+
+    server.listen(PORT, "0.0.0.0", () => {
+      console.log("k3s-mcp-fake listening on " + PORT);
+    });
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k3s-mcp-fake
+  labels:
+    app: k3s-mcp-fake
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: k3s-mcp-fake
+  template:
+    metadata:
+      labels:
+        app: k3s-mcp-fake
+    spec:
+      containers:
+        # The data-plane image already carries the Node 22 runtime (it ships the
+        # Claude CLI), and scripts/e2e/up.sh has already loaded it into kind — so
+        # this substitute needs no extra image build and no registry pull.
+        - name: server
+          image: session-platform/data-plane:dev
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/opt/k3s-mcp-fake/server.js"]
+          env:
+            - name: PORT
+              value: "8080"
+            - name: EXPECTED_BEARER
+              valueFrom:
+                secretKeyRef:
+                  name: claude-code-credentials
+                  key: k3s-mcp-token
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 1
+            periodSeconds: 2
+          volumeMounts:
+            - name: script
+              mountPath: /opt/k3s-mcp-fake
+      volumes:
+        - name: script
+          configMap:
+            name: k3s-mcp-fake
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: k3s-mcp-fake
+  labels:
+    app: k3s-mcp-fake
+spec:
+  selector:
+    app: k3s-mcp-fake
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
