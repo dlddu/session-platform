@@ -5,7 +5,6 @@ import (
 	"io"
 )
 
-// CreateRequest is the input to Manager.Create.
 type CreateRequest struct {
 	Name string
 	// WorkloadType selects the data plane workload (AC-E1). Empty means
@@ -39,8 +38,7 @@ type WriteResult struct {
 }
 
 // Manager is the primary port the API depends on. It owns session lifecycle
-// and orchestration, delegating to the adapter ports. This is the
-// "SessionManager" of the design docs.
+// and orchestration, delegating to the adapter ports.
 //
 // AC mapping:
 //   - Create    → AC-A1, AC-A2 (provision one dedicated pod, go active),

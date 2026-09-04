@@ -11,15 +11,9 @@ import (
 	"time"
 )
 
-// State is the lifecycle state of a session.
-//
-// The state machine (see docs/prd/lifecycle.md, docs/prd/state-api.md):
-//
-//	active  ──idle 60m──▶ idle ──idle 60m total──▶ snapshot
-//	  ▲                     │                          │
-//	  └──────── access ◀────┴──── access (restore) ◀───┘
-//
-// Transitions between these states MUST be atomic (AC-C1).
+// State is the lifecycle state of a session. The state machine and its
+// atomicity requirement are specified in docs/prd/lifecycle.md (AC-B1/AC-B2)
+// and docs/prd/state-api.md (AC-C1).
 type State string
 
 const (
@@ -46,12 +40,9 @@ func (s State) Valid() bool {
 
 // WorkloadType selects which data plane workload a session runs (AC-E1). It is
 // chosen at creation and immutable for the session's lifetime — changing it
-// means creating a new session. The control plane provisions a different data
-// plane workload per type; AC-A1 (the control plane never runs the workload
-// itself) and AC-A2 hold for every type. AC-A2 binds one dedicated *workload*
-// pod to each session and additionally allows session-scoped auxiliary pods
-// that provide side functions without running the workload themselves — see
-// Session.AuxiliaryPods and Session.Pods.
+// means creating a new session. AC-A1 and AC-A2 (docs/prd/architecture.md) hold
+// for every type; the pod set they govern is Session.Pod plus
+// Session.AuxiliaryPods.
 type WorkloadType string
 
 const (
@@ -62,19 +53,12 @@ const (
 	// (docs/prd/claude-code-workload.md, AC-E2~E6).
 	WorkloadTypeClaudeCode WorkloadType = "claude-code"
 	// WorkloadTypeApprovalGated — the approval-gated agent workload
-	// (docs/prd/approval-gated-workload.md, AC-F1~F6). It runs the same one-shot
-	// prompt execution model as claude-code (AC-F1 reuses AC-E2~E6 verbatim),
-	// but everything that reaches outside the pod goes through a session-scoped
-	// helper pod: the provider proxy moves out of the workload pod so a pod-level
-	// egress policy can leave no external destination on the workload pod's
-	// allowlist (AC-F2/F4/F6).
+	// (docs/prd/approval-gated-workload.md, AC-F1~F6).
 	WorkloadTypeApprovalGated WorkloadType = "approval-gated"
 
 	// PlatformDefaultModel is the stable session-level alias for the model
 	// selected by the platform's optional Secret configuration (falling back to
-	// the Claude Code installation default). Keeping the alias in session
-	// metadata makes the choice explicit and immutable without hard-coding a
-	// vendor model version into the API contract (AC-E6).
+	// the Claude Code installation default). (AC-E6)
 	PlatformDefaultModel = "platform-default"
 
 	// MaxClaudePromptBytes is the decoded UTF-8 prompt limit.
@@ -197,10 +181,9 @@ type SnapshotTransaction struct {
 // reclaimed and Checkpoint is populated instead.
 type Session struct {
 	ID string `json:"id"`
-	// WorkloadType is fixed at creation and never mutated afterwards (AC-E1);
-	// no API changes it and snapshot/restore carry it across. Sessions stored
-	// before the type axis existed decode as "" — read it through
-	// NormalizeWorkloadType, which resolves that to the shell default.
+	// WorkloadType is fixed at creation (AC-E1); no API changes it and
+	// snapshot/restore carry it across. Read stored values through
+	// NormalizeWorkloadType.
 	WorkloadType WorkloadType `json:"workloadType,omitempty"`
 	// Model is meaningful only for the agent workload types (claude-code and
 	// approval-gated) and, like the workload type, is fixed at creation.
