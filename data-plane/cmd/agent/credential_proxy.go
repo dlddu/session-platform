@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"log/slog"
@@ -246,20 +247,68 @@ func parseCredentialProxyUpstream(raw string) (*url.URL, error) {
 	return upstream, nil
 }
 
-func validateCredentialProxyBindAddr(addr string) error {
+func validateCredentialProxyBindAddr(addr string, placement credentialProxyPlacement) error {
 	host, portText, err := net.SplitHostPort(addr)
 	if err != nil {
-		return errors.New("credential proxy address must include a loopback host and port")
-	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return errors.New("credential proxy must bind to a loopback IP")
+		return errors.New("credential proxy address must include a host and port")
 	}
 	port, err := strconv.Atoi(portText)
 	if err != nil || port < 1 || port > 65535 {
 		return errors.New("credential proxy port is invalid")
 	}
+	ip := net.ParseIP(host)
+	switch placement {
+	case proxyPlacementSidecar:
+		if ip == nil || !ip.IsLoopback() {
+			return errors.New("sidecar credential proxy must bind to a loopback IP")
+		}
+	case proxyPlacementHelper:
+		// The helper placement's only client is the *workload* pod, one network
+		// hop away (AC-F6), so this proxy binds the pod network instead. A
+		// loopback bind here is not a safety win but an outage: nothing outside
+		// the helper pod could reach it. What keeps the wider bind safe is
+		// AC-F2's ingress policy, which the control plane creates alongside the
+		// helper pod and which admits only that session's workload pod.
+		if host == "" {
+			return nil // ":8091" — the unspecified address, every pod interface
+		}
+		if ip == nil {
+			return errors.New("helper credential proxy must bind to an IP")
+		}
+		if ip.IsLoopback() {
+			return errors.New("helper credential proxy must not bind to loopback; its client is a pod away")
+		}
+	default:
+		return fmt.Errorf("unknown credential proxy placement %q", placement)
+	}
 	return nil
+}
+
+// credentialProxyPlacement is where this proxy container runs. The behaviour
+// contract is one (AC-E6) and only the placement differs (AC-F6): claude-code
+// keeps it a loopback sidecar inside the workload pod, approval-gated moves it
+// into the session helper pod where it must be reachable across the pod
+// network. The distinction exists so that opening the bind for the helper can
+// never silently open it for a sidecar as well.
+type credentialProxyPlacement string
+
+const (
+	proxyPlacementSidecar credentialProxyPlacement = "sidecar"
+	proxyPlacementHelper  credentialProxyPlacement = "helper"
+)
+
+// credentialProxyPlacementFromEnv reads the placement the control plane
+// declared. It fails closed: an unset value is the restrictive sidecar
+// placement, and an unrecognised one is an error rather than a default.
+func credentialProxyPlacementFromEnv() (credentialProxyPlacement, error) {
+	switch value := os.Getenv(proxyPlacementEnv); value {
+	case "", string(proxyPlacementSidecar):
+		return proxyPlacementSidecar, nil
+	case string(proxyPlacementHelper):
+		return proxyPlacementHelper, nil
+	default:
+		return "", fmt.Errorf("unknown credential proxy placement %q", value)
+	}
 }
 
 func validateClaudeProxyClientEnv() error {
@@ -271,6 +320,66 @@ func validateClaudeProxyClientEnv() error {
 	}
 	if os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != "" {
 		return errors.New("claude-code container must not receive direct credentials")
+	}
+	return nil
+}
+
+// validateApprovalGatedClientEnv is the approval-gated counterpart. The
+// workload pod holds no external credential at all (AC-F6): its provider
+// endpoint is its own session helper pod's proxy rather than loopback, its
+// token is the same non-secret placeholder, and neither the K3s MCP token nor
+// any provider credential is projected here. It returns the session MCP URL,
+// which is this type's only tool surface that leaves the pod.
+func validateApprovalGatedClientEnv() (string, error) {
+	if err := validateHelperEndpoint(os.Getenv("ANTHROPIC_BASE_URL"), helperProxyPort); err != nil {
+		return "", fmt.Errorf("approval-gated provider endpoint: %w", err)
+	}
+	if os.Getenv("ANTHROPIC_AUTH_TOKEN") != claudeProxyPlaceholderToken {
+		return "", errors.New("approval-gated workload must use the non-secret credential proxy placeholder")
+	}
+	if os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != "" {
+		return "", errors.New("approval-gated container must not receive direct credentials")
+	}
+	if os.Getenv("K3S_MCP_TOKEN") != "" {
+		// AC-F6 (2026-09-03 decision): this type has no runtime plugin
+		// bootstrap, so the token that bootstrap needed must not be here either.
+		return "", errors.New("approval-gated container must not receive the K3s MCP token")
+	}
+	mcpURL := os.Getenv(sessionMCPURLEnv)
+	if err := validateHelperEndpoint(mcpURL, sessionMCPPort); err != nil {
+		return "", fmt.Errorf("approval-gated session MCP endpoint: %w", err)
+	}
+	return mcpURL, nil
+}
+
+// validateHelperEndpoint checks one of the two in-cluster addresses the control
+// plane injects into an approval-gated workload pod. Both must be plain http on
+// the expected helper port and must not be loopback: a loopback value would
+// mean the proxy or MCP had been folded back into this pod, which is exactly
+// the arrangement AC-F2 moved away from.
+func validateHelperEndpoint(raw string, wantPort int) error {
+	if raw == "" {
+		return errors.New("must be set")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return errors.New("must be a URL")
+	}
+	if parsed.Scheme != "http" {
+		return errors.New("must be an in-cluster http URL")
+	}
+	host, portText, err := net.SplitHostPort(parsed.Host)
+	if err != nil {
+		return errors.New("must include a host and port")
+	}
+	if port, err := strconv.Atoi(portText); err != nil || port != wantPort {
+		return fmt.Errorf("must use port %d", wantPort)
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return errors.New("must not be loopback; the helper pod is a network hop away")
+	}
+	if host == "" {
+		return errors.New("must include a host")
 	}
 	return nil
 }

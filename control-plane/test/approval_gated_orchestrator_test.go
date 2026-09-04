@@ -372,9 +372,46 @@ func TestApprovalGated_ExistingTypesUnchanged(t *testing.T) {
 			if !ok || !strings.HasPrefix(addr, "127.0.0.1") {
 				t.Errorf("claude-code proxy bind = %q, want loopback (AC-E6 keeps the sidecar placement)", addr)
 			}
+			// The data plane refuses a bind its declared placement does not
+			// sanction, so opening the pod-network bind for the helper cannot
+			// reach this one by accident.
+			if placement, ok := envValue(proxy, k8s.CredentialProxyPlacementEnvVar); !ok || placement != "sidecar" {
+				t.Errorf("claude-code proxy placement = %q, want sidecar", placement)
+			}
 			if _, _, ok := secretKey(container(t, pods[0], k8s.ContainerName), k8s.K3SMCPTokenEnvVar); !ok {
 				t.Error("claude-code lost its K3s MCP token projection")
 			}
 		})
+	}
+}
+
+// The helper pod's two containers must be startable by the data plane as
+// configured — the type's whole failure mode until now was a pod spec whose
+// containers the agent refused. Both halves are asserted here: the proxy's
+// declared placement (which is what lets it bind the pod network at all) and a
+// readiness probe that AC-F2's ingress policy cannot lock out.
+func TestApprovalGatedHelperContainersAreStartableUnderTheirOwnBoundary(t *testing.T) {
+	_, pods := newApprovalGatedOrchestrator(t)
+
+	proxy := container(t, pods.helper, k8s.HelperCredentialProxyContainerName)
+	if placement, ok := envValue(proxy, k8s.CredentialProxyPlacementEnvVar); !ok || placement != "helper" {
+		t.Errorf("helper proxy placement = %q, want helper (AC-F6 moves it off loopback)", placement)
+	}
+	addr, ok := envValue(proxy, "DATA_PLANE_AGENT_ADDR")
+	if !ok || strings.HasPrefix(addr, "127.0.0.1") {
+		t.Errorf("helper proxy bind = %q, want the pod network — its client is a pod away", addr)
+	}
+
+	mcp := container(t, pods.helper, k8s.SessionMCPContainerName)
+	if mcp.ReadinessProbe == nil || mcp.ReadinessProbe.Exec == nil {
+		t.Fatalf("session MCP readiness probe = %+v, want an exec probe", mcp.ReadinessProbe)
+	}
+	if mcp.ReadinessProbe.HTTPGet != nil {
+		// An HTTP probe is dialled by the kubelet from the node, which is
+		// exactly the caller AC-F2's ingress policy is written to reject.
+		t.Error("session MCP uses an HTTP readiness probe, which its own ingress policy would block")
+	}
+	if got := strings.Join(mcp.ReadinessProbe.Exec.Command, " "); !strings.Contains(got, "8092") {
+		t.Errorf("session MCP probe = %q, want it to check the MCP port", got)
 	}
 }

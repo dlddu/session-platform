@@ -42,6 +42,15 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+  # approval-gated sessions only: the egress allowlist for the workload pod and
+  # the ingress restriction on its helper pod (AC-F2). No update/patch — a
+  # session's boundary is written once with its pods and never edited — and no
+  # delete either: the policies carry an owner reference to that session's
+  # helper pod, so Kubernetes garbage collection reclaims them when the pod
+  # under `pods` above is deleted.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["create", "get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
