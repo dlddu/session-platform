@@ -29,12 +29,7 @@ func newService() *service.Service {
 }
 
 // newServiceWithStore is like newService but also hands back the store, so a
-// test can seed a non-active state without waiting for the background reaper;
-// reaper timing and cutoff behavior are covered in reaper_test.go.
-// The store is the real ConfigMap adapter over a fake clientset, so
-// CompareAndSwapState behaves exactly as in production. The agent stub is
-// returned too, so state-dispatch tests can assert the I/O that rode each
-// branch (AC-D2/D3).
+// test can seed a non-active state without waiting for the background reaper.
 func newServiceWithStore() (*service.Service, *configmap.Store, *agent.StubClient) {
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
 	ag := agent.NewStubClient()
@@ -43,8 +38,7 @@ func newServiceWithStore() (*service.Service, *configmap.Store, *agent.StubClien
 }
 
 // TestSnapshotRestoreCycle covers active -> snapshot -> restore (AC-B1, AC-B2,
-// AC-A3): the pod is reclaimed on snapshot and a new one is provisioned on
-// restore.
+// AC-A3).
 func TestSnapshotRestoreCycle(t *testing.T) {
 	ctx := context.Background()
 	svc := newService()
@@ -966,8 +960,7 @@ func TestClaudeLegacyStrategyFailsClosedAndGateOffRecoveryStillAborts(t *testing
 }
 
 // TestReadDispatchesOnState covers the uniform resume-on-access read policy
-// (AC-C2): active serves in place, idle is promoted to active, snapshot is
-// restored to active — and in every non-active case the session ends active.
+// (AC-C2).
 func TestReadDispatchesOnState(t *testing.T) {
 	ctx := context.Background()
 	svc, store, _ := newServiceWithStore()
@@ -1017,9 +1010,8 @@ func TestReadDispatchesOnState(t *testing.T) {
 	}
 }
 
-// TestWriteDispatchesOnState mirrors the read test for the write policy (AC-C3):
-// snapshot/idle writes are not rejected — the session is restored/promoted to
-// active first and then written.
+// TestWriteDispatchesOnState mirrors the read test for the write policy
+// (AC-C3).
 func TestWriteDispatchesOnState(t *testing.T) {
 	ctx := context.Background()
 	svc, store, _ := newServiceWithStore()
@@ -1066,10 +1058,8 @@ func TestWriteDispatchesOnState(t *testing.T) {
 	}
 }
 
-// TestReadWriteMapToAgentIO: write forwards the payload to the session's pod
-// through the AgentClient (AC-D2) and read returns the offset-cursored delta
-// of what accumulated there with a nextOffset cursor (AC-D3) — across state
-// branches, since idle is promoted before serving.
+// TestReadWriteMapToAgentIO exercises write/read against the AgentClient
+// (AC-D2/AC-D3) across state branches.
 func TestReadWriteMapToAgentIO(t *testing.T) {
 	ctx := context.Background()
 	svc, store, _ := newServiceWithStore()
@@ -1160,9 +1150,8 @@ func TestReadWriteSurfaceAgentErrors(t *testing.T) {
 	}
 }
 
-// reachTrackingOrchestrator wraps the stub to observe/steer the AC-D1 shell
-// reachability verification: it counts Reach calls, can fail them, and records
-// which pods were stopped.
+// reachTrackingOrchestrator wraps the stub to observe and steer the AC-D1
+// shell reachability verification.
 type reachTrackingOrchestrator struct {
 	*k8s.StubOrchestrator
 	reachCalls     int
@@ -1200,8 +1189,7 @@ func newTrackedService() (*service.Service, *reachTrackingOrchestrator, *configm
 }
 
 // TestCreateVerifiesShellReachability: a session only becomes active after the
-// control plane has opened the pod's shell attach stream (AC-D1) — Create must
-// call Reach exactly once on the happy path.
+// control plane has opened the pod's shell attach stream (AC-D1).
 func TestCreateVerifiesShellReachability(t *testing.T) {
 	ctx := context.Background()
 	svc, orch, _ := newTrackedService()
@@ -1219,8 +1207,7 @@ func TestCreateVerifiesShellReachability(t *testing.T) {
 }
 
 // TestCreateReachFailureRollsBackPod: if the shell is unreachable the session
-// must not become active — Create returns the error, reclaims the pod (AC-A3
-// hygiene) and registers nothing.
+// must not become active (AC-D1, AC-A3 hygiene).
 func TestCreateReachFailureRollsBackPod(t *testing.T) {
 	ctx := context.Background()
 	svc, orch, store := newTrackedService()
@@ -1241,9 +1228,8 @@ func TestCreateReachFailureRollsBackPod(t *testing.T) {
 	}
 }
 
-// TestRestoreReachFailureRollsBackPod: the restore path holds the same bar —
-// a restored pod whose shell is unreachable is stopped and the session stays
-// in snapshot rather than going active (AC-D1, AC-B2).
+// TestRestoreReachFailureRollsBackPod: the restore path holds the same bar
+// (AC-D1, AC-B2).
 func TestRestoreReachFailureRollsBackPod(t *testing.T) {
 	ctx := context.Background()
 	svc, orch, store := newTrackedService()
