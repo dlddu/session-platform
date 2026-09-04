@@ -76,9 +76,7 @@ func (g *fakeGateway) gate(t *testing.T) *approvalGateway {
 	return gate
 }
 
-// A gate that cannot reach the gateway must not be built at all. The caller's
-// fallback is to offer no tool, so a half-configured gate would be the one
-// shape that turns a missing secret into an ungated call.
+// newApprovalGateway's every-field-required rule, field by field.
 func TestApprovalGatewayRefusesIncompleteConfiguration(t *testing.T) {
 	for _, tc := range []struct{ name, url, key, user, session string }{
 		{"no url", "", "k", "u", "s"},
@@ -165,9 +163,7 @@ func TestApprovalGatewayStopsWaitingWhenTheContextEnds(t *testing.T) {
 	}
 }
 
-// Failing to ask is not being told no. A gateway outage must surface as an
-// error, because the caller reports a decision to the model as a refusal and an
-// outage is not one.
+// approvalGateway.do's rule, on both calls.
 func TestApprovalGatewayFailuresAreErrorsNotDecisions(t *testing.T) {
 	t.Run("create fails", func(t *testing.T) {
 		gw := newFakeGateway(t, "APPROVED")
@@ -221,8 +217,7 @@ func TestApprovalGatewaySendsIdentityWithoutSecrets(t *testing.T) {
 }
 
 // Two calls in one session, and the same call in another session, must produce
-// three different external identifiers or the gateway dedupe rejects one of
-// them (AC-F3).
+// three different external identifiers (AC-F3).
 func TestApprovalGatewayExternalIDsSeparateCallsAndSessions(t *testing.T) {
 	one, err := newApprovalGateway("http://gw", "k", "u", "sess-1")
 	if err != nil {

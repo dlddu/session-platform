@@ -37,8 +37,7 @@ const (
 	claudeSettingsDir           = ".claude"
 	claudeSettingsFile          = "settings.json"
 	claudeSessionPlatformPlugin = "session-platform@dlddu-plugins"
-	// sessionMCPPermission is how the managed permission allowlist names every
-	// tool of the session MCP server (AC-F6 adds exactly this to AC-E2's list).
+	// sessionMCPPermission names every tool of the session MCP server.
 	sessionMCPPermission       = "mcp__" + sessionMCPServerName
 	maxClaudePromptBytes       = 1 << 20
 	maxClaudeQueuedPrompts     = 64
@@ -74,8 +73,7 @@ var (
 	errClaudeCheckpointID    = errors.New("no matching claude checkpoint")
 )
 
-// commandRunner is the process-execution seam for the Claude CLI. Production
-// uses execCommandRunner; tests inject a deterministic fake.
+// commandRunner is the process-execution seam for the Claude CLI.
 type commandRunner interface {
 	Run(ctx context.Context, argv []string, opts runnerOptions) error
 }
@@ -101,9 +99,8 @@ func (execCommandRunner) Run(ctx context.Context, argv []string, opts runnerOpti
 	cmd.Env = opts.Env
 	cmd.Stdout = opts.Stdout
 	cmd.Stderr = opts.Stderr
-	// A tool may start a background process. Give each one-shot invocation its
-	// own process group, kill the whole group on cancellation and again after
-	// the direct CLI exits, and bound inherited stdout/stderr pipe draining.
+	// A tool may start a background process, so each one-shot invocation gets
+	// its own process group and the whole group is killed, not just the CLI.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = claudeProcessGroupDrainTimeout
 	cmd.Cancel = func() error {
@@ -140,18 +137,13 @@ type claudeConfig struct {
 	RunTimeout      time.Duration
 	RunOutputLimit  int
 	ScrollbackLimit int
-	// Tools is the platform-managed tool surface written into the session
-	// HOME's settings.json. It is the one place the two agent workload types
-	// diverge (AC-E6 vs AC-F6).
+	// Tools is written into the session HOME's settings.json.
 	Tools toolSurface
 }
 
 // toolSurface is what the platform lets a session's agent reach beyond its own
-// filesystem tools. Exactly one form is sanctioned per workload type:
-// claude-code enables the marketplace plugin, approval-gated registers its
-// session MCP instead (AC-F6's 2026-09-03 decision — no plugin bootstrap in
-// that type, because AC-F2's egress allowlist has neither the K3s MCP endpoint
-// nor github.com in it).
+// filesystem tools. Exactly one form is sanctioned per workload type (AC-E6 for
+// claude-code, AC-F6's 2026-09-03 decision for approval-gated).
 type toolSurface struct {
 	// Plugin enables the managed session-platform marketplace plugin.
 	Plugin bool
@@ -182,8 +174,7 @@ type claudeWorkload struct {
 	tools    toolSurface
 	out      scrollback
 
-	// approvals is what AC-F3's idle exception is decided from. It stays empty
-	// for claude-code, which has no gate to wait on.
+	// approvals is what AC-F3's idle exception is decided from.
 	approvals approvalWaits
 
 	mu                      sync.Mutex
@@ -346,10 +337,7 @@ func (c *claudeWorkload) enqueue(prompt string) error {
 
 // appendPlatformNotice writes one platform-generated in-band marker into the
 // same append-only record the agent's own output goes to (AC-F3's approval
-// markers today). It goes through the bounded append, so the cumulative
-// scrollback limit and its terminal marker hold exactly as they do for agent
-// output — a marker cannot push the buffer past the bound or land after the
-// stream has been closed by it (AC-E3).
+// markers today), through the same bounded append as agent output (AC-E3).
 //
 // It deliberately does not consume the per-invocation output quota: that quota
 // is defined over assistant text and diagnostic stderr, and a platform notice
@@ -407,10 +395,8 @@ func (c *claudeWorkload) runWorker() {
 		err = errors.Join(err, stderr.Close())
 		err = errors.Join(err, output.Close())
 
-		// A failed first invocation may not have created a Claude conversation.
-		// Once a run succeeds, later failures do not erase the established resume
-		// state. Persist before reporting idle, so checkpoint cannot archive a
-		// stale flag.
+		// Resume state follows AC-E4. Persist before reporting idle, so a
+		// checkpoint cannot archive a stale flag.
 		nextHasRun := resume || err == nil || errors.Is(err, exec.ErrWaitDelay)
 		persistErr := persistClaudeRuntimeState(c.stateDir, nextHasRun)
 		c.mu.Lock()
@@ -436,9 +422,7 @@ func (c *claudeWorkload) argv(prompt string, resume bool) []string {
 	if c.model != "" && c.model != platformDefaultModel {
 		argv = append(argv, "--model", c.model)
 	}
-	// Partial stream-json is projected back to user-facing text by runWorker.
-	// Permission mode is platform policy for every invocation. The
-	// option delimiter still prevents a prompt beginning with "--" from changing
+	// The option delimiter prevents a prompt beginning with "--" from changing
 	// any platform-controlled flag.
 	return append(argv,
 		"--permission-mode", claudePermissionMode,
@@ -448,8 +432,6 @@ func (c *claudeWorkload) argv(prompt string, resume bool) []string {
 }
 
 // beginCheckpoint atomically closes admission and drains all accepted work.
-// commitCheckpoint keeps it closed after a successful stream; abortCheckpoint
-// reopens it when archive construction or delivery fails.
 func (c *claudeWorkload) beginCheckpoint(ctx context.Context, requestedID string) ([]byte, string, error) {
 	checkpointID, err := claudeCheckpointID(requestedID)
 	if err != nil {
@@ -838,7 +820,7 @@ func ensureClaudeManagedSettings(homeDir string, tools toolSurface) error {
 }
 
 // managedSettingsMatch reports whether the platform-managed parts of settings
-// already say what want says, so an unchanged file is left alone.
+// already say what want says.
 func managedSettingsMatch(settings, want claudeManagedSettings) bool {
 	if len(settings.EnabledPlugins) != len(want.EnabledPlugins) {
 		return false
@@ -1026,11 +1008,8 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 		_, _ = w.Write([]byte(`{"status":"awaiting restore","workload":"claude-code"}`))
 	})
 
-	// AC-F3's idle exception, read side. It answers whether a human is being
-	// waited on right now, so the control plane can hold the idle count
-	// instead of freezing a session that has an approval in flight. It stays
-	// answerable while the workload is awaiting restore — an unready agent is
-	// simply not waiting on anyone.
+	// AC-F3's idle exception, read side. It stays answerable while the workload
+	// is awaiting restore — an unready agent is simply not waiting on anyone.
 	mux.HandleFunc("GET "+approvalWaitPath, func(w http.ResponseWriter, _ *http.Request) {
 		serveApprovalWait(w, &c.approvals)
 	})

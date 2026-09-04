@@ -68,8 +68,6 @@ func TestSessionMCPCompletesTheHandshake(t *testing.T) {
 	if !ok || capabilities["tools"] == nil {
 		t.Fatalf("capabilities = %v, want tools declared", result["capabilities"])
 	}
-	// Everything this server will ever offer has to pass the approval gate,
-	// which is a tool-call boundary: no resources, no prompts (AC-F3).
 	if capabilities["resources"] != nil || capabilities["prompts"] != nil {
 		t.Fatalf("capabilities = %v, want tools only", capabilities)
 	}
@@ -78,9 +76,7 @@ func TestSessionMCPCompletesTheHandshake(t *testing.T) {
 	}
 }
 
-// A container that was never given the gateway triple has no gate, and a tool
-// whose gate does not run is the one failure this type exists to prevent. So it
-// offers nothing at all — the safe end of a misconfiguration.
+// session_mcp.go's cross-file invariant: no gate, no tools.
 func TestSessionMCPOffersNoToolsWithoutAnApprovalGate(t *testing.T) {
 	srv := newSessionMCPServer(t)
 	status, body := postMCP(t, srv, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
@@ -109,8 +105,7 @@ func TestSessionMCPRejectsMalformedAndUnknownCalls(t *testing.T) {
 	}{
 		{"not json", `{`, jsonRPCParseError},
 		{"not jsonrpc 2.0", `{"jsonrpc":"1.0","id":1,"method":"initialize"}`, jsonRPCInvalidRequest},
-		// resources/read was never in this server's capabilities: everything it
-		// offers has to pass the tool-call boundary the gate sits on (AC-F3).
+		// resources/read was never in this server's capabilities (AC-F3).
 		{"unknown method", `{"jsonrpc":"2.0","id":1,"method":"resources/read"}`, jsonRPCMethodNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

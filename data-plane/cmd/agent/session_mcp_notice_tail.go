@@ -4,11 +4,8 @@
 // session's append-only output byte stream, where AC-F3 says they belong.
 //
 // They go in as in-band markers in the same shape the platform already uses for
-// its other interjections (`[session-platform: …]`, AC-E3's truncation and
-// terminal markers). That is the whole point of the requirement: no new SSE
-// event type and no new field, so the cursor contract — `id=nextOffset`,
-// `{offset,payloadBase64,nextOffset}`, UTF-8 boundaries, reset recovery — stays
-// identical across workload types (AC-C2/AC-E3).
+// its other interjections (`[session-platform: …]`), which is what keeps the
+// cursor contract identical across workload types (AC-F3, AC-C2/AC-E3).
 package main
 
 import (
@@ -36,10 +33,8 @@ const (
 	maxNoticeFeedResponseBytes = 1 << 20
 )
 
-// noticeSink is the workload half of the feed. One poll yields two things the
-// workload needs — the marker text for AC-E3's byte stream, and the wait state
-// behind it for AC-F3's idle exception — and they arrive together, so they are
-// handed over together.
+// noticeSink is the workload half of the feed: AC-E3's marker text and the
+// AC-F3 wait state behind it, which one poll yields together.
 type noticeSink interface {
 	appendPlatformNotice(text string)
 	observeApprovalNotices(notices []approvalNotice, dropped int)
@@ -52,8 +47,7 @@ type noticeSink interface {
 type noticeTailer struct {
 	baseURL string
 	client  *http.Client
-	// sink receives what one poll found. It is the workload in production,
-	// injected so a test can read what would have been recorded.
+	// sink receives what one poll found; in production it is the workload.
 	sink   noticeSink
 	logger *slog.Logger
 	retry  time.Duration
@@ -93,9 +87,6 @@ func (t *noticeTailer) run(ctx context.Context) {
 		// written a moment late is only a marker written a moment late.
 		t.sink.observeApprovalNotices(body.Notices, body.Dropped)
 		if body.Dropped > 0 {
-			// Say so rather than leave a silent hole: the byte stream is the
-			// record a client reads, and an unexplained gap in it is worse
-			// than an admitted one.
 			t.sink.appendPlatformNotice(fmt.Sprintf("\n[session-platform: %d approval notices were dropped]\n", body.Dropped))
 		}
 		for _, notice := range body.Notices {

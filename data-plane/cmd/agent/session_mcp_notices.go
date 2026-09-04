@@ -1,20 +1,11 @@
-// The approval notice feed (AC-F3's "대기 표시"). AC-F3 wants the start of an
-// approval wait and its decision written into AC-E3's append-only output byte
-// stream. The two halves of that sentence live in different pods: the external
-// identifier is minted here, in the helper pod's MCP container, while the byte
-// stream belongs to the workload pod's agent.
+// The approval notice feed (AC-F3's "대기 표시"). The two halves of that
+// requirement live in different pods: the external identifier is minted here, in
+// the helper pod's MCP container, while the byte stream belongs to the workload
+// pod's agent.
 //
 // This file is the helper-pod half: a sequenced, in-memory feed the gate
-// publishes to and the workload pod tails over the connection it is already
-// allowed to make. The direction is deliberate — AC-F2's egress allowlist lets
-// the workload pod reach this container and nothing else reach it, so a pull
-// costs no new network policy, while a push from here to the workload pod would
-// need one in each direction.
-//
-// The feed is memory only and dies with the pod, which is what AC-F4 requires
-// of a helper pod ("자체 상태를 보존하지 않는다"). Nothing is lost by that: once
-// a notice has been tailed it lives in the workload's scrollback, and that is
-// what the archive carries across a freeze (AC-E5).
+// publishes to and the workload pod tails. Why pull rather than push, and why
+// memory only: docs/doc-tracker.md's AC-F3·F5 entry.
 package main
 
 import (
@@ -31,8 +22,7 @@ const (
 	noticesPath = "/notices"
 	// noticeFeedCapacity bounds the ring. A session's approvals are a human
 	// round trip apart, so this is a guard against an unbounded buffer rather
-	// than a limit anyone reaches; a tailer that fell far enough behind to
-	// pass it is told how many it missed instead of silently skipping them.
+	// than a limit anyone reaches.
 	noticeFeedCapacity = 1024
 	// noticeFeedPollTimeout bounds one long poll. It ends an idle wait with an
 	// empty answer so the tailer reconnects on a cursor it still owns, rather
@@ -59,8 +49,7 @@ type approvalNotice struct {
 	Kind       string `json:"kind"`
 	Tool       string `json:"tool"`
 	ExternalID string `json:"externalId"`
-	// Decision is set on a decided notice: APPROVED, REJECTED, EXPIRED or
-	// TIMEOUT.
+	// Decision is set on a decided notice (approvalDecision).
 	Decision string `json:"decision,omitempty"`
 }
 

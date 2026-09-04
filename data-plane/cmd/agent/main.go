@@ -1,35 +1,9 @@
-// Command agent is the data plane entrypoint for both session workloads,
-// selected by DATA_PLANE_WORKLOAD (default "shell"):
-//
-//   - shell launches exactly one PTY-attached interactive shell. /write is
-//     stdin, /read is offset-cursored PTY output, and checkpoint/restore uses
-//     CRIU plus serialized scrollback (AC-D1~D4).
-//   - claude-code launches no resident shell or Claude process. /write queues a
-//     prompt for one serial worker, each job execs a one-shot Claude CLI, /read
-//     serves merged stdout/stderr, and checkpoint/restore archives filesystem
-//     state plus scrollback without CRIU (AC-E2~E5).
-//   - approval-gated runs the same one-shot execution model as claude-code
-//     (AC-E2~E5 are reused verbatim) with the tool surface AC-F6 prescribes:
-//     no marketplace plugin and no K3s MCP token, the provider proxy reached
-//     across the pod network in the session helper pod instead of loopback,
-//     and that helper pod's session MCP registered as the only tool surface
-//     that leaves the pod.
-//   - mcp is the session MCP that runs in the helper pod's other container. It
-//     serves the readiness endpoint, the MCP endpoint the workload agent
-//     registers, and the approval notice feed that agent tails. Its external
-//     tools sit behind the AC-F3 approval gate; a container started without the
-//     gateway triple advertises no tools at all rather than ungated ones.
-//   - credential-proxy holds the real Anthropic gateway URL/token and pins all
-//     requests to that upstream, keeping provider credentials out of the
-//     Claude/Bash process environment (AC-E6); plugin-specific K3S_MCP_TOKEN is
-//     separately Secret-backed. It runs in one of two placements: a
-//     loopback-bound sidecar for claude-code, or a pod-network-bound container
-//     of the session helper pod for approval-gated (AC-F6).
-//
-// Shell and Claude modes expose /healthz and the reachability-only /attach
-// WebSocket. A DATA_PLANE_RESTORE_MODE=1 pod reports healthy while awaiting
-// POST /restore, avoiding a readiness deadlock before the control plane streams
-// its archive. Credential-proxy exposes /healthz and the fixed-upstream proxy.
+// Command agent is the data plane entrypoint for every workload mode, selected
+// by DATA_PLANE_WORKLOAD (default "shell"). The switch in main lists them, and
+// each mode's contract lives with its own code: shell here (AC-D1~D4),
+// claude-code and approval-gated in claude.go (AC-E2~E5) with their tool
+// surfaces in agentToolSurface below, mcp in session_mcp.go, credential-proxy
+// in credential_proxy.go.
 package main
 
 import (
@@ -62,53 +36,34 @@ const (
 
 	claudeProxyBaseURL          = "http://127.0.0.1:8091"
 	claudeProxyPlaceholderToken = "session-platform-proxy"
-	// helperProxyPort and sessionMCPPort are the two ports an approval-gated
-	// workload pod may reach on its session helper pod, and the only
-	// destinations AC-F2's egress allowlist admits besides kube-dns. Keep them
-	// in sync with the control plane orchestrator (credentialProxyPort,
-	// SessionMCPPort).
+	// helperProxyPort and sessionMCPPort are the ports of this session's helper
+	// pod (AC-F2). Keep them in sync with the control plane orchestrator
+	// (credentialProxyPort, SessionMCPPort).
 	helperProxyPort = 8091
 	sessionMCPPort  = 8092
-	// proxyPlacementEnv tells a credential-proxy container which of its two
-	// sanctioned placements it is in (AC-E6 sidecar vs AC-F6 helper pod). Unset
-	// means the restrictive sidecar placement.
+	// proxyPlacementEnv is read by credentialProxyPlacementFromEnv.
 	proxyPlacementEnv = "DATA_PLANE_PROXY_PLACEMENT"
-	// sessionMCPURLEnv carries the address of this session's MCP (AC-F6). It is
-	// the approval-gated agent's only tool surface that leaves the pod.
+	// sessionMCPURLEnv carries the address of this session's MCP (AC-F6).
 	sessionMCPURLEnv = "SESSION_MCP_URL"
-	// The MCP container's own environment (AC-F6): the gateway triple that lets
-	// it ask a human, and the session id that makes AC-F3's external identifier
-	// unique. None of these is projected into the workload pod. Keep in sync
-	// with control-plane/internal/adapter/k8s (ApprovalGateway*EnvVar,
-	// SessionIDEnvVar).
+	// The MCP container's own environment (AC-F6). Keep in sync with
+	// control-plane/internal/adapter/k8s (ApprovalGateway*EnvVar, SessionIDEnvVar).
 	approvalGatewayURLEnv    = "APPROVAL_GATEWAY_URL"
 	approvalGatewayAPIKeyEnv = "APPROVAL_GATEWAY_API_KEY"
 	approvalGatewayUserIDEnv = "APPROVAL_GATEWAY_USER_ID"
 	sessionIDEnv             = "SESSION_ID"
 
-	// defaultShell is the interactive shell launched when DATA_PLANE_SHELL is
-	// unset (AC-D1).
 	defaultShell = "/bin/bash"
-	// defaultAddr is where the agent serves its endpoints. Keep the port in sync
-	// with the control plane orchestrator's agentPort
-	// (control-plane/internal/adapter/k8s/client_orchestrator.go).
+	// defaultAddr: keep the port in sync with the control plane orchestrator's
+	// agentPort (control-plane/internal/adapter/k8s/client_orchestrator.go).
 	defaultAddr = ":8090"
-	// restoreModeEnv, when "1", starts the agent without a shell: it waits for a
-	// checkpoint on POST /restore instead (in-pod CRIU restore). The control
-	// plane sets it on restore-target pods (AnnotationRestoreCheckpoint path).
+	// restoreModeEnv is set by the control plane on restore-target pods
+	// (AnnotationRestoreCheckpoint path).
 	restoreModeEnv = "DATA_PLANE_RESTORE_MODE"
 
-	// nsLastPIDPath is the per-pid-namespace knob for the last allocated pid: the
-	// next fork gets the value written here + 1. Writable only in a privileged
-	// pod (which is what the CRIU gate provisions).
 	nsLastPIDPath = "/proc/sys/kernel/ns_last_pid"
 	// defaultShellPIDFloor is written to nsLastPIDPath before the session shell
-	// forks, so the shell lands well above the pids an agent process occupies.
-	// CRIU restores a task under its ORIGINAL pid, and a shell started right
-	// after the agent would otherwise land around pid ~10 — exactly where the
-	// restore pod's own agent has its Go runtime threads (tids ≤ ~15), making the
-	// restore collide (observed on-cluster 2026-07-23; earlier successes were
-	// luck). Overridable via CRIU_PID_FLOOR while tuning against a runtime.
+	// forks; see docs/criu-verification.md 5차 (2026-07-23, 복원 pid 충돌) for
+	// why. Overridable via CRIU_PID_FLOOR while tuning against a runtime.
 	defaultShellPIDFloor = 300
 )
 
@@ -126,12 +81,8 @@ func main() {
 		a.shellPath = env("DATA_PLANE_SHELL", defaultShell)
 		a.engine = newExecCriuEngine()
 		if restoreMode {
-			// Restore mode: no shell yet — POST /restore brings back the
-			// checkpointed one. healthz reports 200 while awaiting it.
 			logger.Info("shell agent started in restore mode; awaiting checkpoint", "addr", addr)
 		} else {
-			// Push the next pid up before forking the shell, so a later CRIU
-			// restore does not collide with one of the restore agent's threads.
 			floor := shellPIDFloor()
 			if err := reserveShellPID(floor); err != nil {
 				logger.Info("could not raise ns_last_pid; the shell will take a low pid"+
@@ -174,25 +125,16 @@ func main() {
 		}
 		a.claude = claude
 		if workload == workloadApprovalGated {
-			// AC-F3's wait marker. Only this type has a gate to report on, and
-			// only it has a helper pod to ask: the tailer follows the session
-			// MCP's notice feed and appends what it finds to the same output
-			// byte stream the agent writes to. It runs under the workload's
-			// context, so it stops when the workload does.
+			// AC-F3's wait marker (session_mcp_notice_tail.go). Only this type
+			// has a gate to report on and a helper pod to ask.
 			tailer := newNoticeTailer(tools.SessionMCP, claude, logger)
 			go tailer.run(claude.ctx)
 		}
 		logger.Info("agent workload started", "workload", workload, "addr", addr,
 			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode)
 	case workloadSessionMCP:
-		// AC-F4's helper pod container. It runs no session workload — it is the
-		// tool surface the workload pod calls into — so it gets its own handler
-		// rather than the workload agent's routes.
-		//
-		// A container without the gateway triple starts and serves, but with no
-		// tools (AC-F3): the external tools exist only behind the gate, so a
-		// missing Secret costs the session its outward reach rather than its
-		// approval requirement.
+		// AC-F4's helper pod container; it serves its own routes rather than the
+		// workload agent's (session_mcp.go).
 		gateway, err := newApprovalGateway(
 			os.Getenv(approvalGatewayURLEnv),
 			os.Getenv(approvalGatewayAPIKeyEnv),
@@ -252,7 +194,6 @@ func main() {
 
 	select {
 	case s := <-sig:
-		// Pod shutdown: stop the selected workload and exit cleanly.
 		logger.Info("signal received; terminating", "signal", s.String())
 		if a.claude != nil {
 			a.claude.Close()
@@ -262,16 +203,14 @@ func main() {
 		}
 		os.Exit(0)
 	case <-a.exited:
-		// The adopted shell exited on its own. Exit so the kubelet restarts the
-		// container with a fresh agent+shell, keeping AC-D1 true.
+		// Exit so the kubelet restarts the container with a fresh shell (AC-D1).
 		logger.Error("session shell exited; restarting container")
 		os.Exit(1)
 	}
 }
 
 // agent holds the current session shell, which is swappable: a normal pod adopts
-// one at startup, a restore-mode pod adopts the CRIU-restored one on POST
-// /restore. It also carries the CRIU engine the checkpoint/restore handlers use.
+// one at startup, a restore-mode pod adopts the CRIU-restored one on /restore.
 type agent struct {
 	shellPath string
 	engine    criuEngine
@@ -282,11 +221,7 @@ type agent struct {
 	exited chan struct{} // closed once an adopted shell exits (triggers restart)
 	once   sync.Once
 	// checkpointing suppresses the shell-exit→container-restart path while a
-	// /checkpoint is in flight. criu dump freezes and kills the shell tree, which
-	// would otherwise trip the exit watch and os.Exit(1) mid-request — truncating
-	// the archive still streaming in the response body. Set before the dump; the
-	// control plane reclaims the pod once it has the archive, so no self-restart
-	// is needed on the checkpoint path.
+	// /checkpoint is in flight; handleCheckpoint sets it and says why.
 	checkpointing atomic.Bool
 }
 
@@ -318,18 +253,10 @@ func (a *agent) adopt(sh *shellProc) {
 
 // scrollback is the append-only record of everything the shell has written to
 // its PTY since it started (stdout and stderr merged by the PTY itself, order
-// preserved). Read serves deltas from it by offset (AC-D3); nothing is ever
-// discarded, so offset 0 always replays the full session history. There is no
-// size cap — the buffer bound is a deliberately open design decision (see
-// docs/prd/shell-workload.md).
-//
-// The buffer lives in the agent process's memory. In-pod CRIU checkpoints the
-// shell *process tree* — not the agent — so the scrollback does not ride the
-// criu images automatically; instead /checkpoint serializes it alongside them
-// and /restore preloads it into the restored shell's buffer (AC-D4). Either way
-// a read cursor (nextOffset) issued before the snapshot stays valid: the same
-// bytes come back at the same length, so a client resumes with only the delta
-// and offset 0 still replays the full pre- and post-snapshot history.
+// preserved). There is no size cap — the buffer bound is a deliberately open
+// design decision (see docs/prd/shell-workload.md). It lives in the agent's
+// memory rather than in the dumped process tree, which is why checkpoint.go
+// has to archive it separately (AC-D3/D4).
 type scrollback struct {
 	mu      sync.Mutex
 	buf     []byte
@@ -346,11 +273,9 @@ func (b *scrollback) Append(p []byte) {
 	b.notifyLocked()
 }
 
-// appendClaudeBoundedAt appends one already-bounded invocation to the Claude
-// scrollback while reserving room for an explicit terminal marker. Existing
-// bytes are never rewritten, so every offset issued before the limit remains
-// valid. It reports only the transition to full; already accepted queued jobs
-// may continue to run, but their later output is discarded.
+// appendClaudeBoundedAt appends to the Claude scrollback while reserving room
+// for an explicit terminal marker (AC-E3). It reports only the transition to
+// full.
 func (b *scrollback) appendClaudeBoundedAt(p []byte, limit int, markerText string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -369,9 +294,6 @@ func (b *scrollback) appendClaudeBoundedAt(p []byte, limit int, markerText strin
 	}
 	if remaining := dataLimit - len(b.buf); remaining > 0 {
 		prefix := min(remaining, len(p))
-		// Claude's projected output is valid UTF-8. Do not split its last rune
-		// merely to fill the byte quota: every issued stream cursor must remain
-		// safe to hand to the legacy JSON /read endpoint.
 		prefix = validUTF8PrefixAtMost(p, prefix)
 		b.buf = append(b.buf, p[:prefix]...)
 	}
@@ -398,8 +320,7 @@ func (b *scrollback) claudeFullAtLocked(limit, markerBytes int) bool {
 }
 
 // Since returns a copy of the output accumulated after offset, plus the cursor
-// for the next delta read (the current accumulated length). An offset at or
-// past the current length yields an empty payload with that cursor.
+// for the next delta read (the current accumulated length).
 func (b *scrollback) Since(offset int) ([]byte, int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -423,8 +344,7 @@ func (b *scrollback) snapshot() []byte {
 }
 
 // restore replaces the complete buffer before a restored Claude workload starts
-// accepting writes. Existing cursors therefore address the same bytes after
-// the pod round trip.
+// accepting writes (AC-E5's cursor continuity).
 func (b *scrollback) restore(p []byte) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -459,10 +379,7 @@ type shellProc struct {
 	kill   func() error          // force-kill the shell
 }
 
-// newShellProc wires a started-or-restored shell: it preloads the scrollback
-// with initial (nil for a fresh shell, the checkpointed history for a restored
-// one), starts draining the PTY master into it (AC-D3), and reaps the process in
-// the background, flipping alive/done when wait returns. Constructing the buffer
+// newShellProc wires a started-or-restored shell. Constructing the buffer
 // before the drain goroutine starts keeps the preload race-free.
 func newShellProc(ptmx *os.File, pid int, initial []byte, wait func() error, signal func(os.Signal) error, kill func() error) *shellProc {
 	s := &shellProc{
@@ -560,11 +477,9 @@ func routes(logger *slog.Logger, a *agent) http.Handler {
 	}
 	mux := http.NewServeMux()
 
-	// The readiness probe. In restore mode before the checkpoint arrives the
-	// agent is up and ready to receive it, so it reports 200 (the restored
-	// shell's reachability is proven separately by the control plane's Reach).
-	// Once a shell is adopted, 200 only while it is alive, so pod Ready reflects
-	// shell liveness (AC-D1).
+	// The readiness probe. A restore-mode pod reports 200 before its checkpoint
+	// arrives, or the control plane could never stream it one; that pod's
+	// reachability is proven separately by Reach (AC-D1).
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		sh := a.current()
@@ -579,8 +494,7 @@ func routes(logger *slog.Logger, a *agent) http.Handler {
 		}
 	})
 
-	// The attach stream — reachability verification only (AC-D1): the agent
-	// holds the stream open, discarding any frames, until the peer closes.
+	// The attach stream — reachability verification only (AC-D1).
 	mux.HandleFunc("GET /attach", func(w http.ResponseWriter, r *http.Request) {
 		sh := a.current()
 		if sh == nil || !sh.alive.Load() {
@@ -601,9 +515,7 @@ func routes(logger *slog.Logger, a *agent) http.Handler {
 		}
 	})
 
-	// write = shell stdin (AC-D2): the raw request body goes into the PTY master
-	// verbatim and the handler returns immediately — it never waits for the
-	// shell to run the command (output is recovered via /read).
+	// write = shell stdin (AC-D2).
 	mux.HandleFunc("POST /write", func(w http.ResponseWriter, r *http.Request) {
 		sh := a.current()
 		if sh == nil || !sh.alive.Load() {
@@ -623,8 +535,7 @@ func routes(logger *slog.Logger, a *agent) http.Handler {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	// read = shell output since a cursor (AC-D3): non-consuming, so it serves
-	// even after the shell has exited — the scrollback is history, not a pipe.
+	// read = shell output since a cursor (AC-D3).
 	mux.HandleFunc("GET /read", func(w http.ResponseWriter, r *http.Request) {
 		sh := a.current()
 		if sh == nil {
@@ -684,11 +595,8 @@ func durationEnv(k string, def time.Duration) (time.Duration, error) {
 }
 
 // agentToolSurface validates the credential wiring of a one-shot agent workload
-// and reports the platform-managed tool surface it must run with. The two
-// agent types share an execution model and differ only here: claude-code
-// reaches its provider proxy over loopback and gets the marketplace plugin,
-// approval-gated reaches a proxy one pod away, gets no plugin and no K3s MCP
-// token, and instead registers its session MCP (AC-F6).
+// and reports the platform-managed tool surface it must run with. The two agent
+// types share an execution model and differ only here.
 func agentToolSurface(workload string) (toolSurface, error) {
 	switch workload {
 	case workloadClaudeCode:

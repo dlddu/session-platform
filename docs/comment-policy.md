@@ -100,9 +100,10 @@
 | 2026-09-04 | `control-plane/internal/session/session.go` · `control-plane/internal/session/manager.go` | 143 | `b43d405ac066` | 첫 판정 패스 — **162줄 판정, 제거 19 · 유지 143**. 상세 ↓ |
 | 2026-09-04 | `control-plane/internal/service/manager.go` · `control-plane/internal/service/manager_test.go` · `control-plane/internal/service/reaper.go` · `control-plane/internal/service/reaper_test.go` · `control-plane/internal/service/auxiliary_pods_test.go` · `control-plane/internal/service/workload_type_test.go` | 239 | `1d85544cb83a` | 2차 판정 패스 — **299줄 판정, 제거 75 · 유지 224**(지문 기준 304 → 229, 오검출 5줄 포함). *2026-09-04 증분 재판정: AC-F3 유휴 예외가 더한 23줄 판정 — 제거 13 · 유지 10 (229 → 239).* 상세 ↓ |
 | 2026-09-04 | `control-plane/internal/adapter/k8s/client_orchestrator.go` · `control-plane/internal/adapter/k8s/orchestrator.go` · `control-plane/internal/adapter/k8s/network_policy.go` · `control-plane/internal/adapter/k8s/orchestrator_test.go` | 328 | `b09a85723f8c` | 3차 판정 패스 — **473줄 판정, 제거 153 · 유지 320**. 이후 #66이 더한 14줄을 재판정(제거 6 · 유지 8) — 누적 **487줄 판정, 제거 159 · 유지 328**. 상세 ↓ |
+| 2026-09-04 | `data-plane/cmd/agent/approval_gated_test.go` · `data-plane/cmd/agent/approval_gateway.go` · `data-plane/cmd/agent/approval_gateway_test.go` · `data-plane/cmd/agent/checkpoint.go` · `data-plane/cmd/agent/checkpoint_test.go` · `data-plane/cmd/agent/claude.go` · `data-plane/cmd/agent/claude_archive.go` · `data-plane/cmd/agent/claude_archive_test.go` · `data-plane/cmd/agent/claude_process_linux.go` · `data-plane/cmd/agent/claude_process_linux_test.go` · `data-plane/cmd/agent/claude_stream.go` · `data-plane/cmd/agent/claude_stream_contract_test.go` · `data-plane/cmd/agent/claude_stream_test.go` · `data-plane/cmd/agent/claude_test.go` · `data-plane/cmd/agent/credential_proxy.go` · `data-plane/cmd/agent/credential_proxy_ca_test.go` · `data-plane/cmd/agent/credential_proxy_stream.go` · `data-plane/cmd/agent/credential_proxy_stream_progress_test.go` · `data-plane/cmd/agent/credential_proxy_stream_test.go` · `data-plane/cmd/agent/credential_proxy_test.go` · `data-plane/cmd/agent/entrypoint_test.go` · `data-plane/cmd/agent/main.go` · `data-plane/cmd/agent/main_test.go` · `data-plane/cmd/agent/output_stream.go` · `data-plane/cmd/agent/session_mcp.go` · `data-plane/cmd/agent/session_mcp_gate_test.go` · `data-plane/cmd/agent/session_mcp_notice_tail.go` · `data-plane/cmd/agent/session_mcp_notice_tail_test.go` · `data-plane/cmd/agent/session_mcp_notices.go` · `data-plane/cmd/agent/session_mcp_notices_test.go` · `data-plane/cmd/agent/session_mcp_test.go` · `data-plane/cmd/agent/session_mcp_tools.go` | 747 | `c6b11fc5193e` | 4차 판정 패스 — **976줄 판정, 제거 237 · 유지 739**. 데이터 플레인 전체. *2026-09-04 증분 재판정: AC-F3 유휴 예외가 이 범위에 더한 16줄 판정 — 제거 8 · 유지 8 (739 → 747).* 상세 ↓ |
 <!-- /판정-원장 -->
 
-판정 완료 합계 **<!-- 판정-합계 -->710<!-- /판정-합계 -->줄**(등재 범위의 현재 줄 수 합).
+판정 완료 합계 **<!-- 판정-합계 -->1457<!-- /판정-합계 -->줄**(등재 범위의 현재 줄 수 합).
 전체 대비 비율과 미판정 잔량은 **게이트가 출력한다** — 프로즈에 적으면 낡는다.
 
 ### 2026-09-04 — `control-plane/internal/session/` (판정 162줄)
@@ -350,6 +351,92 @@ replays the full session history`. 이 문서의 「포인터는 남기고 사�
 - **포인터**(`docs/test/e2e.md`의 `CLAUDE-PROVIDER`)는 SSOT로 가는 길이라 남긴다.
 - **「Keep in sync with data-plane/cmd/agent (providerCACertEnv)」** — 컴파일러가 잡지 못하는
   cross-module 계약. 이 패스가 같은 형태 4건을 남긴 것과 같은 이유다.
+
+
+### 2026-09-04 — `data-plane/cmd/agent/` (판정 976줄)
+
+컨트롤 플레인 세 패스에 이어 **데이터 플레인 전체**. 32파일을 통째로 읽었다 — 소스 12개(729줄) ·
+테스트 20개(247줄). 패키지 하나(`package main`)라서 파일 하나만 집으면 「지운 쪽의 사본」을
+소유하지 못하는 것은 3차 패스와 같고, 여기서는 그 되풀이가 **소스↔테스트** 사이에도 있었다.
+
+**왜 제거율이 24%인가**: 앞선 세 패스(12% · 25% · 32%)와 같은 대역이다. 다만 분포가 극단적으로
+치우쳤다 — `main.go` 하나가 제거 237줄 중 **92줄**(그 파일의 50%)이고, 반대로
+`claude_archive.go` · `credential_proxy_stream.go` · `claude_process_linux.go` ·
+`claude_stream_contract_test.go`는 **한 줄도 지우지 않았다.** 아카이브 안전성·tail-safe redaction·
+`/proc` 파싱처럼 코드 형태로 보이지 않는 지식만 적혀 있어서, 이 패스는 「어느 파일이 살쪘는가」가
+아니라 **「어느 파일이 다른 곳을 베꼈는가」**를 골라냈다.
+
+**제거 237줄** — 「이미 말하는 곳」이 제거 근거다.
+
+| 위치 | 제거한 것 | 이미 말하는 곳 (복원 경로) |
+| --- | --- | --- |
+| `main.go` 패키지 주석 (33→5) | 다섯 워크로드 모드의 AC 서술 전부 — shell의 write/read/CRIU(AC-D1~D4) · claude-code의 원샷·직렬 큐·비-CRIU 아카이브(AC-E2~E5) · approval-gated의 「plugin 없음 · K3s MCP 토큰 없음 · 프록시가 파드 밖 · 세션 MCP가 유일한 표면」(AC-F6) · mcp 컨테이너 서술 · credential-proxy의 두 배치 | ② PRD 다섯 절이 전부 축자에 가깝다 · ① **같은 파일의 `switch workload`**가 다섯 모드와 기본값을 그대로 말한다 · ① `session_mcp.go` 헤더가 mcp 문단을, `credential_proxy.go`의 `credentialProxyPlacement`가 배치 문단을, 같은 파일의 `agentToolSurface`가 approval-gated 문단을 각각 다시 말한다 |
+| `main.go` `defaultShellPIDFloor`(8→3) · `nsLastPIDPath`(3→0) | 「CRIU는 체크포인트 당시 pid로 복원한다 → 셸이 pid ~10에 앉아 복원 pod의 에이전트 스레드(tids ≤ ~15)와 충돌(2026-07-23 관측)」 · 「privileged pod에서만 쓰기 가능」 | ② `docs/criu-verification.md` **5차 (2026-07-23, pid 충돌)** 가 그 서술과 기본값 300·`CRIU_PID_FLOOR`·privileged 전제까지 그대로 적는다. **주석이 이미 날짜로 그 라운드를 자백하고 있었다** — 포인터만 남겼다 · ① `reserveShellPID` doc이 `ns_last_pid` 의미를 정본으로 적는다 |
+| `main.go` `scrollback` doc (14→6) | 「CRIU는 셸 트리를 뜨고 에이전트를 뜨지 않으므로 scrollback이 criu 이미지에 실리지 않는다 → /checkpoint가 따로 직렬화하고 /restore가 preload한다」 · 「복원 전 커서가 그대로 유효하다」 | ① `checkpoint.go` 파일 헤더 2문단이 **축자로** 같은 말을 한다(그쪽을 정본으로 남기고 여기서 가리킨다) · ② `prd/shell-workload.md` AC-D3의 「설계 노트 (offset과 복원)」가 커서 유효성을 그대로 적는다 |
+| `main.go` `checkpointing` 필드 (6→2) | criu dump가 셸을 죽여 exit watch가 `os.Exit(1)`로 아카이브를 자른다는 서술 | ① `checkpoint.go` `handleCheckpoint`의 인라인 5줄이 **실패 분기(재무장)까지 포함해** 같은 말을 한다 |
+| `main.go` 라우트 주석 4곳 (12→6) | `/write`의 「본문이 PTY로 그대로 · 즉시 반환」 · `/read`의 「비파괴적」 · `/attach`의 「프레임을 버리며 붙잡고 있다」 · healthz의 세 분기 | ② AC-D2·AC-D3·AC-C3의 비블로킹 규약 · ① 각 핸들러 본문이 그대로 보여 준다. 포인터(`AC-D…`)만 남겼다 |
+| `main.go` 인라인 3곳 (7→0) | 「Restore mode: no shell yet」 · 「Push the next pid up …」 · 「Claude's projected output is valid UTF-8 …」 | ① 바로 다음 줄의 `logger.Info("… restore mode; awaiting checkpoint")` · ① `reserveShellPID`/`defaultShellPIDFloor` doc · ① **UTF-8 경계 문장은 레포에 세 벌 있었다** — `claude_stream.go`의 `utf8NormalizingWriter` doc(일반 진술)과 `output_stream.go`의 `streamChunk`(셸 PTY 폴백까지 더한다)를 남기고 여기만 지웠다 |
+| `checkpoint.go` 파일 헤더 (18→9) | RUNTIME SEAM 문단 통째 | ① 같은 파일의 `criuEngine` doc(「tests inject a fake so the handlers and archive plumbing run without a CRIU runtime」)과 `execCriuEngine` doc(「RUNTIME SEAM — … never in CI」)이 **각각 다시** 말한다. 세 벌 중 둘을 남겼다 |
+| `checkpoint.go` `execCriuEngine`(10→7) · `Restore` 인라인(8→6) | 「detached·sibling·pidfile로 바꾼 이유: criu 종료를 셸 종료로 오인해 컨테이너가 재시작했다(2026-07-23)」의 **두 벌** | ② `docs/criu-verification.md` 5차가 그 사건과 대응을 적는다 · 플래그 **의미**(criu 외부 지식)는 남기고 사건 서술만 지웠다 |
+| `claude.go` `toolSurface`(6→3) · `Tools` 필드(3→1) · `sessionMCPPermission`(2→1) | 「approval-gated는 plugin 부트스트랩이 없다 — AC-F2 허용목록에 K3s MCP도 github.com도 없기 때문」 · 「두 타입이 갈리는 유일한 지점」 · 「AC-E2 목록에 정확히 이것만 더한다」 | ② `prd/approval-gated-workload.md` AC-F6의 ✅확정 문단이 축자다 · ① 바로 아래 `toolSurface` 타입 doc · ① `loadClaudeManagedSettings`의 인라인이 「AC-E2 목록에 대한 유일한 추가」를 정본으로 적는다 |
+| `claude.go` `argv` 인라인(4→2) · resume 인라인(4→2) | 「partial stream-json을 runWorker가 투영한다」 · 「permission mode는 플랫폼 정책」 · 「실패한 첫 실행은 대화를 만들지 않는다」 | ① `claudeStreamProjector` doc · ② AC-E2의 ✅구현 결정(headless 권한 정책) · ② AC-E4 축자(「첫 실행 실패·timeout은 resume 상태를 만들지 않는다」). **순서 계약**(「idle 보고 전에 persist」)은 남겼다 |
+| `claude.go` `beginCheckpoint` (3→1) | 「commitCheckpoint이 …」 | ① **그런 함수는 없다** — 실제 이름은 `completeCheckpointStream`이고 그 doc이 같은 계약을 적는다. 낡아 틀린 주석이라 제거 근거가 강해진다 |
+| `credential_proxy.go` `credentialProxyPlacement`(6→3) · `validateApprovalGatedClientEnv`(6→3) · `validateHelperEndpoint`(5→4) | 「동작 계약은 AC-E6 하나, 배치만 다르다: claude-code는 loopback 사이드카, approval-gated는 헬퍼 파드」 · 검증 네 항목의 열거 · 「plain http · 지정 포트 · loopback 아님」 | ② AC-F6 축자(「프록시의 동작 계약은 AC-E6을 그대로 재사용한다 … 다른 것은 배치와 바인딩뿐이다」) · ① 바로 아래 본문의 네 `if` · ① 같은 함수 본문. **왜 loopback이 거부되는가**(파드 안으로 접힌 배치)와 **왜 타입인가**(사이드카까지 열리지 않게)는 남겼다 |
+| `approval_gateway.go` 파일 헤더(10→7) · `externalID`(4→2) · `await` 2문단(4→1) · `create`(3→2) | wire 규약의 엔드포인트·헤더 열거 · 「세션 절반이 두 세션을, 요청 절반이 두 호출을 가른다」 · 「AC-E2 직렬 큐 안에서 사람이 걸리는 만큼 자리를 점유한다」 · 「승인 컨텍스트에 게이트웨이 키·공급자 토큰이 없다」 | ② `docs/doc-tracker.md`의 AC-F3·F5 항목이 **엔드포인트·헤더·외부 식별자 형태까지** 적는다 · ② AC-F3의 「유일성」·「대기 위치」 불릿이 축자 · ② AC-F3의 「승인 컨텍스트에 자격 증명이나 게이트웨이 API key가 실리지 않는다(AC-F6)」. 참조 구현의 **파일 경로**(`mcp-server/src/services/gatekeeper.ts`)는 어디에도 없어 남겼다 |
+| `approval_gateway.go` `now`/`sleep` 필드 (2→0) | 「테스트가 시계를 주입한다」 | ① 3차 패스가 `WithAgentPort`·`WithReadiness`에서 지운 것과 **같은 형태**. 테스트가 그 자체로 보여 준다 |
+| `session_mcp_notices.go` 파일 헤더 (17→9) | 「pull을 택한 이유: 워크로드→헬퍼:8092는 이미 egress 허용목록에 있어 정책을 하나도 안 건드리지만 push는 양방향 규칙을 요구한다」 · 「피드가 메모리뿐인 것은 AC-F4의 무상태 요구」 | ② `docs/doc-tracker.md`가 **그 두 문단을 거의 그대로** 적는다(「워크로드가 헬퍼를 당긴다(pull) … push는 양쪽에 새 규칙을 요구한다」, 「피드가 메모리뿐인 것도 의도다」) |
+| `session_mcp_notice_tail.go` 헤더(11→6) · Dropped 인라인(3→0) | 커서 규약 열거(`id=nextOffset`, `{offset,payloadBase64,nextOffset}`, UTF-8 경계, reset 복구) · 「조용한 구멍보다 밝힌 구멍이 낫다」 | ② AC-F3의 「대기 표시」 불릿이 **그 괄호 목록까지 축자로** 적는다 · ① `noticeFeedResponse.Dropped` doc이 같은 말을 한다 |
+| `session_mcp_tools.go` 헤더(9→6) · `sessionMCPConfig`(3→1) · `toolDefinitions`(4→2) · `callTool`(6→4) | 「게이트 없으면 도구 목록이 빈다」의 **네 벌** · 「거절은 transport 오류가 아니라 도구 결과다」 | ① `session_mcp.go` 헤더가 그 불변식을 「두 파일에 걸친다」고 선언하며 소유한다 — 그쪽 하나만 남겼다 · ① `mcpToolText`/`mcpToolError` doc이 `isError` 규약의 정본 |
+| `session_mcp_tools.go` `maxFetchedBodyBytes` (4→2) | 「AC-F5 공유 볼륨이 착지할 때까지 본문을 자른다」 | ② `doc-tracker.md`의 「② AC-F5 RWX 공유 볼륨 미착지 — 그때까지 … 100 000바이트에서 잘라 도구 응답으로 돌려준다」 |
+| `session_mcp.go` `sessionMCPServerVersion` (3→1) | 「1이 된 것은 승인 게이트와 첫 외부 도구가 착지했을 때이고 0은 handshake만 되던 서버였다」 | ④ 커밋 이력이 그 전이를 갖는다 |
+| 테스트 20개의 doc 46줄 | 소스 doc·인라인이 이미 단언하는 서술 — `TestShellPIDFloor`↔`shellPIDFloor` · `TestCheckpointDefersRestartWhileStreaming`↔`handleCheckpoint` 인라인 · `TestApprovalGatewayRefusesIncompleteConfiguration`↔`newApprovalGateway` · `TestApprovalGatewayFailuresAreErrorsNotDecisions`↔`do` · `TestUnknownNoticeKindsRenderNothing`↔`renderApprovalNotice` · `TestNoticeTailerSurvivesAnUnreachableFeed`↔`run` · `TestRestoredManagedSettingsArePointedAtTheCurrentSessionMCP`↔`ensureClaudeManagedSettings` · `TestProviderCAWidensTrustWithoutWeakeningIt`↔`trustProviderCA` · `session_mcp_test.go`의 게이트 불변식 **세 벌** · `credential_proxy_test.go`의 `Connection` 헤더 주석↔`Rewrite` 인라인 · `approval_gated_test.go`의 loopback 인라인↔`validateCredentialProxyBindAddr` | ① 전부 **같은 레포의 소스 doc**이 정본이다. 테스트 쪽은 「무엇을 재는가」를 가리키는 한 줄로 줄이고, **소스에 없는 것**(시나리오 번호·`httptest` 내부 동작·비결정적 타이밍 규약·명령 치환이 왜 강한 단언인지)은 남겼다 |
+
+**유지 739줄** — 「지울까」를 검토했다가 남긴 것들.
+
+- **아카이브 안전성 전부(`claude_archive.go` 18줄, 한 줄도 안 지웠다)** — 「연쇄 심링크 이스케이프는 lexical Clean이 놓친다」, 「디렉터리 권한은 자식을 만든 뒤에 적용한다」, 「이전 라이브 상태가 온전할 때 불변식을 검증한다 — workspace/home을 조용히 재생성하면 손상이 데이터 손실이 된다」. 코드 형태로 보이지 않고 어느 AC에도 없다.
+- **`credential_proxy_stream.go` 10줄 · `claude_process_linux.go` 9줄(둘 다 0 제거)** — 「overflow·전송 오류에서 redactor를 Finish하지 말 것 — 보류된 suffix가 자격 증명의 일부일 수 있다」, 「남은 허용치보다 1바이트 더 읽어 전체 버퍼링 없이 초과를 잡는다」, 「`comm`은 괄호로 싸여 있고 공백·`)`을 포함할 수 있으니 **마지막** `)` 뒤에서 자른다」. 전부 되돌리기 어려운 실수의 근거이거나 외부 포맷 지식이다.
+- **`main.go`의 PTY·시그널 지식** — 「PTY slave가 controlling terminal이 되는 것이 곧 인터랙티브의 정의」, 「인터랙티브 셸은 SIGTERM을 무시하므로 SIGHUP 먼저」, `upgrader`의 「피어는 브라우저가 아니라 클러스터 안의 control plane이라 origin 게이트가 없다」.
+- **`claude.go` `defaultClaudeStateDir`의 EBUSY(3줄)** — 3차 패스가 `client_orchestrator.go`의 `claudeCodeStateDir`에서 남긴 것과 **같은 사실의 두 번째 사본**이다. 갈렸다(아래).
+- **`claude.go` `appendPlatformNotice`의 quota·redaction 제외 근거(5줄)** — 「invocation quota는 assistant text와 stderr에 대해 정의된 것이고 플랫폼 알림은 둘 다 아니다」, 「도구 이름과 외부 식별자로 조립되므로 redaction sink를 지나지 않는다」. AC-E2가 quota의 범위를 정하지만 **이 코드 경로가 왜 그 밖인지**는 말하지 않는다.
+- **`approval_gateway.go`의 실패 의미론** — `poll`의 「모르는 중간 status는 결정이 아니라 계속 대기로 읽는다」, `do`의 「묻지 못한 것은 거절당한 것이 아니다 — 모델에 refusal로 보고해도 되는 것은 뒤쪽뿐이다」, `approvalDecision`의 「PENDING은 요청의 상태이지 기다림의 결과가 아니다」.
+- **`session_mcp_tools.go` `requestIDPrefix`(4줄)** — 「JSON-RPC id를 쓰지 않는 이유: 에이전트 프로세스마다 1로 되감기므로 한 세션의 두 invocation에서 충돌한다」. 어느 문서에도 없다.
+- **`output_stream.go`의 셸 PTY 폴백(4줄)** — 「셸 PTY 바이트는 임의일 수 있다. 청크 안에 경계가 없으면 그 스트림을 영영 멈추느니 바이트 경계 폴백을 유지한다」. AC-E3은 Claude 출력만 valid UTF-8이라고 말하고 셸 쪽은 말하지 않는다.
+- **`main.go` `adopt`의 `sync.Once` 근거(3줄)** — 「한 pod은 평생 셸을 최대 하나 채택한다(신규 기동 **또는** 복원 한 번), 그래서 once로 충분하다」.
+- **cross-module 「Keep in sync」 4건** — `helperProxyPort`/`sessionMCPPort` · `defaultAddr` · `restoreModeEnv` · MCP 컨테이너 env 3종. 3차 패스가 컨트롤 플레인 쪽 4건을 남긴 것과 같은 이유이고, **이쪽이 그 4건이 가리키는 반대편**이다.
+
+**갈려서 남긴 것 셋.**
+
+1. **`credential_proxy.go` `providerCACertEnv`의 7줄** — 존재 이유(공개 저장소가 모르는 CA가 발급한 private gateway)와 분류 근거(주소류이지 자격 증명이 아니다)는 **#70이 두 시간 전에 `client_orchestrator.go`의 `AnthropicCACertEnvVar`에서 판정해 8줄로 남긴 것과 같은 내용**이다. 즉 레포에 두 벌 있다. 그럼에도 남긴 이유: 컨트롤 플레인 쪽은 「어느 Secret 키를 어느 컨테이너에 넣는가」의 자리이고, **신뢰 결정을 실제로 실행하는 것은 이쪽**(`trustProviderCA`)이다. 한쪽만 읽는 독자가 반대쪽으로 가야 답을 얻는 형태를 만들지 않았다. 다음 패스가 둘 중 하나를 정본으로 정하면 그때가 제거 시점이다.
+2. **`claude.go` `defaultClaudeStateDir`의 EBUSY** — 위와 같은 형태(3차 패스가 컨트롤 플레인 쪽을 남겼다). 마운트 경로를 **선언**하는 것은 저쪽이고 **rename하는 것은 이쪽**(`installClaudeState`)이라 남겼다.
+3. **`checkpoint.go` `criuEngine.Restore` 인터페이스 doc(3줄)** — 본문이 하는 일을 옮겨 적는 형태로 보이지만, 인터페이스 메서드의 doc은 **구현이 아니라 계약**이고 `fakeCriuEngine`도 그 계약으로 작성됐다. 남겼다.
+
+**관측 — 이 렌즈 밖에 낡은 주석이 하나 지목돼 있다.** `docs/test/e2e.md`가
+`control-plane/cmd/control-plane/main.go:79-82`의 Go 주석(「its data plane runtime — the helper
+pod's session MCP — is not implemented yet」)을 **거짓이 된 주석**으로 지목하며 소관을 이 모델로
+넘겼다. 이번 슬라이스의 범위(`data-plane/cmd/agent/`) 밖이라 손대지 않았다 —
+`cmd/control-plane/`(주석 77줄)을 잡는 **다음 패스의 1순위**다.
+
+#### 증분 재판정 — AC-F3 유휴 예외가 더한 16줄 (2026-09-04)
+
+이 슬라이스가 열려 있는 동안 #71이 머지돼 등재 범위에 주석 16줄을 더했고, 머지 직전 게이트가
+R2로 잡았다. 유입된 **16줄만** 같은 절차로 판정했다 — **제거 8 · 유지 8**(739 → 747).
+
+| 자리 | 판정 | 근거 |
+| --- | --- | --- |
+| `claude.go` `approvals` 필드 doc (2→1) | 1줄 제거 | 「claude-code에서는 비어 있다 — 게이트가 없으니까」는 `approval_wait.go`의 `observeApprovalNotices` doc이 **그 사실을 소유한 자리에서** 이미 말한다. AC-F3 포인터 한 줄만 남겼다 |
+| `claude.go` `approvalWaitPath` 핸들러 doc (5→2) | 3줄 제거 | 「사람을 기다리는 중인지 답해서 컨트롤 플레인이 유휴 카운트를 붙든다」는 ② `docs/prd/approval-gated-workload.md` AC-F3의 사본이고 `approval_wait.go` 패키지 doc이 더 길게 적는다. 반면 **「복원 대기 중에도 답한다」**는 바로 아래 `GET /attach`가 `isReady()` 가드를 두는 것과의 **대비**로만 보이는 사실이라 남겼다 |
+| `session_mcp_notice_tail.go` `noticeSink` doc (4→2) | 2줄 제거 | 「한 폴이 두 가지를 함께 준다 → 그래서 함께 넘긴다」는 **인터페이스가 두 메서드를 한 타입에 묶은 형태 자체**가 말한다(①). AC-E3·AC-F3 포인터는 남겼다 |
+| `session_mcp_notice_tail_test.go` `recordingSink` doc (2→0) | 2줄 제거 | `emit func(string)` · `waits approvalWaits` 두 필드와 두 메서드가 그대로 말하는 선언 재진술이고, 「테스트가 양쪽을 단언할 수 있게」는 그 단언을 하는 테스트 본문이 말한다(①) |
+
+**유지한 8줄**: 위 표의 잔여 5줄과 `run()`의 **「State before markers」 4줄 중 순서 계약 부분** —
+「상태를 마커보다 먼저 넘긴다」와 그 이유(늦은 상태는 하지 말았어야 할 freeze를 만들지만, 늦은
+마커는 늦은 마커일 뿐이다)는 **루프 안의 순서 계약**이라 정책이 명시적으로 보호하는 유형이다.
+갈리지 않았다.
+
+**범위 밖으로 남긴 것 — 신규 2파일.** #71이 같은 패키지에 `approval_wait.go`(48줄)와
+`approval_wait_test.go`(20줄)를 새로 더했다. 등재 행의 파일 목록 밖이라 게이트는 이 68줄을
+미판정 잔량으로 센다. 이 슬라이스는 **등재된 32파일의 유입분만** 재판정했고, 두 신규 파일은
+as-is 지문 이동의 재감지가 다음 task로 잇는다.
 
 ## 범위 밖
 
