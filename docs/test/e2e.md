@@ -78,31 +78,43 @@ operational idle-state producer가 생기면 배포 e2e로 채운다.
 개수에 상한이 걸려 있어(`상한` 집계) 새 위반이 들어오면 CI가 막고, 줄어들 때만 상한을 함께
 내린다.
 
-남은 두 파일 모두 `page.route("**/api/v1/**")`로 **control-plane API 표면 전체**를 가로채 세션
-목록·단건·SSE 스트림·snapshot·delete를 손으로 지은 픽스처로 응답한다. 그중 일부(config 실패,
-응답 보류로 만드는 중간 UI 상태, past-end cursor `reset` 이벤트)는 `NET` 자격을 만족하지만,
-그것들이 **API 전체를 삼키는 인터셉트 안에** 들어 있어 행 단위로 승인할 수 없다. 실 SUT가 낼
-수 있는 데이터(세션 목록·상태·pod)까지 함께 위조되기 때문이다.
+남은 한 파일은 `page` 라우팅으로 **control-plane API 표면 전체**(`**/api/v1/**`)를 가로채 세션
+목록·단건·SSE 스트림·config를 손으로 지은 픽스처로 응답한다. 그중 일부(config 실패, 응답 보류로
+만드는 중간 UI 상태, past-end cursor `reset` 이벤트)는 `NET` 자격을 만족하지만, 그것들이 **API
+전체를 삼키는 인터셉트 안에** 들어 있어 행 단위로 승인할 수 없다. 실 SUT가 낼 수 있는
+데이터(세션 목록·상태·pod)까지 함께 위조되기 때문이다.
 
-제거가 이 슬라이스에서 끝나지 않는 이유는 두 스위트가 모두 **claude-code 세션**을 검증 대상으로
+제거가 한 슬라이스에서 끝나지 않은 이유는 두 스위트가 모두 **claude-code 세션**을 검증 대상으로
 삼기 때문이었다. 그 선행은 2026-09-04에 **모두 풀렸다** — 세션 pod가 SUT에서 서고(`PLUGIN-CRED`
 등재 + 인클러스터 마켓플레이스 원격), 프롬프트에 답하는 provider도 인클러스터에 있다
 (`CLAUDE-PROVIDER` 등재). 그래서 아래 「차단 요인」 표는 비었다.
 
-**그럼에도 상한은 4 그대로다.** 남은 것은 선행이 아니라 **재작성 노동**이고, 래칫은 실제로 줄였을
-때만 내린다 — "곧 줄어든다"로 상한을 미리 내리면 그때부터 게이트가 붉은 채로 산다.
+**남은 것은 선행이 아니라 재작성 노동이고, 래칫은 실제로 줄였을 때만 내린다** — "곧 줄어든다"로
+상한을 미리 내리면 그때부터 게이트가 붉은 채로 산다. 그래서 상한은 위반을 **실제로 지운 그
+커밋에서만** 함께 내려간다(6 → 4 → 2).
 
-*해소된 것*: `web/e2e/journeys/session-deletion.spec.ts`는 여기서 빠졌다. 세션 생성과 동결을 제품 API로
+**j6가 남은 이유는 노동량이 아니라 설계 논점이다.** `installAgentApi`가 덮는 12개 테스트 중 절반은
+`/api/v1/config`가 **테스트마다 다른 모델 카탈로그**(2개짜리 목록 · 빈 목록 · 503)를 내야 성립한다.
+배포된 SUT 하나는 그 세 상태를 동시에 낼 수 없으므로, 실패·지연만 좁혀 `NET`으로 등재하는 것으로는
+닫히지 않고 **파일을 나누는 설계**가 먼저다. 그 판단이 서기 전까지 두 행은 여기 남는다.
+
+*해소된 것*: ① `web/e2e/journeys/session-deletion.spec.ts`는 여기서 빠졌다. 세션 생성과 동결을 제품 API로
 돌려 실 SUT 위에서 돌게 만들고, 남은 인터셉트를 첫 DELETE의 409 응답 하나로 좁혀
 `DELETE-CONFLICT-ERR`(`NET`)로 **승인 등재**했다. 그만큼 상한도 6에서 4로 내려갔다.
+② `web/e2e/journeys/manual-archive.spec.ts`는 2026-09-04에 빠졌다 — 이쪽은 **좁히지 않고 전량
+제거**했다. claude-code 세션을 제품 API로 실제로 만들고(대상을 shell로 바꾸지 않았다),
+`ws-archive-session` 클릭이 제품 아카이브 경로(`CLAUDE_CODE_ARCHIVE_ENABLED`는 base에서 이미 on,
+`NewAgentArchiveCheckpointer`)를 타게 한 뒤, 얼어붙은 상태와 회수된 pod를 배포 SUT에 **다시 물어**
+확인한다. 중간 `Archiving…` 상태도 지연 주입 없이 관측된다 — 실 아카이브가 워크스페이스를 MinIO로
+올리고 pod를 회수한 **뒤에야** 응답하기 때문이다. 예고돼 있던 `NET`(LAT) 등재는 **쓰지 않았다**:
+정책이 "예외는 늘지 않는 방향으로만"이라 등재 seam을 늘리지 않고 닫는 쪽이 낫다. 상한은 4에서 2로
+내려갔다.
 
 <!-- fidelity:violations -->
 | 파일 | 토큰 | 무엇을 위조하는가 | 제거 경로 (선결조건) |
 | --- | --- | --- | --- |
 | `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` | `.route(` | `installAgentApi`가 12개 테스트 전부에 `/api/v1/**` 핸들러를 설치해 세션·config·SSE 스트림을 위조한다. | **선결조건은 없다** — 세션 pod가 SUT에서 서고(`PLUGIN-CRED`), 프롬프트에 답하는 provider도 인클러스터에 있다(`CLAUDE-PROVIDER`). 남은 것은 재작성 노동뿐이다: **claude-code 세션을 대상으로 유지한 채** 실 SUT 위에서 다시 쓴다. 재작성에 앞서 실 Claude CLI가 그 대역 표면으로 실제 프롬프트 루프를 도는지부터 확인해야 한다 — `CLAUDE-PROVIDER` 등재 행이 그 계약을 미검증으로 남겨 두었다. |
 | `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` | `route.fulfill(` | 위와 같은 핸들러의 응답 생성부 — JSON·`text/event-stream` 본문을 직접 짓는다. | 위와 같다. 재작성 뒤에도 실 SUT가 요청 시점에 낼 수 없는 주입(config 503, 응답 보류, past-end cursor `reset` 재생)은 남으므로, 그것들은 `session-deletion` 선례대로 **행 단위로 좁혀 `NET` 승인 등재**로 닫는다 — 전량 제거가 목표가 아니다. |
-| `web/e2e/journeys/manual-archive.spec.ts` | `.route(` | active claude-code 세션과 그 목록·단건·stream을 위조한다. | 위와 같다. **워크로드를 shell로 바꿔 우회하지 않는다** — 이 스위트의 검증 대상은 claude-code 아카이브 UI 경로이고, 대상을 바꾸면 위반은 사라져도 그 경로는 영영 미검증으로 남는다. |
-| `web/e2e/journeys/manual-archive.spec.ts` | `route.fulfill(` | 위 핸들러의 응답 생성부 + snapshot 응답을 보류해 중간 상태를 만든다. | 위와 같다. 재작성 뒤 남는 중간 "Archiving…" 상태의 지연 주입은 `NET`(LAT)으로 **행 단위 승인 가능**하다. |
 <!-- /fidelity:violations -->
 
 ### 차단 요인 (seam이 아니다 — 치환조차 없는 공백의 원인)
@@ -157,8 +169,6 @@ seam 스캔이 잡는 `(파일, 토큰)` 쌍마다 한 행이다. 등재 seam에
 | `k8s/deployment.yaml` | `CRIU_ENABLED` | `CRIU-GATE` | 프로덕션 base의 게이트 값(`"false"`). |
 | `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` | `.route(` | `위반` | 미해소 위반 — 위 표 참조. |
 | `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` | `route.fulfill(` | `위반` | 미해소 위반 — 위 표 참조. |
-| `web/e2e/journeys/manual-archive.spec.ts` | `.route(` | `위반` | 미해소 위반 — 위 표 참조. |
-| `web/e2e/journeys/manual-archive.spec.ts` | `route.fulfill(` | `위반` | 미해소 위반 — 위 표 참조. |
 | `web/e2e/journeys/session-deletion.spec.ts` | `.route(` | `DELETE-CONFLICT-ERR` | 스냅샷 삭제 테스트가 첫 DELETE만 가로채려고 그 세션 URL에 거는 핸들러. |
 | `web/e2e/journeys/session-deletion.spec.ts` | `route.fulfill(` | `DELETE-CONFLICT-ERR` | 주입되는 단 하나의 응답 — 409 `session state changed concurrently`(실서버 메시지와 동일). |
 | `web/e2e/journeys/session-deletion.spec.ts` | `route.continue(` | `DELETE-CONFLICT-ERR` | 같은 핸들러의 통과 분기. 단건 GET도, **재시도 DELETE도** 실 control-plane이 응답하게 한다 — 이 줄이 없으면 승인 범위가 409 하나를 넘어선다. |
@@ -177,8 +187,8 @@ seam 스캔이 잡는 `(파일, 토큰)` 쌍마다 한 행이다. 등재 seam에
 <!-- fidelity:summary -->
 - 등재 seam **4**개 — GATE **1** · TRIG **0** · EXT **2** · NET **1**
 - 코드 마커 지점 **6** / 마커 파일 **6**
-- 지문 회계 행 **19** — 등재 귀속 9 · 미해소 위반 **4** · 비-seam **6**
-- web e2e 인터셉트 **7**건 (승인 3 · 위반 4, 상한 **4**)
+- 지문 회계 행 **17** — 등재 귀속 9 · 미해소 위반 **2** · 비-seam **6**
+- web e2e 인터셉트 **5**건 (승인 3 · 위반 2, 상한 **2**)
 - 차단 요인 **0**건 (seam이 아니다 — 셋 다 등재 또는 실배포로 나갔다)
 <!-- /fidelity:summary -->
 
@@ -359,8 +369,8 @@ AC-F1~F6(approval-gated 워크로드)가 여기 남는다.
 > 인클러스터 provider 대역을 세워 `CLAUDE-PROVIDER`(EXT)로 등재하면서 「차단 요인」 표가 비었다.
 > 그래서 E2~E6이 아직 공백인 이유는 이제 **원인이 아니라 순서**다 — 전용 파일을 저작하는 일이
 > 남아 있고, 그 슬라이스는 먼저 실 Claude CLI가 그 대역으로 프롬프트 루프를 도는지 확인해야 한다
-> (등재 행이 그 계약을 미검증으로 남겨 두었다). 그때까지는 j6·`manual-archive`의 인터셉트가
-> 「미해소 위반」에 그대로 남는다.
+> (등재 행이 그 계약을 미검증으로 남겨 두었다). 그때까지는 j6의 인터셉트가 「미해소 위반」에
+> 그대로 남는다 — `manual-archive`는 2026-09-04에 실 SUT 재작성으로 거기서 빠졌다.
 
 > **왜 이번에도 E 계열을 범위 밖에 두는가** *(2026-08-30 재판정)*. 원래 근거였던 "구현 전무"는
 > #24 *Implement Claude Code workload end to end* 로 **더 이상 성립하지 않는다**. 그럼에도 범위
