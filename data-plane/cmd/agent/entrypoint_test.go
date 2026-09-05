@@ -108,8 +108,12 @@ func TestEntrypointPointsMarketplaceAndAuthHeaderAtTheConfiguredRemote(t *testin
 	cacheDir := filepath.Join(dir, "plugin-cache")
 	bootstrapHome := filepath.Join(dir, "bootstrap-home")
 	const remote = "http://plugin-marketplace-git:8080/plugin-marketplace.git"
+	const mcpURL = "http://k3s-mcp-fake:8080/mcp"
 
-	writeEntrypointTestExecutable(t, dir, "curl", `printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"isError":false,"content":[{"type":"resource","resource":{"uri":"file:///github-token.env","mimeType":"text/plain","text":"# Expires at: 2099-01-01T00:00:00Z\nGITHUB_TOKEN=test-installation-token\n"}}]}}'`)
+	writeEntrypointTestExecutable(t, dir, "curl", `
+for mcp_target in "$@"; do :; done
+[ "$mcp_target" = "$EXPECTED_K3S_MCP_URL" ]
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"isError":false,"content":[{"type":"resource","resource":{"uri":"file:///github-token.env","mimeType":"text/plain","text":"# Expires at: 2099-01-01T00:00:00Z\nGITHUB_TOKEN=test-installation-token\n"}}]}}'`)
 	writeEntrypointTestExecutable(t, dir, "claude", `
 [ "$GIT_CONFIG_COUNT" = "1" ]
 [ "$GIT_CONFIG_KEY_0" = "http.$EXPECTED_REMOTE.extraheader" ]
@@ -124,7 +128,8 @@ printf 'claude:%s\n' "$*" >> "$CALL_LOG"
 		"DATA_PLANE_WORKLOAD=claude-code",
 		"DATA_PLANE_AGENT_BIN="+agent,
 		"K3S_MCP_TOKEN=test-k3s-mcp-token",
-		"K3S_MCP_URL=http://k3s-mcp-fake:8080/mcp",
+		"K3S_MCP_URL="+mcpURL,
+		"EXPECTED_K3S_MCP_URL="+mcpURL,
 		"CLAUDE_CODE_PLUGIN_MARKETPLACE_URL="+remote,
 		"CLAUDE_CODE_PLUGIN_CACHE_DIR="+cacheDir,
 		"CLAUDE_CODE_PLUGIN_BOOTSTRAP_HOME="+bootstrapHome,
