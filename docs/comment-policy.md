@@ -73,8 +73,11 @@
    대상이 아니다.
 2. 범위 안의 주석을 **한 줄도 빠짐없이** 읽는다. 「흔한 중복 유형 목록」에서 찾지 않는다 —
    그런 목록은 가설이지 판정이 아니다.
-3. 제거하는 줄마다 **좌표**를 적는다: 어느 파일 몇 줄이, 또는 어느 문서의 어느 AC가 이미 이
-   내용을 말하는가. 좌표 없이 「중복이다」라고만 적으면 리뷰가 불가능하다.
+3. 제거하는 줄마다 **좌표**를 적는다: 어느 파일의 어느 **심볼**이, 또는 어느 문서의 어느 AC가
+   이미 이 내용을 말하는가. 좌표 없이 「중복이다」라고만 적으면 리뷰가 불가능하다.
+   **줄 번호는 쓰지 않는다** — 다음 판정이 그 파일에서 주석을 지우면 좌표가 밀려 조용히 썩는데,
+   지문·합계와 달리 줄 번호는 어떤 규칙도 재측정하지 않아 **원장이 초록인 채로 거짓이 된다.**
+   이제 **R5**가 그것을 금지한다.
 4. 유지 판정도 판정이다. 특히 **판단이 갈린 것**은 왜 갈렸는지를 남긴다 — 다음 판정의 입력이 된다.
 5. 판정한 줄 수(제거 + 유지)를 아래 이력에 기록한다. **성과는 지운 줄 수가 아니라 판정된 줄 수다.**
 
@@ -86,7 +89,8 @@
 >
 > **그 오독을 이제 기계가 막는다.** `scripts/check_comment_policy.py`가 매 PR에서 아래 행들을
 > 모델 as-is 지문과 **같은 추출·정규화·정렬로 재측정**해 대조한다(R1 범위 실재 · R2 줄 수·지문
-> 일치 · R3 이중 등재 금지 · R4 합계 미러). 등재된 범위에 누가 주석을 더하면 그 자리에서 빨개진다.
+> 일치 · R3 이중 등재 금지 · R4 합계 미러 · **R5 줄 번호 좌표 금지**). 등재된 범위에 누가 주석을
+> 더하면 그 자리에서 빨개진다.
 > 그래서 이전 판의 「@ 측정 커밋」 표기는 더 필요하지 않다 — **지문이 그 자리를 대신한다.**
 >
 > 읽는 법: **`주석 줄`·`지문`은 그 범위의 *현재* 상태**이고(게이트가 대조하는 값), **판정한 줄 수와
@@ -103,9 +107,10 @@
 | 2026-09-04 | `data-plane/cmd/agent/approval_gated_test.go` · `data-plane/cmd/agent/approval_gateway.go` · `data-plane/cmd/agent/approval_gateway_test.go` · `data-plane/cmd/agent/approval_wait.go` · `data-plane/cmd/agent/approval_wait_test.go` · `data-plane/cmd/agent/checkpoint.go` · `data-plane/cmd/agent/checkpoint_test.go` · `data-plane/cmd/agent/claude.go` · `data-plane/cmd/agent/claude_archive.go` · `data-plane/cmd/agent/claude_archive_test.go` · `data-plane/cmd/agent/claude_process_linux.go` · `data-plane/cmd/agent/claude_process_linux_test.go` · `data-plane/cmd/agent/claude_stream.go` · `data-plane/cmd/agent/claude_stream_contract_test.go` · `data-plane/cmd/agent/claude_stream_test.go` · `data-plane/cmd/agent/claude_test.go` · `data-plane/cmd/agent/credential_proxy.go` · `data-plane/cmd/agent/credential_proxy_ca_test.go` · `data-plane/cmd/agent/credential_proxy_stream.go` · `data-plane/cmd/agent/credential_proxy_stream_progress_test.go` · `data-plane/cmd/agent/credential_proxy_stream_test.go` · `data-plane/cmd/agent/credential_proxy_test.go` · `data-plane/cmd/agent/entrypoint_test.go` · `data-plane/cmd/agent/main.go` · `data-plane/cmd/agent/main_test.go` · `data-plane/cmd/agent/output_stream.go` · `data-plane/cmd/agent/session_mcp.go` · `data-plane/cmd/agent/session_mcp_gate_test.go` · `data-plane/cmd/agent/session_mcp_notice_tail.go` · `data-plane/cmd/agent/session_mcp_notice_tail_test.go` · `data-plane/cmd/agent/session_mcp_notices.go` · `data-plane/cmd/agent/session_mcp_notices_test.go` · `data-plane/cmd/agent/session_mcp_test.go` · `data-plane/cmd/agent/session_mcp_tools.go` | 781 | `7dad4f10cce1` | 4차 판정 패스 — **976줄 판정, 제거 237 · 유지 739**. 데이터 플레인 전체. *2026-09-04 증분 재판정: AC-F3 유휴 예외가 이 범위에 더한 16줄 판정 — 제거 8 · 유지 8 (739 → 747).* *2026-09-05: #71이 더한 신규 2파일(`approval_wait.go` 48 · `approval_wait_test.go` 20)을 이 행에 편입해 판정 — **68줄 판정, 제거 34 · 유지 34** (747 → 781). 상세 ↓* |
 | 2026-09-05 | `control-plane/internal/adapter/agent/client.go` · `control-plane/internal/adapter/agent/client_test.go` · `control-plane/internal/adapter/agent/stub.go` · `control-plane/internal/adapter/checkpointstore/store.go` · `control-plane/internal/adapter/checkpointstore/store_test.go` · `control-plane/internal/adapter/configmap/store.go` · `control-plane/internal/adapter/configmap/store_test.go` · `control-plane/internal/adapter/configmap/envtest/go.mod` · `control-plane/internal/adapter/configmap/envtest/store_conflict_test.go` · `control-plane/internal/adapter/criu/agent_checkpointer.go` · `control-plane/internal/adapter/criu/agent_checkpointer_test.go` · `control-plane/internal/adapter/criu/checkpointer.go` · `control-plane/internal/adapter/criu/container_checkpointer.go` · `control-plane/internal/adapter/criu/container_checkpointer_test.go` | 352 | `45e1de866652` | 5차 판정 패스 — **508줄 판정, 제거 156 · 유지 352**. `internal/adapter/` 의 k8s 외 전부(3차 패스가 k8s 4파일을 이미 등재했으므로 이 행으로 **어댑터 계층이 닫힌다**). 상세 ↓ |
 | 2026-09-05 | `control-plane/cmd/control-plane/main.go` | 58 | `44ca04abf7ff` | 6차 판정 패스 — **77줄 판정, 제거 19 · 유지 58**. 4차 패스가 「다음 패스의 1순위」로 지목한 조립 루트. **거짓이 된 주석 2건**(「helper pod's session MCP는 아직 구현되지 않았다」)을 포함한다. 상세 ↓ |
+| 2026-09-05 | `control-plane/go.mod` · `control-plane/cmd/control-plane/main_test.go` · `control-plane/internal/api/api.go` · `control-plane/internal/api/api_test.go` · `control-plane/internal/api/config_test.go` · `control-plane/internal/api/errors_test.go` · `control-plane/internal/api/workload_type_test.go` · `control-plane/internal/service/approval_idle_test.go` · `control-plane/internal/static/static.go` · `control-plane/internal/store/store.go` · `data-plane/go.mod` | 86 | `4b1264fc2b5f` | 7차 판정 패스 — **142줄 판정, 제거 57 · 유지 85**(지문 기준 143 → 86; `approval_idle_test.go`의 임베드 필드 `*agent.StubClient` 1줄은 주석이 아니라 2차 패스가 적은 오검출이다). 앞선 여섯 패스가 남긴 **컨트롤 플레인의 마지막 미판정 패키지 전부**. 이 행으로 스캔 범위에서 남는 미판정은 **`control-plane/test/`와 `web/` 둘뿐**이다. 상세 ↓ |
 <!-- /판정-원장 -->
 
-판정 완료 합계 **<!-- 판정-합계 -->1901<!-- /판정-합계 -->줄**(등재 범위의 현재 줄 수 합).
+판정 완료 합계 **<!-- 판정-합계 -->1987<!-- /판정-합계 -->줄**(등재 범위의 현재 줄 수 합).
 전체 대비 비율과 미판정 잔량은 **게이트가 출력한다** — 프로즈에 적으면 낡는다.
 
 ### 2026-09-04 — `control-plane/internal/session/` (판정 162줄)
@@ -177,7 +182,7 @@
 | `manager.go` `stopPodsBestEffort`·`Create` Reach (5→3) | 보조 파드 설명의 재진술 | ② AC-A2 「보조 파드」 절 *「보조 파드는 세션 워크로드를 실행하지 않고」* |
 | `reaper.go` `IdleReaper` (15→5) | 스캔 동작 서술 · `/snapshot` 엔드포인트와의 대비 · `TODO(policy)` 5줄 사본 | ① `ScanOnce` doc과 본문 · ① `Service.Snapshot` doc(*「Explicit snapshots have no idle precondition」*) · ① `session.MaxIdle`의 `TODO(policy)` — **원본은 doc-tracker가 앵커로 참조해 1차 패스가 보존한 그 블록이다.** 포인터만 남겼다 |
 | `reaper.go` `SnapshotIfIdle` 재진술 (2→0) | 「Lease를 잡고 LastAccess를 다시 읽는다」 · 「일반 매니저는 Snapshot을 쓴다」 | ① `Service.SnapshotIfIdle` doc이 같은 계약을 말한다 · ① `ScanOnce`의 `idleSnapshotManager` 타입 단언 |
-| `reaper.go` `NewIdleReaper`·`Run`·`ScanOnce` (3→0) | 「테스트가 시계를 주입한다」 · 「SIGINT/SIGTERM에 깨끗이 멈춘다」 · 「단일 tick을 위해 export했다」 | ① `reaper_test.go` · ① `cmd/control-plane/main.go:152`의 `signal.NotifyContext(…SIGINT, SIGTERM)` · ① export 여부는 선언이 말한다 |
+| `reaper.go` `NewIdleReaper`·`Run`·`ScanOnce` (3→0) | 「테스트가 시계를 주입한다」 · 「SIGINT/SIGTERM에 깨끗이 멈춘다」 · 「단일 tick을 위해 export했다」 | ① `reaper_test.go` · ① `cmd/control-plane/main.go`의 `signal.NotifyContext(…SIGINT, SIGTERM)` · ① export 여부는 선언이 말한다 |
 | `manager_test.go` 헬퍼·테스트 doc 9곳 (32→17) | 본문이 그대로 단언하는 서술(«pod가 회수되고 새 pod가 생긴다», «active는 그대로, idle은 승격, snapshot은 복원») | ① 각 테스트 본문의 단언과 `res.Path` 기대값 · ② `docs/test/lifecycle.md` 시나리오 1·2, AC-C2/AC-C3 |
 | `workload_type_test.go` doc 5곳 (13→8) | 「저장본은 shell 기본값으로 읽혀야 한다」 등 | ① `NormalizeWorkloadType` doc — *「records written before the type axis existed … resolves to shell, the only type those sessions could have been」* 축자 일치 |
 | `auxiliary_pods_test.go` doc 4곳 (14→9) | 파일 상단의 테스트 목록 재진술 · AC-F4 인용문 · 「보조 파드는 상태를 갖지 않아 복원이 아니라 재생성」 | ① 바로 아래 테스트 **함수 이름들**(`TestSnapshotReclaims…`·`TestTerminateReclaims…`·`TestRestoreProvisions…`·`TestFailedCreateReclaims…`) · ② AC-F4 · ① `manager.go` `Restore`의 같은 설명(그쪽을 정본으로 남겼다) |
@@ -236,7 +241,7 @@ replays the full session history`. 이 문서의 「포인터는 남기고 사�
 | --- | --- | --- |
 | `approvalWaitReporter` doc (3→1) | 2줄 제거 | 「선택적 능력 인터페이스인 이유」는 ③ PR 본문·④ 커밋 메시지에 있다. 게다가 **바로 옆 형제 셋**(`checkpointAborter` · `generationCheckpointer` · `agentCheckpointAborter`)은 주석이 **0줄**이다 — 같은 형태에 다른 기준을 적용하지 않는다. AC 포인터 한 줄만 남겼다 |
 | `WithClock` doc (4→2) | 2줄 제거 | 「대기 중에는 카운트가 진행되지 않고, 끝나면 진행된다」는 인용은 `test/approval-gated-workload.md` 시나리오 5의 **기대 결과를 그대로 옮겨 적은 사본**이다. 운영 규칙대로 **경로(포인터)는 남기고 사본을 지웠다.** exported 라 식별자로 시작하는 doc 첫 줄은 유지 |
-| `snapshot()` 인라인 (6→2) | 4줄 제거 | 「결정이 나면 갱신이 멈추고 일반 카운트로 돌아간다」는 `prd/approval-gated-workload.md:81`의 사본이다. 반면 **「플랫폼이 클라이언트 접근 없이 `lastAccess`를 전진시키는 유일한 자리」**는 한 지점의 코드로는 보이지 않는 사실(모든 `Touch` 호출자를 훑어야 안다)이라 유지 |
+| `snapshot()` 인라인 (6→2) | 4줄 제거 | 「결정이 나면 갱신이 멈추고 일반 카운트로 돌아간다」는 `prd/approval-gated-workload.md` AC-F3 「유휴 기준」 항목의 사본이다. 반면 **「플랫폼이 클라이언트 접근 없이 `lastAccess`를 전진시키는 유일한 자리」**는 한 지점의 코드로는 보이지 않는 사실(모든 `Touch` 호출자를 훑어야 안다)이라 유지 |
 | `holdingForApproval` doc (10→5) | 5줄 제거 | 세 좁힘 중 **둘은 바로 아래 코드가 말한다**(`if sess.WorkloadType != …` 가드 · `if err != nil { return false }`) → 복원 경로 ①. 남긴 하나는 **호출자의 성질**(「유일한 호출자가 리퍼 경로다」)이라 이 자리에서 보이지 않고, 수동 동결이 여전히 어는 이유를 지탱한다 |
 
 **갈린 판정**: `snapshot()`의 「유일한 자리」와 `holdingForApproval`의 「유일한 호출자」는 둘 다
@@ -413,8 +418,9 @@ replays the full session history`. 이 문서의 「포인터는 남기고 사�
 3. **`checkpoint.go` `criuEngine.Restore` 인터페이스 doc(3줄)** — 본문이 하는 일을 옮겨 적는 형태로 보이지만, 인터페이스 메서드의 doc은 **구현이 아니라 계약**이고 `fakeCriuEngine`도 그 계약으로 작성됐다. 남겼다.
 
 **관측 — 이 렌즈 밖에 낡은 주석이 하나 지목돼 있다.** `docs/test/e2e.md`가
-`control-plane/cmd/control-plane/main.go:79-82`의 Go 주석(「its data plane runtime — the helper
-pod's session MCP — is not implemented yet」)을 **거짓이 된 주석**으로 지목하며 소관을 이 모델로
+`control-plane/cmd/control-plane/main.go`의 `k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, …)`
+앞 인라인 주석(「its data plane runtime — the helper pod's session MCP — is not implemented yet」)을
+**거짓이 된 주석**으로 지목하며 소관을 이 모델로
 넘겼다. 이번 슬라이스의 범위(`data-plane/cmd/agent/`) 밖이라 손대지 않았다 —
 `cmd/control-plane/`(주석 77줄)을 잡는 **다음 패스의 1순위**다.
 
@@ -518,8 +524,8 @@ as-is 지문 이동의 재감지가 다음 task로 잇는다.
 4차 패스가 「다음 패스의 1순위」로 지목한 조립 루트. **제거 19 · 유지 58.**
 
 **지목의 근거였던 「거짓이 된 주석」을 실측으로 확정하고 지웠다.** `docs/test/e2e.md`가
-`main.go:79-82`(「its data plane runtime — the helper pod's session MCP — is not implemented yet」)를
-낡음으로 지목했고, 같은 주장이 `dataPlaneApprovalGatedImage` 필드 doc에도 **두 번째 벌**로 있었다.
+`main.go`의 `WithWorkloadImage(…WorkloadTypeApprovalGated…)` 앞 인라인(「its data plane runtime — the
+helper pod's session MCP — is not implemented yet」)을 낡음으로 지목했고, 같은 주장이 `dataPlaneApprovalGatedImage` 필드 doc에도 **두 번째 벌**로 있었다.
 데이터 플레인에는 `session_mcp.go` · `session_mcp_tools.go` · `session_mcp_notices.go` 등 8파일이
 실재하고 `main.go`가 `case workloadSessionMCP:`로 그 워크로드를 띄운다 — 주석이 틀렸다. 그리고
 그 타입이 실제로 inert인 **현재의 이유**(이미지 미설정 + 필수 `secretEnv` 3종이 없으면 헬퍼 파드가
@@ -528,7 +534,7 @@ Ready에 이르지 못함)는 `docs/test/e2e.md`가 좌표까지 들어 적고 �
 
 | 위치 | 제거한 것 | 이미 말하는 곳 (복원 경로) |
 | --- | --- | --- |
-| `main.go:79-82`(4→1) · `dataPlaneApprovalGatedImage` doc(4→3) | 「헬퍼 파드의 session MCP는 아직 데이터 플레인에 없다 … 그래서 unset이 기대되는 배포 상태다」의 **두 벌** | **거짓이다**(위). 현재 사유는 ② `docs/test/e2e.md`의 F 계열 문단이 좌표(`client_orchestrator.go:780-782`)까지 들어 적는다 |
+| `main.go`의 `WithWorkloadImage(…ApprovalGated…)` 인라인(4→1) · `dataPlaneApprovalGatedImage` doc(4→3) | 「헬퍼 파드의 session MCP는 아직 데이터 플레인에 없다 … 그래서 unset이 기대되는 배포 상태다」의 **두 벌** | **거짓이다**(위). 현재 사유는 ② `docs/test/e2e.md`의 F 계열 문단이 좌표까지 들어 적는다(그 문단이 인용한 줄 번호는 그 뒤 낡았다 — 실제 자리는 `client_orchestrator.go`의 게이트웨이 3종 `secretEnv(ApprovalGateway{URL,APIKey,UserID}EnvVar, …)`이고, 그 원장은 자매 모델 `tbm_session-platform-ac-e2e` 소관이다) |
 | `k8s.BuildClient` 앞 인라인 (7→3) | 「같은 client가 pod orchestrator와 ConfigMap/Lease store를 함께 받친다」 · 「활성 전략은 에이전트에게 셸 CRIU 번들이나 Claude 아카이브를 만들게 해 durable store에 넣고, 비활성 전략은 회수 전에 fail closed」 | ① `configmap.NewStore` doc이 **같은 문장을**(「the same client the pod orchestrator uses」) 적는다 · ① 이 파일 패키지 주석이 이미 전략 배분과 fail-closed를 말한다 |
 | claude-code 이미지 인라인 (3→1) | 「Start가 claude-code 라벨로 셸 파드를 띄우는 대신 그 타입을 거부한다」 | ① 같은 파일 `dataPlaneClaudeCodeImage` 필드 doc이 축자에 가깝게 적는다(그쪽을 정본으로 남겼다) |
 | 리퍼 인라인 (5→2) · 「Drive the idle→snapshot reaper …」(1→0) | 스캔 주기·`MaxIdle`·AC-D5·AC-A3 회수의 열거 · 「종료까지 리퍼를 돌린다」 | ① `service/reaper.go`의 `IdleReaper`/`ScanOnce` doc · ① 같은 파일 `idleScanInterval` 필드 doc · ① 바로 아래 `go reaper.Run(ctx)` |
@@ -540,6 +546,104 @@ Ready에 이르지 못함)는 `docs/test/e2e.md`가 좌표까지 들어 적고 �
 (Secret 투영 실수를 감추게 된다), `claudeCodeModels`가 API 허용목록이 아니라 표시 설정이라는 구분,
 그리고 `mock-exception: CRIU-GATE` 등재 블록(자매 모델 `tbm_session-platform-e2e-mock-policy`
 소관이라 손대지 않았다).
+
+### 2026-09-05 — 컨트롤 플레인의 나머지 전부 (판정 142줄)
+
+`internal/api` · `internal/store` · `internal/static` · `internal/service`의 등재 밖 1파일 ·
+두 모듈의 `go.mod`. **제거 57 · 유지 85.** 이 패스로 컨트롤 플레인에서 `control-plane/test/`
+밖의 판정 대상이 남지 않는다.
+
+**주석 0줄 파일도 등재했다**(`cmd/control-plane/main_test.go` · `internal/api/errors_test.go`).
+R2는 *등재된 파일 목록만* 재측정하므로, 등재하지 않으면 그 파일에 나중에 생기는 주석이 rc=0
+아래에서 영원히 미판정으로 남는다 — 4차 패스가 정확히 그 형태로 68줄을 놓쳤고 5차 패스가
+편입해 닫았다. 같은 함정을 이번에는 등재로 미리 막는다.
+
+**낡아 거짓이 된 주석 2건을 바로 아래 코드로 반증했다.**
+
+| 위치 | 주장 | 반증 |
+| --- | --- | --- |
+| `control-plane/go.mod` 상단 | 「Both reuse the k8s.io dependencies below — **no extra runtime deps**」 | **바로 아래 require 블록**에 직접 의존이 `aws-sdk-go-v2` · `…/config` · `…/credentials` · `…/service/s3` · `…/service/sts` · `gorilla/websocket` 여섯이 더 있다 |
+| 같은 곳 | 「Only the Checkpointer (CRIU) remains an **in-memory stub**, so its external deps are **not required yet**」 | `internal/adapter/criu/{agent_checkpointer,container_checkpointer}.go`와 `internal/adapter/checkpointstore/store.go`(S3)가 실재하고, 그 외부 의존이 위의 aws-sdk 다섯이다. 5차 패스가 이미 그 파일들을 판정해 등재했다 |
+
+두 문장이 같은 주석 블록에 있고 **반증이 같은 파일 다음 다섯 줄에 있다.** 「주석은 아무도
+검증하지 않는다」의 가장 값싼 예라 블록 전체를 지웠다.
+
+**제거 57줄** — 「이미 말하는 곳」이 제거 근거다.
+
+| 위치 | 제거한 것 | 이미 말하는 곳 (복원 경로) |
+| --- | --- | --- |
+| `control-plane/go.mod` 상단 (5→0) | 위 표의 거짓 2건 + 「PodOrchestrator와 StateStore는 둘 다 client-go 위에 서고 ConfigMap·Lease에 상태를 둔다」 | **거짓이다**(위) · ① `internal/store/store.go` 패키지 doc이 *「the concrete adapter lives under internal/adapter」*로, 5차 패스가 등재한 `adapter/configmap/store.go`가 그 구현으로 말한다 |
+| `data-plane/go.mod` 상단 (3→0) | 「creack/pty가 셸을 의사 터미널에 붙이고(AC-D1) gorilla/websocket이 `/attach`를 낸다 · 둘 다 의존이 없다」 | ② `prd/*` AC-D1 · ① `data-plane/cmd/agent/main.go`의 `pty.Start`와 `mux.HandleFunc("GET /attach", …)` · ① 이 `go.mod` 자신 — indirect 블록이 없다는 것이 「의존이 없다」이다 |
+| `store.go` 패키지 doc (6→3) | 「ConfigMap+Lease 구현이 모든 연산을 k8s API로 받쳐 전이·점유가 복제본 간 atomic하다(AC-C1)」 · 「도메인 에러는 session 패키지에 있다」 | ① 바로 아래 `StateStore` doc이 *「Every state transition and occupancy claim must be atomic (AC-C1)」*로 같은 말을 한다(같은 파일 두 벌) · ② `prd/state-api.md` AC-C1 · ① 메서드 doc들이 `session.ErrConflict`를 그대로 적는다. **포인터(`internal/adapter`)는 남기고 사본을 지웠다** |
+| `store.go` `CompareAndSwapSession` doc (3→0) | 「lifecycle state와 durable snapshot transaction이 **둘 다** 기대값과 맞을 때만 aggregate를 통째 교체한다」 | ① 시그니처의 `expectedState`·`expectedTxn`·`next` 파라미터 이름이 그 계약 자체다. 그리고 같은 인터페이스의 `Put`·`Get`·`List`·`Unlock`은 doc이 **0줄**이라 이 파일은 「모든 메서드에 doc」 규약을 갖지 않는다(1차 패스가 `CreateRequest is the input to Manager.Create.`를 지운 것과 같은 형태) |
+| `static.go` 패키지 doc (7→6) | 「그 디렉터리는 컨트롤 플레인 바이너리에 임베드된다」 | ① 여덟 줄 아래 `//go:embed all:dist` + `var embedded embed.FS` |
+| `static.go` `Handler` doc (3→1) | 「정적 자산은 그대로, 비-API·비-자산 경로는 index.html로 폴백해 클라이언트 라우팅이 된다」 | ① 본문 20줄이 그대로 그것이고, **같은 함수 안 인라인 2건**이 다시 말한다 — 한 파일에 세 벌 |
+| `static.go` 폴백 인라인 (2→1) | 「요청한 파일이 있으면 그것을 낸다」 | ① 바로 아래 `if _, err := fs.Stat(sub, p); err != nil` 분기. 「history-mode routing」이라는 이름만 남겼다 |
+| `api.go` 패키지 doc (3→2) | 「핸들러는 얇다: decode → manager 위임 → encode」 · 「도메인 에러는 여기서 HTTP 상태로 매핑된다」 | ① 모든 핸들러 본문이 정확히 그 세 줄이다 · ① 같은 파일 `writeErr`의 `switch`가 그 매핑표다 |
+| `api.go` `API` doc (1→0) · `Option` doc (1→0) · `New` doc (1→0) | `API holds the dependencies the handlers need.` · `Option customises the API surface.` · `New returns an API bound to a session.Manager.` | ① 각각 필드 선언(`mgr session.Manager` …) · `type Option func(*API)` · 시그니처 `New(mgr session.Manager, opts ...Option) *API`. 정책의 「그 1줄이 시그니처를 그대로 옮겨 적기만 하면」 조항 그대로다 |
+| `api.go` `WithClaudeCodeModelConfig` doc (3→2) | 「카탈로그는 표시 설정이지 API 허용목록이 아니다」 | ① `cmd/control-plane/main.go`의 `claudeCodeModels` 필드 doc — **6차 패스가 바로 그 구분을 유지 판정해 정본으로 남겼다** · ① 같은 패키지 `config_test.go`의 `catalog-soft-choice` 케이스 |
+| `api.go` snapshot 라우트 인라인 (2→0) | 「리퍼의 수동 대응물: 즉시 아카이브하고 파드를 회수한다. 나중의 switch가 복원한다」 | ① 같은 파일 `snapshotSession` doc(*「freezes a session and reclaims its pod (AC-B1/AC-A3)」*) · ① `service/manager.go` `Service.Snapshot` doc(*「Explicit snapshots have no idle precondition」*) — 2차 패스가 `reaper.go`의 같은 대비 서술을 그 근거로 이미 지웠다 |
+| `api.go` `createReq.Model` doc (2→1) | 「claude-code에서만 받고, 생략하면 platform-default 별칭으로 해석되며 워크로드 타입과 함께 불변」 | ② AC-E6 · ① `session.PlatformDefaultModel` doc와 `NormalizeWorkloadType` doc(1차 패스가 그쪽을 정본으로 남겼다). 포인터(AC-E6)만 남겼다 |
+| `api.go` `readReq.Offset` doc (2→1) | 「직전 read가 발급한 nextOffset 커서이고 0(또는 본문 없음)은 세션 시작부터 전체」 | ② AC-D3의 커서 규약 — 2차 패스가 `service/manager.go` `Read`의 **같은 사본**을 그 근거로 이미 지웠다 |
+| `api.go` `runtimeConfig` 인라인 (3→2) | 「이 카탈로그는 Secret 기반 환경변수로 기동 시 들어온다」 | ① `cmd/control-plane/main.go`의 설정 필드 doc와 `env(...)` 읽기. `no-store`의 **이유**(롤아웃이 즉시 보이게)는 코드가 말하지 않아 남겼다 |
+| `api.go` read·write 본문 인라인 (2→0) | 「본문은 선택이다」 두 벌 | ① 두 자리 모두 `decodeRequestBody(r.Body, &req, false)` — 그 `false`가 `required`다 · ② 빈 write의 의미는 AC-C3(2차 패스가 `manager.go` `Write`의 같은 사본을 그 근거로 지웠다) |
+| `api_test.go` 테스트 doc 6곳 (12→2) | 이름과 본문 단언을 옮겨 적은 서술(«204를 내고 파드를 회수하고 이후 read에서 사라진다», «모르는 세션의 snapshot은 404», «경합하는 lifecycle 보유자는 409») | ① 각 테스트 **함수 이름**과 바로 아래 `t.Fatalf` 기대값. 2차 패스가 `manager_test.go`에서 같은 형태 15줄을 지운 것과 같다 |
+| `api_test.go` 절 라벨 (2→0) | `// create` · `// list` | ① 바로 아래 `http.Post(.../sessions)` · `http.Get(.../sessions)` — 아무 주장도 담지 않는다 |
+| `api_test.go` `// A negative offset is invalid input.` (1→0) | | ① 바로 아래 `offset: -1` 요청과 400 단언 |
+| `workload_type_test.go` 인라인·doc 3곳 (5→2) | AC-F1 모델 계약 서술의 **두 번째 벌**(같은 파일 위에 이미 있다) · 「기존 세션 라우트는 불변 필드 변경 시도를 거부한다」 · 「스냅샷/복원 왕복에서 모델이 유지되고 재프로비저닝에도 같은 값이 간다」 | ① 같은 파일 앞선 `// AC-F1: the model contract is AC-E6's, unchanged.` · ① 아래 `for _, path := range []string{"/read","/write","/switch"}` 루프와 단언 · ① 테스트 이름 + 본문 |
+| `approval_idle_test.go` 파일 헤더 (4→2) | 시나리오 5의 기대 결과 3줄 사본 | ② **주석이 스스로 인용한** `docs/test/approval-gated-workload.md` 시나리오 5 · ① 아래 세 테스트 doc이 그 셋을 각각 다시 말한다. 포인터만 남겼다 |
+| `approval_idle_test.go` `approvalReportingAgent` doc (3→2) | 「widened `agent.Client`가 아니라 별도 타입인 이유」 | ③ PR 본문 · ④ 커밋 메시지 — 5차 패스가 `approvalWaitReporter` doc의 **같은 형태**를 같은 근거로 지웠다 |
+| `approval_idle_test.go` `testClock` doc (1→0) | 「시나리오가 요구하는 "시간을 제어할 수 있는 테스트 하네스"」 | ② 시나리오 5 · ① 같은 파일 형제 헬퍼(`mustCreate` · `scan` · `mustGet`)는 doc이 **0줄**이다 |
+| `approval_idle_test.go` 테스트 doc·인라인 6곳 (13→7) | AC-F3 요구사항 4줄 사본 · 「한 시간 뒤에도 여전히 대기 중」 · 「사람이 결정한다」의 배경 · 「대조군」 서술의 본문 재진술 · 「읽을 수 없으면 AC-F3 이전으로 돌아간다」 | ② `prd/approval-gated-workload.md` AC-F3 「유휴 기준」 항목이 축자에 가깝다 · ① 각 `t.Fatalf` 메시지가 AC 번호까지 들어 그 단언을 적는다. **AC 포인터와 「왜 이 스캔이 두 번인가」는 남겼다** |
+
+**유지 85줄** — 「지울까」를 검토했다가 남긴 것들.
+
+- **`store.go`의 `AC mapping:` 블록(5줄)** — 1차 패스가 `session.Manager`의 같은 형태를 남긴 것과
+  같은 근거다. 개별 대응은 ②로 복원되지만 **포트 메서드에서 AC로 가는 방향의 색인**은 어느 문서에도
+  한 덩어리로 없다. **같은 형태에 다른 기준을 적용하지 않는다.**
+- **`store.go`의 펜싱·순서 계약(`Delete`·`Touch`·`Lock`·`Renew`, 9줄)** — 「token이 lifecycle 펜스를
+  쥔 동안에만」, 「호출자가 락을 계속 쥐고 `Unlock`으로 따로 놓는다」, 「낡은 read의 lifecycle·recovery
+  메타데이터를 덮어쓰지 않는다」, 「긴 아카이브 전송이 다른 복제본의 회수를 막는 데 쓴다」. 전부 여러
+  메서드에 걸친 시간 순서라 한 선언으로는 보이지 않는다.
+- **`api.go`의 절 배너 3개**(`// ---- request/response DTOs ----` 등) — 5차 패스가
+  `adapter/configmap/store.go`의 `// ---- helpers ----`를 **유지 판정했다.** 같은 형태에 다른 기준을
+  적용하지 않는다.
+- **`api.go` `createReq.WorkloadType`의 「raw로 두어 생략과 명시적 empty/null을 가른다」** — `json.RawMessage`
+  타입은 「raw」만 말하고 **왜**는 말하지 않는다. 이 구분이 AC-E1 거부 규칙의 전제다.
+- **`api.go` `streamSession` doc(3줄)** — `Last-Event-ID`가 쿼리 커서를 이긴다는 우선순위와 **그 이유**
+  (네이티브 `EventSource` 재연결이 브라우저가 마지막으로 받은 이벤트부터 재개해야 한다). 외부 시스템의
+  동작이라 코드가 말하지 않는다.
+- **`api.go` `Routes`의 「Go 1.22+ method+path 패턴이라 라우팅에 의존이 없다」** — 「없는 것」의 근거라
+  코드에 나타나지 않는다. 라우터를 넣으려는 다음 사람이 읽어야 할 문장이다.
+- **`approval_idle_test.go` `newApprovalIdleService` doc(3줄)** — 「모든 워크로드 타입에 checkpointer를
+  주었으므로, active로 남는 타입은 **AC-F3 때문**이지 동결 전략이 없어서가 아니다」. 이 한 줄이 없으면
+  대조군 테스트가 vacuous한지 판별할 수 없다. 이번 패스에서 가장 값이 큰 주석이다.
+- **`api_test.go` `// switch (active -> active no-op)`** — 같은 자리의 `// create`·`// list`는 지웠는데
+  이것만 남겼다. 앞 둘은 아래 호출을 이름으로 되풀이할 뿐이지만, 이것은 **본문이 단언하지 않는 사실**
+  (전이가 active→active라 no-op)을 말한다. 본문은 200만 확인한다.
+- **`config_test.go`의 「카탈로그는 UI 피커이지 깨지는 API 허용목록이 아니다」(1줄)** — `api.go`에서
+  같은 문장을 지우고 이것을 남긴 것은 **갈린 판정**이다. 지운 쪽은 필드 doc이고 이쪽은 「목록 밖 모델이
+  201을 받는다」는 놀라운 기대값의 자리다. 정본은 `main.go`의 `claudeCodeModels` doc이므로 세 벌 중
+  둘로 줄었다. 다음 패스가 이것마저 지우려면 `t.Fatalf` 메시지에 이유를 옮기는 편이 낫다.
+
+**갈린 판정**: 위의 `// switch (…)`와 `config_test.go` 한 줄, 그리고 `api.go`의 절 배너 3개. 셋 다
+「지울 수 있다」와 「이 자리에서만 보인다」가 팽팽했고, 정책의 **「애매하면 남긴다」**로 남겼다.
+
+**이 패스가 원장 자신의 좌표 부패를 함께 고쳤다 — 그리고 재발을 R5로 끊었다.**
+이 문서의 `파일:줄` 좌표를 전수(**6건**) 뽑아 현재 트리와 대조하니 **5건이 어긋나 있었고, 그중 4건은
+직전 패스(6차)가 만든 것**이다. 6차 패스가 `cmd/control-plane/main.go`에서 주석 19줄을 지우자
+`signal.NotifyContext` 선언이 밀렸고(좌표 1건), **6차 패스가 지운 바로 그 주석**을 가리키던 좌표가
+셋 더 있었다. 나머지 1건은 자매 원장에서 인용해 온 선재 부패이고, 6번째(AC-F3 문단을 가리키는 것)는
+지금은 맞지만 같은 형태다.
+
+**숫자를 고쳐 적지 않았다.** 그렇게 하면 이번 패스의 제거 57줄이 다시 좌표를 밀어 낸다. 대신 전부
+**심볼 앵커**로 바꿨고(이 문서 대부분이 이미 그 형태다 — `ScanOnce` doc · `sessionPodRefs` doc),
+「판정 절차」 3번의 *「어느 파일 몇 줄이」* 라는 지시 자체를 *「어느 파일의 어느 심볼이」* 로 고쳤다.
+좌표 부패의 원인은 개별 실수가 아니라 **절차가 줄 번호를 요구한 것**이었다.
+
+그리고 **R5**가 그것을 기계로 강제한다. R1~R4 중 어느 것도 좌표를 재측정하지 않아 이 축은
+**영원히 초록**이었다 — 지문과 합계는 기계가 지키는데 좌표만 사람이 지켰다. R5는 이 문서 안의
+`파일:줄` 형태를 금지한다. 순수 경로 포인터(`docs/test/e2e.md`)는 권장 형태라 걸리지 않는다.
 
 ## 범위 밖
 

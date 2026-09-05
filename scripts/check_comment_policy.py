@@ -21,6 +21,10 @@
 * **R3** 행 사이에 같은 파일이 두 번 등재되지 않는다(판정 완료량의 이중 계상 방지).
 * **R4** 합계 마커 == 원장 행들의 주석 줄 수 합(양방향 미러). 범위를 더하거나 빼면 같은 PR에서
   합계도 움직여야 한다.
+* **R5** 원장 문서가 「이미 말하는 곳」을 가리킬 때 **줄 번호 좌표를 쓰지 않는다.** 줄 번호는 다음
+  판정이 그 파일에서 주석을 지우는 순간 밀려나 조용히 썩는데, R1~R4 중 어느 것도 그것을 재측정하지
+  않아 **영원히 초록**이다(실제로 한 슬라이스가 자기 원장의 좌표 5건을 한 번에 낡게 만들었다).
+  좌표는 심볼 이름이나 AC 번호로 적는다 — 그쪽은 grep 으로 되짚을 수 있다.
 
 통과하면 **범위 전체의 현재 인구조사를 출력한다.** 그 수치는 문서 프로즈에 적지 않는다 —
 낡는 형태를 없애는 것이 이 게이트의 목적이고, 최신값이 필요하면 여기서 읽는다.
@@ -48,6 +52,10 @@ SCAN_EXCLUDE_RE = re.compile(r"(^|/)(vendor|node_modules|dist)/")
 COMMENT_RE = re.compile(r"^[ \t\v\f\r]*(//|/\*|\*[^/])")
 DIRECTIVE_RE = re.compile(r"//go:|nolint|eslint-|@ts-|검증 AC:|mock-exception:|mockup:")
 WHITESPACE_RUN_RE = re.compile(r"[ \t\v\f\r]+")
+
+# R5 — 원장이 가리키는 좌표에서 금지되는 형태. 확장자를 요구해 산문의 우연한 `낱말:1` 을 피하고,
+# 뒤에 숫자가 붙는 경우만 본다(`docs/test/e2e.md` 같은 순수 경로 포인터는 권장 형태라 걸리지 않는다).
+LINE_COORDINATE_RE = re.compile(r"[A-Za-z0-9_./-]+\.(?:go|ts|tsx|md|yaml|yml|sh|py):\d+(?:-\d+)?")
 
 LEDGER_OPEN = "<!-- 판정-원장 -->"
 LEDGER_CLOSE = "<!-- /판정-원장 -->"
@@ -224,6 +232,16 @@ def main() -> int:
                 f" 실측 `{actual_fingerprint}`. 줄 수가 같아도 내용이 바뀌면 재판정 대상이다.",
             )
 
+    # R5 — 줄 번호 좌표 금지
+    for lineno, line in enumerate(text.splitlines(), 1):
+        for hit in LINE_COORDINATE_RE.finditer(line):
+            fail(
+                "R5",
+                f"{POLICY.name} {lineno} 번째 줄에 줄 번호 좌표 `{hit.group(0)}` 이 있다."
+                " 줄 번호는 다음 판정이 그 파일을 건드리는 순간 밀려나고 어떤 규칙도 그것을"
+                " 재측정하지 않는다 — 심볼 이름이나 AC 번호로 적을 것.",
+            )
+
     # R4 — 합계 미러(양방향)
     ledger_sum = sum(row["lines"] for row in rows)
     if total != ledger_sum:
@@ -243,7 +261,7 @@ def main() -> int:
     judged = ledger_sum
     share = (judged * 100.0 / len(hits)) if hits else 0.0
     print(
-        f"OK: 규칙 R1~R4 위반 없음 — {census(hits)}"
+        f"OK: 규칙 R1~R5 위반 없음 — {census(hits)}"
         f" · 판정 완료 {judged}줄({share:.1f}%) / 등재 범위 {len(rows)}"
     )
     for row in rows:

@@ -44,7 +44,6 @@ func newServerWithOrchestrator(
 	return httptest.NewServer(mux), orch, stateStore
 }
 
-// createForTest creates a session through the API and returns it.
 func createForTest(t *testing.T, srv *httptest.Server, name string) session.Session {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"name": name})
@@ -63,8 +62,6 @@ func createForTest(t *testing.T, srv *httptest.Server, name string) session.Sess
 	return s
 }
 
-// The product snapshot endpoint lets a user archive a session immediately,
-// without waiting for the idle reaper, and reclaims its pod.
 func TestSnapshotEndpointArchivesSession(t *testing.T) {
 	srv := newServer()
 	defer srv.Close()
@@ -89,7 +86,6 @@ func TestSnapshotEndpointArchivesSession(t *testing.T) {
 	}
 }
 
-// A snapshot of an unknown session is a 404 like the other handlers.
 func TestSnapshotUnknownSession(t *testing.T) {
 	srv := newServer()
 	defer srv.Close()
@@ -109,7 +105,6 @@ func TestHappyPath(t *testing.T) {
 	srv := newServer()
 	defer srv.Close()
 
-	// create
 	body, _ := json.Marshal(map[string]string{"name": "api-gateway-dev"})
 	resp, err := http.Post(srv.URL+"/api/v1/sessions", "application/json", bytes.NewReader(body))
 	if err != nil {
@@ -130,7 +125,6 @@ func TestHappyPath(t *testing.T) {
 		t.Error("new session should have a pod assigned (AC-A2)")
 	}
 
-	// list
 	resp, err = http.Get(srv.URL + "/api/v1/sessions")
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -157,9 +151,7 @@ func TestHappyPath(t *testing.T) {
 	resp.Body.Close()
 }
 
-// TestReadWriteWireContract drives write→read over HTTP: the write payload
-// comes back from the (stub) agent and read honours the offset/nextOffset
-// cursor contract (AC-D2/D3 wire shape).
+// AC-D2/D3 wire shape: the write payload comes back through read on the cursor.
 func TestReadWriteWireContract(t *testing.T) {
 	srv := newServer()
 	defer srv.Close()
@@ -217,7 +209,6 @@ func TestReadWriteWireContract(t *testing.T) {
 		t.Fatalf("cursor read = %q, want empty delta", delta)
 	}
 
-	// A negative offset is invalid input.
 	rbody, _ := json.Marshal(map[string]int64{"offset": -1})
 	resp, err = http.Post(srv.URL+"/api/v1/sessions/"+created.ID+"/read", "application/json", bytes.NewReader(rbody))
 	if err != nil {
@@ -258,8 +249,6 @@ func TestGetUnknownReturns404(t *testing.T) {
 	}
 }
 
-// Deleting an active session returns an empty 204 response, reclaims its pod,
-// and removes it from subsequent reads.
 func TestDeleteSession(t *testing.T) {
 	srv, orch, _ := newServerWithOrchestrator()
 	defer srv.Close()
@@ -313,7 +302,6 @@ func TestDeleteUnknownSessionReturns404(t *testing.T) {
 	}
 }
 
-// A competing lifecycle holder is surfaced as 409 and leaves the session intact.
 func TestDeleteConflictReturns409(t *testing.T) {
 	srv, _, stateStore := newServerWithOrchestrator()
 	defer srv.Close()
@@ -350,8 +338,7 @@ func TestDeleteConflictReturns409(t *testing.T) {
 	}
 }
 
-// A snapshotted session has no live pod but its logical record is still
-// deletable through the same product endpoint.
+// A snapshotted session has no live pod but its record is still deletable.
 func TestDeleteSnapshotSession(t *testing.T) {
 	srv := newServer()
 	defer srv.Close()

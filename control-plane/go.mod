@@ -2,11 +2,6 @@ module github.com/dlddu/session-platform/control-plane
 
 go 1.24
 
-// The PodOrchestrator and the StateStore are both backed by client-go: the
-// former drives data plane pods, the latter stores session state in ConfigMaps
-// and per-session locks in coordination.k8s.io Leases. Both reuse the k8s.io
-// dependencies below — no extra runtime deps. Only the Checkpointer (CRIU)
-// remains an in-memory stub, so its external deps are not required yet.
 require (
 	k8s.io/api v0.30.3
 	k8s.io/apimachinery v0.30.3

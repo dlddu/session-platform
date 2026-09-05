@@ -1,6 +1,5 @@
 // Package static serves the built React SPA that `vite build` emits into
-// ./dist. The directory is embedded into the control plane binary so a single
-// image serves both the API and the UI (one port).
+// ./dist, so a single image serves both the API and the UI on one port.
 //
 // During `make build` the web app is built first and its output copied into
 // this package's dist/ directory; a committed placeholder index.html keeps the
@@ -17,9 +16,7 @@ import (
 //go:embed all:dist
 var embedded embed.FS
 
-// Handler returns an http.Handler that serves the SPA: static assets are served
-// directly, and any non-API, non-asset path falls back to index.html so client
-// side routing works.
+// Handler returns an http.Handler that serves the SPA.
 func Handler() http.Handler {
 	sub, err := fs.Sub(embedded, "dist")
 	if err != nil {
@@ -33,8 +30,7 @@ func Handler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		// If the requested file exists, serve it; otherwise fall back to the
-		// SPA entrypoint (history-mode routing).
+		// Unknown paths fall back to the SPA entrypoint (history-mode routing).
 		p := strings.TrimPrefix(r.URL.Path, "/")
 		if p == "" {
 			p = "index.html"
