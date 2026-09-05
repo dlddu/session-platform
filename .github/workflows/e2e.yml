@@ -112,7 +112,12 @@ jobs:
         working-directory: control-plane
         env:
           E2E_BASE_URL: http://localhost:8080
-        run: go test -tags=e2e -v ./test/...
+        # -timeout is explicit because go's default is 10 minutes *per package*
+        # and this one package provisions a pod per test. The claude-code tests
+        # add cold CLI invocations on top of that, so the default stopped being
+        # a safe bound; 30m fails a genuinely stuck suite without failing a slow
+        # runner. The job itself is still bounded by the workflow default.
+        run: go test -tags=e2e -timeout=30m -v ./test/...
 
       - name: install web deps
         working-directory: web
