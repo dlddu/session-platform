@@ -1,16 +1,7 @@
-// This file is the CRI-O/kubelet ALTERNATIVE Checkpointer (decision ⑤), NOT the
-// wired path. It drives the kubelet ContainerCheckpoint API (KEP-2008, alpha) to
-// produce a container-level checkpoint archive.
-//
-// It is kept but no longer wired: the k3s/containerd verification on 2026-07-22
-// confirmed the *checkpoint* (dump) side works, but containerd has no way to
-// *restore* that archive (no CRI-O-style checkpoint-image/annotation restore), so
-// the round trip dead-ends. The wired path is instead agent-driven in-pod CRIU
-// (agent_checkpointer.go), which completes the round trip inside this repo. This
-// code remains for a future CRI-O deployment (which would additionally build a
-// checkpoint OCI image from the archive) and to document the KEP path; its
-// runtime call stays isolated behind CheckpointDriver so it compiles and
-// unit-tests without a runtime. See docs/criu-verification.md.
+// The CRI-O/kubelet ALTERNATIVE Checkpointer — kept, unit-tested, and NOT wired.
+// It drives the kubelet ContainerCheckpoint API (KEP-2008, alpha). Why it is not
+// the wired path, and what a CRI-O deployment would add on top of it:
+// docs/criu-verification.md (decisions ② and ⑤).
 package criu
 
 import (
@@ -97,15 +88,12 @@ type ContainerCheckpointer struct {
 	now       func() time.Time
 }
 
-// compile-time assertion that ContainerCheckpointer satisfies the port.
 var _ Checkpointer = (*ContainerCheckpointer)(nil)
 
-// Option customises a ContainerCheckpointer. WithDriver/WithClock exist for
-// tests; production uses the defaults (the real kubeletDriver, a UTC clock).
+// Option customises a ContainerCheckpointer.
 type Option func(*ContainerCheckpointer)
 
-// WithContainer overrides the container name to checkpoint (default:
-// k8s.ContainerName, the single data plane container).
+// WithContainer overrides the container name to checkpoint.
 func WithContainer(name string) Option {
 	return func(c *ContainerCheckpointer) {
 		if name != "" {
@@ -114,8 +102,7 @@ func WithContainer(name string) Option {
 	}
 }
 
-// WithDriver injects a CheckpointDriver, letting tests exercise the adapter's
-// orchestration without a CRIU-capable runtime.
+// WithDriver injects a CheckpointDriver.
 func WithDriver(d CheckpointDriver) Option {
 	return func(c *ContainerCheckpointer) {
 		if d != nil {
@@ -124,9 +111,7 @@ func WithDriver(d CheckpointDriver) Option {
 	}
 }
 
-// WithStore sets the durable checkpoint store. Without it Checkpoint records the
-// ephemeral node-local archive path; with it the archive is uploaded and the
-// durable ref (e.g. s3://…) is recorded instead.
+// WithStore sets the durable checkpoint store.
 func WithStore(s CheckpointStore) Option {
 	return func(c *ContainerCheckpointer) {
 		if s != nil {
@@ -135,8 +120,7 @@ func WithStore(s CheckpointStore) Option {
 	}
 }
 
-// WithArchiveOpener overrides how the node-local archive is opened for upload
-// (tests inject an in-memory archive).
+// WithArchiveOpener overrides how the node-local archive is opened for upload.
 func WithArchiveOpener(o archiveOpener) Option {
 	return func(c *ContainerCheckpointer) {
 		if o != nil {
@@ -155,7 +139,7 @@ func WithClock(now func() time.Time) Option {
 }
 
 // NewContainerCheckpointer builds the real checkpointer over an injected client
-// and namespace. Without WithDriver it drives the real kubelet endpoint.
+// and namespace.
 func NewContainerCheckpointer(client kubernetes.Interface, namespace string, opts ...Option) *ContainerCheckpointer {
 	c := &ContainerCheckpointer{
 		client:    client,
@@ -185,8 +169,6 @@ func (c *ContainerCheckpointer) Checkpoint(ctx context.Context, ref k8s.PodRef) 
 	if ns == "" {
 		ns = c.namespace
 	}
-	// The checkpoint endpoint lives on the node running the pod, so resolve the
-	// pod's node before dialing the kubelet through it.
 	pod, err := c.client.CoreV1().Pods(ns).Get(ctx, ref.Name, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("resolve pod %s/%s for checkpoint: %w", ns, ref.Name, err)
@@ -241,13 +223,10 @@ func checkpointKey(namespace, pod, localPath string) string {
 	return namespace + "/" + pod + "/" + filepath.Base(localPath)
 }
 
-// Restore resumes the checkpoint into the restore-target pod (AC-B2, AC-B3). The
-// pod was already shaped as a restore target by RestoreInto (carrying cp.Ref in
-// an annotation), so on the K8s-native path this delegates to the driver, which
-// relies on the runtime resuming from that annotation; the service layer then
-// proves the resumed shell is reachable (Reach, AC-D1). When cp.Ref is an s3://
-// URI (a durable store was configured at checkpoint time), the node-side restore
-// fetches the archive from the store using the same assume-role identity before
+// Restore resumes the checkpoint into the restore-target pod (AC-B2, AC-B3) by
+// delegating to the driver — see CheckpointDriver.Restore. When cp.Ref is an
+// s3:// URI (a durable store was configured at checkpoint time), the node-side
+// restore fetches the archive using the same assume-role identity before
 // resuming — see docs/criu-verification.md.
 func (c *ContainerCheckpointer) Restore(ctx context.Context, cp *session.Checkpoint, into k8s.PodRef) error {
 	if cp == nil || cp.Ref == "" {
@@ -296,15 +275,7 @@ func (d *kubeletDriver) Checkpoint(ctx context.Context, node, namespace, pod, co
 }
 
 func (d *kubeletDriver) Restore(ctx context.Context, ref string, into k8s.PodRef) error {
-	// K8s-native restore has no kubelet API: the resume is triggered when the
-	// restore-target pod (created by k8s.ClientOrchestrator.RestoreInto, carrying
-	// annotationRestoreCheckpoint=ref) is started by a CRIU-capable runtime,
-	// which maps the annotation to its restore mechanism (e.g. CRI-O's
-	// io.kubernetes.cri-o.restore, or a checkpoint OCI image built from the
-	// archive). The service layer then proves the resumed shell is reachable via
-	// Reach (AC-D1). There is thus nothing to drive here on the K8s-native path;
-	// the runc-restore alternative (docs/criu-verification.md) would apply the
-	// archive at this seam instead.
+	// Nothing to drive on the K8s-native path — see CheckpointDriver.Restore.
 	_, _, _ = ctx, ref, into
 	return nil
 }

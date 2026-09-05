@@ -42,10 +42,7 @@ type Client interface {
 
 // HTTPClient is the real Client: it resolves the pod's current IP through the
 // Kubernetes API on every call (pod IPs are not stable across restore, and
-// sessions store only the pod name) and talks plain HTTP to the agent's
-// /write and /read endpoints. It also carries the pod's /checkpoint and /restore
-// endpoints for the agent-driven CRIU path (see Checkpoint/Restore below), so
-// the criu.AgentCheckpointer reuses this one client and its IP resolution.
+// sessions store only the pod name) and talks plain HTTP to the agent.
 type HTTPClient struct {
 	client    kubernetes.Interface
 	namespace string
@@ -57,14 +54,12 @@ type HTTPClient struct {
 	stream *http.Client
 }
 
-// compile-time assertion that HTTPClient satisfies the shell I/O port.
 var _ Client = (*HTTPClient)(nil)
 
 // HTTPOption customises an HTTPClient.
 type HTTPOption func(*HTTPClient)
 
-// WithPort overrides the agent port (default k8s.AgentPort). Tests point the
-// client at a local httptest agent; production keeps the default.
+// WithPort overrides the agent port (tests point it at a local httptest agent).
 func WithPort(port int) HTTPOption {
 	return func(c *HTTPClient) {
 		if port > 0 {
@@ -88,10 +83,8 @@ func NewHTTPClient(client kubernetes.Interface, namespace string, opts ...HTTPOp
 	return c
 }
 
-// Checkpoint drives the agent's /checkpoint: it returns the checkpoint archive
-// stream (criu images + scrollback) the agent produced by CRIU-dumping its shell
-// tree. The caller (criu.AgentCheckpointer) streams it to durable storage and
-// must Close the returned reader.
+// Checkpoint drives the agent's /checkpoint, returning the archive stream it
+// produces (criu images + scrollback). See criu.AgentCheckpointClient.
 func (c *HTTPClient) Checkpoint(ctx context.Context, pod string) (io.ReadCloser, string, error) {
 	return c.checkpoint(ctx, pod, "")
 }
@@ -129,8 +122,7 @@ func (c *HTTPClient) checkpoint(ctx context.Context, pod, generation string) (io
 
 // AbortCheckpoint reopens a claude-code agent after its archive was streamed
 // but durable storage or pod reclamation failed. The data plane endpoint is
-// idempotent. Shell CRIU callers never invoke this method because a completed
-// dump cannot be resumed by this protocol.
+// idempotent.
 func (c *HTTPClient) AbortCheckpoint(ctx context.Context, pod, checkpointID string) error {
 	ip, err := c.resolve(ctx, pod)
 	if err != nil {
@@ -261,14 +253,10 @@ func (c *HTTPClient) Read(ctx context.Context, pod string, offset int64) (string
 	return out.Payload, out.NextOffset, nil
 }
 
-// AwaitingApproval reports whether the pod is blocked on a human decision
-// right now (AC-F3), which is what lets the idle path hold the count instead
-// of freezing a session mid-approval.
-//
-// It is deliberately not on the Client interface. Only one workload type has a
-// gate, only the idle path asks, and widening the port every session I/O fake
-// implements would buy nothing: the service reaches it through an optional
-// capability assertion, the same way it reaches CheckpointWithGeneration.
+// AwaitingApproval reports whether the pod is blocked on a human decision right
+// now (AC-F3). It is deliberately not on the Client interface — the service
+// reaches it through an optional capability assertion, as it does
+// CheckpointWithGeneration.
 func (c *HTTPClient) AwaitingApproval(ctx context.Context, pod string) (bool, error) {
 	ip, err := c.resolve(ctx, pod)
 	if err != nil {
@@ -299,9 +287,8 @@ func (c *HTTPClient) AwaitingApproval(ctx context.Context, pod string) (bool, er
 	return out.Awaiting, nil
 }
 
-// Stream opens the data plane's long-lived SSE output feed at offset. Unlike
-// the short Read client, it uses the context-bounded streaming HTTP client so
-// an otherwise healthy workspace connection has no 30-second deadline.
+// Stream opens the data plane's long-lived SSE output feed at offset, over the
+// context-bounded streaming client rather than the short Read one.
 func (c *HTTPClient) Stream(ctx context.Context, pod string, offset int64) (io.ReadCloser, error) {
 	ip, err := c.resolve(ctx, pod)
 	if err != nil {

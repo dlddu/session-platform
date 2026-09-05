@@ -1,15 +1,9 @@
-// This file contains the wired agent-driven workload archive strategies. Shell
-// sessions ask their agent to CRIU-dump the process tree; Claude sessions use a
-// generation-fenced filesystem archive. Both streams go to durable storage and
-// are later streamed to the selected workload's restore endpoint.
-//
-// This replaces the kubelet ContainerCheckpoint approach (container_checkpointer.go,
-// kept only as the CRI-O alternative) because the k3s/containerd verification on
-// 2026-07-22 confirmed containerd cannot restore a container checkpoint — there
-// is no runtime component to resume the AnnotationRestoreCheckpoint pod. Doing
-// Shell CRIU in-agent keeps that path inside this repo (decision ⑤). The one
-// part that still needs a CRIU-capable node is the shell agent's criu invocation
-// (data-plane execCriuEngine); Claude archive mode does not invoke CRIU.
+// The wired agent-driven workload archive strategies. Shell sessions ask their
+// agent to CRIU-dump the process tree; Claude sessions use a generation-fenced
+// filesystem archive. Both streams go to durable storage and are later streamed
+// to the selected workload's restore endpoint. Why this rather than the kubelet
+// path, and which part still needs a CRIU-capable node: docs/criu-verification.md
+// (decision ⑤).
 package criu
 
 import (
@@ -51,11 +45,9 @@ type AgentCheckpointer struct {
 	abortable bool
 }
 
-// compile-time assertion that AgentCheckpointer satisfies the port.
 var _ Checkpointer = (*AgentCheckpointer)(nil)
 
-// NewAgentCheckpointer builds the agent-driven checkpointer over the agent
-// checkpoint client and a durable store.
+// NewAgentCheckpointer builds the agent-driven checkpointer.
 func NewAgentCheckpointer(client AgentCheckpointClient, store CheckpointStore) *AgentCheckpointer {
 	return &AgentCheckpointer{
 		client: client,
@@ -65,8 +57,7 @@ func NewAgentCheckpointer(client AgentCheckpointClient, store CheckpointStore) *
 }
 
 // NewAgentArchiveCheckpointer builds the filesystem-archive variant used by
-// claude-code. Unlike a completed CRIU dump, this workload can reopen prompt
-// admission if durable storage or pod reclamation fails.
+// claude-code.
 func NewAgentArchiveCheckpointer(client AgentCheckpointClient, store CheckpointStore) *AgentCheckpointer {
 	c := NewAgentCheckpointer(client, store)
 	c.abortable = true

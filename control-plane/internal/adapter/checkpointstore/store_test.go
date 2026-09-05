@@ -10,8 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-// fakeS3 records the requests the store makes and returns canned results, so the
-// store's key/ref logic is exercised without real AWS.
+// fakeS3 records the requests the store makes and returns canned results.
 type fakeS3 struct {
 	putIn   *s3.PutObjectInput
 	putBody []byte
@@ -40,8 +39,6 @@ func (f *fakeS3) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*
 
 var _ objectAPI = (*fakeS3)(nil)
 
-// Put joins the prefix with the key, streams the body verbatim, and returns the
-// durable s3:// ref.
 func TestS3_PutStoresUnderPrefixAndReturnsRef(t *testing.T) {
 	fake := &fakeS3{}
 	store := newWithAPI(fake, "ckpt-bucket", "checkpoints")
@@ -74,10 +71,8 @@ type unseekableReader struct{ r io.Reader }
 
 func (u unseekableReader) Read(p []byte) (int, error) { return u.r.Read(p) }
 
-// The archive stream is unseekable and of unknown length, which S3 cannot take
-// directly (it needs a seekable body to checksum, and the trailing-checksum
-// fallback needs TLS — this failed against the e2e MinIO backend). Put must
-// spool it so the upload still carries the exact bytes.
+// The trailing-checksum fallback for an unseekable body needs TLS — that failed
+// against the e2e MinIO backend, so Put must spool and still carry exact bytes.
 func TestS3_PutSpoolsUnseekableStream(t *testing.T) {
 	fake := &fakeS3{}
 	store := newWithAPI(fake, "b", "p")
@@ -109,7 +104,6 @@ func TestS3_PutDefaultsPrefix(t *testing.T) {
 	}
 }
 
-// A PutObject failure surfaces from Put.
 func TestS3_PutSurfacesError(t *testing.T) {
 	fake := &fakeS3{putErr: errors.New("access denied")}
 	store := newWithAPI(fake, "b", "p")
@@ -118,7 +112,6 @@ func TestS3_PutSurfacesError(t *testing.T) {
 	}
 }
 
-// Get parses the s3:// ref back into bucket/key and streams the object body.
 func TestS3_GetParsesRefAndStreams(t *testing.T) {
 	fake := &fakeS3{getBody: "RESTORED-ARCHIVE"}
 	store := newWithAPI(fake, "b", "p")
@@ -141,7 +134,6 @@ func TestS3_GetParsesRefAndStreams(t *testing.T) {
 	}
 }
 
-// Get rejects refs that are not well-formed s3://bucket/key URIs.
 func TestS3_GetRejectsBadRef(t *testing.T) {
 	store := newWithAPI(&fakeS3{}, "b", "p")
 	for _, ref := range []string{"", "not-s3", "s3://", "s3://bucket-only", "s3://bucket/"} {
@@ -151,9 +143,7 @@ func TestS3_GetRejectsBadRef(t *testing.T) {
 	}
 }
 
-// NewS3 refuses incomplete config (so a half-set store never silently no-ops)
-// and builds a store from complete config without any network call (credentials
-// resolve lazily on first use).
+// A half-set config must not yield a store that silently no-ops.
 func TestNewS3_ValidatesConfig(t *testing.T) {
 	ctx := context.Background()
 	for _, cfg := range []Config{
@@ -176,9 +166,6 @@ func TestNewS3_ValidatesConfig(t *testing.T) {
 	}
 }
 
-// A role ARN is optional: without one the ambient credentials are used directly
-// (IRSA, or the static keys the S3-compatible e2e backend uses). An endpoint
-// override targets an S3-compatible backend such as MinIO.
 func TestNewS3_RoleOptionalAndEndpointOverride(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewS3(ctx, Config{

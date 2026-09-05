@@ -17,9 +17,6 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// fakeDriver stands in for the kubelet ContainerCheckpoint call so the adapter's
-// orchestration is unit-tested without a CRIU-capable runtime (the runtime side
-// is verified separately — see docs/criu-verification.md). It records its args.
 type fakeDriver struct {
 	items         []string
 	checkpointErr error
@@ -47,8 +44,6 @@ func (f *fakeDriver) Restore(_ context.Context, ref string, into k8s.PodRef) err
 
 var _ criu.CheckpointDriver = (*fakeDriver)(nil)
 
-// fakeStore stands in for the durable checkpoint store (S3) so the upload wiring
-// is unit-tested without AWS. It records the key and the streamed bytes.
 type fakeStore struct {
 	ref      string
 	err      error
@@ -77,8 +72,6 @@ func podOn(node, ns, name string) *corev1.Pod {
 	}
 }
 
-// Checkpoint resolves the pod's node, drives the checkpoint through the driver,
-// and returns the archive path the kubelet reported as Checkpoint.Ref (AC-B1/B3).
 func TestContainerCheckpointer_CheckpointReturnsArchiveRef(t *testing.T) {
 	const ns = "sessions"
 	archive := "/var/lib/kubelet/checkpoints/checkpoint-sess-abcd_sessions-session-2026.tar"
@@ -104,8 +97,6 @@ func TestContainerCheckpointer_CheckpointReturnsArchiveRef(t *testing.T) {
 		t.Errorf("CreatedAt = %v, want the injected clock %v", cp.CreatedAt, fixed)
 	}
 
-	// The driver must be dialed for the right node/pod/container (the checkpoint
-	// endpoint lives on the pod's node; the container is the data plane shell).
 	if drv.checkpointCalls != 1 {
 		t.Fatalf("driver Checkpoint called %d times, want 1", drv.checkpointCalls)
 	}
@@ -118,16 +109,12 @@ func TestContainerCheckpointer_CheckpointReturnsArchiveRef(t *testing.T) {
 	if drv.gotContainer != k8s.ContainerName {
 		t.Errorf("driver container = %q, want %q", drv.gotContainer, k8s.ContainerName)
 	}
-	// No store configured: the ref is the ephemeral node-local archive path and
-	// size is unknown (0).
 	if cp.SizeBytes != 0 {
 		t.Errorf("SizeBytes = %d, want 0 without a durable store", cp.SizeBytes)
 	}
 }
 
-// With a CheckpointStore the node-local archive is uploaded and its durable ref
-// (e.g. s3://…) and size are recorded instead of the ephemeral node path
-// (decision ③ — checkpoints survive their node).
+// Decision ③ — a stored archive survives its node.
 func TestContainerCheckpointer_CheckpointUploadsToStore(t *testing.T) {
 	const ns = "sessions"
 	archive := "/var/lib/kubelet/checkpoints/checkpoint-sess-abcd_sessions-session-9.tar"
@@ -155,7 +142,6 @@ func TestContainerCheckpointer_CheckpointUploadsToStore(t *testing.T) {
 	if cp.SizeBytes != int64(len(content)) {
 		t.Errorf("SizeBytes = %d, want the uploaded archive size %d", cp.SizeBytes, len(content))
 	}
-	// Stored under namespace/pod/<kubelet-filename> with the bytes streamed verbatim.
 	if want := "sessions/sess-abcd/checkpoint-sess-abcd_sessions-session-9.tar"; store.gotKey != want {
 		t.Errorf("store key = %q, want %q", store.gotKey, want)
 	}
@@ -182,8 +168,6 @@ func TestContainerCheckpointer_CheckpointSurfacesStoreError(t *testing.T) {
 	}
 }
 
-// A pod not yet scheduled to a node cannot be checkpointed — there is no kubelet
-// to dial — so Checkpoint fails without calling the driver.
 func TestContainerCheckpointer_CheckpointRequiresNode(t *testing.T) {
 	const ns = "sessions"
 	drv := &fakeDriver{items: []string{"unused"}}
@@ -211,8 +195,6 @@ func TestContainerCheckpointer_CheckpointSurfacesDriverError(t *testing.T) {
 	}
 }
 
-// An empty archive list is an error, not a checkpoint with an empty ref (nothing
-// to restore from later).
 func TestContainerCheckpointer_CheckpointRejectsEmptyArchive(t *testing.T) {
 	const ns = "sessions"
 	drv := &fakeDriver{items: nil}
@@ -224,7 +206,6 @@ func TestContainerCheckpointer_CheckpointRejectsEmptyArchive(t *testing.T) {
 	}
 }
 
-// Restore hands the recorded ref and target pod to the driver (AC-B2).
 func TestContainerCheckpointer_RestoreDrivesRefIntoPod(t *testing.T) {
 	const ns = "sessions"
 	drv := &fakeDriver{}
@@ -247,8 +228,6 @@ func TestContainerCheckpointer_RestoreDrivesRefIntoPod(t *testing.T) {
 	}
 }
 
-// Restore refuses a nil/empty checkpoint rather than dialing the driver with
-// nothing to resume.
 func TestContainerCheckpointer_RestoreRejectsEmptyCheckpoint(t *testing.T) {
 	drv := &fakeDriver{}
 	ckpt := criu.NewContainerCheckpointer(fake.NewSimpleClientset(), "sessions", criu.WithDriver(drv))

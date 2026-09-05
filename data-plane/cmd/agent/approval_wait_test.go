@@ -10,7 +10,6 @@ import (
 	"time"
 )
 
-// awaiting builds the notice the gate publishes when a wait starts.
 func awaitingNotice(externalID string) approvalNotice {
 	return approvalNotice{Kind: noticeAwaiting, Tool: webFetchGetTool, ExternalID: externalID}
 }
@@ -19,9 +18,8 @@ func decidedNotice(externalID, decision string) approvalNotice {
 	return approvalNotice{Kind: noticeDecided, Tool: webFetchGetTool, ExternalID: externalID, Decision: decision}
 }
 
-// The state machine AC-F3's idle exception is decided from: a wait is open
-// from its "awaiting" until whatever ends it, and every way it can end has to
-// close it. A wait that never closes holds a pod forever.
+// Every way a wait can end has to close it — the count is what AC-F3's idle
+// exception reads, and a wait that never closes holds a pod forever.
 func TestApprovalWaitsTrackWhatTheFeedSays(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -74,8 +72,7 @@ func TestApprovalWaitsTrackWhatTheFeedSays(t *testing.T) {
 }
 
 // Falling behind the helper's ring means a decision may have been evicted
-// unseen. The set is cleared rather than kept, because a wait that can never
-// be closed would hold this session's lastAccess — and its pod — forever.
+// unseen, so the set is cleared rather than kept.
 func TestApprovalWaitsClearWhenNoticesWereDropped(t *testing.T) {
 	var w approvalWaits
 	w.observe([]approvalNotice{awaitingNotice("s:1"), awaitingNotice("s:2")}, 0)
@@ -88,16 +85,13 @@ func TestApprovalWaitsClearWhenNoticesWereDropped(t *testing.T) {
 		t.Fatalf("awaiting = %v pending = %d after a drop, want false/0", awaiting, pending)
 	}
 
-	// A drop reported alongside notices still records the notices that did
-	// arrive: only what came before the cursor is unaccounted for.
 	w.observe([]approvalNotice{awaitingNotice("s:9")}, 2)
 	if awaiting, pending := w.state(); !awaiting || pending != 1 {
 		t.Fatalf("awaiting = %v pending = %d, want true/1", awaiting, pending)
 	}
 }
 
-// noticeFeedServer serves one feed over HTTP, the way the helper pod's MCP
-// container does, so a test can drive the tailer from the publisher side.
+// noticeFeedServer serves one feed the way the helper pod's MCP container does.
 func noticeFeedServer(t *testing.T) (*noticeFeed, string) {
 	t.Helper()
 	feed := newNoticeFeed()
@@ -141,9 +135,7 @@ func awaitApprovalWait(t *testing.T, base string, want bool) approvalWaitRespons
 	return got
 }
 
-// The whole workload-pod chain AC-F3's idle exception rests on: the helper pod
-// publishes, the tailer follows, and the control plane — which can reach this
-// pod and not the helper — reads the answer off the workload agent.
+// The whole workload-pod chain AC-F3's idle exception rests on.
 func TestApprovalWaitTravelsFromTheFeedToTheControlPlane(t *testing.T) {
 	feed, feedURL := noticeFeedServer(t)
 	c, srv := newClaudeTestServer(t, &fakeClaudeRunner{}, "", false, nil)
@@ -169,9 +161,7 @@ func TestApprovalWaitTravelsFromTheFeedToTheControlPlane(t *testing.T) {
 	}
 }
 
-// AC-F6: the answer crosses a pod boundary, so it carries only what the idle
-// decision needs. The tool, the external identifier and anything about the
-// gateway stay on the side that already has them.
+// AC-F6: the answer crosses a pod boundary, so it carries nothing else.
 func TestApprovalWaitAnswerCarriesNothingElse(t *testing.T) {
 	feed, feedURL := noticeFeedServer(t)
 	c, srv := newClaudeTestServer(t, &fakeClaudeRunner{}, "", false, nil)
@@ -207,9 +197,7 @@ func TestApprovalWaitAnswerCarriesNothingElse(t *testing.T) {
 	}
 }
 
-// The same chain driven by the real gate rather than a hand-published feed: a
-// call that goes all the way through leaves no wait behind, so an idle session
-// whose approvals are all decided freezes on the ordinary schedule.
+// The same chain driven by the real gate rather than a hand-published feed.
 func TestApprovalWaitClosesWhenTheRealGateDecides(t *testing.T) {
 	g := newGatedMCP(t, "APPROVED")
 	c, srv := newClaudeTestServer(t, &fakeClaudeRunner{}, "", false, nil)

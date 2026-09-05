@@ -42,11 +42,7 @@ func main() {
 
 	// The control plane drives data plane pods AND stores session state via
 	// client-go, so it needs a reachable cluster: the in-cluster config as a pod,
-	// or the ambient kubeconfig for local development against a kind cluster. The
-	// same client backs the pod orchestrator and ConfigMap/Lease state store.
-	// Enabled snapshot strategies ask the session pod agent to produce either a
-	// shell CRIU bundle or Claude filesystem archive, then persist it in the
-	// configured durable store; disabled strategies fail closed before reclaim.
+	// or the ambient kubeconfig for local development against a kind cluster.
 	client, namespace, err := k8s.BuildClient()
 	if err != nil {
 		logger.Error("k8s: no reachable cluster (in-cluster config or kubeconfig required)", "err", err)
@@ -72,14 +68,9 @@ func main() {
 
 	orch := k8s.NewClientOrchestrator(client, namespace,
 		k8s.WithImage(cfg.dataPlaneImage), k8s.WithShell(cfg.dataPlaneShell),
-		// Per-type image (AC-E1). Empty is a no-op, which leaves claude-code
-		// unconfigured — Start then refuses that type instead of provisioning a
-		// shell pod under a claude-code label.
+		// Per-type image (AC-E1); empty is a no-op — see the config fields.
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, cfg.dataPlaneClaudeCodeImage),
-		// Same for approval-gated (AC-F1). Its data plane runtime — the helper
-		// pod's session MCP — is not implemented yet, so leaving this unset is
-		// the expected deployment state: the type stays inert instead of
-		// provisioning a pod pair that cannot come up.
+		// Same for approval-gated (AC-F1).
 		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, cfg.dataPlaneApprovalGatedImage),
 		k8s.WithClaudeCredentialsSecret(cfg.claudeCredentialsSecret),
 		k8s.WithApprovalGatewaySecret(cfg.approvalGatewaySecret),
@@ -128,11 +119,8 @@ func main() {
 	mgr := service.New(orch, store, shellCkpt, agentClient, serviceOpts...)
 	snapshotEnabled := shellCkpt.Enabled() || cfg.claudeArchiveEnabled
 
-	// AC-B1: the operational idle->snapshot trigger. A background reaper scans
-	// sessions every cfg.idleScanInterval and freezes any idle (no client
-	// read/write, AC-D5) for at least session.MaxIdle, reclaiming its pod
-	// (AC-A3). Manual snapshots use the same manager operation through the
-	// product API without waiting for the idle limit.
+	// AC-B1: the operational idle->snapshot trigger. Manual snapshots reach the
+	// same manager operation through the product API, without the idle wait.
 	reaper := service.NewIdleReaper(mgr, session.MaxIdle, cfg.idleScanInterval, nil, logger)
 
 	mux := http.NewServeMux()
@@ -152,7 +140,6 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Drive the idle->snapshot reaper until shutdown (AC-B1).
 	if snapshotEnabled {
 		go reaper.Run(ctx)
 	} else {
@@ -184,8 +171,7 @@ type config struct {
 	dataPlaneClaudeCodeImage string
 	// dataPlaneApprovalGatedImage is the image for `workloadType=approval-gated`
 	// sessions and their helper pods (AC-F1/AC-F4). Unset means the type is not
-	// deployable here, which is the current expected state: the helper pod's
-	// session MCP workload does not exist in the data plane agent yet.
+	// deployable here.
 	dataPlaneApprovalGatedImage string
 	// approvalGatewaySecret names the platform Secret whose url/api-key/user-id
 	// keys are projected into the helper pod's MCP container only (AC-F6).
@@ -206,12 +192,9 @@ type config struct {
 	// idle limit (AC-B1). The 60m limit itself is session.MaxIdle; this only
 	// bounds how promptly a newly-idle session is noticed.
 	idleScanInterval time.Duration
-	// Checkpoint/archive store used by either explicitly enabled strategy:
-	// an S3 bucket,
-	// accessed by assuming checkpointS3RoleARN over the ambient credentials
-	// (node instance profile / IRSA). checkpointS3Endpoint targets an
-	// S3-compatible backend instead of AWS — the e2e SUT points it at MinIO and
-	// leaves the role empty, authenticating with static keys from the env.
+	// Checkpoint/archive store used by either explicitly enabled strategy: an S3
+	// bucket reached through checkpointstore.NewS3. checkpointS3Endpoint targets
+	// an S3-compatible backend instead of AWS.
 	checkpointS3Bucket      string
 	checkpointS3RoleARN     string
 	checkpointS3Region      string
@@ -220,9 +203,7 @@ type config struct {
 	checkpointS3Endpoint    string
 }
 
-// buildCheckpointStore builds the checkpoint archive backend. The agent-driven
-// checkpointer always needs one: the archive is produced inside a pod that is
-// reclaimed moments later.
+// buildCheckpointStore builds the checkpoint archive backend.
 func buildCheckpointStore(cfg config) (criu.CheckpointStore, error) {
 	if cfg.checkpointS3Bucket == "" {
 		return nil, errors.New("snapshot strategy needs a checkpoint store: set CHECKPOINT_S3_BUCKET")
