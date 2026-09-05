@@ -39,7 +39,7 @@ spec:
       containers:
         - name: control-plane
           # ⚙️ CI가 관리하는 줄입니다(docker-build-push.yaml 의 `pin` job).
-          image: ghcr.io/dlddu/session-platform:ba3cddcd5a26efb9ed09692aa35b3373c7f2607b
+          image: ghcr.io/dlddu/session-platform:3b39ee3e01e368adc704f220554e4b475537180b
           ports:
             - containerPort: 8080
           env:
@@ -50,7 +50,7 @@ spec:
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다(env value 라 kustomize 의
             # images 변환이 닿지 않는 자리다).
             - name: DATA_PLANE_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:ba3cddcd5a26efb9ed09692aa35b3373c7f2607b"
+              value: "ghcr.io/dlddu/session-platform-data-plane:3b39ee3e01e368adc704f220554e4b475537180b"
             # mock-exception: CRIU-GATE — 검증된 런타임이 설 때까지 off가 프로덕션의 의도된
             # 동작이다(그 경로에서 쉘 동결/복원은 no-op 스텁). e2e 오버레이(deploy/)만 on으로
             # 올려 실 경로를 탄다. 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
@@ -60,7 +60,7 @@ spec:
               value: "false"
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다.
             - name: DATA_PLANE_CLAUDE_CODE_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:ba3cddcd5a26efb9ed09692aa35b3373c7f2607b"
+              value: "ghcr.io/dlddu/session-platform-data-plane:3b39ee3e01e368adc704f220554e4b475537180b"
             # The required base-url/auth-token keys are referenced only by the
             # localhost credential-proxy sidecar. The required k3s-mcp-token is
             # referenced only by the Claude tool-running container. A
