@@ -573,7 +573,7 @@ R2는 *등재된 파일 목록만* 재측정하므로, 등재하지 않으면 �
 | 위치 | 제거한 것 | 이미 말하는 곳 (복원 경로) |
 | --- | --- | --- |
 | `control-plane/go.mod` 상단 (5→0) | 위 표의 거짓 2건 + 「PodOrchestrator와 StateStore는 둘 다 client-go 위에 서고 ConfigMap·Lease에 상태를 둔다」 | **거짓이다**(위) · ① `internal/store/store.go` 패키지 doc이 *「the concrete adapter lives under internal/adapter」*로, 5차 패스가 등재한 `adapter/configmap/store.go`가 그 구현으로 말한다 |
-| `data-plane/go.mod` 상단 (3→0) | 「creack/pty가 셸을 의사 터미널에 붙이고(AC-D1) gorilla/websocket이 `/attach`를 낸다 · 둘 다 의존이 없다」 | ② `prd/*` AC-D1 · ① `data-plane/cmd/agent/main.go`의 `pty.Start`와 `mux.HandleFunc("GET /attach", …)` · ① 이 `go.mod` 자신 — indirect 블록이 없다는 것이 「의존이 없다」이다 |
+| `data-plane/go.mod` 상단 (3→0) | 「creack/pty가 셸을 의사 터미널에 붙이고(AC-D1) gorilla/websocket이 `/attach`를 낸다 · 둘 다 의존이 없다」 | ② `prd/*` AC-D1 · ① `data-plane/cmd/agent/main.go`의 `pty.StartWithSize`와 `mux.HandleFunc("GET /attach", …)` · ① 이 `go.mod` 자신 — indirect 블록이 없다는 것이 「의존이 없다」이다 |
 | `store.go` 패키지 doc (6→3) | 「ConfigMap+Lease 구현이 모든 연산을 k8s API로 받쳐 전이·점유가 복제본 간 atomic하다(AC-C1)」 · 「도메인 에러는 session 패키지에 있다」 | ① 바로 아래 `StateStore` doc이 *「Every state transition and occupancy claim must be atomic (AC-C1)」*로 같은 말을 한다(같은 파일 두 벌) · ② `prd/state-api.md` AC-C1 · ① 메서드 doc들이 `session.ErrConflict`를 그대로 적는다. **포인터(`internal/adapter`)는 남기고 사본을 지웠다** |
 | `store.go` `CompareAndSwapSession` doc (3→0) | 「lifecycle state와 durable snapshot transaction이 **둘 다** 기대값과 맞을 때만 aggregate를 통째 교체한다」 | ① 시그니처의 `expectedState`·`expectedTxn`·`next` 파라미터 이름이 그 계약 자체다. 그리고 같은 인터페이스의 `Put`·`Get`·`List`·`Unlock`은 doc이 **0줄**이라 이 파일은 「모든 메서드에 doc」 규약을 갖지 않는다(1차 패스가 `CreateRequest is the input to Manager.Create.`를 지운 것과 같은 형태) |
 | `static.go` 패키지 doc (7→6) | 「그 디렉터리는 컨트롤 플레인 바이너리에 임베드된다」 | ① 여덟 줄 아래 `//go:embed all:dist` + `var embedded embed.FS` |
