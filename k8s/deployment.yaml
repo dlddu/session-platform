@@ -39,7 +39,7 @@ spec:
       containers:
         - name: control-plane
           # ⚙️ CI가 관리하는 줄입니다(docker-build-push.yaml 의 `pin` job).
-          image: ghcr.io/dlddu/session-platform:4a367c60fa50c55945d29fbaa386036b27b9124a
+          image: ghcr.io/dlddu/session-platform:5cc2bf97c5b358fa459f87356732b19c823d3d3c
           ports:
             - containerPort: 8080
           env:
@@ -50,7 +50,7 @@ spec:
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다(env value 라 kustomize 의
             # images 변환이 닿지 않는 자리다).
             - name: DATA_PLANE_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:4a367c60fa50c55945d29fbaa386036b27b9124a"
+              value: "ghcr.io/dlddu/session-platform-data-plane:5cc2bf97c5b358fa459f87356732b19c823d3d3c"
             # mock-exception: CRIU-GATE — 검증된 런타임이 설 때까지 off가 프로덕션의 의도된
             # 동작이다(그 경로에서 쉘 동결/복원은 no-op 스텁). e2e 오버레이(deploy/)만 on으로
             # 올려 실 경로를 탄다. 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
@@ -60,7 +60,7 @@ spec:
               value: "false"
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다.
             - name: DATA_PLANE_CLAUDE_CODE_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:4a367c60fa50c55945d29fbaa386036b27b9124a"
+              value: "ghcr.io/dlddu/session-platform-data-plane:5cc2bf97c5b358fa459f87356732b19c823d3d3c"
             # approval-gated 워크로드 파드와 그 세션 전용 헬퍼 파드(MCP·credential-proxy
             # 컨테이너)가 쓰는 이미지다(AC-F1/AC-F4). 같은 data plane 에이전트 바이너리가
             # DATA_PLANE_WORKLOAD 로 `approval-gated`·`mcp` 경로를 모두 태우므로
@@ -73,7 +73,7 @@ spec:
             # 이 SSM 에서 동기화한다(AC-F6 — 값은 헬퍼 pod 의 MCP 컨테이너만 받는다).
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다.
             - name: DATA_PLANE_APPROVAL_GATED_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:4a367c60fa50c55945d29fbaa386036b27b9124a"
+              value: "ghcr.io/dlddu/session-platform-data-plane:5cc2bf97c5b358fa459f87356732b19c823d3d3c"
             # The required base-url/auth-token keys are referenced only by the
             # localhost credential-proxy sidecar. The required k3s-mcp-token is
             # referenced only by the Claude tool-running container. A
