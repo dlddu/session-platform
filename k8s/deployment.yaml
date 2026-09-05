@@ -61,6 +61,19 @@ spec:
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다.
             - name: DATA_PLANE_CLAUDE_CODE_IMAGE
               value: "ghcr.io/dlddu/session-platform-data-plane:4a367c60fa50c55945d29fbaa386036b27b9124a"
+            # approval-gated 워크로드 파드와 그 세션 전용 헬퍼 파드(MCP·credential-proxy
+            # 컨테이너)가 쓰는 이미지다(AC-F1/AC-F4). 같은 data plane 에이전트 바이너리가
+            # DATA_PLANE_WORKLOAD 로 `approval-gated`·`mcp` 경로를 모두 태우므로
+            # claude-code 와 같은 이미지를 가리킨다. 비어 있으면 이 타입의 세션 생성이
+            # 실패한다(main.go 의 기본값이 빈 문자열) — 그래서 여기서 명시적으로 켠다.
+            #
+            # 게이트웨이 자격 증명 Secret 이름은 코드 기본값 `approval-gateway-credentials`
+            # 를 그대로 쓰므로 APPROVAL_GATEWAY_SECRET env 는 두지 않는다. 그 Secret 은
+            # flux-cd-apps 의 apps/session-platform/approval-gateway-credentials-external-secret.yaml
+            # 이 SSM 에서 동기화한다(AC-F6 — 값은 헬퍼 pod 의 MCP 컨테이너만 받는다).
+            # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다.
+            - name: DATA_PLANE_APPROVAL_GATED_IMAGE
+              value: "ghcr.io/dlddu/session-platform-data-plane:4a367c60fa50c55945d29fbaa386036b27b9124a"
             # The required base-url/auth-token keys are referenced only by the
             # localhost credential-proxy sidecar. The required k3s-mcp-token is
             # referenced only by the Claude tool-running container. A
