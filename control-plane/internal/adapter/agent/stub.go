@@ -19,7 +19,6 @@ type StubClient struct {
 	bufs map[string][]byte
 }
 
-// compile-time assertion that StubClient satisfies the port.
 var _ Client = (*StubClient)(nil)
 
 // NewStubClient returns an empty stub.

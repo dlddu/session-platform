@@ -100,10 +100,12 @@
 | 2026-09-04 | `control-plane/internal/session/session.go` · `control-plane/internal/session/manager.go` | 143 | `b43d405ac066` | 첫 판정 패스 — **162줄 판정, 제거 19 · 유지 143**. 상세 ↓ |
 | 2026-09-04 | `control-plane/internal/service/manager.go` · `control-plane/internal/service/manager_test.go` · `control-plane/internal/service/reaper.go` · `control-plane/internal/service/reaper_test.go` · `control-plane/internal/service/auxiliary_pods_test.go` · `control-plane/internal/service/workload_type_test.go` | 239 | `1d85544cb83a` | 2차 판정 패스 — **299줄 판정, 제거 75 · 유지 224**(지문 기준 304 → 229, 오검출 5줄 포함). *2026-09-04 증분 재판정: AC-F3 유휴 예외가 더한 23줄 판정 — 제거 13 · 유지 10 (229 → 239).* 상세 ↓ |
 | 2026-09-04 | `control-plane/internal/adapter/k8s/client_orchestrator.go` · `control-plane/internal/adapter/k8s/orchestrator.go` · `control-plane/internal/adapter/k8s/network_policy.go` · `control-plane/internal/adapter/k8s/orchestrator_test.go` | 328 | `b09a85723f8c` | 3차 판정 패스 — **473줄 판정, 제거 153 · 유지 320**. 이후 #66이 더한 14줄을 재판정(제거 6 · 유지 8) — 누적 **487줄 판정, 제거 159 · 유지 328**. 상세 ↓ |
-| 2026-09-04 | `data-plane/cmd/agent/approval_gated_test.go` · `data-plane/cmd/agent/approval_gateway.go` · `data-plane/cmd/agent/approval_gateway_test.go` · `data-plane/cmd/agent/checkpoint.go` · `data-plane/cmd/agent/checkpoint_test.go` · `data-plane/cmd/agent/claude.go` · `data-plane/cmd/agent/claude_archive.go` · `data-plane/cmd/agent/claude_archive_test.go` · `data-plane/cmd/agent/claude_process_linux.go` · `data-plane/cmd/agent/claude_process_linux_test.go` · `data-plane/cmd/agent/claude_stream.go` · `data-plane/cmd/agent/claude_stream_contract_test.go` · `data-plane/cmd/agent/claude_stream_test.go` · `data-plane/cmd/agent/claude_test.go` · `data-plane/cmd/agent/credential_proxy.go` · `data-plane/cmd/agent/credential_proxy_ca_test.go` · `data-plane/cmd/agent/credential_proxy_stream.go` · `data-plane/cmd/agent/credential_proxy_stream_progress_test.go` · `data-plane/cmd/agent/credential_proxy_stream_test.go` · `data-plane/cmd/agent/credential_proxy_test.go` · `data-plane/cmd/agent/entrypoint_test.go` · `data-plane/cmd/agent/main.go` · `data-plane/cmd/agent/main_test.go` · `data-plane/cmd/agent/output_stream.go` · `data-plane/cmd/agent/session_mcp.go` · `data-plane/cmd/agent/session_mcp_gate_test.go` · `data-plane/cmd/agent/session_mcp_notice_tail.go` · `data-plane/cmd/agent/session_mcp_notice_tail_test.go` · `data-plane/cmd/agent/session_mcp_notices.go` · `data-plane/cmd/agent/session_mcp_notices_test.go` · `data-plane/cmd/agent/session_mcp_test.go` · `data-plane/cmd/agent/session_mcp_tools.go` | 747 | `c6b11fc5193e` | 4차 판정 패스 — **976줄 판정, 제거 237 · 유지 739**. 데이터 플레인 전체. *2026-09-04 증분 재판정: AC-F3 유휴 예외가 이 범위에 더한 16줄 판정 — 제거 8 · 유지 8 (739 → 747).* 상세 ↓ |
+| 2026-09-04 | `data-plane/cmd/agent/approval_gated_test.go` · `data-plane/cmd/agent/approval_gateway.go` · `data-plane/cmd/agent/approval_gateway_test.go` · `data-plane/cmd/agent/approval_wait.go` · `data-plane/cmd/agent/approval_wait_test.go` · `data-plane/cmd/agent/checkpoint.go` · `data-plane/cmd/agent/checkpoint_test.go` · `data-plane/cmd/agent/claude.go` · `data-plane/cmd/agent/claude_archive.go` · `data-plane/cmd/agent/claude_archive_test.go` · `data-plane/cmd/agent/claude_process_linux.go` · `data-plane/cmd/agent/claude_process_linux_test.go` · `data-plane/cmd/agent/claude_stream.go` · `data-plane/cmd/agent/claude_stream_contract_test.go` · `data-plane/cmd/agent/claude_stream_test.go` · `data-plane/cmd/agent/claude_test.go` · `data-plane/cmd/agent/credential_proxy.go` · `data-plane/cmd/agent/credential_proxy_ca_test.go` · `data-plane/cmd/agent/credential_proxy_stream.go` · `data-plane/cmd/agent/credential_proxy_stream_progress_test.go` · `data-plane/cmd/agent/credential_proxy_stream_test.go` · `data-plane/cmd/agent/credential_proxy_test.go` · `data-plane/cmd/agent/entrypoint_test.go` · `data-plane/cmd/agent/main.go` · `data-plane/cmd/agent/main_test.go` · `data-plane/cmd/agent/output_stream.go` · `data-plane/cmd/agent/session_mcp.go` · `data-plane/cmd/agent/session_mcp_gate_test.go` · `data-plane/cmd/agent/session_mcp_notice_tail.go` · `data-plane/cmd/agent/session_mcp_notice_tail_test.go` · `data-plane/cmd/agent/session_mcp_notices.go` · `data-plane/cmd/agent/session_mcp_notices_test.go` · `data-plane/cmd/agent/session_mcp_test.go` · `data-plane/cmd/agent/session_mcp_tools.go` | 781 | `7dad4f10cce1` | 4차 판정 패스 — **976줄 판정, 제거 237 · 유지 739**. 데이터 플레인 전체. *2026-09-04 증분 재판정: AC-F3 유휴 예외가 이 범위에 더한 16줄 판정 — 제거 8 · 유지 8 (739 → 747).* *2026-09-05: #71이 더한 신규 2파일(`approval_wait.go` 48 · `approval_wait_test.go` 20)을 이 행에 편입해 판정 — **68줄 판정, 제거 34 · 유지 34** (747 → 781). 상세 ↓* |
+| 2026-09-05 | `control-plane/internal/adapter/agent/client.go` · `control-plane/internal/adapter/agent/client_test.go` · `control-plane/internal/adapter/agent/stub.go` · `control-plane/internal/adapter/checkpointstore/store.go` · `control-plane/internal/adapter/checkpointstore/store_test.go` · `control-plane/internal/adapter/configmap/store.go` · `control-plane/internal/adapter/configmap/store_test.go` · `control-plane/internal/adapter/configmap/envtest/go.mod` · `control-plane/internal/adapter/configmap/envtest/store_conflict_test.go` · `control-plane/internal/adapter/criu/agent_checkpointer.go` · `control-plane/internal/adapter/criu/agent_checkpointer_test.go` · `control-plane/internal/adapter/criu/checkpointer.go` · `control-plane/internal/adapter/criu/container_checkpointer.go` · `control-plane/internal/adapter/criu/container_checkpointer_test.go` | 352 | `45e1de866652` | 5차 판정 패스 — **508줄 판정, 제거 156 · 유지 352**. `internal/adapter/` 의 k8s 외 전부(3차 패스가 k8s 4파일을 이미 등재했으므로 이 행으로 **어댑터 계층이 닫힌다**). 상세 ↓ |
+| 2026-09-05 | `control-plane/cmd/control-plane/main.go` | 58 | `44ca04abf7ff` | 6차 판정 패스 — **77줄 판정, 제거 19 · 유지 58**. 4차 패스가 「다음 패스의 1순위」로 지목한 조립 루트. **거짓이 된 주석 2건**(「helper pod's session MCP는 아직 구현되지 않았다」)을 포함한다. 상세 ↓ |
 <!-- /판정-원장 -->
 
-판정 완료 합계 **<!-- 판정-합계 -->1457<!-- /판정-합계 -->줄**(등재 범위의 현재 줄 수 합).
+판정 완료 합계 **<!-- 판정-합계 -->1901<!-- /판정-합계 -->줄**(등재 범위의 현재 줄 수 합).
 전체 대비 비율과 미판정 잔량은 **게이트가 출력한다** — 프로즈에 적으면 낡는다.
 
 ### 2026-09-04 — `control-plane/internal/session/` (판정 162줄)
@@ -437,6 +439,107 @@ R2로 잡았다. 유입된 **16줄만** 같은 절차로 판정했다 — **제�
 `approval_wait_test.go`(20줄)를 새로 더했다. 등재 행의 파일 목록 밖이라 게이트는 이 68줄을
 미판정 잔량으로 센다. 이 슬라이스는 **등재된 32파일의 유입분만** 재판정했고, 두 신규 파일은
 as-is 지문 이동의 재감지가 다음 task로 잇는다.
+
+#### 증분 재판정 — #71이 더한 신규 2파일 (2026-09-05)
+
+바로 위 문단이 「as-is 지문 이동의 재감지가 다음 task로 잇는다」로 넘긴 68줄이다. 그 재감지가
+발화해 이 행에 편입했다 — `approval_wait.go`(48) · `approval_wait_test.go`(20), **68줄 판정,
+제거 34 · 유지 34**(747 → 781).
+
+**게이트가 이 68줄에 대해 침묵했다는 점을 먼저 적는다.** R2는 *등재된 파일 목록*을 재측정할 뿐
+「이 패키지에 등재 밖 파일이 있는가」를 묻지 않는다. 그래서 rc=0 이면서도 같은 디렉터리의 신규
+2파일이 미판정으로 남아 있었다 — 게이트 결함이 아니라(인구조사 카운터로는 보였다) **초록이
+커버리지를 뜻하지 않는다**는 뜻이다. 같은 형태를 다음에도 만들지 않으려면, 등재 행을 만든
+슬라이스 뒤에 그 경로로 들어온 신규 파일을 **다음 패스가 먼저 훑어야 한다.**
+
+| 위치 | 제거한 것 | 이미 말하는 곳 (복원 경로) |
+| --- | --- | --- |
+| `approval_wait.go` 패키지 주석 (17→6) | AC-F3 유휴 예외의 서술과 근거(「대기 중 동결되면 승인이 나도 실행할 파드가 없다」) · pull을 택한 이유 7줄(egress 허용목록·역방향엔 ingress 정책이 없음·NetworkPolicy 무변경) | ② `prd/approval-gated-workload.md` AC-F3의 「유휴 기준」 불릿이 **근거 문장까지 축자**다 · ③ PR #71 본문의 「방향을 pull로 고른 근거」 표가 세 방향을 각각 판정해 적는다 · ① `session_mcp_notices.go`가 같은 선택을 먼저 했다. **포인터(AC-F2·`session_mcp_notices.go`)만 남겼다** |
+| `approval_wait.go` `approvalWaitPath` (3→1) | 「헬퍼 파드가 아니라 워크로드 에이전트 서버에 있다 — 헬퍼가 바로 컨트롤 플레인이 닿지 못하는 쪽이니까」 | ② AC-F2 · ③ 같은 PR 표. 위 패키지 주석에서 이미 한 번 지운 사본의 두 번째 벌이다 |
+| `approval_wait.go` `approvalWaits` (8→4) | 「파생 상태이고 아무 데도 영속되지 않는다 … 헬퍼는 동결을 건너 상태를 갖지 않고(AC-F4), 복원된 세션은 새 에이전트와 빈 피드를 받는다」 | ① `session_mcp_notice_tail.go`의 `noticeTailer` doc이 **같은 문장을 축자로** 적는다(「a new agent process means a new helper pod with a feed that also starts empty (AC-F4)」). 「set이지 counter가 아닌 이유」는 남겼다 — 재전달이 언제 일어나는지는 코드 형태로 보이지 않는다 |
+| `approval_wait.go` `observe` (9→6) · 미지 kind 인라인 (3→2) · `approvalWaitResponse` (4→2) | 비움의 비용 비대칭(「한 번 잘못 얼면 재접근에 복원되지만, 반대는 회수되지 않는 파드다(V2)」) · 「미지 kind를 발행하는 최신 헬퍼」 서술 · 「도구 이름·외부 식별자·게이트웨이 정보를 싣지 않는다 … 파드 경계를 넓힐 뿐」 | ③ PR #71 「판단이 갈린 지점」이 그 트레이드오프를 그대로 적는다 · ① `renderApprovalNotice` doc(주석이 스스로 「matching renderApprovalNotice」로 가리키고 있었다) · ① `session_mcp_notices.go`의 `approvalNotice` doc이 **같은 논거를 같은 낱말로**(「would only widen what crosses the pod boundary」) 적는다 |
+| `approval_wait_test.go` doc 7곳 (20→7) | 테스트 이름·표의 케이스 이름·소스 doc이 그대로 말하는 서술 — 「awaiting builds the notice …」 · 「the helper pod publishes, the tailer follows, …」 · AC-F6 3줄 · 「real gate가 결정하면 …」 | ① 각 테스트 함수 이름과 서브테스트 이름(「approval closes it」·「rejection closes it」…) · ① `approval_wait.go`의 소스 doc. **「어느 쪽을 재는가」 한 줄씩만 남겼다** |
+
+**유지 34줄** — 파일 목적 문단과 pull 포인터, 「set이지 counter가 아닌 이유」, 「미지 kind가 유휴
+카운트를 붙잡지 못하게」, `observeApprovalNotices`가 claude-code에도 있는 이유(게이트도 헬퍼도
+없어 아무도 발행하지 않는다), 그리고 위 표에서 한 줄로 줄인 테스트 doc 7줄.
+
+### 2026-09-05 — `control-plane/internal/adapter/` (k8s 외 전부, 판정 508줄)
+
+3차 패스가 `adapter/k8s/` 4파일을 등재했으므로, 이 패스로 **어댑터 계층이 닫힌다** — `criu`(5파일
+215줄) · `configmap`(2파일 107줄 + `envtest` 2파일 33줄) · `agent`(3파일 83줄) ·
+`checkpointstore`(2파일 70줄). **제거 156 · 유지 352**(30.7%).
+
+**이 패스의 주된 형태는 「같은 문단이 한 파일 안에 두세 벌」이었다.** 앞선 패스들이 파일↔문서,
+소스↔테스트 사이의 되풀이를 골라냈다면 여기서는 *인터페이스 doc · 구현 doc · 구현 본문 인라인*이
+같은 계약을 각각 한 번씩 적는 형태가 반복됐다. 가장 큰 한 건: `container_checkpointer.go`의
+「K8s-native restore에는 kubelet API가 없다 — 재개는 RestoreInto가 단 어노테이션을 런타임이
+읽어 일으키고, 여기서 구동할 것은 없다」가 **`CheckpointDriver.Restore` doc · `Restore` doc ·
+`kubeletDriver.Restore` 본문 세 곳에** 있었다. 계약을 소유하는 인터페이스 doc 하나만 남겼다.
+
+**제거 156줄**
+
+| 위치 | 제거한 것 | 이미 말하는 곳 (복원 경로) |
+| --- | --- | --- |
+| `criu/container_checkpointer.go` 패키지 주석 (13→4) | 「2026-07-22 k3s/containerd 검증에서 dump는 되지만 containerd가 복원할 방법이 없어 왕복이 막힌다 → 미배선으로 유지, CRI-O 도입 시 checkpoint OCI 이미지 경로」 | ② `docs/criu-verification.md`의 **결정 ⑤ 근거·대안**과 「실구현 요약」의 이 파일 행(「CRI-O 대안(미배선) … 유지·테스트되지만 wired가 아님」)이 같은 말을 더 자세히 적는다. **주석이 스스로 그 문서를 가리키고 있었다** — 포인터만 남겼다 |
+| `criu/container_checkpointer.go` `Restore` doc (8→5) · `kubeletDriver.Restore` 본문 (9→1) | 위의 세 벌 중 둘 | ① `CheckpointDriver.Restore` 인터페이스 doc. s3:// ref일 때 **노드 쪽이 assume-role로 아카이브를 당겨 온다**는 사실은 그 doc에 없어 남겼다 |
+| `criu/container_checkpointer.go` Option 5종 (12→5) · `NewContainerCheckpointer`(2→1) · `Checkpoint` 본문 인라인(2→0) | 「기본값은 k8s.ContainerName」 · 「테스트가 CRIU 없이 오케스트레이션을 돌리게」 · 「store 없으면 node-local 경로, 있으면 durable ref」 · 「WithDriver 없으면 실 kubelet」 · 「체크포인트 엔드포인트는 파드가 뜬 노드에 있다」 | ① 각각 생성자 본문(`container: k8s.ContainerName`, `if c.driver == nil`) · `CheckpointDriver` doc · `Checkpoint` 본문의 두 분기 · `kubeletDriver` doc의 **URL 템플릿 `{node}`** 가 그대로 보여 준다 |
+| `criu/agent_checkpointer.go` 패키지 주석 (12→6) · `NewAgentCheckpointer`(2→1) · `NewAgentArchiveCheckpointer`(3→2) | 「kubelet 방식을 대체한 이유(2026-07-22)」 · 「CRIU-capable 노드가 필요한 것은 셸 에이전트의 criu 호출뿐」 · 「완료된 dump와 달리 프롬프트 admission을 다시 열 수 있다」 | ② `criu-verification.md` 결정 ⑤(근거·런타임 seam) · ① 같은 파일 `AbortCheckpoint` doc이 그 대비를 **행동을 지배하는 자리에서** 적는다 |
+| `criu/checkpointer.go` 패키지 주석(4→3) · `StubCheckpointer`(4→3) · `NewStubCheckpointer`(3→1) · no-op 인라인 2곳 (6→0) | 「프로덕션 셸은 agent-driven CRIU, claude-code는 파일시스템 아카이브」 · 「합성 metadata 뒤에서 live pod를 지우지 않는다」의 되풀이 · 「스텁은 격리된 lifecycle 테스트용」의 **네 벌** | ① `agent_checkpointer.go` 패키지 주석(전략 배분의 정본) · ① 같은 파일 `StubCheckpointer` doc · ① `service/manager.go` `checkpointerFor`(2차 패스가 데이터 손실 근거로 남긴 정본) |
+| `criu` 테스트 2파일 (38→8) | 테스트 이름과 소스 doc이 그대로 단언하는 서술 — 「fake stands in … without a CRIU-capable runtime」 · 「durable store가 필요하다: 아카이브는 곧 회수될 파드 안에서 만들어진다」 · 「store가 있으면 durable ref를 대신 기록한다(결정 ③)」 · 「Restore는 nil/빈 체크포인트를 거부한다」 | ① `CheckpointDriver`·`AgentCheckpointer`·`WithStore`·`checkpointKey` doc이 각각 정본이다. **`fakeStore.Get` 이 kubelet 경로에서 안 쓰이는데도 있는 이유**(공유 계약)와 「driver 실패의 예(kubelet 불통·게이트 off·런타임에 CRIU 없음)」는 남겼다 |
+| `agent/client.go` `HTTPClient` doc(6→3) · `Checkpoint`(4→2) · `AbortCheckpoint`(4→3) · `AwaitingApproval`(8→4) · `Stream`(3→2) · `WithPort`(2→1) | 「같은 client가 /checkpoint·/restore도 지고 IP 해석을 재사용한다」 · 「호출자가 durable storage로 흘리고 Close 해야 한다」 · 「셸 CRIU 호출자는 이 메서드를 부르지 않는다」 · 「Client 인터페이스를 넓히면 모든 fake가 바뀐다」 · 「30초 데드라인이 없다」 | ② `criu-verification.md` 실구현 요약의 이 파일 행 · ① `criu.AgentCheckpointClient` doc(계약의 정본, 「The caller closes it」 포함) · ① `AgentCheckpointer.AbortCheckpoint` doc · ③ PR #71 본문(「선택적 능력 인터페이스로 붙여 기존 fake를 하나도 고치지 않았다」) · ① `stream` 필드 doc |
+| `checkpointstore/store.go` 패키지 주석(6→3) · `NewS3`(4→3) · 본문 인라인 2곳(7→1) · `Put` doc(9→7) · `Config`(2→1) | 「ambient chain + optional assume-role」의 **세 벌**(패키지 주석·`NewS3` doc·본문) · 「role 없으면 ambient 그대로」 · 「대형 아카이브는 multipart uploader로 바꿀 수 있다」 | ② `criu-verification.md` 결정 ③의 「권한(코드)」이 **SDK 심볼 이름까지**(`stscreds.NewAssumeRoleProvider` · `aws.NewCredentialsCache`) 적고, 「경계/후속」이 spool과 multipart 후속을 적는다 · ① `if cfg.RoleARN != ""` 분기. **spool이 필요한 이유**(SDK가 seekable body를 요구하고 trailing checksum은 TLS를 요구한다)는 외부 시스템 지식이라 남겼다 |
+| `configmap/store.go` 패키지 주석(17→13) · `var _`(1→0) · `WithLeaseDuration`(2→1) · CAS 본문 인라인(2→0) | 「인메모리 스텁과 같은 StateStore 계약을 유지한다」 · 컴파일타임 단언 · 「(default 15s)」 · 「cm이 Get의 resourceVersion을 지니므로 409로 하나만 이긴다」 | ④ **그 인메모리 스텁은 지금 레포에 없다**(`internal/store/`는 포트 하나뿐, 유일한 구현이 이 어댑터다) — 낡아 거짓이 된 이력 서술이라 커밋 이력에 맡겼다 · ① 선언 자체 · ① `defaultLeaseDuration` doc · ① 같은 함수의 doc과 패키지 주석이 이미 두 번 말한다 |
+| `configmap`·`checkpointstore` 테스트 doc (48→20) | 소스 doc의 사본과 테스트 이름 재진술 — 「Unlock은 토큰이 쥔 락만 푼다」 · 「크래시한 홀더의 락은 self-heal한다」 · 「Delete는 Lease를 유지한다」 · 「Get은 s3:// ref를 파싱한다」 | ① `Unlock`·`heldByUsOrExpired`·`Delete`·`Get` doc과 패키지 주석이 각각 정본 · ① 테스트 함수 이름. **본문 안의 「지금 상태가 idle이므로 from=active는 conflict」류 인라인과 「e2e MinIO에서 실제로 실패했다」는 관측은 남겼다** |
+| `configmap/envtest/store_conflict_test.go` 테스트 doc (24→20) | 두 테스트 doc이 되풀이한 「단일 승자」 서술 | ① 같은 파일 패키지 주석이 **왜 fake clientset으로는 안 되는지**까지 포함해 소유한다. `go.mod`의 9줄(중첩 모듈이 부모 `./...`에서 빠지는 이유)은 **한 줄도 건드리지 않았다** |
+
+**유지 352줄** — 「지울까」를 검토했다가 남긴 것들.
+
+- **`configmap/store.go` 74줄(82에서 8만 제거)** — Lease/CAS/resourceVersion의 순서·원자성 계약이
+  대부분이다. 정책이 명시적으로 보호하는 유형이고, AC-C1은 「atomic 전이」만 말할 뿐 **어느 실패가
+  어느 쪽으로 해석되는지**는 말하지 않는다.
+- **`criu/container_checkpointer.go`의 kubelet 지식** — `POST /api/v1/nodes/{node}/proxy/checkpoint/…`
+  URL 템플릿, feature gate와 `nodes/proxy` RBAC, kubelet 응답 JSON 형태, 아카이브 파일명이
+  타임스탬프를 담아 유일하다는 사실.
+- **`checkpointstore/store.go`의 S3 지식** — spool이 필요한 이유(위), path-style 주소가 필요한 이유
+  (S3-compatible 엔드포인트에는 버킷별 DNS가 없다), `defaultSessionName`이 CloudTrail에 보인다는 것.
+- **`agent/client.go`의 pod IP 재해석** — 「복원을 건너면 pod IP가 유지되지 않고 세션은 pod 이름만
+  들고 있다」. 어느 문서에도 없다.
+- **`envtest` 두 파일의 존재 이유** — 「fake clientset의 object tracker는 resourceVersion 낙관적
+  동시성을 강제하지 않아 진짜 CAS 레이스를 재현하지 못한다」와 「중첩 모듈이라 부모의 `./...`가
+  이 트리를 컴파일조차 하지 않는다」. 둘 다 도구의 문서화되지 않은 동작이다.
+
+**갈려서 남긴 것 하나.** `criu/checkpointer.go`의 `Checkpointer` 인터페이스에 붙은 `AC mapping:`
+블록(6줄)은 1차 패스가 `session.Manager`에서 같은 형태를 남긴 것과 같은 이유로 남겼다 — **Go
+메서드에서 AC로 가는 색인은 어느 문서에도 한 덩어리로 없다.**
+
+### 2026-09-05 — `control-plane/cmd/control-plane/` (판정 77줄)
+
+4차 패스가 「다음 패스의 1순위」로 지목한 조립 루트. **제거 19 · 유지 58.**
+
+**지목의 근거였던 「거짓이 된 주석」을 실측으로 확정하고 지웠다.** `docs/test/e2e.md`가
+`main.go:79-82`(「its data plane runtime — the helper pod's session MCP — is not implemented yet」)를
+낡음으로 지목했고, 같은 주장이 `dataPlaneApprovalGatedImage` 필드 doc에도 **두 번째 벌**로 있었다.
+데이터 플레인에는 `session_mcp.go` · `session_mcp_tools.go` · `session_mcp_notices.go` 등 8파일이
+실재하고 `main.go`가 `case workloadSessionMCP:`로 그 워크로드를 띄운다 — 주석이 틀렸다. 그리고
+그 타입이 실제로 inert인 **현재의 이유**(이미지 미설정 + 필수 `secretEnv` 3종이 없으면 헬퍼 파드가
+Ready에 이르지 못함)는 `docs/test/e2e.md`가 좌표까지 들어 적고 있으므로, 사본을 새로 쓰지 않고
+**두 자리 모두 사실 주장을 지우고 AC 포인터만 남겼다.**
+
+| 위치 | 제거한 것 | 이미 말하는 곳 (복원 경로) |
+| --- | --- | --- |
+| `main.go:79-82`(4→1) · `dataPlaneApprovalGatedImage` doc(4→3) | 「헬퍼 파드의 session MCP는 아직 데이터 플레인에 없다 … 그래서 unset이 기대되는 배포 상태다」의 **두 벌** | **거짓이다**(위). 현재 사유는 ② `docs/test/e2e.md`의 F 계열 문단이 좌표(`client_orchestrator.go:780-782`)까지 들어 적는다 |
+| `k8s.BuildClient` 앞 인라인 (7→3) | 「같은 client가 pod orchestrator와 ConfigMap/Lease store를 함께 받친다」 · 「활성 전략은 에이전트에게 셸 CRIU 번들이나 Claude 아카이브를 만들게 해 durable store에 넣고, 비활성 전략은 회수 전에 fail closed」 | ① `configmap.NewStore` doc이 **같은 문장을**(「the same client the pod orchestrator uses」) 적는다 · ① 이 파일 패키지 주석이 이미 전략 배분과 fail-closed를 말한다 |
+| claude-code 이미지 인라인 (3→1) | 「Start가 claude-code 라벨로 셸 파드를 띄우는 대신 그 타입을 거부한다」 | ① 같은 파일 `dataPlaneClaudeCodeImage` 필드 doc이 축자에 가깝게 적는다(그쪽을 정본으로 남겼다) |
+| 리퍼 인라인 (5→2) · 「Drive the idle→snapshot reaper …」(1→0) | 스캔 주기·`MaxIdle`·AC-D5·AC-A3 회수의 열거 · 「종료까지 리퍼를 돌린다」 | ① `service/reaper.go`의 `IdleReaper`/`ScanOnce` doc · ① 같은 파일 `idleScanInterval` 필드 doc · ① 바로 아래 `go reaper.Run(ctx)` |
+| checkpoint 설정 필드 주석 (6→3) · `buildCheckpointStore` doc (3→1) | 「checkpointS3RoleARN을 ambient 위에서 assume … e2e SUT는 MinIO를 가리키고 role을 비워 static key로 인증한다」 · 「agent-driven checkpointer는 언제나 store가 필요하다: 아카이브는 곧 회수될 파드 안에서 만들어진다」 | ① `checkpointstore.NewS3` doc · ① `Config.RoleARN` 필드 주석이 e2e static key까지 적는다 · ① `criu.AgentCheckpointer` doc이 **같은 낱말로** 적는다 |
+
+**유지 58줄** — 조립 루트에서만 보이는 것들. 폴백 이미지에 에이전트가 없어 readiness를 통과하지
+못한다는 함정, 아카이브 게이트 두 개(`CRIU_ENABLED` · `CLAUDE_CODE_ARCHIVE_ENABLED`)가 데이터
+유출 경계라는 사실, `parseClaudeCodeDefaultModel`이 예약 별칭을 명시 설정으로 받지 않는 이유
+(Secret 투영 실수를 감추게 된다), `claudeCodeModels`가 API 허용목록이 아니라 표시 설정이라는 구분,
+그리고 `mock-exception: CRIU-GATE` 등재 블록(자매 모델 `tbm_session-platform-e2e-mock-policy`
+소관이라 손대지 않았다).
 
 ## 범위 밖
 

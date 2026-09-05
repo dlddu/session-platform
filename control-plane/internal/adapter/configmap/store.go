@@ -11,10 +11,6 @@
 //   - Lock creates the Lease; the API server admits exactly one Create for a
 //     given name, so the occupancy claim is exclusive. A crashed holder's lock
 //     self-heals via leaseDurationSeconds (a stale Lease can be taken over).
-//
-// This keeps the same StateStore contract the in-memory stub had, so the
-// service layer is unchanged — only the backend (and its atomicity guarantee)
-// differs.
 package configmap
 
 import (
@@ -70,14 +66,12 @@ type Store struct {
 	now       func() time.Time // injectable clock for lease-staleness in tests
 }
 
-// compile-time assertion that Store satisfies the port.
 var _ store.StateStore = (*Store)(nil)
 
 // Option customises a Store.
 type Option func(*Store)
 
-// WithLeaseDuration overrides how long a held lock survives without renewal
-// before it can be taken over (default 15s).
+// WithLeaseDuration overrides how long a held lock survives without renewal.
 func WithLeaseDuration(d time.Duration) Option {
 	return func(s *Store) {
 		if d > 0 {
@@ -283,8 +277,6 @@ func (s *Store) CompareAndSwapState(ctx context.Context, id string, from, to ses
 	if err := encodeInto(cm, sess); err != nil {
 		return err
 	}
-	// cm carries the resourceVersion from Get; the API server rejects the Update
-	// with 409 if another writer moved it first — so only one CAS wins.
 	if _, err := cms.Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
 		if apierrors.IsConflict(err) {
 			return session.ErrConflict

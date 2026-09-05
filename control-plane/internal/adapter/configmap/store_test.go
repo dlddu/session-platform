@@ -35,8 +35,7 @@ func sampleSession(id string) *session.Session {
 	}
 }
 
-// Put writes a ConfigMap, Get reads the same session back, and the underlying
-// object is named/labelled 1:1 to its session (V5: single source of truth).
+// V5: the backing object is named and labelled 1:1 to its session.
 func TestPutGetRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	store, cs := newStore(t)
@@ -170,7 +169,6 @@ func TestTouchAndAggregateCASPreserveTransactionFenceAndLatestAccess(t *testing.
 	}
 }
 
-// Put on an existing session updates it in place (no second ConfigMap).
 func TestPutUpdatesInPlace(t *testing.T) {
 	ctx := context.Background()
 	store, cs := newStore(t)
@@ -201,8 +199,6 @@ func TestPutUpdatesInPlace(t *testing.T) {
 	}
 }
 
-// List returns every owned session and ignores ConfigMaps this control plane
-// does not own (no managed-by label).
 func TestListScopedToOwned(t *testing.T) {
 	ctx := context.Background()
 	store, cs := newStore(t)
@@ -271,8 +267,6 @@ func TestDeleteIdempotent(t *testing.T) {
 	}
 }
 
-// Delete removes metadata but deliberately keeps a held lifecycle Lease until
-// its owner releases it with token-safe Unlock.
 func TestDeleteKeepsHeldLeaseUntilUnlock(t *testing.T) {
 	ctx := context.Background()
 	store, _ := newStore(t)
@@ -302,8 +296,6 @@ func TestDeleteKeepsHeldLeaseUntilUnlock(t *testing.T) {
 	}
 }
 
-// CompareAndSwapState moves the state only when the current state matches
-// `from`; a mismatch is ErrConflict and an unknown id is ErrNotFound (AC-C1).
 func TestCompareAndSwapState(t *testing.T) {
 	ctx := context.Background()
 	store, _ := newStore(t)
@@ -331,7 +323,6 @@ func TestCompareAndSwapState(t *testing.T) {
 	}
 }
 
-// Lock is exclusive: a second holder conflicts until the first releases (AC-C1).
 func TestLockConflictAndRelease(t *testing.T) {
 	ctx := context.Background()
 	store, _ := newStore(t)
@@ -351,8 +342,6 @@ func TestLockConflictAndRelease(t *testing.T) {
 	}
 }
 
-// Unlock only releases a lock the token actually holds, and is a no-op
-// otherwise (including when no lock exists).
 func TestUnlockScopedToHolder(t *testing.T) {
 	ctx := context.Background()
 	store, _ := newStore(t)
@@ -410,8 +399,6 @@ func TestRenewExtendsOnlyCurrentHolderLease(t *testing.T) {
 	}
 }
 
-// A crashed holder's lock self-heals: once renewTime + leaseDuration passes, a
-// new caller takes it over rather than being blocked forever.
 func TestLockTakesOverStaleLease(t *testing.T) {
 	ctx := context.Background()
 	cs := fake.NewSimpleClientset()
@@ -443,8 +430,6 @@ func TestLockTakesOverStaleLease(t *testing.T) {
 	}
 }
 
-// A stale holder cannot delete the session after a successor takes over the
-// Lease and claims the ConfigMap lifecycle-owner fence.
 func TestDeleteRejectsStaleHolderAfterTakeover(t *testing.T) {
 	ctx := context.Background()
 	cs := fake.NewSimpleClientset()

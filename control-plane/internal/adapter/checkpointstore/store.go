@@ -1,9 +1,6 @@
 // Package checkpointstore is the durable object store for workload snapshots.
 // A pod agent streams either a shell CRIU bundle or a Claude filesystem archive
 // here so it outlives the pod and can restore on another node.
-//
-// Credentials use the ambient chain and may optionally assume a configured role.
-// Local/e2e S3-compatible deployments may use ambient static environment keys.
 package checkpointstore
 
 import (
@@ -27,8 +24,7 @@ const defaultSessionName = "session-platform-checkpointer"
 // defaultPrefix is the key prefix under which archives are stored.
 const defaultPrefix = "checkpoints"
 
-// Config configures the S3 checkpoint store. Bucket and Region are required;
-// the rest are optional.
+// Config configures the S3 checkpoint store.
 type Config struct {
 	Bucket  string // target S3 bucket (required)
 	Region  string // AWS region (required)
@@ -55,29 +51,22 @@ type S3 struct {
 	prefix string
 }
 
-// NewS3 builds an S3 store whose client authenticates by assuming Config.RoleARN
-// via STS, layered over the ambient credential chain (the node instance profile
-// or IRSA provides the base credentials). Building the client makes no network
-// call — credentials are resolved lazily on the first S3 request.
+// NewS3 builds an S3 store whose client assumes Config.RoleARN via STS over the
+// ambient credential chain. Building it makes no network call — credentials are
+// resolved lazily on the first S3 request.
 func NewS3(ctx context.Context, cfg Config) (*S3, error) {
 	if cfg.Bucket == "" || cfg.Region == "" {
 		return nil, fmt.Errorf("checkpoint S3 store needs bucket and region (got bucket=%q region=%q)",
 			cfg.Bucket, cfg.Region)
 	}
 
-	// Base credentials come from the default chain — on a node that is the EC2
-	// instance profile (via IMDS), IRSA when the pod has a projected token, or
-	// static keys from the environment.
 	base, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.Region))
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
 
 	if cfg.RoleARN != "" {
-		// Assume the target role on top of the base credentials (STS AssumeRole),
-		// caching the temporary credentials so they are reused until they near
-		// expiry. Skipped when no role is configured — then the ambient
-		// credentials are used as-is.
+		// Cache the temporary credentials so they are reused until they near expiry.
 		sessionName := cfg.SessionName
 		if sessionName == "" {
 			sessionName = defaultSessionName
@@ -99,8 +88,7 @@ func NewS3(ctx context.Context, cfg Config) (*S3, error) {
 	return newWithAPI(client, cfg.Bucket, cfg.Prefix), nil
 }
 
-// newWithAPI builds an S3 store over an injected object API (tests) and
-// normalises the key prefix.
+// newWithAPI builds an S3 store over an injected object API (tests).
 func newWithAPI(api objectAPI, bucket, prefix string) *S3 {
 	p := strings.Trim(prefix, "/")
 	if p == "" {
@@ -119,8 +107,7 @@ func (s *S3) Bucket() string { return s.bucket }
 // produces it while dumping — which S3 cannot take directly: the SDK needs a
 // seekable body to compute the request checksum and Content-Length, and its
 // fallback (trailing checksums over an aws-chunked body) requires TLS. So spool
-// the stream to a temp file first and upload that. A future large-archive path
-// can replace the spool with the SDK's multipart uploader.
+// the stream to a temp file first and upload that.
 func (s *S3) Put(ctx context.Context, key string, r io.Reader) (string, error) {
 	full := s.key(key)
 
