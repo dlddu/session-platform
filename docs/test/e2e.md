@@ -331,6 +331,7 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 | AC-D5 | `control-plane/test/e2e_d5_idle_definition_test.go` | go | read만 해도 `lastAccess` 갱신 / 쉘 자체 출력만으로는 미갱신(GET은 접근으로 세지 않음) |
 | AC-E1 | `control-plane/test/e2e_e1_workload_type_test.go` | go | `workloadType=claude-code` 세션이 SUT에서 서고 그 pod에서 Claude CLI가 실제로 실행됨 / 필드 생략은 shell / 잘못된 값은 pod 생성 전 400 / 타입·모델은 생성 후 불변 |
 | AC-E2 | `control-plane/test/e2e_e2_prompt_invocation_test.go` | go | write = 프롬프트 1회 실행 — 배포 SUT에서 실 `claude` 프로세스가 기동되고 응답이 세션 출력에 투영됨 / burst의 모든 프롬프트가 큐에 수락돼 각각 1회씩 실행됨 / 프로세스 테이블에서 본 exact argv·원샷 수명·직렬 큐(동시 실행 없음)·첫 성공 뒤에만 `--continue` / 1 MiB 초과 프롬프트는 public API 413이고 실행되지 않음 (비블로킹 반환 자체는 SUT에서 관측 불가 — invocation이 write 왕복보다 느리지 않다. `data-plane/cmd/agent/claude_test.go`의 `TestClaudeWriteIsNonBlockingAndSerial`이 fake runner로 소유) |
+| AC-E6 | `control-plane/test/e2e_e6_credential_placement_test.go` | go | **자격 증명의 배치와 그 배치가 사는 격리**를 배포 SUT에서 — 공급자 `base-url`·`auth-token`·optional `ca-cert`는 사이드카 `claude-credentials`에만 / 필수 `k3s-mcp-token`과 optional `k3s-mcp-url`·`plugin-marketplace-url`은 주 컨테이너에만 / optional `model`은 주 컨테이너에만이고 concrete model은 literal이 Secret 기본값을 이김 / 주 컨테이너가 실 플랫폼 토큰을 **어떤 `/proc/*/environ`으로도 읽지 못함**(같은 프로브가 placeholder는 찾으므로 음성 결과가 자기검증된다) / pod가 `data-plane` SA로 서고 실 authorizer가 pods는 allow·secrets는 deny(SubjectAccessReview) / 생성 요청의 자격 증명 필드는 400이고 세션 조회·read 어디에도 두 토큰 값이 없음. 비교하는 비밀 값은 전부 클러스터 Secret에서 읽으므로 이 파일은 자격 증명 사본을 갖지 않는다. **프록시의 행위 계약**(헤더 허용목록·1xx redaction·64 MiB 상한·split-token tail-safe·`ca-cert` 파싱 실패 시 시작 거부)은 `data-plane/cmd/agent/credential_proxy*_test.go`가, **제출되는 pod spec**은 `control-plane/test/workload_type_orchestrator_test.go`(태그 `integration`)가 이미 소유하므로 여기서 다시 사지 않는다 — e2e가 배타적으로 살 수 있는 것은 배포된 그라운드-트루스다 |
 <!-- ac-mapping:end -->
 
 ## AC 예외 목록
@@ -372,8 +373,8 @@ AC 대신 스모크/인프라를 검증하는 매칭 단위 파일(규칙 3).
 <!-- ac-summary:begin -->
 - AC 총계: 27
 - 예외: 1
-- AC 매칭 파일: 16
-- 공백: 10 — AC-E3 AC-E4 AC-E5 AC-E6 AC-F1 AC-F2 AC-F3 AC-F4 AC-F5 AC-F6
+- AC 매칭 파일: 17
+- 공백: 9 — AC-E3 AC-E4 AC-E5 AC-F1 AC-F2 AC-F3 AC-F4 AC-F5 AC-F6
 <!-- ac-summary:end -->
 
 **공백**은 전용 파일도 예외 등재도 아직 없는 AC다. AC-E2~E6(claude-code 워크로드)와
