@@ -70,6 +70,8 @@ operational idle-state producer가 생기면 배포 e2e로 채운다.
 | `PLUGIN-CRED` | `EXT` | claude-code 세션 pod는 agent 를 띄우기 전에 `data-plane/entrypoint.sh` 가 K3s MCP 에서 마켓플레이스 읽기 토큰을 받아 플러그인을 설치한다. e2e SUT 에서는 그 **자격 발급 한 지점만** 인클러스터 대역(`deploy/e2e-k3s-mcp-fake.yaml`)으로 바꾸고 나머지는 전부 실물이다 — 토큰 요청은 pod 안의 **실 curl·실 jq**가 프로덕션과 같은 JSON-RPC 왕복으로 보내고, 받은 토큰은 같은 `http.<url>.extraheader` 로 좁혀져 **실 git 클론**(인클러스터 원격, 아래 비-seam)에 쓰이며, `claude plugin marketplace add`·`claude plugin install` 은 실 Claude CLI 가 실행한다. 대역이 bearer 를 검사해 틀리면 401 을 내므로 인증 단계도 그대로 밟는다. 이 경로가 서야 pod 가 Ready 에 이르고, `control-plane/test/e2e_e1_workload_type_test.go` 가 그 위에서 claude-code 세션 생성과 pod 안 `claude --version` 실행을 단언하고, **인클러스터 픽스처에만 있는 마커 문자열이 그 pod의 플러그인 캐시에 있음**을 확인해 *어느 원격이 응답했는지*까지 못 박는다. | **프로덕션의 실제 자격 발급 왕복은 미검증**이다 — 실 K3s MCP 의 GitHub App 설치 토큰 발급, 그 토큰의 스코프·만료, github.com 에 대한 인증 클론은 어떤 e2e 도 밟지 않는다. 대역이 돌려주는 것은 형태만 같은 가짜 토큰이라, 발급이 실패하거나 권한이 모자랄 때의 동작도 여기서는 드러나지 않는다. |
 | `DELETE-CONFLICT-ERR` | `NET` | `web/e2e/journeys/session-deletion.spec.ts`의 스냅샷 삭제 테스트는 **실 SUT 위에서** 돈다 — 세션을 `POST /api/v1/sessions`로 실제로 만들고 제품 `POST /api/v1/sessions/{id}/snapshot`으로 진짜 `snapshot` 상태(pod 회수 포함)까지 얼린 뒤, `/restore/{id}` 렌더·세션 목록·단건 조회·**재시도 DELETE(204)** 가 모두 배포된 control-plane의 실 응답이다. 인터셉트가 만드는 것은 **첫 DELETE 한 번의 409 응답뿐**이고, 나머지 요청은 같은 핸들러에서 `route.continue()`로 그대로 흘려보낸다. | 409를 낳는 **진짜 경합** — 다른 라이프사이클 연산이 세션 Lease를 쥔 상태에서 들어온 DELETE(`service.Terminate`의 `store.Lock` → `session.ErrConflict`) — 자체는 브라우저 e2e에서 검증되지 않는다. 주입은 UI의 실패 표시·재시도 경로만 확인하고, 서버가 그 상태에서 실제로 409를 내는지는 control-plane 단위 테스트와 envtest의 CAS/Lease 충돌 케이스가 담당한다. |
 | `CLAUDE-PROVIDER` | `EXT` | claude-code 세션의 프롬프트 왕복에서 **응답을 만드는 주체 하나만** 인클러스터 대역(`deploy/e2e-anthropic-fake.yaml`)으로 바꾸고 나머지는 전부 실물이다. 요청은 주 컨테이너가 오케스트레이터가 주입한 loopback `ANTHROPIC_BASE_URL`로 보내고, credential-proxy 사이드카가 **프로덕션 코드 그대로** 헤더 허용목록을 적용하고 호출자가 붙인 `Authorization`을 버린 뒤 자기 Secret 환경의 플랫폼 토큰을 주입하며, 대역의 인증서를 **실제로 검증한다** — 사설 발급자를 신뢰하는 근거는 플랫폼 Secret의 optional `ca-cert` 키 하나뿐이고 시스템 루트는 대체되지 않는다. 대역은 bearer가 틀리면 401을 내므로 주입이 실제로 일어났는지가 대역 쪽에서도 확인된다. `control-plane/test/e2e_provider_reachability_test.go`가 배포 SUT의 세션 pod 안에서 이 왕복을 **버퍼드·SSE 두 형태**로 단언하고, 위조 `Authorization`이 대체되는 것까지 확인한다. **2026-09-04부터 실 CLI의 프롬프트 루프 자체가 이 표면 위에서 구동된다** — `control-plane/test/e2e_e2_prompt_invocation_test.go`가 배포 SUT의 세션 pod에서 write 한 번당 `claude` 프로세스를 실제로 기동시켜, 플랫폼이 만든 exact argv·원샷 수명·직렬 큐를 프로세스 테이블에서 관측하고 그 응답이 세션의 append-only 출력에 투영되는 것까지 단언한다(AC-E2). | **실 provider의 계약은 여전히 미검증**이다 — 오류 응답·토큰 회계·모델 라우팅은 대역이 결정적 상수로 답하므로 드러나지 않는다. 프롬프트 루프가 이 표면으로 **성립한다는 것**은 위 구간이 확인했지만, 상수 응답이라는 성질에서 두 가지가 남는다: ⑴ **응답이 프롬프트를 한 글자도 반영하지 않는다** — AC-E4(대화 연속성)와 AC-E5의 「동결 전 대화를 참조하는 프롬프트」는 이 대역으로 단언할 수 없다. ⑵ **한 invocation이 내는 `content_block_delta`가 1개다** — AC-E3이 요구하는 「둘 이상의 output delta가 프로세스 종료 전에 순서대로」가 한 write로 관측되지 않는다. 둘 다 대역을 넓히면 풀리고 그 파일(`deploy/e2e-anthropic-fake.yaml`)은 자매 모델 `tbm_session-platform-e2e-mock-policy`의 SUT 경로 안이므로, 두 계획이 그 한 파일에서 만난다. |
+| `MODEL-CONFIG-STATE` | `NET` | `web/e2e/journeys/j6-model-selection.spec.ts` 의 여정 절반은 **인터셉트 없이** 실 SUT 위에서 돈다 — 배포 오버레이가 심은 실제 카탈로그(`deploy/claude-code-credentials-secret.yaml` 의 `model`·`models` → `k8s/deployment.yaml` 의 두 env → `GET /api/v1/config`)를 그대로 받아 콤보박스 옵션과 구체 기본값 중복 제거를 확인하고, 고른 모델로 **진짜 claude-code 세션을 만들어** 배포된 control-plane 에 모델을 다시 물어 확인한다. 주입은 `GET /api/v1/config` **한 엔드포인트**에만 걸리고, 그 밖의 요청(SPA · 세션 생성 · 목록 · 단건 조회)은 핸들러를 아예 지나지 않는다. 자유 입력 갈래도 제출만은 실 SUT 로 보내 세션이 실제로 서는 것까지 본다. | 주입이 만드는 네 가지 config 응답 — **빈 카탈로그** · **구체 기본값 없음** · **503** · **응답 보류** — 자체는 배포된 SUT 에서 검증되지 않는다. 이 SUT 는 오버레이가 심은 카탈로그 하나만 낼 수 있고 그 셋을 동시에 가질 수 없다. 즉 *그 응답이 왔을 때 SPA 가 무엇을 그리는가*는 확인되지만, *제어면이 그 응답을 실제로 내는가*는 여기가 아니라 `control-plane/internal/api/config_test.go`(카탈로그 직렬화·빈 배열 보존)와 `main.go` 의 `parseClaudeCodeModels` 단위 테스트가 담당한다. |
+| `STREAM-RESET-REPLAY` | `NET` | `web/e2e/journeys/j6-stream-recovery.spec.ts` 의 세션은 제품 API 로 배포 SUT 에 **진짜로** 만들어지고, 세션 목록·단건 조회는 실 응답이다. 가로채는 것은 그 **한 세션의 출력 표면 두 곳**(`/stream` · `/read`)뿐이고, 라우트 패턴이 그 세션 id 로 좁혀져 있어 다른 세션·다른 엔드포인트에는 닿지 않는다. | 이 파일 안에서 세션의 **출력 내용은 전부 위조**된다 — 실 에이전트 출력이 브라우저까지 어떻게 도달하는지는 여기가 아니라 `j6-agent-prompt-loop.spec.ts` 가 인터셉트 없이 단언한다(인클러스터 대역만이 낼 수 있는 마커가 콘솔에 뜨는 것으로). 여기서 확인되는 것은 **브라우저의 복구 대수**뿐이다: 같은 바이트 범위가 재전송돼도 한 번만 그리고, past-end `reset` 이 오면 보관 이력을 `offset=0` 재조회로 교체한 뒤 그 커서에서 재연결한다. 서버가 그 사건을 언제 내는지는 `data-plane/cmd/agent/output_stream.go` 의 단위 테스트와 AC-B3 e2e 가 담당한다. |
 <!-- /fidelity:registry -->
 
 ### 미해소 위반 (승인된 예외가 아니다)
@@ -78,29 +80,45 @@ operational idle-state producer가 생기면 배포 e2e로 채운다.
 개수에 상한이 걸려 있어(`상한` 집계) 새 위반이 들어오면 CI가 막고, 줄어들 때만 상한을 함께
 내린다.
 
-남은 한 파일은 `page` 라우팅으로 **control-plane API 표면 전체**(`**/api/v1/**`)를 가로채 세션
-목록·단건·SSE 스트림·config를 손으로 지은 픽스처로 응답한다. 그중 일부(config 실패, 응답 보류로
-만드는 중간 UI 상태, past-end cursor `reset` 이벤트)는 `NET` 자격을 만족하지만, 그것들이 **API
-전체를 삼키는 인터셉트 안에** 들어 있어 행 단위로 승인할 수 없다. 실 SUT가 낼 수 있는
-데이터(세션 목록·상태·pod)까지 함께 위조되기 때문이다.
+**표는 2026-09-05에 비었다.** 상한도 함께 **2 → 0** 으로 내려갔다 — 래칫은 위반을 **실제로 지운
+그 커밋에서만** 움직인다(6 → 4 → 2 → 0). 비어 있다는 것이 "이제 인터셉트가 없다"는 뜻은 아니다:
+web e2e 인터셉트는 7건이고 **전부 `NET` 승인 등재에 귀속**돼 있다. 여기가 세는 것은 *등재되지
+않은* 치환이다.
 
-제거가 한 슬라이스에서 끝나지 않은 이유는 두 스위트가 모두 **claude-code 세션**을 검증 대상으로
-삼기 때문이었다. 그 선행은 2026-09-04에 **모두 풀렸다** — 세션 pod가 SUT에서 서고(`PLUGIN-CRED`
-등재 + 인클러스터 마켓플레이스 원격), 프롬프트에 답하는 provider도 인클러스터에 있다
-(`CLAUDE-PROVIDER` 등재). 그래서 아래 「차단 요인」 표는 비었다.
+⚠️ **래칫의 기계 의미를 오해하지 말 것 — R9는 양방향 미러다.** `scripts/check-fidelity-allowlist.py`
+(`상한(ratchet)` 절)은 `len(violations) > budget` 과 `budget > len(violations)` 를 **둘 다** 실패로
+잡는다. 즉 "상한 == 실제 위반"은 게이트가 초록일 때 항상 참이고, 상한이 "아직 여유가 있다/만석이다"
+같은 상태를 표현하지는 않는다. 기계가 막는 것은 **상한을 그대로 둔 채 위반을 늘리는 것**과
+**위반을 줄이고 상한을 안 내리는 것** 둘뿐이다. "예외는 늘지 않는 방향으로만"은 그 위에 얹힌
+**정책 산문**이지 게이트가 아니다 — 그래서 새 `NET` 등재의 정당화는 사람이 아래처럼 적어야 한다.
 
-**남은 것은 선행이 아니라 재작성 노동이고, 래칫은 실제로 줄였을 때만 내린다** — "곧 줄어든다"로
-상한을 미리 내리면 그때부터 게이트가 붉은 채로 산다. 그래서 상한은 위반을 **실제로 지운 그
-커밋에서만** 함께 내려간다(6 → 4 → 2).
+**등재 seam 이 4 → 6 으로 늘어난 것을 이 정책은 후퇴로 보지 않는다.** 판정 기준은 개수가 아니라
+**인터셉트가 실 SUT 가 낼 수 있는 것을 위조하는가**다. 직전까지 j6 한 파일이 `**/api/v1/**` 를
+통째로 삼켜 세션 목록·상태·pod 처럼 **배포된 control-plane 이 얼마든지 낼 수 있는** 데이터까지
+지어냈고, 그래서 행 단위 승인이 불가능했다. 이번 슬라이스가 그 통짜 인터셉트를 걷어내고 남긴 두
+`NET` 은 각각 **한 엔드포인트**(`GET /api/v1/config`)와 **한 세션의 두 엔드포인트**
+(`/stream`·`/read`)로 좁혀져 있으며, 둘 다 이 배포가 요청 시점에 **원리적으로** 만들 수 없는
+상태만 낸다. 승인 3 → 7 은 그 좁힘의 산술적 결과이지 새로운 관용이 아니다.
 
-**j6가 남은 이유는 노동량이 아니라 설계 논점이다.** `installAgentApi`가 덮는 12개 테스트 중 절반은
-`/api/v1/config`가 **테스트마다 다른 모델 카탈로그**(2개짜리 목록 · 빈 목록 · 503)를 내야 성립한다.
-배포된 SUT 하나는 그 세 상태를 동시에 낼 수 없으므로, 실패·지연만 좁혀 `NET`으로 등재하는 것으로는
-닫히지 않고 **파일을 나누는 설계**가 먼저다. 그 판단이 서기 전까지 두 행은 여기 남는다.
+**설계 논점이었던 「파일 분할」의 답은 계획 단계의 실측 하나로 나왔다: 배포 SUT 는 이미 실 모델
+카탈로그를 낸다.** `deploy/claude-code-credentials-secret.yaml` 이 `model: claude-e2e-model` 과
+2개짜리 `models` 를 심고 `k8s/deployment.yaml` 이 그것을 제어면 env 로 투영한다. 그래서 "테스트마다
+다른 카탈로그"라던 세 상태 중 **하나는 SUT 가 진짜로 내고 있었다** — 그 형태에 걸리는 여정은 주입
+없이 실 SUT 로 옮겨졌고, 남은 것(빈 카탈로그 · 구체 기본값 없음 · 503 · 보류)만 `config` 한
+엔드포인트에 남아 비로소 `NET` 자격이 깨끗해졌다. 분할의 축은 결국 AC 도 화면도 아니고
+**"배포된 SUT 가 이 상태를 낼 수 있는가"** 였다.
 
 *해소된 것*: ① `web/e2e/journeys/session-deletion.spec.ts`는 여기서 빠졌다. 세션 생성과 동결을 제품 API로
 돌려 실 SUT 위에서 돌게 만들고, 남은 인터셉트를 첫 DELETE의 409 응답 하나로 좁혀
 `DELETE-CONFLICT-ERR`(`NET`)로 **승인 등재**했다. 그만큼 상한도 6에서 4로 내려갔다.
+③ `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` 는 2026-09-05에 빠졌다 — 654줄 한 파일을
+**세 파일로 나누고** 통짜 인터셉트를 걷어냈다. `j6-agent-prompt-loop.spec.ts` 는 **인터셉트 0** 으로
+다시 쓰여, 제품 API 로 만든 실 claude-code 세션에 브라우저가 프롬프트를 보내고 인클러스터
+provider 대역만이 낼 수 있는 마커가 콘솔에 뜨는 것 · 커서 read 의 비파괴성 · 아카이브된 세션의
+Restore 왕복(수동적 관찰이 아카이브를 되살리지 않는 것 포함)을 배포 SUT 위에서 단언한다.
+`j6-model-selection.spec.ts` 와 `j6-stream-recovery.spec.ts` 는 위 두 `NET` 로 승인 등재됐다.
+상한은 2에서 0으로 내려갔다.
+
 ② `web/e2e/journeys/manual-archive.spec.ts`는 2026-09-04에 빠졌다 — 이쪽은 **좁히지 않고 전량
 제거**했다. claude-code 세션을 제품 API로 실제로 만들고(대상을 shell로 바꾸지 않았다),
 `ws-archive-session` 클릭이 제품 아카이브 경로(`CLAUDE_CODE_ARCHIVE_ENABLED`는 base에서 이미 on,
@@ -113,8 +131,6 @@ operational idle-state producer가 생기면 배포 e2e로 채운다.
 <!-- fidelity:violations -->
 | 파일 | 토큰 | 무엇을 위조하는가 | 제거 경로 (선결조건) |
 | --- | --- | --- | --- |
-| `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` | `.route(` | `installAgentApi`가 12개 테스트 전부에 `/api/v1/**` 핸들러를 설치해 세션·config·SSE 스트림을 위조한다. | **선결조건은 없다** — 세션 pod가 SUT에서 서고(`PLUGIN-CRED`), 프롬프트에 답하는 provider도 인클러스터에 있다(`CLAUDE-PROVIDER`). 남은 것은 재작성 노동뿐이다: **claude-code 세션을 대상으로 유지한 채** 실 SUT 위에서 다시 쓴다. 재작성에 앞서 실 Claude CLI가 그 대역 표면으로 실제 프롬프트 루프를 도는지부터 확인해야 한다 — `CLAUDE-PROVIDER` 등재 행이 그 계약을 미검증으로 남겨 두었다. |
-| `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` | `route.fulfill(` | 위와 같은 핸들러의 응답 생성부 — JSON·`text/event-stream` 본문을 직접 짓는다. | 위와 같다. 재작성 뒤에도 실 SUT가 요청 시점에 낼 수 없는 주입(config 503, 응답 보류, past-end cursor `reset` 재생)은 남으므로, 그것들은 `session-deletion` 선례대로 **행 단위로 좁혀 `NET` 승인 등재**로 닫는다 — 전량 제거가 목표가 아니다. |
 <!-- /fidelity:violations -->
 
 ### 차단 요인 (seam이 아니다 — 치환조차 없는 공백의 원인)
@@ -167,8 +183,10 @@ seam 스캔이 잡는 `(파일, 토큰)` 쌍마다 한 행이다. 등재 seam에
 | `control-plane/cmd/control-plane/main.go` | `NewStubCheckpointer` | `CRIU-GATE` | 게이트 off일 때 주입되는 no-op 체크포인터. |
 | `deploy/kustomization.yaml` | `CRIU_ENABLED` | `CRIU-GATE` | base의 off를 on으로 올리는 `env/2` replace. |
 | `k8s/deployment.yaml` | `CRIU_ENABLED` | `CRIU-GATE` | 프로덕션 base의 게이트 값(`"false"`). |
-| `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` | `.route(` | `위반` | 미해소 위반 — 위 표 참조. |
-| `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` | `route.fulfill(` | `위반` | 미해소 위반 — 위 표 참조. |
+| `web/e2e/journeys/j6-model-selection.spec.ts` | `.route(` | `MODEL-CONFIG-STATE` | `GET /api/v1/config` **한 엔드포인트에만** 거는 핸들러. 이 배포가 동시에 가질 수 없는 카탈로그 구성과 요청 시점 실패·보류를 주입한다. |
+| `web/e2e/journeys/j6-model-selection.spec.ts` | `route.fulfill(` | `MODEL-CONFIG-STATE` | 주입되는 응답 본문 — 빈 카탈로그 · 구체 기본값 없는 카탈로그 · 503 넷뿐이다. 세션 생성·조회는 이 핸들러를 지나지 않는다. |
+| `web/e2e/journeys/j6-stream-recovery.spec.ts` | `.route(` | `STREAM-RESET-REPLAY` | 그 **한 세션의** `/stream`·`/read` 에만 거는 두 핸들러(라우트 패턴이 세션 id 로 좁혀져 있다). |
+| `web/e2e/journeys/j6-stream-recovery.spec.ts` | `route.fulfill(` | `STREAM-RESET-REPLAY` | 주입되는 SSE·JSON 본문 — 같은 범위의 재전송과 past-end `reset`, 그리고 그 복구가 요구하는 `offset=0` 전체 재조회 응답. |
 | `web/e2e/journeys/session-deletion.spec.ts` | `.route(` | `DELETE-CONFLICT-ERR` | 스냅샷 삭제 테스트가 첫 DELETE만 가로채려고 그 세션 URL에 거는 핸들러. |
 | `web/e2e/journeys/session-deletion.spec.ts` | `route.fulfill(` | `DELETE-CONFLICT-ERR` | 주입되는 단 하나의 응답 — 409 `session state changed concurrently`(실서버 메시지와 동일). |
 | `web/e2e/journeys/session-deletion.spec.ts` | `route.continue(` | `DELETE-CONFLICT-ERR` | 같은 핸들러의 통과 분기. 단건 GET도, **재시도 DELETE도** 실 control-plane이 응답하게 한다 — 이 줄이 없으면 승인 범위가 409 하나를 넘어선다. |
@@ -185,10 +203,10 @@ seam 스캔이 잡는 `(파일, 토큰)` 쌍마다 한 행이다. 등재 seam에
 ### 집계
 
 <!-- fidelity:summary -->
-- 등재 seam **4**개 — GATE **1** · TRIG **0** · EXT **2** · NET **1**
-- 코드 마커 지점 **6** / 마커 파일 **6**
-- 지문 회계 행 **17** — 등재 귀속 9 · 미해소 위반 **2** · 비-seam **6**
-- web e2e 인터셉트 **5**건 (승인 3 · 위반 2, 상한 **2**)
+- 등재 seam **6**개 — GATE **1** · TRIG **0** · EXT **2** · NET **3**
+- 코드 마커 지점 **8** / 마커 파일 **8**
+- 지문 회계 행 **19** — 등재 귀속 13 · 미해소 위반 **0** · 비-seam **6**
+- web e2e 인터셉트 **7**건 (승인 7 · 위반 0, 상한 **0**)
 - 차단 요인 **0**건 (seam이 아니다 — 셋 다 등재 또는 실배포로 나갔다)
 <!-- /fidelity:summary -->
 
@@ -344,7 +362,7 @@ AC 대신 스모크/인프라를 검증하는 매칭 단위 파일(규칙 3).
 | 대상 | 왜 밖인가 |
 | --- | --- |
 | `control-plane/test/harness_shared_test.go` | 공용 하네스(HTTP DTO·헬퍼·kube 클라이언트)만 담는다. 파일명이 `e2e_`로 시작하지 않아 매칭 단위가 아니다. |
-| `web/e2e/journeys/**.spec.ts` (j1·j3·j5·j6·deferred·session-deletion·manual-archive) | 여정 spec은 **여정 하나를 통째로** 훑어 여러 AC의 화면을 경유한다. 통합 1:1 공간에서 각 AC의 주검증은 더 날카로운 단언을 가진 Go 파일이 소유하므로(예: write 비블로킹, PTY 프로세스 수, 커서 델타), 여정 spec은 최상위 밖으로 내려 매칭 대상에서 제외하고 **브라우저 회귀 커버리지로 계속 실행**한다(playwright `testDir: ./e2e`가 재귀 탐색). 여정 통합 검증을 1:1 공간의 1급 유형으로 올리려면 모델 판정 기준 개정이 필요하다.<br>**2026-08-30 추가**: `j6-agent-prompt-loop`(#24)·`session-deletion`(#27)·`manual-archive`(#36)도 같은 이유로 여기에 있다 — j6는 E1~E6를 한 파일에서 묶어 훑고, `session-deletion`의 자원 회수 계약은 `e2e_a3_pod_reclaim_test.go`가 이미 AC-A3로 소유하며(양쪽에서 선언하면 규칙 1 중복), `manual-archive`는 claude-code 아카이브 UI 경로다. 셋 다 브라우저 회귀 커버리지로 계속 실행된다. |
+| `web/e2e/journeys/**.spec.ts` (j1·j3·j5·j6-agent-prompt-loop·j6-model-selection·j6-stream-recovery·deferred·session-deletion·manual-archive) | 여정 spec은 **여정 하나를 통째로** 훑어 여러 AC의 화면을 경유한다. 통합 1:1 공간에서 각 AC의 주검증은 더 날카로운 단언을 가진 Go 파일이 소유하므로(예: write 비블로킹, PTY 프로세스 수, 커서 델타), 여정 spec은 최상위 밖으로 내려 매칭 대상에서 제외하고 **브라우저 회귀 커버리지로 계속 실행**한다(playwright `testDir: ./e2e`가 재귀 탐색). 여정 통합 검증을 1:1 공간의 1급 유형으로 올리려면 모델 판정 기준 개정이 필요하다.<br>**2026-08-30 추가**: `j6-*`(#24)·`session-deletion`(#27)·`manual-archive`(#36)도 같은 이유로 여기에 있다 — j6는 E1~E6를 한 여정으로 묶어 훑고(2026-09-05에 세 파일로 나뉘었으나 셋 다 여정 spec 이라 판정은 같다), `session-deletion`의 자원 회수 계약은 `e2e_a3_pod_reclaim_test.go`가 이미 AC-A3로 소유하며(양쪽에서 선언하면 규칙 1 중복), `manual-archive`는 claude-code 아카이브 UI 경로다. 셋 다 브라우저 회귀 커버리지로 계속 실행된다. |
 | `control-plane/test/integration_test.go`·`client_orchestrator_test.go` | 빌드 태그 `integration` — 인프로세스 통합. |
 | `control-plane/internal/**/*_test.go`, envtest 잡 | 단위·envtest. 예외 목록의 "대체 검증 수단"으로만 인용된다. |
 | `scripts/e2e/*.sh`, `deploy/`, `web/playwright.config.ts`, `Makefile`, `.github/workflows/e2e.yml` | 실행 하네스. |
@@ -369,19 +387,22 @@ AC-F1~F6(approval-gated 워크로드)가 여기 남는다.
 > **나머지 E 계열(E2~E6)의 선행도 같은 날 풀렸다.** 필요한 것은 **프롬프트에 대한 응답**이었고,
 > 인클러스터 provider 대역을 세워 `CLAUDE-PROVIDER`(EXT)로 등재하면서 「차단 요인」 표가 비었다.
 > 그래서 E2~E6이 아직 공백인 이유는 이제 **원인이 아니라 순서**다 — 전용 파일을 저작하는 일이
-> 남아 있고, 그 슬라이스는 먼저 실 Claude CLI가 그 대역으로 프롬프트 루프를 도는지 확인해야 한다
-> (등재 행이 그 계약을 미검증으로 남겨 두었다). 그때까지는 j6의 인터셉트가 「미해소 위반」에
-> 그대로 남는다 — `manual-archive`는 2026-09-04에 실 SUT 재작성으로 거기서 빠졌다.
+> 남아 있다. 그 슬라이스가 먼저 확인해야 했던 것(실 Claude CLI가 그 대역으로 프롬프트 루프를
+> 도는가)은 2026-09-04에 AC-E2 전용 파일이 배포 SUT 위에서 측정으로 확정했고, j6의 인터셉트도
+> 2026-09-05에 「미해소 위반」에서 빠졌다(`manual-archive`는 2026-09-04).
 
 > **왜 이번에도 E 계열을 범위 밖에 두는가** *(2026-08-30 재판정)*. 원래 근거였던 "구현 전무"는
 > #24 *Implement Claude Code workload end to end* 로 **더 이상 성립하지 않는다**. 그럼에도 범위
 > 밖으로 두는 이유는 둘이다. ① `web/e2e/journeys/j6-agent-prompt-loop.spec.ts`가 E1~E6를 **한
 > 파일에서 묶어** 검증해(654줄), 규칙 2(파일당 AC 1개)를 만족시키려면 AC별 6분할이라는 별도
-> 슬라이스가 필요하다. ② j6와 `manual-archive`는 위 「미해소 위반」 원장에 올라 있는
-> **승인되지 않은 네트워크 인터셉트**를 쓴다 — 지금 이들을 AC 전용 파일로 승격하면 "모킹으로
-> 검증된 AC"를 1:1 정본에 박아 넣게 된다. 실 SUT 전환이 먼저이고 그 작업은 이미 진행 중이다
-> (`manual-archive`는 PR #42). 그 전환이 끝난 뒤 E 계열 전용 파일을 신설하거나, 외부 LLM
-> 자격증명·비결정 산출물처럼 곤란한 것은 예외로 등재해 이 표를 0으로 만든다.
+> 슬라이스가 필요하다. ② *(2026-09-05 갱신 — 이 근거는 해소됐다)* 원래는 j6와 `manual-archive`가 위 「미해소 위반」
+> 원장에 올라 있는 **승인되지 않은 네트워크 인터셉트**를 써서, AC 전용 파일로 승격하면 "모킹으로
+> 검증된 AC"를 1:1 정본에 박아 넣게 되는 것이 문제였다. `manual-archive`(#42)와 j6(세 파일 분할)의
+> 실 SUT 전환이 끝나 **「미해소 위반」 표는 비었고**, 남은 인터셉트는 전부 좁혀진 `NET` 승인
+> 등재다. 그래서 지금 E 계열을 범위 밖에 두는 근거는 ① **하나뿐**이다 — 여정 spec 은 여러 AC의
+> 화면을 한 번에 훑으므로 규칙 2(파일당 AC 1개)를 만족하지 않는다. E 계열 전용 파일은
+> `e2e_e2_prompt_invocation_test.go` 처럼 Go 스위트에 신설하거나, 외부 LLM 자격증명·비결정
+> 산출물처럼 곤란한 것은 예외로 등재해 이 표를 0으로 만든다.
 
 > **왜 F 계열은 「예외」가 아니라 「공백」인가** *(2026-09-03 판정 · **2026-09-04 선행 재판정**)*.
 > #46이 `approval-gated` 워크로드 타입을 문서로 신설하며 AC가 **21 → 27**로 늘었다(AC-F1~F6).

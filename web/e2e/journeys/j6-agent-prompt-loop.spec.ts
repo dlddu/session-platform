@@ -1,654 +1,147 @@
-import { Buffer } from "node:buffer";
-import { expect, test, type Page, type Route } from "@playwright/test";
+// 매칭 단위 밖 (AC ↔ e2e 1:1): 이 디렉터리의 여정 spec 은 web/e2e 최상위가 아니므로 AC
+// 매칭 단위가 아니다. 각 AC 의 주검증은 Go e2e 의 전용 파일이 소유한다
+// (AC-E1 `e2e_e1_workload_type_test.go`, AC-E2 `e2e_e2_prompt_invocation_test.go`).
+// 등재: docs/test/e2e.md.
+import { expect, test } from "@playwright/test";
 
-type SessionFixture = {
+// JRN-agent-prompt-loop — 브라우저에서 claude-code 세션에 프롬프트를 보내고 응답을 따라간다.
+//
+// 여기에는 네트워크 인터셉트가 **하나도 없다**. 세션은 제품 API 로 배포 SUT 에 실제로
+// 만들어지고, 프롬프트는 세션 pod 안에서 실 `claude` 프로세스를 기동시키며, 응답은
+// 인클러스터 provider 대역(CLAUDE-PROVIDER 등재)이 낸다. 세션 목록·상태·pod·아카이브는
+// 전부 배포된 control-plane 의 실 응답이다 — docs/test/e2e.md 「e2e 충실도 허용목록」.
+//
+// 출력 타이밍은 비결정적이므로(에이전트 기동, CLI 콜드 스타트, SSE 전달) 모든 단언은
+// 넉넉한 타임아웃의 containment 다 — 정확 일치가 아니다.
+
+// 인클러스터 provider 대역만이 낼 수 있는 마커. 트리 어디에도 이 문자열이 없으므로,
+// 이것이 콘솔에 뜨면 그 바이트가 배포된 그 대역에서 왔다는 뜻이다
+// (deploy/e2e-anthropic-fake.yaml 의 `REPLY`; Go 쪽 소유자는 AC-E2 전용 파일).
+const PROVIDER_REPLY = "session-platform-e2e-provider-ok";
+
+// 배포 오버레이가 SUT 에 심는 모델 카탈로그의 두 번째 항목
+// (deploy/claude-code-credentials-secret.yaml 의 `models`).
+const ALTERNATE_MODEL = "claude-e2e-alternate";
+
+type CreatedSession = {
   id: string;
-  name: string;
-  workloadType: "shell" | "claude-code";
+  state: string;
+  workloadType: string;
   model?: string;
-  state: "active" | "idle" | "snapshot";
-  pod?: string;
-  createdAt: string;
-  lastAccess: string;
-  checkpoint?: {
-    ref: string;
-    sizeBytes: number;
-    createdAt: string;
-    reclaimed?: string;
-  };
 };
 
-type ApiMockOptions = {
-  model?: string;
-  defaultModel?: string;
-  configuredModels?: string[];
-  configFails?: boolean;
-  holdConfig?: boolean;
-  snapshot?: boolean;
-  writeDelayMs?: number;
-  snapshotAfterFirstStream?: boolean;
-  resetBeforeAgentOutput?: boolean;
-};
-
-function json(route: Route, status: number, body: unknown) {
-  return route.fulfill({
-    status,
-    contentType: "application/json",
-    body: JSON.stringify(body),
-  });
-}
-
-function sse(route: Route, body: string) {
-  return route.fulfill({
-    status: 200,
-    contentType: "text/event-stream",
-    headers: {
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
-    body,
-  });
-}
-
-function outputEvent(offset: number, payload: Uint8Array) {
-  const bytes = Buffer.from(payload);
-  const nextOffset = offset + bytes.byteLength;
-  return {
-    nextOffset,
-    wire:
-      `event: output\n` +
-      `id: ${nextOffset}\n` +
-      `data: ${JSON.stringify({
-        offset,
-        payloadBase64: bytes.toString("base64"),
-        nextOffset,
-      })}\n\n`,
-  };
-}
-
-function resetEvent(nextOffset: number) {
-  return (
-    `event: reset\n` +
-    `id: ${nextOffset}\n` +
-    `data: ${JSON.stringify({ nextOffset })}\n\n`
-  );
-}
-
-async function installAgentApi(page: Page, options: ApiMockOptions = {}) {
-  const now = "2026-08-08T12:00:00Z";
-  let session: SessionFixture = {
-    id: "a11ce",
-    name: "agent-session",
-    workloadType: "claude-code",
-    ...(options.model ? { model: options.model } : {}),
-    state: options.snapshot ? "snapshot" : "active",
-    ...(options.snapshot ? {} : { pod: "sess-a11ce-agent" }),
-    createdAt: now,
-    lastAccess: now,
-    ...(options.snapshot
-      ? {
-          checkpoint: {
-            ref: "s3://sessions/a11ce/archive.tar.zst",
-            sizeBytes: 4096,
-            createdAt: now,
-            reclaimed: "1 vCPU · 2 GB",
-          },
-        }
-      : {}),
-  };
-  const createBodies: Array<Record<string, unknown>> = [];
-  let configRequests = 0;
-  let releaseConfig: () => void = () => undefined;
-  const configRelease = new Promise<void>((resolve) => {
-    releaseConfig = resolve;
-  });
-  const writePayloads: string[] = [];
-  const readOffsets: number[] = [];
-  const streamOffsets: number[] = [];
-  const existingOutput = Buffer.from("existing agent response\n");
-  const firstAgentChunk = Buffer.from("new agent response 응");
-  const secondAgentChunk = Buffer.from("답\n");
-  const newOutput = Buffer.concat([firstAgentChunk, secondAgentChunk]);
-  let retainedOutput = existingOutput;
-  let deliveredAgentOutput = false;
-  let streamRequests = 0;
-  let finalStreamOffset = existingOutput.byteLength;
-  let signalFirstWrite: () => void = () => undefined;
-  let firstWriteSignalled = false;
-  const firstWriteAccepted = new Promise<void>((resolve) => {
-    signalFirstWrite = resolve;
-  });
-
-  await page.route("**/api/v1/**", async (route) => {
-    const request = route.request();
-    const url = new URL(request.url());
-    const pathname = url.pathname;
-    const method = request.method();
-
-    if (pathname === "/api/v1/config" && method === "GET") {
-      configRequests += 1;
-      if (options.holdConfig) await configRelease;
-      if (options.configFails) {
-        await json(route, 503, { error: "config unavailable" });
-      } else {
-        await json(route, 200, {
-          claudeCode: {
-            defaultModel: options.defaultModel ?? "platform-default",
-            models: options.configuredModels ?? [],
-          },
-        });
-      }
-      return;
-    }
-
-    if (pathname.endsWith("/stream") && method === "GET") {
-      const offset = Number(url.searchParams.get("offset") ?? "0");
-      streamOffsets.push(offset);
-      streamRequests += 1;
-
-      if (streamRequests === 1) {
-        const initial = outputEvent(0, retainedOutput);
-        if (options.snapshotAfterFirstStream) {
-          session = {
-            ...session,
-            state: "snapshot",
-            pod: undefined,
-            checkpoint: {
-              ref: "s3://sessions/a11ce/archive-after-stream.tar.zst",
-              sizeBytes: 8192,
-              createdAt: now,
-              reclaimed: "1 vCPU · 2 GB",
-            },
-          };
-        }
-        await sse(route, initial.wire);
-        return;
-      }
-
-      if (!deliveredAgentOutput) {
-        await Promise.race([
-          firstWriteAccepted,
-          new Promise<void>((resolve) => page.once("close", resolve)),
-        ]);
-        if (page.isClosed()) return;
-
-        // Each event ends on a UTF-8 boundary. Replaying the first byte range
-        // still exercises cursor-based de-duplication with non-ASCII output.
-        const chunkStart = options.resetBeforeAgentOutput
-          ? Math.min(Buffer.byteLength("existing "), retainedOutput.byteLength)
-          : retainedOutput.byteLength;
-        const resetWire = options.resetBeforeAgentOutput
-          ? resetEvent(chunkStart)
-          : "";
-        if (options.resetBeforeAgentOutput) {
-          retainedOutput = retainedOutput.subarray(0, chunkStart);
-        }
-
-        const first = outputEvent(chunkStart, firstAgentChunk);
-        const second = outputEvent(first.nextOffset, secondAgentChunk);
-        retainedOutput = Buffer.concat([retainedOutput, newOutput]);
-        finalStreamOffset = retainedOutput.byteLength;
-        deliveredAgentOutput = true;
-        await sse(
-          route,
-          resetWire + first.wire + first.wire + second.wire,
-        );
-        return;
-      }
-
-      // Playwright route.fulfill cannot leave a streaming response open. Keep
-      // the final reconnect pending until the page closes instead.
-      await new Promise<void>((resolve) => page.once("close", resolve));
-      return;
-    }
-
-    if (pathname === "/api/v1/sessions" && method === "GET") {
-      await json(route, 200, { sessions: [session] });
-      return;
-    }
-
-    if (pathname === "/api/v1/sessions" && method === "POST") {
-      const body = request.postDataJSON() as Record<string, unknown>;
-      createBodies.push(body);
-      session = {
-        ...session,
-        name: String(body.name),
-        workloadType: String(body.workloadType) as SessionFixture["workloadType"],
-        model:
-          typeof body.model === "string" ? body.model : "platform-default",
-        state: "active",
-        pod: "sess-a11ce-agent",
-        checkpoint: undefined,
-      };
-      await json(route, 201, session);
-      return;
-    }
-
-    if (pathname.endsWith("/read") && method === "POST") {
-      const body = request.postDataJSON() as { offset?: number };
-      const offset = body.offset ?? 0;
-      readOffsets.push(offset);
-      await json(route, 200, {
-        session,
-        path: "active/read",
-        payload: retainedOutput
-          .subarray(Math.min(offset, retainedOutput.byteLength))
-          .toString(),
-        nextOffset: retainedOutput.byteLength,
-      });
-      return;
-    }
-
-    if (pathname.endsWith("/write") && method === "POST") {
-      const body = request.postDataJSON() as { payload?: string };
-      writePayloads.push(body.payload ?? "");
-      if (!firstWriteSignalled) {
-        firstWriteSignalled = true;
-        signalFirstWrite();
-      }
-      if (options.writeDelayMs) {
-        await new Promise((resolve) => setTimeout(resolve, options.writeDelayMs));
-      }
-      await json(route, 200, { session, path: "active/write" });
-      return;
-    }
-
-    if (pathname.endsWith("/switch") && method === "POST") {
-      session = {
-        ...session,
-        state: "active",
-        pod: "sess-a11ce-restored",
-        checkpoint: undefined,
-      };
-      await json(route, 200, session);
-      return;
-    }
-
-    if (
-      pathname === `/api/v1/sessions/${session.id}` &&
-      method === "GET"
-    ) {
-      await json(route, 200, session);
-      return;
-    }
-
-    await json(route, 404, { error: `unhandled mock route: ${method} ${pathname}` });
-  });
-
-  return {
-    createBodies,
-    getConfigRequests: () => configRequests,
-    releaseConfig,
-    writePayloads,
-    readOffsets,
-    streamOffsets,
-    getFinalStreamOffset: () => finalStreamOffset,
-    getRetainedOutput: () => retainedOutput.toString(),
-    getSession: () => session,
-  };
-}
-
-test("de-duplicates the concrete default and submits another configured model", async ({
-  page,
-}) => {
-  const mock = await installAgentApi(page, {
-    model: "claude-opus-test",
-    defaultModel: "claude-sonnet-test",
-    configuredModels: ["claude-sonnet-test", "claude-opus-test"],
-  });
-
-  await page.goto("/new");
-  await expect(page.getByTestId("new-session-workload-shell")).toHaveAttribute(
-    "aria-checked",
-    "true",
-  );
-  await expect(page.getByTestId("new-session-model")).toHaveCount(0);
-
-  await page.getByTestId("new-session-workload-claude-code").click();
-  await page.getByTestId("new-session-name").fill("review-agent");
-  const model = page.getByTestId("new-session-model");
-  await expect(model).toHaveRole("combobox");
-  await expect(model.locator("option")).toHaveText([
-    "claude-sonnet-test (platform default)",
-    "claude-opus-test",
-  ]);
-  await model.selectOption("claude-opus-test");
-  await page.getByTestId("new-session-submit").click();
-
-  await expect(page).toHaveURL(/\/agent\/a11ce$/, { timeout: 5_000 });
-  expect(mock.createBodies).toEqual([
-    {
-      name: "review-agent",
+async function createAgentSession(
+  request: import("@playwright/test").APIRequestContext,
+  name: string,
+  model?: string,
+): Promise<CreatedSession> {
+  const response = await request.post("/api/v1/sessions", {
+    data: {
+      name,
       workloadType: "claude-code",
-      model: "claude-opus-test",
+      ...(model ? { model } : {}),
     },
-  ]);
-  await expect(page.getByRole("heading", { name: "review-agent", level: 1 })).toBeVisible();
+    // claude-code pod 는 에이전트가 뜨기 전에 플러그인을 설치하므로 기본 타임아웃보다
+    // 한참 느리다.
+    timeout: 180_000,
+  });
+  expect(response.status()).toBe(201);
+  const created = (await response.json()) as CreatedSession;
+  expect(created.workloadType).toBe("claude-code");
+  expect(created.state).toBe("active");
+  return created;
+}
+
+test("a prompt sent from the workspace runs on the deployed SUT and its reply lands in the output", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(300_000);
+
+  const created = await createAgentSession(
+    request,
+    "j6-prompt-" + Date.now(),
+    ALTERNATE_MODEL,
+  );
+
+  await page.goto("/agent/" + created.id);
   await expect(page.getByTestId("ws-model")).toHaveText(
-    "model=claude-opus-test",
+    "model=" + ALTERNATE_MODEL,
   );
   await expect(page.getByTestId("ws-workload")).toContainText("claude-code");
-});
-
-test("omits the concrete configured default so the platform default is used", async ({
-  page,
-}) => {
-  const mock = await installAgentApi(page, {
-    defaultModel: "claude-sonnet-test",
-    configuredModels: ["claude-sonnet-test", "claude-opus-test"],
-  });
-
-  await page.goto("/new");
-  await page.getByTestId("new-session-workload-claude-code").click();
-  await expect(
-    page.getByText(
-      "Workload type and model choice are fixed for this session. Platform default resolves to the configured default at container start.",
-      { exact: true },
-    ),
-  ).toBeVisible();
-  await page.getByTestId("new-session-name").fill("default-model-agent");
-  const model = page.getByTestId("new-session-model");
-  await expect(model).toHaveRole("combobox");
-  await expect(model).toHaveValue("");
-  await expect(model.locator("option")).toHaveText([
-    "claude-sonnet-test (platform default)",
-    "claude-opus-test",
-  ]);
-  await page.getByTestId("new-session-submit").click();
-
-  await expect(page).toHaveURL(/\/agent\/a11ce$/, { timeout: 5_000 });
-  expect(mock.createBodies).toEqual([
-    {
-      name: "default-model-agent",
-      workloadType: "claude-code",
-    },
-  ]);
-  await expect(page.getByTestId("ws-model")).toHaveText(
-    "model=platform default",
-  );
-});
-
-test("names the concrete default in free text mode and omits a blank model", async ({
-  page,
-}) => {
-  const mock = await installAgentApi(page, {
-    defaultModel: "claude-sonnet-test",
-    configuredModels: [],
-  });
-
-  await page.goto("/new");
-  await page.getByTestId("new-session-workload-claude-code").click();
-  await expect
-    .poll(() => mock.getConfigRequests())
-    .toBeGreaterThan(0);
-  await page.getByTestId("new-session-name").fill("free-text-agent");
-  const model = page.getByTestId("new-session-model");
-  await expect(model).toHaveRole("textbox");
-  await expect(model).toHaveAttribute(
-    "placeholder",
-    "claude-sonnet-test (platform default)",
-  );
-  await expect(
-    page.getByText(
-      "Leave blank to use claude-sonnet-test (platform default).",
-    ),
-  ).toBeVisible();
-  await page.getByTestId("new-session-submit").click();
-
-  await expect(page).toHaveURL(/\/agent\/a11ce$/, { timeout: 5_000 });
-  expect(mock.createBodies).toEqual([
-    {
-      name: "free-text-agent",
-      workloadType: "claude-code",
-    },
-  ]);
-});
-
-test("submits an explicit free-text model when no catalog is configured", async ({
-  page,
-}) => {
-  const mock = await installAgentApi(page, {
-    defaultModel: "claude-sonnet-test",
-    configuredModels: [],
-  });
-
-  await page.goto("/new");
-  await page.getByTestId("new-session-workload-claude-code").click();
-  await expect
-    .poll(() => mock.getConfigRequests())
-    .toBeGreaterThan(0);
-  await page.getByTestId("new-session-name").fill("custom-model-agent");
-  const model = page.getByTestId("new-session-model");
-  await expect(model).toHaveRole("textbox");
-  await model.fill("claude-free-text-test");
-  await page.getByTestId("new-session-submit").click();
-
-  await expect(page).toHaveURL(/\/agent\/a11ce$/, { timeout: 5_000 });
-  expect(mock.createBodies).toEqual([
-    {
-      name: "custom-model-agent",
-      workloadType: "claude-code",
-      model: "claude-free-text-test",
-    },
-  ]);
-});
-
-test("preserves a pending free-text model when an empty catalog arrives", async ({
-  page,
-}) => {
-  const mock = await installAgentApi(page, {
-    defaultModel: "claude-sonnet-test",
-    configuredModels: [],
-    holdConfig: true,
-  });
-
-  await page.goto("/new");
-  await page.getByTestId("new-session-workload-claude-code").click();
-  await expect
-    .poll(() => mock.getConfigRequests())
-    .toBeGreaterThan(0);
-  await page.getByTestId("new-session-name").fill("pending-model-agent");
-  const model = page.getByTestId("new-session-model");
-  await expect(model).toHaveRole("textbox");
-  await model.fill("claude-pending-test");
-
-  const configResponse = page.waitForResponse(
-    (response) =>
-      response.url().endsWith("/api/v1/config") &&
-      response.request().method() === "GET",
-  );
-  mock.releaseConfig();
-  await configResponse;
-  await expect(model).toHaveValue("claude-pending-test");
-  await expect(model).toHaveAttribute(
-    "placeholder",
-    "claude-sonnet-test (platform default)",
-  );
-
-  await page.getByTestId("new-session-submit").click();
-
-  await expect(page).toHaveURL(/\/agent\/a11ce$/, { timeout: 5_000 });
-  expect(mock.createBodies).toEqual([
-    {
-      name: "pending-model-agent",
-      workloadType: "claude-code",
-      model: "claude-pending-test",
-    },
-  ]);
-});
-
-test("keeps the Platform default fallback when no concrete default is configured", async ({
-  page,
-}) => {
-  await installAgentApi(page, {
-    defaultModel: "platform-default",
-    configuredModels: ["claude-sonnet-test", "claude-opus-test"],
-  });
-
-  await page.goto("/new");
-  await page.getByTestId("new-session-workload-claude-code").click();
-  const model = page.getByTestId("new-session-model");
-  await expect(model).toHaveRole("combobox");
-  await expect(model.locator("option")).toHaveText([
-    "Platform default",
-    "claude-sonnet-test",
-    "claude-opus-test",
-  ]);
-});
-
-test("keeps the free-text model input when config loading fails", async ({
-  page,
-}) => {
-  const mock = await installAgentApi(page, { configFails: true });
-
-  await page.goto("/new");
-  await page.getByTestId("new-session-workload-claude-code").click();
-  await expect
-    .poll(() => mock.getConfigRequests())
-    .toBeGreaterThan(0);
-  const model = page.getByTestId("new-session-model");
-  await expect(model).toHaveRole("textbox");
-  await expect(model).toHaveAttribute("placeholder", "Platform default");
-  await expect(page.getByText("Leave blank to use the platform default.")).toBeVisible();
-});
-
-test("streams partial agent output, de-duplicates it, and reconnects by byte cursor", async ({
-  page,
-}) => {
-  const mock = await installAgentApi(page, {
-    model: "claude-opus-test",
-    writeDelayMs: 600,
-  });
-
-  await page.goto("/");
-  const card = page.locator(
-    '[data-testid="session-card"][data-session-id="a11ce"]',
-  );
-  await expect(card).toHaveAttribute("data-workload-type", "claude-code");
-  await expect(card).toContainText("◇ claude-code");
-  await card.click();
-
-  await expect(page).toHaveURL(/\/agent\/a11ce$/);
-  const prompt = page.getByTestId("ws-prompt");
-  await prompt.fill("first prompt");
-  await prompt.press("Enter");
-  await prompt.fill("second prompt");
-  await prompt.press("Enter");
-
-  await expect(page.getByTestId("agent-queue")).toContainText(
-    "2 submissions pending",
-  );
-  await expect
-    .poll(() => mock.writePayloads.length, { timeout: 5_000 })
-    .toBe(2);
-  expect(mock.writePayloads).toEqual(["first prompt", "second prompt"]);
-  expect(mock.writePayloads.every((payload) => !payload.endsWith("\n"))).toBe(
-    true,
-  );
+  await expect(page.getByTestId("ws-state")).toHaveText("active");
 
   const log = page.getByTestId("ws-log");
-  await expect(log).toContainText("▸ first prompt");
-  await expect(log).toContainText("new agent response 응답", {
-    timeout: 5_000,
-  });
-  expect(mock.readOffsets).toEqual([]);
+  const prompt = page.getByTestId("ws-prompt");
+  await prompt.fill("j6 prompt one");
+  await prompt.press("Enter");
 
-  // The fixture replayed a complete UTF-8 byte range, but it appears only once.
-  // The non-ASCII chunks also verify that byte offsets are not JS string lengths.
-  const logText = await log.textContent();
-  expect(logText?.split("new agent response").length).toBe(2);
+  // 제출한 프롬프트는 즉시 콘솔에 반향된다(로컬 에코). 그 뒤 실 invocation 의 응답이
+  // 세션의 append-only 출력에 실려 스트림으로 도착한다.
+  await expect(log).toContainText("▸ j6 prompt one");
+  await expect(log).toContainText(PROVIDER_REPLY, { timeout: 180_000 });
 
-  // A finite mocked stream disconnects after the chunks. The browser reconnects
-  // with the server-issued byte cursor, not JS string length or offset zero.
-  await expect
-    .poll(() => mock.streamOffsets, { timeout: 5_000 })
-    .toContain(mock.getFinalStreamOffset());
-  await expect(page.getByTestId("ws-stream-status")).toHaveAttribute(
-    "data-stream-state",
-    "reconnecting",
-  );
-
-  // POST /read remains an explicit recovery path, but normal output needed no
-  // click and made no read request.
-  await expect(page.getByTestId("ws-refresh-output")).toBeEnabled({
-    timeout: 5_000,
-  });
-  const readsBeforeRefresh = mock.readOffsets.length;
-
+  // 명시적 커서 read 는 복구 경로이지 정상 경로가 아니다 — 위 출력은 클릭 없이 왔다.
+  // 그리고 read 는 비파괴다(AC-D3): 눌러도 이미 보고 있던 이력이 사라지지 않는다.
   await page.getByTestId("ws-refresh-output").click();
-  await expect.poll(() => mock.readOffsets.length).toBeGreaterThan(
-    readsBeforeRefresh,
+  await expect(log).toContainText(PROVIDER_REPLY);
+  await expect(log).toContainText("▸ j6 prompt one");
+});
+
+test("an archived claude-code session is described as an archive and restored from it", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(300_000);
+
+  const created = await createAgentSession(request, "j6-archive-" + Date.now());
+
+  // 제품 아카이브 트리거. 실 아카이브는 워크스페이스를 인클러스터 MinIO 로 올리고 pod 를
+  // 회수한 뒤에야 응답하므로 기본 타임아웃보다 한참 느리다.
+  const snapshotResponse = await request.post(
+    "/api/v1/sessions/" + created.id + "/snapshot",
+    { timeout: 240_000 },
   );
-  await expect
-    .poll(() => mock.readOffsets[mock.readOffsets.length - 1])
-    .toBe(mock.getFinalStreamOffset());
-});
+  expect(snapshotResponse.status()).toBe(200);
+  const frozen = (await snapshotResponse.json()) as {
+    state: string;
+    pod?: string;
+    checkpoint?: { ref?: string };
+  };
+  expect(frozen.state).toBe("snapshot");
+  expect(frozen.pod ?? "").toBe("");
+  expect(frozen.checkpoint?.ref ?? "").not.toBe("");
 
-test("an authoritative reset replaces retained output before reconnecting", async ({
-  page,
-}) => {
-  const mock = await installAgentApi(page, {
-    resetBeforeAgentOutput: true,
+  // 동결된 세션의 워크스페이스로 들어가면 SPA 는 Restore 로 넘긴다 — 그리고 그 관찰은
+  // 수동적이다: 화면을 열었다는 이유만으로 아카이브가 되살아나지 않는다.
+  await page.goto("/agent/" + created.id);
+  await expect(page).toHaveURL(new RegExp("/restore/" + created.id + "$"), {
+    timeout: 30_000,
   });
+  const stillFrozen = await request.get("/api/v1/sessions/" + created.id);
+  expect(stillFrozen.status()).toBe(200);
+  expect(((await stillFrozen.json()) as { state: string }).state).toBe(
+    "snapshot",
+  );
 
-  await page.goto("/agent/a11ce");
-  const log = page.getByTestId("ws-log");
-  await expect(log).toContainText("existing agent response");
-
-  const prompt = page.getByTestId("ws-prompt");
-  await prompt.fill("trigger reset");
-  await prompt.press("Enter");
-  await expect.poll(() => mock.writePayloads).toContain("trigger reset");
-
-  // reset closes the SSE source, performs the explicit offset-zero read, and
-  // replaces stale mixed scrollback before reconnecting at the replay cursor.
-  await expect.poll(() => mock.readOffsets).toContain(0);
-  await expect
-    .poll(() => log.textContent())
-    .toBe(mock.getRetainedOutput());
-  await expect(log).not.toContainText("▸ trigger reset");
-  await expect
-    .poll(() => mock.streamOffsets)
-    .toContain(mock.getFinalStreamOffset());
-});
-
-test("a stream disconnect observes snapshot state without restoring by read", async ({
-  page,
-}) => {
-  const mock = await installAgentApi(page, {
-    snapshotAfterFirstStream: true,
-  });
-
-  await page.goto("/agent/a11ce");
-  await expect(page).toHaveURL(/\/restore\/a11ce$/, { timeout: 5_000 });
   await expect(
     page.getByRole("heading", { name: "Resume from session archive" }),
   ).toBeVisible();
-
-  expect(mock.getSession().state).toBe("snapshot");
-  expect(mock.readOffsets).toEqual([]);
-  expect(mock.streamOffsets).toEqual([0]);
-
-  // Cleanup closes the EventSource, so the Restore screen cannot reconnect and
-  // accidentally turn passive observation into snapshot activation.
-  await page.waitForTimeout(400);
-  expect(mock.streamOffsets).toEqual([0]);
-});
-
-test("describes and restores a claude-code snapshot as an archive", async ({
-  page,
-}) => {
-  const mock = await installAgentApi(page, { snapshot: true });
-
-  await page.goto("/restore/a11ce");
-  await expect(
-    page.getByRole("heading", { name: "Resume from session archive" }),
-  ).toBeVisible();
+  // claude-code 세션의 동결은 CRIU 프로세스 이미지가 아니라 워크스페이스 아카이브다.
   await expect(page.getByText("No CRIU checkpoint is used.")).toBeVisible();
-  await expect(page.getByText(/archive s3:\/\/sessions\/a11ce/)).toBeVisible();
+  await expect(page.getByText(/archive s3:\/\//)).toBeVisible();
 
   await page.getByTestId("restore-submit").click();
-  await expect(page).toHaveURL(/\/agent\/a11ce$/);
-  expect(mock.getSession().state).toBe("active");
+  await expect(page).toHaveURL(new RegExp("/agent/" + created.id + "$"), {
+    timeout: 240_000,
+  });
   await expect(page.getByTestId("ws-workload")).toContainText("claude-code");
+
+  // 그라운드 트루스는 픽스처가 아니라 배포된 control-plane 이다: 세션이 정말 다시 서고
+  // 새 pod 를 얻었다.
+  const after = await request.get("/api/v1/sessions/" + created.id);
+  expect(after.status()).toBe(200);
+  const restored = (await after.json()) as { state: string; pod?: string };
+  expect(restored.state).toBe("active");
+  expect(restored.pod ?? "").not.toBe("");
 });
