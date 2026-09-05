@@ -5,12 +5,20 @@ type RoutableSession = Pick<Session, "id" | "state" | "workloadType">;
 // Keep every entry point (create, card click, restore) on the same workload
 // routing rule. Shell URLs stay backwards compatible; agent sessions have a
 // distinct URL so a copied/deep link still communicates which workspace opens.
+// approval-gated gets its own path rather than sharing /agent: the two run the
+// same execution model but not the same screen, and the URL is the only part a
+// user can read before the session loads.
 export function liveSessionPath(
   session: Pick<RoutableSession, "id" | "workloadType">,
 ): string {
-  return session.workloadType === "claude-code"
-    ? `/agent/${session.id}`
-    : `/session/${session.id}`;
+  switch (session.workloadType) {
+    case "claude-code":
+      return `/agent/${session.id}`;
+    case "approval-gated":
+      return `/gated/${session.id}`;
+    default:
+      return `/session/${session.id}`;
+  }
 }
 
 export function sessionEntryPath(session: RoutableSession): string {

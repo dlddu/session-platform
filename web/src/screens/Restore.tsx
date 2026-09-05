@@ -6,6 +6,7 @@ import { api } from "../api/client";
 import type { Session } from "../api/types";
 import { DeleteSessionDialog } from "../app/DeleteSessionDialog";
 import { liveSessionPath } from "../app/sessionRoutes";
+import { isAgentWorkload, isGatedWorkload } from "../app/workloadKind";
 import { useToast } from "../app/Toast";
 
 const AGENT_RESTORE_COPY =
@@ -13,10 +14,16 @@ const AGENT_RESTORE_COPY =
   "and accumulated output. No CRIU checkpoint is used.";
 const SHELL_RESTORE_COPY =
   "The checkpoint will thaw into a fresh pod and resume the shell exactly where it froze.";
+const GATED_RESTORE_COPY =
+  "A fresh workload pod and a fresh helper pod will restore the conversation " +
+  "history, working directory, shared volume, and accumulated output. The " +
+  "approval gate is re-armed; nothing that was pending survives the freeze.";
 
 // Restore — the resume screen for a snapshotted session. Shell sessions thaw a
-// CRIU checkpoint; claude-code sessions restore a filesystem archive. switch
-// returns the active session and its immutable workload picks the live route.
+// CRIU checkpoint; the agent family (claude-code, approval-gated) restores a
+// filesystem archive, and approval-gated brings its helper pod back with it
+// (AC-F4). switch returns the active session and its immutable workload picks
+// the live route.
 export function Restore() {
   const { id = "" } = useParams();
   const [sess, setSess] = useState<Session | null>(null);
@@ -62,7 +69,12 @@ export function Restore() {
   if (error) return <div className="pad error">Failed to load session: {error}</div>;
   if (!sess) return <div className="pad empty">Loading…</div>;
 
-  const isAgent = sess.workloadType === "claude-code";
+  const isAgent = isAgentWorkload(sess.workloadType);
+  const restoreCopy = isGatedWorkload(sess.workloadType)
+    ? GATED_RESTORE_COPY
+    : isAgent
+      ? AGENT_RESTORE_COPY
+      : SHELL_RESTORE_COPY;
   const resumeLabel = busy
     ? isAgent
       ? "Restoring…"
@@ -102,7 +114,7 @@ export function Restore() {
           {isAgent ? "Resume from session archive" : "Resume from checkpoint"}
         </h2>
         <p className="restore-copy">
-          {isAgent ? AGENT_RESTORE_COPY : SHELL_RESTORE_COPY}
+          {restoreCopy}
         </p>
         <div className="restore-meta">
           {sess.checkpoint ? (

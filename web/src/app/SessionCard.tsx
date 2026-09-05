@@ -6,6 +6,17 @@ import type { Session } from "../api/types";
 import { StateBadge } from "./StateBadge";
 import { ClockIcon, CrystalIcon, PodIcon } from "./icons";
 import { sessionEntryPath } from "./sessionRoutes";
+import { isAgentWorkload, isGatedWorkload } from "./workloadKind";
+
+// The card's type tag and freeze vocabulary. Agent-family sessions archive a
+// filesystem snapshot (AC-E5) where shell thaws a CRIU checkpoint, and the
+// gated variant is the one whose outbound calls wait on a person (AC-F3), so
+// it gets its own glyph instead of falling through to "$ shell".
+const WORKLOAD_TAG: Record<string, string> = {
+  shell: "$ shell",
+  "claude-code": "◇ claude-code",
+  "approval-gated": "⏸ approval-gated",
+};
 
 // MaxIdle mirrors control-plane/internal/session.MaxIdle (60m). A session
 // freezes once it has been idle this long; the idle card counts down to it.
@@ -90,7 +101,7 @@ function SnapshotBody({ s, now }: { s: Session; now: number }) {
         <div className="snap-meta">
           <div className="row">
             <span className="k">
-              {s.workloadType === "claude-code" ? "archive" : "checkpoint"}
+              {isAgentWorkload(s.workloadType) ? "archive" : "checkpoint"}
             </span>
             <span className="v">{cp ? fmtBytes(cp.sizeBytes) : "—"}</span>
           </div>
@@ -106,9 +117,11 @@ function SnapshotBody({ s, now }: { s: Session; now: number }) {
       </div>
       <div className="snap-hint">
         <ClockIcon size={13} />{" "}
-        {s.workloadType === "claude-code"
-          ? "open to restore the archive and continue the conversation"
-          : "open to thaw and resume exactly where it froze"}
+        {isGatedWorkload(s.workloadType)
+          ? "open to restore the archive — the gate is re-armed on resume"
+          : isAgentWorkload(s.workloadType)
+            ? "open to restore the archive and continue the conversation"
+            : "open to thaw and resume exactly where it froze"}
       </div>
     </>
   );
@@ -203,11 +216,15 @@ export function SessionCard({
           <span
             className={
               "workload-tag" +
-              (s.workloadType === "claude-code" ? " workload-tag-agent" : "")
+              (isGatedWorkload(s.workloadType)
+                ? " workload-tag-gated"
+                : isAgentWorkload(s.workloadType)
+                  ? " workload-tag-agent"
+                  : "")
             }
             title={"workloadType=" + s.workloadType}
           >
-            {s.workloadType === "claude-code" ? "◇ claude-code" : "$ shell"}
+            {WORKLOAD_TAG[s.workloadType] ?? s.workloadType}
           </span>
         </div>
       </button>
