@@ -335,6 +335,7 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 | AC-E1 | `control-plane/test/e2e_e1_workload_type_test.go` | go | `workloadType=claude-code` 세션이 SUT에서 서고 그 pod에서 Claude CLI가 실제로 실행됨 / 필드 생략은 shell / 잘못된 값은 pod 생성 전 400 / 타입·모델은 생성 후 불변 |
 | AC-E2 | `control-plane/test/e2e_e2_prompt_invocation_test.go` | go | write = 프롬프트 1회 실행 — 배포 SUT에서 실 `claude` 프로세스가 기동되고 응답이 세션 출력에 투영됨 / burst의 모든 프롬프트가 큐에 수락돼 각각 1회씩 실행됨 / 프로세스 테이블에서 본 exact argv·원샷 수명·직렬 큐(동시 실행 없음)·첫 성공 뒤에만 `--continue` / 1 MiB 초과 프롬프트는 public API 413이고 실행되지 않음 (비블로킹 반환 자체는 SUT에서 관측 불가 — invocation이 write 왕복보다 느리지 않다. `data-plane/cmd/agent/claude_test.go`의 `TestClaudeWriteIsNonBlockingAndSerial`이 fake runner로 소유) |
 | AC-E6 | `control-plane/test/e2e_e6_credential_placement_test.go` | go | **자격 증명의 배치와 그 배치가 사는 격리**를 배포 SUT에서 — 공급자 `base-url`·`auth-token`·optional `ca-cert`는 사이드카 `claude-credentials`에만 / 필수 `k3s-mcp-token`과 optional `k3s-mcp-url`·`plugin-marketplace-url`은 주 컨테이너에만 / optional `model`은 주 컨테이너에만이고 concrete model은 literal이 Secret 기본값을 이김 / 주 컨테이너가 실 플랫폼 토큰을 **어떤 `/proc/*/environ`으로도 읽지 못함**(같은 프로브가 placeholder는 찾으므로 음성 결과가 자기검증된다) / pod가 `data-plane` SA로 서고 실 authorizer가 pods는 allow·secrets는 deny(SubjectAccessReview) / 생성 요청의 자격 증명 필드는 400이고 세션 조회·read 어디에도 두 토큰 값이 없음. 비교하는 비밀 값은 전부 클러스터 Secret에서 읽으므로 이 파일은 자격 증명 사본을 갖지 않는다. **프록시의 행위 계약**(헤더 허용목록·1xx redaction·64 MiB 상한·split-token tail-safe·`ca-cert` 파싱 실패 시 시작 거부)은 `data-plane/cmd/agent/credential_proxy*_test.go`가, **제출되는 pod spec**은 `control-plane/test/workload_type_orchestrator_test.go`(태그 `integration`)가 이미 소유하므로 여기서 다시 사지 않는다 — e2e가 배타적으로 살 수 있는 것은 배포된 그라운드-트루스다 |
+| AC-F1 | `control-plane/test/e2e_f1_workload_type_test.go` | go | `workloadType=approval-gated` 세션이 배포 SUT에서 서고 그 pod 집합이 워크로드 파드 + **세션 전속 헬퍼 파드 1개**(라벨 `session-id`+`pod-role=helper`로 조회, 컨테이너 정확히 둘 — 세션 MCP·credential-proxy — 이 모두 Ready)임 / 타입 축이 실제로 판별함 — 필드 생략과 explicit `shell`은 헬퍼 파드를 0개 만든다 / 근접 오타(`approval_gated`·전후 공백·대문자·`approvalgated`)와 explicit `""`·`null`·비문자열은 **pod 생성 전** 400(세션 파드 수 불변이 그라운드-트루스) / 생성 후 `/read`·`/write`·`/switch`의 타입·모델 변경은 400이고 원래 값 유지. 승인 왕복(AC-F3)·공유 볼륨(AC-F5)·컨테이너별 자격 증명 분리(AC-F6)는 각자의 AC가 소유하므로 여기서 사지 않는다 — 이 파일이 사는 것은 **타입 축과 그것이 세우는 파드 집합**이다 |
 <!-- ac-mapping:end -->
 
 ## AC 예외 목록
@@ -376,8 +377,8 @@ AC 대신 스모크/인프라를 검증하는 매칭 단위 파일(규칙 3).
 <!-- ac-summary:begin -->
 - AC 총계: 27
 - 예외: 1
-- AC 매칭 파일: 17
-- 공백: 9 — AC-E3 AC-E4 AC-E5 AC-F1 AC-F2 AC-F3 AC-F4 AC-F5 AC-F6
+- AC 매칭 파일: 18
+- 공백: 8 — AC-E3 AC-E4 AC-E5 AC-F2 AC-F3 AC-F4 AC-F5 AC-F6
 <!-- ac-summary:end -->
 
 **공백**은 전용 파일도 예외 등재도 아직 없는 AC다. **어느 AC가 공백인지는 바로 위 `ac-summary`
@@ -413,10 +414,12 @@ AC 대신 스모크/인프라를 검증하는 매칭 단위 파일(규칙 3).
 > `e2e_e2_prompt_invocation_test.go` 처럼 Go 스위트에 신설하거나, 외부 LLM 자격증명·비결정
 > 산출물처럼 곤란한 것은 예외로 등재해 이 표를 0으로 만든다.
 
-> **왜 F 계열은 「예외」가 아니라 「공백」인가** *(2026-09-03 판정 · **2026-09-04 선행 재판정**)*.
+> **왜 남은 F 계열은 「예외」가 아니라 「공백」인가** *(2026-09-03 판정 · 2026-09-04 선행 재판정 ·
+> **2026-09-06 AC-F1 착지**)*.
 > #46이 `approval-gated` 워크로드 타입을 문서로 신설하며 AC가 **21 → 27**로 늘었다(AC-F1~F6).
-> 여섯 건 모두 전용 파일도 예외 등재도 없이 공백에 놓는다. 두 갈래를 다 검토했고 **지금은 어느
-> 쪽도 성립하지 않는다**.
+> 여섯 건 전부를 공백에 놓았고, **그 중 AC-F1은 2026-09-06에 전용 파일로 나왔다**(아래 승격 조건 ①
+> 참고). 남은 다섯 건에 대해 두 갈래를 다 검토했고 **지금은 어느 쪽도 성립하지 않는다** — 어느 AC가
+> 아직 공백인지는 언제나 위 `ac-summary` 블록이 정본이고, 이 문단은 그 목록의 사본을 두지 않는다.
 >
 > - **전용 파일 신설 불가 — e2e SUT에서 이 타입의 세션이 아직 서지 않는다.** 최초 판정의 근거는
 >   "구현이 0줄"이었고 그것은 **더 이상 사실이 아니다**: #48이 pod 참조를 집합으로 바꿨고, 이어진
@@ -437,8 +440,14 @@ AC 대신 스모크/인프라를 검증하는 매칭 단위 파일(규칙 3).
 >   로컬 빌드 에이전트 이미지로 replace한다. 그래서 `workloadType=approval-gated` 생성 요청은
 >   더 이상 `imageFor`의 미설정 에러로 500이 되지 않는다.
 >
->   ⚠️ **이 해소가 「그러니 지금 저작해도 된다」로 읽히면 안 된다** — 아래 ⓑ가 그대로 남아 있어
->   세션은 여전히 서지 않는다. 두 선행을 한 문단에 두는 이유가 그것이다.
+>   ✅ **ⓐ·ⓑ가 둘 다 풀려, 이 타입의 세션은 이제 e2e SUT에서 실제로 선다** — 아래 ⓑ 문단과
+>   AC-F1 전용 파일(`control-plane/test/e2e_f1_workload_type_test.go`)이 그 사실을 각각 기록하고
+>   기계로 단언한다.
+>
+>   ⚠️ **그렇다고 F 계열 전체의 선행이 풀린 것은 아니다.** 이 두 선행은 「세션이 서느냐」만 풀었고,
+>   **AC-F2(정책을 집행하는 CNI)와 AC-F5(공유 RWX 볼륨 구현)는 각자의 선행에 그대로 막혀 있다**
+>   (아래 ⚠️ 두 개). 한 문장으로 「선행이 다 풀렸다」고 읽으면 그 둘까지 착수 가능으로 오독하게 된다 —
+>   두 사실을 두 문장으로 나눠 두는 이유가 그것이다.
 >
 >   📌 **이 자리에 이미지 env 이름의 유무를 다시 서술하지 말 것.** 그 사실의 정본은 매니페스트
 >   자신(`k8s/deployment.yaml`의 env 목록과 `deploy/kustomization.yaml`의 patch)이고, 여기에
@@ -447,19 +456,22 @@ AC 대신 스모크/인프라를 검증하는 매칭 단위 파일(규칙 3).
 >   `deploy/`·`k8s/`를 보지 않아 재감지가 걸리지 않았다). 같은 함정의 앞선 사례는 위
 >   「AC 검증 범위」의 `AC 21개` 사본이다.
 >
->   **선행 ⓑ(남아 있는 유일한 선행) — SUT에 게이트웨이 Secret이 없고, 그 참조는 optional이
->   아니다.** `approval-gateway-credentials` 매니페스트가 e2e 오버레이(`deploy/`)에 없다.
->   프로덕션 쪽은 이 Secret을 클러스터 밖에서 받으므로(`k8s/deployment.yaml`의 관련 주석 참고)
->   남은 것은 **SUT 하나**다. 그런데 헬퍼 파드의 MCP 컨테이너는 게이트웨이 3종을
->   **`secretEnv`**로 투영한다(`client_orchestrator.go:780-782`, 정의 `:887-895`). 이 자리는
->   `Optional`을 세우지 않으므로(세우는 쪽은 같은 파일의 `optionalSecretEnv` `:897-902`이고 여기
->   쓰이지 않았다) Secret이 없으면 kubelet이 컨테이너 구성 단계에서 실패해 **헬퍼 파드가 Ready에
->   이르지 못한다.**
->   ⚠️ `doc-tracker.md`의 「게이트웨이 3종 env가 없으면 컨테이너는 뜨되 **도구 목록이 빈다**」와
->   겹쳐 읽어 "이미지만 채우면 선다"로 결론 내지 말 것 — 그 관용은 **agent 프로세스 층위**의 것이고
->   (`data-plane/cmd/agent/main.go`의 `case workloadSessionMCP:`), **필수 SecretKeyRef가 걸린 이
->   배포에서는 프로세스가
->   시작조차 못 해 그 경로에 도달하지 않는다.**
+>   **✅ 선행 ⓑ — SUT에 게이트웨이 Secret이 없다 — 는 2026-09-06에 해소됐다.** e2e 오버레이가
+>   승인 게이트웨이 대역과 그 Secret을 세우고 `deploy/kustomization.yaml`의 `resources:`가 그것을
+>   렌더에 편입한다. 헬퍼 파드의 MCP 컨테이너는 이 Secret을 **optional이 아니게** 참조하므로
+>   (`client_orchestrator.go`의 `helperPodSpec`이 `optionalSecretEnv`가 아니라 `secretEnv`를 쓴다)
+>   그것이 없던 동안에는 kubelet이 컨테이너 구성 단계에서 실패해 헬퍼 파드가 Ready에 이르지
+>   못했고, 그래서 세션 자체가 서지 않았다. 지금은 선다.
+>
+>   📌 **여기에 Secret 이름·키·주소나 매니페스트 파일의 좌표를 옮겨 적지 말 것.** 그 사실의 정본은
+>   `deploy/`의 오버레이와 그것을 여는 `deploy/kustomization.yaml`, 그리고 그 Secret을 참조하는
+>   `helperPodSpec`이다. 이 자리는 바로 위 📌가 이미 경고한 것과 **같은 함정**이며, 이 절은 실제로
+>   그렇게 세 번 낡았다(`AC 21개` 사본 · `E2~E6` · 「선언 자체가 없다」). 값이 아니라 **어디서
+>   확인하는가**만 남긴다.
+>
+>   그리고 이 해소가 실제로 산 것은 「이 타입의 세션이 SUT에서 선다」 하나다. 그 문장을 산문으로
+>   두지 않기 위해, AC-F1 전용 파일이 배포된 클러스터에서 **워크로드 파드와 세션 전속 헬퍼 파드가
+>   함께 Ready로 서는 것**을 직접 단언한다 — 이 문단이 주장하는 사실과 그 파일이 재는 사실이 같다.
 >
 >   📌 같은 낡음이 `control-plane/cmd/control-plane/main.go:79-82`의 Go 주석에도 있다("its data
 >   plane runtime — the helper pod's session MCP — is not implemented yet"). **코드 주석은 이 렌즈의
@@ -486,20 +498,30 @@ AC 대신 스모크/인프라를 검증하는 매칭 단위 파일(규칙 3).
 > **승격 조건(다음 감지가 이 논점을 다시 열지 않도록 못박는다)** *(2026-09-04 재작성 — 해제 조건을
 > 위 선행 ⓐ·ⓑ 기준으로 옮긴다. 이전 판은 「data plane MCP 워크로드」 하나를 걸었고 그것은 이미
 > 발화했다)*.
-> ① **AC-F1·F3·F5·F6** → 전용 파일 신설. **해제 조건은 이제 ⓑ 하나다** *(2026-09-06 갱신 — ⓐ가
-> #81로 해소되어 「ⓐ와 ⓑ가 함께」에서 줄었다)* — SUT 네임스페이스에
-> `approval-gateway-credentials`(`url`·`api-key`·`user-id`)가 있어 헬퍼 파드가 Ready에 이르는 것.
-> 그 둘이 서면 F1(타입 허용값·400 거부·불변성)은 AC-E1과 같은 모양이라 Go 스위트이고,
-> F3(승인 대기 중 write 즉시 반환·in-band 마커·`lastAccess` 갱신)·F5(공유 볼륨 왕복)·
-> F6(컨테이너별 Secret 분리)도 API·pod 스펙 단언이므로 Go 스위트다. **이 해제는 e2e 하네스
-> (오버레이) 작업이라 이 렌즈의 산출물이 아니다** — 이 루프가 내는 것은 e2e 파일과 등재 문서뿐이다.
+> ① **전용 파일 신설** → **해제 조건 ⓐ·ⓑ가 둘 다 발화했다** *(2026-09-06 — ⓐ는 #81, ⓑ는 오버레이가
+> 승인 게이트웨이 대역을 세우면서)*. 이 조건이 걸어 두었던 것은 「헬퍼 파드가 Ready에 이르러 이 타입의
+> 세션이 SUT에서 선다」 하나였고, 그것이 성립했다.
+> - **AC-F1은 그 발화로 착지했다** — `control-plane/test/e2e_f1_workload_type_test.go`. AC-E1과 같은
+>   모양의 Go 스위트이고, 검증 방법 네 갈래(파드 쌍 기동 · 타입 축 판별 · pod 생성 전 400 · 생성 후 불변)를
+>   전부 단언한다.
+> - **AC-F3·F4·F6은 이제 착수 가능하다** — 각각 승인 왕복 · 동반 회수 · 자격 배치라 서로 다른 축이므로
+>   전용 파일도 따로 선다. **다만 F3에는 아직 닫히지 않은 갈래가 있다**: 승인 **뒤의 실제 외부 GET**은
+>   MCP 컨테이너의 fetch가 시스템 루트만 신뢰하는 데서 막혀 있어, F3 슬라이스는 대기 마커·`lastAccess`
+>   갱신·거절/만료 갈래까지로 끊고 성공 왕복은 그 다음으로 넘긴다.
+> - **AC-F5는 여기에 들어가지 않는다** — 아래 ⚠️가 적는 대로 공유 RWX 볼륨 구현 자체가 선행이다.
+>   이전 판이 열거를 `F1·F3·F5·F6`으로 적어 F5를 착수 가능처럼 보이게 했고, F4를 빠뜨렸다(F4는 위 ②가
+>   「예외가 아니라 전용 파일이 기본값」이라 스스로 적는다). 이 열거가 그 교정이다.
 >
-> ⚠️ **AC-F1을 「400 거부 갈래만」으로 먼저 끊지 말 것.** 타입 검증은 pod 생성 전에 끝나므로 그
-> 갈래만은 이미지 없이도 관측된다 — 그래서 매번 "F1만은 지금 되지 않나"라는 물음이 다시 올라온다.
-> 답은 아니오다: AC-F1의 검증 방법(`../prd/approval-gated-workload.md`)은 **첫 갈래가 「세션을
+> **이 해제 자체는 e2e 하네스(오버레이) 작업이라 이 렌즈의 산출물이 아니었다** — 이 루프가 내는 것은
+> e2e 파일과 등재 문서뿐이고, 오버레이는 자매 렌즈가 세웠다.
+>
+> ✅ **AC-F1은 「400 거부 갈래만」으로 끊지 않았다** *(2026-09-06)*. 타입 검증은 pod 생성 전에 끝나므로
+> 그 갈래만은 이미지도 Secret도 없이 관측됐고, 그래서 이 자리는 오래 "F1만은 지금 되지 않나"라는 물음을
+> 거절해 왔다 — AC-F1의 검증 방법(`../prd/approval-gated-workload.md`)은 **첫 갈래가 「세션을
 > 생성하면 워크로드 파드와 세션 전용 헬퍼 파드(컨테이너 둘)가 함께 기동되고 세션 조회 응답의 타입이
-> `approval-gated`임을 확인한다」**이고, 그것이 정확히 ⓐ·ⓑ에 막힌다. 반쪽만 단언하는 파일은 규칙 1이
-> 요구하는 **그 AC의 주검증**이 아니다. 선례가 같은 말을 한다 —
+> `approval-gated`임을 확인한다」**이고 그것이 ⓐ·ⓑ에 막혀 있었기 때문이다. 착지한 파일은 그 갈래를
+> 포함해 넷을 전부 단언한다. **규범은 그대로 남는다**: 반쪽만 단언하는 파일은 규칙 1이 요구하는
+> **그 AC의 주검증**이 아니다. 선례가 같은 말을 한다 —
 > `control-plane/test/e2e_e1_workload_type_test.go`는 헤더에 "네 갈래를 **전부** 단언한다"고 적고
 > 실제로 파드 기동 갈래를 갖는데, 그 갈래는 부트스트랩 두 대역이 선 뒤에야(#62) 도달 가능해졌다.
 >
