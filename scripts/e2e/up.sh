@@ -82,6 +82,11 @@ kubectl rollout status deploy/plugin-marketplace-git --timeout=180s
 # The provider stand-in a claude-code session talks to once it is running. Same
 # reason again: the first prompt must not race its TLS listener coming up.
 kubectl rollout status deploy/anthropic-fake --timeout=120s
+# The gateway stand-in an approval-gated session's helper pod calls before every
+# external tool call. Same reason once more: the first gated call must not race
+# its listener. The Secret it authenticates against is applied above with the
+# rest of the overlay, so nothing else has to be ordered here.
+kubectl rollout status deploy/approval-gateway-fake --timeout=120s
 kubectl rollout status deploy/control-plane --timeout=120s
 
 echo "e2e: polling $BASE_URL/api/v1/healthz"

@@ -40,6 +40,20 @@ resources:
   # approved mock exception (CLAUDE-PROVIDER, EXT): unlike MinIO there is no
   # real implementation to deploy — the service *is* the model.
   - e2e-anthropic-fake.yaml
+
+  # What an approval-gated session's helper pod needs to exist at all (AC-F1/F6).
+  # The MCP container projects the gateway triple through *required*
+  # SecretKeyRefs, so without the Secret the kubelet fails the container's
+  # configuration and the helper pod never reaches Ready — the session type is
+  # simply unrunnable in this SUT, no matter what the images say.
+  #   - the gateway itself is an approved mock exception (APPROVAL-GATEWAY, EXT):
+  #     like the provider stand-in and unlike MinIO, there is no gateway server
+  #     to deploy — the reference implementation ships only a client, and the
+  #     service's substance is a human decision.
+  #   - the Secret is overlay-only; production syncs the same three keys from SSM
+  #     through flux-cd-apps, which is why k8s/ needs no change.
+  - approval-gateway-credentials-secret.yaml
+  - e2e-approval-gateway-fake.yaml
 images:
   - name: ghcr.io/dlddu/session-platform
     newName: session-platform/control-plane

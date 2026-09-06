@@ -1,0 +1,253 @@
+# kind e2e ONLY: a stand-in for the human approval gateway an approval-gated
+# session waits on (AC-F3/AC-F6).
+#
+# mock-exception: APPROVAL-GATEWAY — 승인 게이트웨이는 사람이 결재하는 외부 서비스이고,
+# 클러스터 안에 세울 실물 구현이 존재하지 않는다. PRD 가 지목한 참조 구현
+# (dlddu/pure-agent)이 갖고 있는 것은 클라이언트뿐이다 — mcp-server/src/services/
+# gatekeeper.ts 가 `${gatekeeperUrl}/api/requests` 로 나가고 설정은 외부 주소를 받는다.
+# 등재: docs/test/e2e.md 「e2e 충실도 허용목록」의 `APPROVAL-GATEWAY`(EXT).
+#
+# MinIO 논리는 여기서 성립하지 않는다. MinIO 는 S3 의 *실물 구현*이라 프로덕션과 같은
+# 코드 경로가 그대로 돌지만, 승인 게이트웨이의 본체는 **사람의 판단**이다 — 배포할 수
+# 있는 서버가 애초에 없다(`CLAUDE-PROVIDER` 와 같은 근거).
+#
+# test-only 라는 말이 붙는 것은 이 대역 자체다. `deploy/minio.yaml` 이나
+# `deploy/plugin-marketplace-git.yaml` 과 달리 프로덕션과 같은 코드 경로가 도는 실물이 아니다.
+#
+# TLS 를 두지 않는 것은 게으름이 아니라 실측이다. `CLAUDE-PROVIDER` 대역이 사설 CA 까지
+# 필요했던 이유는 credential-proxy 가 upstream 스킴을 https 로 강제하기 때문인데
+# (`parseCredentialProxyUpstream`), 게이트웨이 클라이언트에는 그 강제가 없다 —
+# `newApprovalGateway`(data-plane/cmd/agent/approval_gateway.go)는 네 값의 non-empty 만
+# 검사하고 스킴을 보지 않는다. https 요구는 도구의 **대상 URL** 쪽이지(`validateFetchTarget`)
+# 게이트웨이 쪽이 아니다. 근거 없는 CA 복제는 복잡도만 늘린다.
+#
+# 응답 모양은 손으로 지은 것이 아니라 소스에서 가져왔다: data-plane/cmd/agent/
+# approval_gateway.go 의 `create`(POST /api/requests → 본문의 `id`), `poll`
+# (GET /api/requests/{id} → 본문의 `status`, APPROVED·REJECTED·EXPIRED 만 settle),
+# `do`(비-2xx 는 결정이 아니라 게이트웨이 오류), 그리고 `x-api-key` 헤더가 정본이다.
+#
+# ── 결정 규칙 (이 대역의 운영자 면) ────────────────────────────────────────────
+# 사람이 승인 컨텍스트를 읽고 결재하듯, 이 대역은 컨텍스트의 `url` **첫 경로 세그먼트**로
+# 결재한다. 컨텍스트는 제품이 `{"url": ..., "method": "GET"}` 로 만들고(session_mcp_tools.go),
+# 그 url 은 도구 인자라 e2e 가 통째로 고른다:
+#
+#   https://approval.e2e.invalid/reject   -> REJECTED
+#   https://approval.e2e.invalid/expire   -> EXPIRED
+#   https://approval.e2e.invalid/pending  -> 결코 결재되지 않는다(제품이 10분 뒤 TIMEOUT)
+#   그 밖의 모든 url                       -> APPROVED
+#
+# 이것은 **제품에 뚫은 test 전용 트리거가 아니다** — 제품은 한 줄도 다르게 돌지 않고,
+# 결정은 전적으로 이 대역 안에서 요청 내용만 보고 내려진다. 그래서 카테고리가 `TRIG`
+# 가 아니라 `EXT` 다(`TRIG` 는 현재 0건이고 이 슬라이스가 늘리지 않는다).
+#
+# 첫 조회는 일부러 PENDING 을 돌려준다(`SETTLE_AFTER_POLLS`). 승인은 사람 왕복이고,
+# 제품이 정말로 폴링 루프를 도는지(3초 간격, approval_gateway.go 의 `await`)를 한 번
+# 이상 밟게 하려는 것이다. 비용은 결재 한 건당 약 3초다.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: approval-gateway-fake
+  labels:
+    app: approval-gateway-fake
+data:
+  server.js: |
+    // The two endpoints data-plane/cmd/agent/approval_gateway.go speaks, plus a
+    // read-only listing this stand-in opens in place of a human console.
+    const http = require("http");
+
+    const PORT = Number(process.env.PORT || 8080);
+    const EXPECTED_API_KEY = process.env.EXPECTED_API_KEY || "";
+    // How many status reads answer PENDING before the verdict is handed over.
+    const SETTLE_AFTER_POLLS = Number(process.env.SETTLE_AFTER_POLLS || 1);
+
+    const REQUESTS_PATH = "/api/requests";
+    // The three statuses the client settles on; anything else keeps it waiting.
+    const VERDICT_BY_SEGMENT = {
+      reject: "REJECTED",
+      expire: "EXPIRED",
+      // A request the gate never decides. The client stops waiting on its own
+      // deadline and calls that TIMEOUT, which is its word and not a status.
+      pending: null,
+    };
+    const DEFAULT_VERDICT = "APPROVED";
+
+    const requests = new Map();
+    let seq = 0;
+
+    function send(res, status, payload) {
+      const body = JSON.stringify(payload);
+      res.writeHead(status, {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(body),
+      });
+      res.end(body);
+    }
+
+    // The verdict a human would reach reading this request, decided from the
+    // approval context the product builds ({"url":...,"method":"GET"}).
+    function verdictFor(context) {
+      let target;
+      try {
+        target = new URL(JSON.parse(context).url);
+      } catch (e) {
+        return DEFAULT_VERDICT;
+      }
+      const segment = target.pathname.split("/").filter(Boolean)[0] || "";
+      return Object.prototype.hasOwnProperty.call(VERDICT_BY_SEGMENT, segment)
+        ? VERDICT_BY_SEGMENT[segment]
+        : DEFAULT_VERDICT;
+    }
+
+    function publicView(record) {
+      return {
+        id: record.id,
+        externalId: record.externalId,
+        context: record.context,
+        requesterName: record.requesterName,
+        userId: record.userId,
+        status: record.status,
+        polls: record.polls,
+      };
+    }
+
+    function readBody(req) {
+      return new Promise((resolve, reject) => {
+        const chunks = [];
+        req.on("data", (c) => chunks.push(c));
+        req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+        req.on("error", reject);
+      });
+    }
+
+    const server = http.createServer(async (req, res) => {
+      const path = (req.url || "").split("?")[0];
+      const method = req.method || "GET";
+
+      if (method === "GET" && path === "/healthz") {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        return res.end("ok\n");
+      }
+
+      // The client sends the platform Secret's api-key on every call. Rejecting
+      // anything else keeps the substitute honest about the auth step it stands
+      // in for, instead of accepting every caller.
+      if (EXPECTED_API_KEY && req.headers["x-api-key"] !== EXPECTED_API_KEY) {
+        return send(res, 401, { error: "unauthorized" });
+      }
+
+      if (method === "POST" && path === REQUESTS_PATH) {
+        let payload;
+        try {
+          payload = JSON.parse(await readBody(req));
+        } catch (e) {
+          return send(res, 400, { error: "body is not JSON" });
+        }
+        if (!payload || typeof payload.externalId !== "string" || payload.externalId === "") {
+          return send(res, 400, { error: "externalId is required" });
+        }
+        seq += 1;
+        const record = {
+          id: "gw-" + seq,
+          externalId: payload.externalId,
+          context: typeof payload.context === "string" ? payload.context : "",
+          requesterName: payload.requesterName || "",
+          userId: payload.userId || "",
+          verdict: verdictFor(payload.context),
+          status: "PENDING",
+          polls: 0,
+        };
+        requests.set(record.id, record);
+        return send(res, 201, publicView(record));
+      }
+
+      // The console listing. Read-only on purpose: it must not advance a
+      // request towards its verdict, so an inspecting test cannot change the
+      // outcome the session under test is waiting for.
+      if (method === "GET" && path === REQUESTS_PATH) {
+        return send(res, 200, { requests: [...requests.values()].map(publicView) });
+      }
+
+      if (method === "GET" && path.startsWith(REQUESTS_PATH + "/")) {
+        const record = requests.get(path.slice(REQUESTS_PATH.length + 1));
+        if (!record) {
+          return send(res, 404, { error: "no such request" });
+        }
+        record.polls += 1;
+        if (record.verdict !== null && record.polls > SETTLE_AFTER_POLLS) {
+          record.status = record.verdict;
+        }
+        return send(res, 200, publicView(record));
+      }
+
+      return send(res, 404, { error: "not found" });
+    });
+
+    server.listen(PORT, "0.0.0.0", () => {
+      console.log("approval-gateway-fake listening on " + PORT);
+    });
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: approval-gateway-fake
+  labels:
+    app: approval-gateway-fake
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: approval-gateway-fake
+  template:
+    metadata:
+      labels:
+        app: approval-gateway-fake
+    spec:
+      containers:
+        # Same reasoning as deploy/e2e-k3s-mcp-fake.yaml: the data-plane image
+        # already carries the Node 22 runtime and scripts/e2e/up.sh has already
+        # loaded it into kind, so this substitute needs no extra image build and
+        # no registry pull.
+        - name: server
+          image: session-platform/data-plane:dev
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/opt/approval-gateway-fake/server.js"]
+          env:
+            - name: PORT
+              value: "8080"
+            # The same key the helper pod's MCP container receives, so a request
+            # that skipped the platform Secret cannot be mistaken for a real one.
+            - name: EXPECTED_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: approval-gateway-credentials
+                  key: api-key
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 1
+            periodSeconds: 2
+          volumeMounts:
+            - name: script
+              mountPath: /opt/approval-gateway-fake
+      volumes:
+        - name: script
+          configMap:
+            name: approval-gateway-fake
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: approval-gateway-fake
+  labels:
+    app: approval-gateway-fake
+spec:
+  selector:
+    app: approval-gateway-fake
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

@@ -71,6 +71,7 @@ operational idle-state producer가 생기면 배포 e2e로 채운다.
 | `DELETE-CONFLICT-ERR` | `NET` | `web/e2e/journeys/session-deletion.spec.ts`의 스냅샷 삭제 테스트는 **실 SUT 위에서** 돈다 — 세션을 `POST /api/v1/sessions`로 실제로 만들고 제품 `POST /api/v1/sessions/{id}/snapshot`으로 진짜 `snapshot` 상태(pod 회수 포함)까지 얼린 뒤, `/restore/{id}` 렌더·세션 목록·단건 조회·**재시도 DELETE(204)** 가 모두 배포된 control-plane의 실 응답이다. 인터셉트가 만드는 것은 **첫 DELETE 한 번의 409 응답뿐**이고, 나머지 요청은 같은 핸들러에서 `route.continue()`로 그대로 흘려보낸다. | 409를 낳는 **진짜 경합** — 다른 라이프사이클 연산이 세션 Lease를 쥔 상태에서 들어온 DELETE(`service.Terminate`의 `store.Lock` → `session.ErrConflict`) — 자체는 브라우저 e2e에서 검증되지 않는다. 주입은 UI의 실패 표시·재시도 경로만 확인하고, 서버가 그 상태에서 실제로 409를 내는지는 control-plane 단위 테스트와 envtest의 CAS/Lease 충돌 케이스가 담당한다. |
 | `CLAUDE-PROVIDER` | `EXT` | claude-code 세션의 프롬프트 왕복에서 **응답을 만드는 주체 하나만** 인클러스터 대역(`deploy/e2e-anthropic-fake.yaml`)으로 바꾸고 나머지는 전부 실물이다. 요청은 주 컨테이너가 오케스트레이터가 주입한 loopback `ANTHROPIC_BASE_URL`로 보내고, credential-proxy 사이드카가 **프로덕션 코드 그대로** 헤더 허용목록을 적용하고 호출자가 붙인 `Authorization`을 버린 뒤 자기 Secret 환경의 플랫폼 토큰을 주입하며, 대역의 인증서를 **실제로 검증한다** — 사설 발급자를 신뢰하는 근거는 플랫폼 Secret의 optional `ca-cert` 키 하나뿐이고 시스템 루트는 대체되지 않는다. 대역은 bearer가 틀리면 401을 내므로 주입이 실제로 일어났는지가 대역 쪽에서도 확인된다. `control-plane/test/e2e_provider_reachability_test.go`가 배포 SUT의 세션 pod 안에서 이 왕복을 **버퍼드·SSE 두 형태**로 단언하고, 위조 `Authorization`이 대체되는 것까지 확인한다. **2026-09-04부터 실 CLI의 프롬프트 루프 자체가 이 표면 위에서 구동된다** — `control-plane/test/e2e_e2_prompt_invocation_test.go`가 배포 SUT의 세션 pod에서 write 한 번당 `claude` 프로세스를 실제로 기동시켜, 플랫폼이 만든 exact argv·원샷 수명·직렬 큐를 프로세스 테이블에서 관측하고 그 응답이 세션의 append-only 출력에 투영되는 것까지 단언한다(AC-E2). | **실 provider의 계약은 여전히 미검증**이다 — 오류 응답·토큰 회계·모델 라우팅은 대역이 결정적 상수로 답하므로 드러나지 않는다. 프롬프트 루프가 이 표면으로 **성립한다는 것**은 위 구간이 확인했지만, 상수 응답이라는 성질에서 두 가지가 남는다: ⑴ **응답이 프롬프트를 한 글자도 반영하지 않는다** — AC-E4(대화 연속성)와 AC-E5의 「동결 전 대화를 참조하는 프롬프트」는 이 대역으로 단언할 수 없다. ⑵ **한 invocation이 내는 `content_block_delta`가 1개다** — AC-E3이 요구하는 「둘 이상의 output delta가 프로세스 종료 전에 순서대로」가 한 write로 관측되지 않는다. 둘 다 대역을 넓히면 풀리고 그 파일(`deploy/e2e-anthropic-fake.yaml`)은 자매 모델 `tbm_session-platform-e2e-mock-policy`의 SUT 경로 안이므로, 두 계획이 그 한 파일에서 만난다. |
 | `MODEL-CONFIG-STATE` | `NET` | `web/e2e/journeys/j6-model-selection.spec.ts` 의 여정 절반은 **인터셉트 없이** 실 SUT 위에서 돈다 — 배포 오버레이가 심은 실제 카탈로그(`deploy/claude-code-credentials-secret.yaml` 의 `model`·`models` → `k8s/deployment.yaml` 의 두 env → `GET /api/v1/config`)를 그대로 받아 콤보박스 옵션과 구체 기본값 중복 제거를 확인하고, 고른 모델로 **진짜 claude-code 세션을 만들어** 배포된 control-plane 에 모델을 다시 물어 확인한다. 주입은 `GET /api/v1/config` **한 엔드포인트**에만 걸리고, 그 밖의 요청(SPA · 세션 생성 · 목록 · 단건 조회)은 핸들러를 아예 지나지 않는다. 자유 입력 갈래도 제출만은 실 SUT 로 보내 세션이 실제로 서는 것까지 본다. | 주입이 만드는 네 가지 config 응답 — **빈 카탈로그** · **구체 기본값 없음** · **503** · **응답 보류** — 자체는 배포된 SUT 에서 검증되지 않는다. 이 SUT 는 오버레이가 심은 카탈로그 하나만 낼 수 있고 그 셋을 동시에 가질 수 없다. 즉 *그 응답이 왔을 때 SPA 가 무엇을 그리는가*는 확인되지만, *제어면이 그 응답을 실제로 내는가*는 여기가 아니라 `control-plane/internal/api/config_test.go`(카탈로그 직렬화·빈 배열 보존)와 `main.go` 의 `parseClaudeCodeModels` 단위 테스트가 담당한다. |
+| `APPROVAL-GATEWAY` | `EXT` | approval-gated 세션에서 **결재하는 주체 하나만** 인클러스터 대역(`deploy/e2e-approval-gateway-fake.yaml`)으로 바꾸고 나머지는 전부 실물이다. 헬퍼 pod 의 MCP 컨테이너는 게이트웨이 3종을 **필수 SecretKeyRef** 로 받아(`client_orchestrator.go` 의 `helperPodSpec`) 프로덕션과 같은 배선으로 서고, 요청은 제품 클라이언트(`data-plane/cmd/agent/approval_gateway.go`)가 프로덕션 코드 그대로 보낸다 — `POST /api/requests` 로 외부 식별자 `{세션ID}:{요청ID}` 와 승인 컨텍스트를 만들고, 3초 간격으로 `GET /api/requests/{id}` 를 폴링하다 `APPROVED`·`REJECTED`·`EXPIRED` 에서만 settle 한다. 대역은 `x-api-key` 가 틀리면 401 을 내므로 플랫폼 Secret 을 실제로 거쳐 왔는지가 대역 쪽에서도 확인되고, 첫 조회에는 일부러 `PENDING` 을 돌려줘 폴링 루프가 최소 한 번은 실제로 돈다. 결재는 승인 컨텍스트의 url 첫 경로 세그먼트로 정해지므로(`/reject`·`/expire`·`/pending`, 그 밖은 승인) 제품에 test 전용 표면을 뚫지 않고도 e2e 가 갈래를 결정적으로 고른다. | **실 게이트웨이의 계약은 미검증**이다 — 사람이 콘솔에서 내리는 결재, 알림 전달, 요청 만료 정책, 그리고 그쪽 오류 응답의 형태는 어떤 e2e 도 밟지 않는다. 두 가지가 더 남는다: ⑴ **승인 뒤의 실제 아웃바운드 호출은 여전히 막혀 있다** — 도구는 https 만 받는데(`validateFetchTarget`) MCP 컨테이너의 fetch 는 시스템 루트만 쓰는 기본 클라이언트라 인클러스터 https 원본을 신뢰할 길이 없다(아래 「차단 요인」). 그래서 `APPROVED` 갈래는 *게이트를 통과했다*는 데까지만 관측된다. ⑵ **`TIMEOUT` 갈래는 이 대역으로도 열리지 않는다** — 10분 대기가 `defaultApprovalTimeout` 에 하드코딩돼 있어(오버라이드 env 없음) 결재되지 않는 요청을 내도 e2e 가 10분을 태워야 한다. 설정화는 제품 변경이라 이 렌즈 밖이다. |
 | `STREAM-RESET-REPLAY` | `NET` | `web/e2e/journeys/j6-stream-recovery.spec.ts` 의 세션은 제품 API 로 배포 SUT 에 **진짜로** 만들어지고, 세션 목록·단건 조회는 실 응답이다. 가로채는 것은 그 **한 세션의 출력 표면 두 곳**(`/stream` · `/read`)뿐이고, 라우트 패턴이 그 세션 id 로 좁혀져 있어 다른 세션·다른 엔드포인트에는 닿지 않는다. | 이 파일 안에서 세션의 **출력 내용은 전부 위조**된다 — 실 에이전트 출력이 브라우저까지 어떻게 도달하는지는 여기가 아니라 `j6-agent-prompt-loop.spec.ts` 가 인터셉트 없이 단언한다(인클러스터 대역만이 낼 수 있는 마커가 콘솔에 뜨는 것으로). 여기서 확인되는 것은 **브라우저의 복구 대수**뿐이다: 같은 바이트 범위가 재전송돼도 한 번만 그리고, past-end `reset` 이 오면 보관 이력을 `offset=0` 재조회로 교체한 뒤 그 커서에서 재연결한다. 서버가 그 사건을 언제 내는지는 `data-plane/cmd/agent/output_stream.go` 의 단위 테스트와 AC-B3 e2e 가 담당한다. |
 <!-- /fidelity:registry -->
 
@@ -163,12 +164,18 @@ AC-E1이 공백에서 전용 파일을 갖게 됐다. ③**제공자 도달**은
 바뀌지 않는다. **https 요구를 낮추는 길은 택하지 않았다**: 프로덕션 보안 게이트를 테스트 편의로
 내리는 것이라 해소가 아니라 새 위반이 됐을 것이다.
 
-**표는 지금 비어 있다.** 비어 있다는 것이 이 표의 목적이 달성됐다는 뜻은 아니다 — 새로 발견되는
-"치환조차 없는 공백"의 원인은 여기에 다시 쌓인다.
+**표는 2026-09-06에 다시 채워졌다.** 셋이 나가고 비어 있던 자리에 한 행이 들어왔다 — 예고대로,
+새로 발견되는 "치환조차 없는 공백"의 원인은 여기에 다시 쌓인다. 이번 행은 approval-gated 세션의
+**결재 이후** 구간이다: 게이트웨이 대역이 서면서 「세션이 아예 서지 못한다」는 원인 자체는
+`APPROVAL-GATEWAY` 등재로 사라졌지만, 승인이 떨어진 뒤의 실제 아웃바운드 호출은 여전히
+치환조차 없는 공백이다. 판정이 `없음`인 것은 이 공백을 메우는 것이 **실물 배포**이기 때문이다 —
+정적 문서를 내는 https 원본은 MinIO·마켓플레이스 원격과 같은 성격으로 kind 에 실제로 세울 수
+있어서, 정의의 EXT 배제 조항이 그대로 걸린다.
 
 <!-- fidelity:blockers -->
 | 무엇이 막는가 | 코드 위치 | 리터럴 | 판정 | 해소 시 |
 | --- | --- | --- | --- | --- |
+| 승인된 `web_fetch_get` 의 **실제 아웃바운드 호출**. 도구는 https 만 받는데(`validateFetchTarget`), 그 호출을 내는 MCP 컨테이너의 fetch 는 **시스템 루트만 신뢰하는 기본 클라이언트**다 — credential-proxy 가 optional `ca-cert` 로 사설 발급자를 신뢰하는 것과 달리, 헬퍼 pod 의 MCP 컨테이너에는 CA 를 넣을 자리가 아예 없다(`helperPodSpec` 의 env 는 워크로드·주소·세션ID·게이트웨이 3종뿐이다). 그래서 인클러스터 https 원본을 세워도 그 인증서를 검증할 수 없고, 승인 갈래는 *게이트를 통과했다*는 데까지만 관측된다. | `data-plane/cmd/agent/session_mcp_tools.go` | `http.DefaultClient.Do(req)` | `없음` | MCP 컨테이너가 사설 발급자를 신뢰할 길이 생기면(제품 변경 — credential-proxy 의 optional `ca-cert` 와 같은 형태, 소관 `tbm_session-platform-docs-impl`) 정적 문서를 내는 https 원본을 **실물로 배포**해 등재 없이 닫는다(MinIO · 마켓플레이스 원격 선례). 그때 이 리터럴은 자기 CA 풀을 든 클라이언트로 바뀌면서 사라진다. 반대로 실물이 아니라 대역이어야 한다고 판정이 뒤집히면 판정을 EXT 로 고쳐 `FETCH-ORIGIN` 으로 등재하고 이 행을 지운다. |
 <!-- /fidelity:blockers -->
 
 ### seam 지문 회계
@@ -192,6 +199,7 @@ seam 스캔이 잡는 `(파일, 토큰)` 쌍마다 한 행이다. 등재 seam에
 | `web/e2e/journeys/session-deletion.spec.ts` | `route.fulfill(` | `DELETE-CONFLICT-ERR` | 주입되는 단 하나의 응답 — 409 `session state changed concurrently`(실서버 메시지와 동일). |
 | `web/e2e/journeys/session-deletion.spec.ts` | `route.continue(` | `DELETE-CONFLICT-ERR` | 같은 핸들러의 통과 분기. 단건 GET도, **재시도 DELETE도** 실 control-plane이 응답하게 한다 — 이 줄이 없으면 승인 범위가 409 하나를 넘어선다. |
 | `deploy/e2e-k3s-mcp-fake.yaml` | `test-only` | `PLUGIN-CRED` | 조직 K3s MCP 대역. 자격 발급만 흉내 내는 치환이라 MinIO(실물 S3 구현)와 달리 승인된 모킹 예외로 등재한다. |
+| `deploy/e2e-approval-gateway-fake.yaml` | `test-only` | `APPROVAL-GATEWAY` | 인클러스터 승인 게이트웨이 대역. `CLAUDE-PROVIDER` 와 같은 근거로 EXT 다 — 참조 구현(`dlddu/pure-agent`)이 갖고 있는 것은 클라이언트뿐이고 세울 게이트웨이 서버가 없으며, 그 서비스의 본체는 사람의 판단이다. TLS 는 두지 않았다: 게이트웨이 클라이언트는 네 값의 non-empty 만 보고 스킴을 검사하지 않아 provider 대역이 필요로 했던 사설 CA 왕복이 여기엔 없다. |
 | `deploy/e2e-anthropic-fake.yaml` | `test-only` | `CLAUDE-PROVIDER` | 인클러스터 provider 대역. MinIO가 S3의 **실물 구현**이라 EXT를 못 쓰는 것과 반대로, 여기에는 세울 실물이 없다 — 그 서비스의 본체가 모델 자체다. 그래서 승인된 모킹 예외로 등재한다. TLS는 진짜다(사설 CA 서명): 프록시가 https를 강제하므로 대역도 인증서를 내야 하고, 그 덕분에 검증 경로가 실물로 남는다. |
 | `deploy/plugin-marketplace-git.yaml` | `test-only` | `—` | 인클러스터 git 원격. MinIO와 같은 성격의 **실물 배포**라 치환이 아니다 — `claude plugin marketplace add` 가 프로덕션과 같은 코드 경로로 클론한다. 담기는 마켓플레이스 문서는 픽스처 데이터이고, 정의상 시드·fixture 는 모킹이 아니다. |
 | `.github/workflows/e2e.yml` | `test-only` | `—` | CRIU 프로브 주석이 "이제 test 전용 트리거가 없다"는 사실을 밝히는 서술. 치환이 아니다. |
@@ -204,11 +212,11 @@ seam 스캔이 잡는 `(파일, 토큰)` 쌍마다 한 행이다. 등재 seam에
 ### 집계
 
 <!-- fidelity:summary -->
-- 등재 seam **6**개 — GATE **1** · TRIG **0** · EXT **2** · NET **3**
-- 코드 마커 지점 **8** / 마커 파일 **8**
-- 지문 회계 행 **19** — 등재 귀속 13 · 미해소 위반 **0** · 비-seam **6**
+- 등재 seam **7**개 — GATE **1** · TRIG **0** · EXT **3** · NET **3**
+- 코드 마커 지점 **9** / 마커 파일 **9**
+- 지문 회계 행 **20** — 등재 귀속 14 · 미해소 위반 **0** · 비-seam **6**
 - web e2e 인터셉트 **7**건 (승인 7 · 위반 0, 상한 **0**)
-- 차단 요인 **0**건 (seam이 아니다 — 셋 다 등재 또는 실배포로 나갔다)
+- 차단 요인 **1**건 (seam이 아니다 — 승인 뒤의 아웃바운드 호출 한 자리)
 <!-- /fidelity:summary -->
 
 이 숫자들도 체커가 실제와 대조한다(R8) — 표만 고치고 집계를 잊으면 실패한다. 상한을 넘는
