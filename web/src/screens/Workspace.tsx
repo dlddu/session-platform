@@ -1,4 +1,4 @@
-// mockup: docs/mockups/workspace.html, docs/mockups/agent-workspace.html
+// mockup: docs/mockups/workspace.html, docs/mockups/agent-workspace.html, docs/mockups/gated-workspace.html
 // docs/mockups/README.md 의 「화면 ↔ mockup 매핑」 표와 양방향으로 일치해야 한다 (scripts/check-render-fidelity.py).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -12,6 +12,7 @@ import type {
 import { DeleteSessionDialog } from "../app/DeleteSessionDialog";
 import { StateBadge } from "../app/StateBadge";
 import { useToast } from "../app/Toast";
+import { isAgentWorkload, isGatedWorkload } from "../app/workloadKind";
 
 const SHELL_READ_DELAYS_MS = [250, 700] as const;
 const STREAM_RECONNECT_BASE_MS = 250;
@@ -54,9 +55,15 @@ function displayModel(model?: string): string {
 }
 
 // Workspace dispatches its interaction model from the immutable workloadType.
-// Shell keeps J5's cursor-read loop. Claude Code writes one queued prompt at a
-// time while a passive SSE connection appends output bytes as they are emitted.
-// POST /read remains an explicit catch-up path, not the normal agent loop.
+// Shell keeps J5's cursor-read loop. The agent family — claude-code and
+// approval-gated — writes one queued prompt at a time while a passive SSE
+// connection appends output bytes as they are emitted. POST /read remains an
+// explicit catch-up path, not the normal agent loop.
+//
+// approval-gated differs from claude-code only in what surrounds a run, never
+// in how the run is driven: its waits and verdicts arrive as in-band markers in
+// the same byte stream (AC-F3 deliberately adds no event type), so the cursor
+// contract is untouched and the gate shows up as copy plus one extra panel.
 export function Workspace() {
   const { id = "" } = useParams();
   const [sess, setSess] = useState<Session | null>(null);
@@ -414,7 +421,7 @@ export function Workspace() {
           routeToRestore(session);
           return;
         }
-        if (session.workloadType === "claude-code") {
+        if (isAgentWorkload(session.workloadType)) {
           connect();
           return;
         }
@@ -462,7 +469,7 @@ export function Workspace() {
 
   async function run() {
     const command = cmd;
-    const isAgent = sess?.workloadType === "claude-code";
+    const isAgent = sess ? isAgentWorkload(sess.workloadType) : false;
     const generation = generationRef.current;
     setCmd("");
 
@@ -523,7 +530,7 @@ export function Workspace() {
       const active = await api.switchSession(id);
       if (generationRef.current !== generation) return;
       setSess(active);
-      if (active.workloadType === "claude-code") restartStreamRef.current?.();
+      if (isAgentWorkload(active.workloadType)) restartStreamRef.current?.();
       appendSys(`switch → ${active.state}`);
     } catch (switchError) {
       if (generationRef.current === generation) {
@@ -536,7 +543,7 @@ export function Workspace() {
     if (!sess || sess.state === "snapshot" || archiving) return;
 
     const generation = generationRef.current;
-    const isAgent = sess.workloadType === "claude-code";
+    const isAgent = isAgentWorkload(sess.workloadType);
     const action = isAgent ? "archive" : "freeze";
 
     setArchiving(true);
@@ -579,7 +586,12 @@ export function Workspace() {
   if (error) return <div className="pad error">Failed to load session: {error}</div>;
   if (!sess) return <div className="pad empty">Loading…</div>;
 
-  const isAgent = sess.workloadType === "claude-code";
+  const isAgent = isAgentWorkload(sess.workloadType);
+  const gated = isGatedWorkload(sess.workloadType);
+  // AC-F4: exactly one helper pod, and it is the only address the workload pod
+  // is allowed to open a connection to. Absent while the session is frozen —
+  // the helper is reclaimed with the workload pod and holds no state.
+  const helperPod = sess.auxiliaryPods?.[0];
   const frozen = sess.state === "snapshot";
   const modelLabel = displayModel(sess.model?.trim());
   const archiveButtonLabel = archiving
@@ -610,7 +622,13 @@ export function Workspace() {
       <div className="ws-body">
         <div className={"console" + (isAgent ? " agent-console" : "")}>
           <div className="console-bar">
-            <span>{isAgent ? "claude-code session" : "session shell"}</span>
+            <span>
+              {gated
+                ? "approval-gated session"
+                : isAgent
+                  ? "claude-code session"
+                  : "session shell"}
+            </span>
             <span data-testid="ws-console-pod">
               {sess.pod ? `pod/${sess.pod}` : "pod reclaimed"}
             </span>
@@ -664,9 +682,11 @@ export function Workspace() {
           >
             {term === "" ? (
               <span className="term-empty">
-                {isAgent
-                  ? "// ready — agent responses stream here automatically"
-                  : "// attached — the shell's output since session start appears here"}
+                {gated
+                  ? "// ready — responses stream here; anything leaving the pod waits for your approval"
+                  : isAgent
+                    ? "// ready — agent responses stream here automatically"
+                    : "// attached — the shell's output since session start appears here"}
               </span>
             ) : (
               term
@@ -687,9 +707,11 @@ export function Workspace() {
               value={cmd}
               onChange={(event) => setCmd(event.target.value)}
               placeholder={
-                isAgent
-                  ? "send a prompt — runs claude -p once in the session pod"
-                  : "run a command — executes in the session shell (bash)"
+                gated
+                  ? "send a prompt — outbound calls wait for your approval"
+                  : isAgent
+                    ? "send a prompt — runs claude -p once in the session pod"
+                    : "run a command — executes in the session shell (bash)"
               }
               spellCheck={isAgent}
               autoComplete="off"
@@ -729,15 +751,49 @@ export function Workspace() {
               <h4>Workload</h4>
               <div className="workload-kv">
                 <span>Type</span>
-                <strong>claude-code</strong>
+                <strong>{sess.workloadType}</strong>
               </div>
               <div className="workload-kv">
                 <span>Model</span>
                 <strong>{modelLabel}</strong>
               </div>
+              {gated ? (
+                <div className="workload-kv">
+                  <span>Helper pod</span>
+                  <strong data-testid="ws-helper-pod">
+                    {helperPod ? `helper/${helperPod}` : "reclaimed"}
+                  </strong>
+                </div>
+              ) : null}
               <p>
                 Each prompt runs once and exits. Responses stream live and
                 remain replayable through the session's offset cursor.
+                {gated
+                  ? " A call waiting on approval keeps its place in the queue and holds the idle timer, so the session is not archived out from under it."
+                  : ""}
+              </p>
+            </div>
+          ) : null}
+          {gated ? (
+            <div className="panel egress-panel" data-testid="ws-egress">
+              <h4>Egress</h4>
+              <ul className="egress-list">
+                <li className="egress-allow">kube-dns</li>
+                <li className="egress-allow" data-testid="ws-egress-helper">
+                  {helperPod
+                    ? `helper/${helperPod}`
+                    : "this session's helper pod"}
+                </li>
+                <li className="egress-deny">every external origin</li>
+                <li className="egress-deny">other sessions' helper pods</li>
+                <li className="egress-deny">the approval gateway itself</li>
+              </ul>
+              <p>
+                No external origin is on this list. The credential proxy lives
+                in the helper pod rather than beside the agent, so every
+                connection out of the workload pod ends at this session's own
+                helper — and the workload pod holds no external credential at
+                all.
               </p>
             </div>
           ) : null}

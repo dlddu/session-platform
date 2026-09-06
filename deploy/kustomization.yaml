@@ -40,6 +40,15 @@ resources:
   # approved mock exception (CLAUDE-PROVIDER, EXT): unlike MinIO there is no
   # real implementation to deploy — the service *is* the model.
   - e2e-anthropic-fake.yaml
+
+  # The approval gateway an `approval-gated` session's helper pod must reach.
+  # Its Secret (`approval-gateway-credentials`) is required non-optionally by
+  # the helper's MCP container, so without this file the helper pod never
+  # reaches Ready and no session of that type can stand — which is why AC-F1/F3/
+  # F4/F6 had no e2e at all. It is an approved mock exception
+  # (APPROVAL-GATEWAY, EXT): the PRD's reference implementation ships only the
+  # gatekeeper *client*, so there is no gateway server to deploy for real.
+  - e2e-approval-gateway-fake.yaml
 images:
   - name: ghcr.io/dlddu/session-platform
     newName: session-platform/control-plane
@@ -76,7 +85,8 @@ patches:
   # against the shared ConfigMap/Lease store; and point DATA_PLANE_IMAGE at the
   # locally built agent image scripts/e2e/up.sh loads into kind (the base
   # references the ghcr-published tag). env/1 is DATA_PLANE_IMAGE, env/2 is
-  # CRIU_ENABLED, and env/3 is DATA_PLANE_CLAUDE_CODE_IMAGE in the base.
+  # CRIU_ENABLED, env/3 is DATA_PLANE_CLAUDE_CODE_IMAGE, and env/4 is
+  # DATA_PLANE_APPROVAL_GATED_IMAGE in the base.
   #
   # CRIU is turned ON here: since checkpoint/restore moved into the agent
   # (docs/criu-verification.md decision ⑤) it needs no CRIU-capable *runtime*,
@@ -110,6 +120,12 @@ patches:
         value: "true"
       - op: replace
         path: /spec/template/spec/containers/0/env/3/value
+        value: session-platform/data-plane:dev
+      # approval-gated 도 같은 로컬 빌드 에이전트 이미지다(base 와 같은 관계를 유지한다 —
+      # 프로덕션도 claude-code 와 동일 이미지를 가리킨다). kind 에는 ghcr 태그가 로드되어
+      # 있지 않으므로, 이 replace 가 없으면 이 타입의 세션만 ImagePullBackOff 로 갈린다.
+      - op: replace
+        path: /spec/template/spec/containers/0/env/4/value
         value: session-platform/data-plane:dev
       - op: add
         path: /spec/template/spec/containers/0/env/-

@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { Session, WorkloadType } from "../api/types";
 import { liveSessionPath } from "../app/sessionRoutes";
+import { isAgentWorkload, isGatedWorkload } from "../app/workloadKind";
 
 // NewSession — modal over the Sessions console. A two-phase flow: immutable
 // workload configuration, then a staged provisioning view. Submit POSTs
@@ -171,7 +172,7 @@ export function NewSession() {
       .createSession({
         name: trimmed,
         workloadType,
-        ...(workloadType === "claude-code" && trimmedModel
+        ...(isAgentWorkload(workloadType) && trimmedModel
           ? { model: trimmedModel }
           : {}),
       })
@@ -298,9 +299,27 @@ export function NewSession() {
                   <strong>claude-code</strong>
                   <small>Agent CLI. You send prompts, it does the work.</small>
                 </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={workloadType === "approval-gated"}
+                  className={
+                    "workload-option wide" +
+                    (workloadType === "approval-gated" ? " selected" : "")
+                  }
+                  data-testid="new-session-workload-approval-gated"
+                  onClick={() => setWorkloadType("approval-gated")}
+                >
+                  <span className="workload-icon gated" aria-hidden="true">⏸</span>
+                  <strong>approval-gated</strong>
+                  <small>
+                    Same agent, but it cannot reach the outside on its own —
+                    every outbound call waits for your approval.
+                  </small>
+                </button>
               </div>
             </fieldset>
-            {workloadType === "claude-code" ? (
+            {isAgentWorkload(workloadType) ? (
               <label className="field model-field">
                 <span>Model</span>
                 {configuredModels.length > 0 ? (
@@ -342,9 +361,11 @@ export function NewSession() {
             <div className="immutable-note">
               <span aria-hidden="true">▣</span>
               <span>
-                {workloadType === "claude-code"
-                  ? "Workload type and model choice are fixed for this session. Platform default resolves to the configured default at container start."
-                  : "Workload type is fixed for the lifetime of this session."}
+                {isGatedWorkload(workloadType)
+                  ? "Workload type and model choice are fixed for this session. The session also gets a helper pod that holds the approval gate and the only route out."
+                  : isAgentWorkload(workloadType)
+                    ? "Workload type and model choice are fixed for this session. Platform default resolves to the configured default at container start."
+                    : "Workload type is fixed for the lifetime of this session."}
               </span>
             </div>
             {error && (
@@ -369,8 +390,8 @@ export function NewSession() {
         ) : (
           <>
             <div className="provision-workload" data-testid="prov-workload">
-              {workloadType === "claude-code"
-                ? `workloadType=claude-code · model=${submittedModel}`
+              {isAgentWorkload(workloadType)
+                ? `workloadType=${workloadType} · model=${submittedModel}`
                 : "workloadType=shell"}
             </div>
             <div className="steps" data-testid="prov-steps">
@@ -378,9 +399,11 @@ export function NewSession() {
                 const status = i < done ? "ok" : i === done ? "run" : "";
                 const displayLabel =
                   i === 1
-                    ? workloadType === "claude-code"
-                      ? "Schedule dedicated pod (agent CLI)"
-                      : "Schedule dedicated pod (shell)"
+                    ? isGatedWorkload(workloadType)
+                      ? "Schedule dedicated pod + helper pod (gated agent)"
+                      : isAgentWorkload(workloadType)
+                        ? "Schedule dedicated pod (agent CLI)"
+                        : "Schedule dedicated pod (shell)"
                     : label;
                 return (
                   <div key={label} className={`step ${status}`.trimEnd()}>

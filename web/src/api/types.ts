@@ -4,9 +4,10 @@ export type State = "active" | "idle" | "snapshot";
 
 /**
  * Which data plane workload the session runs (AC-E1/AC-F1). Chosen at creation
- * and immutable afterwards. NewSession offers shell (the default) and
- * claude-code; approval-gated exists in the API contract but has no screen
- * affordance yet, so the SPA only ever renders it as a value it read back.
+ * and immutable afterwards. All three are selectable in NewSession, and the
+ * SPA branches on the family rather than on the literal — see
+ * `app/workloadKind.ts`, which is what tells the agent family (claude-code,
+ * approval-gated) apart from shell.
  */
 export type WorkloadType = "shell" | "claude-code" | "approval-gated";
 
@@ -39,7 +40,8 @@ export interface Session {
    * workload themselves (AC-A2's auxiliary-pod clause). They share the workload
    * pod's lifetime, so this is absent exactly when `pod` is. shell and
    * claude-code sessions provision none; an approval-gated session lists its one
-   * helper pod here (AC-F4).
+   * helper pod here (AC-F4), which the workspace's Egress panel names as the
+   * single destination its workload pod is allowed to reach.
    */
   auxiliaryPods?: string[];
   createdAt: string;

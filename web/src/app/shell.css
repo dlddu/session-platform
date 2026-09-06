@@ -318,6 +318,9 @@ article.card {
 .workload-tag-agent {
   color: var(--frozen);
 }
+.workload-tag-gated {
+  color: var(--idle);
+}
 .btn svg {
   width: 16px;
   height: 16px;
@@ -853,6 +856,50 @@ article.card {
   font-size: 11.5px;
 }
 
+/* ---------- egress panel (approval-gated only, AC-F2) ---------- */
+.egress-panel {
+  border-color: var(--idle-soft);
+}
+.egress-panel p {
+  margin: 12px 0 0;
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+.egress-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.egress-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  font-family: "IBM Plex Mono", monospace;
+}
+.egress-list li::before {
+  width: 12px;
+  text-align: center;
+}
+.egress-allow {
+  color: var(--text-dim);
+}
+.egress-allow::before {
+  content: "\2713";
+  color: var(--ok);
+}
+.egress-deny {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+.egress-deny::before {
+  content: "\2715";
+  color: var(--danger);
+  text-decoration: none;
+}
+
 /* ---------- modal (new session) ---------- */
 .scrim {
   position: fixed;
@@ -975,6 +1022,15 @@ article.card {
 .workload-option.selected .workload-icon,
 .workload-option .workload-icon.agent {
   color: var(--active);
+}
+/* The gated card spans both columns — its one-line pitch does not fit the
+   126px square the other two share (mirrors `.type.wide` in the mockup). */
+.workload-option.wide {
+  grid-column: 1 / -1;
+  min-height: 0;
+}
+.workload-option .workload-icon.gated {
+  color: var(--idle);
 }
 .workload-option strong {
   color: var(--text);

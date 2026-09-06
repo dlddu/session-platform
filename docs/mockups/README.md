@@ -70,7 +70,7 @@
 |-----------|------|-------------|------|------|
 | `web/src/screens/Sessions.tsx` | screen | `docs/mockups/index.html` | 세션 목록 대시보드. 상태별 카드 + workloadType 태그 | ✅ 매핑 |
 | `web/src/screens/NewSession.tsx` | screen | `docs/mockups/new-session.html` | 생성 모달 · 워크로드 타입 카드 · 프로비저닝 단계 뷰 | ✅ 매핑 |
-| `web/src/screens/Workspace.tsx` | screen | `docs/mockups/workspace.html`, `docs/mockups/agent-workspace.html` | 한 화면이 `workloadType`에 따라 둘로 갈린다(`shell` / `claude-code`). `approval-gated`는 구현이 없어 아래 표 참조 | ✅ 매핑 (1:N) |
+| `web/src/screens/Workspace.tsx` | screen | `docs/mockups/workspace.html`, `docs/mockups/agent-workspace.html`, `docs/mockups/gated-workspace.html` | 한 화면이 `workloadType`에 따라 셋으로 갈린다(`shell` / `claude-code` / `approval-gated`). 뒤의 둘은 실행 모델이 같아 같은 SSE 루프를 쓰고, 갈리는 것은 카피와 `Egress` 패널뿐이다 | ✅ 매핑 (1:N) |
 | `web/src/screens/Restore.tsx` | screen | `docs/mockups/restore.html` | 체크포인트 복원 화면 | ✅ 매핑 |
 | `web/src/app/AppShell.tsx` | component | `docs/mockups/index.html` | 뷰포트 + 64px 하단 레일. 6개 mockup이 공유하는 셸이라 정본 출처를 `index.html`로 고정 | ✅ 매핑 |
 | `web/src/app/SessionCard.tsx` | component | `docs/mockups/index.html` | 세션 카드(vitals · freeze ring · snapshot body) | ✅ 매핑 |
@@ -96,7 +96,11 @@
 
 | mockup | 구현 신호 (`git grep -F`) | 비고 |
 |--------|---------------------------|------|
-| `docs/mockups/gated-workspace.html` | `approval-gated` | AC-F1~F6 구현이 `tbm_session-platform-docs-impl`에 걸려 있다. 착지하면 `Workspace.tsx`의 1:N 대응에 이 파일이 합류한다 |
+
+**현재 비어 있습니다.** `gated-workspace.html`이 마지막 항목이었고, SPA가 `approval-gated`를
+구현하면서 위 매핑 표의 `Workspace.tsx` 행으로 옮겨갔습니다 — 게이트가 구현 신호
+`approval-gated`의 hit을 잡아 이 이동을 강제했습니다. 표를 지우지 않고 비워 두는 것은
+다음 미구현 mockup이 같은 자리에 등재되게 하기 위해서입니다.
 
 ---
 
@@ -106,20 +110,32 @@ mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="pane
 뽑아 **쌍별로** 비교한 실측 원장입니다. 게이트가 매번 다시 계산해 이 표와 대조하므로 손으로
 맞출 수 없습니다.
 
-패널 차집합 상한 = **10**
+패널 차집합 상한 = **15**
 
 | 구현 파일 | mockup | 이 쌍의 구현 패널 | mockup-only (구현에 없음) | impl-only (mockup에 없음) |
 |-----------|--------|-------------------|---------------------------|---------------------------|
 | `web/src/screens/Workspace.tsx` | `docs/mockups/workspace.html` | Actions | Vitals · Shell state · Lifecycle | Actions |
 | `web/src/screens/Workspace.tsx` | `docs/mockups/agent-workspace.html` | Workload · Actions | Vitals · Conversation · Lifecycle | Actions |
+| `web/src/screens/Workspace.tsx` | `docs/mockups/gated-workspace.html` | Workload · Egress · Actions | Vitals · Conversation · Approvals · Lifecycle | Actions |
 | `web/src/screens/Restore.tsx` | `docs/mockups/restore.html` | — | Vitals · Lifecycle | — |
 
-`Workspace.tsx`는 한 파일이 두 mockup을 그리므로 **쌍마다 그 변형이 실제로 그리는 패널만** 선언합니다
-(`Workload` 패널은 `isAgent`일 때만 렌더). 게이트는 쌍별 선언의 **합집합이 파일에서 추출한 패널
-전체와 같은지**까지 확인하므로, 한 쌍에서 빼는 방식으로 차집합을 줄일 수 없습니다.
+`Workspace.tsx`는 한 파일이 세 mockup을 그리므로 **쌍마다 그 변형이 실제로 그리는 패널만** 선언합니다
+(`Workload` 패널은 `isAgent`일 때만, `Egress` 패널은 `approval-gated`일 때만 렌더). 게이트는 쌍별
+선언의 **합집합이 파일에서 추출한 패널 전체와 같은지**까지 확인하므로, 한 쌍에서 빼는 방식으로
+차집합을 줄일 수 없습니다.
 
-**읽는 법**: `Actions`가 두 쌍 모두에서 impl-only인 것은 같은 패널 하나가 두 대조에 나타난 것이지
-패널이 둘이라는 뜻이 아닙니다. 상한 10은 (3+1)+(3+1)+(2+0)의 합입니다.
+**읽는 법**: `Actions`가 세 쌍 모두에서 impl-only인 것은 같은 패널 하나가 세 대조에 나타난 것이지
+패널이 셋이라는 뜻이 아닙니다. 상한 15는 (3+1)+(3+1)+(4+1)+(2+0)의 합입니다.
+
+> **상한이 10에서 15로 늘었습니다.** 이 표의 상한은 이탈 원장의 OPEN 상한과 달리 실측과
+> **등식**으로 묶여 있어(줄어도 실패합니다) 방향 규율이 걸려 있지 않습니다 — 늘어난 5는 정합성이
+> 나빠진 것이 아니라 **대조 대상이 하나 늘어난 것**입니다. `gated-workspace.html`은 이전까지
+> 「구현이 없는 mockup」이라 어느 쌍에도 세어지지 않았고, 이제 실제로 그리는 화면이 생기면서
+> 그 mockup이 가진 패널 6개가 처음으로 차집합 계산에 들어왔습니다. 남은 mockup-only 4개 중
+> `Approvals`가 유일하게 **의도적 보류**입니다 — 승인 대기·판정은 AC-F3이 별도 event type 없이
+> 출력 바이트열의 in-band 마커로만 흘리기로 한 것이라, 패널이 읽을 구조화된 소스가 API에 없습니다.
+> 콘솔 로그에는 이미 나타나므로 정보가 빠진 것은 아니고, 패널로 승격하려면 먼저 상류 계약이
+> 필요합니다. `Vitals`·`Conversation`·`Lifecycle`은 세 쌍 모두에서 빠져 있는 기존 항목입니다.
 
 > **이 표가 세는 것은 패널 층위까지입니다.** 패널 **내부**의 카피·수치(예: `Idle timer` ·
 > `Auto-freeze at` · `Pod uptime` · `process tree` · `Resuming from checkpoint` · `Session workspace`,
