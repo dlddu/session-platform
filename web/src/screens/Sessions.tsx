@@ -1,5 +1,4 @@
 // mockup: docs/mockups/index.html
-// docs/mockups/README.md 의 「화면 ↔ mockup 매핑」 표와 양방향으로 일치해야 한다 (scripts/check-render-fidelity.py).
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
@@ -9,9 +8,7 @@ import { SessionCard } from "../app/SessionCard";
 import { PodIcon } from "../app/icons";
 import { useToast } from "../app/Toast";
 
-// Sums the per-checkpoint "N vCPU · M GB" reclaimed strings into one figure for
-// the summary strip's "reclaimed from frozen" chip. Returns null when no
-// snapshot exposes a parseable reclaimed value (chip is then hidden).
+// checkpoint 의 `reclaimed` 는 "N vCPU · M GB" 자유 문자열이라 파싱해서 합친다.
 function aggregateReclaimed(sessions: Session[]): string | null {
   let vcpu = 0;
   let gb = 0;
@@ -35,9 +32,6 @@ function aggregateReclaimed(sessions: Session[]): string | null {
   return `${fmt(vcpu)} vCPU · ${fmt(gb)} GB`;
 }
 
-// Sessions console — lists every session from GET /api/v1/sessions and renders
-// the summary strip + card grid. Cards route to Workspace (live) or Restore
-// (snapshot). [plan step 5, O3]
 export function Sessions() {
   const [sessions, setSessions] = useState<Session[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -59,8 +53,7 @@ export function Sessions() {
     load();
   }, [load]);
 
-  // Live clock — drives the idle freeze countdown / snapshot "frozen ago"
-  // without refetching. Only ticks while an idle card is on screen.
+  // 카운트다운은 이 시계로만 움직인다 — 다시 조회하지 않는다.
   const hasIdle = sessions?.some((s) => s.state === "idle") ?? false;
   useEffect(() => {
     if (!hasIdle) return;

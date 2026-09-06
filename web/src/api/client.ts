@@ -44,16 +44,14 @@ export const api = {
     req<void>(`/sessions/${id}`, { method: "DELETE" }),
 
   /**
-   * Open the passive workload-output stream at a byte cursor. The caller owns
-   * reconnect policy and must close the returned EventSource on cleanup.
+   * 재연결 정책은 호출자의 몫이고, 돌려준 EventSource 는 호출자가 닫아야 한다.
    */
   streamSession: (id: string, offset = 0) =>
     new EventSource(
       `${BASE}/sessions/${encodeURIComponent(id)}/stream?offset=${encodeURIComponent(String(offset))}`,
     ),
 
-  /** offset is the nextOffset cursor from the previous read; 0 replays the
-   *  full workload output since session start (AC-D3/AC-E3). */
+  /** offset: 직전 read 가 발급한 nextOffset 커서 (AC-D3/AC-E3). */
   readSession: (id: string, offset = 0) =>
     req<ReadResult>(`/sessions/${id}/read`, {
       method: "POST",

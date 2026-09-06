@@ -1,13 +1,8 @@
-// 매칭 단위 밖 (AC ↔ e2e 1:1): 이 디렉터리의 여정 spec은 web/e2e 최상위가 아니므로
-// AC 매칭 단위가 아니다. 여정 전체를 한 파일에서 훑는 형태를 유지하되, 각 AC의 주검증은
-// Go e2e의 전용 파일이 소유한다. 등재: docs/test/e2e.md.
+// 매칭 단위 밖 (AC ↔ e2e 1:1) — 등재: docs/test/e2e.md.
 import { test, expect } from "@playwright/test";
 
-// JRN-multi-session-switch — multiple sessions and free switching.
-// Value V4 (free multi-session switching) + V3 (continuity); AC-C4 (switch).
-// Sessions are created via the API so the spec focuses on list -> card ->
-// workspace navigation. In the α scope every target is active, so switching is
-// a no-op (the snapshot -> restore path is deferred; see deferred.spec.ts).
+// JRN-multi-session-switch — docs/user-journeys/JRN-multi-session-switch.md.
+// snapshot -> restore 갈래는 deferred.spec.ts 가 갖는다.
 test("list multiple active sessions and switch between them", async ({ page, request }) => {
   const prefix = `j3-${Date.now()}`;
   const ids: string[] = [];
@@ -20,21 +15,21 @@ test("list multiple active sessions and switch between them", async ({ page, req
 
   await page.goto("/");
 
-  // STP-session-list: the created sessions appear as active cards in the list.
+  // STP-session-list
   for (const id of ids) {
     const card = page.locator(`[data-testid="session-card"][data-session-id="${id}"]`);
     await expect(card).toBeVisible();
     await expect(card).toHaveAttribute("data-state", "active");
   }
 
-  // STP-switch-away/STP-target-activation: open one session, switch (active target -> no-op), state preserved.
+  // STP-switch-away / STP-target-activation
   await page.locator(`[data-session-id="${ids[0]}"]`).click();
   await expect(page).toHaveURL(new RegExp(`/session/${ids[0]}$`));
   await expect(page.getByTestId("ws-state")).toHaveText("active");
   await page.getByTestId("ws-switch").click();
   await expect(page.getByTestId("ws-log")).toContainText(/switch\s*→\s*active/);
 
-  // STP-switch-back: navigate back and open a different session; its state is intact.
+  // STP-switch-back
   await page.locator("a.back").click();
   await expect(page).toHaveURL(/\/$/);
   await page.locator(`[data-session-id="${ids[1]}"]`).click();

@@ -1,17 +1,11 @@
 import { expect, test } from "@playwright/test";
 
-// The session under test is real: a claude-code session created through the
-// product API on the deployed SUT, archived through the product snapshot
-// endpoint. The workspace screen, the archive round trip, the session list and
-// the reclaimed-pod ground truth are all served by the deployed control plane.
-// Nothing here is intercepted — see the fidelity allowlist in docs/test/e2e.md.
+// 인터셉트 0 — 충실도 허용목록(docs/test/e2e.md)의 「해소된 것」②.
 test("manually archives a Claude Code session from the workspace", async ({
   page,
   request,
 }) => {
-  // A claude-code session pod installs its plugins before the agent starts, and
-  // the archive tars the agent workspace into the in-cluster MinIO. Both are far
-  // slower than the default test timeout.
+  // 플러그인 설치와 MinIO 아카이브가 선행하므로 기본 타임아웃으로는 모자란다.
   test.setTimeout(300_000);
 
   const name = "manual-archive-" + Date.now();
@@ -34,8 +28,6 @@ test("manually archives a Claude Code session from the workspace", async ({
   await expect(archiveButton).toBeEnabled();
 
   await archiveButton.click();
-  // The pending label is observable without injecting a delay: the real archive
-  // uploads the agent workspace to MinIO and reclaims the pod before it answers.
   await expect(archiveButton).toHaveText("Archiving…");
   await expect(archiveButton).toBeDisabled();
 
@@ -49,8 +41,6 @@ test("manually archives a Claude Code session from the workspace", async ({
     ),
   ).toHaveAttribute("data-state", "snapshot");
 
-  // Ground truth from the deployed control plane, not from a fixture: the
-  // session really is frozen and its pod really was reclaimed.
   const after = await request.get("/api/v1/sessions/" + created.id);
   expect(after.status()).toBe(200);
   const frozen = (await after.json()) as {
