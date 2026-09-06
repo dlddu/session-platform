@@ -40,6 +40,15 @@ resources:
   # approved mock exception (CLAUDE-PROVIDER, EXT): unlike MinIO there is no
   # real implementation to deploy — the service *is* the model.
   - e2e-anthropic-fake.yaml
+
+  # The approval gateway an `approval-gated` session's helper pod must reach.
+  # Its Secret (`approval-gateway-credentials`) is required non-optionally by
+  # the helper's MCP container, so without this file the helper pod never
+  # reaches Ready and no session of that type can stand — which is why AC-F1/F3/
+  # F4/F6 had no e2e at all. It is an approved mock exception
+  # (APPROVAL-GATEWAY, EXT): the PRD's reference implementation ships only the
+  # gatekeeper *client*, so there is no gateway server to deploy for real.
+  - e2e-approval-gateway-fake.yaml
 images:
   - name: ghcr.io/dlddu/session-platform
     newName: session-platform/control-plane

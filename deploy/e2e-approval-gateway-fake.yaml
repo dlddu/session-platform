@@ -1,0 +1,264 @@
+# kind e2e ONLY: an in-cluster stand-in for the external approval gateway.
+#
+# mock-exception: APPROVAL-GATEWAY — 승인 게이트웨이는 클러스터 안에 실물을 세울 수 없다. PRD 가
+# 지목한 참조 구현 `dlddu/pure-agent` 가 갖고 있는 것은 게이트키퍼 **클라이언트**뿐이고
+# (`mcp-server/src/services/gatekeeper.ts` 가 외부 `GATEKEEPER_URL` 로 나간다), 승인 API 서버는
+# 그 레포에 없다. MinIO 를 EXT 에서 뺀 근거(실물 구현이 배포 가능하다)가 여기엔 해당하지 않는다.
+# 등재: docs/test/e2e.md 「e2e 충실도 허용목록」의 `APPROVAL-GATEWAY`(EXT).
+#
+# 이것이 무엇을 대신하고 무엇을 대신하지 **않는지**:
+#   - 대신하는 것은 **결정을 내리는 주체**(사람) 하나뿐이다. 그 앞뒤는 전부 실물이다 — 헬퍼 파드의
+#     MCP 컨테이너가 프로덕션 코드 그대로 요청을 만들고(POST /api/requests + x-api-key), 3초 간격
+#     폴링으로 결정을 기다리며, APPROVED 일 때만 실제 외부 GET 을 한다. 대역이 api-key 를 검사해
+#     틀리면 401 을 내므로 자격 증명이 MCP 컨테이너에만 있다는 것도 대역 쪽에서 확인된다.
+#   - 대신하지 **않는** 것: 실 게이트웨이의 알림 전달·만료 시계·중복 externalId 정책. 여기 결정은
+#     테스트가 지정한 값이고, 사람이 실제로 무엇을 보는지는 이 배선이 단언하지 않는다.
+#
+# test-only 라는 말이 붙는 것은 이 대역 자체다. `deploy/minio.yaml` 이나
+# `deploy/plugin-marketplace-git.yaml` 과 달리 프로덕션과 같은 코드 경로가 도는 실물이 아니다.
+#
+# 왜 평문 HTTP 인가: 게이트웨이 클라이언트는 스킴을 강제하지 않는다 — `newApprovalGateway`
+# (data-plane/cmd/agent/approval_gateway.go)는 네 값의 non-empty 만 검사한다. https 강제가 걸리는
+# 곳은 도구의 **대상 URL** 쪽이고(session_mcp_tools.go 의 `url must be https`), 게이트웨이가
+# 아니다. anthropic-fake 가 사설 CA 까지 세운 것은 credential-proxy 가 upstream 스킴을 https 로
+# 강제하기 때문이며, 여기에는 그 강제가 없으므로 인증서를 흉내 낼 근거도 없다.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: approval-gateway-fake
+  labels:
+    app: approval-gateway-fake
+data:
+  server.js: |
+    // The approval gateway wire contract, exactly as the client speaks it
+    // (data-plane/cmd/agent/approval_gateway.go, itself copied from the PRD's
+    // reference implementation):
+    //
+    //   POST /api/requests        + x-api-key  {externalId, context,
+    //                                           requesterName, userId} -> {id}
+    //   GET  /api/requests/{id}   + x-api-key              -> {status, ...}
+    //
+    // APPROVED / REJECTED / EXPIRED settle the wait; anything else keeps the
+    // caller polling. A non-2xx is a gateway *failure*, never a decision — the
+    // client must be able to tell "could not ask" from "was told no".
+    //
+    // The operator surface below is what a human uses on the real gateway's UI,
+    // reached here over HTTP so a test can play that human deterministically:
+    //
+    //   POST /operator/decide  {externalId | id, status}  -> {ok:true}
+    //   GET  /operator/requests                           -> [{...}, ...]
+    //   POST /operator/policy  {defaultStatus}            -> {ok:true}
+    //
+    // `defaultStatus` decides every request the moment it is created, so the
+    // common paths (approve-all, reject-all) need no second call. It starts as
+    // PENDING so the wait is real until somebody decides.
+    const http = require("http");
+
+    const PORT = Number(process.env.PORT || 8080);
+    const API_KEY = process.env.EXPECTED_API_KEY || "";
+    const SETTLED = new Set(["APPROVED", "REJECTED", "EXPIRED"]);
+
+    const requests = new Map(); // id -> record
+    const byExternalId = new Map(); // externalId -> id
+    let defaultStatus = "PENDING";
+    let seq = 0;
+
+    function send(res, status, payload) {
+      const body = JSON.stringify(payload);
+      res.writeHead(status, {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(body),
+      });
+      res.end(body);
+    }
+
+    function readBody(req) {
+      return new Promise((resolve, reject) => {
+        let raw = "";
+        req.on("data", (c) => {
+          raw += c;
+          if (raw.length > 1_000_000) reject(new Error("body too large"));
+        });
+        req.on("end", () => {
+          try {
+            resolve(raw ? JSON.parse(raw) : {});
+          } catch (err) {
+            reject(err);
+          }
+        });
+        req.on("error", reject);
+      });
+    }
+
+    function authed(req) {
+      return API_KEY === "" || req.headers["x-api-key"] === API_KEY;
+    }
+
+    const server = http.createServer(async (req, res) => {
+      const url = new URL(req.url, "http://gateway");
+      const path = url.pathname;
+
+      if (path === "/healthz") return send(res, 200, { ok: true });
+
+      // --- operator surface (stands in for the human at the real UI) --------
+      if (path.startsWith("/operator/")) {
+        if (path === "/operator/requests" && req.method === "GET") {
+          return send(res, 200, [...requests.values()]);
+        }
+        let payload;
+        try {
+          payload = await readBody(req);
+        } catch {
+          return send(res, 400, { error: "invalid json" });
+        }
+        if (path === "/operator/policy" && req.method === "POST") {
+          defaultStatus = String(payload.defaultStatus || "PENDING");
+          return send(res, 200, { ok: true, defaultStatus });
+        }
+        if (path === "/operator/decide" && req.method === "POST") {
+          const id = payload.id || byExternalId.get(payload.externalId);
+          const record = id ? requests.get(id) : undefined;
+          if (!record) return send(res, 404, { error: "no such request" });
+          record.status = String(payload.status || "APPROVED");
+          return send(res, 200, { ok: true, id: record.id, status: record.status });
+        }
+        return send(res, 404, { error: "no such operator route" });
+      }
+
+      // --- gateway surface (the contract the MCP container speaks) ----------
+      if (!authed(req)) return send(res, 401, { error: "bad api key" });
+
+      if (path === "/api/requests" && req.method === "POST") {
+        let payload;
+        try {
+          payload = await readBody(req);
+        } catch {
+          return send(res, 400, { error: "invalid json" });
+        }
+        const externalId = String(payload.externalId || "");
+        if (!externalId) return send(res, 400, { error: "externalId is required" });
+        // The real gateway dedupes on externalId; a collision is an error, not
+        // a silent reuse. AC-F3's uniqueness check depends on this answer.
+        if (byExternalId.has(externalId)) {
+          return send(res, 409, { error: "externalId already exists", externalId });
+        }
+        const id = "req-" + ++seq;
+        const record = {
+          id,
+          externalId,
+          context: String(payload.context || ""),
+          requesterName: String(payload.requesterName || ""),
+          userId: String(payload.userId || ""),
+          status: defaultStatus,
+          createdAt: new Date().toISOString(),
+        };
+        requests.set(id, record);
+        byExternalId.set(externalId, id);
+        return send(res, 201, { id, status: record.status });
+      }
+
+      const match = /^\/api\/requests\/([^/]+)$/.exec(path);
+      if (match && req.method === "GET") {
+        const record = requests.get(decodeURIComponent(match[1]));
+        if (!record) return send(res, 404, { error: "no such request" });
+        return send(res, 200, {
+          id: record.id,
+          externalId: record.externalId,
+          status: record.status,
+          settled: SETTLED.has(record.status),
+        });
+      }
+
+      return send(res, 404, { error: "no such route" });
+    });
+
+    server.listen(PORT, () => {
+      console.log("approval gateway stand-in listening on " + PORT);
+    });
+---
+# The Secret the helper pod's MCP container requires. Its three keys are
+# projected with a *non-optional* SecretKeyRef (client_orchestrator.go), so
+# without this manifest the kubelet fails to configure the container and the
+# helper pod never reaches Ready — which is why `approval-gated` sessions could
+# not stand in this SUT at all. Values must be non-empty: an empty triple builds
+# no gate, and a session MCP with no gate offers no tools.
+#
+# Production provisions the same three keys out of band; k8s/ is unaffected.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: approval-gateway-credentials
+  labels:
+    app: control-plane
+type: Opaque
+stringData:
+  url: "http://approval-gateway-fake:8080"
+  api-key: "e2e-approval-gateway-placeholder-not-a-real-key"
+  # The notification target. Platform-wide by contract (AC-F6): a session may
+  # not choose it, so one value serves the whole SUT.
+  user-id: "e2e-approver"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: approval-gateway-fake
+  labels:
+    app: approval-gateway-fake
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: approval-gateway-fake
+  template:
+    metadata:
+      labels:
+        app: approval-gateway-fake
+    spec:
+      containers:
+        # Same reasoning as deploy/e2e-anthropic-fake.yaml: the data-plane image
+        # already carries the Node 22 runtime and scripts/e2e/up.sh has already
+        # loaded it into kind, so the stand-in costs no extra build and no pull.
+        - name: server
+          image: session-platform/data-plane:dev
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/opt/approval-gateway-fake/server.js"]
+          env:
+            - name: PORT
+              value: "8080"
+            # The very key the MCP container sends, read from the same Secret
+            # key that container reads. A mismatch surfaces as 401 here.
+            - name: EXPECTED_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: approval-gateway-credentials
+                  key: api-key
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 1
+            periodSeconds: 2
+          volumeMounts:
+            - name: script
+              mountPath: /opt/approval-gateway-fake
+      volumes:
+        - name: script
+          configMap:
+            name: approval-gateway-fake
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: approval-gateway-fake
+  labels:
+    app: approval-gateway-fake
+spec:
+  selector:
+    app: approval-gateway-fake
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
