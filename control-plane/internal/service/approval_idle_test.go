@@ -18,13 +18,10 @@ import (
 )
 
 // docs/test/approval-gated-workload.md scenario 5, as far as it can be pinned
-// without a cluster: an approval-gated session waiting on a human does not have
-// its idle count advance, the count resumes once the wait ends, and shell and
-// claude-code sessions in the same condition freeze exactly as before.
+// without a cluster.
 
 // approvalReportingAgent is the workload I/O stub plus the one extra answer
-// the idle path asks for. It is a separate type rather than a widened
-// agent.Client so that every other fake in this package stays untouched.
+// the idle path asks for.
 type approvalReportingAgent struct {
 	*agent.StubClient
 	mu       sync.Mutex
@@ -63,7 +60,6 @@ func (a *approvalReportingAgent) timesAsked(pod string) int {
 	return a.asked[pod]
 }
 
-// testClock is the "시간을 제어할 수 있는 테스트 하네스" the scenario asks for.
 type testClock struct {
 	mu  sync.Mutex
 	now time.Time
@@ -128,10 +124,7 @@ func mustGet(t *testing.T, svc *service.Service, id string) *session.Session {
 	return got
 }
 
-// The requirement itself: while a human is being waited on, lastAccess is
-// refreshed with no client I/O at all and the session does not freeze; once
-// the decision lands the refresh stops and the ordinary count resumes from
-// there, freezing the session when it next reaches the limit.
+// AC-F3 itself: the idle hold while a human is waited on, and its release.
 func TestApprovalWaitHoldsTheIdleCountAndReleasesIt(t *testing.T) {
 	start := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 	clock := &testClock{now: start}
@@ -141,8 +134,7 @@ func TestApprovalWaitHoldsTheIdleCountAndReleasesIt(t *testing.T) {
 	sess := mustCreate(t, svc, session.WorkloadTypeApprovalGated)
 	ag.setAwaiting(sess.Pod, true)
 
-	// Past the limit with nobody touching the session: without AC-F3 this is
-	// exactly the shape that freezes.
+	// Without AC-F3 this is exactly the shape that freezes.
 	clock.advance(session.MaxIdle + time.Minute)
 	if n := scan(t, svc, clock); n != 0 {
 		t.Fatalf("snapshotted = %d while an approval was pending, want 0 (AC-F3)", n)
@@ -158,8 +150,7 @@ func TestApprovalWaitHoldsTheIdleCountAndReleasesIt(t *testing.T) {
 		t.Fatalf("idle = %s while waiting, want the count held at zero", held.IdleFor(clock.Now()))
 	}
 
-	// Still waiting an hour later: the count keeps being held, not merely
-	// deferred once.
+	// The count keeps being held, not merely deferred once.
 	clock.advance(session.MaxIdle + time.Minute)
 	if n := scan(t, svc, clock); n != 0 {
 		t.Fatalf("snapshotted = %d on the second scan while still waiting, want 0", n)
@@ -188,9 +179,8 @@ func TestApprovalWaitHoldsTheIdleCountAndReleasesIt(t *testing.T) {
 	}
 }
 
-// The control group the scenario names explicitly: shell and claude-code have
-// no approval concept, so nothing about AC-D5/AC-B1 changes for them — not
-// even the question being asked.
+// The control group scenario 5 names explicitly: these types keep AC-D5/AC-B1
+// unchanged — not even the question being asked.
 func TestOtherWorkloadTypesKeepTheOrdinaryIdleRule(t *testing.T) {
 	for _, workload := range []session.WorkloadType{
 		session.WorkloadTypeShell,
@@ -221,7 +211,6 @@ func TestOtherWorkloadTypesKeepTheOrdinaryIdleRule(t *testing.T) {
 }
 
 // AC-F3's "동결·삭제와의 충돌": the exception belongs to the idle trigger only.
-// A user asking to freeze a session gets it frozen, wait or no wait.
 func TestManualSnapshotStillFreezesDuringAnApprovalWait(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)}
 	ag := newApprovalReportingAgent()
@@ -242,8 +231,7 @@ func TestManualSnapshotStillFreezesDuringAnApprovalWait(t *testing.T) {
 	}
 }
 
-// An agent that cannot be asked must not be able to pin a pod. The idle rule
-// falls back to what it did before AC-F3 existed.
+// An agent that cannot be asked must not be able to pin a pod.
 func TestUnreadableApprovalStateFallsBackToTheOrdinaryIdleRule(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)}
 	ag := newApprovalReportingAgent()

@@ -147,8 +147,7 @@ func TestCreateSessionWorkloadType(t *testing.T) {
 			{"name": "model-number", "workloadType": "claude-code", "model": 42},
 			{"name": "model-space", "workloadType": "claude-code", "model": "bad model"},
 			{"name": "model-option", "workloadType": "claude-code", "model": "--danger"},
-			// AC-F1: approval-gated shares AC-E6's model contract, so the same
-			// inputs are refused for it.
+			// AC-F1: same model contract, so the same inputs are refused.
 			{"name": "model-ag-empty", "workloadType": "approval-gated", "model": ""},
 			{"name": "model-ag-null", "workloadType": "approval-gated", "model": nil},
 			{"name": "model-ag-space", "workloadType": "approval-gated", "model": "bad model"},
@@ -175,7 +174,6 @@ func TestWorkloadTypeIsImmutableAfterCreate(t *testing.T) {
 		t.Fatalf("status = %d, want 201", status)
 	}
 
-	// Existing-session routes reject attempted immutable-field mutations.
 	for _, path := range []string{"/read", "/write", "/switch"} {
 		body := bytes.NewReader([]byte(`{"workloadType":"shell","model":"platform-default","payload":"x"}`))
 		resp, err := http.Post(srv.URL+"/api/v1/sessions/"+created.ID+path, "application/json", body)
@@ -208,8 +206,7 @@ func TestWorkloadTypeIsImmutableAfterCreate(t *testing.T) {
 	}
 }
 
-// AC-E6: the API-visible model remains fixed while snapshot access restores a
-// new pod, and the restored provisioning request receives the same model.
+// AC-E6: the model is fixed across a snapshot/restore round trip over HTTP.
 func TestModelSurvivesSnapshotRestoreOverHTTP(t *testing.T) {
 	srv, orch, _ := newServerWithOrchestrator()
 	defer srv.Close()
