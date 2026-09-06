@@ -429,19 +429,26 @@ AC 대신 스모크/인프라를 검증하는 매칭 단위 파일(규칙 3).
 >   **그 문장을 근거로 남겨 두면 이 원장은 「선행이 풀렸으니 지금 저작해도 된다」고 읽힌다** — 그러나
 >   세션은 여전히 서지 않는다. 실제로 남아 있는 선행은 아래 둘이고, 둘 다 **SUT 오버레이 쪽**이다.
 >
->   **선행 ⓐ — `DATA_PLANE_APPROVAL_GATED_IMAGE`가 어디에도 설정돼 있지 않다.** base
->   `k8s/deployment.yaml`이 선언하는 이미지 env는 `DATA_PLANE_IMAGE`(`:52`)와
->   `DATA_PLANE_CLAUDE_CODE_IMAGE`(`:62`) **둘뿐**이고 이 env는 **선언 자체가 없다**. e2e 오버레이
->   `deploy/kustomization.yaml`의 control-plane patch도 `env/1`·`env/2`·`env/3`만 replace한다.
->   따라서 제어면은 `control-plane/cmd/control-plane/main.go:268`의 기본값 `""`를 쓰고,
->   `WithWorkloadImage`가 빈 값을 no-op으로 버리며
->   (`control-plane/internal/adapter/k8s/client_orchestrator.go:264-274`) `imageFor`가 shell 아닌
->   미설정 타입에 에러를 돌린다(`:555-563`). 즉 `workloadType=approval-gated` 생성 요청은 **타입
->   검증을 통과한 뒤**(400이 아니다) **프로비저닝에서 500으로 실패하고, 파드가 하나도 서지 않는다.**
+>   **✅ 선행 ⓐ — `DATA_PLANE_APPROVAL_GATED_IMAGE` 미설정 — 은 2026-09-05에 해소됐다.**
+>   #81이 base `k8s/deployment.yaml`에 이 env를 선언해 값을 채우고(CI `pin` job의 관리 대상으로
+>   함께 등재), e2e 오버레이 `deploy/kustomization.yaml`의 control-plane patch가 그 자리를
+>   로컬 빌드 에이전트 이미지로 replace한다. 그래서 `workloadType=approval-gated` 생성 요청은
+>   더 이상 `imageFor`의 미설정 에러로 500이 되지 않는다.
 >
->   **선행 ⓑ — 게이트웨이 Secret이 없고, 그 참조는 optional이 아니다.**
->   `git grep 'approval-gateway' -- deploy k8s`가 **0 hits**다 — `approval-gateway-credentials`
->   매니페스트가 오버레이에도 base에도 없다. 그런데 헬퍼 파드의 MCP 컨테이너는 게이트웨이 3종을
+>   ⚠️ **이 해소가 「그러니 지금 저작해도 된다」로 읽히면 안 된다** — 아래 ⓑ가 그대로 남아 있어
+>   세션은 여전히 서지 않는다. 두 선행을 한 문단에 두는 이유가 그것이다.
+>
+>   📌 **이 자리에 이미지 env 이름의 유무를 다시 서술하지 말 것.** 그 사실의 정본은 매니페스트
+>   자신(`k8s/deployment.yaml`의 env 목록과 `deploy/kustomization.yaml`의 patch)이고, 여기에
+>   사본을 두면 매니페스트가 움직여도 CI가 잡지 못한다 — 이 문단은 실제로 그렇게 낡았다
+>   (2026-09-03 판정이 「선언 자체가 없다」로 적은 뒤 #81이 그것을 뒤집었는데, 이 렌즈의 지문은
+>   `deploy/`·`k8s/`를 보지 않아 재감지가 걸리지 않았다). 같은 함정의 앞선 사례는 위
+>   「AC 검증 범위」의 `AC 21개` 사본이다.
+>
+>   **선행 ⓑ(남아 있는 유일한 선행) — SUT에 게이트웨이 Secret이 없고, 그 참조는 optional이
+>   아니다.** `approval-gateway-credentials` 매니페스트가 e2e 오버레이(`deploy/`)에 없다.
+>   프로덕션 쪽은 이 Secret을 클러스터 밖에서 받으므로(`k8s/deployment.yaml`의 관련 주석 참고)
+>   남은 것은 **SUT 하나**다. 그런데 헬퍼 파드의 MCP 컨테이너는 게이트웨이 3종을
 >   **`secretEnv`**로 투영한다(`client_orchestrator.go:780-782`, 정의 `:887-895`). 이 자리는
 >   `Optional`을 세우지 않으므로(세우는 쪽은 같은 파일의 `optionalSecretEnv` `:897-902`이고 여기
 >   쓰이지 않았다) Secret이 없으면 kubelet이 컨테이너 구성 단계에서 실패해 **헬퍼 파드가 Ready에
@@ -477,8 +484,8 @@ AC 대신 스모크/인프라를 검증하는 매칭 단위 파일(규칙 3).
 > **승격 조건(다음 감지가 이 논점을 다시 열지 않도록 못박는다)** *(2026-09-04 재작성 — 해제 조건을
 > 위 선행 ⓐ·ⓑ 기준으로 옮긴다. 이전 판은 「data plane MCP 워크로드」 하나를 걸었고 그것은 이미
 > 발화했다)*.
-> ① **AC-F1·F3·F5·F6** → 전용 파일 신설. **해제 조건은 ⓐ와 ⓑ가 함께 충족되는 것이다** — SUT
-> 오버레이가 `DATA_PLANE_APPROVAL_GATED_IMAGE`를 채우고, 같은 네임스페이스에
+> ① **AC-F1·F3·F5·F6** → 전용 파일 신설. **해제 조건은 이제 ⓑ 하나다** *(2026-09-06 갱신 — ⓐ가
+> #81로 해소되어 「ⓐ와 ⓑ가 함께」에서 줄었다)* — SUT 네임스페이스에
 > `approval-gateway-credentials`(`url`·`api-key`·`user-id`)가 있어 헬퍼 파드가 Ready에 이르는 것.
 > 그 둘이 서면 F1(타입 허용값·400 거부·불변성)은 AC-E1과 같은 모양이라 Go 스위트이고,
 > F3(승인 대기 중 write 즉시 반환·in-band 마커·`lastAccess` 갱신)·F5(공유 볼륨 왕복)·
