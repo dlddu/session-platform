@@ -1,10 +1,6 @@
 /*
- * Design tokens — ported 1:1 from docs/mockups/index.html :root.
- * State colors map directly to the session.State enum:
- *   active   -> --active   (StateActive)
- *   idle     -> --idle     (StateIdle)
- *   snapshot -> --frozen   (StateSnapshot, "frozen" in the UI)
- *   resume   -> --resume   (restore/thaw transition)
+ * 토큰 복제 원장은 web/src/design/README.md 다.
+ * 이름이 상태와 어긋나는 것은 하나뿐이다: session.State 의 `snapshot` -> `--frozen`.
  */
 :root {
   --ink: #0b1116;

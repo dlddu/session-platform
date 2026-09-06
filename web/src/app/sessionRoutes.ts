@@ -3,8 +3,7 @@ import type { Session } from "../api/types";
 type RoutableSession = Pick<Session, "id" | "state" | "workloadType">;
 
 // Keep every entry point (create, card click, restore) on the same workload
-// routing rule. Shell URLs stay backwards compatible; agent sessions have a
-// distinct URL so a copied/deep link still communicates which workspace opens.
+// routing rule — a copied/deep link should communicate which workspace opens.
 // approval-gated gets its own path rather than sharing /agent: the two run the
 // same execution model but not the same screen, and the URL is the only part a
 // user can read before the session loads.
