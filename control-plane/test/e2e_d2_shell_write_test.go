@@ -2,16 +2,11 @@
 
 // 검증 AC: AC-D2
 //
-// write = shell stdin (docs/prd/shell-workload.md, docs/test/shell-workload.md
-// scenario 2): the payload is injected into the session shell's stdin and bash
-// actually runs it, and the call returns without waiting for the command to
-// finish.
+// docs/prd/shell-workload.md, docs/test/shell-workload.md scenario 2.
 //
 // The $((…)) marker only exists in the output once bash expanded and ran the
 // line — the PTY-echoed input alone cannot contain the computed value, so it
-// distinguishes "injected into stdin" from "echoed back". Recovering that output
-// (offset cursor semantics) is AC-D3's file; the state dispatch around write is
-// AC-C3's.
+// distinguishes "injected into stdin" from "echoed back".
 package e2e_test
 
 import (
@@ -29,13 +24,11 @@ func TestShellWrite_InjectsIntoStdinWithoutWaiting(t *testing.T) {
 		t.Fatalf("write blocked for %v on a 3s command — write must not wait for completion (AC-D2)", took)
 	}
 
-	// The command really ran in the session's shell.
 	eventuallyShellRead(t, s.ID, 0, func(p string) bool {
 		return strings.Contains(p, "d2-marker-42")
 	})
 }
 
-// Successive writes are injected in order — stdin is a stream, not a one-shot.
 func TestShellWrite_SuccessiveWritesReachTheSameShell(t *testing.T) {
 	s := createSession(t, uniqueName(t))
 

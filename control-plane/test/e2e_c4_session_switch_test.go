@@ -2,13 +2,7 @@
 
 // 검증 AC: AC-C4
 //
-// Free switching between the sessions a user holds (docs/prd/state-api.md).
-// Switching an already-active session is a no-op, and moving back and forth
-// across several sessions leaves each one's identity and state intact — the
-// switch never breaks isolation.
-//
-// Restoring a `snapshot` target on switch is the AC-B2 transition and lives in
-// that file; this one owns the switching semantics themselves.
+// docs/prd/state-api.md, docs/test/state-api.md scenario 4.
 package e2e_test
 
 import (
@@ -31,7 +25,6 @@ func switchSession(t *testing.T, id string) session {
 	return s
 }
 
-// Switching an already-active session is a no-op: same session, still active.
 func TestSessionSwitch_ActiveTargetIsANoop(t *testing.T) {
 	s := createSession(t, uniqueName(t))
 
@@ -47,8 +40,6 @@ func TestSessionSwitch_ActiveTargetIsANoop(t *testing.T) {
 	}
 }
 
-// Moving freely across several sessions activates the right one every time and
-// preserves the others — switching never crosses session boundaries.
 func TestSessionSwitch_MovesFreelyAcrossSessions(t *testing.T) {
 	const n = 3
 	sessions := make([]session, 0, n)
@@ -56,7 +47,6 @@ func TestSessionSwitch_MovesFreelyAcrossSessions(t *testing.T) {
 		sessions = append(sessions, createSession(t, fmt.Sprintf("%s-%d", uniqueName(t), i)))
 	}
 
-	// Forward, then backward — each switch targets exactly the asked-for session.
 	order := []int{0, 1, 2, 1, 0, 2}
 	for _, i := range order {
 		want := sessions[i]
@@ -72,7 +62,6 @@ func TestSessionSwitch_MovesFreelyAcrossSessions(t *testing.T) {
 		}
 	}
 
-	// Every session survived the traversal untouched.
 	for _, want := range sessions {
 		got := getSession(t, want.ID)
 		if got.State != "active" || got.Pod != want.Pod || got.Name != want.Name {

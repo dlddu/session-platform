@@ -2,13 +2,8 @@
 
 // 검증 AC: AC-D4
 //
-// The shell process tree is what CRIU checkpoints, so the in-memory state it
-// carries survives the freeze (docs/prd/shell-workload.md). This is the concrete
-// marker form of AC-B3's "no data loss": AC-D4's 검증 방법 names it exactly —
-// `export MARKER=42` + `cd /tmp` before the freeze, `echo $MARKER; pwd` after
-// the restore.
-//
-// AC-B3's file owns the scrollback/cursor half; AC-B2's owns the transition.
+// docs/prd/shell-workload.md — the markers below are the ones AC-D4's 검증 방법
+// names.
 package e2e_test
 
 import (
@@ -19,8 +14,8 @@ import (
 func TestProcessTree_EnvAndCwdSurviveTheFreeze(t *testing.T) {
 	s := createSession(t, uniqueName(t))
 
-	// Shell state that must survive. export/cd print nothing, so anchor on the
-	// PTY's echo of the input line to know the shell has consumed them.
+	// export/cd print nothing, so anchor on the PTY's echo of the input line to
+	// know the shell has consumed them.
 	writeShell(t, s.ID, "export D4MARK=frozen42\n")
 	writeShell(t, s.ID, "cd /tmp\n")
 	eventuallyShellRead(t, s.ID, 0, func(p string) bool {
@@ -31,10 +26,9 @@ func TestProcessTree_EnvAndCwdSurviveTheFreeze(t *testing.T) {
 		t.Skip("SUT predates the product snapshot endpoint — the CRIU round trip is not exercisable here; see docs/criu-verification.md")
 	}
 
-	// Restored shell resumes on top of the frozen context: the variable and the
-	// working directory are exactly as they were. The markers below only appear
-	// once bash actually expanded them — the PTY-echoed input carries `$D4MARK`
-	// and `$(pwd)` literally, so an echo alone can never match.
+	// The markers below only appear once bash actually expanded them — the
+	// PTY-echoed input carries `$D4MARK` and `$(pwd)` literally, so an echo alone
+	// can never match.
 	writeShell(t, s.ID, "echo d4env:$D4MARK\n")
 	writeShell(t, s.ID, "echo d4cwd:$(pwd)\n")
 

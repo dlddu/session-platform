@@ -2,19 +2,11 @@
 
 // 검증 AC: AC-C1
 //
-// Concurrent requests to one session, served by a multi-replica control plane
-// sharing the ConfigMap(resourceVersion CAS) + Lease state store, converge to a
-// single consistent state — no torn state, no duplicate pod, and crucially no
-// replica reporting "not found" (docs/prd/state-api.md, docs/test/state-api.md
-// scenario 1). The deploy/ overlay runs 2 replicas behind one Service, so the
-// burst below load-balances across both: with a per-replica in-memory store
-// roughly half these requests would 404.
+// docs/prd/state-api.md, docs/test/state-api.md scenario 1.
 //
-// Division of labour: the hermetic single-winner proof (exactly one of N
-// concurrent CompareAndSwap / Lock calls wins, against a real apiserver) lives
-// in the envtest suite (internal/adapter/configmap/envtest) — it is not a
-// matching unit here. This file asserts the dimension that suite cannot: two
-// real control-plane processes sharing one store.
+// What makes the burst a detector: the Service fans it across both replicas, so
+// a per-replica in-memory store would surface as roughly half the requests 404ing.
+// The hermetic single-winner proof is internal/adapter/configmap/envtest.
 package e2e_test
 
 import (
@@ -37,15 +29,11 @@ func TestAtomicState_ConcurrentAccessConvergesAcrossReplicas(t *testing.T) {
 	}
 	ns := sessionNamespace()
 
-	// One session, created once. It lands in a ConfigMap visible to every replica.
 	s := createSession(t, uniqueName(t))
 	if s.Pod == "" {
 		t.Fatal("created session has no pod")
 	}
 
-	// Fan a burst of concurrent requests at that one session. The Service
-	// load-balances them across replicas; a non-shared store surfaces as 404s or
-	// torn state.
 	const workers = 24
 	ops := []string{"get", "read", "write", "switch"}
 	type outcome struct {
@@ -80,8 +68,6 @@ func TestAtomicState_ConcurrentAccessConvergesAcrossReplicas(t *testing.T) {
 		}
 	}
 
-	// Ground truth from the cluster: exactly one pod backs the session — concurrent
-	// access never provisioned a duplicate.
 	pods, err := cs.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{
 		LabelSelector: "session-id=" + s.ID,
 	})
@@ -92,17 +78,14 @@ func TestAtomicState_ConcurrentAccessConvergesAcrossReplicas(t *testing.T) {
 		t.Fatalf("session %s backed by %d pods, want exactly 1 (AC-C1)", s.ID, len(pods.Items))
 	}
 
-	// Final read-back: still a single, consistent, active session.
 	final := getSession(t, s.ID)
 	if final.ID != s.ID || final.State != "active" || final.Pod != s.Pod {
 		t.Fatalf("final session %+v diverged from created %+v", final, s)
 	}
 }
 
-// callSession performs one op (get/read/write/switch) against a session and
-// returns the observed state/pod. It returns errors instead of failing the test,
-// so it is safe to call from many goroutines (t.Fatal must stay on the test
-// goroutine). get/switch return the session directly; read/write wrap it.
+// callSession returns errors instead of failing the test, so it is safe to call
+// from many goroutines — t.Fatal must stay on the test goroutine.
 func callSession(id, op string) (state, pod string, err error) {
 	var method, path string
 	var body io.Reader
