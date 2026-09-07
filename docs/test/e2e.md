@@ -343,6 +343,7 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 | AC-E2 | `control-plane/test/e2e_e2_prompt_invocation_test.go` | go | write = 프롬프트 1회 실행 — 배포 SUT에서 실 `claude` 프로세스가 기동되고 응답이 세션 출력에 투영됨 / burst의 모든 프롬프트가 큐에 수락돼 각각 1회씩 실행됨 / 프로세스 테이블에서 본 exact argv·원샷 수명·직렬 큐(동시 실행 없음)·첫 성공 뒤에만 `--continue` / 1 MiB 초과 프롬프트는 public API 413이고 실행되지 않음 (비블로킹 반환 자체는 SUT에서 관측 불가 — invocation이 write 왕복보다 느리지 않다. `data-plane/cmd/agent/claude_test.go`의 `TestClaudeWriteIsNonBlockingAndSerial`이 fake runner로 소유) |
 | AC-E6 | `control-plane/test/e2e_e6_credential_placement_test.go` | go | **자격 증명의 배치와 그 배치가 사는 격리**를 배포 SUT에서 — 공급자 `base-url`·`auth-token`·optional `ca-cert`는 사이드카 `claude-credentials`에만 / 필수 `k3s-mcp-token`과 optional `k3s-mcp-url`·`plugin-marketplace-url`은 주 컨테이너에만 / optional `model`은 주 컨테이너에만이고 concrete model은 literal이 Secret 기본값을 이김 / 주 컨테이너가 실 플랫폼 토큰을 **어떤 `/proc/*/environ`으로도 읽지 못함**(같은 프로브가 placeholder는 찾으므로 음성 결과가 자기검증된다) / pod가 `data-plane` SA로 서고 실 authorizer가 pods는 allow·secrets는 deny(SubjectAccessReview) / 생성 요청의 자격 증명 필드는 400이고 세션 조회·read 어디에도 두 토큰 값이 없음. 비교하는 비밀 값은 전부 클러스터 Secret에서 읽으므로 이 파일은 자격 증명 사본을 갖지 않는다. **프록시의 행위 계약**(헤더 허용목록·1xx redaction·64 MiB 상한·split-token tail-safe·`ca-cert` 파싱 실패 시 시작 거부)은 `data-plane/cmd/agent/credential_proxy*_test.go`가, **제출되는 pod spec**은 `control-plane/test/workload_type_orchestrator_test.go`(태그 `integration`)가 이미 소유하므로 여기서 다시 사지 않는다 — e2e가 배타적으로 살 수 있는 것은 배포된 그라운드-트루스다 |
 | AC-F1 | `control-plane/test/e2e_f1_workload_type_test.go` | go | `workloadType=approval-gated` 세션이 배포 SUT에서 서고 그 pod 집합이 워크로드 파드 + **세션 전속 헬퍼 파드 1개**(라벨 `session-id`+`pod-role=helper`로 조회, 컨테이너 정확히 둘 — 세션 MCP·credential-proxy — 이 모두 Ready)임 / 타입 축이 실제로 판별함 — 필드 생략과 explicit `shell`은 헬퍼 파드를 0개 만든다 / 근접 오타(`approval_gated`·전후 공백·대문자·`approvalgated`)와 explicit `""`·`null`·비문자열은 **pod 생성 전** 400(세션 파드 수 불변이 그라운드-트루스) / 생성 후 `/read`·`/write`·`/switch`의 타입·모델 변경은 400이고 원래 값 유지. 승인 왕복(AC-F3)·공유 볼륨(AC-F5)·컨테이너별 자격 증명 분리(AC-F6)는 각자의 AC가 소유하므로 여기서 사지 않는다 — 이 파일이 사는 것은 **타입 축과 그것이 세우는 파드 집합**이다 |
+| AC-F4 | `control-plane/test/e2e_f4_helper_pod_test.go` | go | **헬퍼 파드의 귀속·수명·컨테이너 경계**를 배포 SUT에서 — 세션 2개가 서로 다른 헬퍼 파드를 갖고 각자 자기 `session-id` 라벨만 지니며 공개 API의 `auxiliaryPods`와 클러스터 조회가 같은 파드를 지목함 / 동결과 삭제 **양쪽에서** 워크로드 파드와 헬퍼 파드가 **둘 다** 회수되고(API는 `pod:""`+`auxiliaryPods` 없음, 클러스터는 삭제/terminating) 세션 선택자에 헬퍼가 더는 걸리지 않음 / 복원이 **새 쌍**을 세우고 새 워크로드 파드의 `SESSION_MCP_URL`이 **그 복원의** 헬퍼 파드 IP를 가리킴(동결 전 주소를 이어 쓰지 않음) / 두 헬퍼 컨테이너가 PID 네임스페이스를 공유하지 않아 서로의 `/proc/*/environ`을 읽지 못함(각 컨테이너가 자기 `DATA_PLANE_WORKLOAD` 마커는 찾으므로 음성 결과가 자기검증되고, 두 마커가 다름도 먼저 확인한다). 제출되는 pod spec·자격 증명 분리·워크로드 파드 실패 시 회수·복원 쌍 생성은 `control-plane/test/approval_gated_orchestrator_test.go`(태그 `integration`)가 이미 소유하므로 다시 사지 않는다 — e2e가 배타적으로 사는 것은 **실 API server가 실제로 지운 파드·실제로 가리키는 주소·실 kubelet이 가른 네임스페이스**다. 타입 축과 파드 집합의 모양(AC-F1)·네트워크 경계(AC-F2)·컨테이너별 자격 증명(AC-F6)은 각자의 AC가 소유한다 |
 <!-- ac-mapping:end -->
 
 ## AC 예외 목록
@@ -384,8 +385,8 @@ AC 대신 스모크/인프라를 검증하는 매칭 단위 파일(규칙 3).
 <!-- ac-summary:begin -->
 - AC 총계: 27
 - 예외: 1
-- AC 매칭 파일: 18
-- 공백: 8 — AC-E3 AC-E4 AC-E5 AC-F2 AC-F3 AC-F4 AC-F5 AC-F6
+- AC 매칭 파일: 19
+- 공백: 7 — AC-E3 AC-E4 AC-E5 AC-F2 AC-F3 AC-F5 AC-F6
 <!-- ac-summary:end -->
 
 **공백**은 전용 파일도 예외 등재도 아직 없는 AC다. **어느 AC가 공백인지는 바로 위 `ac-summary`
