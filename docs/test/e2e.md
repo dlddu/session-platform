@@ -344,6 +344,7 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 | AC-E6 | `control-plane/test/e2e_e6_credential_placement_test.go` | go | **자격 증명의 배치와 그 배치가 사는 격리**를 배포 SUT에서 — 공급자 `base-url`·`auth-token`·optional `ca-cert`는 사이드카 `claude-credentials`에만 / 필수 `k3s-mcp-token`과 optional `k3s-mcp-url`·`plugin-marketplace-url`은 주 컨테이너에만 / optional `model`은 주 컨테이너에만이고 concrete model은 literal이 Secret 기본값을 이김 / 주 컨테이너가 실 플랫폼 토큰을 **어떤 `/proc/*/environ`으로도 읽지 못함**(같은 프로브가 placeholder는 찾으므로 음성 결과가 자기검증된다) / pod가 `data-plane` SA로 서고 실 authorizer가 pods는 allow·secrets는 deny(SubjectAccessReview) / 생성 요청의 자격 증명 필드는 400이고 세션 조회·read 어디에도 두 토큰 값이 없음. 비교하는 비밀 값은 전부 클러스터 Secret에서 읽으므로 이 파일은 자격 증명 사본을 갖지 않는다. **프록시의 행위 계약**(헤더 허용목록·1xx redaction·64 MiB 상한·split-token tail-safe·`ca-cert` 파싱 실패 시 시작 거부)은 `data-plane/cmd/agent/credential_proxy*_test.go`가, **제출되는 pod spec**은 `control-plane/test/workload_type_orchestrator_test.go`(태그 `integration`)가 이미 소유하므로 여기서 다시 사지 않는다 — e2e가 배타적으로 살 수 있는 것은 배포된 그라운드-트루스다 |
 | AC-F1 | `control-plane/test/e2e_f1_workload_type_test.go` | go | `workloadType=approval-gated` 세션이 배포 SUT에서 서고 그 pod 집합이 워크로드 파드 + **세션 전속 헬퍼 파드 1개**(라벨 `session-id`+`pod-role=helper`로 조회, 컨테이너 정확히 둘 — 세션 MCP·credential-proxy — 이 모두 Ready)임 / 타입 축이 실제로 판별함 — 필드 생략과 explicit `shell`은 헬퍼 파드를 0개 만든다 / 근접 오타(`approval_gated`·전후 공백·대문자·`approvalgated`)와 explicit `""`·`null`·비문자열은 **pod 생성 전** 400(세션 파드 수 불변이 그라운드-트루스) / 생성 후 `/read`·`/write`·`/switch`의 타입·모델 변경은 400이고 원래 값 유지. 승인 왕복(AC-F3)·공유 볼륨(AC-F5)·컨테이너별 자격 증명 분리(AC-F6)는 각자의 AC가 소유하므로 여기서 사지 않는다 — 이 파일이 사는 것은 **타입 축과 그것이 세우는 파드 집합**이다 |
 | AC-F4 | `control-plane/test/e2e_f4_helper_pod_test.go` | go | **헬퍼 파드의 귀속·수명·컨테이너 경계**를 배포 SUT에서 — 세션 2개가 서로 다른 헬퍼 파드를 갖고 각자 자기 `session-id` 라벨만 지니며 공개 API의 `auxiliaryPods`와 클러스터 조회가 같은 파드를 지목함 / **삭제** 시 워크로드 파드와 헬퍼 파드가 **둘 다** 회수됨(클러스터에서 삭제/terminating) / **거부된 동결은 아무것도 회수하지 않음** — `POST /snapshot`이 503 `checkpoint strategy is disabled`를 돌려주고 세션은 `active`에 그대로이며 워크로드 파드와 **그 헬퍼 파드가 이름까지 같은 것으로** 살아 Ready임(수명이 API 호출이 아니라 세션 종료 사건에 결합돼 있다는 것을 음성 방향에서 산다) / 두 헬퍼 컨테이너가 PID 네임스페이스를 공유하지 않아 서로의 `/proc/*/environ`을 읽지 못함(각 컨테이너가 자기 `DATA_PLANE_WORKLOAD` 마커는 찾으므로 음성 결과가 자기검증되고, 두 마커가 다름도 먼저 확인한다). **동결 시 동반 회수와 복원 갈래는 이 파일에 없다** — AC-F5의 아카이브 전략이 선행이라 아래 §「남은 미검증 분기」에 등재했고, 위 거부 케이스가 그 선행이 풀리는 순간 빨개져 되살릴 자리를 지목한다. 제출되는 pod spec·자격 증명 분리·워크로드 파드 실패 시 회수·복원 쌍 생성은 `control-plane/test/approval_gated_orchestrator_test.go`(태그 `integration`)가 이미 소유하므로 다시 사지 않는다 — e2e가 배타적으로 사는 것은 **실 API server가 실제로 지운 파드·거부 뒤에도 실제로 서 있는 파드·실 kubelet이 가른 네임스페이스**다(단위 스텁은 살아남은 파드의 **수**만 세고 어느 쪽인지 말하지 못한다). 타입 축과 파드 집합의 모양(AC-F1)·네트워크 경계(AC-F2)·컨테이너별 자격 증명(AC-F6)은 각자의 AC가 소유한다 |
+| AC-F6 | `control-plane/test/e2e_f6_credential_split_test.go` | go | **두 자격 증명의 컨테이너별 배치**를 배포 SUT에서 — 게이트웨이 3종(`APPROVAL_GATEWAY_URL`·`_API_KEY`·`_USER_ID`)이 헬퍼 파드의 `session-mcp` 컨테이너에만 `approval-gateway-credentials`의 `url`/`api-key`/`user-id`로 **필수** 주입되고 `credential-proxy`·워크로드 컨테이너엔 이름으로도 **키로도** 없음 / 공급자 3종(`base-url`·`auth-token` 필수 + optional `ca-cert`)은 같은 파드의 `credential-proxy`에만 있고 그 컨테이너가 `DATA_PLANE_PROXY_PLACEMENT=helper`·`DATA_PLANE_AGENT_ADDR=0.0.0.0:8091`로 **loopback이 아니라 파드 네트워크에 바인딩**함(AC-E6과 갈리는 유일한 지점) / 워크로드 컨테이너는 Secret ref를 하나도 갖지 않고(optional `model` 제외) `ANTHROPIC_BASE_URL`·`SESSION_MCP_URL`이 **헬퍼 파드의 실제 `status.podIP`** 와 일치하며 `ANTHROPIC_AUTH_TOKEN`은 placeholder, `K3S_MCP_TOKEN`은 **없음**(✅ 2026-09-03 확정 항목) / 실제로 해소된 환경 — `session-mcp`가 api-key를, `credential-proxy`가 auth-token을 해소하고 워크로드 컨테이너의 `/proc/*/environ` 어디에도 그 둘이 없음(자기 placeholder를 찾는 대조군이 먼저 붙어 음성 결과가 자기검증된다) / 생성 요청의 `userId`·게이트웨이 필드·공급자 자격 증명은 **400**이고 세션이 생기지 않음 / 네 토큰 문자열이 세션 조회·목록·`read` 출력·**control-plane 파드 로그**에 없음(로그가 비어 있지 않음을 먼저 확인) / model 계약이 claude-code와 동일. 제출되는 pod spec은 `approval_gated_orchestrator_test.go`(태그 `integration`)가, 프록시의 **동작** 계약은 `data-plane/cmd/agent/credential_proxy*_test.go`가 이미 소유하므로 다시 사지 않는다 — e2e가 배타적으로 사는 것은 **Secret에서 실제로 해소된 환경과 API server가 실제로 배정한 IP**다. 타입 축과 파드 집합(AC-F1)·귀속과 수명과 PID 경계(AC-F4)·네트워크 경계(AC-F2)는 각자의 AC가 소유한다. **차단 갈래 셋은 이 파일에 없다** — 아래 §「남은 미검증 분기」에 등재했다 |
 <!-- ac-mapping:end -->
 
 ## AC 예외 목록
@@ -385,8 +386,8 @@ AC 대신 스모크/인프라를 검증하는 매칭 단위 파일(규칙 3).
 <!-- ac-summary:begin -->
 - AC 총계: 27
 - 예외: 1
-- AC 매칭 파일: 19
-- 공백: 7 — AC-E3 AC-E4 AC-E5 AC-F2 AC-F3 AC-F5 AC-F6
+- AC 매칭 파일: 20
+- 공백: 6 — AC-E3 AC-E4 AC-E5 AC-F2 AC-F3 AC-F5
 <!-- ac-summary:end -->
 
 **공백**은 전용 파일도 예외 등재도 아직 없는 AC다. **어느 AC가 공백인지는 바로 위 `ac-summary`
@@ -542,6 +543,19 @@ AC 대신 스모크/인프라를 검증하는 매칭 단위 파일(규칙 3).
 > 것은 없다** — 이것이 "반쪽만 단언하는 파일"과 갈리는 지점이다. 이 판정을 실측이 뒤집는 경우는 하나,
 > 아카이브 전략이 등록되는 때이고 그때는 파일이 스스로 빨개진다.
 >
+> ✅ **같은 규범을 AC-F6에도 판정했다 — 걸리지 않는다** *(2026-09-07)*. AC-F6 전용 파일은 검증
+> 방법이 열거하는 것 중 **차단 두 갈래**(워크로드 파드 → 게이트웨이·공급자 origin 직접 연결,
+> 다른 세션 → 이 헬퍼 파드 ingress)와 **승인 컨텍스트 갈래**를 갖지 않는다. 앞의 둘은 SUT의
+> kindnet이 NetworkPolicy를 **집행하지 않아** 거부가 일어나지 않으므로 — 성공한 연결은 제품
+> 결함이 아니고 실패는 경계를 산 것이 아니다 — 관측 대상 자체가 없고, 뒤의 하나는 승인 왕복
+> (AC-F3)이 선행이라 진입 자체가 없다. 위 AC-F4 판정과 **같은 잣대**다: 규범이 금지하는 것은
+> *관측 가능한* 갈래를 임의로 빼는 것이고, 여기서 빠지는 셋은 배포 SUT가 답할 수 없는 것들이다.
+> 그 파일은 나머지 — 컨테이너별 배치, **실제로 해소된 환경**, 실제 podIP와 대조한 주소, 생성
+> 요청 400, 네 토큰의 조회·목록·`read`·control-plane 로그 부재, model 계약 — 을 전부 단언한다.
+> 따라서 **배포 SUT에서 관측 가능한 AC-F6의 갈래 중 단언되지 않은 것은 없다.** 세 갈래는 아래
+> §「남은 미검증 분기」에 등재했고, **AC-F4 쪽과 달리 CI가 집행하는 기한이 없다**는 것도 거기
+> 적었다 — 이 셋을 다시 여는 것은 AC-F2·AC-F3이 공백에서 빠지는 순간의 **다음 감지**다.
+>
 > ⚠️ **AC-F5에는 선행이 하나 더 있다.** 공유 RWX 볼륨은 아직 구현되지 않았다
 > (`control-plane/internal/adapter/k8s/client_orchestrator.go:685`, `../doc-tracker.md`의 같은 항목).
 > ⓐ·ⓑ가 풀려도 F5 전용 파일은 그 구현이 착지한 뒤다 — 구현은 `tbm_session-platform-docs-impl`의
@@ -579,20 +593,31 @@ AC 대신 스모크/인프라를 검증하는 매칭 단위 파일(규칙 3).
 ## 남은 미검증 분기 (공백은 아님)
 
 전용 파일은 있으나 그 안에서 아직 단언하지 못하는 경로. **공백(전용 파일이 없는 AC)과 다르다** —
-파일은 이미 그 AC의 주검증이고, 막힌 것은 그 안의 갈래 하나다. 이유는 두 갈래다: (1) `idle`
+파일은 이미 그 AC의 주검증이고, 막힌 것은 그 안의 갈래 하나다. 이유는 세 갈래다: (1) `idle`
 상태에 도달할 방법이 없다(AC-B1의 트리거 정책과 함께 풀린다), (2) `approval-gated` 타입에
-스냅샷 전략이 등록돼 있지 않다(AC-F5의 아카이브 전략과 함께 풀린다).
+스냅샷 전략이 등록돼 있지 않다(AC-F5의 아카이브 전략과 함께 풀린다), (3) SUT의 CNI가
+NetworkPolicy를 **집행하지 않아** 차단 갈래에 관측 대상 자체가 없다(kindnet — `deploy/`에
+`disableDefaultCNI` 0파일).
 
 | 경로 | 소유 파일 | 막힌 이유 |
 | --- | --- | --- |
 | read `idle->active->read` | `e2e_c2_read_branches_test.go` | idle 진입 트리거 없음(AC-B1 정책 미확정) |
 | write `idle->active->write` | `e2e_c3_write_branches_test.go` | 〃 |
+| switch의 idle 대상 승격 | `e2e_c4_session_switch_test.go` | 〃 |
+| 워크로드 파드 → 게이트웨이 주소·공급자 origin **직접 연결 차단** | `e2e_f6_credential_split_test.go` | SUT의 kindnet이 NetworkPolicy를 집행하지 않아 **거부가 일어나지 않는다** — 여기서 성공하는 연결은 제품 결함이 아니고 실패해도 경계를 산 것이 아니므로 단언이 vacuous하다. 선행은 정책 집행 CNI(`deploy/kind-config.yaml`의 `disableDefaultCNI` + CNI 설치)이고 소관은 **AC-F2**다. 배치 쪽(자격 증명이 어느 컨테이너에 있는가)은 소유 파일이 전부 산다 |
+| 다른 세션의 워크로드 파드 → 이 헬퍼 파드 **ingress 차단** | 〃 | 〃 (같은 선행) |
+| 승인 컨텍스트에 자격 증명·게이트웨이 키가 실리지 않음 | 〃 | 승인 왕복 자체가 아직 없다 — AC-F3이 선행이고, 그 슬라이스는 대역의 `FETCH-ORIGIN` 등재를 기다린다(소관 `tbm_session-platform-e2e-mock-policy`). 토큰이 **조회·목록·`read`·control-plane 로그**에 나타나지 않는 것은 소유 파일이 이미 산다 |
 | 동결 시 워크로드·헬퍼 파드 **동반 회수** | `e2e_f4_helper_pod_test.go` | `approval-gated`에 아카이브 전략이 등록돼 있지 않아 `checkpointerFor`가 `ErrCheckpointDisabled`를 내고 공개 API가 503으로 거부한다 — **결함이 아니라 의도된 계약**이며(`internal/service/workload_type_test.go`의 `TestSnapshotIsRefusedForApprovalGated`가 그 계약을 산다) 아카이브 전략 없이 동결하면 복원할 수 없는 체크포인트 뒤로 파드 쌍을 회수하게 된다. 선행은 **AC-F5**이고 소관은 `tbm_session-platform-docs-impl`이다. |
 | 복원 시 **새 쌍** 기동 + 워크로드 파드의 헬퍼 주소 재배선 | 〃 | 〃 (동결이 선행이라 복원 진입 자체가 없다) |
 
-위 두 행은 **잊히지 않는다** — 소유 파일의 `RefusedFreezeReclaimsNeitherPod`가 거부 계약 자체를
+**동결·복원 두 행**은 **잊히지 않는다** — 소유 파일의 `RefusedFreezeReclaimsNeitherPod`가 거부 계약 자체를
 단언하므로, 아카이브 전략이 등록되는 순간 그 케이스가 빨개지고 실패 메시지가 「이 케이스를 지우고
 동결·복원 갈래를 세우고 이 두 행을 지우라」고 지시한다. 같은 순간 위 단위 테스트도 함께 빨개지므로
 그 슬라이스는 어차피 두 파일을 같이 만진다. 산문 메모가 아니라 **CI가 집행하는 기한**이라는 점에서
-`idle` 두 행과 성격이 다르다(그쪽은 AC-B1 정책이 확정될 때까지 붉힐 것이 없다).
-| switch의 idle 대상 승격 | `e2e_c4_session_switch_test.go` | 〃 |
+`idle` 세 행과 성격이 다르다(그쪽은 AC-B1 정책이 확정될 때까지 붉힐 것이 없다).
+
+**AC-F6의 세 행에는 그런 기한이 없다** — `idle` 쪽과 같은 성격이다. 차단 두 행은 CNI가 바뀌는
+순간 관측 가능해지지만 그때 붉어질 단언이 없고(집행되지 않는 정책에 대해 소유 파일이 아무것도
+단언하지 않는다), 승인 컨텍스트 행은 AC-F3 슬라이스가 서면 그 파일이 같은 자리에서 산다.
+따라서 이 셋을 다시 여는 것은 CI가 아니라 **다음 감지**다: AC-F2·AC-F3이 공백에서 빠지는 순간
+이 표를 함께 손봐야 한다.
