@@ -24,13 +24,14 @@
 //     value is readable from any process environment in the workload container,
 //  5. a create request cannot choose any of it — gateway fields, the userId and
 //     provider credentials are unknown fields and no session is created,
-//  6. no token string reaches the session lookup, the session list, the read
-//     stream or the control plane's own log,
+//  6. no token string reaches the session lookup response, the session list, the
+//     read response or the control plane's log — each of those four searched
+//     only after a control proves the text is one the SUT really produced,
 //  7. the model contract is claude-code's: platform-default resolves from the
 //     optional Secret key, a concrete model is a literal, and neither helper
 //     container is given the variable.
 //
-// What is deliberately missing, and why — all three are registered in
+// What is deliberately missing, and why — all five are registered in
 // docs/test/e2e.md § "남은 미검증 분기 (공백은 아님)":
 //
 //   - the workload pod being *unable* to reach the gateway address or the
@@ -40,6 +41,18 @@
 //     would prove nothing and an accepted one would not be a product defect.
 //   - "no credential rides in the approval context" needs an approval round
 //     trip, which is AC-F3 and blocked on its own precondition.
+//   - the *scrollback* half of the read surface. This type runs the same
+//     one-shot model as claude-code, so it has no resident shell and produces
+//     no output until a prompt round trip is driven through the provider
+//     stand-in and the session MCP — machinery AC-E2/E3 own and no e2e drives
+//     for this type. Point 6 buys the read *response*, whose envelope names the
+//     session; searching an empty payload would prove nothing.
+//   - the *per-request* half of the control plane's log. Its only request
+//     logger writes at Debug under a handler that defaults to Info, so a
+//     window scoped to one session's lifetime comes back empty (CI measured
+//     exactly that). Point 6 buys the log the control plane really emits, from
+//     process start, with the startup line and a Secret-resolved value in it as
+//     controls. Raising the level is a product decision, not a test one.
 //
 // Neighbours this file does not re-buy: AC-F1 owns the type axis and the shape
 // of the pod set; AC-F4 owns the helper pod's ownership, lifetime and the PID
@@ -64,7 +77,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -108,6 +120,11 @@ const (
 	// pod whose log must not echo a token.
 	modelEnvVar       = "CLAUDE_CODE_MODEL"
 	controlPlaneLabel = "app=control-plane"
+	// controlPlaneStartupLine is the message the control plane logs once, at
+	// process start, with the configuration it was given. Finding it is how the
+	// log search below knows it is reading a whole log rather than an empty
+	// window — see f6ControlPlaneLog.
+	controlPlaneStartupLine = "starting control plane"
 )
 
 // f6Session is one approval-gated session plus the cluster handles its
@@ -230,6 +247,31 @@ func mustEnv(t *testing.T, c corev1.Container, name string) corev1.EnvVar {
 	return env
 }
 
+// f6RequireSecretRef asserts an entry is backed by the given key of a *named*
+// Secret, with the expected optionality. Optional or not is the difference
+// between "the deployment must provide this" and "absent means the documented
+// fallback", which AC-F6 states key by key.
+//
+// The Secret's name is a parameter because AC-F6's whole claim is that two
+// different Secrets land in two different containers: a helper that carried one
+// Secret name as a constant — as AC-E6's e6RequireSecretRef does, correctly for
+// a type with only one — cannot state this AC's half of it.
+func f6RequireSecretRef(t *testing.T, c corev1.Container, secretName, envName, key string, optional bool) {
+	t.Helper()
+	env := mustEnv(t, c, envName)
+	ref := e6SecretRef(env)
+	if ref == nil {
+		t.Fatalf("container %q %s is not Secret-backed (value=%q)", c.Name, envName, env.Value)
+	}
+	if ref.Name != secretName || ref.Key != key {
+		t.Fatalf("container %q %s reads %s/%s, want %s/%s",
+			c.Name, envName, ref.Name, ref.Key, secretName, key)
+	}
+	if got := ref.Optional != nil && *ref.Optional; got != optional {
+		t.Fatalf("container %q %s optional=%v, want %v", c.Name, envName, got, optional)
+	}
+}
+
 // f6NoSecretRefTo asserts a container reads none of the given keys of a Secret
 // through any of its environment entries. Naming the entry is not enough: the
 // same key can arrive under a different variable name, and the claim AC-F6
@@ -261,10 +303,17 @@ func f6NoSecretRefTo(t *testing.T, c corev1.Container, secretName string, keys .
 const f6ReachProbe = `printf 'control=%s\n' "$(grep -lF "$1" /proc/[0-9]*/environ 2>/dev/null | wc -l | tr -d ' ')"
 printf 'leak=%s\n' "$(grep -lF "$2" /proc/[0-9]*/environ 2>/dev/null | wc -l | tr -d ' ')"`
 
-// f6ControlPlaneLog returns the control plane's log since the given time. The
-// control plane is the one process that handles both Secrets' names on every
-// create, so its log is the surface most able to echo one by accident.
-func f6ControlPlaneLog(t *testing.T, cs kubernetes.Interface, ns string, since time.Time) string {
+// f6ControlPlaneLog returns every control plane replica's log from process
+// start. The control plane is the one process that handles both Secrets' names
+// on every create, so its log is the surface most able to echo one by accident.
+//
+// The window is the container's whole life, not the session's. A session-scoped
+// window is empty here — the only per-request logger writes at Debug and the
+// handler defaults to Info — and a search of an empty text proves nothing. The
+// whole log does contain the one line the control plane always writes, the
+// startup line that echoes the configuration it was given, which is what the
+// caller uses as its control.
+func f6ControlPlaneLog(t *testing.T, cs kubernetes.Interface, ns string) string {
 	t.Helper()
 	pods, err := cs.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{LabelSelector: controlPlaneLabel})
 	if err != nil {
@@ -273,11 +322,10 @@ func f6ControlPlaneLog(t *testing.T, cs kubernetes.Interface, ns string, since t
 	if len(pods.Items) == 0 {
 		t.Fatalf("no pod matches %s in %s; the log surface AC-F6 names cannot be read", controlPlaneLabel, ns)
 	}
-	seconds := int64(time.Since(since).Seconds()) + 30
 	var all strings.Builder
 	for i := range pods.Items {
 		stream, err := cs.CoreV1().Pods(ns).
-			GetLogs(pods.Items[i].Name, &corev1.PodLogOptions{SinceSeconds: &seconds}).
+			GetLogs(pods.Items[i].Name, &corev1.PodLogOptions{}).
 			Stream(context.Background())
 		if err != nil {
 			t.Fatalf("stream logs of %s/%s: %v", ns, pods.Items[i].Name, err)
@@ -294,7 +342,6 @@ func f6ControlPlaneLog(t *testing.T, cs kubernetes.Interface, ns string, since t
 
 // The whole placement, read off one session's pod pair.
 func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
-	started := time.Now()
 	f, ok := newF6Session(t, map[string]any{
 		"name": uniqueName(t), "workloadType": "approval-gated",
 	})
@@ -304,16 +351,13 @@ func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
 	mcp, proxy, work := f.mcp(t), f.proxy(t), f.workload(t)
 
 	t.Run("GatewayTripleOnlyInTheMCPContainer", func(t *testing.T) {
-		// Required, all three: the MCP container cannot ask for an approval
-		// without the address, cannot authenticate without the key, and has
-		// nobody to notify without the platform-wide userId.
-		e6RequireSecretRef(t, mcp, gatewayURLEnvVar, gatewayURLKey, false)
-		e6RequireSecretRef(t, mcp, gatewayAPIKeyEnvVar, gatewayAPIKeyKey, false)
-		e6RequireSecretRef(t, mcp, gatewayUserIDEnvVar, gatewayUserIDKey, false)
-		if ref := e6SecretRef(mustEnv(t, mcp, gatewayURLEnvVar)); ref.Name != approvalGatewaySecretName {
-			t.Fatalf("the MCP container reads the gateway url from Secret %q, want %q",
-				ref.Name, approvalGatewaySecretName)
-		}
+		// Required, all three, and out of the gateway's own Secret: the MCP
+		// container cannot ask for an approval without the address, cannot
+		// authenticate without the key, and has nobody to notify without the
+		// platform-wide userId.
+		f6RequireSecretRef(t, mcp, approvalGatewaySecretName, gatewayURLEnvVar, gatewayURLKey, false)
+		f6RequireSecretRef(t, mcp, approvalGatewaySecretName, gatewayAPIKeyEnvVar, gatewayAPIKeyKey, false)
+		f6RequireSecretRef(t, mcp, approvalGatewaySecretName, gatewayUserIDEnvVar, gatewayUserIDKey, false)
 
 		// Its neighbour in the same pod, and the container that runs the agent,
 		// are given none of it — by name and by key.
@@ -324,11 +368,11 @@ func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
 	})
 
 	t.Run("ProviderCredentialsOnlyInTheProxyContainer", func(t *testing.T) {
-		e6RequireSecretRef(t, proxy, "ANTHROPIC_BASE_URL", "base-url", false)
-		e6RequireSecretRef(t, proxy, "ANTHROPIC_AUTH_TOKEN", "auth-token", false)
+		f6RequireSecretRef(t, proxy, credentialsSecretName, "ANTHROPIC_BASE_URL", "base-url", false)
+		f6RequireSecretRef(t, proxy, credentialsSecretName, "ANTHROPIC_AUTH_TOKEN", "auth-token", false)
 		// The trust anchor is optional and rides with the credential it is
 		// paired with — same rule as AC-E6, same container as the token.
-		e6RequireSecretRef(t, proxy, "ANTHROPIC_CA_CERT", "ca-cert", true)
+		f6RequireSecretRef(t, proxy, credentialsSecretName, "ANTHROPIC_CA_CERT", "ca-cert", true)
 
 		// The MCP container fronts the approval gate; it never speaks to the
 		// provider, so it gets no provider credential.
@@ -414,7 +458,7 @@ func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
 
 	t.Run("PlatformDefaultModelResolvesFromTheOptionalKey", func(t *testing.T) {
 		// The model contract is claude-code's, unchanged by the move.
-		e6RequireSecretRef(t, work, modelEnvVar, "model", true)
+		f6RequireSecretRef(t, work, credentialsSecretName, modelEnvVar, "model", true)
 		e6RequireAbsent(t, mcp, modelEnvVar)
 		e6RequireAbsent(t, proxy, modelEnvVar)
 
@@ -428,35 +472,75 @@ func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
 		}
 	})
 
-	t.Run("NoTokenReachesAPublicSurfaceOrTheControlPlaneLog", func(t *testing.T) {
+	t.Run("NoTokenReachesTheSessionAPIOrTheControlPlaneLog", func(t *testing.T) {
 		gateway := f.secret(t, approvalGatewaySecretName)
 		provider := f.secret(t, credentialsSecretName)
 
-		_, lookup := do(t, http.MethodGet, "/api/v1/sessions/"+f.session.ID, nil)
+		lookupResp, lookup := do(t, http.MethodGet, "/api/v1/sessions/"+f.session.ID, nil)
+		if lookupResp.StatusCode != http.StatusOK {
+			t.Fatalf("session lookup: status=%d body=%s", lookupResp.StatusCode, lookup)
+		}
 		listResp, list := do(t, http.MethodGet, "/api/v1/sessions", nil)
 		if listResp.StatusCode != http.StatusOK {
 			t.Fatalf("list sessions: status=%d body=%s", listResp.StatusCode, list)
 		}
-		log := f6ControlPlaneLog(t, f.cs, f.ns, started)
-		if strings.TrimSpace(log) == "" {
-			t.Fatal("the control plane logged nothing for this session's lifetime; its silence about the tokens would prove nothing")
+		// The read *response*, not its payload: this type has no resident shell,
+		// so the scrollback is empty until a prompt round trip that AC-E2/E3 own
+		// (registered in docs/test/e2e.md). The envelope is what the SUT does
+		// produce here, and it names the session it answers for.
+		readResp, read := do(t, http.MethodPost, "/api/v1/sessions/"+f.session.ID+"/read",
+			map[string]int64{"offset": 0})
+		if readResp.StatusCode != http.StatusOK {
+			t.Fatalf("read session: status=%d body=%s", readResp.StatusCode, read)
 		}
 
-		surfaces := []struct{ name, text string }{
-			{"session lookup response", string(lookup)},
-			{"session list response", string(list)},
-			{"session output", readShellAt(t, f.session.ID, 0).Payload},
-			{"control plane log", log},
+		// Every surface carries a control — something that must be in it. A
+		// negative over a text the SUT never wrote would hold just as well, and
+		// that is exactly how this assertion failed the first time it ran.
+		surfaces := []struct{ name, text, control, why string }{
+			{"session lookup response", string(lookup), f.session.ID,
+				"a lookup response names the session it answers for"},
+			{"session list response", string(list), f.session.ID,
+				"the list must carry the session that is active right now"},
+			{"read response", string(read), f.session.ID,
+				"a read envelope names its session"},
+			{"control plane log", f6ControlPlaneLog(t, f.cs, f.ns), controlPlaneStartupLine,
+				"a control plane log reaches back to the process start"},
 		}
+		for _, s := range surfaces {
+			if !strings.Contains(s.text, s.control) {
+				t.Fatalf("%s does not contain %q — %s, so a token missing from it would prove nothing",
+					s.name, s.control, s.why)
+			}
+		}
+
+		// A second control for the log alone. The control plane is given the two
+		// Secrets' *names*, and out of one of them a single non-credential value
+		// it resolves itself (the optional model key) — which it echoes on the
+		// startup line. Finding that proves the log carries Secret-derived
+		// material at all, so the four absences below are a property of what the
+		// control plane logs rather than of a log that could never hold one.
+		if model := provider["model"]; model != "" {
+			if log := surfaces[len(surfaces)-1].text; !strings.Contains(log, model) {
+				t.Fatalf("the control plane log echoes no value resolved from %s; the absences below would say less than AC-F6 asks",
+					credentialsSecretName)
+			}
+		}
+
 		secrets := []struct{ what, value string }{
 			{"the gateway api key", gateway[gatewayAPIKeyKey]},
 			{"the gateway url", gateway[gatewayURLKey]},
 			{"the notification userId", gateway[gatewayUserIDKey]},
 			{"the provider token", provider["auth-token"]},
 		}
+		for _, sec := range secrets {
+			if sec.value == "" {
+				t.Fatalf("the deployment leaves %s empty; its absence from every surface would be vacuous", sec.what)
+			}
+		}
 		for _, s := range surfaces {
 			for _, sec := range secrets {
-				if sec.value != "" && strings.Contains(s.text, sec.value) {
+				if strings.Contains(s.text, sec.value) {
 					t.Fatalf("%s contains %s (AC-F6)", s.name, sec.what)
 				}
 			}
