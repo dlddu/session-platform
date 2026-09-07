@@ -3,17 +3,12 @@
 export type State = "active" | "idle" | "snapshot";
 
 /**
- * Which data plane workload the session runs (AC-E1/AC-F1). Chosen at creation
- * and immutable afterwards. All three are selectable in NewSession, and the
- * SPA branches on the family rather than on the literal — see
- * `app/workloadKind.ts`, which is what tells the agent family (claude-code,
- * approval-gated) apart from shell.
+ * AC-E1/AC-F1. 화면은 리터럴이 아니라 계열로 갈린다 — `app/workloadKind.ts`.
  */
 export type WorkloadType = "shell" | "claude-code" | "approval-gated";
 
 export interface PlatformConfig {
   claudeCode: {
-    /** Concrete Secret default when configured; otherwise platform-default. */
     defaultModel: string;
     models: string[];
   };
@@ -30,18 +25,13 @@ export interface Session {
   id: string;
   name: string;
   workloadType: WorkloadType;
-  /** Claude model selected at creation; omitted means the platform default. */
   model?: string;
   state: State;
   /** The session's dedicated workload pod — the 1:1 subject of AC-A2. */
   pod?: string;
   /**
-   * Session-scoped pods that serve the workload pod without running the
-   * workload themselves (AC-A2's auxiliary-pod clause). They share the workload
-   * pod's lifetime, so this is absent exactly when `pod` is. shell and
-   * claude-code sessions provision none; an approval-gated session lists its one
-   * helper pod here (AC-F4), which the workspace's Egress panel names as the
-   * single destination its workload pod is allowed to reach.
+   * AC-A2 의 보조 파드 조항 · AC-F4. 워크로드 파드와 수명을 공유하므로 이 필드는
+   * `pod` 이 없을 때 정확히 함께 없다.
    */
   auxiliaryPods?: string[];
   createdAt: string;
@@ -53,29 +43,21 @@ export interface CreateSessionRequest {
   name: string;
   /** omitted means "shell" (AC-E1) */
   workloadType?: WorkloadType;
-  /** Only applies to claude-code. Omitted means the platform default (AC-E6). */
   model?: string;
 }
 
 export interface ReadResult {
   session: Session;
   path: string;
-  /** workload output accumulated after the requested offset (AC-D3/AC-E3) */
+  /** AC-D3/AC-E3 */
   payload: string;
-  /** cursor to pass as offset on the next read to receive only new output */
   nextOffset: number;
 }
 
-/**
- * One `output` event from the session SSE stream. Payload bytes are base64 so
- * byte offsets, overlap slicing, and wire lengths stay exact. Claude output
- * event cursors are always issued at UTF-8 code-point boundaries.
- */
+/** 세션 SSE 스트림의 `output` 이벤트 — 커서·base64 규약은 AC-E3. */
 export interface OutputStreamEvent {
-  /** byte offset of the first payload byte */
   offset: number;
   payloadBase64: string;
-  /** byte offset immediately after the last payload byte */
   nextOffset: number;
 }
 

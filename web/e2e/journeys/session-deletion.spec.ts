@@ -86,17 +86,12 @@ test("delete an open session and return to the session list", async ({
   ).toBe(404);
 });
 
-// The snapshot session under test is real: created through the product API and
-// frozen through the product snapshot endpoint (the same trigger the Go suite
-// uses for AC-A3/AC-D4), so /restore, the list, the single GET and the retried
-// DELETE are all served by the deployed control plane. The only substitution is
-// the very first DELETE's 409 — see the fidelity allowlist in docs/test/e2e.md.
+// 인터셉트는 첫 DELETE 의 409 하나뿐 — DELETE-CONFLICT-ERR(NET) 등재, docs/test/e2e.md.
 test("delete a snapshot from Restore and retry after a conflict", async ({
   page,
   request,
 }) => {
-  // A real freeze runs CRIU inside the session pod and uploads the archive to
-  // the in-cluster MinIO, which is far slower than the default test timeout.
+  // 실 CRIU 동결과 MinIO 업로드가 선행하므로 기본 타임아웃으로는 모자란다.
   test.setTimeout(180_000);
 
   const name = "delete-snapshot-" + Date.now();
@@ -110,9 +105,8 @@ test("delete a snapshot from Restore and retry after a conflict", async ({
     "/api/v1/sessions/" + created.id + "/snapshot",
     { timeout: 150_000 },
   );
-  // A SUT without a reachable product snapshot endpoint (older build, or the
-  // CRIU gate off) cannot produce a snapshot-state session at all; the Go suite
-  // skips on the same signal rather than reporting a browser regression.
+  // snapshot 상태를 만들 수 없는 SUT 는 브라우저 회귀가 아니라 전제 미달이다 — Go 스위트도
+  // 같은 신호에 skip 한다.
   test.skip(
     snapshotResponse.status() === 404 || snapshotResponse.status() === 503,
     "SUT has no reachable product snapshot endpoint — no snapshot-state session to delete here",
@@ -126,9 +120,7 @@ test("delete a snapshot from Restore and retry after a conflict", async ({
   expect(frozen.pod ?? "").toBe("");
 
   let conflictInjected = false;
-  // mock-exception: DELETE-CONFLICT-ERR — 409는 다른 라이프사이클 연산이 세션 Lease를
-  // 쥐고 있을 때만 나오는 응답이라(service.Terminate → session.ErrConflict) 실 SUT에
-  // 요청 시점에 결정적으로 유발할 수 없다. 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
+  // mock-exception: DELETE-CONFLICT-ERR — 세션 Lease 경합은 실 SUT 에 요청 시점에 결정적으로 유발할 수 없다.
   await page.route("**/api/v1/sessions/" + created.id, async (route) => {
     if (conflictInjected || route.request().method() !== "DELETE") {
       await route.continue();
@@ -154,12 +146,10 @@ test("delete a snapshot from Restore and retry after a conflict", async ({
   );
   await expect(page).toHaveURL(new RegExp(`/restore/${created.id}$`));
   expect(conflictInjected).toBe(true);
-  // The rejected attempt changed nothing on the real SUT.
   expect(
     (await request.get("/api/v1/sessions/" + created.id)).status(),
   ).toBe(200);
 
-  // The retry is no longer intercepted: the deployed control plane deletes it.
   await confirmButton.click();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("status")).toContainText(

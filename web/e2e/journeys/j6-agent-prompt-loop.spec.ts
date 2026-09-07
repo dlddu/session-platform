@@ -1,26 +1,17 @@
-// 매칭 단위 밖 (AC ↔ e2e 1:1): 이 디렉터리의 여정 spec 은 web/e2e 최상위가 아니므로 AC
-// 매칭 단위가 아니다. 각 AC 의 주검증은 Go e2e 의 전용 파일이 소유한다
-// (AC-E1 `e2e_e1_workload_type_test.go`, AC-E2 `e2e_e2_prompt_invocation_test.go`).
-// 등재: docs/test/e2e.md.
+// 매칭 단위 밖 (AC ↔ e2e 1:1) — 등재: docs/test/e2e.md.
 import { expect, test } from "@playwright/test";
 
-// JRN-agent-prompt-loop — 브라우저에서 claude-code 세션에 프롬프트를 보내고 응답을 따라간다.
-//
-// 여기에는 네트워크 인터셉트가 **하나도 없다**. 세션은 제품 API 로 배포 SUT 에 실제로
-// 만들어지고, 프롬프트는 세션 pod 안에서 실 `claude` 프로세스를 기동시키며, 응답은
-// 인클러스터 provider 대역(CLAUDE-PROVIDER 등재)이 낸다. 세션 목록·상태·pod·아카이브는
-// 전부 배포된 control-plane 의 실 응답이다 — docs/test/e2e.md 「e2e 충실도 허용목록」.
+// JRN-agent-prompt-loop — docs/user-journeys/JRN-agent-prompt-loop.md.
+// 인터셉트 0 — 이 파일이 무엇을 실물로 밟는지는 CLAUDE-PROVIDER 등재가 갖는다.
 //
 // 출력 타이밍은 비결정적이므로(에이전트 기동, CLI 콜드 스타트, SSE 전달) 모든 단언은
 // 넉넉한 타임아웃의 containment 다 — 정확 일치가 아니다.
 
-// 인클러스터 provider 대역만이 낼 수 있는 마커. 트리 어디에도 이 문자열이 없으므로,
-// 이것이 콘솔에 뜨면 그 바이트가 배포된 그 대역에서 왔다는 뜻이다
-// (deploy/e2e-anthropic-fake.yaml 의 `REPLY`; Go 쪽 소유자는 AC-E2 전용 파일).
+// 트리 어디에도 이 문자열이 없으므로, 콘솔에 뜨면 그 바이트는 배포된 대역에서 온 것이다
+// (deploy/e2e-anthropic-fake.yaml).
 const PROVIDER_REPLY = "session-platform-e2e-provider-ok";
 
-// 배포 오버레이가 SUT 에 심는 모델 카탈로그의 두 번째 항목
-// (deploy/claude-code-credentials-secret.yaml 의 `models`).
+// 배포 오버레이가 심는 카탈로그의 둘째 항목(deploy/claude-code-credentials-secret.yaml).
 const ALTERNATE_MODEL = "claude-e2e-alternate";
 
 type CreatedSession = {
@@ -41,8 +32,7 @@ async function createAgentSession(
       workloadType: "claude-code",
       ...(model ? { model } : {}),
     },
-    // claude-code pod 는 에이전트가 뜨기 전에 플러그인을 설치하므로 기본 타임아웃보다
-    // 한참 느리다.
+    // 플러그인 설치가 선행하므로(PLUGIN-CRED) 기본 타임아웃으로는 모자란다.
     timeout: 180_000,
   });
   expect(response.status()).toBe(201);
@@ -76,13 +66,10 @@ test("a prompt sent from the workspace runs on the deployed SUT and its reply la
   await prompt.fill("j6 prompt one");
   await prompt.press("Enter");
 
-  // 제출한 프롬프트는 즉시 콘솔에 반향된다(로컬 에코). 그 뒤 실 invocation 의 응답이
-  // 세션의 append-only 출력에 실려 스트림으로 도착한다.
   await expect(log).toContainText("▸ j6 prompt one");
   await expect(log).toContainText(PROVIDER_REPLY, { timeout: 180_000 });
 
-  // 명시적 커서 read 는 복구 경로이지 정상 경로가 아니다 — 위 출력은 클릭 없이 왔다.
-  // 그리고 read 는 비파괴다(AC-D3): 눌러도 이미 보고 있던 이력이 사라지지 않는다.
+  // 위 출력은 클릭 없이 왔다 — 아래 read 는 복구 경로이지 정상 경로가 아니다(AC-D3 비파괴).
   await page.getByTestId("ws-refresh-output").click();
   await expect(log).toContainText(PROVIDER_REPLY);
   await expect(log).toContainText("▸ j6 prompt one");
@@ -96,8 +83,7 @@ test("an archived claude-code session is described as an archive and restored fr
 
   const created = await createAgentSession(request, "j6-archive-" + Date.now());
 
-  // 제품 아카이브 트리거. 실 아카이브는 워크스페이스를 인클러스터 MinIO 로 올리고 pod 를
-  // 회수한 뒤에야 응답하므로 기본 타임아웃보다 한참 느리다.
+  // 실 아카이브가 MinIO 업로드와 pod 회수를 마친 뒤에야 응답하므로 타임아웃을 늘린다.
   const snapshotResponse = await request.post(
     "/api/v1/sessions/" + created.id + "/snapshot",
     { timeout: 240_000 },
@@ -112,8 +98,6 @@ test("an archived claude-code session is described as an archive and restored fr
   expect(frozen.pod ?? "").toBe("");
   expect(frozen.checkpoint?.ref ?? "").not.toBe("");
 
-  // 동결된 세션의 워크스페이스로 들어가면 SPA 는 Restore 로 넘긴다 — 그리고 그 관찰은
-  // 수동적이다: 화면을 열었다는 이유만으로 아카이브가 되살아나지 않는다.
   await page.goto("/agent/" + created.id);
   await expect(page).toHaveURL(new RegExp("/restore/" + created.id + "$"), {
     timeout: 30_000,
@@ -127,7 +111,6 @@ test("an archived claude-code session is described as an archive and restored fr
   await expect(
     page.getByRole("heading", { name: "Resume from session archive" }),
   ).toBeVisible();
-  // claude-code 세션의 동결은 CRIU 프로세스 이미지가 아니라 워크스페이스 아카이브다.
   await expect(page.getByText("No CRIU checkpoint is used.")).toBeVisible();
   await expect(page.getByText(/archive s3:\/\//)).toBeVisible();
 
@@ -137,8 +120,6 @@ test("an archived claude-code session is described as an archive and restored fr
   });
   await expect(page.getByTestId("ws-workload")).toContainText("claude-code");
 
-  // 그라운드 트루스는 픽스처가 아니라 배포된 control-plane 이다: 세션이 정말 다시 서고
-  // 새 pod 를 얻었다.
   const after = await request.get("/api/v1/sessions/" + created.id);
   expect(after.status()).toBe(200);
   const restored = (await after.json()) as { state: string; pod?: string };

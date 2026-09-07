@@ -8,8 +8,7 @@ import { Workspace } from "./screens/Workspace";
 import { Restore } from "./screens/Restore";
 import "./design/tokens.css";
 
-// NewSession is a modal rendered over the Sessions console, so /new reuses the
-// Sessions element underneath via a layout child that renders both.
+// /new 는 Sessions 위에 얹히는 모달이라 두 엘리먼트를 함께 렌더한다.
 const router = createBrowserRouter([
   {
     element: <AppShell />,

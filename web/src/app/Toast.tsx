@@ -1,9 +1,6 @@
 // mockup: docs/mockups/index.html
-// docs/mockups/README.md 의 「화면 ↔ mockup 매핑」 표와 양방향으로 일치해야 한다 (scripts/check-render-fidelity.py).
-// Toast infrastructure ported from docs/mockups (toast-wrap / toast). Provides a
-// context + useToast() hook so any screen can surface a transient notice. Only
-// the component + plumbing live here; triggers are wired by user actions in the
-// screens (the mockup's demo-only simulated triggers are intentionally omitted).
+// mockup 의 데모 전용 시뮬레이션 트리거는 **의도적으로 옮기지 않았다** — 여기 사는 것은
+// 컴포넌트와 배선뿐이고, 실제 트리거는 화면의 사용자 동작이 건다.
 import {
   createContext,
   useCallback,
@@ -28,8 +25,7 @@ interface ToastApi {
 
 const ToastContext = createContext<ToastApi | null>(null);
 
-// useToast surfaces the toast() dispatcher; throws if used outside the provider
-// so a missing <ToastProvider> fails loudly instead of silently no-op'ing.
+// <ToastProvider> 누락이 조용한 no-op 이 되지 않도록 던진다.
 export function useToast(): ToastApi {
   const ctx = useContext(ToastContext);
   if (!ctx) throw new Error("useToast must be used within <ToastProvider>");
@@ -66,12 +62,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const toast = useCallback((msg: string, kind: ToastKind = "ok") => {
     const id = ++seq.current;
     setItems((prev) => [...prev, { id, msg, kind, in: false }]);
-    // Next frame: flip `in` to trigger the enter transition (matches mockup's
-    // requestAnimationFrame nudge).
+    // 다음 프레임에 `in` 을 뒤집어야 enter 트랜지션이 걸린다.
     requestAnimationFrame(() =>
       setItems((prev) => prev.map((t) => (t.id === id ? { ...t, in: true } : t)))
     );
-    // Auto-dismiss: start the exit transition, then drop after it finishes.
     setTimeout(() => {
       setItems((prev) => prev.map((t) => (t.id === id ? { ...t, in: false } : t)));
       setTimeout(() => setItems((prev) => prev.filter((t) => t.id !== id)), 350);

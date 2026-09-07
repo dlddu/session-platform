@@ -1,13 +1,7 @@
-// 매칭 단위 밖 (AC ↔ e2e 1:1): 이 디렉터리의 여정 spec은 web/e2e 최상위가 아니므로
-// AC 매칭 단위가 아니다. 여정 전체를 한 파일에서 훑는 형태를 유지하되, 각 AC의 주검증은
-// Go e2e의 전용 파일이 소유한다. 등재: docs/test/e2e.md.
+// 매칭 단위 밖 (AC ↔ e2e 1:1) — 등재: docs/test/e2e.md.
 import { test, expect, type Page } from "@playwright/test";
 
-// JRN-shell-interaction — running commands in the session shell and following the output.
-// Value V6 (interactive shell session); AC-D2 (write → shell stdin) and AC-D3
-// (read = offset-cursored delta of the scrollback; offset 0 replays the full
-// history on re-entry).
-//
+// JRN-shell-interaction — docs/user-journeys/JRN-shell-interaction.md.
 // Output timing is non-deterministic (PTY echo, bash scheduling), so every
 // assertion is containment with a generous timeout — never an exact match.
 
@@ -29,13 +23,11 @@ test("commands run in the session shell and output accumulates across them", asy
   await createSession(page, `j5-${Date.now()}`);
   const log = page.getByTestId("ws-log");
 
-  // STP-command-input/STP-output-read: a command's output lands in the console. The computed marker
-  // only exists once bash executed the line (the echoed input can't match).
+  // STP-command-input / STP-output-read: the computed marker only exists once bash
+  // executed the line — the echoed input can't match it.
   await runCommand(page, "echo j5-first-$((40+1))");
   await expect(log).toContainText("j5-first-41", { timeout: 15_000 });
 
-  // A second command appends after the first — the scrollback accumulates
-  // (cursor reads only fetch the delta, but the console keeps the history).
   await runCommand(page, "echo j5-second-$((40+3))");
   await expect(log).toContainText("j5-second-43", { timeout: 15_000 });
   await expect(log).toContainText("j5-first-41");
@@ -49,13 +41,11 @@ test("re-entering the workspace replays the full scrollback (offset=0)", async (
   await runCommand(page, "echo j5-history-$((40+4))");
   await expect(log).toContainText("j5-history-44", { timeout: 15_000 });
 
-  // Leave for the Sessions console, then come back in through its card.
   await page.getByRole("link", { name: "← Sessions" }).click();
   await expect(page).toHaveURL(/\/$/);
   await page.locator('[data-testid="session-card"]', { hasText: name }).click();
   await expect(page).toHaveURL(/\/session\/[0-9a-f]+$/);
 
-  // AC-D3 non-consuming: the entry read at offset 0 restores the history
-  // produced before we left — nothing was consumed by earlier reads.
+  // AC-D3 비파괴 — 재진입 read(offset=0)가 떠나기 전 이력을 그대로 되돌린다.
   await expect(page.getByTestId("ws-log")).toContainText("j5-history-44", { timeout: 15_000 });
 });

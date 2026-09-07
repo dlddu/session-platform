@@ -1,5 +1,4 @@
 // mockup: docs/mockups/index.html
-// docs/mockups/README.md 의 「화면 ↔ mockup 매핑」 표와 양방향으로 일치해야 한다 (scripts/check-render-fidelity.py).
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Session } from "../api/types";
@@ -8,18 +7,14 @@ import { ClockIcon, CrystalIcon, PodIcon } from "./icons";
 import { sessionEntryPath } from "./sessionRoutes";
 import { isAgentWorkload, isGatedWorkload } from "./workloadKind";
 
-// The card's type tag and freeze vocabulary. Agent-family sessions archive a
-// filesystem snapshot (AC-E5) where shell thaws a CRIU checkpoint, and the
-// gated variant is the one whose outbound calls wait on a person (AC-F3), so
-// it gets its own glyph instead of falling through to "$ shell".
+// 동결 어휘는 타입별로 갈린다 — 아카이브(AC-E5) vs CRIU 체크포인트(AC-D4).
 const WORKLOAD_TAG: Record<string, string> = {
   shell: "$ shell",
   "claude-code": "◇ claude-code",
   "approval-gated": "⏸ approval-gated",
 };
 
-// MaxIdle mirrors control-plane/internal/session.MaxIdle (60m). A session
-// freezes once it has been idle this long; the idle card counts down to it.
+// control-plane/internal/session.MaxIdle 의 사본이다 — 어느 게이트도 둘을 대조하지 않는다.
 const MAX_IDLE_MS = 60 * 60 * 1000;
 
 function fmtSec(total: number): string {
@@ -28,7 +23,6 @@ function fmtSec(total: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-// Human-readable checkpoint size from a raw byte count (matches mockup "412 MB").
 function fmtBytes(n: number): string {
   const MB = 1024 * 1024;
   const GB = 1024 * MB;
@@ -36,7 +30,6 @@ function fmtBytes(n: number): string {
   return `${Math.max(1, Math.round(n / MB))} MB`;
 }
 
-// Relative "frozen Xm ago" label from an ISO timestamp.
 function fmtAgo(iso: string, now: number): string {
   const diffMin = Math.max(0, Math.floor((now - Date.parse(iso)) / 60000));
   if (diffMin < 1) return "just now";
@@ -46,9 +39,8 @@ function fmtAgo(iso: string, now: number): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-// active vitals — static placeholders. Real CPU/Mem metrics are out of scope
-// (the control plane does not emit them yet); this keeps layout parity so the
-// values can be dropped in later without touching structure.
+// 정적 플레이스홀더다 — 제어면이 CPU/Mem 지표를 아직 내지 않는다. 값이 생기면
+// 구조를 건드리지 않고 끼울 수 있게 레이아웃만 맞춰 둔다.
 function ActiveBody() {
   return (
     <div className="vit" aria-hidden="true">
@@ -70,8 +62,6 @@ function ActiveBody() {
   );
 }
 
-// idle freeze countdown — derived purely from lastAccess + MaxIdle, ticked by
-// the parent's `now` clock (no refetch).
 function IdleBody({ s, now }: { s: Session; now: number }) {
   const idleMs = Math.max(0, now - Date.parse(s.lastAccess));
   const freezeSec = Math.max(0, Math.floor((MAX_IDLE_MS - idleMs) / 1000));
@@ -127,9 +117,7 @@ function SnapshotBody({ s, now }: { s: Session; now: number }) {
   );
 }
 
-// SessionCard — one card in the console grid. Routes to Workspace (live) or
-// Restore (snapshot). Preserves the session-card testid / data-* attributes the
-// e2e specs key off of.
+// 아래 testid / data-* 는 e2e spec 이 키로 쓴다 — 이름을 바꾸면 그쪽이 깨진다.
 export function SessionCard({
   s,
   now,

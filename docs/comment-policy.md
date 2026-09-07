@@ -108,9 +108,10 @@
 | 2026-09-05 | `control-plane/internal/adapter/agent/client.go` · `control-plane/internal/adapter/agent/client_test.go` · `control-plane/internal/adapter/agent/stub.go` · `control-plane/internal/adapter/checkpointstore/store.go` · `control-plane/internal/adapter/checkpointstore/store_test.go` · `control-plane/internal/adapter/configmap/store.go` · `control-plane/internal/adapter/configmap/store_test.go` · `control-plane/internal/adapter/configmap/envtest/go.mod` · `control-plane/internal/adapter/configmap/envtest/store_conflict_test.go` · `control-plane/internal/adapter/criu/agent_checkpointer.go` · `control-plane/internal/adapter/criu/agent_checkpointer_test.go` · `control-plane/internal/adapter/criu/checkpointer.go` · `control-plane/internal/adapter/criu/container_checkpointer.go` · `control-plane/internal/adapter/criu/container_checkpointer_test.go` | 352 | `45e1de866652` | 5차 판정 패스 — **508줄 판정, 제거 156 · 유지 352**. `internal/adapter/` 의 k8s 외 전부(3차 패스가 k8s 4파일을 이미 등재했으므로 이 행으로 **어댑터 계층이 닫힌다**). 상세 ↓ |
 | 2026-09-05 | `control-plane/cmd/control-plane/main.go` | 58 | `44ca04abf7ff` | 6차 판정 패스 — **77줄 판정, 제거 19 · 유지 58**. 4차 패스가 「다음 패스의 1순위」로 지목한 조립 루트. **거짓이 된 주석 2건**(「helper pod's session MCP는 아직 구현되지 않았다」)을 포함한다. 상세 ↓ |
 | 2026-09-05 | `control-plane/go.mod` · `control-plane/cmd/control-plane/main_test.go` · `control-plane/internal/api/api.go` · `control-plane/internal/api/api_test.go` · `control-plane/internal/api/config_test.go` · `control-plane/internal/api/errors_test.go` · `control-plane/internal/api/workload_type_test.go` · `control-plane/internal/service/approval_idle_test.go` · `control-plane/internal/static/static.go` · `control-plane/internal/store/store.go` · `data-plane/go.mod` | 86 | `4b1264fc2b5f` | 7차 판정 패스 — **142줄 판정, 제거 57 · 유지 85**(지문 기준 143 → 86; `approval_idle_test.go`의 임베드 필드 `*agent.StubClient` 1줄은 주석이 아니라 2차 패스가 적은 오검출이다). 앞선 여섯 패스가 남긴 **컨트롤 플레인의 마지막 미판정 패키지 전부**. 이 행으로 스캔 범위에서 남는 미판정은 **`control-plane/test/`와 `web/` 둘뿐**이다. 상세 ↓ |
+| 2026-09-06 | `web/e2e/journeys/deferred.spec.ts` · `web/e2e/journeys/j1-session-creation.spec.ts` · `web/e2e/journeys/j3-multi-session-switch.spec.ts` · `web/e2e/journeys/j5-shell-interaction.spec.ts` · `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` · `web/e2e/journeys/j6-model-selection.spec.ts` · `web/e2e/journeys/j6-stream-recovery.spec.ts` · `web/e2e/journeys/manual-archive.spec.ts` · `web/e2e/journeys/session-deletion.spec.ts` · `web/e2e/smoke.spec.ts` · `web/src/api/client.ts` · `web/src/api/types.ts` · `web/src/app/AppShell.tsx` · `web/src/app/DeleteSessionDialog.tsx` · `web/src/app/SessionCard.tsx` · `web/src/app/StateBadge.tsx` · `web/src/app/Toast.tsx` · `web/src/app/icons.tsx` · `web/src/app/sessionRoutes.ts` · `web/src/app/shell.css` · `web/src/app/workloadKind.ts` · `web/src/design/tokens.css` · `web/src/main.tsx` · `web/src/screens/NewSession.tsx` · `web/src/screens/Restore.tsx` · `web/src/screens/Sessions.tsx` · `web/src/screens/Workspace.tsx` | 148 | `0617dd01174a` | 8차 판정 패스 — **379줄 판정, 제거 231 · 유지 146**(지문 기준 379 → 148; `tokens.css`의 CSS 전체 선택자 `* {` 2줄은 주석이 아니라 이 패스가 새로 찾은 오검출이다). **`web/` 스캔 범위 전량**이고, 이 행으로 남는 미판정은 `control-plane/test/` 하나뿐이다. 상세 ↓ |
 <!-- /판정-원장 -->
 
-판정 완료 합계 **<!-- 판정-합계 -->1987<!-- /판정-합계 -->줄**(등재 범위의 현재 줄 수 합).
+판정 완료 합계 **<!-- 판정-합계 -->2135<!-- /판정-합계 -->줄**(등재 범위의 현재 줄 수 합).
 전체 대비 비율과 미판정 잔량은 **게이트가 출력한다** — 프로즈에 적으면 낡는다.
 
 ### 2026-09-04 — `control-plane/internal/session/` (판정 162줄)
@@ -644,6 +645,105 @@ R2는 *등재된 파일 목록만* 재측정하므로, 등재하지 않으면 �
 그리고 **R5**가 그것을 기계로 강제한다. R1~R4 중 어느 것도 좌표를 재측정하지 않아 이 축은
 **영원히 초록**이었다 — 지문과 합계는 기계가 지키는데 좌표만 사람이 지켰다. R5는 이 문서 안의
 `파일:줄` 형태를 금지한다. 순수 경로 포인터(`docs/test/e2e.md`)는 권장 형태라 걸리지 않는다.
+
+### 2026-09-06 — `web/` 전량 (판정 379줄)
+
+스캔 범위의 마지막 두 미판정 경계 중 **`web/`** 쪽. 27파일을 통째로 읽었다 —
+`web/e2e/**` 191줄/10파일 + `web/src/**` 188줄/17파일(아래 「등재하지 않은 파일」 참고).
+
+**왜 이 범위인가**: 다른 하나(`control-plane/test/`)는 자매 렌즈가 **매 슬라이스 새 파일을 더하는
+자리**라, 저작 시점에 잰 지문이 머지 창 안에서 배신당하기 가장 쉽다. 반면 `web/` 트리는
+2026-09-05 이후 불변이고 이 경로를 판정면으로 갖는 다른 렌즈에 열린 작업이 없다.
+**아무도 열어 두지 않은 경계를 고른다**는 앞선 패스의 기준을 그대로 따랐다.
+
+**제거율이 61%로 앞선 어느 패스보다 높다 — 판정이 엄해진 것이 아니다.** 이 범위의 주석은
+`docs/test/e2e.md`의 **등재 표를 문장 단위로 옮겨 적은** 형태가 압도적이다. 그 표를 쓴 슬라이스가
+같은 PR에서 spec 헤더도 썼기 때문이고, 그래서 「출처를 밝히면서 내용을 함께 옮겨 적은」 형태가
+파일 단위로 나타난다 — 3차 패스가 32%를 설명한 것과 같은 사정의 더 큰 판이다.
+
+**제거 231줄** — 「이미 말하는 곳」이 제거 근거다.
+
+| 위치 | 제거한 것 | 이미 말하는 곳 (복원 경로) |
+| --- | --- | --- |
+| `journeys/` 7파일의 「매칭 단위 밖」 헤더 (22→7) | 「여정 spec은 web/e2e 최상위가 아니라 AC 매칭 단위가 아니다 · 각 AC의 주검증은 Go e2e 전용 파일이 소유한다」의 **일곱 벌**, 그리고 그 파일이 지목한 소유자 이름 | ② `docs/test/e2e.md` §「매칭 단위 밖」 표가 이 파일들을 이름으로 열거하며 같은 사유를 적고, §「AC ↔ e2e 매핑 규칙」이 *「`web/e2e/*.spec.ts` — Playwright (**최상위만**)」* 로 규칙을 적는다. 소유자 이름은 §「AC ↔ e2e 파일 매핑」 표가 갖는다. **주석이 스스로 「등재: docs/test/e2e.md」라고 자백하고 있었다** — 포인터 한 줄만 남겼다 |
+| `j6-model-selection.spec.ts` 파일 헤더 (13→2) | 「배포 SUT는 실 카탈로그를 낸다 → Secret이 심고 → deployment가 env로 투영하고 → `GET /api/v1/config`가 낸다」 사슬과 「나머지는 동시에 가질 수 없는 구성이라 한 엔드포인트에만 주입한다」 | ② `e2e.md`의 `MODEL-CONFIG-STATE` 등재 행이 그 사슬을 괄호 하나로 같은 순서로 적고, 「미해소 위반」 절의 *「설계 논점이었던 「파일 분할」의 답은…」* 문단이 나머지 절반을 적는다 |
+| `j6-stream-recovery.spec.ts` 파일 헤더 (15→2) | 「가로채는 것은 출력 표면 두 곳뿐」·「왜 실 SUT로 못 만드나(append-only · reset 조건 · AC-B3 계약)」·「진짜 출력의 도달은 `j6-agent-prompt-loop`가 단언한다」 | ② `STREAM-RESET-REPLAY` 등재 행의 두 칸이 **셋 다** 적는다. 세 번째는 축자 일치다 |
+| `manual-archive.spec.ts` 헤더 (5→1) · `session-deletion.spec.ts` 헤더 (5→1) | 「실 SUT 위에서 돌고 인터셉트는 없다/409 하나뿐」의 서술 전체 | ② `e2e.md` 「미해소 위반」의 *해소된 것* ②와 `DELETE-CONFLICT-ERR` 등재 행. 둘 다 축자에 가깝다 |
+| `mock-exception:` 마커 3곳의 사유 (한 줄 규약 초과분 7→0) | 마커 뒤에 이어 붙은 등재 행 「잔여」 칸의 사본과 「등재: docs/test/e2e.md …」 반복 | ② 표기 규약이 *「`// mock-exception: <CODE> — <실환경으로 불가능한 이유 **한 줄**>`」* 로 한 줄을 요구하고, 나머지는 그 CODE의 등재 행이 갖는다 |
+| j1·j3·j5의 STP 라벨 뒤 설명 (해당 줄 유지, 문장 제거) | 「Sessions 콘솔로 들어가 New session 모달을 연다」 류 — 바로 아래 3~4줄이 그대로 하는 일 | ① 각 단계의 본문 · ② `docs/user-journeys/JRN-*.md`의 같은 이름 단계 절. **STP 식별자(포인터)는 남겼다** |
+| j1·j3·j5·j6 본문 인라인 12곳 (24→0) | 「switch는 no-op이라 active 그대로」·「스크롤백이 누적된다」·「그라운드 트루스는 배포된 control-plane이다」·「구체 기본값은 한 번만 나타난다」·「늦게 온 카탈로그가 입력값을 덮지 않는다」 등 | ① 바로 아래 단언과 **테스트 이름**이 같은 말을 한다. 2차·7차 패스가 `manager_test.go`·`api_test.go`에서 지운 것과 같은 형태다 |
+| `smoke.spec.ts` 헤더 (8→1) | 「SPA가 부팅하고 Sessions 콘솔이 헤딩과 New session 진입점을 그린다」·「1:1 규칙 3으로 비-AC 매칭 단위 등재」 | ① 두 줄짜리 본문 자체 · ② `e2e.md` 「비-AC 파일 등재」 행이 *「SPA 부팅·baseURL 배선(Sessions 콘솔 헤딩 + New session 진입점)」* 으로 축자에 가깝게 적는다 |
+| `web/src` 10파일의 「매핑 표와 양방향으로 일치해야 한다」 (10→0) | `mockup:` 선언 줄 **바로 아래**에 열 번 되풀이된 게이트 규칙 서술 | ① `scripts/check-render-fidelity.py`의 독스트링 R3·R4가 *「양방향 완전 동등」* 으로 그 규칙의 정본이고 **기계가 이미 강제한다** · ② `docs/mockups/README.md`가 *「표와 선언이 어긋나면 게이트가 실패하므로, 둘 중 하나만 고치는 것은 불가능합니다」* 로 같은 말을 한다. 기계 판독 대상은 위의 `mockup:` 줄뿐이라 이 줄은 지워도 게이트가 그대로 돈다 |
+| `types.ts` doc 주석 9곳 (28→11) | 「생성 시 확정·이후 불변」·「보조 파드는 워크로드를 실행하지 않는다」·「omitted면 shell」·「base64는 byte 범위·overlap을 정확히 보존한다」·「커서는 UTF-8 code-point 경계」 | ② AC-E1/F1·AC-A2 보조 파드 절·AC-E3이 **전부 축자에 가깝다.** AC 포인터와, 어느 AC에도 없는 **wire 불변식**(「`auxiliaryPods`는 `pod`이 없을 때 정확히 함께 없다」)만 남겼다 |
+| `Restore.tsx` doc (5→1) · `Workspace.tsx` 헤더 (10→3) | 타입별 복원 메커니즘 열거 · 「승인 대기·결정은 in-band 마커이고 AC-F3은 event type을 만들지 않는다」 | ② AC-B2 구체화와 AC-F3 「대기 표시」 항목이 축자 일치 · ① `Restore.tsx`의 세 `*_RESTORE_COPY` 상수가 **사용자에게 보이는 문장으로** 같은 것을 이미 말한다 |
+| `Workspace.tsx` reset 주석 (2→0) · `SessionCard.tsx`·`Sessions.tsx`·`NewSession.tsx`·`Toast.tsx`·`icons.tsx`·`AppShell.tsx`·`StateBadge.tsx` doc 14곳 | 「reset이면 권위 있는 재생으로 교체한다」·「64px 하단 레일」·「State enum → 배지 스타일」·「아이콘을 1:1 이식했다」·「단계를 짧은 타이머로 켠다」 | ② AC-E3의 reset 복구 절차 · `docs/mockups/README.md` 매핑 표의 「근거」 칸(*「뷰포트 + 64px 하단 레일」*, *「`session.State` 배지」*, *「인라인 SVG 아이콘 1:1 이식」*)이 축자 일치 · ① 각 함수 본문 |
+| `Sessions.tsx` `[plan step 5, O3]` · `NewSession.tsx` `[plan steps 2-6]` · `workloadKind.ts` 도입 경위 3줄 | 어떤 계획의 몇 번 단계였는지, 이 모듈 전에는 SPA가 무엇을 잘못했는지 | ③④ PR 본문·커밋 메시지. 가리키는 계획 문서는 레포에 없어 **이미 끊긴 참조**였다 |
+
+**유지 146줄** — 「지울까」를 검토했다가 남긴 것들.
+
+- **`deferred.spec.ts`의 AC-B1 skip 사유 3줄** — *「Needs an idle->snapshot trigger (reaper or
+  test-only endpoint)」*. 이 파일에서 **충실도 스캔 토큰 `test-only`가 나오는 유일한 자리**이고,
+  `docs/test/e2e.md`의 「seam 지문 회계」에 `(deferred.spec.ts, test-only)` 행이 있다. 지우거나
+  고쳐 쓰면 `fidelity` 게이트가 그 자리에서 빨개진다. **주석이 게이트의 판정 대상인 자리**라,
+  다음 패스도 이 블록을 건드리려면 회계 행을 함께 옮겨야 한다.
+- **증명 근거 4종** — ⑴ `PROVIDER_REPLY`가 *「트리 어디에도 이 문자열이 없으므로 콘솔에 뜨면 그
+  바이트는 배포된 대역에서 온 것」*, ⑵ `STUB_*` 모델 이름이 *「SUT의 실제 카탈로그와 겹치지 않으므로
+  화면에 보이면 주입이 렌더된 것」*, ⑶ `$((…))` 마커가 *「에코된 입력과 구별되는 이유」*,
+  ⑷ 비-ASCII 청크가 *「바이트 오프셋 != JS 문자열 길이」까지 함께 증명한다*. 넷 다 **단언이 왜
+  판별자인지**를 말하고, 그 사실은 레포 전역을 훑어야 알 수 있어 한 지점의 코드로는 보이지 않는다.
+- **`route.fulfill`은 열린 스트리밍 응답을 남길 수 없다(2줄)** — 외부 시스템(Playwright)의 제약이고
+  픽스처가 마지막 재연결을 페이지 종료까지 보류하는 이유다.
+- **containment 단언의 근거(각 2줄, j5·j6)** — 「PTY 에코·bash 스케줄링·에이전트 콜드 스타트 때문에
+  출력 타이밍이 비결정적이라 정확 일치를 쓰지 않는다」. 타임아웃 숫자는 코드에 있지만 **왜
+  containment인가**는 없다.
+- **`Workspace.tsx`의 동시성 계약(약 10줄)** — generation guard가 막는 `A → B → A` 지연 응답,
+  「SSE가 앞서 갔으면 JSON read의 payload는 안전하게 슬라이스할 수 없다」, **reset 소스를 뒤이은
+  이벤트가 오기 전에 닫아야 하는 순서**, `fatal: true` 원샷 디코드가 커서 전진 전에 실패하고
+  펜딩 디코더 상태를 남기지 않는다는 것, 수락 요청의 직렬화. 전부 여러 콜백에 걸친 시간 순서라
+  한 선언으로는 보이지 않는다.
+- **`MAX_IDLE_MS`가 `session.MaxIdle`의 사본이라는 사실(1줄)** — 언어 경계를 넘는 중복인데
+  **어느 게이트도 둘을 대조하지 않는다.** 사본임을 아는 것이 이 상수를 고칠 때의 전부다.
+- **정적 vitals 플레이스홀더의 근거(2줄)** — 「제어면이 CPU/Mem 지표를 아직 내지 않는다」.
+  「없는 것」의 근거라 코드에 나타나지 않는다.
+- **`Toast.tsx`의 「mockup의 데모 전용 트리거를 의도적으로 옮기지 않았다」(2줄)** — 목업과 구현의
+  **의도된 이탈**이고, 렌더 충실도 게이트의 원장 셋(R6 hex/inline · R7 `EXC` · R8 패널)은 어느
+  것도 이 종류를 담지 않는다. 원장이 없으므로 주석이 유일한 기록이다.
+- **`client.ts`의 「경로가 상대라 Vite dev 프록시와 내장 prod 빌드에서 같은 코드가 돈다」(2줄)** ·
+  **`sessionRoutes.ts`의 「`approval-gated`가 `/agent`를 나눠 쓰지 않는 이유」(5줄)** ·
+  **`NewSession.tsx`의 「세 단계는 시각적 어포던스일 뿐」(2줄)** — 셋 다 **대안을 왜 버렸는가**이고,
+  코드는 고른 쪽만 보여 준다.
+- **`shell.css`·`tokens.css`의 절 배너 21곳** — 5차 패스가 `adapter/configmap/store.go`의
+  `// ---- helpers ----`를, 7차 패스가 `api.go`의 절 배너 3개를 유지 판정했다. **같은 형태에 다른
+  기준을 적용하지 않는다.**
+
+**갈린 판정 셋.** ⑴ `j6-stream-recovery.spec.ts`의 「각 이벤트가 UTF-8 경계에서 끝나므로 재전송된
+첫 범위도 유효한 바이트열이다」 — AC-E3이 그 경계 규약을 갖지만, 이 문장이 말하는 것은 **픽스처가
+자기가 시험하는 계약을 깨지 않는다**는 것이라 남겼다. ⑵ `session-deletion.spec.ts`의 「snapshot을
+만들 수 없는 SUT는 브라우저 회귀가 아니라 전제 미달이다」 — `test.skip` 조건이 404/503을 보여 주지만
+**왜 실패가 아니라 skip인가**는 말하지 않는다. ⑶ `client.ts`의 「재연결 정책은 호출자의 몫이고
+EventSource는 호출자가 닫는다」 — 반환 타입이 `EventSource`라는 것만으로는 소유권이 정해지지 않는다.
+셋 다 「지울 수 있다」와 「이 자리에서만 보인다」가 팽팽했고 정책의 **「애매하면 남긴다」**로 남겼다.
+
+**등재하지 않은 파일이 하나 있다 — `web/src/design/README.md`.** 이 파일의 6줄은 주석이 아니라
+지문 정규식 `^\s*(//|/\*|\*[^/])`의 `\*[^/]` 가지가 마크다운의 **볼드 접두 줄**(`**…**`)을 잡은
+것이다. 실제 주석은 0줄이라 「판정했다」고 적을 것이 없고, 등재하면 그 문서를 정상적으로 고칠 때마다
+R2가 빨개져 **판정이 아니라 소음을 강제한다.** `data-plane/Dockerfile`의 `*) echo …` 1줄과 같은
+계열이고 그쪽도 같은 이유로 미등재다. 그래서 이 두 파일 **7줄은 스캔 범위에 있으면서 어느 행에도
+속할 수 없다** — 게이트가 세는 미판정 잔량이 0에 닿지 않는 구조적 이유이며, 없애려면 지문 정규식을
+좁혀야 하고 그것은 정합성 모델 definition 개정 사안이다.
+
+**반면 `tokens.css`는 등재했다.** 그 파일의 오검출 2줄은 CSS 전체 선택자 `* {`인데, 같은 파일이 실
+주석도 갖고 있어 빼면 그 주석들이 미판정으로 남는다. 2차 패스가 Go **포인터 역참조문**을, 7차 패스가
+**임베드 필드**를 그렇게 처리한 것과 같다 — 파일은 등재하고, 오검출은 행의 `결과` 칸에 적는다.
+
+**주석이 0줄이 된 파일 4개(`AppShell.tsx`·`DeleteSessionDialog.tsx`·`StateBadge.tsx`·`icons.tsx`)도
+등재했다.** R2는 *등재된 파일 목록만* 재측정하므로, 빼면 나중에 그 파일에 생기는 주석이 rc=0 아래에서
+영원히 미판정으로 남는다 — 이 원장이 실제로 68줄을 그렇게 놓친 전례가 있다.
+
+**지문이 못 본 제거가 하나 있다.** `shell.css`의 「매핑 표와 양방향으로 일치해야 한다」는 다른
+열 파일과 달리 `/* … */` 블록의 **둘째 줄**이라, 줄 시작이 `/*`도 `*`도 아니어서 패턴에 걸리지 않는다.
+같은 형태에 다른 기준을 적용하지 않으려고 함께 지웠고, 그래서 이 패스의 실제 제거는 **232줄**이지만
+등재 숫자는 231만 움직인다. 정의가 이미 적어 둔 사각지대(줄 끝 주석·raw string)의 세 번째 사례다.
 
 ## 범위 밖
 

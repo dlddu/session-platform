@@ -1,5 +1,4 @@
 // mockup: docs/mockups/workspace.html, docs/mockups/agent-workspace.html, docs/mockups/gated-workspace.html
-// docs/mockups/README.md 의 「화면 ↔ mockup 매핑」 표와 양방향으로 일치해야 한다 (scripts/check-render-fidelity.py).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
@@ -54,16 +53,9 @@ function displayModel(model?: string): string {
   return !model || model === "platform-default" ? "platform default" : model;
 }
 
-// Workspace dispatches its interaction model from the immutable workloadType.
-// Shell keeps J5's cursor-read loop. The agent family — claude-code and
-// approval-gated — writes one queued prompt at a time while a passive SSE
-// connection appends output bytes as they are emitted. POST /read remains an
-// explicit catch-up path, not the normal agent loop.
-//
-// approval-gated differs from claude-code only in what surrounds a run, never
-// in how the run is driven: its waits and verdicts arrive as in-band markers in
-// the same byte stream (AC-F3 deliberately adds no event type), so the cursor
-// contract is untouched and the gate shows up as copy plus one extra panel.
+// 한 화면이 workloadType 으로 상호작용 모델을 갈라 쓴다 — shell 은 커서 read 루프,
+// 에이전트 계열은 SSE 다(AC-E3). approval-gated 가 claude-code 와 갈리는 것은 실행을
+// 「모는 방식」이 아니라 그 둘레뿐이라(AC-F3), 커서 규약은 손대지 않는다.
 export function Workspace() {
   const { id = "" } = useParams();
   const [sess, setSess] = useState<Session | null>(null);
@@ -273,8 +265,6 @@ export function Workspace() {
           return;
         }
 
-        // A reset means retained history diverged. Replace mixed local/server
-        // scrollback with the server's authoritative replay before reconnecting.
         offsetRef.current = result.nextOffset;
         setTerm(result.payload);
         reconnectAttempts = 0;
@@ -329,9 +319,8 @@ export function Workspace() {
           return;
         }
 
-        // The server says retained history is shorter than our local cursor.
-        // Stop this source before its post-reset events, then replace the full
-        // rendered history from JSON /read and reconnect at that read cursor.
+        // 이 소스를 reset 이후 이벤트가 오기 **전에** 닫아야 한다 — 닫지 않으면 교체될
+        // 이력 위에 뒤이은 이벤트가 얹힌다.
         closeTransport();
         const resetToken = transportToken;
         setStreamState("reconnecting");
@@ -379,10 +368,9 @@ export function Workspace() {
         const unseen = bytes.subarray(localOffset - event.offset);
         let text: string;
         try {
-          // Every issued cursor is a UTF-8 boundary, including localOffset
-          // after overlap slicing. One-shot fatal decode makes violations fail
-          // before the byte cursor advances and leaves no pending decoder state
-          // for a concurrent JSON /read catch-up.
+          // One-shot fatal decode makes violations fail before the byte cursor
+          // advances and leaves no pending decoder state for a concurrent JSON
+          // /read catch-up (커서가 UTF-8 경계라는 전제는 AC-E3).
           text = new TextDecoder("utf-8", { fatal: true }).decode(unseen);
         } catch (decodeError) {
           reconnectFromCursor(`invalid UTF-8 output: ${decodeError}`);
@@ -588,9 +576,7 @@ export function Workspace() {
 
   const isAgent = isAgentWorkload(sess.workloadType);
   const gated = isGatedWorkload(sess.workloadType);
-  // AC-F4: exactly one helper pod, and it is the only address the workload pod
-  // is allowed to open a connection to. Absent while the session is frozen —
-  // the helper is reclaimed with the workload pod and holds no state.
+  // AC-F4/F2 — auxiliaryPods 의 첫 항목이 그 세션의 헬퍼 파드다.
   const helperPod = sess.auxiliaryPods?.[0];
   const frozen = sess.state === "snapshot";
   const modelLabel = displayModel(sess.model?.trim());

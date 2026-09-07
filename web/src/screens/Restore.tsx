@@ -1,5 +1,4 @@
 // mockup: docs/mockups/restore.html
-// docs/mockups/README.md 의 「화면 ↔ mockup 매핑」 표와 양방향으로 일치해야 한다 (scripts/check-render-fidelity.py).
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
@@ -19,11 +18,7 @@ const GATED_RESTORE_COPY =
   "history, working directory, shared volume, and accumulated output. The " +
   "approval gate is re-armed; nothing that was pending survives the freeze.";
 
-// Restore — the resume screen for a snapshotted session. Shell sessions thaw a
-// CRIU checkpoint; the agent family (claude-code, approval-gated) restores a
-// filesystem archive, and approval-gated brings its helper pod back with it
-// (AC-F4). switch returns the active session and its immutable workload picks
-// the live route.
+// 복원 메커니즘의 타입별 분기는 AC-B2 · AC-D4 · AC-E5 · AC-F4/F5 가 정본이다.
 export function Restore() {
   const { id = "" } = useParams();
   const [sess, setSess] = useState<Session | null>(null);
