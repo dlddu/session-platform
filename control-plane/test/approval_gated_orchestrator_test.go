@@ -285,6 +285,61 @@ func TestApprovalGated_MCPContainerKnowsItsSession(t *testing.T) {
 	}
 }
 
+// AC-F6: the MCP container gets its own trust anchor for the approved outbound
+// call, and getting it must not drag the provider's credentials — or the
+// provider's own optional CA — across the container boundary AC-F6 draws.
+func TestApprovalGated_MCPContainerHasItsOwnTrustAnchor(t *testing.T) {
+	_, set := newApprovalGatedOrchestrator(t)
+	mcp := container(t, set.helper, k8s.SessionMCPContainerName)
+	proxy := container(t, set.helper, k8s.HelperCredentialProxyContainerName)
+	workload := container(t, set.workload, k8s.ContainerName)
+
+	gatewaySecret, _, ok := secretKey(mcp, k8s.ApprovalGatewayURLEnvVar)
+	if !ok {
+		t.Fatal("MCP container has no gateway Secret to compare the trust anchor's holder against")
+	}
+	secret, key, ok := secretKey(mcp, k8s.SessionMCPCACertEnvVar)
+	if !ok {
+		t.Fatalf("MCP container is missing Secret-backed %s; an https-only tool cannot reach a privately issued origin without it",
+			k8s.SessionMCPCACertEnvVar)
+	}
+	if secret != gatewaySecret || key != k8s.ApprovalGatewayCACertSecretKey {
+		t.Errorf("trust anchor selector = %s/%s, want %s/%s — the container's own Secret, not the provider's",
+			secret, key, gatewaySecret, k8s.ApprovalGatewayCACertSecretKey)
+	}
+	// Optional, so a deployment whose approved origins are publicly issued
+	// keeps the system pool and needs no manifest change.
+	if sel := secretSelector(mcp, k8s.SessionMCPCACertEnvVar); sel == nil || sel.Optional == nil || !*sel.Optional {
+		t.Errorf("%s selector = %+v, want an optional key", k8s.SessionMCPCACertEnvVar, sel)
+	}
+
+	// The provider's CA stays where AC-F6 put it: the proxy container alone.
+	if _, _, ok := secretKey(proxy, k8s.AnthropicCACertEnvVar); !ok {
+		t.Errorf("proxy container lost %s", k8s.AnthropicCACertEnvVar)
+	}
+	for _, c := range []corev1.Container{mcp, workload} {
+		if _, ok := envValue(c, k8s.AnthropicCACertEnvVar); ok {
+			t.Errorf("%s reached container %q; the two trust domains must not be aliased (AC-F6)",
+				k8s.AnthropicCACertEnvVar, c.Name)
+		}
+	}
+	// And the MCP's anchor does not leak the other way.
+	for _, c := range []corev1.Container{proxy, workload} {
+		if _, ok := envValue(c, k8s.SessionMCPCACertEnvVar); ok {
+			t.Errorf("%s reached container %q, which makes no approved outbound call", k8s.SessionMCPCACertEnvVar, c.Name)
+		}
+	}
+}
+
+func secretSelector(c corev1.Container, name string) *corev1.SecretKeySelector {
+	for _, e := range c.Env {
+		if e.Name == name && e.ValueFrom != nil {
+			return e.ValueFrom.SecretKeyRef
+		}
+	}
+	return nil
+}
+
 // The workload pod of an approval-gated session must not carry the credential
 // proxy sidecar: moving it out is what lets AC-F2 leave no external destination
 // on that pod's egress allowlist.

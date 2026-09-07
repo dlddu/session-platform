@@ -159,6 +159,17 @@ const (
 	ApprovalGatewayURLSecretKey    = "url"
 	ApprovalGatewayAPIKeySecretKey = "api-key"
 	ApprovalGatewayUserIDSecretKey = "user-id"
+	// SessionMCPCACertEnvVar carries an optional PEM bundle the MCP container's
+	// approved outbound fetch must trust *in addition to* the system roots, for
+	// a deployment whose reachable https origins are issued by a CA no public
+	// store knows. Same shape and same reasoning as AnthropicCACertEnvVar above,
+	// but deliberately a different env and a different Secret key holder: the
+	// provider gateway's issuer and the issuers of whatever a human approves are
+	// separate trust domains, and AC-F6 keeps the provider credentials — the
+	// optional `ca-cert` among them — out of every container but the proxy.
+	// Keep in sync with data-plane/cmd/agent (sessionMCPCACertEnv).
+	SessionMCPCACertEnvVar         = "SESSION_MCP_CA_CERT"
+	ApprovalGatewayCACertSecretKey = "ca-cert"
 	// SessionIDEnvVar tells the MCP container which session it serves — the
 	// session half of AC-F3's external identifier.
 	// Keep in sync with data-plane/cmd/agent (sessionIDEnv).
@@ -688,6 +699,9 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 			secretEnv(ApprovalGatewayURLEnvVar, o.approvalGatewaySecret, ApprovalGatewayURLSecretKey),
 			secretEnv(ApprovalGatewayAPIKeyEnvVar, o.approvalGatewaySecret, ApprovalGatewayAPIKeySecretKey),
 			secretEnv(ApprovalGatewayUserIDEnvVar, o.approvalGatewaySecret, ApprovalGatewayUserIDSecretKey),
+			// Optional, so a deployment whose approved origins are publicly
+			// issued keeps the system pool and needs no manifest change.
+			optionalSecretEnv(SessionMCPCACertEnvVar, o.approvalGatewaySecret, ApprovalGatewayCACertSecretKey),
 		},
 		// An exec probe for the same reason the proxy container uses one, plus
 		// one specific to this pod: an HTTP probe originates at the kubelet, not

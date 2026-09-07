@@ -36,6 +36,17 @@ const (
 	// collide across two invocations of the same session.
 	requestIDPrefix = "req-"
 	requestIDBytes  = 4
+	// sessionMCPCACertEnv optionally carries a PEM bundle the approved outbound
+	// call must trust in addition to the system roots, for a deployment whose
+	// reachable https origins are issued by a CA no public store knows. The tool
+	// only accepts https targets (validateFetchTarget), so without a way to
+	// widen trust such a deployment can pass the gate and still never complete
+	// the call. It is an address-class setting, not a credential — a CA
+	// certificate is public by construction — and the platform Secret key behind
+	// it is optional exactly like the proxy's `ca-cert`: omit it and the fetch
+	// keeps the system pool it has always used.
+	// Keep in sync with control-plane (SessionMCPCACertEnvVar).
+	sessionMCPCACertEnv = "SESSION_MCP_CA_CERT"
 )
 
 // sessionMCPConfig is what the MCP container was started with.
@@ -48,8 +59,16 @@ type sessionMCPConfig struct {
 	notices *noticeFeed
 }
 
-func newSessionMCPConfig(gateway *approvalGateway) sessionMCPConfig {
-	return sessionMCPConfig{gateway: gateway, fetch: fetchURL, notices: newNoticeFeed()}
+// newSessionMCPConfig builds the container's configuration. It fails rather
+// than returns a degraded config when caPEM is unusable, for the reason
+// trustExtraCA gives: falling back to system-only trust would reject every call
+// to the origin the key was added for.
+func newSessionMCPConfig(gateway *approvalGateway, caPEM string) (sessionMCPConfig, error) {
+	fetcher, err := newApprovedFetcher(caPEM)
+	if err != nil {
+		return sessionMCPConfig{}, err
+	}
+	return sessionMCPConfig{gateway: gateway, fetch: fetcher.fetch, notices: newNoticeFeed()}, nil
 }
 
 // gated reports whether this container can offer external tools at all.
@@ -198,14 +217,27 @@ func newApprovalRequestID() (string, error) {
 	return requestIDPrefix + hex.EncodeToString(buf), nil
 }
 
-func fetchURL(ctx context.Context, target string) (*http.Response, error) {
+// approvedFetcher performs the approved outbound call. It holds its own client
+// rather than using the default one so the deployment's extra trust anchor
+// (sessionMCPCACertEnv) applies here and nowhere else in the process.
+type approvedFetcher struct{ client *http.Client }
+
+func newApprovedFetcher(caPEM string) (approvedFetcher, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if err := trustExtraCA(transport, caPEM, "session MCP"); err != nil {
+		return approvedFetcher{}, err
+	}
+	return approvedFetcher{client: &http.Client{Transport: transport}}, nil
+}
+
+func (f approvedFetcher) fetch(ctx context.Context, target string) (*http.Response, error) {
 	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := f.client.Do(req)
 	if err != nil {
 		cancel()
 		return nil, err

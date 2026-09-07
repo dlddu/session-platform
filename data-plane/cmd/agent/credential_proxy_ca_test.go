@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// The three outcomes providerCACertEnv and trustProviderCA promise, pinned
+// The three outcomes providerCACertEnv and trustExtraCA promise, pinned
 // against a real TLS handshake.
 
 // tlsUpstreamCAPEM re-encodes an httptest TLS server's own certificate as the
@@ -100,14 +100,14 @@ func TestCredentialProxyRejectsCABundleWithoutCertificate(t *testing.T) {
 	}
 }
 
-// trustProviderCA's widen-never-weaken rule, asserted on the transport.
+// trustExtraCA's widen-never-weaken rule, asserted on the transport.
 func TestProviderCAWidensTrustWithoutWeakeningIt(t *testing.T) {
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer upstream.Close()
 	caPEM := tlsUpstreamCAPEM(t, upstream)
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if err := trustProviderCA(transport, caPEM); err != nil {
+	if err := trustExtraCA(transport, caPEM, "credential proxy"); err != nil {
 		t.Fatalf("trust provider CA: %v", err)
 	}
 	if transport.TLSClientConfig == nil || transport.TLSClientConfig.RootCAs == nil {
@@ -120,7 +120,7 @@ func TestProviderCAWidensTrustWithoutWeakeningIt(t *testing.T) {
 	// A transport that carries no TLS configuration of its own still gets a
 	// floor: this branch is what a caller outside newCredentialProxy hits.
 	bare := &http.Transport{}
-	if err := trustProviderCA(bare, caPEM); err != nil {
+	if err := trustExtraCA(bare, caPEM, "credential proxy"); err != nil {
 		t.Fatalf("trust provider CA on a bare transport: %v", err)
 	}
 	if bare.TLSClientConfig.MinVersion != tls.VersionTLS12 {
@@ -133,7 +133,7 @@ func TestProviderCAWidensTrustWithoutWeakeningIt(t *testing.T) {
 
 func TestEmptyProviderCALeavesTrustAtTheSystemDefault(t *testing.T) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if err := trustProviderCA(transport, ""); err != nil {
+	if err := trustExtraCA(transport, "", "credential proxy"); err != nil {
 		t.Fatalf("empty bundle: %v", err)
 	}
 	// nil RootCAs is how the standard library says "use the system pool".

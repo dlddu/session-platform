@@ -71,32 +71,37 @@ func newCredentialProxy(rawUpstream, token, caPEM string, logger *slog.Logger) (
 	// A provider endpoint is an explicitly configured security boundary. Never
 	// let ambient HTTP_PROXY/HTTPS_PROXY variables redirect the real credential.
 	transport.Proxy = nil
-	if err := trustProviderCA(transport, caPEM); err != nil {
+	if err := trustExtraCA(transport, caPEM, "credential proxy"); err != nil {
 		return nil, err
 	}
 	return newCredentialProxyWithTransport(rawUpstream, token, logger, transport)
 }
 
-// trustProviderCA adds pem to the transport's roots. It *appends to* the system
-// pool rather than replacing it: a private gateway is an addition to the set of
+// trustExtraCA adds pem to the transport's roots. It *appends to* the system
+// pool rather than replacing it: a private issuer is an addition to the set of
 // trustworthy issuers, not a reason to stop trusting the public ones, and
 // replacing the pool would silently break any deployment that later moves back
 // to a publicly issued endpoint. An empty pem leaves the transport untouched so
 // the default path keeps using the system pool the standard library resolves
 // lazily. A non-empty pem that yields no certificate is a configuration error
-// and fails loudly here rather than at the first request: a proxy that silently
-// ignored it would fall back to system-only trust and reject every call to the
-// gateway it was configured for.
-func trustProviderCA(transport *http.Transport, pem string) error {
+// and fails loudly here rather than at the first request: a client that
+// silently ignored it would fall back to system-only trust and reject every
+// call to the origin it was configured for.
+//
+// subject names the caller in those errors because two containers share this:
+// the credential proxy's provider upstream (AC-E6/AC-F6) and the session MCP's
+// approved outbound fetch (AC-F3). They are separate trust domains projected
+// from separate Secret keys; only the pool-building rule is common.
+func trustExtraCA(transport *http.Transport, pem, subject string) error {
 	if pem == "" {
 		return nil
 	}
 	roots, err := x509.SystemCertPool()
 	if err != nil {
-		return fmt.Errorf("credential proxy could not load system CA pool: %w", err)
+		return fmt.Errorf("%s could not load system CA pool: %w", subject, err)
 	}
 	if !roots.AppendCertsFromPEM([]byte(pem)) {
-		return errors.New("credential proxy CA bundle contains no certificate")
+		return fmt.Errorf("%s CA bundle contains no certificate", subject)
 	}
 	if transport.TLSClientConfig == nil {
 		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}

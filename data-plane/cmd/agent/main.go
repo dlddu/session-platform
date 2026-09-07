@@ -145,7 +145,15 @@ func main() {
 			logger.Warn("session MCP has no approval gate; it will offer no tools", "err", err)
 			gateway = nil
 		}
-		handler = sessionMCPRoutes(logger, newSessionMCPConfig(gateway))
+		config, err := newSessionMCPConfig(gateway, os.Getenv(sessionMCPCACertEnv))
+		if err != nil {
+			// Unlike a missing gateway triple — which leaves a container that
+			// runs with no tools — an unusable trust anchor is a configuration
+			// error the operator meant to matter, so it stops the container.
+			logger.Error("failed to initialise session MCP", "err", err)
+			os.Exit(1)
+		}
+		handler = sessionMCPRoutes(logger, config)
 		logger.Info("session MCP started", "addr", addr, "gated", gateway != nil)
 	case workloadCredentialProxy:
 		placement, err := credentialProxyPlacementFromEnv()
