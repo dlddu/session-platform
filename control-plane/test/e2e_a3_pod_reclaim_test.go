@@ -2,14 +2,7 @@
 
 // 검증 AC: AC-A3
 //
-// Freezing a session reclaims the cluster resources it held (docs/prd/architecture.md,
-// docs/test/architecture.md scenario 3): the API clears the pod field AND the
-// backing Pod object is actually deleted — reclaim, not merely dropped from the
-// API's view.
-//
-// The freeze is driven by the product snapshot endpoint; its automatic
-// counterpart (service.IdleReaper's idle window, AC-B1) is a registered
-// exception in docs/test/e2e.md.
+// docs/prd/architecture.md, docs/test/architecture.md scenario 3.
 package e2e_test
 
 import (
@@ -28,7 +21,6 @@ func TestPodReclaim_FreezeDeletesTheBackingPod(t *testing.T) {
 	}
 	ns := sessionNamespace()
 
-	// Precondition: an active session backed by a real Pod object.
 	s := createSession(t, uniqueName(t))
 	if s.Pod == "" {
 		t.Fatal("created session has no pod")
@@ -46,9 +38,7 @@ func TestPodReclaim_FreezeDeletesTheBackingPod(t *testing.T) {
 		t.Fatalf("pod after snapshot = %q, want it reclaimed (AC-A3)", frozen.Pod)
 	}
 
-	// Ground truth from the cluster: the backing Pod object is actually gone (or
-	// at least accepted for deletion). Poll past the pod's termination grace
-	// (default 30s) before giving up.
+	// Poll past the pod's termination grace (k8s default 30s) before giving up.
 	deadline := time.Now().Add(90 * time.Second)
 	for {
 		pod, err := cs.CoreV1().Pods(ns).Get(context.Background(), s.Pod, metav1.GetOptions{})
@@ -67,8 +57,6 @@ func TestPodReclaim_FreezeDeletesTheBackingPod(t *testing.T) {
 		time.Sleep(time.Second)
 	}
 
-	// And the session reads back unambiguously frozen — an independent
-	// confirmation the reclaim stuck.
 	got := getSession(t, s.ID)
 	if got.State != "snapshot" || got.Pod != "" {
 		t.Fatalf("session after snapshot = %+v, want state=snapshot pod=\"\" (AC-A3)", got)

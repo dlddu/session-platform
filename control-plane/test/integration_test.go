@@ -1,12 +1,6 @@
 //go:build integration
 
 // Package integration is the opt-in happy-path harness (`make test-integration`).
-//
-// It mounts the HTTP handlers over deterministic in-memory adapters for the
-// create/list/switch/terminate and session-to-pod mapping scenarios. Scenario 4
-// additionally builds the production adapters when CRIU_ENABLED=1 and its
-// cluster, privilege, and archive-store prerequisites are configured. The full
-// deployed black-box path lives in the e2e-tagged suite.
 package integration_test
 
 import (
@@ -70,7 +64,6 @@ func create(t *testing.T, srv *httptest.Server, name string) session.Session {
 	return s
 }
 
-// Scenario 1 (AC-A1): creating a session provisions a dedicated data plane pod.
 func TestScenario1_CreateProvisionsPod(t *testing.T) {
 	srv, _ := harness(t)
 	s := create(t, srv, "api-gateway-dev")
@@ -82,8 +75,6 @@ func TestScenario1_CreateProvisionsPod(t *testing.T) {
 	}
 }
 
-// Scenario 2 (AC-A2): N sessions => N unique pods; terminating one doesn't
-// affect the others.
 func TestScenario2_OneToOneMappingAndIsolation(t *testing.T) {
 	srv, svc := harness(t)
 	a := create(t, srv, "s-a")
@@ -105,7 +96,6 @@ func TestScenario2_OneToOneMappingAndIsolation(t *testing.T) {
 	}
 }
 
-// Scenario 3 (AC-A3): snapshotting reclaims the pod.
 func TestScenario3_SnapshotReclaimsPod(t *testing.T) {
 	srv, svc := harness(t)
 	s := create(t, srv, "model-train")
@@ -118,15 +108,8 @@ func TestScenario3_SnapshotReclaimsPod(t *testing.T) {
 	}
 }
 
-// Scenario 4 (AC-D4, concretising AC-B3): a session's shell state — here an env
-// var and the working directory — survives a snapshot→restore round-trip, and
-// the read cursor issued before the freeze stays valid afterwards (the
-// agent serializes scrollback alongside the CRIU process images).
-//
-// Unlike scenarios 1–3 this needs a real shell and the cluster-backed Service.
-// It runs only where CRIU_ENABLED=1 and the cluster kernel/privilege/store
-// prerequisites are configured; ordinary unit CI skips it. Snapshot is a direct
-// Service call — the public product transition is driven by the idle reaper.
+// Snapshot here is a direct Service call — the public product transition is
+// driven by the idle reaper.
 func TestScenario4_CRIUIntegrity(t *testing.T) {
 	if os.Getenv("CRIU_ENABLED") != "1" {
 		t.Skip("CRIU verification environment not configured; see docs/criu-verification.md")
@@ -134,9 +117,8 @@ func TestScenario4_CRIUIntegrity(t *testing.T) {
 	svc := realService(t) // skips if no CRIU-capable runtime is reachable
 	ctx := context.Background()
 
-	// Set shell state that must survive the freeze (AC-D4 markers): an env var
-	// and the working directory. export/cd emit nothing to stdout — the PTY
-	// echoes the typed input — so anchor the pre-freeze cursor on that echo.
+	// export/cd emit nothing to stdout — the PTY echoes the typed input — so
+	// anchor the pre-freeze cursor on that echo.
 	sess := createReal(t, svc, "criu-integrity")
 	writeShell(t, svc, sess.ID, "export CRIUMARK=frozen42\n")
 	writeShell(t, svc, sess.ID, "cd /tmp\n")
@@ -144,7 +126,6 @@ func TestScenario4_CRIUIntegrity(t *testing.T) {
 		return strings.Contains(p, "CRIUMARK=frozen42")
 	})
 
-	// Freeze in-process, reclaiming the pod (AC-B1/AC-A3).
 	frozen, err := svc.Snapshot(ctx, sess.ID)
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
@@ -153,16 +134,9 @@ func TestScenario4_CRIUIntegrity(t *testing.T) {
 		t.Fatalf("after snapshot state=%q pod=%q, want snapshot with reclaimed pod", frozen.State, frozen.Pod)
 	}
 
-	// Accessing the frozen session restores the checkpoint into a new pod (AC-B2)
-	// and runs on top of the frozen context: $CRIUMARK and the cwd must be
-	// exactly as before the freeze.
 	writeShell(t, svc, sess.ID, "echo restored:$CRIUMARK\n")
 	writeShell(t, svc, sess.ID, "pwd\n")
 
-	// AC-D4 + cursor continuity: read the delta from the *pre-freeze* cursor.
-	// That the cursor is still a valid offset into the restored buffer (not past
-	// its end) is the buffer-in-checkpoint guarantee. The delta proves the frozen
-	// env var ($CRIUMARK → frozen42) and cwd (pwd → /tmp) came back intact.
 	delta, _ := eventuallyReadShell(t, svc, sess.ID, cursorBefore, func(p string) bool {
 		return strings.Contains(p, "restored:frozen42") && strings.Contains(p, "/tmp")
 	})
@@ -170,8 +144,6 @@ func TestScenario4_CRIUIntegrity(t *testing.T) {
 		t.Fatalf("delta from the pre-freeze cursor replayed pre-freeze input %q; want the post-restore delta only (cursor continuity)", delta)
 	}
 
-	// offset 0 still replays the whole history across the freeze — pre-freeze
-	// input echo and post-restore output both present, in order (non-consuming).
 	full, _ := eventuallyReadShell(t, svc, sess.ID, 0, func(p string) bool {
 		return strings.Contains(p, "CRIUMARK=frozen42") && strings.Contains(p, "restored:frozen42")
 	})
@@ -180,8 +152,6 @@ func TestScenario4_CRIUIntegrity(t *testing.T) {
 	}
 }
 
-// realService builds the production adapters for a genuine shell CRIU
-// snapshot→restore and skips when its opt-in cluster prerequisites are absent.
 func realService(t *testing.T) *service.Service {
 	t.Helper()
 	client, ns, err := k8s.BuildClient()
@@ -197,16 +167,13 @@ func realService(t *testing.T) *service.Service {
 		k8s.WithCheckpointPrivileged(true))
 	store := configmap.NewStore(client, ns)
 	ag := agent.NewHTTPClient(client, ns)
-	// Agent-driven checkpointer (the wired path). An in-memory store bridges the
-	// archive from checkpoint to restore within this test process, so the AC-D4
-	// round trip is verified without needing S3 — the S3 store is covered by unit
+	// The in-memory store bridges the archive from checkpoint to restore inside
+	// this process, so the round trip needs no S3 — that store is covered by unit
 	// tests and the deployed control plane.
 	ckpt := criu.NewAgentCheckpointer(ag, &memStore{blobs: map[string][]byte{}})
 	return service.New(orch, store, ckpt, ag)
 }
 
-// memStore is an in-process CheckpointStore for the CRIU round-trip test: it
-// keeps archives in memory between checkpoint and restore.
 type memStore struct {
 	mu    sync.Mutex
 	blobs map[string][]byte
@@ -233,8 +200,6 @@ func (m *memStore) Get(_ context.Context, ref string) (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(b)), nil
 }
 
-// createReal creates a session through the real Service and schedules its
-// teardown (pod + state reclaimed) at test end regardless of outcome.
 func createReal(t *testing.T, svc *service.Service, name string) *session.Session {
 	t.Helper()
 	sess, err := svc.Create(context.Background(), session.CreateRequest{Name: name})
@@ -245,8 +210,6 @@ func createReal(t *testing.T, svc *service.Service, name string) *session.Sessio
 	return sess
 }
 
-// writeShell injects a line into the session shell's stdin (AC-D2), restoring or
-// promoting the session first per the uniform resume-on-access rule.
 func writeShell(t *testing.T, svc *service.Service, id, payload string) {
 	t.Helper()
 	if _, err := svc.Write(context.Background(), id, payload); err != nil {
@@ -254,10 +217,8 @@ func writeShell(t *testing.T, svc *service.Service, id, payload string) {
 	}
 }
 
-// eventuallyReadShell polls Read(offset) until the payload satisfies ok, failing
-// after a deadline. Shell output timing is non-deterministic, so assertions are
-// containment + eventually, never exact matches (mirrors the data plane agent's
-// own tests).
+// Shell output timing is non-deterministic, so assertions here are containment
+// + eventually, never exact matches (mirrors the data plane agent's own tests).
 func eventuallyReadShell(t *testing.T, svc *service.Service, id string, offset int64, ok func(string) bool) (string, int64) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)

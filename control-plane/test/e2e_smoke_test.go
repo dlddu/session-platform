@@ -2,13 +2,8 @@
 
 // 검증 AC: 없음 (스모크·인프라)
 //
-// Non-AC smoke: is the deployed SUT reachable and is its /api/v1 surface wired
-// up at all? These run first so a broken deployment fails here with an obvious
-// message instead of surfacing as a confusing AC failure.
-//
-// Registered as a non-AC matching unit in docs/test/e2e.md (1:1 rule 3): healthz,
-// the API-surface round trip (create -> list -> get), and the 404 error mapping.
-// None of these is an acceptance criterion of its own.
+// Registered as a non-AC matching unit in docs/test/e2e.md §"비-AC 파일 등재"
+// (1:1 rule 3).
 package e2e_test
 
 import (
@@ -31,8 +26,6 @@ func TestSmoke_Healthz(t *testing.T) {
 	}
 }
 
-// The API surface round-trips: a created session is listed and fetchable, and
-// the three views agree.
 func TestSmoke_SessionSurfaceRoundTrips(t *testing.T) {
 	s := createSession(t, uniqueName(t))
 
@@ -66,7 +59,6 @@ func TestSmoke_SessionSurfaceRoundTrips(t *testing.T) {
 	}
 }
 
-// Error mapping: an unknown session id is a 404.
 func TestSmoke_UnknownSessionIsNotFound(t *testing.T) {
 	resp, _ := do(t, http.MethodGet, "/api/v1/sessions/does-not-exist", nil)
 	if resp.StatusCode != http.StatusNotFound {

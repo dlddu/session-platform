@@ -2,30 +2,11 @@
 
 // 검증 AC: AC-E6
 //
-// Where the platform's secrets land, asserted on the deployed SUT
-// (docs/prd/claude-code-workload.md AC-E6). The AC's title is a placement
-// claim — provider credentials in the sidecar, the plugin token in the main
-// container, the platform model as an optional key — and placement is only
-// worth stating because of what it buys: the container that runs model and
-// user code cannot reach the provider token at all.
+// docs/prd/claude-code-workload.md AC-E6, asserted on the deployed SUT.
 //
-// Two neighbours already own parts of AC-E6 and this file deliberately does not
-// re-buy them:
-//
-//   - the pod spec the orchestrator *submits* is asserted in-process against a
-//     fake clientset by control-plane/test/workload_type_orchestrator_test.go
-//     (build tag `integration`),
-//   - the proxy's behaviour contract — header allowlist, 1xx redaction, the
-//     64 MiB raw cap, tail-safe split-token redaction, refusing to start on an
-//     unparseable ca-cert — is unit-owned by data-plane/cmd/agent/
-//     credential_proxy*_test.go.
-//
-// What only e2e can buy is the deployed ground truth: the pod the real API
-// server admitted, the environment those containers actually resolved from the
-// Secret, the real authorizer's answer for the data-plane identity, and the
-// public API's silence about both tokens. Every secret value compared below is
-// read from the cluster Secret rather than written here, so this file holds no
-// copy of a credential and cannot drift from the deployment.
+// Every secret value compared below is read from the cluster Secret rather than
+// written here, so this file holds no copy of a credential and cannot drift from
+// the deployment.
 package e2e_test
 
 import (
@@ -49,8 +30,7 @@ const (
 	// credentialsSecretName is the platform-global Secret the orchestrator
 	// references; the deployment provisions it (deploy/, k8s/ example).
 	credentialsSecretName = "claude-code-credentials"
-	// The loopback endpoint and non-secret placeholder the main container gets
-	// in place of the provider's address and token.
+	// What the main container gets in place of the provider's address and token.
 	proxyURLForMainContainer = "http://127.0.0.1:8091"
 	proxyPlaceholderToken    = "session-platform-proxy"
 	// dataPlaneServiceAccount is the session pod's identity: read-only cluster
@@ -58,10 +38,9 @@ const (
 	dataPlaneServiceAccount = "data-plane"
 )
 
-// e6Session is one claude-code session under test plus the cluster handles its
-// assertions need. Creating it is the expensive part (the pod must reach Ready,
-// which means entrypoint.sh finished its plugin bootstrap), so each test makes
-// one and hangs every assertion it can off that single pod.
+// Creating one is the expensive part (the pod must reach Ready, which means
+// entrypoint.sh finished its plugin bootstrap), so each test makes a single
+// session and hangs every assertion it can off that one pod.
 type e6Session struct {
 	session typedSession
 	pod     *corev1.Pod
@@ -70,8 +49,7 @@ type e6Session struct {
 	ns      string
 }
 
-// newE6Session creates a claude-code session and fetches its pod. It reports
-// ok=false when the run has no cluster access, so a suite pointed at a
+// Reports ok=false when the run has no cluster access, so a suite pointed at a
 // non-cluster SUT skips the cluster half instead of failing on it.
 func newE6Session(t *testing.T, body map[string]any) (e6Session, bool) {
 	t.Helper()
@@ -95,8 +73,7 @@ func newE6Session(t *testing.T, body map[string]any) (e6Session, bool) {
 	return e6Session{session: s, pod: getPodEventually(t, cs, ns, s.Pod), cs: cs, cfg: cfg, ns: ns}, true
 }
 
-// container returns a named container of the session pod, failing with the
-// pod's actual container list so a rename reads as a rename.
+// Fails with the pod's actual container list, so a rename reads as a rename.
 func (e e6Session) container(t *testing.T, name string) corev1.Container {
 	t.Helper()
 	c, found := containerByName(e.pod, name)
@@ -106,9 +83,9 @@ func (e e6Session) container(t *testing.T, name string) corev1.Container {
 	return c
 }
 
-// sh runs a /bin/sh script in one of the pod's containers. Secret values are
-// passed as positional arguments rather than interpolated into the script, so
-// no credential is ever spliced into a command line this test builds.
+// Secret values are passed as positional arguments rather than interpolated into
+// the script, so no credential is ever spliced into a command line this test
+// builds.
 func (e e6Session) sh(t *testing.T, container, script string, args ...string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -121,9 +98,8 @@ func (e e6Session) sh(t *testing.T, container, script string, args ...string) st
 	return stdout
 }
 
-// credentialsSecret reads the platform Secret from the cluster. The test runner
-// may do this — it holds the cluster's admin kubeconfig; the data plane may
-// not, which is exactly what the authorization subtest asserts.
+// The test runner may read this — it holds the cluster's admin kubeconfig; the
+// data plane may not, which is exactly what the authorization subtest asserts.
 func (e e6Session) credentialsSecret(t *testing.T) map[string]string {
 	t.Helper()
 	secret, err := e.cs.CoreV1().Secrets(e.ns).Get(context.Background(), credentialsSecretName, metav1.GetOptions{})
@@ -137,7 +113,6 @@ func (e e6Session) credentialsSecret(t *testing.T) map[string]string {
 	return values
 }
 
-// e6Env finds an environment entry by name.
 func e6Env(c corev1.Container, name string) (corev1.EnvVar, bool) {
 	for _, env := range c.Env {
 		if env.Name == name {
@@ -147,8 +122,6 @@ func e6Env(c corev1.Container, name string) (corev1.EnvVar, bool) {
 	return corev1.EnvVar{}, false
 }
 
-// e6SecretRef is the Secret key an environment entry reads, or nil for a
-// literal.
 func e6SecretRef(env corev1.EnvVar) *corev1.SecretKeySelector {
 	if env.ValueFrom == nil {
 		return nil
@@ -156,10 +129,8 @@ func e6SecretRef(env corev1.EnvVar) *corev1.SecretKeySelector {
 	return env.ValueFrom.SecretKeyRef
 }
 
-// e6RequireSecretRef asserts that an entry is backed by the given key of the
-// credentials Secret, with the expected optionality. Optional or not is the
-// difference between "the deployment must provide this" and "absent means the
-// documented fallback", which AC-E6 states key by key.
+// Optional or not is the difference between "the deployment must provide this"
+// and "absent means the documented fallback".
 func e6RequireSecretRef(t *testing.T, c corev1.Container, envName, key string, optional bool) {
 	t.Helper()
 	env, found := e6Env(c, envName)
@@ -179,8 +150,8 @@ func e6RequireSecretRef(t *testing.T, c corev1.Container, envName, key string, o
 	}
 }
 
-// e6RequireLiteral asserts an entry carries a plain value and no Secret ref at
-// all — the point of the placement, not an accident of how it is spelled.
+// No Secret ref at all — that is the point of the placement, not an accident of
+// how the value is spelled.
 func e6RequireLiteral(t *testing.T, c corev1.Container, envName, want string) {
 	t.Helper()
 	env, found := e6Env(c, envName)
@@ -195,7 +166,6 @@ func e6RequireLiteral(t *testing.T, c corev1.Container, envName, want string) {
 	}
 }
 
-// e6RequireAbsent asserts a container was given no such environment entry.
 func e6RequireAbsent(t *testing.T, c corev1.Container, envNames ...string) {
 	t.Helper()
 	for _, name := range envNames {
@@ -206,9 +176,8 @@ func e6RequireAbsent(t *testing.T, c corev1.Container, envNames ...string) {
 	}
 }
 
-// e6Allowed asks the cluster's own authorizer whether user may perform verb on
-// resource. Reading the RBAC objects would only re-state the manifests; a
-// SubjectAccessReview is the authorizer's answer.
+// Reading the RBAC objects would only re-state the manifests; a
+// SubjectAccessReview is the authorizer's own answer.
 func e6Allowed(t *testing.T, cs kubernetes.Interface, user, ns, verb, resource string) bool {
 	t.Helper()
 	review, err := cs.AuthorizationV1().SubjectAccessReviews().Create(context.Background(),
@@ -226,7 +195,6 @@ func e6Allowed(t *testing.T, cs kubernetes.Interface, user, ns, verb, resource s
 	return review.Status.Allowed
 }
 
-// e6ProbeFields parses the `key=value` lines an in-pod probe prints.
 func e6ProbeFields(t *testing.T, out string) map[string]string {
 	t.Helper()
 	fields := map[string]string{}
@@ -238,12 +206,11 @@ func e6ProbeFields(t *testing.T, out string) map[string]string {
 	return fields
 }
 
-// e6TokenReachProbe reports what the tool-running container can see of the
-// provider token. `control` counts the process environments holding the
-// non-secret placeholder and `leak` those holding the real token: the control
-// must hit, or a zero `leak` would mean nothing more than an unreadable /proc.
-// $1 is the real token and $2 the placeholder — passed as arguments so neither
-// is spliced into a command line.
+// `control` counts the process environments holding the non-secret placeholder
+// and `leak` those holding the real token: the control must hit, or a zero
+// `leak` would mean nothing more than an unreadable /proc. $1 is the real token
+// and $2 the placeholder — passed as arguments so neither is spliced into a
+// command line.
 const e6TokenReachProbe = `printf 'own=%s\n' "$ANTHROPIC_AUTH_TOKEN"
 printf 'control=%s\n' "$(grep -lF "$2" /proc/[0-9]*/environ 2>/dev/null | wc -l | tr -d ' ')"
 printf 'leak=%s\n' "$(grep -lF "$1" /proc/[0-9]*/environ 2>/dev/null | wc -l | tr -d ' ')"`
@@ -266,8 +233,6 @@ func TestCredentialPlacementOnTheDeployedSUT(t *testing.T) {
 		// the key and keeps the system pool.
 		e6RequireSecretRef(t, proxy, "ANTHROPIC_CA_CERT", "ca-cert", true)
 
-		// The main container is told where the proxy is and given a placeholder
-		// that is not a secret. Nothing it holds reaches the Secret.
 		e6RequireLiteral(t, main, "ANTHROPIC_BASE_URL", proxyURLForMainContainer)
 		e6RequireLiteral(t, main, "ANTHROPIC_AUTH_TOKEN", proxyPlaceholderToken)
 		e6RequireAbsent(t, main, "ANTHROPIC_CA_CERT")
@@ -324,7 +289,6 @@ func TestCredentialPlacementOnTheDeployedSUT(t *testing.T) {
 			t.Fatalf("the proxy sidecar did not resolve the platform token from the Secret (got %d bytes, want %d)",
 				len(got), len(token))
 		}
-		// ...and it was given no plugin token, which lives one container over.
 		if got := strings.TrimSpace(e.sh(t, credentialsContainer, `printf %s "${K3S_MCP_TOKEN-UNSET}"`)); got != "UNSET" {
 			t.Fatal("the proxy sidecar carries K3S_MCP_TOKEN; the plugin token belongs to the main container only")
 		}
@@ -388,9 +352,7 @@ func TestCredentialPlacementOnTheDeployedSUT(t *testing.T) {
 	})
 }
 
-// A concrete model is a literal on the main container and outranks the Secret
-// default — the half of the model contract a platform-default session cannot
-// show.
+// The half of the model contract a platform-default session cannot show.
 func TestCredentialPlacement_ConcreteModelLiteralBeatsThePlatformDefault(t *testing.T) {
 	const concrete = "claude-e2e-alternate"
 	e, ok := newE6Session(t, map[string]any{
@@ -412,8 +374,8 @@ func TestCredentialPlacement_ConcreteModelLiteralBeatsThePlatformDefault(t *test
 	}
 }
 
-// Credentials cannot be chosen by the caller. The create DTO decodes strictly,
-// so a credential-shaped field is an unknown field and no session is created.
+// The create DTO decodes strictly, so a credential-shaped field is an unknown
+// field and no session is created.
 func TestCredentialPlacement_CredentialFieldsCannotBeSetByTheCreateRequest(t *testing.T) {
 	for _, field := range []string{"authToken", "baseUrl", "anthropicAuthToken", "k3sMcpToken"} {
 		t.Run(field, func(t *testing.T) {

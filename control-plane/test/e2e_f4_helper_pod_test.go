@@ -2,54 +2,15 @@
 
 // 검증 AC: AC-F4
 //
-// The session-dedicated helper pod, asserted on the *deployed* SUT
-// (docs/prd/approval-gated-workload.md AC-F4). AC-F4 is a claim about a pod's
-// ownership, its lifetime and the boundary between its two containers. Of the
-// four things its verification method names, this file buys everything the
-// deployed SUT can currently answer:
+// docs/prd/approval-gated-workload.md AC-F4, asserted on the deployed SUT.
 //
-//  1. dedication — two live sessions get two different helper pods and neither
-//     is shared,
-//  2. reclaim — deleting a session takes *both* of its pods away, so AC-A3's
-//     "resources are recovered" holds across the pair rather than across the
-//     workload pod alone,
-//  3. lifetime coupling — a *refused* freeze reclaims neither pod, which is the
-//     same claim read from the other side: the pair goes away when the session
-//     ends, not when someone asks for a snapshot (see the next paragraph),
-//  4. isolation — the two helper containers share only the network namespace,
-//     so neither can read the other's process environments.
-//
-// What is deliberately missing, and why. AC-F4 also asks for the *snapshot* half
-// of reclaim and for the restore round (a fresh pair, the workload pod rewired
-// to the helper made for that restore). Neither is observable here: this type
-// has no archive strategy registered, so control-plane/internal/service's
-// checkpointerFor returns ErrCheckpointDisabled and the public API answers 503.
-// That refusal is intentional and owned elsewhere — see the comment on
-// TestSnapshotIsRefusedForApprovalGated in
-// control-plane/internal/service/workload_type_test.go, and AC-F5, whose
-// filesystem archive is the precondition. Rather than skip past the hole, case 3
-// asserts the refusal and its ground truth, so this file turns red the moment
-// the precondition lifts; its failure message says what to put back. The two
-// branches are registered in docs/test/e2e.md § "남은 미검증 분기 (공백은 아님)".
-//
-// Why an e2e file at all, when a fake clientset already sees pod specs: the
-// in-process suite (control-plane/test/approval_gated_orchestrator_test.go,
-// build tag `integration`) owns what a submitted spec looks like — that a
-// helper pod is provisioned, how the credentials are split across its two
-// containers, that a failed workload pod takes the helper with it, and that a
-// restore round builds a fresh pair. None of that is re-bought here. What only
-// the deployed cluster can answer is whether the real API server and kubelet
-// agree: pods that actually disappear, pods that are actually still standing
-// after a refusal, and a PID namespace that is actually not shared — a fake
-// clientset has no processes to isolate and so cannot buy branch 4 at all, and
-// its unit-level sibling counts survivors without being able to say *which* pod
-// survived.
-//
-// Neighbours this file also does not re-buy: AC-F1 owns the type axis and the
-// shape of the set it provisions (one helper pod, two containers, both Ready);
-// AC-F2 owns the network boundary; AC-F6 owns which credential lands in which
-// container. This file takes the helper pod as given and asks who it belongs
-// to, how long it lives, and what its two halves can see of each other.
+// The snapshot half of reclaim and the restore round are not observable yet —
+// this type has no archive strategy registered, so checkpointerFor returns
+// ErrCheckpointDisabled and the API answers 503. Rather than skip past the hole,
+// the refused-freeze case asserts that refusal and its ground truth, so this
+// file turns red the moment the precondition lifts and its failure message says
+// what to put back. Both branches are registered in docs/test/e2e.md
+// § "남은 미검증 분기 (공백은 아님)".
 package e2e_test
 
 import (
@@ -67,10 +28,8 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-// f4Session is the wire view this file needs. `auxiliaryPods` is the public
-// name for a session's session-scoped pods, and it is what makes the pair
-// observable from outside the cluster — the cluster assertions below check that
-// the API's answer and the API server's answer are the same answer.
+// `auxiliaryPods` is the public name for a session's session-scoped pods, and it
+// is what makes the pair observable from outside the cluster.
 type f4Session struct {
 	ID            string   `json:"id"`
 	State         string   `json:"state"`
@@ -113,10 +72,9 @@ func f4Get(t *testing.T, id string) f4Session {
 	return s
 }
 
-// f4TheHelperPod is the session's one helper pod, cross-checked against the
-// public API. Two independent sources naming the same pod is what rules out a
-// helper the control plane forgot to record — or a record naming a pod that was
-// never created.
+// Two independent sources naming the same pod is what rules out a helper the
+// control plane forgot to record — or a record naming a pod that was never
+// created.
 func f4TheHelperPod(t *testing.T, cs kubernetes.Interface, ns string, s f4Session) corev1.Pod {
 	t.Helper()
 	helpers := helperPodsFor(t, cs, ns, s.ID)
@@ -130,8 +88,7 @@ func f4TheHelperPod(t *testing.T, cs kubernetes.Interface, ns string, s f4Sessio
 	return helpers[0]
 }
 
-// f4AwaitReclaimed blocks until the pod is gone or accepted for deletion. The
-// window clears the default 30s termination grace, same as AC-A3's file.
+// The window clears the k8s default 30s termination grace, same as AC-A3's file.
 func f4AwaitReclaimed(t *testing.T, cs kubernetes.Interface, ns, name, why string) {
 	t.Helper()
 	deadline := time.Now().Add(90 * time.Second)
@@ -154,8 +111,8 @@ func f4AwaitReclaimed(t *testing.T, cs kubernetes.Interface, ns, name, why strin
 	}
 }
 
-// f4Sh runs a /bin/sh script in one container of a pod, passing values as
-// positional arguments rather than splicing them into the command line.
+// Values go in as positional arguments rather than being spliced into the
+// command line.
 func f4Sh(t *testing.T, cs kubernetes.Interface, cfg *rest.Config, ns, pod, container, script string, args ...string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -168,18 +125,15 @@ func f4Sh(t *testing.T, cs kubernetes.Interface, cfg *rest.Config, ns, pod, cont
 	return stdout
 }
 
-// f4NeighbourProbe counts the process environments in this container that carry
-// its own workload marker and those that carry the neighbour container's. The
-// own count is the control: it must hit, or a zero neighbour count would say
-// nothing more than "/proc is unreadable here".
+// The own-marker count is the control: it must hit, or a zero neighbour count
+// would say nothing more than "/proc is unreadable here".
 //
 // $1 is this container's marker and $2 the neighbour's.
 const f4NeighbourProbe = `printf 'own=%s\n' "$(grep -lF "$1" /proc/[0-9]*/environ 2>/dev/null | wc -l | tr -d ' ')"
 printf 'neighbour=%s\n' "$(grep -lF "$2" /proc/[0-9]*/environ 2>/dev/null | wc -l | tr -d ' ')"`
 
-// f4WorkloadMarker reads the container's own DATA_PLANE_WORKLOAD value. Read
-// from the running container rather than written here so the probe below keeps
-// meaning what it says if the deployment renames a workload.
+// Read from the running container rather than written here, so the probe below
+// keeps meaning what it says if the deployment renames a workload.
 func f4WorkloadMarker(t *testing.T, cs kubernetes.Interface, cfg *rest.Config, ns, pod, container string) string {
 	t.Helper()
 	got := strings.TrimSpace(f4Sh(t, cs, cfg, ns, pod, container, `printf %s "$DATA_PLANE_WORKLOAD"`))
@@ -189,9 +143,8 @@ func f4WorkloadMarker(t *testing.T, cs kubernetes.Interface, cfg *rest.Config, n
 	return "DATA_PLANE_WORKLOAD=" + got
 }
 
-// Two live sessions get two different helper pods, and each helper carries only
-// its own session's identifier. A helper shared between sessions would show up
-// under both selectors; one mislabelled would show up under neither.
+// A helper shared between sessions would show up under both selectors; one
+// mislabelled would show up under neither.
 func TestApprovalGatedHelperPod_IsDedicatedToOneSession(t *testing.T) {
 	cs, _, ok := kubeClient(t)
 	if !ok {
@@ -253,19 +206,6 @@ const restoreTheFreezeBranches = "AC-F5's archive strategy has landed for approv
 	"control-plane/internal/service/workload_type_test.go's TestSnapshotIsRefusedForApprovalGated turns red in " +
 	"the same moment and wants the same edit"
 
-// A refused freeze reclaims neither pod. AC-F4 couples the helper pod's lifetime
-// to the session's, and this is that coupling read from the side the SUT can
-// currently answer: the pair goes away when the session ends (the delete case
-// below), and stays when it does not. The snapshot path cannot end an
-// approval-gated session yet — no archive strategy is registered for the type,
-// so the product refuses rather than reclaiming a pod pair behind a checkpoint
-// that cannot restore it.
-//
-// The refusal itself is already unit-tested; what only the deployed cluster can
-// add is *which* pod survived. The unit test counts running pods through a stub
-// orchestrator, so a run that reclaimed the helper and kept the workload pod
-// would satisfy it. Here the helper is named — selected by its own role label
-// and cross-checked against the session's auxiliaryPods.
 func TestApprovalGatedHelperPod_RefusedFreezeReclaimsNeitherPod(t *testing.T) {
 	cs, _, ok := kubeClient(t)
 	if !ok {
@@ -298,7 +238,6 @@ func TestApprovalGatedHelperPod_RefusedFreezeReclaimsNeitherPod(t *testing.T) {
 			refusal.Error, checkpointDisabledMessage)
 	}
 
-	// The public answer: nothing moved.
 	got := f4Get(t, s.ID)
 	if got.State != "active" {
 		t.Fatalf("state after a refused freeze = %q, want it unchanged at active", got.State)
@@ -343,9 +282,8 @@ func TestApprovalGatedHelperPod_RefusedFreezeReclaimsNeitherPod(t *testing.T) {
 	}
 }
 
-// Deleting a session reclaims the same pair. The freeze path leaves a snapshot
-// behind and the delete path does not, so they reach reclamation differently;
-// AC-F4 requires the helper pod to go on both.
+// The freeze path leaves a snapshot behind and the delete path does not, so they
+// reach reclamation differently; the helper pod has to go on both.
 func TestApprovalGatedHelperPod_DeleteReclaimsBothPods(t *testing.T) {
 	cs, _, ok := kubeClient(t)
 	if !ok {
@@ -366,14 +304,9 @@ func TestApprovalGatedHelperPod_DeleteReclaimsBothPods(t *testing.T) {
 	f4AwaitReclaimed(t, cs, ns, helper.Name, "the delete")
 }
 
-// The two helper containers do not share a PID namespace, so neither can read
-// the other's process environments. This is the property AC-F4 leans on when it
-// puts both of the platform's external secrets in one pod: the isolation that
-// keeps them apart is the container boundary, not the pod boundary.
-//
-// The probe is symmetric and self-validating — each container must find its own
-// marker (or its zero for the neighbour would only mean /proc was unreadable)
-// and must not find the other's.
+// This is the property AC-F4 leans on when it puts both of the platform's
+// external secrets in one pod: the isolation that keeps them apart is the
+// container boundary, not the pod boundary.
 func TestApprovalGatedHelperPod_ContainersDoNotSharePIDNamespace(t *testing.T) {
 	cs, cfg, ok := kubeClient(t)
 	if !ok {

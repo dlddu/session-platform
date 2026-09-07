@@ -2,17 +2,8 @@
 
 // 검증 AC: AC-C2
 //
-// Read dispatches on the session's state and always ends with the session
-// `active` (docs/prd/state-api.md, docs/test/state-api.md scenario 2). The
-// response's `path` field names the branch taken:
-//   - active            -> "active"                    (asserted below)
-//   - snapshot          -> "snapshot->restore->read"   (asserted below)
-//   - idle              -> "idle->active->read"        (not asserted: no way to
-//     reach `idle` yet — the idle entry trigger rides on the same undecided
-//     policy as AC-B1, service/session.go TODO(policy). Registered as a gap in
-//     docs/test/e2e.md, not as a separate matching file.)
-//
-// What read RETURNS (shell scrollback, offset cursor semantics) is AC-D3's file.
+// docs/prd/state-api.md, docs/test/state-api.md scenario 2. The idle branch is
+// unreachable and registered in docs/test/e2e.md §"남은 미검증 분기".
 package e2e_test
 
 import (
@@ -21,13 +12,11 @@ import (
 	"time"
 )
 
-// active branch: served in place, and the cursor comes back with the payload.
 func TestReadBranches_ActiveServedInPlace(t *testing.T) {
 	s := createSession(t, uniqueName(t))
 
-	// The freshly started bash eventually prints its prompt; output timing is
-	// non-deterministic, so wait for the shell to speak rather than asserting on
-	// the first read.
+	// A freshly started bash prints its prompt on no fixed schedule, so wait for
+	// the shell to speak rather than asserting on the first read.
 	deadline := time.Now().Add(30 * time.Second)
 	var r readResp
 	for {
@@ -54,7 +43,6 @@ func TestReadBranches_ActiveServedInPlace(t *testing.T) {
 	}
 }
 
-// snapshot branch: read restores first, then reads — it never rejects.
 func TestReadBranches_SnapshotRestoresThenReads(t *testing.T) {
 	s := createSession(t, uniqueName(t))
 

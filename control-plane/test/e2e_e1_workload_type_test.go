@@ -2,22 +2,7 @@
 
 // 검증 AC: AC-E1
 //
-// Workload type selection on the *deployed* SUT (docs/prd/claude-code-workload.md
-// AC-E1). The AC's verification method has four parts and this file asserts all
-// four against the kind cluster:
-//
-//  1. `workloadType=claude-code` provisions a session whose pod can actually run
-//     the Claude Code CLI (ground truth: `claude --version` inside the pod's
-//     workload container),
-//  2. omitting the field still yields a `shell` session,
-//  3. explicit ""/null/non-string and unknown types are rejected with 400
-//     *before* any pod is created,
-//  4. existing-session routes reject workload/model mutations and the original
-//     values survive.
-//
-// Part 1 only became reachable once the overlay stood up the two bootstrap
-// endpoints the session pod contacts before its agent starts — see
-// docs/test/e2e.md 「e2e 충실도 허용목록」 (`PLUGIN-CRED`) and deploy/.
+// docs/prd/claude-code-workload.md AC-E1, asserted against the kind cluster.
 package e2e_test
 
 import (
@@ -38,7 +23,6 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 )
 
-// typedSession extends the shared DTO with the two immutable workload fields.
 // Declared locally so this suite keeps asserting the wire contract rather than
 // the control plane's internal types.
 type typedSession struct {
@@ -50,8 +34,8 @@ type typedSession struct {
 	Model        string `json:"model"`
 }
 
-// workloadContainer is the tool-running container of a session pod. The Claude
-// pod also carries an isolated credential-proxy sidecar, so exec must name it.
+// The Claude pod also carries an isolated credential-proxy sidecar, so exec has
+// to name the container it wants.
 const workloadContainer = "session"
 
 func createTyped(t *testing.T, body map[string]any) (int, typedSession) {
@@ -79,8 +63,8 @@ func getTyped(t *testing.T, id string) typedSession {
 	return s
 }
 
-// execInContainer is execInPod with an explicit container, which a multi-
-// container pod needs (the shared helper targets single-container shell pods).
+// The shared execInPod helper targets single-container shell pods; a Claude pod
+// needs the container named explicitly.
 func execInContainer(ctx context.Context, cs kubernetes.Interface, cfg *rest.Config, ns, pod, container string, command []string) (string, string, error) {
 	req := cs.CoreV1().RESTClient().Post().
 		Resource("pods").Name(pod).Namespace(ns).SubResource("exec").
@@ -99,10 +83,9 @@ func execInContainer(ctx context.Context, cs kubernetes.Interface, cfg *rest.Con
 	return stdout.String(), stderr.String(), err
 }
 
-// A claude-code session stands up on the deployed SUT and its pod really can
-// run the Claude Code CLI. Create only returns after the pod reports Ready, and
-// the pod cannot reach Ready unless entrypoint.sh completed its plugin
-// bootstrap — so a passing create is itself evidence that the bootstrap ran.
+// Create only returns after the pod reports Ready, and the pod cannot reach
+// Ready unless entrypoint.sh completed its plugin bootstrap — so a passing
+// create is itself evidence that the bootstrap ran.
 func TestWorkloadType_ClaudeCodeSessionRunsTheClaudeCLI(t *testing.T) {
 	status, s := createTyped(t, map[string]any{
 		"name": uniqueName(t), "workloadType": "claude-code",
@@ -142,13 +125,12 @@ func TestWorkloadType_ClaudeCodeSessionRunsTheClaudeCLI(t *testing.T) {
 	}
 }
 
-// The plugin bootstrap resolved against the endpoints THIS overlay deploys, not
-// against github.com. Pod Ready already proves the bootstrap ran to completion —
-// entrypoint.sh is `set -eu`, so a failed token request or a failed
-// `claude plugin marketplace add` kills the container before the agent starts.
-// What this test adds is *which remote answered*: the in-cluster fixture carries
-// a marker string that exists in no other marketplace, so finding it in the pod's
-// plugin cache is decisive.
+// Pod Ready already proves the bootstrap ran to completion — entrypoint.sh is
+// `set -eu`, so a failed token request or a failed `claude plugin marketplace
+// add` kills the container before the agent starts. What this test adds is
+// *which remote answered*: the in-cluster fixture carries a marker string that
+// exists in no other marketplace, so finding it in the pod's plugin cache is
+// decisive.
 //
 // The paths are entrypoint.sh's documented defaults, which the control plane does
 // not override: the bootstrap runs the CLI under its own HOME and hands the agent
@@ -194,7 +176,6 @@ func TestWorkloadType_ClaudeCodePluginBootstrapUsedTheInClusterMarketplace(t *te
 	}
 }
 
-// Omitting the field keeps the historical default: a shell session.
 func TestWorkloadType_OmittedDefaultsToShell(t *testing.T) {
 	status, s := createTyped(t, map[string]any{"name": uniqueName(t)})
 	if status != http.StatusCreated {
@@ -208,9 +189,8 @@ func TestWorkloadType_OmittedDefaultsToShell(t *testing.T) {
 	}
 }
 
-// Invalid types are rejected on the wire, before anything is provisioned. The
-// pod count is the ground truth for "before provisioning": a rejected create
-// must not leave a pod behind.
+// The pod count is the ground truth for "before provisioning": a rejected
+// create must not leave a pod behind.
 func TestWorkloadType_InvalidValuesRejectedBeforeProvisioning(t *testing.T) {
 	cs, _, hasCluster := kubeClient(t)
 	ns := sessionNamespace()
@@ -228,8 +208,6 @@ func TestWorkloadType_InvalidValuesRejectedBeforeProvisioning(t *testing.T) {
 	}
 }
 
-// Workload type and model are immutable: the existing-session routes reject
-// attempted mutations and the original values survive.
 func TestWorkloadType_ImmutableAfterCreate(t *testing.T) {
 	const model = "claude-e2e-model"
 	status, created := createTyped(t, map[string]any{
@@ -274,7 +252,6 @@ func containerNames(pod *corev1.Pod) []string {
 	return names
 }
 
-// podCount counts session pods (those labelled with a session id) in ns.
 func podCount(t *testing.T, cs kubernetes.Interface, ns string, hasCluster bool) int {
 	t.Helper()
 	if !hasCluster {

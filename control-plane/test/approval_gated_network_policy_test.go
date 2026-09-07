@@ -1,11 +1,8 @@
 //go:build integration
 
-// AC-F2 as far as a fake clientset can carry it: the two policy objects an
-// approval-gated session gets, their selectors and ports, and the fact that
-// they are reclaimed with the session rather than left behind. What is *not*
-// here — and cannot be, on any fake or on kindnet — is whether a cluster
-// enforces them. That half needs a policy-enforcing CNI and is recorded as
-// open in docs/doc-tracker.md.
+// AC-F2 as far as a fake clientset can carry it. Whether a cluster *enforces*
+// the policies cannot be bought here or on kindnet, which ships no
+// policy-enforcing CNI; that half is recorded as open in docs/doc-tracker.md.
 package integration_test
 
 import (
@@ -33,8 +30,6 @@ func listNetworkPolicies(t *testing.T, cs *fake.Clientset) map[string]networking
 	return byName
 }
 
-// startApprovalGated brings up one approval-gated session and hands back its
-// pods plus the clientset, so a test can look at what else was created.
 func startApprovalGated(t *testing.T, sessionID string) (*k8s.ClientOrchestrator, *fake.Clientset, podSet) {
 	t.Helper()
 	orch, cs := newReadyOrchestrator(t,

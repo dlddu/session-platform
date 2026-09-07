@@ -2,18 +2,8 @@
 
 // 검증 AC: AC-C3
 //
-// Write follows the same uniform rule as read — bring the session `active`
-// first, then apply (docs/prd/state-api.md, docs/test/state-api.md scenario 3).
-// A snapshot write is NOT rejected: it restores and then applies. The response's
-// `path` names the branch:
-//   - active   -> "active"                     (asserted below)
-//   - snapshot -> "snapshot->restore->write"   (asserted below)
-//   - idle     -> "idle->active->write"        (not asserted: `idle` is not
-//     reachable yet — same undecided trigger policy as AC-B1. Registered as a
-//     gap in docs/test/e2e.md, not as a separate matching file.)
-//
-// What write DOES to the workload (stdin injection, non-blocking return) is
-// AC-D2's file.
+// docs/prd/state-api.md, docs/test/state-api.md scenario 3. The idle branch is
+// unreachable and registered in docs/test/e2e.md §"남은 미검증 분기".
 package e2e_test
 
 import (
@@ -36,7 +26,6 @@ func writeAt(t *testing.T, id, payload string) writeResp {
 	return w
 }
 
-// active branch: applied in place.
 func TestWriteBranches_ActiveAppliedInPlace(t *testing.T) {
 	s := createSession(t, uniqueName(t))
 
@@ -52,7 +41,6 @@ func TestWriteBranches_ActiveAppliedInPlace(t *testing.T) {
 	}
 }
 
-// snapshot branch: restore first, then apply — never a rejection.
 func TestWriteBranches_SnapshotRestoresThenWrites(t *testing.T) {
 	s := createSession(t, uniqueName(t))
 

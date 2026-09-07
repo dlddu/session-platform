@@ -2,47 +2,26 @@
 
 // 검증 AC: AC-E2
 //
-// write = one prompt invocation on the *deployed* SUT (docs/prd/claude-code-workload.md
-// AC-E2). A `claude-code` session's write payload is a prompt, not shell stdin:
-// the agent starts one `claude` process per accepted write, projects its
-// assistant text into the session's append-only output, and the process exits.
-//
-// This is the first file to drive the prompt loop end to end. AC-E1's file only
-// proved the CLI is installed and runnable; e2e_provider_reachability_test.go
-// only proved a hand-made HTTP request from the session container reaches the
-// provider. Neither started the CLI's own request loop, which is what AC-E2 is
-// about — and until 2026-09-04 nothing could, because no prompt had an answer
-// (docs/test/e2e.md 「차단 요인」 ③, now empty).
-//
-// The provider is the in-cluster stand-in (deploy/e2e-anthropic-fake.yaml,
-// allowlist row `CLAUDE-PROVIDER`). It answers a deterministic constant, which
-// is exactly enough for this AC — AC-E2 asserts *that* one invocation runs and
-// *that* its answer is projected, never what the answer says. The two ACs that
-// do read the answer (AC-E4 conversation continuity, AC-E5 restore-then-ask)
-// stay blocked on the stand-in and are not claimed here.
+// docs/prd/claude-code-workload.md AC-E2, driven against the in-cluster provider
+// stand-in registered as `CLAUDE-PROVIDER` in docs/test/e2e.md.
 //
 // What this file deliberately does NOT assert, and why:
 //
-//   - that write returns *before* its invocation finishes. Distinguishing that
-//     from a blocking write needs an invocation that outlasts the write's own
-//     round trip, and on this SUT it does not: a measured burst of four prompts
-//     took 3.4s to issue and all four had already answered inside that window.
-//     Neither a clock nor a queue-depth count can separate the two when the API
-//     round trip is the slower half, so any assertion here would be a coin
-//     flip. The contract is covered where the runner *can* be held open —
-//     data-plane/cmd/agent/claude_test.go's TestClaudeWriteIsNonBlockingAndSerial
-//     drives a fake runner that parks after its first delta, which is the very
-//     method AC-E2's verification text prescribes for this clause. What the SUT
-//     can show — that every queued prompt runs, one at a time, in order — is
-//     asserted below.
-//   - 429 on a saturated queue: the bound is 64 queued prompts
-//     (data-plane maxClaudeQueuedPrompts), and filling it means racing the
-//     drain rate rather than observing a contract.
+//   - that write returns *before* its invocation finishes. Separating that from
+//     a blocking write needs an invocation that outlasts the write's own round
+//     trip, and on this SUT it does not: a measured burst of four prompts took
+//     3.4s to issue and all four had already answered inside that window. So
+//     neither a clock nor a queue-depth count can tell the two apart here, and
+//     any assertion would be a coin flip. data-plane/cmd/agent/claude_test.go's
+//     TestClaudeWriteIsNonBlockingAndSerial holds a fake runner open instead,
+//     which is the method AC-E2's verification text prescribes for this clause.
+//   - 429 on a saturated queue: filling `maxClaudeQueuedPrompts` means racing
+//     the drain rate rather than observing a contract.
 //   - the 16 MiB per-invocation truncation marker: the stand-in cannot be made
 //     to emit that much.
 //   - `--continue` staying off after a *failed* first run: no way to fail an
 //     invocation on the SUT without breaking the wiring the other assertions
-//     need. The success half of that rule is asserted below.
+//     need.
 package e2e_test
 
 import (
@@ -62,17 +41,14 @@ const (
 	e2PromptSecond = "e2-prompt-second"
 )
 
-// e2InvariantArgv is the part of AC-E2's argv the platform owns on every
-// invocation, in order. What may precede it is `--continue` (only after a
-// successful run) and `--model <effective model>`; what follows `-- ` is the
-// prompt as a single positional argument.
+// What may precede this run of flags is `--continue` (only after a successful
+// run) and `--model <effective model>`; what follows `-- ` is the prompt as a
+// single positional argument.
 const e2InvariantArgv = "--permission-mode auto -p --output-format stream-json " +
 	"--verbose --include-partial-messages -- "
 
-// claudeArgvProbe samples the workload container's process table for the
-// one-shot CLI invocation and prints one line per *change*: "<count>\t<argv>".
-// $1 is the sampling window in seconds; it stops early once a resume invocation
-// has come and gone, so the common case does not wait the window out.
+// Prints one line per *change*: "<count>\t<argv>". $1 is the sampling window in
+// seconds; it stops early once a resume invocation has come and gone.
 //
 // It must not count anything but the invocation, and two things would fool a
 // naive match. Its own command line contains the flags it matches on, and so
@@ -122,8 +98,7 @@ while [ "$(date +%s)" -lt "$end" ]; do
 done
 `
 
-// claudeSession creates a `claude-code` session and deletes it afterwards. It
-// leaves the model unset, so the session takes the `platform-default` alias and
+// The model is left unset, so the session takes the `platform-default` alias and
 // the pod resolves it from the credentials Secret's optional `model` key.
 func claudeSession(t *testing.T) typedSession {
 	t.Helper()
@@ -144,8 +119,6 @@ func claudeSession(t *testing.T) typedSession {
 	return s
 }
 
-// writePrompt posts a prompt and returns the HTTP status, so callers can assert
-// both the accepted and the rejected paths.
 func writePrompt(t *testing.T, id, prompt string) (int, []byte) {
 	t.Helper()
 	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+id+"/write", map[string]string{"payload": prompt})
@@ -159,9 +132,9 @@ func writePromptOK(t *testing.T, id, prompt string) {
 	}
 }
 
-// eventuallyClaudeOutput polls read until ok(payload) holds. The deadline is far
-// longer than the shell suite's: an invocation is a cold CLI start (process
-// launch, settings load, provider round trip), not a line into a live bash.
+// The deadline is far longer than the shell suite's: an invocation is a cold CLI
+// start (process launch, settings load, provider round trip), not a line into a
+// live bash.
 func eventuallyClaudeOutput(t *testing.T, id string, within time.Duration, ok func(string) bool) readResp {
 	t.Helper()
 	deadline := time.Now().Add(within)
@@ -178,14 +151,9 @@ func eventuallyClaudeOutput(t *testing.T, id string, within time.Duration, ok fu
 	}
 }
 
-// A write is a prompt, and its answer reaches the session's output. The marker
-// exists nowhere else in the tree, so finding it in the buffer says a real
-// `claude` invocation ran and the agent projected its assistant text — the
-// whole AC-E2 loop, not just a reachable endpoint.
-//
-// A burst also shows the queue accepts every prompt and runs each one: four
-// writes produce four replies, none dropped and none merged, appended in order
-// to the same record.
+// The marker exists nowhere else in the tree, so finding it in the buffer says a
+// real `claude` invocation ran and the agent projected its assistant text — the
+// whole loop, not just a reachable endpoint.
 func TestClaudePromptWrite_QueuesEveryPromptAndRunsEachOne(t *testing.T) {
 	s := claudeSession(t)
 
@@ -213,10 +181,8 @@ func TestClaudePromptWrite_QueuesEveryPromptAndRunsEachOne(t *testing.T) {
 		burst, issued, burst, time.Since(start))
 }
 
-// The AC's argv, its one-shot lifetime and its serial queue are all properties
-// of the *process*, so they are asserted against the container's process table
-// while two writes run. One probe covers all three: the flags the platform owns
-// appear verbatim, two invocations never overlap, and nothing is left running.
+// Argv, one-shot lifetime and serial queueing are all properties of the
+// *process*, so one probe of the container's process table covers all three.
 func TestClaudePromptInvocation_ExactArgvOneShotAndSerialised(t *testing.T) {
 	cs, cfg, ok := kubeClient(t)
 	if !ok {
@@ -246,7 +212,6 @@ func TestClaudePromptInvocation_ExactArgvOneShotAndSerialised(t *testing.T) {
 	writePromptOK(t, s.ID, e2PromptFirst)
 	writePromptOK(t, s.ID, e2PromptSecond)
 
-	// Both invocations answered: two copies of the marker in the buffer.
 	eventuallyClaudeOutput(t, s.ID, 5*time.Minute, func(p string) bool {
 		return strings.Count(p, providerReplyMarker) >= 2
 	})
@@ -313,8 +278,6 @@ func TestClaudePromptInvocation_ExactArgvOneShotAndSerialised(t *testing.T) {
 		t.Fatalf("second invocation argv = %q, want it to contain %q (AC-E2 exact argv)", second, want)
 	}
 
-	// The first invocation of a session starts a new conversation; only after
-	// one has succeeded does the next resume it.
 	if strings.Contains(first, "--continue") {
 		t.Fatalf("the first invocation carried --continue: %q — a session's first prompt starts a new "+
 			"conversation (AC-E2)", first)
@@ -325,9 +288,8 @@ func TestClaudePromptInvocation_ExactArgvOneShotAndSerialised(t *testing.T) {
 	}
 }
 
-// A prompt over 1 MiB is refused at the public API and never becomes an
-// invocation. The limit is checked before the session is even activated, so the
-// output cursor cannot move.
+// The limit is checked before the session is even activated, so the output
+// cursor cannot move.
 func TestClaudePromptWrite_RejectsOverSizedPromptWithoutRunningIt(t *testing.T) {
 	s := claudeSession(t)
 
