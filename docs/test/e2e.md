@@ -343,7 +343,7 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 | AC-E2 | `control-plane/test/e2e_e2_prompt_invocation_test.go` | go | write = 프롬프트 1회 실행 — 배포 SUT에서 실 `claude` 프로세스가 기동되고 응답이 세션 출력에 투영됨 / burst의 모든 프롬프트가 큐에 수락돼 각각 1회씩 실행됨 / 프로세스 테이블에서 본 exact argv·원샷 수명·직렬 큐(동시 실행 없음)·첫 성공 뒤에만 `--continue` / 1 MiB 초과 프롬프트는 public API 413이고 실행되지 않음 (비블로킹 반환 자체는 SUT에서 관측 불가 — invocation이 write 왕복보다 느리지 않다. `data-plane/cmd/agent/claude_test.go`의 `TestClaudeWriteIsNonBlockingAndSerial`이 fake runner로 소유) |
 | AC-E6 | `control-plane/test/e2e_e6_credential_placement_test.go` | go | **자격 증명의 배치와 그 배치가 사는 격리**를 배포 SUT에서 — 공급자 `base-url`·`auth-token`·optional `ca-cert`는 사이드카 `claude-credentials`에만 / 필수 `k3s-mcp-token`과 optional `k3s-mcp-url`·`plugin-marketplace-url`은 주 컨테이너에만 / optional `model`은 주 컨테이너에만이고 concrete model은 literal이 Secret 기본값을 이김 / 주 컨테이너가 실 플랫폼 토큰을 **어떤 `/proc/*/environ`으로도 읽지 못함**(같은 프로브가 placeholder는 찾으므로 음성 결과가 자기검증된다) / pod가 `data-plane` SA로 서고 실 authorizer가 pods는 allow·secrets는 deny(SubjectAccessReview) / 생성 요청의 자격 증명 필드는 400이고 세션 조회·read 어디에도 두 토큰 값이 없음. 비교하는 비밀 값은 전부 클러스터 Secret에서 읽으므로 이 파일은 자격 증명 사본을 갖지 않는다. **프록시의 행위 계약**(헤더 허용목록·1xx redaction·64 MiB 상한·split-token tail-safe·`ca-cert` 파싱 실패 시 시작 거부)은 `data-plane/cmd/agent/credential_proxy*_test.go`가, **제출되는 pod spec**은 `control-plane/test/workload_type_orchestrator_test.go`(태그 `integration`)가 이미 소유하므로 여기서 다시 사지 않는다 — e2e가 배타적으로 살 수 있는 것은 배포된 그라운드-트루스다 |
 | AC-F1 | `control-plane/test/e2e_f1_workload_type_test.go` | go | `workloadType=approval-gated` 세션이 배포 SUT에서 서고 그 pod 집합이 워크로드 파드 + **세션 전속 헬퍼 파드 1개**(라벨 `session-id`+`pod-role=helper`로 조회, 컨테이너 정확히 둘 — 세션 MCP·credential-proxy — 이 모두 Ready)임 / 타입 축이 실제로 판별함 — 필드 생략과 explicit `shell`은 헬퍼 파드를 0개 만든다 / 근접 오타(`approval_gated`·전후 공백·대문자·`approvalgated`)와 explicit `""`·`null`·비문자열은 **pod 생성 전** 400(세션 파드 수 불변이 그라운드-트루스) / 생성 후 `/read`·`/write`·`/switch`의 타입·모델 변경은 400이고 원래 값 유지. 승인 왕복(AC-F3)·공유 볼륨(AC-F5)·컨테이너별 자격 증명 분리(AC-F6)는 각자의 AC가 소유하므로 여기서 사지 않는다 — 이 파일이 사는 것은 **타입 축과 그것이 세우는 파드 집합**이다 |
-| AC-F4 | `control-plane/test/e2e_f4_helper_pod_test.go` | go | **헬퍼 파드의 귀속·수명·컨테이너 경계**를 배포 SUT에서 — 세션 2개가 서로 다른 헬퍼 파드를 갖고 각자 자기 `session-id` 라벨만 지니며 공개 API의 `auxiliaryPods`와 클러스터 조회가 같은 파드를 지목함 / 동결과 삭제 **양쪽에서** 워크로드 파드와 헬퍼 파드가 **둘 다** 회수되고(API는 `pod:""`+`auxiliaryPods` 없음, 클러스터는 삭제/terminating) 세션 선택자에 헬퍼가 더는 걸리지 않음 / 복원이 **새 쌍**을 세우고 새 워크로드 파드의 `SESSION_MCP_URL`이 **그 복원의** 헬퍼 파드 IP를 가리킴(동결 전 주소를 이어 쓰지 않음) / 두 헬퍼 컨테이너가 PID 네임스페이스를 공유하지 않아 서로의 `/proc/*/environ`을 읽지 못함(각 컨테이너가 자기 `DATA_PLANE_WORKLOAD` 마커는 찾으므로 음성 결과가 자기검증되고, 두 마커가 다름도 먼저 확인한다). 제출되는 pod spec·자격 증명 분리·워크로드 파드 실패 시 회수·복원 쌍 생성은 `control-plane/test/approval_gated_orchestrator_test.go`(태그 `integration`)가 이미 소유하므로 다시 사지 않는다 — e2e가 배타적으로 사는 것은 **실 API server가 실제로 지운 파드·실제로 가리키는 주소·실 kubelet이 가른 네임스페이스**다. 타입 축과 파드 집합의 모양(AC-F1)·네트워크 경계(AC-F2)·컨테이너별 자격 증명(AC-F6)은 각자의 AC가 소유한다 |
+| AC-F4 | `control-plane/test/e2e_f4_helper_pod_test.go` | go | **헬퍼 파드의 귀속·수명·컨테이너 경계**를 배포 SUT에서 — 세션 2개가 서로 다른 헬퍼 파드를 갖고 각자 자기 `session-id` 라벨만 지니며 공개 API의 `auxiliaryPods`와 클러스터 조회가 같은 파드를 지목함 / **삭제** 시 워크로드 파드와 헬퍼 파드가 **둘 다** 회수됨(클러스터에서 삭제/terminating) / **거부된 동결은 아무것도 회수하지 않음** — `POST /snapshot`이 503 `checkpoint strategy is disabled`를 돌려주고 세션은 `active`에 그대로이며 워크로드 파드와 **그 헬퍼 파드가 이름까지 같은 것으로** 살아 Ready임(수명이 API 호출이 아니라 세션 종료 사건에 결합돼 있다는 것을 음성 방향에서 산다) / 두 헬퍼 컨테이너가 PID 네임스페이스를 공유하지 않아 서로의 `/proc/*/environ`을 읽지 못함(각 컨테이너가 자기 `DATA_PLANE_WORKLOAD` 마커는 찾으므로 음성 결과가 자기검증되고, 두 마커가 다름도 먼저 확인한다). **동결 시 동반 회수와 복원 갈래는 이 파일에 없다** — AC-F5의 아카이브 전략이 선행이라 아래 §「남은 미검증 분기」에 등재했고, 위 거부 케이스가 그 선행이 풀리는 순간 빨개져 되살릴 자리를 지목한다. 제출되는 pod spec·자격 증명 분리·워크로드 파드 실패 시 회수·복원 쌍 생성은 `control-plane/test/approval_gated_orchestrator_test.go`(태그 `integration`)가 이미 소유하므로 다시 사지 않는다 — e2e가 배타적으로 사는 것은 **실 API server가 실제로 지운 파드·거부 뒤에도 실제로 서 있는 파드·실 kubelet이 가른 네임스페이스**다(단위 스텁은 살아남은 파드의 **수**만 세고 어느 쪽인지 말하지 못한다). 타입 축과 파드 집합의 모양(AC-F1)·네트워크 경계(AC-F2)·컨테이너별 자격 증명(AC-F6)은 각자의 AC가 소유한다 |
 <!-- ac-mapping:end -->
 
 ## AC 예외 목록
@@ -533,6 +533,15 @@ AC 대신 스모크/인프라를 검증하는 매칭 단위 파일(규칙 3).
 > `control-plane/test/e2e_e1_workload_type_test.go`는 헤더에 "네 갈래를 **전부** 단언한다"고 적고
 > 실제로 파드 기동 갈래를 갖는데, 그 갈래는 부트스트랩 두 대역이 선 뒤에야(#62) 도달 가능해졌다.
 >
+> ✅ **그 규범이 AC-F4에 걸리는지 따로 판정했다 — 걸리지 않는다** *(2026-09-07)*. AC-F4 전용 파일은
+> 검증 방법 넷 중 **동결 시 동반 회수와 복원 갈래를 갖지 않는다.** 그러나 규범이 금지하는 것은
+> **관측 가능한 갈래를 임의로 빼는 것**이고(AC-F1을 "400 거부 갈래만"으로 끊으려던 것이 그 예다),
+> 여기서 빠지는 갈래는 제품이 **의도적으로 거부해 관측할 대상 자체가 없다** — `approval-gated`에는
+> 아카이브 전략이 등록돼 있지 않고, 그 거부는 위 「남은 미검증 분기」가 적는 대로 계약이다. 그리고
+> 그 파일은 **거부 자체를 단언한다.** 따라서 **배포 SUT에서 관측 가능한 AC-F4의 갈래 중 단언되지 않은
+> 것은 없다** — 이것이 "반쪽만 단언하는 파일"과 갈리는 지점이다. 이 판정을 실측이 뒤집는 경우는 하나,
+> 아카이브 전략이 등록되는 때이고 그때는 파일이 스스로 빨개진다.
+>
 > ⚠️ **AC-F5에는 선행이 하나 더 있다.** 공유 RWX 볼륨은 아직 구현되지 않았다
 > (`control-plane/internal/adapter/k8s/client_orchestrator.go:685`, `../doc-tracker.md`의 같은 항목).
 > ⓐ·ⓑ가 풀려도 F5 전용 파일은 그 구현이 착지한 뒤다 — 구현은 `tbm_session-platform-docs-impl`의
@@ -569,11 +578,21 @@ AC 대신 스모크/인프라를 검증하는 매칭 단위 파일(규칙 3).
 
 ## 남은 미검증 분기 (공백은 아님)
 
-전용 파일은 있으나 그 안에서 아직 단언하지 못하는 경로. 전부 **`idle` 상태에 도달할 방법이
-없다**는 한 가지 이유이며, AC-B1의 트리거 정책과 함께 풀린다.
+전용 파일은 있으나 그 안에서 아직 단언하지 못하는 경로. **공백(전용 파일이 없는 AC)과 다르다** —
+파일은 이미 그 AC의 주검증이고, 막힌 것은 그 안의 갈래 하나다. 이유는 두 갈래다: (1) `idle`
+상태에 도달할 방법이 없다(AC-B1의 트리거 정책과 함께 풀린다), (2) `approval-gated` 타입에
+스냅샷 전략이 등록돼 있지 않다(AC-F5의 아카이브 전략과 함께 풀린다).
 
 | 경로 | 소유 파일 | 막힌 이유 |
 | --- | --- | --- |
 | read `idle->active->read` | `e2e_c2_read_branches_test.go` | idle 진입 트리거 없음(AC-B1 정책 미확정) |
 | write `idle->active->write` | `e2e_c3_write_branches_test.go` | 〃 |
+| 동결 시 워크로드·헬퍼 파드 **동반 회수** | `e2e_f4_helper_pod_test.go` | `approval-gated`에 아카이브 전략이 등록돼 있지 않아 `checkpointerFor`가 `ErrCheckpointDisabled`를 내고 공개 API가 503으로 거부한다 — **결함이 아니라 의도된 계약**이며(`internal/service/workload_type_test.go`의 `TestSnapshotIsRefusedForApprovalGated`가 그 계약을 산다) 아카이브 전략 없이 동결하면 복원할 수 없는 체크포인트 뒤로 파드 쌍을 회수하게 된다. 선행은 **AC-F5**이고 소관은 `tbm_session-platform-docs-impl`이다. |
+| 복원 시 **새 쌍** 기동 + 워크로드 파드의 헬퍼 주소 재배선 | 〃 | 〃 (동결이 선행이라 복원 진입 자체가 없다) |
+
+위 두 행은 **잊히지 않는다** — 소유 파일의 `RefusedFreezeReclaimsNeitherPod`가 거부 계약 자체를
+단언하므로, 아카이브 전략이 등록되는 순간 그 케이스가 빨개지고 실패 메시지가 「이 케이스를 지우고
+동결·복원 갈래를 세우고 이 두 행을 지우라」고 지시한다. 같은 순간 위 단위 테스트도 함께 빨개지므로
+그 슬라이스는 어차피 두 파일을 같이 만진다. 산문 메모가 아니라 **CI가 집행하는 기한**이라는 점에서
+`idle` 두 행과 성격이 다르다(그쪽은 AC-B1 정책이 확정될 때까지 붉힐 것이 없다).
 | switch의 idle 대상 승격 | `e2e_c4_session_switch_test.go` | 〃 |
