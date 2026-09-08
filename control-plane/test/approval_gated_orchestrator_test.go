@@ -1,13 +1,7 @@
 //go:build integration
 
-// approval-gated pod shapes, asserted against the same fake clientset the rest
-// of client_orchestrator_test.go uses. AC-F6 states its verification in exactly
-// these terms — "inspect the session pod spec" — so the credential split is
-// fully checkable here; AC-F1's type contract is checked at the API layer
-// (internal/api/workload_type_test.go). What a fake cannot show is the runtime
-// behaviour of the two helper containers (AC-F3's approval gate) or that the
-// egress policy actually blocks (AC-F2, which needs a policy-enforcing CNI —
-// see docs/test/e2e.md). Neither is implemented in this slice.
+// approval-gated pod shapes. Which parts of the F series this file owns and
+// which need the deployed SUT are in docs/test/e2e.md.
 package integration_test
 
 import (
@@ -35,7 +29,6 @@ func newApprovalGatedOrchestrator(t *testing.T) (*k8s.ClientOrchestrator, podSet
 	return orch, newPodSet(t, listPods(t, cs), started)
 }
 
-// podSet is the pod pair one approval-gated session owns, resolved by role.
 type podSet struct {
 	workload corev1.Pod
 	helper   corev1.Pod
@@ -81,9 +74,8 @@ func containerNames(pod corev1.Pod) string {
 	return strings.Join(names, ",")
 }
 
-// envValue returns a literal env value; secretKey returns the Secret key an env
-// var is projected from. Exactly one of them is meaningful per variable, which
-// is what makes "is this a secret here?" a decidable question in these tests.
+// Exactly one of these two is meaningful per variable, which is what makes "is
+// this a secret here?" a decidable question in these tests.
 func envValue(c corev1.Container, name string) (string, bool) {
 	for _, e := range c.Env {
 		if e.Name == name {
@@ -106,9 +98,7 @@ func secretKey(c corev1.Container, name string) (secret, key string, ok bool) {
 	return "", "", false
 }
 
-// AC-F1/AC-F4: an approval-gated session is provisioned as a workload pod *and*
-// a session-scoped helper pod, both bound to the session and returned as one
-// set so the lifecycle paths reclaim and restore them together.
+// AC-F1/AC-F4.
 func TestApprovalGated_ProvisionsWorkloadAndHelperPod(t *testing.T) {
 	_, set := newApprovalGatedOrchestrator(t)
 
@@ -137,7 +127,6 @@ func TestApprovalGated_ProvisionsWorkloadAndHelperPod(t *testing.T) {
 		t.Error("workload and helper pod share a name")
 	}
 
-	// AC-F4: two containers, the session MCP and the provider proxy.
 	if n := len(set.helper.Spec.Containers); n != 2 {
 		t.Fatalf("helper containers = %d (%s), want 2", n, containerNames(set.helper))
 	}
@@ -146,9 +135,8 @@ func TestApprovalGated_ProvisionsWorkloadAndHelperPod(t *testing.T) {
 	if mcp.Image != approvalGatedImage || proxy.Image != approvalGatedImage {
 		t.Errorf("helper images = %q/%q, want the configured type image %q", mcp.Image, proxy.Image, approvalGatedImage)
 	}
-	// The helper pod holds both platform secrets and calls no Kubernetes API,
-	// so it gets no cluster identity — unlike the workload pod (AC-A1's
-	// read-only view role).
+	// The helper pod calls no Kubernetes API, so it gets no cluster identity —
+	// unlike the workload pod (AC-A1's read-only view role).
 	if set.helper.Spec.ServiceAccountName != "" {
 		t.Errorf("helper service account = %q, want none", set.helper.Spec.ServiceAccountName)
 	}
@@ -157,9 +145,7 @@ func TestApprovalGated_ProvisionsWorkloadAndHelperPod(t *testing.T) {
 	}
 }
 
-// AC-F6: the gateway triple reaches the MCP container only, the provider
-// credentials reach the proxy container only, and the workload pod gets neither
-// — just its helper pod's addresses and a non-secret placeholder.
+// AC-F6.
 func TestApprovalGated_CredentialsAreSplitAcrossHelperContainers(t *testing.T) {
 	_, set := newApprovalGatedOrchestrator(t)
 	mcp := container(t, set.helper, k8s.SessionMCPContainerName)
@@ -208,20 +194,17 @@ func TestApprovalGated_CredentialsAreSplitAcrossHelperContainers(t *testing.T) {
 		}
 	}
 
-	// The workload container must carry no Secret projection at all.
 	for _, e := range workload.Env {
 		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Key != k8s.ClaudeCodeModelSecretKey {
 			t.Errorf("workload container reads Secret key %q through %s; AC-F6 injects no external credential here",
 				e.ValueFrom.SecretKeyRef.Key, e.Name)
 		}
 	}
-	// AC-F6's 2026-09-03 decision: no runtime plugin bootstrap for this type, so
-	// no K3s MCP token either.
+	// AC-F6's ✅ 2026-09-03 decision.
 	if _, _, ok := secretKey(workload, k8s.K3SMCPTokenEnvVar); ok {
 		t.Error("workload container gets the K3s MCP token; approval-gated has no plugin bootstrap (AC-F6)")
 	}
 
-	// What it does get: its own helper pod's addresses and the placeholder.
 	helperIP := set.started.Auxiliary[0].IP
 	if helperIP == "" {
 		t.Fatal("helper pod ref has no IP, so the workload pod cannot be pointed at it")
@@ -243,22 +226,14 @@ func TestApprovalGated_CredentialsAreSplitAcrossHelperContainers(t *testing.T) {
 		t.Error("workload container is missing the non-secret proxy placeholder token")
 	}
 
-	// The proxy binds the pod network here, not loopback: its client is a pod
-	// away (AC-F6). Its claude-code sidecar placement keeps loopback — asserted
-	// by TestApprovalGated_ExistingTypesUnchanged below.
 	addr, ok := envValue(proxy, "DATA_PLANE_AGENT_ADDR")
 	if !ok || strings.HasPrefix(addr, "127.0.0.1") {
 		t.Errorf("helper proxy bind address = %q, want a pod-network bind (AC-F6)", addr)
 	}
 }
 
-// AC-F3 builds every approval request's external identifier as
-// {sessionID}:{requestID}, and the gateway refuses a duplicate. The session half
-// is only knowable to the container that talks to the gateway if the control
-// plane hands it over, so the MCP container carries the session id as a plain
-// value — it is not a credential, it is the same id the pod already wears as a
-// label. The proxy container has no business with the gateway, so it does not
-// get it.
+// AC-F3's external request identifier needs the session half, and only the
+// control plane can hand it to the container that talks to the gateway.
 func TestApprovalGated_MCPContainerKnowsItsSession(t *testing.T) {
 	_, set := newApprovalGatedOrchestrator(t)
 	mcp := container(t, set.helper, k8s.SessionMCPContainerName)
@@ -275,8 +250,6 @@ func TestApprovalGated_MCPContainerKnowsItsSession(t *testing.T) {
 	if got != sessionID {
 		t.Errorf("%s = %q, want the session this helper pod serves (%q)", k8s.SessionIDEnvVar, got, sessionID)
 	}
-	// A plain value, never a Secret projection: an id is not a credential, and
-	// projecting it as one would put it in the same bucket AC-F6 keeps audited.
 	if _, _, ok := secretKey(mcp, k8s.SessionIDEnvVar); ok {
 		t.Errorf("%s is projected from a Secret; the session id is not a credential", k8s.SessionIDEnvVar)
 	}
@@ -285,9 +258,6 @@ func TestApprovalGated_MCPContainerKnowsItsSession(t *testing.T) {
 	}
 }
 
-// The workload pod of an approval-gated session must not carry the credential
-// proxy sidecar: moving it out is what lets AC-F2 leave no external destination
-// on that pod's egress allowlist.
 func TestApprovalGated_WorkloadPodHasNoCredentialSidecar(t *testing.T) {
 	_, set := newApprovalGatedOrchestrator(t)
 	if n := len(set.workload.Spec.Containers); n != 1 {
@@ -299,9 +269,8 @@ func TestApprovalGated_WorkloadPodHasNoCredentialSidecar(t *testing.T) {
 	}
 }
 
-// A failure after the helper pod is up must not leave it behind (AC-A3
-// hygiene): an unconfigured image makes the workload pod spec fail to build,
-// which is the cheapest way to reach that path.
+// An unconfigured image makes a pod spec fail to build, which is the cheapest
+// way to reach the failure paths AC-A3 hygiene covers.
 func TestApprovalGated_HelperPodIsReclaimedWhenTheWorkloadPodFails(t *testing.T) {
 	// No WithWorkloadImage for the type: the helper pod spec fails first, so
 	// nothing is created at all.
@@ -330,9 +299,7 @@ func TestApprovalGated_HelperPodIsReclaimedWhenTheWorkloadPodFails(t *testing.T)
 	}
 }
 
-// AC-B2 for this type: a restore provisions a *new* pair under fresh names that
-// share one round suffix, and the workload pod is pointed at the helper pod
-// created for that restore (AC-F4).
+// AC-B2 for this type, with AC-F4's helper pod.
 func TestApprovalGated_RestoreProvisionsAFreshPair(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t,
 		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))
@@ -359,7 +326,6 @@ func TestApprovalGated_RestoreProvisionsAFreshPair(t *testing.T) {
 		t.Errorf("restore pod names exceed the DNS label limit: %q (%d), %q (%d)",
 			set.workload.Name, len(set.workload.Name), set.helper.Name, len(set.helper.Name))
 	}
-	// Same provisioning round: the names differ only in the role letter.
 	wSuffix := strings.TrimPrefix(set.workload.Name, "sess-f6f6-r")
 	hSuffix := strings.TrimPrefix(set.helper.Name, "sess-f6f6-h")
 	if wSuffix == set.workload.Name || hSuffix == set.helper.Name || wSuffix != hSuffix {
@@ -367,9 +333,6 @@ func TestApprovalGated_RestoreProvisionsAFreshPair(t *testing.T) {
 	}
 }
 
-// Regression guard for the two existing types: adding the third one must not
-// change the pods they get. Their contract is one pod, and for claude-code a
-// loopback-bound credential sidecar inside it.
 func TestApprovalGated_ExistingTypesUnchanged(t *testing.T) {
 	const claudeImage = "ghcr.io/dlddu/session-platform-data-plane:claude"
 	for _, tc := range []struct {
@@ -418,11 +381,6 @@ func TestApprovalGated_ExistingTypesUnchanged(t *testing.T) {
 	}
 }
 
-// The helper pod's two containers must be startable by the data plane as
-// configured — the type's whole failure mode until now was a pod spec whose
-// containers the agent refused. Both halves are asserted here: the proxy's
-// declared placement (which is what lets it bind the pod network at all) and a
-// readiness probe that AC-F2's ingress policy cannot lock out.
 func TestApprovalGatedHelperContainersAreStartableUnderTheirOwnBoundary(t *testing.T) {
 	_, pods := newApprovalGatedOrchestrator(t)
 
