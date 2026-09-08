@@ -24,9 +24,11 @@ const (
 	// webFetchGetTool is the one external tool an approval-gated session has.
 	// Adding a second one means adding a second gated handler, never a bypass.
 	webFetchGetTool = "web_fetch_get"
-	// maxFetchedBodyBytes bounds what a fetch may hand back inline, standing in
-	// for AC-F5's shared volume until it lands (docs/doc-tracker.md).
-	maxFetchedBodyBytes = 100_000
+	// maxInlineBodyBytes is the line AC-F5 draws between a response small enough
+	// to ride the tool result and one that goes to the shared volume as a file.
+	// It keeps its old value: what changes is that exceeding it now spills
+	// instead of truncating, wherever the volume is configured.
+	maxInlineBodyBytes = 100_000
 	// fetchTimeout bounds the approved call itself. The wait before it is
 	// bounded separately by the gateway's own timeout.
 	fetchTimeout = 60 * time.Second
@@ -46,10 +48,20 @@ type sessionMCPConfig struct {
 	// notices carries the wait and its decision to whoever is tailing, which in
 	// a real session is the workload pod's agent (session_mcp_notice_tail.go).
 	notices *noticeFeed
+	// sharedDir is the session's shared volume as this container sees it, empty
+	// where the deployment configured none. The control plane sets it only in
+	// the branch that mounts the volume, so a value here also says the workload
+	// pod holds the same filesystem at the same path (AC-F5).
+	sharedDir string
 }
 
-func newSessionMCPConfig(gateway *approvalGateway) sessionMCPConfig {
-	return sessionMCPConfig{gateway: gateway, fetch: fetchURL, notices: newNoticeFeed()}
+func newSessionMCPConfig(gateway *approvalGateway, sharedDir string) sessionMCPConfig {
+	return sessionMCPConfig{
+		gateway:   gateway,
+		fetch:     fetchURL,
+		notices:   newNoticeFeed(),
+		sharedDir: strings.TrimSpace(sharedDir),
+	}
 }
 
 // gated reports whether this container can offer external tools at all.
@@ -152,16 +164,50 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 		return mcpToolError("fetch failed: " + err.Error()), nil
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchedBodyBytes))
+	// One byte past the inline limit is what tells "this fits" from "this is the
+	// large result AC-F5 wants in a file" without reading a big body twice.
+	head, err := io.ReadAll(io.LimitReader(resp.Body, maxInlineBodyBytes+1))
 	if err != nil {
 		return mcpToolError("reading the response failed: " + err.Error()), nil
 	}
-	payload, err := json.Marshal(map[string]any{
+	result := map[string]any{
 		"success": true,
 		"status":  resp.StatusCode,
 		"headers": map[string]any{"content-type": resp.Header.Get("Content-Type")},
-		"body":    string(body),
-	})
+	}
+	switch {
+	case int64(len(head)) <= maxInlineBodyBytes:
+		result["body"] = string(head)
+	case c.sharedDir == "":
+		// The deployment configured no ReadWriteMany class, so there is no
+		// volume to hand a file across and this is the shape the tool had
+		// before AC-F5: cut at the inline limit and say so.
+		result["body"] = string(head[:maxInlineBodyBytes])
+		result["truncated"] = true
+	default:
+		spill, spillErr := c.spillBody(requestID, head, resp.Body)
+		if spillErr != nil {
+			// An approved call is not repeatable on a whim — a human said yes to
+			// this one — so a volume that could not take it falls back to the
+			// pre-AC-F5 shape rather than discarding the result. The reason
+			// travels with it so the agent is not left guessing why the body is
+			// short.
+			logger.Error("could not spill the response to the shared volume",
+				"tool", webFetchGetTool, "err", spillErr)
+			result["body"] = string(head[:maxInlineBodyBytes])
+			result["truncated"] = true
+			result["spillError"] = spillErr.Error()
+			break
+		}
+		// No "body" key: the point of the volume is that the bytes do not make
+		// this round trip (AC-F5).
+		result["bodyPath"] = spill.path
+		result["bodyBytes"] = spill.size
+		result["truncated"] = spill.truncated
+		logger.Info("stored the response on the shared volume",
+			"tool", webFetchGetTool, "path", spill.path, "bytes", spill.size)
+	}
+	payload, err := json.Marshal(result)
 	if err != nil {
 		return nil, &jsonRPCError{Code: jsonRPCInternalError, Message: "could not encode the tool result"}
 	}

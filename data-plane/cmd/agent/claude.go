@@ -149,6 +149,11 @@ type toolSurface struct {
 	Plugin bool
 	// SessionMCP, when set, is the URL of this session's MCP server.
 	SessionMCP string
+	// SharedDir, when set, is the shared volume this session's MCP writes large
+	// approved responses into (AC-F5). It belongs to the tool surface because
+	// the agent's file tools are scoped to its own state tree by default, so
+	// without it the path the MCP hands back is one the agent may not open.
+	SharedDir string
 }
 
 type claudeRuntimeState struct {
@@ -751,6 +756,10 @@ func decodeClaudeRuntimeState(f *os.File) (bool, error) {
 type claudeManagedSettings struct {
 	Permissions struct {
 		Allow []string `json:"allow"`
+		// AdditionalDirectories widens the agent's file tools past its own state
+		// tree. The platform sets exactly one entry, the shared volume, and only
+		// where there is one (AC-F5).
+		AdditionalDirectories []string `json:"additionalDirectories,omitempty"`
 	} `json:"permissions"`
 	EnabledPlugins map[string]bool            `json:"enabledPlugins"`
 	MCPServers     map[string]claudeMCPServer `json:"mcpServers,omitempty"`
@@ -777,6 +786,9 @@ func managedSettingsFor(tools toolSurface) claudeManagedSettings {
 			sessionMCPServerName: {Type: "http", URL: tools.SessionMCP},
 		}
 		settings.Permissions.Allow = append(settings.Permissions.Allow, sessionMCPPermission)
+	}
+	if tools.SharedDir != "" {
+		settings.Permissions.AdditionalDirectories = []string{tools.SharedDir}
 	}
 	return settings
 }
@@ -806,6 +818,7 @@ func ensureClaudeManagedSettings(homeDir string, tools toolSurface) error {
 		// before the managed plugin (or before this type existed) land here too.
 		settings.EnabledPlugins = want.EnabledPlugins
 		settings.MCPServers = want.MCPServers
+		settings.Permissions.AdditionalDirectories = want.Permissions.AdditionalDirectories
 		for _, allow := range want.Permissions.Allow {
 			if !containsString(settings.Permissions.Allow, allow) {
 				settings.Permissions.Allow = append(settings.Permissions.Allow, allow)
@@ -840,6 +853,17 @@ func managedSettingsMatch(settings, want claudeManagedSettings) bool {
 	}
 	for _, allow := range want.Permissions.Allow {
 		if !containsString(settings.Permissions.Allow, allow) {
+			return false
+		}
+	}
+	// Equality, not containment: this list is wholly the platform's, and an
+	// entry the archive carried names a directory of a *previous* round that
+	// this pod may not even have (AC-F5).
+	if len(settings.Permissions.AdditionalDirectories) != len(want.Permissions.AdditionalDirectories) {
+		return false
+	}
+	for i, dir := range want.Permissions.AdditionalDirectories {
+		if settings.Permissions.AdditionalDirectories[i] != dir {
 			return false
 		}
 	}

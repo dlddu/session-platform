@@ -199,3 +199,58 @@ func TestManagedSettingsRejectMixedToolSurfaces(t *testing.T) {
 		t.Fatalf("validation error = %v, want a mixed-surface rejection", err)
 	}
 }
+
+// AC-F5's reading half: the path the MCP hands back is only useful if the
+// agent's file tools may open it, and they are scoped to its own state tree
+// otherwise.
+func TestApprovalGatedManagedSettingsOpenTheSharedVolumeToTheAgent(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := ensureClaudeManagedSettings(homeDir,
+		toolSurface{SessionMCP: "http://10.42.0.9:8092", SharedDir: "/shared"}); err != nil {
+		t.Fatalf("write managed settings: %v", err)
+	}
+	settings := readManagedSettings(t, homeDir)
+	if got := settings.Permissions.AdditionalDirectories; len(got) != 1 || got[0] != "/shared" {
+		t.Fatalf("additionalDirectories = %v, want exactly the shared volume", got)
+	}
+	if err := validateClaudeManagedSettings(homeDir); err != nil {
+		t.Fatalf("managed settings are invalid: %v", err)
+	}
+}
+
+// The opt-in's other side: no volume, no widened file scope. A directory named
+// here that the pod does not hold would be a permission granted for nothing.
+func TestManagedSettingsWidenNothingWithoutASharedVolume(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := ensureClaudeManagedSettings(homeDir, toolSurface{SessionMCP: "http://10.42.0.9:8092"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readManagedSettings(t, homeDir).Permissions.AdditionalDirectories; len(got) != 0 {
+		t.Fatalf("additionalDirectories = %v, want none", got)
+	}
+	if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugin: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readManagedSettings(t, homeDir).Permissions.AdditionalDirectories; len(got) != 0 {
+		t.Fatalf("claude-code additionalDirectories = %v, want none — that type has no shared volume", got)
+	}
+}
+
+// An archive carries the previous round's settings, and the previous round's
+// volume is gone with its claim. Normalising the list rather than merging it is
+// what keeps a stale directory out of this round's permissions (AC-F4/AC-F5).
+func TestRestoredManagedSettingsDropAStaleSharedDirectory(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := ensureClaudeManagedSettings(homeDir,
+		toolSurface{SessionMCP: "http://10.42.0.9:8092", SharedDir: "/shared-old"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureClaudeManagedSettings(homeDir,
+		toolSurface{SessionMCP: "http://10.42.1.4:8092", SharedDir: "/shared"}); err != nil {
+		t.Fatalf("re-point managed settings: %v", err)
+	}
+	got := readManagedSettings(t, homeDir).Permissions.AdditionalDirectories
+	if len(got) != 1 || got[0] != "/shared" {
+		t.Fatalf("additionalDirectories = %v, want only this round's volume", got)
+	}
+}
