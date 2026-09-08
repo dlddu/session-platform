@@ -8,12 +8,13 @@
 // JSON DTOs) and talks to whatever E2E_BASE_URL points at — the kind-deployed
 // control-plane (default http://localhost:8080, see deploy/ + scripts/e2e).
 //
-// LAYOUT — one AC per file. Every `e2e_*_test.go` in this directory declares
-// exactly one acceptance criterion in its header (`// 검증 AC: AC-XX`); that
-// declaration is the machine-checkable AC↔file mapping (scripts/e2e/check-ac-mapping.sh,
+// LAYOUT — one test scenario per file. Every `e2e_*_test.go` in this directory
+// declares exactly one scenario in its header
+// (`// 검증 시나리오: lifecycle.md#시나리오 2`); that declaration is the
+// machine-checkable scenario↔file mapping (scripts/e2e/check-scenario-mapping.sh,
 // registry in docs/test/e2e.md). THIS file is deliberately NOT named `e2e_*`:
 // it holds the shared harness only, so it is not a matching unit and needs no
-// AC declaration.
+// scenario declaration.
 package e2e_test
 
 import (

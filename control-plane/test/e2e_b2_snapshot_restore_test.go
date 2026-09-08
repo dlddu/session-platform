@@ -1,6 +1,6 @@
 //go:build e2e
 
-// 검증 AC: AC-B2
+// 검증 시나리오: lifecycle.md#시나리오 2
 //
 // docs/prd/lifecycle.md, docs/test/lifecycle.md scenario 2; the CRIU round trip
 // the restore rides on is docs/criu-verification.md.

@@ -1,6 +1,6 @@
 //go:build e2e
 
-// 검증 AC: AC-F6
+// 검증 시나리오: approval-gated-workload.md#시나리오 8
 //
 // Where an approval-gated session's two external secrets land, asserted on the
 // *deployed* SUT (docs/prd/approval-gated-workload.md AC-F6). AC-F6 is a

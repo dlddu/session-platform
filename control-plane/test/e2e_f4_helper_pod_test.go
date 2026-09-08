@@ -1,6 +1,6 @@
 //go:build e2e
 
-// 검증 AC: AC-F4
+// 검증 시나리오: approval-gated-workload.md#시나리오 7
 //
 // docs/prd/approval-gated-workload.md AC-F4, asserted on the deployed SUT.
 //

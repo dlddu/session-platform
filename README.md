@@ -216,11 +216,14 @@ gitignored.
   proxy pre-EOF chunk forwarding, byte boundaries, output limits, resume,
   archive round trip, and lifecycle crash boundaries use fake-runner/adapter Go tests.
   A deployed test against the external Claude API is intentionally not claimed.
-  Each AC has its own e2e file, declared in the file header and registered in
-  [`docs/test/e2e.md`](docs/test/e2e.md) — `make check-ac-mapping` enforces the
-  1:1. Only the reaper-driven idle→snapshot trigger (AC-B1, a registered
-  exception) and the idle-state read/write branches remain open, both waiting on
-  the same `TODO(policy)`.
+  Each e2e file declares the test scenario it verifies in its header
+  (`// 검증 시나리오: lifecycle.md#시나리오 2`) and is registered in
+  [`docs/test/e2e.md`](docs/test/e2e.md) — `make check-scenario-mapping` enforces
+  the 1:1. The axis moved from acceptance criteria to test scenarios on
+  2026-09-08, so the registry lists the scenarios that do not have a dedicated
+  file yet; the reaper-driven idle→snapshot trigger
+  (`lifecycle.md#시나리오 1`) stays a registered exception, waiting on the same
+  `TODO(policy)` as the idle-state read/write branches.
 - **Conflict (envtest)** (`make test-envtest`): an isolated nested module runs
   the ConfigMap adapter against a real kube-apiserver + etcd to assert AC-C1's
   single-winner property (exactly one of N concurrent CompareAndSwap / Lease

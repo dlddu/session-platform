@@ -28,8 +28,8 @@
 ### 유지 대상 (이 밖은 제거 후보)
 
 1. **기계가 읽는 주석** — 정책 대상이 아니며 판정에서 제외한다:
-   `//go:` · `nolint` · `eslint-` · `@ts-` · `검증 AC:` · `mock-exception:` · `mockup:`
-   (각각 Go 툴체인 · `scripts/e2e/check-ac-mapping.sh` · `scripts/check-render-fidelity.py` ·
+   `//go:` · `nolint` · `eslint-` · `@ts-` · `검증 시나리오:` · `mock-exception:` · `mockup:`
+   (각각 Go 툴체인 · `scripts/e2e/check-scenario-mapping.sh` · `scripts/check-render-fidelity.py` ·
    `scripts/check-fidelity-allowlist.py`가 파싱한다. 지우면 게이트가 깨진다.)
 2. **doc 주석** — exported Go 식별자는 Go 관례대로 **식별자 이름으로 시작하는 1줄** doc 주석과
    패키지 주석을 유지한다. 다만 **그 1줄이 시그니처를 그대로 옮겨 적기만 하면**

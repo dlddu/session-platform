@@ -1,6 +1,6 @@
 //go:build e2e
 
-// 검증 AC: 없음 (스모크·인프라)
+// 검증 시나리오: 없음 (스모크·인프라)
 //
 // Registered as a non-AC matching unit in docs/test/e2e.md §"비-AC 파일 등재"
 // (1:1 rule 3).

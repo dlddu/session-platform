@@ -1,6 +1,6 @@
 //go:build e2e
 
-// 검증 AC: AC-D4
+// 검증 시나리오: shell-workload.md#시나리오 4
 //
 // docs/prd/shell-workload.md — the markers below are the ones AC-D4's 검증 방법
 // names.

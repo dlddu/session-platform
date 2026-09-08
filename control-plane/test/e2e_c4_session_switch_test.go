@@ -1,6 +1,6 @@
 //go:build e2e
 
-// 검증 AC: AC-C4
+// 검증 시나리오: state-api.md#시나리오 4
 //
 // docs/prd/state-api.md, docs/test/state-api.md scenario 4.
 package e2e_test

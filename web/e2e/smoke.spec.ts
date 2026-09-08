@@ -1,4 +1,4 @@
-// 검증 AC: 없음 (스모크·인프라)
+// 검증 시나리오: 없음 (스모크·인프라)
 // 등재: docs/test/e2e.md 「비-AC 파일 등재」.
 import { test, expect } from "@playwright/test";
 

@@ -13,7 +13,7 @@ ENVTEST_K8S_VERSION ?= 1.30.0
 
 .DEFAULT_GOAL := build
 
-.PHONY: build web embed control-plane run dev test test-unit test-integration test-envtest lint check-fidelity check-ac-mapping check-comment-policy fmt docker docker-data-plane clean tidy e2e-up e2e-down e2e-api e2e-web e2e
+.PHONY: build web embed control-plane run dev test test-unit test-integration test-envtest lint check-fidelity check-scenario-mapping check-comment-policy fmt docker docker-data-plane clean tidy e2e-up e2e-down e2e-api e2e-web e2e
 
 ## build: web -> embed -> control-plane binary
 build: control-plane
@@ -100,10 +100,10 @@ e2e: e2e-api e2e-web
 check-fidelity:
 	python3 scripts/check-fidelity-allowlist.py
 
-## check-ac-mapping: verify the AC <-> e2e 1:1 mapping (docs/test/e2e.md).
+## check-scenario-mapping: verify the 테스트 시나리오 <-> e2e 1:1 mapping (docs/test/e2e.md).
 ## Static — no cluster, no toolchain; runs on every PR from ci.yml.
-check-ac-mapping:
-	./scripts/e2e/check-ac-mapping.sh
+check-scenario-mapping:
+	./scripts/e2e/check-scenario-mapping.sh
 
 ## check-comment-policy: 주석 판정 원장(docs/comment-policy.md) <-> 실제 주석 대조.
 ## 등재된 범위의 줄 수·지문을 모델 as-is 지문과 같은 추출로 재측정해, 판정 이후 그 범위에
@@ -112,7 +112,7 @@ check-comment-policy:
 	python3 scripts/check_comment_policy.py
 
 ## lint: go vet + gofmt check (both Go modules) + web typecheck + 정적 등재 게이트 3종
-lint: check-fidelity check-ac-mapping check-comment-policy
+lint: check-fidelity check-scenario-mapping check-comment-policy
 	cd $(CP_DIR) && go vet ./... && test -z "$$(gofmt -l . | tee /dev/stderr)"
 	cd $(DP_DIR) && go vet ./... && test -z "$$(gofmt -l . | tee /dev/stderr)"
 	cd $(WEB_DIR) && (test -d node_modules || npm install) && npm run lint
