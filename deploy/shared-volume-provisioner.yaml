@@ -1,0 +1,167 @@
+# A ReadWriteMany StorageClass for the kind SUT, so AC-F5's session-shared
+# volume is exercised here rather than only asserted against a fake client.
+#
+# Why this exists at all: kind's built-in `standard` class is rancher
+# local-path in nodePathMap mode, which rejects any access mode other than
+# ReadWriteOnce before it provisions anything. An approval-gated session's
+# claim therefore never binds, its pod pair never leaves Pending, and session
+# creation does not return — which is exactly how the first attempt at AC-F5
+# turned this job red. Naming a class is not enough; the cluster has to have
+# one that serves ReadWriteMany.
+#
+# Why a second local-path provisioner rather than an NFS stack: local-path in
+# sharedFileSystemPath mode skips the ReadWriteOnce-only check and emits a
+# PersistentVolume with no node affinity, on the premise that every node sees
+# the same filesystem at that path. deploy/kind-config.yaml makes that premise
+# true by bind-mounting one host directory into both nodes. Both images below
+# are already baked into the kind node image, so this pulls nothing, needs no
+# privileged NFS daemon, and adds one failure surface (a config) instead of
+# five. It is a real deployment, like MinIO — not a stand-in for one.
+#
+# Production is untouched: k8s/ names no class, and this file lives in the kind
+# overlay only. Which class serves ReadWriteMany is a property of the target
+# cluster, which is why the control plane takes it as configuration.
+#
+# The ConfigMap and ServiceAccount deliberately reuse the names kind's own
+# provisioner uses. They are in a different namespace, so nothing collides, and
+# reusing them means the deployment below needs no --configmap-name or
+# --service-account-name override. The ClusterRole and its binding *are*
+# renamed: those are cluster-scoped and would collide.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: session-shared-storage
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: local-path-provisioner-service-account
+  namespace: session-shared-storage
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: session-shared-path-provisioner-role
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "persistentvolumeclaims", "configmaps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["endpoints", "persistentvolumes", "pods"]
+    verbs: ["*"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: session-shared-path-provisioner-bind
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: session-shared-path-provisioner-role
+subjects:
+  - kind: ServiceAccount
+    name: local-path-provisioner-service-account
+    namespace: session-shared-storage
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: local-path-config
+  namespace: session-shared-storage
+data:
+  # sharedFileSystemPath and nodePathMap are mutually exclusive, and it is the
+  # presence of this key alone that puts the provisioner in the mode that can
+  # serve ReadWriteMany. The path is the bind mount both nodes carry.
+  config.json: |-
+    {
+            "sharedFileSystemPath": "/var/session-shared"
+    }
+  setup: |-
+    #!/bin/sh
+    set -eu
+    mkdir -m 0777 -p "$VOL_DIR"
+  teardown: |-
+    #!/bin/sh
+    set -eu
+    rm -rf "$VOL_DIR"
+  helperPod.yaml: |-
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: helper-pod
+    spec:
+      containers:
+      - name: helper-pod
+        image: docker.io/kindest/local-path-helper:v20230510-486859a6
+        imagePullPolicy: IfNotPresent
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: local-path-provisioner
+  namespace: session-shared-storage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: session-shared-path-provisioner
+  template:
+    metadata:
+      labels:
+        app: session-shared-path-provisioner
+    spec:
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Equal
+          effect: NoSchedule
+      serviceAccountName: local-path-provisioner-service-account
+      containers:
+        - name: local-path-provisioner
+          # Baked into the kind node image (kind v0.24.0), hence IfNotPresent
+          # and no pull. Keep both tags in step with the kind version pinned in
+          # .github/workflows/e2e.yml if that moves.
+          image: docker.io/kindest/local-path-provisioner:v20240813-c6f155d6
+          imagePullPolicy: IfNotPresent
+          command:
+            - local-path-provisioner
+            - --debug
+            - start
+            # The distinct name is what keeps this instance and kind's own from
+            # answering for each other's StorageClass.
+            - --provisioner-name
+            - session-platform.io/shared-path
+            - --helper-image
+            - docker.io/kindest/local-path-helper:v20230510-486859a6
+            - --config
+            - /etc/config/config.json
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/config/
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+      volumes:
+        - name: config-volume
+          configMap:
+            name: local-path-config
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  # Deliberately not the default class: everything else in this SUT is happy
+  # with kind's node-local `standard`, and only the claim that asks for this
+  # name by way of SESSION_SHARED_VOLUME_STORAGE_CLASS should land here.
+  name: session-shared
+provisioner: session-platform.io/shared-path
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
