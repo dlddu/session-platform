@@ -51,6 +51,13 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["create", "get", "list", "watch"]
+  # approval-gated sessions only: the ReadWriteMany claim the session's workload
+  # pod and its helper pod's MCP container share (AC-F5). Create only, for the
+  # same reason as the policies above — the claim carries an owner reference to
+  # that session's helper pod, so garbage collection reclaims it with the pod.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["create", "get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
