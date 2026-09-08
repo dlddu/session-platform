@@ -10,6 +10,16 @@
 # NOTE(criu): real CRIU checkpoint/restore needs a CRIU-capable node runtime
 # and the ContainerCheckpoint feature gate (alpha). This config does NOT enable
 # it — the CRIU path stays gated off here. See docs/criu-verification.md.
+#
+# NOTE(AC-F5): both nodes bind-mount the *same* host directory at
+# /var/session-shared. deploy/shared-volume-provisioner.yaml runs a local-path
+# provisioner in sharedFileSystemPath mode over that directory, which is how
+# this cluster serves ReadWriteMany at all: that mode is the one where the
+# provisioner skips the ReadWriteOnce-only check and issues a PersistentVolume
+# with no node affinity, and the identical mount on every node is exactly the
+# premise it makes. The default `standard` class cannot stand in — it is
+# node-local and refuses a ReadWriteMany claim outright, leaving the claim
+# Pending and an approval-gated session unable to finish provisioning.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: session-platform
@@ -19,4 +29,10 @@ nodes:
       - containerPort: 30080
         hostPort: 8080
         protocol: TCP
+    extraMounts:
+      - hostPath: /tmp/session-platform-shared
+        containerPath: /var/session-shared
   - role: worker
+    extraMounts:
+      - hostPath: /tmp/session-platform-shared
+        containerPath: /var/session-shared
