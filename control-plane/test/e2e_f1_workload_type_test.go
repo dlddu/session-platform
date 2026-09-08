@@ -1,6 +1,6 @@
 //go:build e2e
 
-// 검증 AC: AC-F1
+// 검증 시나리오: approval-gated-workload.md#시나리오 1
 //
 // docs/prd/approval-gated-workload.md AC-F1, asserted against the kind cluster.
 // Why the F series is a 공백 rather than an 예외 is docs/test/e2e.md.

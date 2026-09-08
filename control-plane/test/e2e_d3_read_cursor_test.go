@@ -1,6 +1,6 @@
 //go:build e2e
 
-// 검증 AC: AC-D3
+// 검증 시나리오: shell-workload.md#시나리오 3
 //
 // docs/prd/shell-workload.md, docs/test/shell-workload.md scenario 3.
 package e2e_test

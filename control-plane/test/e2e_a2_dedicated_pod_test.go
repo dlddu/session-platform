@@ -1,6 +1,6 @@
 //go:build e2e
 
-// 검증 AC: AC-A2
+// 검증 시나리오: architecture.md#시나리오 2
 //
 // docs/prd/architecture.md, docs/test/architecture.md scenarios 1·2.
 package e2e_test

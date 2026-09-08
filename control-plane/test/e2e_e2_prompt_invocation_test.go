@@ -1,6 +1,6 @@
 //go:build e2e
 
-// 검증 AC: AC-E2
+// 검증 시나리오: claude-code-workload.md#시나리오 2
 //
 // docs/prd/claude-code-workload.md AC-E2, driven against the in-cluster provider
 // stand-in registered as `CLAUDE-PROVIDER` in docs/test/e2e.md.

@@ -1,6 +1,6 @@
 //go:build e2e
 
-// 검증 AC: AC-C3
+// 검증 시나리오: state-api.md#시나리오 3
 //
 // docs/prd/state-api.md, docs/test/state-api.md scenario 3. The idle branch is
 // unreachable and registered in docs/test/e2e.md §"남은 미검증 분기".

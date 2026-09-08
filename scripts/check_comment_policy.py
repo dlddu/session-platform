@@ -50,7 +50,7 @@ POLICY = REPO_ROOT / "docs" / "comment-policy.md"
 SCAN_PATHSPECS = ("control-plane", "data-plane", "web/src", "web/e2e")
 SCAN_EXCLUDE_RE = re.compile(r"(^|/)(vendor|node_modules|dist)/")
 COMMENT_RE = re.compile(r"^[ \t\v\f\r]*(//|/\*|\*[^/])")
-DIRECTIVE_RE = re.compile(r"//go:|nolint|eslint-|@ts-|검증 AC:|mock-exception:|mockup:")
+DIRECTIVE_RE = re.compile(r"//go:|nolint|eslint-|@ts-|검증 시나리오:|mock-exception:|mockup:")
 WHITESPACE_RUN_RE = re.compile(r"[ \t\v\f\r]+")
 
 # R5 — 원장이 가리키는 좌표에서 금지되는 형태. 확장자를 요구해 산문의 우연한 `낱말:1` 을 피하고,

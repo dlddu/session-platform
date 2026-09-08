@@ -1,6 +1,6 @@
 //go:build e2e
 
-// 검증 AC: AC-C1
+// 검증 시나리오: state-api.md#시나리오 1
 //
 // docs/prd/state-api.md, docs/test/state-api.md scenario 1.
 //

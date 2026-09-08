@@ -1,6 +1,6 @@
 //go:build e2e
 
-// 검증 AC: AC-A1
+// 검증 시나리오: architecture.md#시나리오 1
 //
 // docs/prd/architecture.md, docs/test/architecture.md scenario 1.
 //

@@ -78,17 +78,18 @@ jobs:
         working-directory: control-plane
         run: go test ./...
 
-  ac-mapping:
-    name: AC ↔ e2e 1:1 mapping
+  scenario-mapping:
+    name: 시나리오 ↔ e2e 1:1 mapping
     runs-on: ubuntu-latest
-    # Static check of the acceptance-criteria ↔ e2e file mapping: every AC has
-    # exactly one declaring file (or a registered exception), every matching-unit
-    # file declares exactly one AC, and docs/test/e2e.md's registry and totals
-    # match reality. No cluster, no toolchain — seconds, on every PR.
+    # Static check of the test-scenario ↔ e2e file mapping: every scenario has
+    # exactly one declaring file (or a registered exception / pending row), every
+    # matching-unit file declares exactly one existing scenario, and
+    # docs/test/e2e.md's registry and totals match reality. No cluster, no
+    # toolchain — seconds, on every PR.
     steps:
       - uses: actions/checkout@v4
-      - name: check AC <-> e2e mapping
-        run: ./scripts/e2e/check-ac-mapping.sh
+      - name: check scenario <-> e2e mapping
+        run: ./scripts/e2e/check-scenario-mapping.sh
 
   data-plane:
     name: data-plane (lint + unit)

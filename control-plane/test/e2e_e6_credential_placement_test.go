@@ -1,6 +1,6 @@
 //go:build e2e
 
-// 검증 AC: AC-E6
+// 검증 시나리오: claude-code-workload.md#시나리오 7
 //
 // docs/prd/claude-code-workload.md AC-E6, asserted on the deployed SUT.
 //

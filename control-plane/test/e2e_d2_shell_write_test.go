@@ -1,6 +1,6 @@
 //go:build e2e
 
-// 검증 AC: AC-D2
+// 검증 시나리오: shell-workload.md#시나리오 2
 //
 // docs/prd/shell-workload.md, docs/test/shell-workload.md scenario 2.
 //

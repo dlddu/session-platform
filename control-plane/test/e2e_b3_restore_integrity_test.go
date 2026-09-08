@@ -1,6 +1,6 @@
 //go:build e2e
 
-// 검증 AC: AC-B3
+// 검증 시나리오: lifecycle.md#시나리오 3
 //
 // docs/prd/lifecycle.md, docs/test/lifecycle.md scenario 3; the observable cursor
 // contract is the "offset과 복원" design note in docs/prd/shell-workload.md.
