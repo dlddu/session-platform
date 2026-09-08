@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
@@ -196,12 +197,15 @@ type ClientOrchestrator struct {
 	image                   string
 	claudeCredentialsSecret string // platform Secret referenced by claude-code pods
 	approvalGatewaySecret   string // platform Secret referenced by approval-gated helper pods
-	workloadImages          map[session.WorkloadType]string
-	shell                   string // DATA_PLANE_SHELL override injected into pods ("" = agent default)
-	checkpointPrivileged    bool   // run session pods privileged for in-pod CRIU (CRIU_ENABLED)
-	agentPort               int
-	pollInterval            time.Duration
-	readyTimeout            time.Duration
+	// AC-F5's per-session shared claim — see shared_volume.go.
+	sharedVolumeStorageClass string
+	sharedVolumeSize         resource.Quantity
+	workloadImages           map[session.WorkloadType]string
+	shell                    string // DATA_PLANE_SHELL override injected into pods ("" = agent default)
+	checkpointPrivileged     bool   // run session pods privileged for in-pod CRIU (CRIU_ENABLED)
+	agentPort                int
+	pollInterval             time.Duration
+	readyTimeout             time.Duration
 }
 
 var _ PodOrchestrator = (*ClientOrchestrator)(nil)
@@ -303,6 +307,7 @@ func NewClientOrchestrator(client kubernetes.Interface, namespace string, opts .
 		agentPort:               AgentPort,
 		claudeCredentialsSecret: defaultClaudeCredentialsSecret,
 		approvalGatewaySecret:   defaultApprovalGatewaySecret,
+		sharedVolumeSize:        resource.MustParse(defaultSharedVolumeSize),
 		pollInterval:            defaultPollInterval,
 		readyTimeout:            defaultReadyTimeout,
 	}
@@ -383,6 +388,9 @@ func (o *ClientOrchestrator) startSet(ctx context.Context, sessionID, checkpoint
 			return SessionPods{}, err
 		}
 		ref, err := o.provision(ctx, spec, func(created *corev1.Pod) error {
+			if err := o.applySharedVolumeClaim(ctx, sessionID, created); err != nil {
+				return err
+			}
 			return o.applySessionNetworkPolicies(ctx, sessionID, created)
 		})
 		if err != nil {
@@ -601,6 +609,12 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			Name:         claudeCodeStateVolumeName,
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		})
+		// The file-exchange volume this session shares with its helper pod's MCP
+		// container (AC-F5), when the deployment has named a class that serves it.
+		if o.sharedVolumeEnabled() {
+			container.VolumeMounts = append(container.VolumeMounts, sharedVolumeMount())
+			volumes = append(volumes, sharedVolume(sharedClaimName(helperPodNameFor(sessionID, suffix))))
+		}
 		// No sidecar: moving the proxy out of this pod is the whole point of
 		// AC-F2's arrangement.
 	}
@@ -664,10 +678,7 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 	if err != nil {
 		return nil, err
 	}
-	name := helperPodName(sessionID)
-	if suffix != "" {
-		name = helperRestorePodName(sessionID, suffix)
-	}
+	name := helperPodNameFor(sessionID, suffix)
 	automountServiceAccountToken := false
 
 	mcp := corev1.Container{
@@ -704,6 +715,13 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 		},
 		SecurityContext: hardenedSecurityContext(),
 	}
+	// AC-F5's shared claim, when configured. Its absence from the proxy container
+	// built below is the decision, not an omission.
+	var helperVolumes []corev1.Volume
+	if o.sharedVolumeEnabled() {
+		mcp.VolumeMounts = []corev1.VolumeMount{sharedVolumeMount()}
+		helperVolumes = []corev1.Volume{sharedVolume(sharedClaimName(name))}
+	}
 
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -723,6 +741,7 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 				mcp,
 				o.credentialProxyContainer(HelperCredentialProxyContainerName, image, helperProxyListenAddr, proxyPlacementHelper),
 			},
+			Volumes: helperVolumes,
 		},
 	}, nil
 }
@@ -813,6 +832,16 @@ func podName(sessionID string) string {
 // helperPodName derives the deterministic name of a session's helper pod (AC-F4).
 func helperPodName(sessionID string) string {
 	return podName(sessionID) + "-helper"
+}
+
+// helperPodNameFor names the round's helper pod: deterministic for a fresh set,
+// suffixed for a restore round. Both pod specs and the shared claim go through
+// it, so the workload pod cannot end up naming a claim the helper pod does not.
+func helperPodNameFor(sessionID, suffix string) string {
+	if suffix != "" {
+		return helperRestorePodName(sessionID, suffix)
+	}
+	return helperPodName(sessionID)
 }
 
 // restoreSuffix generates the per-provisioning-round suffix shared by a restore

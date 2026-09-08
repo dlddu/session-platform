@@ -49,6 +49,12 @@ resources:
   # (APPROVAL-GATEWAY, EXT): the PRD's reference implementation ships only the
   # gatekeeper *client*, so there is no gateway server to deploy for real.
   - e2e-approval-gateway-fake.yaml
+
+  # The ReadWriteMany class AC-F5's session-shared volume is provisioned from.
+  # kind's default class is node-local and refuses a ReadWriteMany claim, so
+  # without this the volume cannot stand here at all — see the file's header
+  # and the env below.
+  - shared-volume-provisioner.yaml
 images:
   - name: ghcr.io/dlddu/session-platform
     newName: session-platform/control-plane
@@ -127,6 +133,16 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/env/4/value
         value: session-platform/data-plane:dev
+      # AC-F5's file-exchange volume is opt-in on a class name, because which
+      # class serves ReadWriteMany is a property of the target cluster and the
+      # production base cannot know it. Naming the class this overlay deploys
+      # is what makes an approval-gated session here actually provision the
+      # claim and mount it into both pods — the path the e2e suite asserts.
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: SESSION_SHARED_VOLUME_STORAGE_CLASS
+          value: session-shared
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:

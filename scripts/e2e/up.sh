@@ -87,6 +87,16 @@ kubectl rollout status deploy/anthropic-fake --timeout=120s
 # its listener. The Secret it authenticates against is applied above with the
 # rest of the overlay, so nothing else has to be ordered here.
 kubectl rollout status deploy/approval-gateway-fake --timeout=120s
+# The ReadWriteMany provisioner behind AC-F5's session-shared volume
+# (deploy/shared-volume-provisioner.yaml). Same reason as the fixtures above:
+# the first approval-gated session must not race it. Without the class its
+# claim never binds and the session hangs instead of failing, so the existence
+# check below turns a 90-second mystery into one line.
+kubectl -n session-shared-storage rollout status deploy/local-path-provisioner --timeout=120s
+if ! kubectl get storageclass session-shared >/dev/null 2>&1; then
+  echo "e2e: StorageClass 'session-shared' is missing — AC-F5's shared volume cannot be provisioned" >&2
+  exit 1
+fi
 kubectl rollout status deploy/control-plane --timeout=120s
 
 echo "e2e: polling $BASE_URL/api/v1/healthz"
