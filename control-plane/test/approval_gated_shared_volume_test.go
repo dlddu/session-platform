@@ -298,3 +298,100 @@ func TestApprovalGated_UnconfiguredStorageClassMakesNoClaim(t *testing.T) {
 		}
 	}
 }
+
+// The path both containers are told, resolved from the mount rather than from
+// the constant: what the data plane needs is not "some directory" but the one
+// its own pod holds the claim at. A change that moved the mount and forgot the
+// env would leave the MCP writing where nothing is mounted.
+func TestApprovalGated_BothMountingContainersAreToldTheSharedPath(t *testing.T) {
+	orch, cs := newReadyOrchestrator(t,
+		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
+		withSharedVolume())
+	started, err := orch.Start(context.Background(), "f5g1",
+		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated})
+	if err != nil {
+		t.Fatalf("start approval-gated session: %v", err)
+	}
+	set := newPodSet(t, listPods(t, cs), started)
+	claim := onlyClaim(t, cs)
+
+	for _, tc := range []struct {
+		what      string
+		pod       corev1.Pod
+		container string
+	}{
+		{"workload", set.workload, "session"},
+		{"helper MCP", set.helper, k8s.SessionMCPContainerName},
+	} {
+		mount, ok := mountPath(t, tc.pod, tc.container, claim.Name)
+		if !ok {
+			t.Fatalf("%s container does not mount claim %s (AC-F5)", tc.what, claim.Name)
+		}
+		dir, ok := envValue(container(t, tc.pod, tc.container), k8s.SharedVolumeDirEnvVar)
+		if !ok {
+			t.Fatalf("%s container mounts the shared claim but has no %s; "+
+				"the data plane cannot find the volume it holds (AC-F5)", tc.what, k8s.SharedVolumeDirEnvVar)
+		}
+		if dir != mount {
+			t.Fatalf("%s container is told %s=%q but mounts the claim at %q (AC-F5)",
+				tc.what, k8s.SharedVolumeDirEnvVar, dir, mount)
+		}
+	}
+
+	// It handles no files, so it is told of no directory — the same split the
+	// mount itself makes.
+	if dir, ok := envValue(container(t, set.helper, k8s.HelperCredentialProxyContainerName),
+		k8s.SharedVolumeDirEnvVar); ok {
+		t.Fatalf("helper %s container is told %s=%q; AC-F5 excludes it from the volume",
+			k8s.HelperCredentialProxyContainerName, k8s.SharedVolumeDirEnvVar, dir)
+	}
+}
+
+// The opt-in's other side for the env: no claim means no path, so the data
+// plane falls back to the shape it had before AC-F5 rather than writing into a
+// directory the pod does not have.
+func TestApprovalGated_UnconfiguredStorageClassTellsNoOneAPath(t *testing.T) {
+	orch, cs := newReadyOrchestrator(t,
+		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))
+	if _, err := orch.Start(context.Background(), "f5g2",
+		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated}); err != nil {
+		t.Fatalf("start approval-gated session: %v", err)
+	}
+	for _, pod := range listPods(t, cs) {
+		for _, c := range pod.Spec.Containers {
+			if dir, ok := envValue(c, k8s.SharedVolumeDirEnvVar); ok {
+				t.Fatalf("pod %s container %s is told %s=%q with no claim to back it (AC-F5)",
+					pod.Name, c.Name, k8s.SharedVolumeDirEnvVar, dir)
+			}
+		}
+	}
+}
+
+// The types without a helper pod have no volume to be told about either.
+func TestOtherWorkloadTypesAreToldNoSharedPath(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		spec k8s.WorkloadSpec
+		opts []k8s.Option
+	}{
+		{"shell", k8s.WorkloadSpec{Type: session.WorkloadTypeShell}, nil},
+		{"claude-code", k8s.WorkloadSpec{Type: session.WorkloadTypeClaudeCode},
+			[]k8s.Option{k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, claudeCodeImage)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := append([]k8s.Option{withSharedVolume()}, tc.opts...)
+			orch, cs := newReadyOrchestrator(t, opts...)
+			if _, err := orch.Start(context.Background(), "f5g3", tc.spec); err != nil {
+				t.Fatalf("start %s session: %v", tc.name, err)
+			}
+			for _, pod := range listPods(t, cs) {
+				for _, c := range pod.Spec.Containers {
+					if dir, ok := envValue(c, k8s.SharedVolumeDirEnvVar); ok {
+						t.Fatalf("%s pod %s container %s is told %s=%q; only approval-gated has the volume",
+							tc.name, pod.Name, c.Name, k8s.SharedVolumeDirEnvVar, dir)
+					}
+				}
+			}
+		})
+	}
+}

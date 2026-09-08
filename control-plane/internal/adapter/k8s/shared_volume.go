@@ -13,8 +13,10 @@
 // class is node-local (kind's, for one) then holds an approval-gated session
 // Pending rather than refusing it outright.
 //
-// Nothing writes to the volume yet — docs/doc-tracker.md's AC-F5 item carries
-// the remaining halves and what stands in for them meanwhile.
+// What writes to it lives in the data plane; this package's share is naming the
+// path once and handing it to both mounting containers. The half of AC-F5 still
+// missing rides the filesystem archive — docs/doc-tracker.md's AC-F5 item
+// carries what it waits on.
 package k8s
 
 import (
@@ -33,6 +35,11 @@ const (
 	// nesting the shared volume inside another volume in one pod only would make
 	// AC-F5's "the same path" true by coincidence of layout.
 	SharedVolumeMountPath = "/shared"
+	// SharedVolumeDirEnvVar tells both mounting containers where the volume is.
+	// Its consumers sit in the data plane, which this package cannot show: the
+	// MCP container spills large approved responses there and the workload's
+	// agent reads them back as files (AC-F5).
+	SharedVolumeDirEnvVar = "SESSION_SHARED_DIR"
 	sharedVolumeName      = "session-shared"
 	// sharedClaimSuffix is appended to the round's helper pod name, which is what
 	// keeps the claim unique per provisioning round exactly as the pods and the

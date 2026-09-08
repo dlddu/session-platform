@@ -613,6 +613,8 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		// container (AC-F5), when the deployment has named a class that serves it.
 		if o.sharedVolumeEnabled() {
 			container.VolumeMounts = append(container.VolumeMounts, sharedVolumeMount())
+			container.Env = append(container.Env,
+				corev1.EnvVar{Name: SharedVolumeDirEnvVar, Value: SharedVolumeMountPath})
 			volumes = append(volumes, sharedVolume(sharedClaimName(helperPodNameFor(sessionID, suffix))))
 		}
 		// No sidecar: moving the proxy out of this pod is the whole point of
@@ -720,6 +722,7 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 	var helperVolumes []corev1.Volume
 	if o.sharedVolumeEnabled() {
 		mcp.VolumeMounts = []corev1.VolumeMount{sharedVolumeMount()}
+		mcp.Env = append(mcp.Env, corev1.EnvVar{Name: SharedVolumeDirEnvVar, Value: SharedVolumeMountPath})
 		helperVolumes = []corev1.Volume{sharedVolume(sharedClaimName(name))}
 	}
 
