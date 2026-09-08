@@ -610,9 +610,11 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		})
 		// The file-exchange volume this session shares with its helper pod's MCP
-		// container (AC-F5).
-		container.VolumeMounts = append(container.VolumeMounts, sharedVolumeMount())
-		volumes = append(volumes, sharedVolume(sharedClaimName(helperPodNameFor(sessionID, suffix))))
+		// container (AC-F5), when the deployment has named a class that serves it.
+		if o.sharedVolumeEnabled() {
+			container.VolumeMounts = append(container.VolumeMounts, sharedVolumeMount())
+			volumes = append(volumes, sharedVolume(sharedClaimName(helperPodNameFor(sessionID, suffix))))
+		}
 		// No sidecar: moving the proxy out of this pod is the whole point of
 		// AC-F2's arrangement.
 	}
@@ -712,9 +714,13 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 			PeriodSeconds:       2,
 		},
 		SecurityContext: hardenedSecurityContext(),
-		// AC-F5's shared claim. Its absence from the proxy container built below
-		// is the decision, not an omission.
-		VolumeMounts: []corev1.VolumeMount{sharedVolumeMount()},
+	}
+	// AC-F5's shared claim, when configured. Its absence from the proxy container
+	// built below is the decision, not an omission.
+	var helperVolumes []corev1.Volume
+	if o.sharedVolumeEnabled() {
+		mcp.VolumeMounts = []corev1.VolumeMount{sharedVolumeMount()}
+		helperVolumes = []corev1.Volume{sharedVolume(sharedClaimName(name))}
 	}
 
 	return &corev1.Pod{
@@ -735,7 +741,7 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 				mcp,
 				o.credentialProxyContainer(HelperCredentialProxyContainerName, image, helperProxyListenAddr, proxyPlacementHelper),
 			},
-			Volumes: []corev1.Volume{sharedVolume(sharedClaimName(name))},
+			Volumes: helperVolumes,
 		},
 	}, nil
 }

@@ -6,6 +6,9 @@
 // a freeze/restore round — is not implemented yet either; docs/doc-tracker.md
 // carries the remainder.
 //
+// The volume is opt-in, so every case that expects a claim configures a class;
+// TestApprovalGated_UnconfiguredStorageClassMakesNoClaim covers the other side.
+//
 // Deliberately not named e2e_*_test.go: that glob is the AC ↔ e2e mapping's
 // matching unit, and a dedicated e2e file for AC-F5 comes with a registry row
 // in docs/test/e2e.md, which this suite does not own.
@@ -23,6 +26,16 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
+
+// testStorageClass stands for the deployment-configured ReadWriteMany class.
+// It is deliberately not a real cluster's class name: what is under test is
+// that the configured name reaches the claim, not any particular name.
+const testStorageClass = "rwx-test"
+
+// withSharedVolume turns the opt-in on for the cases that assert the claim.
+func withSharedVolume() k8s.Option {
+	return k8s.WithSharedVolume(testStorageClass, resource.Quantity{})
+}
 
 func listClaims(t *testing.T, cs *fake.Clientset) []corev1.PersistentVolumeClaim {
 	t.Helper()
@@ -68,7 +81,8 @@ func onlyClaim(t *testing.T, cs *fake.Clientset) corev1.PersistentVolumeClaim {
 // volume at once — so it is asserted rather than assumed.
 func TestApprovalGated_SessionGetsItsOwnReadWriteManyClaim(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))
+		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
+		withSharedVolume())
 	if _, err := orch.Start(context.Background(), "f5a1",
 		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated}); err != nil {
 		t.Fatalf("start approval-gated session: %v", err)
@@ -82,12 +96,12 @@ func TestApprovalGated_SessionGetsItsOwnReadWriteManyClaim(t *testing.T) {
 		t.Fatalf("claim %s session label = %q, want the session's own id",
 			claim.Name, claim.Labels[k8s.LabelSessionID])
 	}
-	// Unset, not empty: the empty string means "bind only to a statically
-	// provisioned volume", which would leave the claim Pending forever on a
-	// cluster that provisions dynamically.
-	if claim.Spec.StorageClassName != nil {
-		t.Fatalf("claim %s storage class = %q, want unset so the cluster default is used",
-			claim.Name, *claim.Spec.StorageClassName)
+	// Never the empty string, which means "bind only to a statically provisioned
+	// volume" and would leave the claim Pending forever on a cluster that
+	// provisions dynamically. Since the volume is opt-in, the configured class is
+	// always there to name.
+	if claim.Spec.StorageClassName == nil || *claim.Spec.StorageClassName == "" {
+		t.Fatalf("claim %s storage class = %v, want the configured class", claim.Name, claim.Spec.StorageClassName)
 	}
 	if claim.Spec.Resources.Requests.Storage().IsZero() {
 		t.Fatalf("claim %s requests no storage", claim.Name)
@@ -119,7 +133,8 @@ func TestApprovalGated_ClaimUsesTheConfiguredStorageClass(t *testing.T) {
 // same claim, same path, and not in the proxy container beside it.
 func TestApprovalGated_WorkloadAndMCPShareTheClaimAtOnePath(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))
+		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
+		withSharedVolume())
 	started, err := orch.Start(context.Background(), "f5b1",
 		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated})
 	if err != nil {
@@ -164,7 +179,8 @@ func TestApprovalGated_WorkloadAndMCPShareTheClaimAtOnePath(t *testing.T) {
 // the only place that dependency is checkable.
 func TestApprovalGated_ClaimIsOwnedByItsHelperPod(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))
+		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
+		withSharedVolume())
 	started, err := orch.Start(context.Background(), "f5c1",
 		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated})
 	if err != nil {
@@ -193,7 +209,8 @@ func TestApprovalGated_ClaimIsOwnedByItsHelperPod(t *testing.T) {
 // pod that is being reclaimed.
 func TestApprovalGated_RestoreRoundGetsItsOwnClaim(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))
+		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
+		withSharedVolume())
 	if _, err := orch.Start(context.Background(), "f5d1",
 		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated}); err != nil {
 		t.Fatalf("start approval-gated session: %v", err)
@@ -255,5 +272,29 @@ func TestOtherWorkloadTypesGetNoSharedClaim(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The opt-in's own case. A cluster whose classes are all node-local has no
+// answer to a ReadWriteMany claim, and an approval-gated session there must
+// still stand up — so unconfigured means no claim and pods of the shape they
+// had before AC-F5, not a claim left Pending with two pods waiting behind it.
+func TestApprovalGated_UnconfiguredStorageClassMakesNoClaim(t *testing.T) {
+	orch, cs := newReadyOrchestrator(t,
+		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))
+	if _, err := orch.Start(context.Background(), "f5f1",
+		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated}); err != nil {
+		t.Fatalf("start approval-gated session: %v", err)
+	}
+
+	if claims := listClaims(t, cs); len(claims) != 0 {
+		t.Fatalf("unconfigured session created %d claims, want 0", len(claims))
+	}
+	for _, pod := range listPods(t, cs) {
+		for _, v := range pod.Spec.Volumes {
+			if v.PersistentVolumeClaim != nil {
+				t.Fatalf("unconfigured pod %s declares a claim-backed volume %q", pod.Name, v.Name)
+			}
+		}
 	}
 }

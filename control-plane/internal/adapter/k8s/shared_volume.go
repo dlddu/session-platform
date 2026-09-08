@@ -7,6 +7,12 @@
 // the node filesystem to a session workload is the opposite of the isolation
 // this workload type is built around (AC-F2, V1).
 //
+// The volume is opt-in: a cluster only gets it once it has been told which
+// class serves ReadWriteMany. A default-on arrangement asked every cluster for
+// a claim its default class may not be able to serve, and a cluster whose only
+// class is node-local (kind's, for one) then holds an approval-gated session
+// Pending rather than refusing it outright.
+//
 // Nothing writes to the volume yet — docs/doc-tracker.md's AC-F5 item carries
 // the remaining halves and what stands in for them meanwhile.
 package k8s
@@ -42,6 +48,14 @@ const (
 // three cannot drift apart.
 func sharedClaimName(helperPod string) string { return helperPod + sharedClaimSuffix }
 
+// sharedVolumeEnabled is the single definition of the opt-in: a configured
+// class is the switch, because a claim without one is the case that cannot be
+// served anywhere the default class is not ReadWriteMany. Both pod specs and
+// the create call read it, so a pod cannot mount a claim that is never made.
+func (o *ClientOrchestrator) sharedVolumeEnabled() bool {
+	return o.sharedVolumeStorageClass != ""
+}
+
 func sharedVolume(claimName string) corev1.Volume {
 	return corev1.Volume{
 		Name: sharedVolumeName,
@@ -58,12 +72,10 @@ func sharedVolumeMount() corev1.VolumeMount {
 	return corev1.VolumeMount{Name: sharedVolumeName, MountPath: SharedVolumeMountPath}
 }
 
-// sharedVolumeClaim renders the round's claim.
-//
-// StorageClassName is left *unset* when unconfigured, which selects the
-// cluster's default class — not the empty string, which means "bind only to a
-// statically provisioned volume" and would leave the claim Pending forever on a
-// cluster that provisions dynamically.
+// sharedVolumeClaim renders the round's claim. StorageClassName is always set
+// and never the empty string, which means "bind only to a statically
+// provisioned volume" and would leave the claim Pending forever on a cluster
+// that provisions dynamically.
 func (o *ClientOrchestrator) sharedVolumeClaim(sessionID string, owner *corev1.Pod) *corev1.PersistentVolumeClaim {
 	claim := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
@@ -82,10 +94,8 @@ func (o *ClientOrchestrator) sharedVolumeClaim(sessionID string, owner *corev1.P
 			},
 		},
 	}
-	if o.sharedVolumeStorageClass != "" {
-		class := o.sharedVolumeStorageClass
-		claim.Spec.StorageClassName = &class
-	}
+	class := o.sharedVolumeStorageClass
+	claim.Spec.StorageClassName = &class
 	return claim
 }
 
@@ -93,7 +103,11 @@ func (o *ClientOrchestrator) sharedVolumeClaim(sessionID string, owner *corev1.P
 // it runs after the helper pod is created, for the owner reference, and before
 // that pod is waited on: the pod stays Pending until the claim exists, so
 // creating it a moment later costs a scheduling round rather than a failure.
+// Unconfigured it does nothing, matching the pods built alongside it.
 func (o *ClientOrchestrator) applySharedVolumeClaim(ctx context.Context, sessionID string, owner *corev1.Pod) error {
+	if !o.sharedVolumeEnabled() {
+		return nil
+	}
 	claim := o.sharedVolumeClaim(sessionID, owner)
 	_, err := o.client.CoreV1().PersistentVolumeClaims(o.namespace).Create(ctx, claim, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
@@ -103,10 +117,11 @@ func (o *ClientOrchestrator) applySharedVolumeClaim(ctx context.Context, session
 }
 
 // WithSharedVolume configures AC-F5's claim: the storage class to request it
-// from (empty selects the cluster default) and its size (zero keeps the
-// default). The class is deployment configuration because no name is correct
-// everywhere — which class offers ReadWriteMany differs per cluster, and this
-// repository cannot check which one a target has.
+// from and its size (zero keeps the default). The class is deployment
+// configuration because no name is correct everywhere — which class offers
+// ReadWriteMany differs per cluster, and this repository cannot check which one
+// a target has. Left empty the volume is off entirely, which is what a cluster
+// without a ReadWriteMany class needs: no claim, and pods shaped as before.
 func WithSharedVolume(storageClass string, size resource.Quantity) Option {
 	return func(o *ClientOrchestrator) {
 		o.sharedVolumeStorageClass = storageClass

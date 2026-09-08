@@ -181,6 +181,8 @@ type config struct {
 	approvalGatewaySecret string
 	// sharedVolumeStorageClass and sharedVolumeSize size the ReadWriteMany claim
 	// an approval-gated session's two pods share (AC-F5; see WithSharedVolume).
+	// An empty class leaves the volume off: only a deployment that knows which
+	// of its classes serves ReadWriteMany can ask for one that will bind.
 	sharedVolumeStorageClass string
 	sharedVolumeSize         resource.Quantity
 	// claudeArchiveEnabled explicitly permits workspace/conversation/output
@@ -246,8 +248,9 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("CLAUDE_CODE_MODELS: %w", err)
 	}
-	// Unlike envDuration/envBool below, a bad value fails startup rather than
-	// falling back: a claim that binds at an unintended size is worse.
+	// Parsed even when the volume is off, so a typo surfaces at startup rather
+	// than on the day the class is configured. Unlike envDuration/envBool below
+	// a bad value fails startup: a claim that binds at an unintended size is worse.
 	sharedVolumeSize, err := resource.ParseQuantity(env("SESSION_SHARED_VOLUME_SIZE", "1Gi"))
 	if err != nil {
 		return config{}, fmt.Errorf("SESSION_SHARED_VOLUME_SIZE: %w", err)
