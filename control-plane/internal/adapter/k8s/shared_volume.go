@@ -56,6 +56,13 @@ func (o *ClientOrchestrator) sharedVolumeEnabled() bool {
 	return o.sharedVolumeStorageClass != ""
 }
 
+// sharedDirEnv hands the mount path to data-plane/entrypoint.sh, which needs it
+// on both sides of the exchange. It comes from the same constant the mounts do,
+// so the seed's writer and its reader cannot be pointed at different places.
+func sharedDirEnv() corev1.EnvVar {
+	return corev1.EnvVar{Name: SessionSharedDirEnvVar, Value: SharedVolumeMountPath}
+}
+
 func sharedVolume(claimName string) corev1.Volume {
 	return corev1.Volume{
 		Name: sharedVolumeName,

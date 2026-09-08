@@ -298,3 +298,65 @@ func TestApprovalGated_UnconfiguredStorageClassMakesNoClaim(t *testing.T) {
 		}
 	}
 }
+
+// The seed's producer needs a marketplace credential and its consumer must not
+// have one: that split is what lets an approval-gated session run the plugin
+// without the workload pod holding a Secret or a route off the pod (AC-F6).
+func TestApprovalGated_PluginSeedCredentialStaysInTheHelperPod(t *testing.T) {
+	orch, cs := newReadyOrchestrator(t,
+		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
+		withSharedVolume())
+	started, err := orch.Start(context.Background(), "f6p1",
+		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated})
+	if err != nil {
+		t.Fatalf("start approval-gated session: %v", err)
+	}
+	set := newPodSet(t, listPods(t, cs), started)
+	mcp := container(t, set.helper, k8s.SessionMCPContainerName)
+	workload := container(t, set.workload, "session")
+
+	if _, key, ok := secretKey(mcp, k8s.K3SMCPTokenEnvVar); !ok {
+		t.Errorf("MCP container is missing Secret-backed %s; it cannot clone the marketplace to seed",
+			k8s.K3SMCPTokenEnvVar)
+	} else if key != k8s.ClaudeCodeK3SMCPTokenSecretKey {
+		t.Errorf("%s reads Secret key %q, want %q", k8s.K3SMCPTokenEnvVar, key, k8s.ClaudeCodeK3SMCPTokenSecretKey)
+	}
+	if _, _, ok := secretKey(workload, k8s.K3SMCPTokenEnvVar); ok {
+		t.Errorf("workload container gets %s; it installs from the seed, not from the marketplace (AC-F6)",
+			k8s.K3SMCPTokenEnvVar)
+	}
+
+	// Both sides must be told the same path, or the seed is written where it is
+	// never read.
+	for name, pod := range map[string]corev1.Container{"MCP": mcp, "workload": workload} {
+		got, ok := envValue(pod, k8s.SessionSharedDirEnvVar)
+		if !ok {
+			t.Errorf("%s container is missing %s", name, k8s.SessionSharedDirEnvVar)
+			continue
+		}
+		if got != k8s.SharedVolumeMountPath {
+			t.Errorf("%s container %s = %q, want the mount path %q",
+				name, k8s.SessionSharedDirEnvVar, got, k8s.SharedVolumeMountPath)
+		}
+	}
+}
+
+// Without the volume there is nowhere to seed, so the helper must not be handed
+// a marketplace credential it has no use for.
+func TestApprovalGated_UnconfiguredStorageClassLeavesTheHelperCredentialless(t *testing.T) {
+	orch, cs := newReadyOrchestrator(t,
+		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))
+	started, err := orch.Start(context.Background(), "f6p2",
+		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated})
+	if err != nil {
+		t.Fatalf("start approval-gated session: %v", err)
+	}
+	set := newPodSet(t, listPods(t, cs), started)
+	mcp := container(t, set.helper, k8s.SessionMCPContainerName)
+	if _, _, ok := secretKey(mcp, k8s.K3SMCPTokenEnvVar); ok {
+		t.Errorf("MCP container gets %s with no volume to seed onto", k8s.K3SMCPTokenEnvVar)
+	}
+	if _, ok := envValue(mcp, k8s.SessionSharedDirEnvVar); ok {
+		t.Errorf("MCP container is told a shared directory it does not mount")
+	}
+}

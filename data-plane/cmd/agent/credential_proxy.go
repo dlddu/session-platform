@@ -374,8 +374,8 @@ func validateApprovalGatedClientEnv() (string, error) {
 		return "", errors.New("approval-gated container must not receive direct credentials")
 	}
 	if os.Getenv("K3S_MCP_TOKEN") != "" {
-		// AC-F6 (2026-09-03 decision): this type has no runtime plugin
-		// bootstrap, so the token that bootstrap needed must not be here either.
+		// The marketplace credential belongs to the helper pod that seeds the
+		// plugin (AC-F6); this pod installs from the seed and has no use for it.
 		return "", errors.New("approval-gated container must not receive the K3s MCP token")
 	}
 	mcpURL := os.Getenv(sessionMCPURLEnv)

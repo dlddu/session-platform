@@ -142,8 +142,11 @@ type claudeConfig struct {
 }
 
 // toolSurface is what the platform lets a session's agent reach beyond its own
-// filesystem tools. Exactly one form is sanctioned per workload type (AC-E6 for
-// claude-code, AC-F6's 2026-09-03 decision for approval-gated).
+// filesystem tools (AC-E6 for claude-code, AC-F6 for approval-gated).
+//
+// The two forms are not alternatives: approval-gated carries both, because the
+// plugin it gets is seeded skills-only and so adds no way out of the pod. Every
+// destination still goes through the session MCP and its gate.
 type toolSurface struct {
 	// Plugin enables the managed session-platform marketplace plugin.
 	Plugin bool
@@ -889,11 +892,11 @@ func validateClaudeManagedSettings(homeDir string) error {
 }
 
 // loadClaudeManagedSettings reads the managed settings. With requireToolSurface
-// it also insists the file declares exactly one of the two sanctioned tool
-// surfaces — the marketplace plugin (AC-E6) or a session MCP (AC-F6) — which is
-// what archive validation needs: it runs before the workload type of the pod
-// doing the restore is relevant, and the pod normalises to its own surface
-// right afterwards (ensureClaudeManagedSettings).
+// it also insists the file declares at least one of the sanctioned tool
+// surfaces — the marketplace plugin (AC-E6) or a session MCP (AC-F6), and
+// approval-gated carries both — which is what archive validation needs: it runs
+// before the workload type of the pod doing the restore is relevant, and the pod
+// normalises to its own surface right afterwards (ensureClaudeManagedSettings).
 func loadClaudeManagedSettings(homeDir string, requireToolSurface bool) (claudeManagedSettings, error) {
 	var settings claudeManagedSettings
 	settingsDir := filepath.Join(homeDir, claudeSettingsDir)
@@ -982,16 +985,10 @@ func loadClaudeManagedSettings(homeDir string, requireToolSurface bool) (claudeM
 			return settings, errors.New("claude managed settings registers the session MCP without permitting it")
 		}
 	}
-	if plugin == mcp {
+	if !plugin && !mcp {
 		return settings, fmt.Errorf(
-			"claude managed settings must declare exactly one platform tool surface: %s or the %s server",
+			"claude managed settings must declare a platform tool surface: %s, the %s server, or both",
 			claudeSessionPlatformPlugin, sessionMCPServerName)
-	}
-	if plugin && len(settings.MCPServers) != 0 {
-		return settings, errors.New("claude managed settings must not mix the managed plugin with an MCP server")
-	}
-	if mcp && len(settings.EnabledPlugins) != 0 {
-		return settings, errors.New("claude managed settings must not mix a session MCP with an enabled plugin")
 	}
 	return settings, nil
 }

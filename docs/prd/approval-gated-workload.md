@@ -118,24 +118,44 @@
 
   프록시의 **동작 계약은 AC-E6을 그대로 재사용한다** — 시작 시 HTTPS upstream origin 고정(평문 HTTP upstream은 시작 거부), 허용 목록 밖 요청 헤더 제거와 플랫폼 토큰 단일 주입, CONNECT·Upgrade·trailer 거부, 중간 1xx를 포함한 응답의 토큰 redaction, raw upstream 64 MiB 상한 안에서의 SSE 증분 전달, response-read 경계를 넘는 tail-safe redaction, optional `ca-cert`로 시스템 루트에 사설 발급자를 **추가**하는 신뢰 확대가 모두 동일하다. **다른 것은 배치와 바인딩뿐이다**: 워크로드 파드의 사이드카가 아니라 헬퍼 파드의 컨테이너이므로 loopback이 아니라 파드 IP에 바인딩하고, 대신 **자기 세션의 워크로드 파드에서 오는 연결만 받도록 ingress를 제한한다**(AC-F2). 같은 헬퍼 파드의 MCP 컨테이너는 이 프록시에 loopback으로 닿을 수 있으나 공급자 토큰은 여전히 프록시 컨테이너의 환경에만 있다. optional `model`/`models`의 기본값·soft catalog와 runner 출력의 증분 redaction도 AC-E6 그대로다.
 
-  **`k3s-mcp-token`과 런타임 plugin 부트스트랩은 이 타입에 두지 않는다**(아래 확정 항목). 대신 주 컨테이너의 에이전트는 시작할 때 **그 세션 헬퍼 파드의 MCP를 MCP 서버로 등록**하고, 세션 HOME의 플랫폼 관리 설정은 AC-E2의 도구 허용 목록(`Read`·`Write`·`Edit`·`Glob`·`Grep`·`Bash`)에 그 MCP만 더한다 — marketplace plugin은 활성화하지 않는다. 즉 이 타입에서 **에이전트가 파드 밖에 닿는 유일한 도구 표면은 세션 MCP**이고, 그 표면은 전부 AC-F3의 승인 게이트를 지난다.
+  **`k3s-mcp-token`은 이 타입의 워크로드 파드에 두지 않는다.** 대신 **헬퍼 파드의 MCP 컨테이너가 marketplace를 클론해 skills만 남긴 사본을 공유 볼륨(AC-F5)에 내려놓고**, 워크로드 파드는 그 로컬 경로에서 plugin을 설치한다(아래 확정 항목). 주 컨테이너의 에이전트는 시작할 때 **그 세션 헬퍼 파드의 MCP를 MCP 서버로 등록**하고, 세션 HOME의 플랫폼 관리 설정은 AC-E2의 도구 허용 목록(`Read`·`Write`·`Edit`·`Glob`·`Grep`·`Bash`)에 그 MCP를 더하며, seed에서 설치가 성립한 경우에만 marketplace plugin을 함께 활성화한다.
+
+  **두 표면은 대안이 아니라 공존한다.** plugin이 더하는 것은 skill — 즉 에이전트가 읽는 지시문 — 뿐이고, seed에서 MCP 서버 선언이 제거되어 있으므로 plugin은 파드 밖으로 나가는 경로를 하나도 만들지 않는다. 따라서 이 타입에서 **에이전트가 파드 밖에 닿는 유일한 도구 표면은 여전히 세션 MCP**이고, 그 표면은 전부 AC-F3의 승인 게이트를 지난다.
 
   게이트웨이 키·`userId`·공급자 토큰은 세션 조회 응답·로그·read·SSE 출력 어디에도 노출되지 않으며, 승인 요청에 실리는 컨텍스트에도 포함되지 않는다.
 - **달성 가치**: V1
 - **구체화 대상**: AC-A1의 control plane / data plane 경계에서의 **자격 증명 배치**, AC-E6 프록시 계약의 재사용 지점과 배치 차이
-- **검증 방법**: 세션 pod 스펙에서 (a) 게이트웨이 URL·API key·`userId`가 헬퍼 파드의 **MCP 컨테이너에만**, (b) 공급자 `base-url`·`auth-token`과 optional `ca-cert`가 같은 파드의 **credential-proxy 컨테이너에만** 있고, (c) **워크로드 파드에는 둘 다 없이** 헬퍼 파드 주소와 placeholder만 있음을 확인한다. 헬퍼 파드 안에서 한 컨테이너가 다른 컨테이너의 환경 변수나 `/proc` 항목을 읽지 못함을 확인한다. 생성 요청에 게이트웨이 필드·`userId`·공급자 자격 증명을 넣으면 400임을 확인한다. 워크로드 파드에서 게이트웨이 주소·공급자 origin으로의 직접 연결이 AC-F2로 차단되고, 다른 세션의 워크로드 파드에서 이 헬퍼 파드로의 연결도 ingress 제한으로 차단됨을 확인한다. 어떤 토큰 문자열도 read/SSE/control-plane 로그·승인 컨텍스트에 나타나지 않음을 확인한다. AC-E6의 프록시 검증 항목(고정 HTTPS upstream, 헤더 제거·토큰 주입, 1xx 포함 redaction, EOF 전 SSE chunk 전달, split-token redaction, 64 MiB 상한, optional `ca-cert`의 시스템 루트 **추가** 신뢰)은 **파드 IP 바인딩에서도 동일하게** 성립함을 확인한다. model 계약도 `claude-code`와 동일함을 확인한다.
+- **검증 방법**: 세션 pod 스펙에서 (a) 게이트웨이 URL·API key·`userId`가 헬퍼 파드의 **MCP 컨테이너에만**, (b) 공급자 `base-url`·`auth-token`과 optional `ca-cert`가 같은 파드의 **credential-proxy 컨테이너에만** 있고, (c) **워크로드 파드에는 둘 다 없이** 헬퍼 파드 주소와 placeholder만 있음을 확인한다. 헬퍼 파드 안에서 한 컨테이너가 다른 컨테이너의 환경 변수나 `/proc` 항목을 읽지 못함을 확인한다. 생성 요청에 게이트웨이 필드·`userId`·공급자 자격 증명을 넣으면 400임을 확인한다. 워크로드 파드에서 게이트웨이 주소·공급자 origin으로의 직접 연결이 AC-F2로 차단되고, 다른 세션의 워크로드 파드에서 이 헬퍼 파드로의 연결도 ingress 제한으로 차단됨을 확인한다. 어떤 토큰 문자열도 read/SSE/control-plane 로그·승인 컨텍스트에 나타나지 않음을 확인한다. AC-E6의 프록시 검증 항목(고정 HTTPS upstream, 헤더 제거·토큰 주입, 1xx 포함 redaction, EOF 전 SSE chunk 전달, split-token redaction, 64 MiB 상한, optional `ca-cert`의 시스템 루트 **추가** 신뢰)은 **파드 IP 바인딩에서도 동일하게** 성립함을 확인한다. model 계약도 `claude-code`와 동일함을 확인한다. plugin seed에 대해서는 (d) `k3s-mcp-token`이 헬퍼 파드의 **MCP 컨테이너에만** 있고 워크로드 파드에는 없음, (e) 공유 볼륨에 publish된 marketplace에 `mcpServers` 선언과 그 파일이 하나도 남아 있지 않음, (f) 워크로드 파드가 자격 증명 없이 그 로컬 경로에서 plugin을 설치하고 세션 HOME의 관리 설정이 plugin과 세션 MCP를 **함께** 선언함, (g) 공유 볼륨이 꺼진 배포에서는 seed도 plugin도 없이 세션이 정상 기동함을 확인한다.
 
-> ✅ **확정 (2026-09-03, plugin 부트스트랩)**: AC-E6의 런타임 plugin 부트스트랩은 주 컨테이너가 K3s MCP
-> 엔드포인트와 `github.com`으로 **직접 나가는 것**을 전제하는데, AC-F2의 허용 목록에는 그 두 목적지가 없어
-> `approval-gated`에서는 성립하지 않는다. 이를 **① 이 타입에서는 런타임 부트스트랩을 아예 두지 않는다**로
-> 확정했다 — 주 컨테이너에 `k3s-mcp-token`을 주입하지 않고, marketplace 등록·plugin 설치도 하지 않으며,
-> 플랫폼 도구는 헬퍼 파드의 세션 MCP로만 노출한다.
+> ✅ **확정 (2026-09-08, plugin seed) — 2026-09-03 확정을 뒤집는다**: AC-E6의 런타임 plugin 부트스트랩은
+> 주 컨테이너가 K3s MCP 엔드포인트와 `github.com`으로 **직접 나가는 것**을 전제하는데, AC-F2의 허용 목록에는
+> 그 두 목적지가 없어 `approval-gated`에서는 성립하지 않는다. 초판은 이를 **① 런타임 부트스트랩을 두지
+> 않는다**로 확정했고, 그 대가로 `claude-code`가 plugin으로 얻는 것을 이 타입은 세션 MCP에 다시 구현해야
+> 했다. 그 대가가 실제로 크다는 것이 확인되어 **② MCP 컨테이너가 seed를 공유 볼륨(AC-F5)에 내려놓는다**로
+> 바꾼다.
 >
-> 검토했으나 택하지 않은 대안: ② MCP 컨테이너가 plugin seed를 공유 볼륨(AC-F5)에 내려놓고 주 컨테이너가
-> 읽는다 — 런타임 갱신은 유지되지만 **기동 순서 의존**이 생기고 도구 표면이 두 갈래(plugin + 세션 MCP)로
-> 나뉜다. ③ 두 목적지를 허용 목록에 추가한다 — AC-F2가 다시 느슨해지므로 비권장.
-> ①의 대가는 **`claude-code`가 plugin으로 얻는 플랫폼 도구를 이 타입은 세션 MCP에 다시 구현해야 한다**는
-> 것이다. 그 대신 주 컨테이너에서 Secret이 하나 사라지고, 도구 표면이 승인 게이트를 지나는 경로 하나로 모인다.
+> 헬퍼 파드의 MCP 컨테이너가 marketplace를 클론하고, **모든 plugin의 `mcpServers` 선언과 그것이 가리키는
+> 파일을 제거한 뒤** 공유 볼륨에 git 워킹트리로 publish한다. 워크로드 파드는 그 로컬 경로에 대고
+> `claude plugin marketplace add`·`plugin install`을 **그대로** 실행한다 — 로컬 경로이므로 자격 증명도,
+> 파드 밖으로 나가는 연결도 필요 없다. 따라서 **AC-F2의 허용 목록은 그대로이고**, `k3s-mcp-token`도 여전히
+> 워크로드 파드에 들어가지 않는다(마켓플레이스 클론은 헬퍼 쪽에서만 일어난다).
+>
+> ①을 기각한 근거였던 두 대가는 이렇게 해소된다.
+>
+> - **기동 순서 의존**: 존재하지 않는다. 세션 프로비저닝은 헬퍼 파드를 먼저 Ready까지 기다린 뒤에 워크로드
+>   파드를 만들고(AC-F4), seed는 MCP 컨테이너가 **포트를 열기 전에** 쓴다. 즉 seed 완료가 워크로드 파드
+>   생성보다 항상 앞서며, 두 파드가 서로를 기다릴 필요가 없다.
+> - **도구 표면이 두 갈래로 나뉜다**: skills-only seed에서는 나뉘지 않는다. plugin이 더하는 것은 에이전트가
+>   읽는 지시문뿐이고 파드 밖으로 나가는 경로를 만들지 않으므로, **게이트를 지나는 표면은 여전히 세션 MCP
+>   하나**다. 이 성질은 seed publish 전에 검사하며, `mcpServers` 선언이 하나라도 남아 있으면 publish 자체를
+>   거부해 볼륨에 marketplace가 없는 상태로 끝난다(워크로드는 이를 "plugin 없음"으로 읽는다).
+>
+> ③ 두 목적지를 허용 목록에 추가한다 — 여전히 기각. AC-F2가 느슨해지고, plugin이 물고 오는 k3s MCP 서버가
+> 승인 게이트를 통째로 우회하게 된다.
+>
+> ②의 대가는 **plugin이 AC-F5 볼륨의 opt-in에 매인다**는 것이다. ReadWriteMany 클래스를 지정하지 않은
+> 배포에는 seed를 둘 자리가 없으므로 그런 세션은 세션 MCP만 가진 이전 모양 그대로 돈다 — 실패가 아니라
+> 축소다.
 
 > ⚠️ **참조 구현의 검증 상태**: 이 PRD의 egress 허용 목록(AC-F2)·MCP 경유 승인(AC-F3)·보조 파드 배치와
 > LLM 게이트웨이의 워크로드 파드 밖 배치(AC-F4·F6)·RWX 공유 볼륨(AC-F5)은 `dlddu/pure-agent`의 구조에서 가져왔다(참조 구현은 게이트웨이와 MCP를 별개 daemon 파드로 두지만, 이 문서는 수명이 같은 둘을 한 헬퍼 파드로 합쳤다). 해당 참조

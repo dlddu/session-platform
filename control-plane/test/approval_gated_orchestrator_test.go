@@ -200,9 +200,9 @@ func TestApprovalGated_CredentialsAreSplitAcrossHelperContainers(t *testing.T) {
 				e.ValueFrom.SecretKeyRef.Key, e.Name)
 		}
 	}
-	// AC-F6's ✅ 2026-09-03 decision.
+	// AC-F6's ✅ 2026-09-08 decision.
 	if _, _, ok := secretKey(workload, k8s.K3SMCPTokenEnvVar); ok {
-		t.Error("workload container gets the K3s MCP token; approval-gated has no plugin bootstrap (AC-F6)")
+		t.Error("workload container gets the K3s MCP token; it installs from the seeded marketplace (AC-F6)")
 	}
 
 	helperIP := set.started.Auxiliary[0].IP

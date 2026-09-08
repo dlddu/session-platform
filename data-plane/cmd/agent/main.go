@@ -45,6 +45,9 @@ const (
 	proxyPlacementEnv = "DATA_PLANE_PROXY_PLACEMENT"
 	// sessionMCPURLEnv carries the address of this session's MCP (AC-F6).
 	sessionMCPURLEnv = "SESSION_MCP_URL"
+	// pluginEnabledEnv is set by data-plane/entrypoint.sh once it has installed
+	// the plugin, so the two cannot disagree about whether one is there.
+	pluginEnabledEnv = "CLAUDE_CODE_PLUGIN_ENABLED"
 	// The MCP container's own environment (AC-F6). Keep in sync with
 	// control-plane/internal/adapter/k8s (ApprovalGateway*EnvVar, SessionIDEnvVar).
 	approvalGatewayURLEnv    = "APPROVAL_GATEWAY_URL"
@@ -609,7 +612,14 @@ func agentToolSurface(workload string) (toolSurface, error) {
 		if err != nil {
 			return toolSurface{}, err
 		}
-		return toolSurface{SessionMCP: mcpURL}, nil
+		// The plugin is whatever the entrypoint managed to install from the
+		// seeded marketplace, which is absent whenever AC-F5's volume is off.
+		// Enabling a plugin this pod never installed would leave the agent
+		// naming one that cannot resolve.
+		return toolSurface{
+			Plugin:     os.Getenv(pluginEnabledEnv) == "1",
+			SessionMCP: mcpURL,
+		}, nil
 	default:
 		return toolSurface{}, fmt.Errorf("workload %q has no agent tool surface", workload)
 	}
