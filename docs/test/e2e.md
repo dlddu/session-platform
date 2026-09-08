@@ -314,8 +314,8 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 
 규칙:
 
-1. **시나리오 → 파일 유일**: 예외 목록·구현 대기 표 어디에도 없는 시나리오는 자신을 선언한 파일을
-   정확히 1개 갖는다. 0개면 공백, 2개 이상이면 중복 — 둘 다 위반이다.
+1. **시나리오 → 파일 유일**: 예외 목록·구현 대기 표·저작 대기 표 **어디에도 없는** 시나리오는
+   자신을 선언한 파일을 정확히 1개 갖는다. 0개면 공백, 2개 이상이면 중복 — 둘 다 위반이다.
 2. **파일 → 시나리오 유일**: 매칭 단위 파일은 **실재하는 시나리오** 정확히 1개만 선언한다. 셋업으로
    다른 시나리오의 경로를 경유하는 것은 검증으로 세지 않는다 — 선언한 것만 센다.
 3. **비-시나리오 파일**: 스모크/인프라 검증만 하는 파일은 `// 검증 시나리오: 없음 (스모크·인프라)`로
@@ -323,13 +323,22 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 4. **예외 목록**: e2e 자동 검증이 곤란한 시나리오는 사유·대체 검증 수단과 함께 아래 「시나리오 예외
    목록」에 올린다. 등재된 시나리오는 파일이 없어도 위반이 아니다. **"아직 구현되지 않았다"는 예외
    사유가 아니다** — 그것은 규칙 6의 구현 대기 사유다.
-5. **참조 무결성**: 존재하지 않는 시나리오를 선언하거나 예외·구현 대기로 등재하면 위반. 같은
-   시나리오를 예외와 구현 대기에 동시에 올리는 것도 위반이다(영구 면제와 임시 보류를 섞지 않는다).
+5. **참조 무결성**: 존재하지 않는 시나리오를 선언하거나 세 표(예외·구현 대기·저작 대기) 중
+   어디에든 등재하면 위반. 한 시나리오를 두 표에 동시에 올리는 것도 위반이다 — 세 표는 서로 다른
+   질문에 답하고(영구 면제 / 구현이 없다 / 파일이 없다) 한 시나리오의 판정은 하나다.
 6. **구현 대기**: 시나리오가 기술하는 기능이 아직 구현되지 않아 e2e가 관측할 대상 자체가 없으면
    「구현 대기」 표에 **미구현 근거·담당·해제 조건**과 함께 올린다. 구현이 착지하면 1:1 판정 대상으로
    복귀한다. 구현 자체는 이 원장의 몫이 아니다.
-7. **집계 일치**: 아래 「집계」가 1~6의 실제 상태와 일치해야 한다. 불변식은
-   **(시나리오 − 예외 − 구현 대기) = (매칭 파일 + 공백)** 이고, 공백이 0이 되는 순간 완전 1:1이다.
+7. **저작 대기**: 기능은 구현돼 있고 예외 사유도 없는데 전용 파일이 아직 없는 시나리오는 「저작
+   대기」 표에 **스위트·선행·근거**와 함께 올린다. 예외(영구 면제)·구현 대기(대상 부재)와 달리 이것은
+   **할 일이 확정된 잔여**이고, 행이 지워지는 방법은 하나뿐이다 — 그 시나리오를 선언하는 파일이
+   생기는 것. 선행 칸은 「누가 무엇을 하면 이 파일을 쓸 수 있는지」로 적는다. 「구현이 없다」를 선행에
+   적지 않는다 — 그러면 규칙 6의 구현 대기이지 저작 대기가 아니다.
+8. **집계 일치와 미분류 공백 금지**: 아래 「집계」가 1~7의 실제 상태와 일치해야 한다. 불변식은
+   **(시나리오 − 예외 − 구현 대기 − 저작 대기) = (매칭 파일 + 공백)** 이고, **공백이 1 이상이면
+   게이트가 실패한다.** 공백은 「아직 판정하지 않았다」는 뜻이고 그것이 초록 아래 쌓이는 것을 막는
+   것이 이 규칙이다. 새 시나리오를 추가해 붉어졌다면 고치는 법은 한 줄이다 — 세 표 중 맞는 곳에
+   행을 더하거나, 파일을 쓰거나. 저작 대기가 0이 되는 날 완전 1:1이다.
 
 > **2026-09-08 축 교체.** 이 문서는 2026-09-08까지 **AC ↔ e2e** 1:1을 등재했다. 판정 축이 AC에서
 > **테스트 시나리오**로 바뀌면서 헤더 선언(`검증 AC:` → `검증 시나리오:`)·등재 표·게이트를 함께
@@ -376,6 +385,8 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 | 시나리오 | 사유 | 대체 검증 수단 |
 | --- | --- | --- |
 | `lifecycle.md#시나리오 1` | 운영 트리거가 **60분 실시간 유휴 대기**라 e2e에서 그대로 재현할 수 없고, 트리거 정책(grace/override, 바쁜 쉘 처리) 자체가 아직 미확정이다 — `control-plane/internal/service/session.go`·`reaper.go`의 `TODO(policy)`. 상태 전이·pod 회수라는 **관측 계약**은 제품 `POST /sessions/{id}/snapshot`으로 이미 `architecture.md#시나리오 3`·`lifecycle.md#시나리오 2`·`lifecycle.md#시나리오 3`·`shell-workload.md#시나리오 4`의 파일이 검증하고 있어, 남은 미검증분은 **타이밍 정책** 하나다. | `internal/service/reaper_test.go`(유휴 경계 60분 전/후 동작을 가짜 시계로 단위 검증) + 위 네 시나리오의 e2e(동결→회수→복원 계약). 트리거 정책이 확정되면 예외를 걷고 전용 파일을 신설한다. |
+| `approval-gated-workload.md#시나리오 5` | 기대 결과의 후반이 **유휴 한계 도달 시 동결**이라 `lifecycle.md#시나리오 1`과 같은 60분 실시간 대기에 걸린다. 시계를 앞당길 경로가 없다 — 한계는 컴파일 상수 `session.MaxIdle`이고 `control-plane/cmd/control-plane/main.go`가 그것을 그대로 리퍼에 넘긴다(env로 조절되는 것은 `IDLE_SCAN_INTERVAL` **스캔 주기**뿐이라 한계 자체는 움직이지 않는다). 앞부분(승인 대기 중 `lastAccess` 갱신)만 떼어 e2e로 사면 시나리오가 기술한 대조(결정 후 갱신이 멈추고 정상 동결)를 잃어 **반쪽이 초록으로 위장**한다. 미구현이 사유가 아니다 — 승인 중 갱신은 실재한다. | `control-plane/internal/service/approval_idle_test.go`(가짜 시계로 승인 대기 중 갱신 / 결정 후 정지를 둘 다 단위 검증 — 파일 헤더가 스스로 이 시나리오를 지목한다) + `reaper_test.go`(60분 경계) + `shell-workload.md#시나리오 5`의 e2e(클라이언트 I/O 기준 유휴 판정). `session.MaxIdle`이 주입 가능해지면(트리거 정책 확정과 같은 선행) 예외를 걷고 전용 파일을 신설한다. |
+| `claude-code-workload.md#시나리오 5` | 기대 결과가 **실 모델의 의미 응답**이다 — 두 번째 답에 「다르마」가 들어 있고, 세 번째 답이 `marker.txt`를 언급해야 한다. SUT의 공급자는 상수 응답 대역이라(`deploy/e2e-anthropic-fake.yaml`이 스스로 「여기 응답은 결정적 상수」라 적는다) 그 문장들을 만들 수 없고, 실 공급자를 붙이면 외부 자격 증명·과금과 비결정적 산출물에 판정을 맡기게 된다. 문서 자신의 비고도 같은 결론을 적는다 — 「실제 응답 의미(“다르마” 포함)는 provider opt-in smoke 대상」. | `data-plane/cmd/agent/claude_test.go`(첫 성공 실행 뒤에만 `--continue`가 붙고 실패 뒤에는 붙지 않음, 세션 고정 HOME·workdir argv) + `claude_archive_test.go`(아카이브 왕복 뒤에도 같은 대화 상태로 재개) + `architecture.md#시나리오 2`의 e2e(세션 간 격리를 파드 1:1로) + provider opt-in smoke. 배선이 아니라 **의미**만 남은 잔여이므로, opt-in smoke가 상설 잡이 되면 예외를 걷는다. |
 <!-- scenario-exceptions:end -->
 
 ## 구현 대기
@@ -388,10 +399,52 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 | --- | --- | --- | --- |
 <!-- scenario-pending:end -->
 
-> **이 표가 비어 있는 것은 "미구현이 없다"는 뜻이 아니다.** 2026-09-08 축 교체 슬라이스는 **축만
-> 옮기고 판정은 새로 내리지 않았다** — 어느 공백이 "미구현이라 막힌 것"이고 어느 것이 "구현은 됐는데
-> 전용 파일이 아직 없는 것"인지는 시나리오마다 근거를 재야 하고, 그것은 각 시나리오를 다루는 다음
-> 슬라이스의 몫이다. 그때까지 미분류 공백은 전부 아래 「집계」의 **공백** 목록에 있다.
+> **이 표가 비어 있는 것은 이제 판정 결과다** (2026-09-08 분류 슬라이스). 축 교체가 남긴 공백 16건을
+> 시나리오별로 재어 보니 **어느 것도 규칙 6의 "관측할 대상 자체가 없음"이 아니었다** — 승인 왕복
+> (`data-plane/cmd/agent/approval_gateway.go`·`approval_wait.go`·`session_mcp_gate.go`), RWX 공유 볼륨
+> (`k8s/shared_volume.go`·`deploy/shared-volume-provisioner.yaml`), 출력 상한과 413/507
+> (`data-plane/cmd/agent/claude.go`·`control-plane/internal/api/api.go`), strict JSON 검증과
+> Last-Event-ID 우선(같은 `api.go`), 세션 전속 헬퍼 파드(`k8s/client_orchestrator.go`)가 전부 main에
+> 실재한다. 각 근거의 인용은 아래 「저작 대기」 표의 해당 행에 있다. 16건이 갈린 곳은 **예외 2 · 저작
+> 대기 14**이고, 남은 벽은 구현이 아니라 **하네스**(정책 집행 CNI, 상한 주입 훅, 시계, 모킹 허용목록)와
+> **아직 쓰지 않은 파일**이다.
+>
+> 이 표가 다시 채워지는 것은 **새 시나리오가 미구현 기능을 기술할 때**다. 그때 「구현이 없다」는
+> 저작 대기의 선행이 아니라 여기의 미구현 근거로 적고, 해제 조건은 반드시 **누가 무엇을 하면
+> 풀리는지**로 쓴다 — 「구현이 없다」를 해제 조건으로 적으면 순환이라 그 행은 영구히 나오지 못한다.
+
+## 저작 대기
+
+구현은 착지했고 예외 사유도 없는데 **전용 파일이 아직 없는** 시나리오(규칙 7). 예외(영구 면제)·구현
+대기(대상 부재)와 달리 **할 일이 확정된 잔여**이고, 행이 사라지는 방법은 그 시나리오를 선언하는 파일이
+생기는 것 하나뿐이다.
+
+읽는 법: **선행이 `없음`인 행은 지금 바로 집을 수 있다.** 그 밖의 선행은 「누가 무엇을 하면 이 파일을
+쓸 수 있는지」이고, 그 선행 작업 자체는 이 원장의 몫이 아니다(각 행에 소유자를 적었다).
+
+<!-- scenario-backlog:begin -->
+| 시나리오 | 스위트 | 선행 | 근거 — 무엇이 이미 있고, 이 파일이 무엇을 살 것인가 |
+| --- | --- | --- | --- |
+| `approval-gated-workload.md#시나리오 2` | go | **정책 집행 CNI.** kind SUT는 kindnet이라 NetworkPolicy를 집행하지 않는다(`deploy/kind-config.yaml`에 `disableDefaultCNI`가 없다). calico 등을 overlay에 세우거나 실클러스터 잡을 더해야 차단을 관측할 수 있다 — 하네스 소관. | 정책 오브젝트는 실재한다 — `control-plane/internal/adapter/k8s/network_policy.go`가 세션마다 egress·ingress를 만들고, `control-plane/test/approval_gated_network_policy_test.go`(태그 `integration`)가 셀렉터·헬퍼 파드 소유권·타입별 유무·복원 라운드를 fake clientset으로 산다. e2e가 배타적으로 살 것은 **집행**이다: (a)(b)(c) 성공과 (d)(e)(f)(g) 차단, 그리고 (h) 세션 삭제 시 정책 오브젝트 동반 소멸. |
+| `approval-gated-workload.md#시나리오 2-1` | go | 시나리오 2와 **같은 CNI 선행** — (c) 우회 차단 갈래에만 걸린다. (a)(b)는 지금도 관측 가능하므로 두 시나리오를 한 슬라이스로 묶는 편이 싸다. | 프록시 단일 통로는 실물이다 — `data-plane/cmd/agent/credential_proxy.go`와 대역 `deploy/e2e-anthropic-fake.yaml`(bearer를 검사해 틀리면 401). `control-plane/test/e2e_provider_reachability_test.go`(비-시나리오 등재)가 이미 「헬퍼를 거쳐 도달하고 호출자가 붙인 Authorization이 플랫폼 토큰으로 대체된다」를 산다. 이 파일이 더할 것: **출발 파드의 배타성**(upstream에 닿은 연결이 전부 헬퍼 출발)과 (b) 프록시 중단 시 실행만 실패하고 승인 경로는 계속 도는 것. |
+| `approval-gated-workload.md#시나리오 3` | go | **없음** | 승인 왕복이 전부 실재한다 — `data-plane/cmd/agent/session_mcp_gate.go`·`approval_wait.go`·`approval_gateway.go`(POST `/api/requests` → 3초 폴링 → APPROVED일 때만 실제 외부 GET), 결정을 지시할 대역은 `deploy/e2e-approval-gateway-fake.yaml`의 `/operator/policy`(defaultStatus)·`/operator/decide`. 이 파일이 살 것: write 즉시 반환 · 결정 전 `awaiting approval` in-band 마커와 **테스트 upstream 무도달** · 승인 후 정확히 1회 호출 · event id/`nextOffset`/decoded 길이 일치와 UTF-8 경계 · 외부 식별자 `{세션ID}:{요청ID}`. |
+| `approval-gated-workload.md#시나리오 4` | go | **폴링 타임아웃 주입** — (c) 갈래만. `data-plane/cmd/agent/approval_gateway.go`의 `defaultApprovalTimeout`이 10분 상수이고 `newApprovalGateway`가 `timeout` 필드를 env로 받지 않아, 지금 (c)를 사려면 CI가 10분을 기다려야 한다. 축소값 주입은 사용자 가시 동작을 바꾸지 않는 테스트 훅이다 — data-plane 소관. (a) 거절·(b) 만료는 대역의 `/operator/decide`로 **선행 없이** 관측 가능. | 세 갈래의 처리 코드는 실재한다 — 같은 파일이 APPROVED/REJECTED/EXPIRED를 정착 결정으로 가르고 자체 `TIMEOUT`을 별도로 발급하며(비-2xx는 결정이 아니라 실패로 구분한다), in-band 통지는 `session_mcp_notices.go`가 만든다. 이 파일이 살 것: 세 경우 모두 **외부 호출 0** · 실패가 in-band 마커로 남음 · 세션이 `active` 유지 · 큐 미폐색 · (d) 후속 write 정상 처리. |
+| `approval-gated-workload.md#시나리오 6` | go | **시나리오 3의 승인 경로 파일.** 공유 볼륨에 파일을 만드는 수단이 「승인된 외부 도구 호출」이라 그 배선을 먼저 세운다(같은 스위트, 같은 대역). | RWX 볼륨은 #98·#100으로 착지했다 — `control-plane/internal/adapter/k8s/shared_volume.go`의 `ReadWriteMany` 클레임, `deploy/shared-volume-provisioner.yaml`(local-path `sharedFileSystemPath`), `deploy/kind-config.yaml`의 전 노드 동일 마운트, `control-plane/test/shared_volume_test.go`·`approval_gated_shared_volume_test.go`. **「RWX가 미구현이라 막혔다」는 더 이상 참이 아니다.** 이 파일이 살 것: (a) 워크로드와 MCP 컨테이너가 같은 파일을 보고 프록시에는 마운트되지 않음 (b) **동결을 건너뛴** 다음 실행도 그 파일을 봄 (c) 복원 후 잔존 (d) `cursorBefore` 델타와 `offset=0` 전체 (e) 다른 세션은 마운트 불가. |
+| `architecture.md#시나리오 2-1` | go | **없음** — 새 대역도 새 하네스도 필요 없는 가장 싼 후보. | 세션 전속 보조 파드는 실재하고(`control-plane/internal/adapter/k8s/client_orchestrator.go`), `control-plane/test/e2e_f4_helper_pod_test.go`가 이미 배포 SUT에서 approval-gated 세션 둘을 세워 라벨로 헬퍼 파드를 찾는 길을 닦아 두었다. 이 파일이 배타적으로 살 것: 보조 파드가 세션마다 별개이고 두 세션이 같은 것을 공유하지 않으며, 한 세션 삭제가 **그 세션의 파드 둘만** 지우고, 그 와중에 **1:1 매핑 진술이 워크로드 파드 기준으로 계속 성립**한다는 것. 시나리오 7과의 경계: 7은 귀속·수명·PID 경계, 2-1은 **격리 진술의 불변**. |
+| `claude-code-workload.md#시나리오 3` | go | **없음** | 직렬 큐는 실재하고(`data-plane/cmd/agent/claude.go`의 프롬프트 큐), 관측 수단에도 선례가 있다 — `control-plane/test/e2e_e2_prompt_invocation_test.go`가 프로세스 테이블에서 invocation argv를 세는 프로브를 이미 세웠다(자기 프로세스와 flag를 언급만 하는 프로세스를 거르는 두 가드까지). 이 파일이 살 것: 두 실행 구간의 **비중첩**(동시 argv 수가 1을 넘지 않음)과 read(`offset=0`) 누적 순서 = write 순서. 시나리오 2와의 경계: 2는 「write 1회 = 1 실행」, 3은 **두 write 사이의 순서**. |
+| `claude-code-workload.md#시나리오 4` | go | **없음** | stream 계약이 실재한다 — `control-plane/internal/api/api.go`가 `Last-Event-ID`를 query 커서보다 우선하고, output 이벤트가 `id=nextOffset`과 `{offset,payloadBase64,nextOffset}`을 싣는다. 이 파일이 살 것: UTF-8 경계로 갈린 두 chunk · 중단 후 `Last-Event-ID` 재연결의 **무손실·무중복** · past-end 커서의 payload 없는 reset이 `lastAccess`를 바꾸지 않음 · read(0)로 콘솔을 교체한 뒤 마지막 커서 read가 **빈 델타**이고 raw stream-json final/result로 text delta가 중복되지 않음. |
+| `claude-code-workload.md#시나리오 6` | go | **없음.** 동결은 `POST /sessions/{id}/snapshot` 직접 호출로 만들어 60분 대기를 피한다(그 대기 자체는 `lifecycle.md#시나리오 1` 예외가 소유). 다만 「동결 전 대화를 참조하는 프롬프트가 정상 응답」의 **의미** 판정은 상수 대역이라 살 수 없으므로, `claude-code-workload.md#시나리오 5` 예외와 같은 이유로 그 절반은 이 파일의 단언에서 빼고 나머지를 산다. | 아카이브 경로가 실재한다 — `data-plane/cmd/agent/claude_archive.go`(대화·작업 디렉터리·출력 버퍼), `checkpoint.go`, 그리고 kind에서 CRIU 갈래가 꺼져 있다는 사실(`deploy/kind-config.yaml`의 `NOTE(criu)`)이 「CRIU dump가 호출되지 않는다」를 관측 가능하게 만든다. 이 파일이 살 것: CRIU 미호출 · 아카이브 생성 · pod 회수 · `preparing`/archive ref를 담은 `committing`의 durable 순서 · 복원 후 파일 잔존 · (a) `cursorBefore` 델타 · (b) `offset=0`의 전·후 순서. |
+| `claude-code-workload.md#시나리오 8` | go | **상한 주입 훅.** `claudeConfig`에 `RunOutputLimit`·`ScrollbackLimit` 필드는 있는데 `data-plane/cmd/agent/main.go`가 그 둘을 env로 읽지 않아 배포 pod는 항상 16 MiB/256 MiB다 — e2e가 그만큼을 만들어 낼 수 없다. `control-plane/test/e2e_e2_prompt_invocation_test.go` 헤더가 같은 벽을 이미 적는다(「the stand-in cannot be made to emit that much」). 축소값 env 배선은 사용자 가시 동작을 바꾸지 않는 테스트 훅 — data-plane 소관. | 상한 로직 자체는 실재한다 — `data-plane/cmd/agent/claude.go`의 invocation/누적 두 마커, `claude_stream.go`의 truncation·session-full 전이, `control-plane/internal/api/api.go`의 413/507 매핑. (a) 1 MiB 초과 프롬프트 413은 **선행 없이도** 지금 관측 가능하고 이미 시나리오 2의 파일이 산다 — 이 파일은 (b)~(e), 즉 truncation 마커의 live append · 기존 bytes 불변 · cumulative terminal marker · 신규 write 507 · checkpoint/restore 뒤 buffer·마커·`nextOffset`·resume state 동일을 산다. |
+| `claude-code-workload.md#시나리오 9` | playwright | **모킹 허용목록 등재.** SPA의 오류 복구는 실 스트림이 원리적으로 내지 않는 사건이라 route 가로채기가 필요하다. 그 방식은 지금 여정 spec `web/e2e/journeys/j6-stream-recovery.spec.ts`에만 있고, 최상위 매칭 단위로 올리려면 e2e 충실도 허용목록(`STREAM-RESET-REPLAY` 계열) 등재가 선행이다 — 「e2e 충실도 허용목록」 절 소관. | 서버 쪽 상태 계약은 실재한다(`control-plane/internal/api/api.go`의 stream 핸들러, snapshot의 invalid-state 거부). 이 파일이 살 것: EventSource 즉시 close · GET session 후 **active/idle만** 마지막 커서로 backoff 재연결 · snapshot은 read fallback 없이 Restore 화면. `state-api.md#시나리오 6`과의 경계: 6은 **API 커서·상태 계약**(go), 9는 **브라우저 복구 동작**(playwright). |
+| `lifecycle.md#시나리오 4` | playwright | 시나리오 9와 **같은 모킹 허용목록 선행**(같은 가로채기를 쓴다). 동결 자체는 `POST /snapshot`으로 만들 수 있어 60분 대기는 필요 없다. | SPA의 단절 처리 경로는 실재한다(`web/src`의 EventSource 핸들링, `j6-stream-recovery.spec.ts`가 여정으로 이미 훑는다). 이 파일이 배타적으로 살 것: 단절 뒤 **자동 stream/read 재시도가 없다**는 음성 단언과 「사용자가 명시적으로 복원하기 전에는 새 pod가 생기지 않는다」(파드 수가 그라운드-트루스). 시나리오 9와의 경계: 9는 상태별 재연결 정책 전반, 4는 **자동 복원 금지** 한 조항. 둘을 한 파일에 담으면 규칙 1의 중복이 된다. |
+| `state-api.md#시나리오 5` | go | **없음** — 클러스터 부하가 가장 작고 전부 API 표면에서 끝나는 후보. | wire validation이 실재한다 — `control-plane/internal/api/api.go`가 두 번째 Decode로 trailing input을 잡고 `DisallowUnknownFields`로 unknown field를 거르며, 8 MiB wire 상한과 decoded 1 MiB prompt 상한을 각각 413으로, 누적 상한을 507로 매핑한다. 이 파일이 살 것: (a) body 생략 3종의 정상 처리(read `offset=0`·write 빈 payload·switch 무필드) · (b)(c) 400과 **agent side effect·타입/모델 무변경** · (d)(e) 413이고 (e)는 **pod 복원 전** 거부. |
+| `state-api.md#시나리오 6` | go | **없음** | 위 `claude-code-workload.md#시나리오 4`와 같은 stream 구현이 근거다. 이 파일이 살 것: active/idle이 기존 pod에서만 stream하고 **상태 승격·restore·`lastAccess` touch가 없음** · snapshot은 invalid-state이고 pod side effect 없음 · `Last-Event-ID`가 query보다 우선 · past-end 커서의 reset · 음수/비정수 커서 400 · keepalive가 output도 activity도 아니지만 뒤이은 read(0)은 일반 Read API 의미를 가짐. 시나리오 4와의 경계: 4는 **claude-code 세션의 라이브 왕복**, 6은 **상태별 계약과 커서 오류 갈래**. |
+<!-- scenario-backlog:end -->
+
+> **저작 순서 제안.** 선행 `없음`이 6건이고 그중 `architecture.md#시나리오 2-1`·`state-api.md#시나리오 5`가
+> 가장 싸다(새 대역 없음, 클러스터 부하 최소). `approval-gated-workload.md#시나리오 3`을 먼저 세우면
+> 시나리오 6의 선행이 함께 풀린다. CNI 2건·상한 훅 1건·모킹 2건은 각자의 선행 소유자가 움직인 뒤에
+> 집는다.
 
 ## 비-시나리오 파일 등재
 
@@ -421,10 +474,11 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 
 <!-- scenario-summary:begin -->
 - 시나리오 총계: 37
-- 예외: 1
+- 예외: 3
 - 구현 대기: 0
+- 저작 대기: 14
 - 시나리오 매칭 파일: 20
-- 공백: 16 — approval-gated-workload.md#시나리오 2 · approval-gated-workload.md#시나리오 2-1 · approval-gated-workload.md#시나리오 3 · approval-gated-workload.md#시나리오 4 · approval-gated-workload.md#시나리오 5 · approval-gated-workload.md#시나리오 6 · architecture.md#시나리오 2-1 · claude-code-workload.md#시나리오 3 · claude-code-workload.md#시나리오 4 · claude-code-workload.md#시나리오 5 · claude-code-workload.md#시나리오 6 · claude-code-workload.md#시나리오 8 · claude-code-workload.md#시나리오 9 · lifecycle.md#시나리오 4 · state-api.md#시나리오 5 · state-api.md#시나리오 6
+- 공백: 0
 <!-- scenario-summary:end -->
 
 **공백**은 전용 파일도 예외·구현 대기 등재도 아직 없는 시나리오다. **어느 시나리오가 공백인지는
