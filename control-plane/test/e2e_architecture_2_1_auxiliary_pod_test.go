@@ -3,22 +3,8 @@
 // 검증 시나리오: architecture.md#시나리오 2-1
 //
 // docs/prd/architecture.md AC-A2 (보조 파드 절, AC-F4가 구체화한다), asserted on the
-// deployed SUT.
-//
-// 이 파일이 배타적으로 사는 것은 **격리 진술의 불변**이다. AC-A2는 "세션 1개 ↔ 워크로드
-// 파드 1개"인데 보조 파드를 갖는 타입이 생기면서 한 세션의 파드가 둘이 됐다 — 그래도 그
-// 진술이 깨지지 않는다는 것이 시나리오 2-1이다. 무엇을 단언하는지는 docs/test/e2e.md 의
-// 매핑 행에 있고, 여기 적어 둘 것은 그 행이 담지 못하는 **경계**다.
-//
-// approval-gated-workload.md#시나리오 7(e2e_f4_helper_pod_test.go)과의 경계: 7은 헬퍼
-// 파드의 **귀속·수명·PID 경계**를 산다. 그래서 아래에서 "지워진 세션의 파드 둘이
-// 사라진다"는 이 파일의 산출이 **아니라 대조군**이다 — 아무것도 지우지 않는 delete 라면
-// "다른 세션이 남았다"는 관찰이 공허해진다. 산출은 그 옆의 **범위**다. 헬퍼 파드의 존재와
-// 컨테이너 구성(AC-F1)·자격 증명 배치(AC-F6)도 각자의 파일이 소유한다.
-//
-// 하네스는 같은 패키지의 것을 재사용한다(f4Create/f4Get/f4AwaitReclaimed·helperPodsFor) —
-// e2e_f4가 helperPodsFor를 e2e_f1에서, execInContainer를 e2e_e1에서 가져다 쓰는 것과 같은
-// 관례다.
+// deployed SUT. 무엇을 단언하는지·무엇이 대조군이고 어느 이웃 파일이 그것을 소유하는지는
+// docs/test/e2e.md 의 이 파일 매핑 행에 있다.
 package e2e_test
 
 import (
@@ -32,14 +18,11 @@ import (
 )
 
 // PodRoleWorkload as the deployed pod spec spells it. Written out rather than
-// imported for the reason e2e_f1 gives for the other three: a rename in the
-// control plane has to fail this file, not travel into it.
+// imported for the reason e2e_f1 gives for the other three.
 const podRoleWorkload = "workload"
 
-// a21PodsBySelector is the one primitive this file needs that the suite does not
-// already have: the *same* label query at two widths. helperPodsFor always adds
-// the helper role; here the whole point is to compare "everything this session
-// owns" against "the workload pod this session owns".
+// helperPodsFor cannot serve here: it always narrows to the helper role, and
+// what this file compares is the *same* label query at two widths.
 func a21PodsBySelector(t *testing.T, cs kubernetes.Interface, ns, selector string) []corev1.Pod {
 	t.Helper()
 	list, err := cs.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{LabelSelector: selector})
@@ -57,8 +40,6 @@ func a21PodNames(pods []corev1.Pod) []string {
 	return names
 }
 
-// a21OwnedPods returns (all pods carrying the session id, the subset labelled as
-// its workload pod).
 func a21OwnedPods(t *testing.T, cs kubernetes.Interface, ns, sessionID string) (all, workload []corev1.Pod) {
 	t.Helper()
 	all = a21PodsBySelector(t, cs, ns, labelSessionID+"="+sessionID)
@@ -66,10 +47,6 @@ func a21OwnedPods(t *testing.T, cs kubernetes.Interface, ns, sessionID string) (
 	return all, workload
 }
 
-// The 1:1 statement AC-A2 makes is about the *workload* pod. This asserts it on
-// a type that has an auxiliary pod (where a session-id-only selector returns
-// two) and, as the contrast that gives that number meaning, on a type that has
-// none (where the two selectors agree).
 func TestAuxiliaryPod_OneToOneStatementHoldsOnWorkloadPods(t *testing.T) {
 	cs, _, ok := kubeClient(t)
 	if !ok {
@@ -95,7 +72,6 @@ func TestAuxiliaryPod_OneToOneStatementHoldsOnWorkloadPods(t *testing.T) {
 		if workload[0].Name != s.Pod {
 			t.Fatalf("session %s reports pod=%q but the cluster's workload pod is %q (AC-A2)", s.ID, s.Pod, workload[0].Name)
 		}
-		// The remaining pod is the auxiliary one, and the API says the same.
 		helpers := helperPodsFor(t, cs, ns, s.ID)
 		if len(helpers) != 1 {
 			t.Fatalf("session %s selects %d helper pods %v, want exactly 1", s.ID, len(helpers), a21PodNames(helpers))
@@ -106,8 +82,6 @@ func TestAuxiliaryPod_OneToOneStatementHoldsOnWorkloadPods(t *testing.T) {
 		}
 	}
 
-	// ① the auxiliary pods are not shared, and neither are the workload pods:
-	// four sessions' worth of pod would collapse to fewer names if either were.
 	seen := map[string]string{} // pod name -> what claims it
 	for _, s := range []f4Session{first, second} {
 		for role, name := range map[string]string{"workload": s.Pod, "auxiliary": s.AuxiliaryPods[0]} {
@@ -121,9 +95,6 @@ func TestAuxiliaryPod_OneToOneStatementHoldsOnWorkloadPods(t *testing.T) {
 		t.Fatalf("two approval-gated sessions account for %d distinct pods %v, want 4", len(seen), seen)
 	}
 
-	// The contrast: for a type with no auxiliary pod the two selectors agree, so
-	// the "want exactly 1 workload pod" above is not a number every session has
-	// by construction — it survives the auxiliary pod, which is the claim.
 	plain := createSession(t, uniqueName(t))
 	plainAll, plainWorkload := a21OwnedPods(t, cs, ns, plain.ID)
 	if len(plainAll) != 1 || len(plainWorkload) != 1 {
@@ -135,10 +106,6 @@ func TestAuxiliaryPod_OneToOneStatementHoldsOnWorkloadPods(t *testing.T) {
 	}
 }
 
-// ③ Deleting a session is scoped to that session. The reclaim of the deleted
-// session's own pair is approval-gated-workload.md#시나리오 7's property and is
-// only the control here — without it, "the other session is still standing"
-// would also be true of a delete that did nothing at all.
 func TestAuxiliaryPod_DeletingOneSessionLeavesTheOtherPairStanding(t *testing.T) {
 	cs, _, ok := kubeClient(t)
 	if !ok {
@@ -161,7 +128,6 @@ func TestAuxiliaryPod_DeletingOneSessionLeavesTheOtherPairStanding(t *testing.T)
 	f4AwaitReclaimed(t, cs, ns, doomed.Pod, "the delete")
 	f4AwaitReclaimed(t, cs, ns, doomedHelper.Name, "the delete")
 
-	// The property: it stopped there. The API record first…
 	got := f4Get(t, survivor.ID)
 	if got.State != "active" {
 		t.Fatalf("surviving session %s state = %q after a neighbour was deleted, want active (AC-A2 격리)", survivor.ID, got.State)
@@ -174,9 +140,8 @@ func TestAuxiliaryPod_DeletingOneSessionLeavesTheOtherPairStanding(t *testing.T)
 			survivor.ID, got.AuxiliaryPods, survivorHelper.Name)
 	}
 
-	// …then the cluster, which is the half that costs resources. A pod already
-	// marked for deletion still answers Get, so the deletion timestamp is part of
-	// "untouched".
+	// A pod already marked for deletion still answers Get, so the deletion
+	// timestamp is part of "untouched".
 	all, workload := a21OwnedPods(t, cs, ns, survivor.ID)
 	if len(all) != 2 || len(workload) != 1 {
 		t.Fatalf("surviving session %s owns %d pods %v (%d workload) after a neighbour was deleted, want 2 (1 workload)",

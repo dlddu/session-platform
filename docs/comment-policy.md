@@ -111,9 +111,10 @@
 | 2026-09-06 | `web/e2e/journeys/deferred.spec.ts` · `web/e2e/journeys/j1-session-creation.spec.ts` · `web/e2e/journeys/j3-multi-session-switch.spec.ts` · `web/e2e/journeys/j5-shell-interaction.spec.ts` · `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` · `web/e2e/journeys/j6-model-selection.spec.ts` · `web/e2e/journeys/j6-stream-recovery.spec.ts` · `web/e2e/journeys/manual-archive.spec.ts` · `web/e2e/journeys/session-deletion.spec.ts` · `web/e2e/smoke.spec.ts` · `web/src/api/client.ts` · `web/src/api/types.ts` · `web/src/app/AppShell.tsx` · `web/src/app/DeleteSessionDialog.tsx` · `web/src/app/SessionCard.tsx` · `web/src/app/StateBadge.tsx` · `web/src/app/Toast.tsx` · `web/src/app/icons.tsx` · `web/src/app/sessionRoutes.ts` · `web/src/app/shell.css` · `web/src/app/workloadKind.ts` · `web/src/design/tokens.css` · `web/src/main.tsx` · `web/src/screens/NewSession.tsx` · `web/src/screens/Restore.tsx` · `web/src/screens/Sessions.tsx` · `web/src/screens/Workspace.tsx` | 148 | `0617dd01174a` | 8차 판정 패스 — **379줄 판정, 제거 231 · 유지 146**(지문 기준 379 → 148; `tokens.css`의 CSS 전체 선택자 `* {` 2줄은 주석이 아니라 이 패스가 새로 찾은 오검출이다). **`web/` 스캔 범위 전량**이고, 이 행으로 남는 미판정은 `control-plane/test/` 하나뿐이다. 상세 ↓ |
 | 2026-09-07 | `control-plane/test/approval_gated_network_policy_test.go` · `control-plane/test/client_orchestrator_test.go` · `control-plane/test/e2e_a1_plane_separation_test.go` · `control-plane/test/e2e_a2_dedicated_pod_test.go` · `control-plane/test/e2e_a3_pod_reclaim_test.go` · `control-plane/test/e2e_b2_snapshot_restore_test.go` · `control-plane/test/e2e_b3_restore_integrity_test.go` · `control-plane/test/e2e_c1_atomic_state_test.go` · `control-plane/test/e2e_c2_read_branches_test.go` · `control-plane/test/e2e_c3_write_branches_test.go` · `control-plane/test/e2e_c4_session_switch_test.go` · `control-plane/test/e2e_d1_pty_shell_test.go` · `control-plane/test/e2e_d2_shell_write_test.go` · `control-plane/test/e2e_d3_read_cursor_test.go` · `control-plane/test/e2e_d4_process_tree_test.go` · `control-plane/test/e2e_d5_idle_definition_test.go` · `control-plane/test/e2e_e1_workload_type_test.go` · `control-plane/test/e2e_e2_prompt_invocation_test.go` · `control-plane/test/e2e_e6_credential_placement_test.go` · `control-plane/test/e2e_f1_workload_type_test.go` · `control-plane/test/e2e_f4_helper_pod_test.go` · `control-plane/test/e2e_provider_reachability_test.go` · `control-plane/test/e2e_smoke_test.go` · `control-plane/test/integration_test.go` · `control-plane/test/approval_gated_shared_volume_test.go` · `control-plane/test/workload_type_orchestrator_test.go` | 423 | `ca781b0575b5` | 9차 판정 패스 — **841줄 판정, 제거 465 · 유지 376**(지문 기준 846 → 381; `e2e_e2_prompt_invocation_test.go`의 셸 `case` 와일드카드 **5줄**은 주석이 아니라 이 패스가 새로 찾은 오검출이다). `control-plane/test/` 27파일 중 **경합면 2파일을 뺀 25파일**. 이 행으로 스캔 범위에 남는 미판정은 그 2파일과 오검출 2파일뿐이다. *2026-09-07 증분 재판정: AC-F5 공유 볼륨 슬라이스의 신규 `approval_gated_shared_volume_test.go`를 이 행에 편입해 **38줄 판정 — 제거 8 · 유지 30**. 걷은 것은 자매 파일 헤더가 이미 적는 「fake가 살 수 없는 것」의 형태와 AC-F5 축자다. 남긴 것은 **왜 이 파일이 `e2e_*_test.go`가 아닌가**(그 glob이 AC ↔ e2e 매칭 단위라 등재 소관이 갈린다)와 각 단언이 **무엇이 깨지면 걸리는가**이다. 381 → 411.* *2026-09-07 증분 재판정 (2): opt-in 전환이 같은 파일에 더한 **12줄 판정 — 제거 0 · 유지 12** (411 → 423). 제거 0 인 이유를 적어 둔다 — 더한 셋이 서로 다른 것을 말한다: 파일 헤더의 「클레임을 기대하는 케이스는 클래스를 설정한다」(하네스 규약), `testStorageClass` 가 **실재 클래스명이 아닌 이유**(이름이 클레임까지 닿는지가 시험 대상이지 특정 이름이 아니다), 그리고 off 케이스가 **왜 존재하는가**(노드 로컬 클래스뿐인 클러스터에서도 세션은 서야 한다). 상세 ↓ |
 | 2026-09-08 | `control-plane/test/e2e_f6_credential_split_test.go` · `control-plane/test/approval_gated_orchestrator_test.go` | 66 | `c71eaf0cc8d9` | 10차 판정 패스 — **249줄 판정, 제거 183 · 유지 66**. 9차 패스가 「다음 패스의 1순위」로 이름까지 찍어 남긴 경합면 파일 하나와, 그 뒤 새로 들어와 **어느 등재 행에도 속하지 않던** 파일 하나. 이 행으로 `control-plane/test/`에 남는 미판정은 `harness_shared_test.go`·`shared_volume_test.go` 둘뿐이고, 둘 다 다른 슬라이스의 살아 있는 소유 선언이 있다. 상세 ↓ |
+| 2026-09-09 | `control-plane/test/e2e_architecture_2_1_auxiliary_pod_test.go` · `control-plane/test/e2e_state_api_5_wire_validation_test.go` | 34 | `fb5d8966387d` | 11차 판정 패스 — **111줄 판정, 제거 77 · 유지 34**. 자매 축(시나리오 ↔ e2e 1:1)의 슬라이스가 새로 들인 2파일로, **어느 등재 행에도 속한 적이 없어 R2가 반응하지 않던** 잔여다. 지배 형태는 9·10차와 같은 것 — `docs/test/e2e.md` 매핑 행의 사본 — 이지만 여기서는 **저자가 헤더에 「매핑 행이 담지 못하는 경계만 적는다」고 선언해 두고도** 그 행이 이미 갖는 경계 문단을 그대로 옮겨 적었다. 이 행으로 `control-plane/test/`에 남는 미판정은 10차와 같은 `harness_shared_test.go`·`shared_volume_test.go` 둘뿐이다. 상세 ↓ |
 <!-- /판정-원장 -->
 
-판정 완료 합계 **<!-- 판정-합계 -->2690<!-- /판정-합계 -->줄**(등재 범위의 현재 줄 수 합).
+판정 완료 합계 **<!-- 판정-합계 -->2724<!-- /판정-합계 -->줄**(등재 범위의 현재 줄 수 합).
 전체 대비 비율과 미판정 잔량은 **게이트가 출력한다** — 프로즈에 적으면 낡는다.
 
 ### 2026-09-04 — `control-plane/internal/session/` (판정 162줄)
@@ -919,3 +920,85 @@ parts」* 라고 **스스로 자백한다**).
 문장으로** 선언해 두었다 — 편입은 파일 목록 관리가 아니라 **판정 책임의 주장**이라 남의 선언 위에
 쓰지 않는다). `web/src/design/README.md`·`data-plane/Dockerfile`의 오탐 7줄은 9차 패스와 같은
 정의 개정 사안으로 남는다.
+
+### 2026-09-09 — 자매 축이 들인 신규 e2e 2파일 (판정 111줄)
+
+`tbm_session-platform-scenario-e2e`(시나리오 ↔ e2e 1:1)의 슬라이스가 저작한
+`e2e_architecture_2_1_auxiliary_pod_test.go`·`e2e_state_api_5_wire_validation_test.go`를
+판정했다. 111줄을 한 줄도 빠짐없이 읽었다.
+
+**왜 지금인가 — 이 잔여에는 유예 사유가 존재한 적이 없다.** 10차 패스가 남긴 두 파일은 각각
+살아 있는 소유 선언이 있어 남겼지만(아래 「등재하지 않은 파일」), 이 둘은 갓 착지해 **어느
+레코드도 유예를 적은 적이 없다.** 그리고 등재되기 전까지는 R2가 이 경로를 재측정하지 않으므로
+**몇 줄이 쌓이든 게이트가 조용하다** — 오탐 2파일을 뺀 미판정 잔여가 한 번의 자매 머지로
+83 → 194로 두 배 이상 늘어난 것이 그 성질이다.
+
+**제거율 69%** — 10차(73%)에 이어 두 번째로 높고, 이유도 같다. 지배 형태는 9차 패스가 이름
+붙인 그것, `docs/test/e2e.md` §「시나리오 ↔ e2e 파일 매핑」의 **「무엇을 검증하나」 칸을 파일
+헤더로 옮겨 적은 것**이다.
+
+**다만 이번에는 새로운 사실이 하나 있다.** 두 파일 모두 헤더에 **「무엇을 단언하는지는
+`docs/test/e2e.md` 의 매핑 행에 있고, 여기 적어 둘 것은 그 행이 담지 못하는 **경계**다」라고
+운영 규칙을 스스로 인용해 두었다.** 그런데 그 선언 바로 아래에 이어지는 「경계」 문단들이
+**그 매핑 행에 이미, 같은 문장 구조로 들어 있었다** — 시나리오 7과의 대조군/산출 구분,
+「대조군이 없으면 「다른 세션이 남았다」가 공허해진다」, f1과의 기전 분담, 시나리오 3의 인용
+관계, 「서버 body read 30초는 이 파일에 없다」까지 전부. 선언은 참이었지만 **매핑 행이 그 뒤로
+자라 경계까지 삼켰고**, 헤더는 그 사실을 다시 재지 않았다. 포인터를 적어 두는 것과 포인터가
+가리키는 내용을 안 적는 것은 다른 일이다.
+
+**제거 77줄** — 「이미 말하는 곳」이 제거 근거다.
+
+| 위치 | 제거한 것 | 이미 말하는 곳 (복원 경로) |
+| --- | --- | --- |
+| `e2e_architecture_2_1_auxiliary_pod_test.go`의 파일 헤더 (18 → 3) | 「이 파일이 배타적으로 사는 것은 격리 진술의 불변이다 … 보조 파드를 갖는 타입이 생기면서 한 세션의 파드가 둘이 됐다」 · 시나리오 7과의 경계 5줄 · 하네스 재사용 관례 3줄 | ② 이 파일의 매핑 행이 셋을 **전부, 더 자세히** 적는다 — 「**보조 파드가 생겨도 AC-A2의 1:1 진술이 깨지지 않는다**」와 「**삭제된 세션 자신의 파드 둘이 회수되는 것은 이 파일의 산출이 아니라 대조군이다** … 아무것도 지우지 않는 delete라면 「다른 세션이 남았다」가 공허해지기 때문에」는 **주석과 같은 문장**이다 · ① 하네스 재사용은 Go 패키지 의미론이고 `f4Create`·`helperPodsFor`는 각 호출 자리에서 grep으로 닿는다 |
+| `e2e_state_api_5_wire_validation_test.go`의 파일 헤더 (20 → 3) | 「이 파일이 사는 것은 요청 본문이 세션에 닿기 전에 무엇이 걸러지는가다」 · f1과의 기전 분담 9줄(`DisallowUnknownFields`·`decodeRequestBody`·agent side effect 부재) · 시나리오 3 인용 관계 3줄 · 「범위 밖: 서버 body read 30초」 2줄 | ② 매핑 행이 **첫 문장부터 같은 말로** 시작하고(「**요청 본문이 세션에 닿기 전에 무엇이 걸러지는가**를 배포 SUT에서」), 기전 분담과 시나리오 3 인용은 그 행의 마지막 두 문장이 **어순까지 같게** 적는다 · ② 30초 제한은 §「남은 미검증 분기」에 **전용 행**으로 등재돼 있고 거기엔 왜 못 사는지·선행이 무엇인지까지 있다 |
+| `(a)`~`(e)` 갈래 doc 5곳 (16 → 4) | 「An omitted body is not a missing field — each route has a documented default」 · 「Everything strict JSON validation rejects, on every route that decodes a body」 · 「The wire limit is a size gate, not a parse result: two bodies that differ by one byte」 · 「The decoded prompt limit … runs *before* the state machine」 | ② 매핑 행이 (a)~(e)를 **같은 letter로** 나눠 각각 한 문단씩 적는다 · ① 네 함수 이름이 이미 문장이다(`…OmittedBodyTakesTheDocumentedDefaults`·`…RejectedBodiesLeaveNoTrace`·`…WireBodyLimitIsExactlyEightMiB`·`…OversizePromptIsRefusedBeforeRestore`). **letter만 남겼다** — 그것이 매핑 행으로 들어가는 색인이다 |
+| 대조군 근거 사본 5곳 | 「for a type with no auxiliary pod the two selectors agree, so the "want exactly 1 workload pod" above is not a number every session has by construction」 · 「the control that the same route says 200 to a body it *does* declare」 · 「without this the table above would also pass against a switch handler that quietly accepted read's DTO」 · 「this route accepts prompts from this session, so a later refusal is about the payload's size」 · 「four sessions' worth of pod would collapse to fewer names」 | ② 매핑 행이 **다섯 개를 전부 괄호로 묶어** 적는다 — 「(그 「1」이 구성상 참인 수가 아님은 **보조 파드가 없는 shell 세션에서 두 선택자가 일치**한다는 대조군이 산다)」 · 「(같은 route가 **선언된 필드**에는 200을 준다는 대조군과, switch가 read의 필드마저 undeclared로 거절한다는 음성 대조를 함께 둔다)」 · 「같은 세션의 작은 프롬프트가 `active`로 200을 받는다는 대조군이 그 413을 크기 문제로 못박는다」 |
+| 바로 아래 단언이 하는 말 4곳 | 「The remaining pod is the auxiliary one, and the API says the same」 · 「The property: it stopped there. The API record first…」 · 「read with no body must mean offset 0 — the whole history」 · 「switch with no body must mean "no fields" … the AC-C4 no-op: same pod, still active」 | ① 다음 2~8줄과 그 실패 메시지가 같은 말을 한다(실패 메시지가 「which does not contain output produced before the call — its offset was not 0」까지 적는다) · ② 매핑 행의 (a) 문단 |
+| 시그니처 재진술 2곳 | 「`a21OwnedPods` returns (all pods carrying the session id, the subset labelled as its workload pod)」 · 「`a5JSONOfSize` builds `{"unexpected":"aaa…"}` of exactly n bytes」 | ① 시그니처와 명명된 반환값, 그리고 크기를 스스로 검증하는 `t.Fatalf`. 둘 다 **비공개 식별자**라 Go 관례상의 doc 의무도 없다. `a5JSONOfSize`의 **뒤 문장은 남겼다** — 아래 유지 참조 |
+| 「import하지 않고 적어 둔 이유」의 사본 2곳 | 「a rename in the control plane has to fail this file, not travel into it」 · 「so that relaxing either limit fails this file instead of travelling into it」 | ① **같은 규칙이 `e2e_f1_workload_type_test.go`의 상수 블록 doc에 한 벌 있다**(「importing the constants would make the assertion agree with any rename by construction」). 9차 패스의 「한 벌만 남긴다」 — **포인터(「for the reason e2e_f1 gives」)는 남겼고**, 두 번째 파일에는 그 포인터가 아예 없어 새로 달았다 |
+| 고아가 된 열거 표기 2곳 | 본문의 `①`·`③` (`②`는 헤더 문단이 갖고 있었다) | ① 위 항목들과 함께 사라진 표기다. **셋 중 둘만 코드에 있어 이미 읽히지 않는 색인이었다** |
+
+**유지 34줄** — 「지울까」를 검토했다가 남긴 것들. 유지 비중이 9·10차보다 낮은 것은 이 두 파일의
+헤더가 유난히 길었기 때문이고, 남은 것의 성격은 같다 — **「무엇을 단언하나」는 매핑 행이 갖지만
+「이 단언이 왜 vacuous하지 않은가」는 어디에도 없다.**
+
+- **k8s API의 문서화되지 않은 동작 1종** — 삭제 표시된 파드가 **종료 유예 동안 계속 Get·List에
+  답한다**. 그래서 「파드가 없다」를 두 파일이 각각 「`DeletionTimestamp`가 없는 것이 없다」로
+  적는다. 이것 없이는 두 단언 모두 **왜 그렇게 에둘러 쓰였는지** 읽히지 않는다. 정책 「유지 대상」
+  3의 「외부 시스템의 문서화되지 않은 동작」 그대로다.
+- **프로브 설계의 함정 1종** — `a5ProbeCommand`가 **개행 없이** 타이핑되고 토큰이 셸 산술로
+  계산된다(`a5ProbeOutputToken`이 그 결과값이다). 그래서 그 토큰은 **셸이 실제로 그 줄을
+  제출했을 때만** 나타난다. 매핑 행은 「대기 중인 미제출 줄이 제출되지 않음」이라는 **결론**을
+  적지만 그것을 어떻게 관측 가능하게 만들었는지는 적지 않고, 코드 모양으로도 보이지 않는다.
+- **음성 단언을 자기검증으로 닫는 대조군 1종** — 「위의 음성은 그 토큰이 **나타날 수 있어야**
+  값을 갖는다」. 마지막에 개행 하나를 더 보내 토큰을 실제로 띄우는 세 줄이 그것이고, 없으면
+  앞의 「나타나지 않았다」가 「원래 나타날 수 없었다」와 구분되지 않는다. 위 「대조군 근거 사본
+  5곳」과 갈린 이유는 하나다 — **이 대조군만 매핑 행에 없다.**
+- **정온 대기의 이유 1종** — `a5Settled`가 **연속 두 번의 전체 읽기가 일치할 때까지** 기다리는
+  이유. 이후의 「출력이 움직이지 않았다」가 **아직 프롬프트를 flush 중인 셸**과 비교되면 그
+  단언은 조용히 무의미해진다. 코드는 폴링을 보여 주지만 무엇을 막으려는 폴링인지는 말하지 않는다.
+- **크기 축을 유일 변수로 만드는 설계 1종** — `a5JSONOfSize`가 **DTO가 선언하지 않는 필드**를
+  일부러 쓰는 이유(그래야 400과 413을 가르는 것이 길이 하나뿐이다). 매핑 행은 「같은 모양의
+  본문이 … 400 … 한 바이트 더한 … 413」이라고 **결과**를 적지만 「같은 모양」이 왜 그 모양이어야
+  하는지는 적지 않는다.
+- **왜 기존 헬퍼로 안 되는가 2종** — `helperPodsFor`는 **항상 헬퍼 role로 좁히므로** 같은
+  질의를 두 폭으로 던지는 이 파일의 요점을 만들 수 없다 · `do`는 **Go 값을 마샬링하므로** DTO가
+  표현할 수 없는 바이트(malformed·trailing·explicit null)를 보낼 수 없다. 둘 다 10차 패스가
+  `f6RequireSecretRef`에서 남긴 것과 같은 형태 — 코드만 보면 「비슷한 게 하나 더 있다」로만 읽힌다.
+- **갈린 판정 1건 — 남겼다.** `f4AwaitReclaimed` 자리의 「Control: the delete really did reclaim
+  something (AC-F4 owns this claim).」 한 줄. **매핑 행이 같은 것을 적으므로 문면상 제거 후보**이고,
+  같은 근거의 헤더 사본은 실제로 지웠다. 그런데 이 한 줄이 없으면 그 함수를 읽는 사람에게 회수
+  단언이 **이 파일의 산출로 보이고**, 다음 편집이 「본론」인 줄 알고 손대기 쉽다 — 소유가 다른
+  단언을 코드 자리에서 표시하는 **한 벌**이다. 정책 「애매하면 남긴다」로 남기고 갈렸다는 사실을
+  여기 적는다.
+
+**부수 변경 없음 — 「제품 코드 무변경」을 측정했다.** 두 파일에서 판정 대상 주석을 걷어낸
+나머지(빈 줄 제외, 우측 공백 정규화)가 부모와 **완전히 동일**하다(각각 148줄·273줄 불변).
+`gofmt -l`은 두 파일 모두 빈 출력이고 `go vet -tags e2e ./test/`는 rc=0이다. 이 슬라이스는
+단언을 하나도 더하거나 빼지 않았다.
+
+**등재하지 않은 파일은 10차와 같은 둘이다.** `harness_shared_test.go`(자매 축의 **다음** 저작이
+착지할 공유 하네스다 — 자매 모델에 저작 대기가 남아 있는 동안은 이 파일이 언제든 움직인다) ·
+`shared_volume_test.go`(열린 PR이 이 원장에 소유를 **살아 있는 문장으로** 선언해 두었다).
+`web/src/design/README.md`·`data-plane/Dockerfile`의 오탐 7줄은 9·10차와 같은 정의 개정 사안이다.
