@@ -141,6 +141,9 @@ const (
 	// SessionMCPURLEnvVar tells the workload pod's agent where its session MCP
 	// is (AC-F6).
 	SessionMCPURLEnvVar = "SESSION_MCP_URL"
+	// SessionSharedDirEnvVar tells both containers that mount AC-F5's volume
+	// where it is; see sharedDirEnv.
+	SessionSharedDirEnvVar = "SESSION_SHARED_DIR"
 	// helperProxyListenAddr binds the helper pod's proxy to the pod network
 	// rather than loopback (AC-F6). What keeps that reachable-from-anywhere bind
 	// safe is AC-F2's ingress policy in network_policy.go — and only where the
@@ -585,8 +588,9 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		sidecars = append(sidecars, o.claudeCredentialProxy(image))
 	case session.WorkloadTypeApprovalGated:
 		// AC-F6: this container holds *no* external credential. The K3s MCP
-		// token and the marketplace plugin bootstrap are deliberately absent —
-		// their omission is the decision, not an oversight.
+		// token's absence is the decision, not an oversight — the plugin this
+		// type runs is installed from the helper pod's seed on the shared
+		// volume, which needs neither a credential nor a route off the pod.
 		modelEnv := corev1.EnvVar{Name: ClaudeCodeModelEnvVar, Value: model}
 		if model == session.PlatformDefaultModel {
 			modelEnv = optionalSecretEnv(
@@ -614,6 +618,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		if o.sharedVolumeEnabled() {
 			container.VolumeMounts = append(container.VolumeMounts, sharedVolumeMount())
 			volumes = append(volumes, sharedVolume(sharedClaimName(helperPodNameFor(sessionID, suffix))))
+			container.Env = append(container.Env, sharedDirEnv())
 		}
 		// No sidecar: moving the proxy out of this pod is the whole point of
 		// AC-F2's arrangement.
@@ -721,6 +726,23 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 	if o.sharedVolumeEnabled() {
 		mcp.VolumeMounts = []corev1.VolumeMount{sharedVolumeMount()}
 		helperVolumes = []corev1.Volume{sharedVolume(sharedClaimName(name))}
+		// The plugin seed for this session's workload pod (AC-F6). The K3s MCP
+		// token stays on this side of the boundary: it buys a marketplace clone
+		// here, and what crosses to the workload pod is the cloned skills.
+		//
+		// The seed is written before this container opens its port, and the
+		// workload pod is created only once this pod is Ready (startSet), so
+		// the ordering holds without the two pods coordinating.
+		mcp.Env = append(mcp.Env,
+			sharedDirEnv(),
+			secretEnv(K3SMCPTokenEnvVar, o.claudeCredentialsSecret, ClaudeCodeK3SMCPTokenSecretKey),
+			optionalSecretEnv(K3SMCPURLEnvVar, o.claudeCredentialsSecret, ClaudeCodeK3SMCPURLSecretKey),
+			optionalSecretEnv(
+				ClaudeCodePluginMarketplaceURLEnvVar,
+				o.claudeCredentialsSecret,
+				ClaudeCodePluginMarketplaceURLSecretKey,
+			),
+		)
 	}
 
 	return &corev1.Pod{

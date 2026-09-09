@@ -57,6 +57,7 @@ func setApprovalGatedEnv(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
 	t.Setenv("K3S_MCP_TOKEN", "")
+	t.Setenv(pluginEnabledEnv, "")
 	t.Setenv(sessionMCPURLEnv, "http://10.42.0.9:8092")
 }
 
@@ -69,9 +70,25 @@ func TestApprovalGatedWorkloadAcceptsItsHelperEndpoints(t *testing.T) {
 	if tools.SessionMCP != "http://10.42.0.9:8092" {
 		t.Fatalf("session MCP = %q, want the injected helper address", tools.SessionMCP)
 	}
-	// AC-F6's 2026-09-03 decision: no marketplace plugin in this type.
 	if tools.Plugin {
-		t.Fatal("approval-gated enabled the marketplace plugin")
+		t.Fatal("approval-gated enabled a plugin the entrypoint never installed")
+	}
+}
+
+// The seeded plugin is skills-only, so it joins the session MCP rather than
+// replacing it: the gate stays the only way out of the pod (AC-F3, AC-F6).
+func TestApprovalGatedWorkloadTakesTheSeededPluginAlongsideItsMCP(t *testing.T) {
+	setApprovalGatedEnv(t)
+	t.Setenv(pluginEnabledEnv, "1")
+	tools, err := agentToolSurface(workloadApprovalGated)
+	if err != nil {
+		t.Fatalf("approval-gated environment rejected: %v", err)
+	}
+	if !tools.Plugin {
+		t.Fatal("the seeded plugin was installed but not enabled")
+	}
+	if tools.SessionMCP != "http://10.42.0.9:8092" {
+		t.Fatalf("session MCP = %q, want it kept alongside the plugin", tools.SessionMCP)
 	}
 }
 
@@ -181,21 +198,39 @@ func TestRestoredManagedSettingsArePointedAtTheCurrentSessionMCP(t *testing.T) {
 	}
 }
 
-// The two surfaces are alternatives, not a menu: a settings file must never
-// carry both, in either direction.
-func TestManagedSettingsRejectMixedToolSurfaces(t *testing.T) {
-	homeDir := t.TempDir()
+// storeManagedSettings writes settings as the pod would, so validation reads a
+// file rather than a struct the test built.
+func storeManagedSettings(t *testing.T, homeDir string, settings claudeManagedSettings) {
+	t.Helper()
 	settingsDir := filepath.Join(homeDir, claudeSettingsDir)
 	if err := os.MkdirAll(settingsDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	mixed := managedSettingsFor(toolSurface{SessionMCP: "http://10.42.0.9:8092"})
-	mixed.EnabledPlugins = map[string]bool{claudeSessionPlatformPlugin: true}
-	if err := storeClaudeManagedSettings(settingsDir, filepath.Join(settingsDir, claudeSettingsFile), mixed); err != nil {
+	if err := storeClaudeManagedSettings(settingsDir, filepath.Join(settingsDir, claudeSettingsFile), settings); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// approval-gated declares both surfaces at once, so validation must accept the
+// pair — and an archive carrying it has to survive a restore.
+func TestManagedSettingsAcceptTheCombinedToolSurface(t *testing.T) {
+	homeDir := t.TempDir()
+	storeManagedSettings(t, homeDir, managedSettingsFor(toolSurface{
+		Plugin:     true,
+		SessionMCP: "http://10.42.0.9:8092",
+	}))
+	if err := validateClaudeManagedSettings(homeDir); err != nil {
+		t.Fatalf("combined tool surface rejected: %v", err)
+	}
+}
+
+// Accepting the pair must not become accepting nothing: a settings file naming
+// no platform surface at all is still the shape validation exists to catch.
+func TestManagedSettingsRejectAnEmptyToolSurface(t *testing.T) {
+	homeDir := t.TempDir()
+	storeManagedSettings(t, homeDir, managedSettingsFor(toolSurface{}))
 	err := validateClaudeManagedSettings(homeDir)
 	if err == nil || !strings.Contains(err.Error(), "tool surface") {
-		t.Fatalf("validation error = %v, want a mixed-surface rejection", err)
+		t.Fatalf("validation error = %v, want a missing-surface rejection", err)
 	}
 }
