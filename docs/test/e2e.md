@@ -349,8 +349,12 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 ## 시나리오 ↔ e2e 파일 매핑
 
 파일 단위 표다(테스트 함수 단위가 아니다). 한 시나리오의 전용 파일은 두 스위트 중 **한쪽에만**
-있다. **파일명은 아직 옛 AC 키를 따른다**(`e2e_b2_snapshot_restore_test.go`) — 파일명 규약은 모델이
-강제하지 않고, 개명은 주석 판정 원장(`docs/comment-policy.md`)의 등재 경로를 깨므로 별도 슬라이스다.
+있다. **축 교체 이전에 있던 파일의 이름은 아직 옛 AC 키를 따른다**(`e2e_b2_snapshot_restore_test.go`)
+— 파일명 규약은 모델이 강제하지 않고, 개명은 주석 판정 원장(`docs/comment-policy.md`)의 등재 경로를
+깨므로 별도 슬라이스다. **축 교체 이후에 새로 저작하는 파일은 시나리오 키를 따른다**
+(`e2e_<문서 키>_<N>_<슬러그>_test.go`, 예: `e2e_state_api_5_wire_validation_test.go`) — 지킬 옛 AC 키가
+없는 파일에 없는 키를 지어 붙이지 않기 위해서다(`state-api.md#시나리오 5`처럼 AC 셋에 걸친 시나리오는
+단일 AC 키 자체가 거짓이 된다). 개명 슬라이스가 오면 나머지도 이 모양으로 모인다.
 
 <!-- scenario-mapping:begin -->
 | 시나리오 | 파일 | 스위트 | 기존 AC 키(참고) | 무엇을 단언하나 |
@@ -360,6 +364,7 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 | `approval-gated-workload.md#시나리오 8` | `control-plane/test/e2e_f6_credential_split_test.go` | go | AC-F6 | **두 자격 증명의 컨테이너별 배치**를 배포 SUT에서 — 게이트웨이 3종(`APPROVAL_GATEWAY_URL`·`_API_KEY`·`_USER_ID`)이 헬퍼 파드의 `session-mcp` 컨테이너에만 `approval-gateway-credentials`의 `url`/`api-key`/`user-id`로 **필수** 주입되고 `credential-proxy`·워크로드 컨테이너엔 이름으로도 **키로도** 없음 / 공급자 3종(`base-url`·`auth-token` 필수 + optional `ca-cert`)은 같은 파드의 `credential-proxy`에만 있고 그 컨테이너가 `DATA_PLANE_PROXY_PLACEMENT=helper`·`DATA_PLANE_AGENT_ADDR=0.0.0.0:8091`로 **loopback이 아니라 파드 네트워크에 바인딩**함(AC-E6과 갈리는 유일한 지점) / 워크로드 컨테이너는 Secret ref를 하나도 갖지 않고(optional `model` 제외) `ANTHROPIC_BASE_URL`·`SESSION_MCP_URL`이 **헬퍼 파드의 실제 `status.podIP`** 와 일치하며 `ANTHROPIC_AUTH_TOKEN`은 placeholder, `K3S_MCP_TOKEN`은 **없음**(✅ 2026-09-03 확정 항목) / 실제로 해소된 환경 — `session-mcp`가 api-key를, `credential-proxy`가 auth-token을 해소하고 워크로드 컨테이너의 `/proc/*/environ` 어디에도 그 둘이 없음(자기 placeholder를 찾는 대조군이 먼저 붙어 음성 결과가 자기검증된다) / 생성 요청의 `userId`·게이트웨이 필드·공급자 자격 증명은 **400**이고 세션이 생기지 않음 / 네 토큰 문자열이 세션 조회 응답·목록 응답·`read` **응답**·**control-plane 파드 로그**에 없음 — 넷 다 **표면별 대조군을 먼저 통과시킨 뒤에** 찾는다(앞 셋은 자기 세션 id를 담아야 하고, 로그는 프로세스 시작 줄을 담아야 하며 거기에 Secret에서 해소한 값 하나(optional `model`)가 실제로 echo돼 있어야 한다) / model 계약이 claude-code와 동일. 제출되는 pod spec은 `approval_gated_orchestrator_test.go`(태그 `integration`)가, 프록시의 **동작** 계약은 `data-plane/cmd/agent/credential_proxy*_test.go`가 이미 소유하므로 다시 사지 않는다 — e2e가 배타적으로 사는 것은 **Secret에서 실제로 해소된 환경과 API server가 실제로 배정한 IP**다. 타입 축과 파드 집합(AC-F1)·귀속과 수명과 PID 경계(AC-F4)·네트워크 경계(AC-F2)는 각자의 AC가 소유한다. **다섯 갈래는 이 파일에 없다**(차단 둘 · 승인 컨텍스트 · `read`의 **scrollback** 반쪽 · control-plane 로그의 **요청 단위** 반쪽) — 아래 §「남은 미검증 분기」에 등재했다 |
 | `architecture.md#시나리오 1` | `control-plane/test/e2e_a1_plane_separation_test.go` | go | AC-A1 | 세션 워크로드가 control-plane pod 밖의 자기 Pod에서 돈다 + control-plane pod엔 워크로드(쉘)가 없다(distroless — exec 실패) |
 | `architecture.md#시나리오 2` | `control-plane/test/e2e_a2_dedicated_pod_test.go` | go | AC-A2 | 생성 = active + 전용 pod, `session-id` 라벨 1:1, N 세션 → 고유 Pod N개 |
+| `architecture.md#시나리오 2-1` | `control-plane/test/e2e_architecture_2_1_auxiliary_pod_test.go` | go | AC-A2 (AC-F4 구체화) | **보조 파드가 생겨도 AC-A2의 1:1 진술이 깨지지 않는다**를 배포 SUT에서 — approval-gated 세션 둘이 각각 `session-id` 라벨로 파드 2개를 갖지만 `pod-role=workload`로 좁힌 같은 선택자는 여전히 **정확히 1개**를 돌려주고 그것이 API의 `pod`와 같음(그 「1」이 구성상 참인 수가 아님은 **보조 파드가 없는 shell 세션에서 두 선택자가 일치**한다는 대조군이 산다) / 보조 파드는 세션마다 별개라 두 세션이 **서로 다른 4개**의 파드로 갈리고 API의 `auxiliaryPods`와 클러스터 조회가 같은 것을 지목함 / 한 세션 삭제가 **그 세션에서 멈춤** — 다른 세션의 파드 둘이 `DeletionTimestamp` 없이 Running·Ready로 남고 그 세션의 `pod`·`auxiliaryPods`도 불변. **삭제된 세션 자신의 파드 둘이 회수되는 것은 이 파일의 산출이 아니라 대조군이다** — `approval-gated-workload.md#시나리오 7`이 소유하며, 아무것도 지우지 않는 delete라면 「다른 세션이 남았다」가 공허해지기 때문에 여기서 함께 관측할 뿐이다. 헬퍼 파드의 귀속·수명·PID 경계(AC-F4)·존재와 컨테이너 구성(AC-F1)·자격 증명 배치(AC-F6)는 각자의 파일이 소유한다 |
 | `architecture.md#시나리오 3` | `control-plane/test/e2e_a3_pod_reclaim_test.go` | go | AC-A3 | 동결 시 API `pod:""` + 클러스터 그라운드-트루스로 Pod 삭제/terminating 확인 |
 | `claude-code-workload.md#시나리오 1` | `control-plane/test/e2e_e1_workload_type_test.go` | go | AC-E1 | `workloadType=claude-code` 세션이 SUT에서 서고 그 pod에서 Claude CLI가 실제로 실행됨 / 필드 생략은 shell / 잘못된 값은 pod 생성 전 400 / 타입·모델은 생성 후 불변 |
 | `claude-code-workload.md#시나리오 2` | `control-plane/test/e2e_e2_prompt_invocation_test.go` | go | AC-E2 | write = 프롬프트 1회 실행 — 배포 SUT에서 실 `claude` 프로세스가 기동되고 응답이 세션 출력에 투영됨 / burst의 모든 프롬프트가 큐에 수락돼 각각 1회씩 실행됨 / 프로세스 테이블에서 본 exact argv·원샷 수명·직렬 큐(동시 실행 없음)·첫 성공 뒤에만 `--continue` / 1 MiB 초과 프롬프트는 public API 413이고 실행되지 않음 (비블로킹 반환 자체는 SUT에서 관측 불가 — invocation이 write 왕복보다 느리지 않다. `data-plane/cmd/agent/claude_test.go`의 `TestClaudeWriteIsNonBlockingAndSerial`이 fake runner로 소유) |
@@ -375,6 +380,7 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 | `state-api.md#시나리오 2` | `control-plane/test/e2e_c2_read_branches_test.go` | go | AC-C2 | read 분기: `active` / `snapshot->restore->read`, 호출 후 항상 active |
 | `state-api.md#시나리오 3` | `control-plane/test/e2e_c3_write_branches_test.go` | go | AC-C3 | write 분기: `active` / `snapshot->restore->write`(거부 아님), 호출 후 항상 active |
 | `state-api.md#시나리오 4` | `control-plane/test/e2e_c4_session_switch_test.go` | go | AC-C4 | active 대상 switch = no-op(재기동 없음), 다건 세션을 오가도 각자 상태·pod 보존 |
+| `state-api.md#시나리오 5` | `control-plane/test/e2e_state_api_5_wire_validation_test.go` | go | AC-C2·C3·C4 (wire validation) | **요청 본문이 세션에 닿기 전에 무엇이 걸러지는가**를 배포 SUT에서 — (a) 본문 생략 3종이 기본값으로 처리됨(read=`offset 0`이라 **호출 전에 만든 출력이 돌아옴** · write=빈 payload라 대기 중인 미제출 줄이 제출되지 않음 · switch=필드 없음이라 AC-C4 no-op으로 pod·상태 불변) / (b)(c) top-level·필드·배열 속 `null` · unknown field · malformed · trailing input · 비-객체 top level이 **read·write·switch 셋 모두**에서 400 `invalid input`이고, 그 왕복 뒤 쉘 출력·`workloadType`·`model`·상태가 전부 불변(같은 route가 **선언된 필드**에는 200을 준다는 대조군과, switch가 read의 필드마저 undeclared로 거절한다는 음성 대조를 함께 둔다) / (d) wire 상한이 **정확히 8 MiB** — 같은 모양의 본문이 `8388608`바이트면 400(선언 안 된 필드에서 떨어진다), **한 바이트 더한** `8388609`바이트면 413 `request body exceeds size limit` / (e) snapshot `claude-code` 세션의 decoded 1 MiB 초과 prompt가 413 `workload prompt exceeds size limit`이고 세션이 `snapshot`·pod 없음 그대로이며 **살아 있는 파드가 하나도 생기지 않음**(= 거부가 복원보다 앞선다. 같은 세션의 작은 프롬프트가 `active`로 200을 받는다는 대조군이 그 413을 크기 문제로 못박는다). immutable metadata를 read/write/switch로 바꾸려는 시도가 400이라는 것 자체는 `approval-gated-workload.md#시나리오 1`의 파일이 타입 축으로 이미 사므로 여기서 다시 사지 않는다 — 이 파일이 사는 것은 그 **기전**(타입별 특수 검사가 아니라 세 route 공통 `DisallowUnknownFields`라서 기본 타입 세션에서도 unknown field와 **같은 표에서** 떨어진다)과, f1이 사지 않는 **agent side effect 부재**다. 「snapshot 세션에 write하면 복원된다」는 `state-api.md#시나리오 3`이 소유하므로 인용만 한다 — (e)가 사는 것은 그 복원이 **일어나지 않았다**는 쪽이다. **서버 body read 30초 제한은 이 파일에 없다** — 아래 §「남은 미검증 분기」에 등재했다 |
 <!-- scenario-mapping:end -->
 
 ## 시나리오 예외 목록
@@ -430,21 +436,26 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 | `approval-gated-workload.md#시나리오 3` | go | **없음** | 승인 왕복이 전부 실재한다 — `data-plane/cmd/agent/session_mcp_gate.go`·`approval_wait.go`·`approval_gateway.go`(POST `/api/requests` → 3초 폴링 → APPROVED일 때만 실제 외부 GET), 결정을 지시할 대역은 `deploy/e2e-approval-gateway-fake.yaml`의 `/operator/policy`(defaultStatus)·`/operator/decide`. 이 파일이 살 것: write 즉시 반환 · 결정 전 `awaiting approval` in-band 마커와 **테스트 upstream 무도달** · 승인 후 정확히 1회 호출 · event id/`nextOffset`/decoded 길이 일치와 UTF-8 경계 · 외부 식별자 `{세션ID}:{요청ID}`. |
 | `approval-gated-workload.md#시나리오 4` | go | **폴링 타임아웃 주입** — (c) 갈래만. `data-plane/cmd/agent/approval_gateway.go`의 `defaultApprovalTimeout`이 10분 상수이고 `newApprovalGateway`가 `timeout` 필드를 env로 받지 않아, 지금 (c)를 사려면 CI가 10분을 기다려야 한다. 축소값 주입은 사용자 가시 동작을 바꾸지 않는 테스트 훅이다 — data-plane 소관. (a) 거절·(b) 만료는 대역의 `/operator/decide`로 **선행 없이** 관측 가능. | 세 갈래의 처리 코드는 실재한다 — 같은 파일이 APPROVED/REJECTED/EXPIRED를 정착 결정으로 가르고 자체 `TIMEOUT`을 별도로 발급하며(비-2xx는 결정이 아니라 실패로 구분한다), in-band 통지는 `session_mcp_notices.go`가 만든다. 이 파일이 살 것: 세 경우 모두 **외부 호출 0** · 실패가 in-band 마커로 남음 · 세션이 `active` 유지 · 큐 미폐색 · (d) 후속 write 정상 처리. |
 | `approval-gated-workload.md#시나리오 6` | go | **시나리오 3의 승인 경로 파일.** 공유 볼륨에 파일을 만드는 수단이 「승인된 외부 도구 호출」이라 그 배선을 먼저 세운다(같은 스위트, 같은 대역). | RWX 볼륨은 #98·#100으로 착지했다 — `control-plane/internal/adapter/k8s/shared_volume.go`의 `ReadWriteMany` 클레임, `deploy/shared-volume-provisioner.yaml`(local-path `sharedFileSystemPath`), `deploy/kind-config.yaml`의 전 노드 동일 마운트, `control-plane/test/shared_volume_test.go`·`approval_gated_shared_volume_test.go`. **「RWX가 미구현이라 막혔다」는 더 이상 참이 아니다.** 이 파일이 살 것: (a) 워크로드와 MCP 컨테이너가 같은 파일을 보고 프록시에는 마운트되지 않음 (b) **동결을 건너뛴** 다음 실행도 그 파일을 봄 (c) 복원 후 잔존 (d) `cursorBefore` 델타와 `offset=0` 전체 (e) 다른 세션은 마운트 불가. |
-| `architecture.md#시나리오 2-1` | go | **없음** — 새 대역도 새 하네스도 필요 없는 가장 싼 후보. | 세션 전속 보조 파드는 실재하고(`control-plane/internal/adapter/k8s/client_orchestrator.go`), `control-plane/test/e2e_f4_helper_pod_test.go`가 이미 배포 SUT에서 approval-gated 세션 둘을 세워 라벨로 헬퍼 파드를 찾는 길을 닦아 두었다. 이 파일이 배타적으로 살 것: 보조 파드가 세션마다 별개이고 두 세션이 같은 것을 공유하지 않으며, 한 세션 삭제가 **그 세션의 파드 둘만** 지우고, 그 와중에 **1:1 매핑 진술이 워크로드 파드 기준으로 계속 성립**한다는 것. 시나리오 7과의 경계: 7은 귀속·수명·PID 경계, 2-1은 **격리 진술의 불변**. |
 | `claude-code-workload.md#시나리오 3` | go | **없음** | 직렬 큐는 실재하고(`data-plane/cmd/agent/claude.go`의 프롬프트 큐), 관측 수단에도 선례가 있다 — `control-plane/test/e2e_e2_prompt_invocation_test.go`가 프로세스 테이블에서 invocation argv를 세는 프로브를 이미 세웠다(자기 프로세스와 flag를 언급만 하는 프로세스를 거르는 두 가드까지). 이 파일이 살 것: 두 실행 구간의 **비중첩**(동시 argv 수가 1을 넘지 않음)과 read(`offset=0`) 누적 순서 = write 순서. 시나리오 2와의 경계: 2는 「write 1회 = 1 실행」, 3은 **두 write 사이의 순서**. |
 | `claude-code-workload.md#시나리오 4` | go | **없음** | stream 계약이 실재한다 — `control-plane/internal/api/api.go`가 `Last-Event-ID`를 query 커서보다 우선하고, output 이벤트가 `id=nextOffset`과 `{offset,payloadBase64,nextOffset}`을 싣는다. 이 파일이 살 것: UTF-8 경계로 갈린 두 chunk · 중단 후 `Last-Event-ID` 재연결의 **무손실·무중복** · past-end 커서의 payload 없는 reset이 `lastAccess`를 바꾸지 않음 · read(0)로 콘솔을 교체한 뒤 마지막 커서 read가 **빈 델타**이고 raw stream-json final/result로 text delta가 중복되지 않음. |
 | `claude-code-workload.md#시나리오 6` | go | **없음.** 동결은 `POST /sessions/{id}/snapshot` 직접 호출로 만들어 60분 대기를 피한다(그 대기 자체는 `lifecycle.md#시나리오 1` 예외가 소유). 다만 「동결 전 대화를 참조하는 프롬프트가 정상 응답」의 **의미** 판정은 상수 대역이라 살 수 없으므로, `claude-code-workload.md#시나리오 5` 예외와 같은 이유로 그 절반은 이 파일의 단언에서 빼고 나머지를 산다. | 아카이브 경로가 실재한다 — `data-plane/cmd/agent/claude_archive.go`(대화·작업 디렉터리·출력 버퍼), `checkpoint.go`, 그리고 kind에서 CRIU 갈래가 꺼져 있다는 사실(`deploy/kind-config.yaml`의 `NOTE(criu)`)이 「CRIU dump가 호출되지 않는다」를 관측 가능하게 만든다. 이 파일이 살 것: CRIU 미호출 · 아카이브 생성 · pod 회수 · `preparing`/archive ref를 담은 `committing`의 durable 순서 · 복원 후 파일 잔존 · (a) `cursorBefore` 델타 · (b) `offset=0`의 전·후 순서. |
 | `claude-code-workload.md#시나리오 8` | go | **상한 주입 훅.** `claudeConfig`에 `RunOutputLimit`·`ScrollbackLimit` 필드는 있는데 `data-plane/cmd/agent/main.go`가 그 둘을 env로 읽지 않아 배포 pod는 항상 16 MiB/256 MiB다 — e2e가 그만큼을 만들어 낼 수 없다. `control-plane/test/e2e_e2_prompt_invocation_test.go` 헤더가 같은 벽을 이미 적는다(「the stand-in cannot be made to emit that much」). 축소값 env 배선은 사용자 가시 동작을 바꾸지 않는 테스트 훅 — data-plane 소관. | 상한 로직 자체는 실재한다 — `data-plane/cmd/agent/claude.go`의 invocation/누적 두 마커, `claude_stream.go`의 truncation·session-full 전이, `control-plane/internal/api/api.go`의 413/507 매핑. (a) 1 MiB 초과 프롬프트 413은 **선행 없이도** 지금 관측 가능하고 이미 시나리오 2의 파일이 산다 — 이 파일은 (b)~(e), 즉 truncation 마커의 live append · 기존 bytes 불변 · cumulative terminal marker · 신규 write 507 · checkpoint/restore 뒤 buffer·마커·`nextOffset`·resume state 동일을 산다. |
 | `claude-code-workload.md#시나리오 9` | playwright | **모킹 허용목록 등재.** SPA의 오류 복구는 실 스트림이 원리적으로 내지 않는 사건이라 route 가로채기가 필요하다. 그 방식은 지금 여정 spec `web/e2e/journeys/j6-stream-recovery.spec.ts`에만 있고, 최상위 매칭 단위로 올리려면 e2e 충실도 허용목록(`STREAM-RESET-REPLAY` 계열) 등재가 선행이다 — 「e2e 충실도 허용목록」 절 소관. | 서버 쪽 상태 계약은 실재한다(`control-plane/internal/api/api.go`의 stream 핸들러, snapshot의 invalid-state 거부). 이 파일이 살 것: EventSource 즉시 close · GET session 후 **active/idle만** 마지막 커서로 backoff 재연결 · snapshot은 read fallback 없이 Restore 화면. `state-api.md#시나리오 6`과의 경계: 6은 **API 커서·상태 계약**(go), 9는 **브라우저 복구 동작**(playwright). |
 | `lifecycle.md#시나리오 4` | playwright | 시나리오 9와 **같은 모킹 허용목록 선행**(같은 가로채기를 쓴다). 동결 자체는 `POST /snapshot`으로 만들 수 있어 60분 대기는 필요 없다. | SPA의 단절 처리 경로는 실재한다(`web/src`의 EventSource 핸들링, `j6-stream-recovery.spec.ts`가 여정으로 이미 훑는다). 이 파일이 배타적으로 살 것: 단절 뒤 **자동 stream/read 재시도가 없다**는 음성 단언과 「사용자가 명시적으로 복원하기 전에는 새 pod가 생기지 않는다」(파드 수가 그라운드-트루스). 시나리오 9와의 경계: 9는 상태별 재연결 정책 전반, 4는 **자동 복원 금지** 한 조항. 둘을 한 파일에 담으면 규칙 1의 중복이 된다. |
-| `state-api.md#시나리오 5` | go | **없음** — 클러스터 부하가 가장 작고 전부 API 표면에서 끝나는 후보. | wire validation이 실재한다 — `control-plane/internal/api/api.go`가 두 번째 Decode로 trailing input을 잡고 `DisallowUnknownFields`로 unknown field를 거르며, 8 MiB wire 상한과 decoded 1 MiB prompt 상한을 각각 413으로, 누적 상한을 507로 매핑한다. 이 파일이 살 것: (a) body 생략 3종의 정상 처리(read `offset=0`·write 빈 payload·switch 무필드) · (b)(c) 400과 **agent side effect·타입/모델 무변경** · (d)(e) 413이고 (e)는 **pod 복원 전** 거부. |
 | `state-api.md#시나리오 6` | go | **없음** | 위 `claude-code-workload.md#시나리오 4`와 같은 stream 구현이 근거다. 이 파일이 살 것: active/idle이 기존 pod에서만 stream하고 **상태 승격·restore·`lastAccess` touch가 없음** · snapshot은 invalid-state이고 pod side effect 없음 · `Last-Event-ID`가 query보다 우선 · past-end 커서의 reset · 음수/비정수 커서 400 · keepalive가 output도 activity도 아니지만 뒤이은 read(0)은 일반 Read API 의미를 가짐. 시나리오 4와의 경계: 4는 **claude-code 세션의 라이브 왕복**, 6은 **상태별 계약과 커서 오류 갈래**. |
 <!-- scenario-backlog:end -->
 
-> **저작 순서 제안.** 선행 `없음`이 6건이고 그중 `architecture.md#시나리오 2-1`·`state-api.md#시나리오 5`가
-> 가장 싸다(새 대역 없음, 클러스터 부하 최소). `approval-gated-workload.md#시나리오 3`을 먼저 세우면
-> 시나리오 6의 선행이 함께 풀린다. CNI 2건·상한 훅 1건·모킹 2건은 각자의 선행 소유자가 움직인 뒤에
-> 집는다.
+> **저작 순서 제안.** 지금 바로 집을 수 있는 것은 **선행이 `없음`인 행**이고, 그 목록의 정본은 위 표의
+> `선행` 칸이다 — 그 수를 여기에 다시 적지 않는다(행이 하나 지워질 때마다 낡는 사본이 되고, 게이트는
+> 이 산문을 읽지 않아 얼마나 틀려도 CI가 잡지 못한다. 개정 전 이 문단이 실제로 그렇게 틀려 있었다:
+> 표에 `없음`이 7행인데 6건이라고 적고 있었다). `approval-gated-workload.md#시나리오 3`을 먼저 세우면
+> 시나리오 6의 선행이 함께 풀리므로 남은 `없음` 행 중에서는 그쪽이 순서 이득이 있다. CNI 2건·상한 훅
+> 1건·모킹 2건은 각자의 선행 소유자가 움직인 뒤에 집는다.
+>
+> **2026-09-08 저작 슬라이스 1**: `architecture.md#시나리오 2-1`·`state-api.md#시나리오 5`(가장 싼 둘 —
+> 새 대역 없음, 클러스터 부하 최소)를 저작해 이 표에서 뺐다. 남은 `없음`은
+> `approval-gated-workload.md#시나리오 3`·`claude-code-workload.md#시나리오 3`·`#시나리오 4`·`#시나리오 6`·
+> `state-api.md#시나리오 6`이다.
 
 ## 비-시나리오 파일 등재
 
@@ -476,8 +487,8 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 - 시나리오 총계: 37
 - 예외: 3
 - 구현 대기: 0
-- 저작 대기: 14
-- 시나리오 매칭 파일: 20
+- 저작 대기: 12
+- 시나리오 매칭 파일: 22
 - 공백: 0
 <!-- scenario-summary:end -->
 
@@ -727,6 +738,7 @@ NetworkPolicy를 **집행하지 않아** 차단 갈래에 관측 대상 자체�
 | control-plane **요청 단위 로그**에 토큰 부재 | 〃 | 요청 로거(`withLogging`)가 `Debug`로 적고 핸들러가 기본 `Info`라 **세션 수명 동안 한 줄도 나오지 않는다**(CI 실측 — 이 파일의 첫 실행이 그 대조군에 걸렸다). 소유 파일이 사는 것은 **프로세스 시작부터의 전체 로그**이고, 그 로그가 Secret에서 해소한 값(optional `model`)을 실제로 echo한다는 것을 두 번째 대조군으로 둔다. 요청 단위 로그를 켜는 것은 **제품 결정**(로그 수준 또는 `Info` 요청 로그)이라 이 원장의 산출물(e2e 파일 + 등재 문서) 밖이다 |
 | 동결 시 워크로드·헬퍼 파드 **동반 회수** | `e2e_f4_helper_pod_test.go` | `approval-gated`에 아카이브 전략이 등록돼 있지 않아 `checkpointerFor`가 `ErrCheckpointDisabled`를 내고 공개 API가 503으로 거부한다 — **결함이 아니라 의도된 계약**이며(`internal/service/workload_type_test.go`의 `TestSnapshotIsRefusedForApprovalGated`가 그 계약을 산다) 아카이브 전략 없이 동결하면 복원할 수 없는 체크포인트 뒤로 파드 쌍을 회수하게 된다. 선행은 **AC-F5**이고 소관은 `tbm_session-platform-docs-impl`이다. |
 | 복원 시 **새 쌍** 기동 + 워크로드 파드의 헬퍼 주소 재배선 | 〃 | 〃 (동결이 선행이라 복원 진입 자체가 없다) |
+| 서버 body read의 **30초 제한** | `e2e_state_api_5_wire_validation_test.go` | 시나리오 5 기대 결과의 마지막 문장. 관측하려면 본문을 30초에 걸쳐 **느리게** 흘려보내야 하는데, 그것은 요청 하나를 30초 이상 붙잡고 있는 테스트가 되어 이 스위트의 시간 예산(`go test -timeout=30m`에 파드 프로비저닝이 이미 들어 있다)과 맞지 않는다. 소유 파일이 사는 것은 **크기** 축(8 MiB wire·1 MiB prompt)이고, 시간 축은 여기 남는다. 선행은 「느린 업로드를 흉내 내는 하네스」이며 그 자체는 제품 변경이 아니다 — 다음 슬라이스가 이 스위트에 붙이면 그때 소유 파일이 같은 자리에서 산다 |
 
 **동결·복원 두 행**은 **잊히지 않는다** — 소유 파일의 `RefusedFreezeReclaimsNeitherPod`가 거부 계약 자체를
 단언하므로, 아카이브 전략이 등록되는 순간 그 케이스가 빨개지고 실패 메시지가 「이 케이스를 지우고
