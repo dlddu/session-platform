@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """주석 비중복성 판정 원장 ↔ 실제 주석 상태 대조 체커.
 
-`docs/comment-policy.md`의 판정 이력은 「이 범위는 판정이 끝났다」는 주장이다. 그 주장은
+`docs/comment-policy/ledger.md`의 판정 원장은 「이 범위는 판정이 끝났다」는 주장이다. 그 주장은
 사람이 손으로 적고 아무것도 검사하지 않으므로 **조용히 낡는다** — 판정을 잰 커밋과 머지
 커밋 사이에 다른 PR이 그 경로에 주석을 더하면, 그 증분은 어느 행에도 속하지 않은 채 영원히
 미판정으로 남는다. 자매 레포 `dlddu/homelab-k3s-mcp`에서 실제로 그렇게 됐고, 이 스크립트는
@@ -21,7 +21,7 @@
 * **R3** 행 사이에 같은 파일이 두 번 등재되지 않는다(판정 완료량의 이중 계상 방지).
 * **R4** 합계 마커 == 원장 행들의 주석 줄 수 합(양방향 미러). 범위를 더하거나 빼면 같은 PR에서
   합계도 움직여야 한다.
-* **R5** 원장 문서가 「이미 말하는 곳」을 가리킬 때 **줄 번호 좌표를 쓰지 않는다.** 줄 번호는 다음
+* **R5** 정책 디렉터리의 문서가 「이미 말하는 곳」을 가리킬 때 **줄 번호 좌표를 쓰지 않는다.** 줄 번호는 다음
   판정이 그 파일에서 주석을 지우는 순간 밀려나 조용히 썩는데, R1~R4 중 어느 것도 그것을 재측정하지
   않아 **영원히 초록**이다(실제로 한 슬라이스가 자기 원장의 좌표 5건을 한 번에 낡게 만들었다).
   좌표는 심볼 이름이나 AC 번호로 적는다 — 그쪽은 grep 으로 되짚을 수 있다.
@@ -40,7 +40,12 @@ import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
-POLICY = REPO_ROOT / "docs" / "comment-policy.md"
+# 정책 SSOT 는 파일 하나가 아니라 디렉터리다 — 본문(README)·원장(ledger)·패스 상세(passes/)가
+# 바뀌는 리듬이 달라서다. 게이트가 파싱하는 마커는 `ledger.md` 에만 있고, 문서 본문 전체를 보는
+# 규칙(R5)은 디렉터리 안의 모든 마크다운을 스캔한다.
+POLICY_DIR = REPO_ROOT / "docs" / "comment-policy"
+POLICY_README = POLICY_DIR / "README.md"
+LEDGER = POLICY_DIR / "ledger.md"
 
 # 아래 넷은 모델 tbm_session-platform-comment-redundancy 의 as-is 버전 스크립트와 글자 그대로
 # 같은 정의다. 하나라도 갈리면 이 게이트가 강제하는 지문이 모델이 관측하는 지문과 다른 것을
@@ -119,7 +124,7 @@ def marked_block(text: str, open_marker: str, close_marker: str) -> str:
     """마커 사이 본문. 정규식 끝 앵커(`$`)로 뜯지 않는다 — 멀티라인에서 줄 끝에도 붙어
     표가 조용히 0행으로 파싱되고, 0행은 '위반 0' 으로 보여 초록으로 새어 나간다."""
     if open_marker not in text or close_marker not in text:
-        raise SystemExit(f"{POLICY.name}: 마커({open_marker} … )를 찾지 못했다.")
+        raise SystemExit(f"{LEDGER.name}: 마커({open_marker} … )를 찾지 못했다.")
     return text.split(open_marker, 1)[1].split(close_marker, 1)[0]
 
 
@@ -137,10 +142,10 @@ def parse_ledger(text: str) -> list[dict]:
             if nxt and all(set(c) <= set("-: ") and c for c in nxt):
                 continue  # 구분선 바로 앞 = 헤더
         if len(cells) != 5:
-            raise SystemExit(f"{POLICY.name}: 판정 이력 행의 열 수가 5가 아니다 -> {line}")
+            raise SystemExit(f"{LEDGER.name}: 판정 이력 행의 열 수가 5가 아니다 -> {line}")
         count = cells[2].strip("`")
         if not count.isdigit():
-            raise SystemExit(f"{POLICY.name}: 주석 줄 수가 정수가 아니다 ({count!r}).")
+            raise SystemExit(f"{LEDGER.name}: 주석 줄 수가 정수가 아니다 ({count!r}).")
         rows.append(
             {
                 # 같은 날 두 범위를 판정하는 일이 흔하므로 날짜만으로는 행을 못 가리킨다.
@@ -152,14 +157,14 @@ def parse_ledger(text: str) -> list[dict]:
             }
         )
     if not rows:
-        raise SystemExit(f"{POLICY.name}: 판정 이력에서 행을 하나도 읽지 못했다(파싱 실패).")
+        raise SystemExit(f"{LEDGER.name}: 판정 이력에서 행을 하나도 읽지 못했다(파싱 실패).")
     return rows
 
 
 def parse_total(text: str) -> int:
     raw = marked_block(text, TOTAL_OPEN, TOTAL_CLOSE).strip()
     if not raw.isdigit():
-        raise SystemExit(f"{POLICY.name}: 판정 합계가 정수가 아니다 ({raw!r}).")
+        raise SystemExit(f"{LEDGER.name}: 판정 합계가 정수가 아니다 ({raw!r}).")
     return int(raw)
 
 
@@ -181,11 +186,14 @@ def census(hits: list[str]) -> str:
 
 
 def main() -> int:
-    if not POLICY.exists():
-        print(f"[R1] 정책 SSOT 가 없다: {POLICY.relative_to(REPO_ROOT)}", file=sys.stderr)
-        return 1
+    for required in (POLICY_DIR, POLICY_README, LEDGER):
+        if not required.exists():
+            what = "정책 디렉터리" if required is POLICY_DIR else (
+                "정책 본문" if required is POLICY_README else "판정 원장")
+            print(f"[R1] {what} 가 없다: {required.relative_to(REPO_ROOT)}", file=sys.stderr)
+            return 1
 
-    text = POLICY.read_text(encoding="utf-8")
+    text = LEDGER.read_text(encoding="utf-8")
     rows = parse_ledger(text)
     total = parse_total(text)
 
@@ -237,10 +245,10 @@ def main() -> int:
         for hit in LINE_COORDINATE_RE.finditer(line):
             fail(
                 "R5",
-                f"{POLICY.name} {lineno} 번째 줄에 줄 번호 좌표 `{hit.group(0)}` 이 있다."
-                " 줄 번호는 다음 판정이 그 파일을 건드리는 순간 밀려나고 어떤 규칙도 그것을"
-                " 재측정하지 않는다 — 심볼 이름이나 AC 번호로 적을 것.",
-            )
+                f"{LEDGER.name} {lineno} 번째 줄에 줄 번호 좌표 `{hit.group(0)}` 이 있다."
+                    " 줄 번호는 다음 판정이 그 파일을 건드리는 순간 밀려나고 어떤 규칙도 그것을"
+                    " 재측정하지 않는다 — 심볼 이름이나 AC 번호로 적을 것.",
+                )
 
     # R4 — 합계 미러(양방향)
     ledger_sum = sum(row["lines"] for row in rows)

@@ -41,7 +41,7 @@ jobs:
   comment-policy:
     name: comment policy ledger (docs <-> comments)
     runs-on: ubuntu-latest
-    # Enforces docs/comment-policy.md's judgement ledger against the comments it
+    # Enforces docs/comment-policy/ledger.md's judgement ledger against the comments it
     # claims to have judged: every registered range exists in the policy's scan
     # scope, its line count and fingerprint still match a re-measurement using
     # the same extraction the drift model uses, no file is registered twice, and
