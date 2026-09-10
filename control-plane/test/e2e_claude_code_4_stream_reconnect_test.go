@@ -43,11 +43,18 @@ const (
 	// len("alpha:") + 3 bytes per rune.
 	cc4AlphaBytes = 6 + 3*cc4AlphaRunes
 
+	// The small shapes. Their byte counts matter as much as the big one's: a
+	// threshold that is merely *reachable* would let a wait return while the
+	// reply is still arriving, and then every cursor below races the tail.
+	cc4SmallRunes = 40
+
 	cc4BetaPrompt = "e2e-reply:beta:40:4"
 	cc4BetaPrefix = "beta:"
+	cc4BetaBytes  = 5 + 3*cc4SmallRunes
 
 	cc4GammaPrompt = "e2e-reply:gamma:40:4"
 	cc4GammaPrefix = "gamma:"
+	cc4GammaBytes  = 6 + 3*cc4SmallRunes
 
 	// The filler rune the stand-in repeats (U+AC00), three bytes wide.
 	cc4Filler = "가"
@@ -76,15 +83,32 @@ func cc4AlphaReply() []byte {
 	return []byte(cc4AlphaPrefix + strings.Repeat(cc4Filler, cc4AlphaRunes))
 }
 
-// cc4Settled writes one prompt and waits for its whole reply to land, returning
-// the full buffer. It waits on a byte count rather than on the marker alone
-// because the point of the big reply is its length.
+// cc4Settled writes one prompt and waits for its whole reply to land *and stop
+// growing*, returning the final buffer.
+//
+// Reaching the byte count is not enough on its own. The reply arrives as a
+// dozen deltas and the message-terminating newline lands after the last of
+// them, so a wait that stopped at the threshold could hand back a buffer that
+// is still moving — and every assertion here compares a fixed buffer against a
+// live stream, so a moving one turns a contract into a race.
 func cc4Settled(t *testing.T, id, prompt string, atLeast int) readResp {
 	t.Helper()
 	writePromptOK(t, id, prompt)
-	return eventuallyClaudeOutput(t, id, 5*time.Minute, func(p string) bool {
+	r := eventuallyClaudeOutput(t, id, 5*time.Minute, func(p string) bool {
 		return len(p) >= atLeast
 	})
+	deadline := time.Now().Add(time.Minute)
+	for {
+		time.Sleep(2 * time.Second)
+		again := readShellAt(t, id, 0)
+		if again.NextOffset == r.NextOffset {
+			return again
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("session %s output never stopped growing (%d -> %d)", id, r.NextOffset, again.NextOffset)
+		}
+		r = again
+	}
 }
 
 // The whole scenario in one place: a reply large enough to be chunked, cut at a
@@ -144,7 +168,11 @@ func TestClaudeStream_ChunkCutsBackOffToACodePointBoundary(t *testing.T) {
 	if !utf8.Valid(p2) {
 		t.Fatal("second chunk is not valid UTF-8")
 	}
-	if got := append(append([]byte(nil), p1...), p2...); !bytes.Equal(got, buf[:len(got)]) {
+	got := append(append([]byte(nil), p1...), p2...)
+	if len(got) > len(buf) {
+		t.Fatalf("the stream delivered %d bytes but the settled buffer holds %d", len(got), len(buf))
+	}
+	if !bytes.Equal(got, buf[:len(got)]) {
 		t.Fatal("the two chunks concatenated do not reproduce the buffer they came from")
 	}
 	t.Logf("alpha reply %d bytes delivered as [0,%d)+[%d,%d)", full.NextOffset,
@@ -209,7 +237,7 @@ func mustPayload(t *testing.T, f s6Frame) []byte {
 // is not access.
 func TestClaudeStream_PastEndResetsWithoutTouchingLastAccess(t *testing.T) {
 	s := claudeSession(t)
-	full := cc4Settled(t, s.ID, cc4GammaPrompt, len(cc4GammaPrefix))
+	full := cc4Settled(t, s.ID, cc4GammaPrompt, cc4GammaBytes)
 
 	before := getSession(t, s.ID)
 	st := s6Open(t, s.ID, "?offset="+strconv.FormatInt(full.NextOffset+1000, 10), "", time.Minute)
@@ -236,8 +264,8 @@ func TestClaudeStream_PastEndResetsWithoutTouchingLastAccess(t *testing.T) {
 // hands back must then be empty.
 func TestClaudeStream_ReadZeroReturnsFullHistoryAndLastCursorIsEmpty(t *testing.T) {
 	s := claudeSession(t)
-	cc4Settled(t, s.ID, cc4GammaPrompt, len(cc4GammaPrefix))
-	full := cc4Settled(t, s.ID, cc4BetaPrompt, len(cc4GammaPrefix)+len(cc4BetaPrefix))
+	cc4Settled(t, s.ID, cc4GammaPrompt, cc4GammaBytes)
+	full := cc4Settled(t, s.ID, cc4BetaPrompt, cc4GammaBytes+cc4BetaBytes)
 
 	gamma := strings.Index(full.Payload, cc4GammaPrefix)
 	beta := strings.Index(full.Payload, cc4BetaPrefix)
