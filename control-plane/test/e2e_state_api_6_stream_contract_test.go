@@ -2,27 +2,10 @@
 
 // 검증 시나리오: state-api.md#시나리오 6
 //
-// docs/prd/state-api.md AC-E3 (passive live output stream), asserted on the
-// deployed SUT.
-//
-// 이 파일이 사는 것은 **passive stream 의 상태 계약과 커서 계약**이다. 갈래별로 무엇을
-// 단언하는지는 docs/test/e2e.md 의 매핑 행에 있고, 여기 적어 둘 것은 그 행이 담지 못하는
-// **경계**다.
-//
-// claude-code-workload.md#시나리오 4 와의 경계: 그쪽은 **claude-code 세션의 라이브 왕복**
-// (UTF-8 경계로 갈린 두 chunk, 중단 후 재연결의 무손실·무중복, raw stream-json 과의 중복
-// 부재)이고, 여기는 **상태별 계약과 커서 오류 갈래**다. 커서 계약 중 둘(`Last-Event-ID`
-// 우선, past-end reset)을 두 시나리오가 같은 문장으로 기술하지만 실어 나르는 바이트가
-// 다르다 — 여기서는 shell 세션의 PTY 바이트를 쓰고, 그래서 UTF-8 경계는 여기서 사지
-// 않는다(shell PTY 바이트는 임의라 경계 자체가 계약이 아니다).
-//
-// "SSE 는 activity 가 아니다"의 반대편, 즉 read 가 `lastAccess` 를 갱신한다는 것은
-// state-api.md#시나리오 2 의 파일이 이미 사므로 다시 사지 않는다 — 여기서는 keepalive
-// 뒤의 read(0) 이 그 일반 의미를 그대로 갖는다는 대조로만 쓴다.
-//
-// 범위 밖: 기대 결과의 `idle` 갈래("active/idle 은 기존 pod 에서만 stream 한다"의 idle
-// 절반)는 이 SUT 에 idle 진입 트리거가 없어 단언하지 않는다 — docs/test/e2e.md
-// §「남은 미검증 분기」에 등재했다(read·write·switch 의 idle 갈래와 같은 선행).
+// 무엇을 단언하고 무엇이 범위 밖인지는 docs/test/e2e.md 의 매핑 행이 갖는다. 그 행이
+// 담지 않는 것 하나만 적어 둔다 — 커서 계약 중 둘(`Last-Event-ID` 우선 · past-end
+// reset)은 claude-code-workload.md#시나리오 4 의 저작 대기 행도 자기 몫으로 열거한다.
+// 두 행을 나란히 놓아야 보이는 그 겹침이 중복이 아닌 이유는 실어 나르는 바이트가 달라서다.
 package e2e_test
 
 import (
@@ -40,18 +23,12 @@ import (
 )
 
 const (
-	// The wire strings the API answers with (control-plane/internal/session
-	// ErrInvalidInput / ErrInvalidState). Written out rather than imported so
-	// that rewording either fails this file instead of travelling into it.
+	// control-plane/internal/session ErrInvalidInput / ErrInvalidState, written
+	// out rather than imported for the reason e2e_f1 gives.
 	s6InvalidInput = "invalid input"
 	s6InvalidState = "session in invalid state for operation"
-	// The agent's SSE heartbeat period (data-plane/cmd/agent/output_stream.go
-	// outputStreamHeartbeat), copied for the same reason.
-	s6Heartbeat = 15 * time.Second
-	// Markers are written as arithmetic so the PTY's echo of the command line
-	// does not itself contain the token — a `Contains` hit is then output, not
-	// the echoed request. The "beta must not be replayed" assertion below
-	// depends on that distinction.
+	// data-plane/cmd/agent/output_stream.go outputStreamHeartbeat, same.
+	s6Heartbeat  = 15 * time.Second
 	s6AlphaCmd   = "echo s6-alpha-$((20+3))\n"
 	s6AlphaToken = "s6-alpha-23"
 	s6BetaCmd    = "echo s6-beta-$((30+1))\n"
@@ -62,9 +39,6 @@ const (
 	s6DeltaToken = "s6-delta-53"
 )
 
-// s6Frame is one SSE frame. Comment frames (`: keepalive`) are frames here
-// rather than noise to skip, because whether one arrived — and whether an
-// output event did not — is itself part of what this scenario buys.
 type s6Frame struct {
 	Comment string
 	ID      string
@@ -82,9 +56,9 @@ type s6ResetData struct {
 	NextOffset int64 `json:"nextOffset"`
 }
 
-// s6Stream is an open passive feed. The shared `client` is deliberately not
-// used: its 90s timeout would cut a live stream at a fixed point regardless of
-// what the test is waiting for, so each stream carries its own budget instead.
+// The shared `client` is deliberately not used: its fixed 90s timeout would cut
+// a live stream at a point unrelated to what the test is waiting for, so each
+// stream carries its own budget instead.
 type s6Stream struct {
 	resp   *http.Response
 	cancel context.CancelFunc
@@ -139,7 +113,6 @@ func (s *s6Stream) Close() {
 	s.cancel()
 }
 
-// next reads the next frame. A frame ends at a blank line.
 func (s *s6Stream) next(t *testing.T) s6Frame {
 	t.Helper()
 	var f s6Frame
@@ -173,8 +146,6 @@ func (s *s6Stream) next(t *testing.T) s6Frame {
 	return f
 }
 
-// nextEvent returns the next non-comment frame and how many comment frames it
-// skipped on the way.
 func (s *s6Stream) nextEvent(t *testing.T) (s6Frame, int) {
 	t.Helper()
 	comments := 0
@@ -188,9 +159,6 @@ func (s *s6Stream) nextEvent(t *testing.T) (s6Frame, int) {
 	}
 }
 
-// s6Output decodes an output event and checks the three things that make its
-// cursor usable: the SSE `id` is the same cursor the payload carries, and the
-// decoded byte count is exactly how far the cursor moved.
 func s6Output(t *testing.T, f s6Frame) (s6OutputData, []byte) {
 	t.Helper()
 	if f.Event != "output" {
@@ -224,11 +192,7 @@ func s6ErrorField(t *testing.T, body []byte) string {
 	return e.Error
 }
 
-// s6Settled polls until two consecutive full reads agree, so that "the stream
-// sent nothing more" is measured against a quiet shell rather than one still
-// flushing. Kept local rather than in the shared harness for the same reason
-// the sibling wire-validation file keeps its own: a scenario file should read
-// on its own terms, and the harness carries only what the whole suite needs.
+// Local rather than shared for the reason a5Settled gives, and kept in step with it.
 func s6Settled(t *testing.T, id string) readResp {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
@@ -246,8 +210,6 @@ func s6Settled(t *testing.T, id string) readResp {
 	}
 }
 
-// s6ActiveWithOutput brings a fresh session to "active, holding a pod, with a
-// settled marker in its output" — the precondition every case below shares.
 func s6ActiveWithOutput(t *testing.T, command, token string) (session, readResp) {
 	t.Helper()
 	s := createSession(t, uniqueName(t))
@@ -260,8 +222,6 @@ func s6ActiveWithOutput(t *testing.T, command, token string) (session, readResp)
 	return s, settled
 }
 
-// The active branch: the stream serves the retained pod's existing byte record
-// and leaves the session exactly as it found it.
 func TestStreamContract_ActiveStreamsPassivelyAndCursorsAreContiguous(t *testing.T) {
 	s, settled := s6ActiveWithOutput(t, s6AlphaCmd, s6AlphaToken)
 
@@ -271,8 +231,8 @@ func TestStreamContract_ActiveStreamsPassivelyAndCursorsAreContiguous(t *testing
 	}
 
 	stream := s6Open(t, s.ID, "?offset=0", "", 60*time.Second)
-	// The agent opens with a comment before any event; reading it is also what
-	// proves the frames below were parsed as SSE and not as a JSON body.
+	// Consuming the agent's opening comment is also what proves the frames below
+	// were parsed as SSE framing and not as one JSON body.
 	if opening := stream.next(t); opening.Comment == "" {
 		t.Fatalf("first frame = %+v, want the opening comment", opening)
 	}
@@ -301,11 +261,11 @@ func TestStreamContract_ActiveStreamsPassivelyAndCursorsAreContiguous(t *testing
 		t.Fatalf("lastAccess moved %q -> %q across a stream; SSE is not activity (AC-B1)", before.LastAccess, after.LastAccess)
 	}
 
-	// `read` hands its bytes back inside a JSON string, so a non-UTF-8 PTY byte
-	// would return as U+FFFD and could not be compared against the stream's raw
-	// bytes. A shell running `echo` emits ASCII, so the comparison is exact here;
-	// the guard keeps a future non-UTF-8 byte from turning a real contract into a
-	// spurious failure rather than silently weakening the assertion.
+	// The two surfaces carry the same bytes in different encodings: `read` hands
+	// them back inside a JSON string (agent main.go), so a non-UTF-8 PTY byte
+	// returns as U+FFFD and cannot be compared against the stream's raw bytes.
+	// `echo` emits ASCII, so the comparison is exact here; the guard logs the
+	// condition instead of quietly weakening the assertion.
 	if !utf8.Valid(acc) {
 		t.Logf("streamed bytes are not valid UTF-8; skipping the byte-for-byte comparison with read, which normalises them")
 	} else if !strings.HasPrefix(string(acc), settled.Payload) {
@@ -316,9 +276,8 @@ func TestStreamContract_ActiveStreamsPassivelyAndCursorsAreContiguous(t *testing
 	}
 }
 
-// A native EventSource reconnect resends the last accepted id as a header while
-// the URL still carries the original query cursor; the header has to win or the
-// client re-reads bytes it already has.
+// Both cursors arrive at once because a native EventSource retries the original
+// URL — query string and all — with the last accepted id added as a header.
 func TestStreamContract_LastEventIDBeatsQueryCursor(t *testing.T) {
 	s, firstHalf := s6ActiveWithOutput(t, s6BetaCmd, s6BetaToken)
 	mid := firstHalf.NextOffset
@@ -355,9 +314,6 @@ func TestStreamContract_LastEventIDBeatsQueryCursor(t *testing.T) {
 	}
 }
 
-// The cursor error branches: a cursor past the end is answered with an explicit
-// reset rather than a silent wait, and a cursor that is not a non-negative
-// integer is rejected before any stream is opened.
 func TestStreamContract_PastEndResetsAndInvalidCursorsAreRejected(t *testing.T) {
 	s, settled := s6ActiveWithOutput(t, s6DeltaCmd, s6DeltaToken)
 
@@ -385,8 +341,6 @@ func TestStreamContract_PastEndResetsAndInvalidCursorsAreRejected(t *testing.T) 
 	}
 	stream.Close()
 
-	// The 200 above is the control that keeps these 400s from being vacuous:
-	// the same route on the same session answers a well-formed cursor.
 	for _, cursor := range []string{"-1", "1.5", "abc", "9223372036854775808"} {
 		resp, body := do(t, http.MethodGet, "/api/v1/sessions/"+s.ID+"/stream?offset="+cursor, nil)
 		if resp.StatusCode != http.StatusBadRequest {
@@ -398,8 +352,6 @@ func TestStreamContract_PastEndResetsAndInvalidCursorsAreRejected(t *testing.T) 
 	}
 }
 
-// The snapshot branch: unlike read/write/switch, the stream does not restore —
-// it refuses, and the frozen session keeps no pod.
 func TestStreamContract_SnapshotIsInvalidStateAndRestoresNothing(t *testing.T) {
 	s, _ := s6ActiveWithOutput(t, s6AlphaCmd, s6AlphaToken)
 
@@ -431,14 +383,10 @@ func TestStreamContract_SnapshotIsInvalidStateAndRestoresNothing(t *testing.T) {
 	}
 }
 
-// The keepalive branch: a heartbeat is neither output nor activity, but it does
-// not change what the client's next read means.
 func TestStreamContract_KeepaliveIsNeitherOutputNorActivity(t *testing.T) {
 	s, settled := s6ActiveWithOutput(t, s6DeltaCmd, s6DeltaToken)
 	before := getSession(t, s.ID)
 
-	// Opening at the end of the record leaves the agent with nothing to send, so
-	// the only frame it can write next is the heartbeat.
 	stream := s6Open(t, s.ID, "?offset="+strconv.FormatInt(settled.NextOffset, 10), "", 3*s6Heartbeat)
 	if opening := stream.next(t); opening.Comment == "" {
 		t.Fatalf("first frame = %+v, want the opening comment", opening)
