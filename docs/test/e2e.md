@@ -381,6 +381,7 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 | `state-api.md#시나리오 3` | `control-plane/test/e2e_c3_write_branches_test.go` | go | AC-C3 | write 분기: `active` / `snapshot->restore->write`(거부 아님), 호출 후 항상 active |
 | `state-api.md#시나리오 4` | `control-plane/test/e2e_c4_session_switch_test.go` | go | AC-C4 | active 대상 switch = no-op(재기동 없음), 다건 세션을 오가도 각자 상태·pod 보존 |
 | `state-api.md#시나리오 5` | `control-plane/test/e2e_state_api_5_wire_validation_test.go` | go | AC-C2·C3·C4 (wire validation) | **요청 본문이 세션에 닿기 전에 무엇이 걸러지는가**를 배포 SUT에서 — (a) 본문 생략 3종이 기본값으로 처리됨(read=`offset 0`이라 **호출 전에 만든 출력이 돌아옴** · write=빈 payload라 대기 중인 미제출 줄이 제출되지 않음 · switch=필드 없음이라 AC-C4 no-op으로 pod·상태 불변) / (b)(c) top-level·필드·배열 속 `null` · unknown field · malformed · trailing input · 비-객체 top level이 **read·write·switch 셋 모두**에서 400 `invalid input`이고, 그 왕복 뒤 쉘 출력·`workloadType`·`model`·상태가 전부 불변(같은 route가 **선언된 필드**에는 200을 준다는 대조군과, switch가 read의 필드마저 undeclared로 거절한다는 음성 대조를 함께 둔다) / (d) wire 상한이 **정확히 8 MiB** — 같은 모양의 본문이 `8388608`바이트면 400(선언 안 된 필드에서 떨어진다), **한 바이트 더한** `8388609`바이트면 413 `request body exceeds size limit` / (e) snapshot `claude-code` 세션의 decoded 1 MiB 초과 prompt가 413 `workload prompt exceeds size limit`이고 세션이 `snapshot`·pod 없음 그대로이며 **살아 있는 파드가 하나도 생기지 않음**(= 거부가 복원보다 앞선다. 같은 세션의 작은 프롬프트가 `active`로 200을 받는다는 대조군이 그 413을 크기 문제로 못박는다). immutable metadata를 read/write/switch로 바꾸려는 시도가 400이라는 것 자체는 `approval-gated-workload.md#시나리오 1`의 파일이 타입 축으로 이미 사므로 여기서 다시 사지 않는다 — 이 파일이 사는 것은 그 **기전**(타입별 특수 검사가 아니라 세 route 공통 `DisallowUnknownFields`라서 기본 타입 세션에서도 unknown field와 **같은 표에서** 떨어진다)과, f1이 사지 않는 **agent side effect 부재**다. 「snapshot 세션에 write하면 복원된다」는 `state-api.md#시나리오 3`이 소유하므로 인용만 한다 — (e)가 사는 것은 그 복원이 **일어나지 않았다**는 쪽이다. **서버 body read 30초 제한은 이 파일에 없다** — 아래 §「남은 미검증 분기」에 등재했다 |
+| `state-api.md#시나리오 6` | `control-plane/test/e2e_state_api_6_stream_contract_test.go` | go | AC-E3 (passive stream) | **passive live output stream 의 상태 계약과 커서 계약**을 배포 SUT 에서 — active 세션이 **기존 pod 에서만** stream 하고 왕복 전후로 상태·pod·`lastAccess` 가 **셋 다 불변**(SSE 는 activity 가 아니다) / output 이벤트가 `id` = `data.nextOffset` 이고 `{offset,payloadBase64,nextOffset}` 이며 decoded byte 길이가 커서 이동폭과 정확히 같고, offset 0 부터 이어 붙인 바이트가 같은 시점 `read(0)` 의 payload 를 **바이트로 재현**함(두 표면이 같은 append-only 기록을 본다) / `Last-Event-ID` 가 query `offset` 을 **이김** — `?offset=0` 과 함께 보내도 재개 커서 앞의 마커가 **재전송되지 않고** 뒤의 마커만 온다(마커를 `$((…))` 산술로 써서 PTY 의 명령행 에코가 토큰을 담지 않게 만든 뒤 판정한다) / 현재 길이를 넘는 커서는 조용한 대기가 아니라 **`reset`** 이고 그 `id` = `nextOffset` 이 요청한 stale 커서보다 뒤·실재 바이트보다 앞 / `-1`·`1.5`·`abc`·int64 overflow 는 **400 `invalid input`**(같은 세션·같은 route 가 정상 커서에 200 을 주는 대조군을 같은 케이스 안에 둔다) / snapshot 세션은 **422 `session in invalid state for operation`** 이고 거부 뒤에도 상태가 `snapshot`·pod 가 빈 문자열 그대로임(read/write/switch 와 달리 **복원하지 않는다**) / keepalive 는 output 도 activity 도 아니지만(하트비트 프레임 뒤에도 셋 다 불변) **뒤이은 `read(0)` 은 일반 Read API 의미**를 가져 `lastAccess` 를 갱신함. `claude-code-workload.md#시나리오 4` 와의 경계: 4는 **claude-code 세션의 라이브 왕복**(UTF-8 경계로 갈린 두 chunk · 중단 후 재연결의 무손실·무중복 · raw stream-json 과의 중복 부재)이고, 6은 **상태별 계약과 커서 오류 갈래**다 — 여기서는 shell PTY 바이트를 실어 나르므로 UTF-8 경계를 사지 않는다(임의 바이트라 경계 자체가 계약이 아니다). read 가 `lastAccess` 를 갱신한다는 것은 `state-api.md#시나리오 2` 의 파일이 이미 사므로 인용만 한다 — 여기서 쓰는 것은 keepalive 뒤의 대조뿐이다. **`idle` 갈래는 이 파일에 없다** — 이 SUT 에 idle 진입 트리거가 없어 아래 §「남은 미검증 분기」에 등재했다 |
 <!-- scenario-mapping:end -->
 
 ## 시나리오 예외 목록
@@ -442,7 +443,6 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 | `claude-code-workload.md#시나리오 8` | go | **상한 주입 훅.** `claudeConfig`에 `RunOutputLimit`·`ScrollbackLimit` 필드는 있는데 `data-plane/cmd/agent/main.go`가 그 둘을 env로 읽지 않아 배포 pod는 항상 16 MiB/256 MiB다 — e2e가 그만큼을 만들어 낼 수 없다. `control-plane/test/e2e_e2_prompt_invocation_test.go` 헤더가 같은 벽을 이미 적는다(「the stand-in cannot be made to emit that much」). 축소값 env 배선은 사용자 가시 동작을 바꾸지 않는 테스트 훅 — data-plane 소관. | 상한 로직 자체는 실재한다 — `data-plane/cmd/agent/claude.go`의 invocation/누적 두 마커, `claude_stream.go`의 truncation·session-full 전이, `control-plane/internal/api/api.go`의 413/507 매핑. (a) 1 MiB 초과 프롬프트 413은 **선행 없이도** 지금 관측 가능하고 이미 시나리오 2의 파일이 산다 — 이 파일은 (b)~(e), 즉 truncation 마커의 live append · 기존 bytes 불변 · cumulative terminal marker · 신규 write 507 · checkpoint/restore 뒤 buffer·마커·`nextOffset`·resume state 동일을 산다. |
 | `claude-code-workload.md#시나리오 9` | playwright | **모킹 허용목록 등재.** SPA의 오류 복구는 실 스트림이 원리적으로 내지 않는 사건이라 route 가로채기가 필요하다. 그 방식은 지금 여정 spec `web/e2e/journeys/j6-stream-recovery.spec.ts`에만 있고, 최상위 매칭 단위로 올리려면 e2e 충실도 허용목록(`STREAM-RESET-REPLAY` 계열) 등재가 선행이다 — 「e2e 충실도 허용목록」 절 소관. | 서버 쪽 상태 계약은 실재한다(`control-plane/internal/api/api.go`의 stream 핸들러, snapshot의 invalid-state 거부). 이 파일이 살 것: EventSource 즉시 close · GET session 후 **active/idle만** 마지막 커서로 backoff 재연결 · snapshot은 read fallback 없이 Restore 화면. `state-api.md#시나리오 6`과의 경계: 6은 **API 커서·상태 계약**(go), 9는 **브라우저 복구 동작**(playwright). |
 | `lifecycle.md#시나리오 4` | playwright | 시나리오 9와 **같은 모킹 허용목록 선행**(같은 가로채기를 쓴다). 동결 자체는 `POST /snapshot`으로 만들 수 있어 60분 대기는 필요 없다. | SPA의 단절 처리 경로는 실재한다(`web/src`의 EventSource 핸들링, `j6-stream-recovery.spec.ts`가 여정으로 이미 훑는다). 이 파일이 배타적으로 살 것: 단절 뒤 **자동 stream/read 재시도가 없다**는 음성 단언과 「사용자가 명시적으로 복원하기 전에는 새 pod가 생기지 않는다」(파드 수가 그라운드-트루스). 시나리오 9와의 경계: 9는 상태별 재연결 정책 전반, 4는 **자동 복원 금지** 한 조항. 둘을 한 파일에 담으면 규칙 1의 중복이 된다. |
-| `state-api.md#시나리오 6` | go | **없음** | 위 `claude-code-workload.md#시나리오 4`와 같은 stream 구현이 근거다. 이 파일이 살 것: active/idle이 기존 pod에서만 stream하고 **상태 승격·restore·`lastAccess` touch가 없음** · snapshot은 invalid-state이고 pod side effect 없음 · `Last-Event-ID`가 query보다 우선 · past-end 커서의 reset · 음수/비정수 커서 400 · keepalive가 output도 activity도 아니지만 뒤이은 read(0)은 일반 Read API 의미를 가짐. 시나리오 4와의 경계: 4는 **claude-code 세션의 라이브 왕복**, 6은 **상태별 계약과 커서 오류 갈래**. |
 <!-- scenario-backlog:end -->
 
 > **저작 순서 제안.** 지금 바로 집을 수 있는 것은 **선행이 `없음`인 행**이고, 그 목록의 정본은 위 표의
@@ -453,9 +453,13 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 > 1건·모킹 2건은 각자의 선행 소유자가 움직인 뒤에 집는다.
 >
 > **2026-09-08 저작 슬라이스 1**: `architecture.md#시나리오 2-1`·`state-api.md#시나리오 5`(가장 싼 둘 —
-> 새 대역 없음, 클러스터 부하 최소)를 저작해 이 표에서 뺐다. 남은 `없음`은
-> `approval-gated-workload.md#시나리오 3`·`claude-code-workload.md#시나리오 3`·`#시나리오 4`·`#시나리오 6`·
-> `state-api.md#시나리오 6`이다.
+> 새 대역 없음, 클러스터 부하 최소)를 저작해 이 표에서 뺐다.
+>
+> **2026-09-09 저작 슬라이스 2**: `state-api.md#시나리오 6`을 저작해 이 표에서 뺐다 — 새 대역도 새
+> 하네스도 없이 배포 SUT의 wire 계약만으로 관측된다. 이 슬라이스는 **저작만 한다**: 어떤 행의 `선행`
+> 칸도 건드리지 않았으므로 남은 `없음`의 감소는 전부 저작 때문이고, 재분류는 한 건도 섞여 있지 않다.
+> 슬라이스 1 문단이 남겨 두었던 「남은 `없음`은 …이다」 이름 목록은 이 저작으로 곧바로 낡으므로
+> 걷어냈다 — 위 문단이 스스로 금지한 사본이다. 정본은 표의 `선행` 칸이니 행별로 읽을 것.
 
 ## 비-시나리오 파일 등재
 
@@ -487,8 +491,8 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 - 시나리오 총계: 37
 - 예외: 3
 - 구현 대기: 0
-- 저작 대기: 12
-- 시나리오 매칭 파일: 22
+- 저작 대기: 11
+- 시나리오 매칭 파일: 23
 - 공백: 0
 <!-- scenario-summary:end -->
 
@@ -731,6 +735,7 @@ NetworkPolicy를 **집행하지 않아** 차단 갈래에 관측 대상 자체�
 | read `idle->active->read` | `e2e_c2_read_branches_test.go` | idle 진입 트리거 없음(AC-B1 정책 미확정) |
 | write `idle->active->write` | `e2e_c3_write_branches_test.go` | 〃 |
 | switch의 idle 대상 승격 | `e2e_c4_session_switch_test.go` | 〃 |
+| stream의 `idle` 갈래(「active/idle은 기존 pod에서만 stream한다」의 idle 절반) | `e2e_state_api_6_stream_contract_test.go` | 〃 — 위 세 행과 같은 선행이다. active 절반은 소유 파일이 사고, 「상태 승격이 없다」도 active 세션에서 산다(왕복 전후로 상태·pod·`lastAccess`가 불변). idle에서만 갈리는 것은 「승격시키지 않는다」의 대상이 idle이라는 것 하나이고, 그 진입 트리거가 없다 |
 | 워크로드 파드 → 게이트웨이 주소·공급자 origin **직접 연결 차단** | `e2e_f6_credential_split_test.go` | SUT의 kindnet이 NetworkPolicy를 집행하지 않아 **거부가 일어나지 않는다** — 여기서 성공하는 연결은 제품 결함이 아니고 실패해도 경계를 산 것이 아니므로 단언이 vacuous하다. 선행은 정책 집행 CNI(`deploy/kind-config.yaml`의 `disableDefaultCNI` + CNI 설치)이고 소관은 **AC-F2**다. 배치 쪽(자격 증명이 어느 컨테이너에 있는가)은 소유 파일이 전부 산다 |
 | 다른 세션의 워크로드 파드 → 이 헬퍼 파드 **ingress 차단** | 〃 | 〃 (같은 선행) |
 | 승인 컨텍스트에 자격 증명·게이트웨이 키가 실리지 않음 | 〃 | 승인 왕복 자체가 아직 없다 — AC-F3이 선행이고, 그 슬라이스는 대역의 `FETCH-ORIGIN` 등재를 기다린다(소관 `tbm_session-platform-e2e-mock-policy`). 토큰이 **조회 응답·목록 응답·`read` 응답·control-plane 로그**에 나타나지 않는 것은 소유 파일이 이미 산다 |
