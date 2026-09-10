@@ -3,24 +3,8 @@
 // 검증 시나리오: state-api.md#시나리오 5
 //
 // docs/prd/state-api.md AC-C2·AC-C3·AC-C4 의 wire validation 절, asserted on the
-// deployed SUT.
-//
-// 이 파일이 사는 것은 **요청 본문이 세션에 닿기 전에 무엇이 걸러지는가**다. 갈래별로 무엇을
-// 단언하는지는 docs/test/e2e.md 의 매핑 행에 있고, 여기 적어 둘 것은 그 행이 담지 못하는
-// **경계**다.
-//
-// immutable metadata 를 read/write/switch 로 바꾸려는 시도가 400 이라는 것은
-// approval-gated 타입 축의 일부로 e2e_f1_workload_type_test.go 가 이미 산다. 여기서
-// 다시 사는 것은 그 **기전**이다 — 그 400 은 타입별 특수 검사가 아니라 세 route 가
-// 공통으로 거는 `DisallowUnknownFields` 이고(control-plane/internal/api 의
-// decodeRequestBody), 그래서 기본 타입 세션에서도 unknown field 와 **같은 표에서** 같은
-// 이유로 떨어진다. 그리고 f1 이 사지 않는 절반, **agent side effect 부재**를 여기서 산다.
-// 마찬가지로 "snapshot 세션에 write 하면 복원된다"는 state-api.md#시나리오 3 의 성질이라
-// (e2e_c3_write_branches_test.go) 다시 사지 않고 인용만 한다 — (e) 가 사는 것은 그 복원이
-// **일어나지 않았다**는 쪽이다.
-//
-// 범위 밖: "서버 body read 는 30초로 제한됨"(시나리오 5 기대 결과의 마지막 문장)은 느린
-// 업로드를 흉내 내야 관측되는 서버 타임아웃이라 이 파일의 단언에 없다.
+// deployed SUT. 아래 (a)~(e)가 무엇을 단언하는지·이웃 파일과의 경계·범위 밖으로 둔 것은
+// docs/test/e2e.md 의 이 파일 매핑 행과 §「남은 미검증 분기」가 갖는다.
 package e2e_test
 
 import (
@@ -35,8 +19,7 @@ import (
 
 const (
 	// api.maxRequestBodyBytes / session.MaxClaudePromptBytes as the product
-	// spells them. Written out rather than imported so that relaxing either limit
-	// fails this file instead of travelling into it.
+	// spells them. Written out rather than imported for the reason e2e_f1 gives.
 	a5MaxWireBytes     = 8 << 20
 	a5MaxPromptBytes   = 1 << 20
 	a5InvalidInput     = "invalid input"
@@ -98,9 +81,8 @@ func a5Settled(t *testing.T, id string) readResp {
 	}
 }
 
-// a5JSONOfSize builds `{"unexpected":"aaa…"}` of exactly n bytes. The field is
-// deliberately one the DTOs do not declare, so the *only* thing that can make
-// two such bodies answer differently is their length.
+// The field is deliberately one the DTOs do not declare, so the *only* thing
+// that can make two such bodies answer differently is their length.
 func a5JSONOfSize(t *testing.T, n int) []byte {
 	t.Helper()
 	const prefix, suffix = `{"unexpected":"`, `"}`
@@ -119,17 +101,13 @@ func a5JSONOfSize(t *testing.T, n int) []byte {
 	return body
 }
 
-// (a) An omitted body is not a missing field — each route has a documented
-// default for it.
+// (a)
 func TestWireValidation_OmittedBodyTakesTheDocumentedDefaults(t *testing.T) {
 	s := createSession(t, uniqueName(t))
 
 	writeShell(t, s.ID, "echo a5-history-$((40+1))\n")
 	eventuallyShellRead(t, s.ID, 0, func(p string) bool { return strings.Contains(p, "a5-history-41") })
 
-	// read with no body must mean offset 0 — the whole history, including what
-	// was written before this call. A default of "wherever the cursor is now"
-	// would come back without that marker.
 	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+s.ID+"/read", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("read with no body: status=%d body=%s (AC-C2 optional body)", resp.StatusCode, body)
@@ -145,7 +123,6 @@ func TestWireValidation_OmittedBodyTakesTheDocumentedDefaults(t *testing.T) {
 		t.Fatalf("state after a body-less read = %q, want active", r.Session.State)
 	}
 
-	// write with no body must mean an empty payload: nothing reaches the shell.
 	// The probe is typed *without* a newline, so its computed token can only
 	// appear if something submits the pending line — an empty payload must not.
 	writeShell(t, s.ID, a5ProbeCommand)
@@ -170,8 +147,6 @@ func TestWireValidation_OmittedBodyTakesTheDocumentedDefaults(t *testing.T) {
 		t.Fatalf("the probe command ran after a body-less write — the empty payload submitted the pending line (AC-C3)")
 	}
 
-	// switch with no body must mean "no fields", and on an active session that is
-	// the AC-C4 no-op: same pod, still active.
 	resp, body = do(t, http.MethodPost, "/api/v1/sessions/"+s.ID+"/switch", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("switch with no body: status=%d body=%s (AC-C4 optional body)", resp.StatusCode, body)
@@ -190,9 +165,7 @@ func TestWireValidation_OmittedBodyTakesTheDocumentedDefaults(t *testing.T) {
 	eventuallyShellRead(t, s.ID, 0, func(p string) bool { return strings.Contains(p, a5ProbeOutputToken) })
 }
 
-// (b)(c) Everything strict JSON validation rejects, on every route that decodes
-// a body, with the session's own state as the ground truth for "nothing
-// happened".
+// (b)(c)
 func TestWireValidation_RejectedBodiesLeaveNoTrace(t *testing.T) {
 	status, s := createTyped(t, map[string]any{"name": uniqueName(t), "workloadType": "shell"})
 	if status != http.StatusCreated {
@@ -213,8 +186,6 @@ func TestWireValidation_RejectedBodiesLeaveNoTrace(t *testing.T) {
 		{"malformed JSON", `{"offset":`},
 		{"trailing input", `{} {}`},
 		{"non-object top level", `[]`},
-		// (c) — immutable metadata reaches the same wire gate as any other
-		// undeclared field; read/write/switch declare none of these.
 		{"immutable workloadType", `{"workloadType":"claude-code"}`},
 		{"immutable model", `{"model":"platform-default"}`},
 	} {
@@ -232,16 +203,11 @@ func TestWireValidation_RejectedBodiesLeaveNoTrace(t *testing.T) {
 		}
 	}
 
-	// A field switch declares nothing of is undeclared even when another route
-	// does declare it; without this the table above would also pass against a
-	// switch handler that quietly accepted read's DTO.
 	resp, body := a5Raw(t, "/api/v1/sessions/"+s.ID+"/switch", []byte(`{"offset":0}`))
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("switch with read's field: status=%d body=%s, want 400 (switch declares no fields)", resp.StatusCode, body)
 	}
 
-	// …and the control that the same route says 200 to a body it *does* declare,
-	// so the 400s above are about these bodies and not about a5Raw itself.
 	resp, body = a5Raw(t, "/api/v1/sessions/"+s.ID+"/read", []byte(`{"offset":0}`))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("read with a declared field: status=%d body=%s, want 200", resp.StatusCode, body)
@@ -262,8 +228,7 @@ func TestWireValidation_RejectedBodiesLeaveNoTrace(t *testing.T) {
 	}
 }
 
-// (d) The wire limit is a size gate, not a parse result: two bodies that differ
-// by one byte and by nothing else answer 400 and 413.
+// (d)
 func TestWireValidation_WireBodyLimitIsExactlyEightMiB(t *testing.T) {
 	s := createSession(t, uniqueName(t))
 	before := a5Settled(t, s.ID)
@@ -292,12 +257,7 @@ func TestWireValidation_WireBodyLimitIsExactlyEightMiB(t *testing.T) {
 	}
 }
 
-// (e) The decoded prompt limit is a different gate from the wire limit — it is
-// workload-specific and it runs *before* the state machine, so a snapshot
-// session refuses without waking up. That "without waking up" is the point:
-// state-api.md#시나리오 3 owns the fact that an accepted write on a snapshot
-// session restores it (e2e_c3_write_branches_test.go), which is what makes the
-// absence of a pod here evidence rather than a tautology.
+// (e)
 func TestWireValidation_OversizePromptIsRefusedBeforeRestore(t *testing.T) {
 	status, s := createTyped(t, map[string]any{"name": uniqueName(t), "workloadType": "claude-code"})
 	if status != http.StatusCreated {
@@ -307,8 +267,6 @@ func TestWireValidation_OversizePromptIsRefusedBeforeRestore(t *testing.T) {
 		t.Fatal("created claude-code session has no workload pod")
 	}
 
-	// Control: this route accepts prompts from this session, so a later refusal
-	// is about the payload's size and not about claude-code writes at large.
 	if w := writeAt(t, s.ID, "a5-small-prompt"); w.Path != "active" {
 		t.Fatalf("small prompt on an active claude-code session: path=%q want active", w.Path)
 	}
