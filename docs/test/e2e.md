@@ -368,6 +368,7 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 | `architecture.md#시나리오 3` | `control-plane/test/e2e_a3_pod_reclaim_test.go` | go | AC-A3 | 동결 시 API `pod:""` + 클러스터 그라운드-트루스로 Pod 삭제/terminating 확인 |
 | `claude-code-workload.md#시나리오 1` | `control-plane/test/e2e_e1_workload_type_test.go` | go | AC-E1 | `workloadType=claude-code` 세션이 SUT에서 서고 그 pod에서 Claude CLI가 실제로 실행됨 / 필드 생략은 shell / 잘못된 값은 pod 생성 전 400 / 타입·모델은 생성 후 불변 |
 | `claude-code-workload.md#시나리오 2` | `control-plane/test/e2e_e2_prompt_invocation_test.go` | go | AC-E2 | write = 프롬프트 1회 실행 — 배포 SUT에서 실 `claude` 프로세스가 기동되고 응답이 세션 출력에 투영됨 / burst의 모든 프롬프트가 큐에 수락돼 각각 1회씩 실행됨 / 프로세스 테이블에서 본 exact argv·원샷 수명·직렬 큐(동시 실행 없음)·첫 성공 뒤에만 `--continue` / 1 MiB 초과 프롬프트는 public API 413이고 실행되지 않음 (비블로킹 반환 자체는 SUT에서 관측 불가 — invocation이 write 왕복보다 느리지 않다. `data-plane/cmd/agent/claude_test.go`의 `TestClaudeWriteIsNonBlockingAndSerial`이 fake runner로 소유) |
+| `claude-code-workload.md#시나리오 6` | `control-plane/test/e2e_claude_code_6_archive_freeze_test.go` | go | AC-E5 (AC-B1/B2/B3의 `claude-code` 경로) | **CRIU 가 아니라 파일시스템 아카이브로 동결·복원되는 타입**을 배포 SUT 에서 — 「동결 시 CRIU dump 가 호출되지 않는다」를 해체 중인 파드를 훔쳐보는 경쟁 대신 **구조로** 산다: CRIU 는 파드 안에서 프로세스 트리를 뜨고 플랫폼은 그 특권을 `shell` 파드에만 준다(`k8s.WithCheckpointPrivileged`, 배포의 CRIU 게이트 배선) — claude-code 워크로드 컨테이너는 그것을 **받지 않으므로** 그 안에서 dump 가 돌 수 없고, 같은 SUT 에 세운 shell 세션이 **특권을 받는다**는 대조군이 그 부재를 「게이트가 꺼져서」가 아니라 **이 타입의 결정**으로 못박는다(대조군이 특권을 안 받으면 판별자가 없다고 보고 skip 한다) / 아카이브가 뜰 대상이 실재함 — 그 파드가 `/session` 에 볼륨을 마운트하고 있음 / 동결 시 API `pod:""` + **클러스터 그라운드-트루스**로 파드 회수 / **왕복 세 갈래가 새 파드로 건너감** — 동결 전 워크스페이스에 심은 마커가 **이름이 다른** 복원 파드에서 같은 내용으로 읽히고(그 프로브가 동결 **전에** 동작한다는 것을 먼저 확인해 음성이 아닌 양성 결과를 자기검증한다), 복원 직후 `read(0)` 이 동결 전 응답 1건을 담으며(출력 scrollback), 복원된 파드의 **첫** invocation argv 가 `--continue` 를 단다 — 새 파드는 새 대화로 시작하므로 그 플래그의 출처는 아카이브뿐이다 / (a) 동결 전 커서의 델타가 동결 **후** 출력 1건만 담고 (b) `offset=0` 이 전·후 2건을 담으며 **델타가 그 꼬리와 바이트 동일** — 두 응답이 같은 상수 문자열이라 개수로는 순서를 못 가르므로 순서는 바이트로 산다. **두 갈래는 이 파일에 없다**(동결 전 대화를 참조하는 프롬프트의 **의미** 판정 · 스냅샷 트랜잭션의 durable `preparing`/`committing` 순서) — 아래 §「남은 미검증 분기」에 등재했다. 파드 회수 자체(`architecture.md#시나리오 3`)·복원이 **새** 파드로 온다는 것(`lifecycle.md#시나리오 2`)·복원 후 커서 무결성(`lifecycle.md#시나리오 3`)은 전부 **shell(=CRIU) 경로**로 각자의 파일이 이미 사므로 다시 사지 않는다 — 이 파일이 배타적으로 사는 것은 같은 계약이 **다른 전략**으로 성립하는가다 |
 | `claude-code-workload.md#시나리오 7` | `control-plane/test/e2e_e6_credential_placement_test.go` | go | AC-E6 | **자격 증명의 배치와 그 배치가 사는 격리**를 배포 SUT에서 — 공급자 `base-url`·`auth-token`·optional `ca-cert`는 사이드카 `claude-credentials`에만 / 필수 `k3s-mcp-token`과 optional `k3s-mcp-url`·`plugin-marketplace-url`은 주 컨테이너에만 / optional `model`은 주 컨테이너에만이고 concrete model은 literal이 Secret 기본값을 이김 / 주 컨테이너가 실 플랫폼 토큰을 **어떤 `/proc/*/environ`으로도 읽지 못함**(같은 프로브가 placeholder는 찾으므로 음성 결과가 자기검증된다) / pod가 `data-plane` SA로 서고 실 authorizer가 pods는 allow·secrets는 deny(SubjectAccessReview) / 생성 요청의 자격 증명 필드는 400이고 세션 조회·read 어디에도 두 토큰 값이 없음. 비교하는 비밀 값은 전부 클러스터 Secret에서 읽으므로 이 파일은 자격 증명 사본을 갖지 않는다. **프록시의 행위 계약**(헤더 허용목록·1xx redaction·64 MiB 상한·split-token tail-safe·`ca-cert` 파싱 실패 시 시작 거부)은 `data-plane/cmd/agent/credential_proxy*_test.go`가, **제출되는 pod spec**은 `control-plane/test/workload_type_orchestrator_test.go`(태그 `integration`)가 이미 소유하므로 여기서 다시 사지 않는다 — e2e가 배타적으로 살 수 있는 것은 배포된 그라운드-트루스다 |
 | `lifecycle.md#시나리오 2` | `control-plane/test/e2e_b2_snapshot_restore_test.go` | go | AC-B2 | snapshot 세션 접근(switch) → `active` 전이 + **새 pod**로 복원(동결 전 pod가 아님) |
 | `lifecycle.md#시나리오 3` | `control-plane/test/e2e_b3_restore_integrity_test.go` | go | AC-B3 | 동결 전 발급 커서가 복원 후에도 유효(델타만), `offset=0`은 동결 전·후 전체 이력을 순서대로 |
@@ -437,9 +438,8 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 | `approval-gated-workload.md#시나리오 3` | go | **없음** | 승인 왕복이 전부 실재한다 — `data-plane/cmd/agent/session_mcp_gate.go`·`approval_wait.go`·`approval_gateway.go`(POST `/api/requests` → 3초 폴링 → APPROVED일 때만 실제 외부 GET), 결정을 지시할 대역은 `deploy/e2e-approval-gateway-fake.yaml`의 `/operator/policy`(defaultStatus)·`/operator/decide`. 이 파일이 살 것: write 즉시 반환 · 결정 전 `awaiting approval` in-band 마커와 **테스트 upstream 무도달** · 승인 후 정확히 1회 호출 · event id/`nextOffset`/decoded 길이 일치와 UTF-8 경계 · 외부 식별자 `{세션ID}:{요청ID}`. |
 | `approval-gated-workload.md#시나리오 4` | go | **폴링 타임아웃 주입** — (c) 갈래만. `data-plane/cmd/agent/approval_gateway.go`의 `defaultApprovalTimeout`이 10분 상수이고 `newApprovalGateway`가 `timeout` 필드를 env로 받지 않아, 지금 (c)를 사려면 CI가 10분을 기다려야 한다. 축소값 주입은 사용자 가시 동작을 바꾸지 않는 테스트 훅이다 — data-plane 소관. (a) 거절·(b) 만료는 대역의 `/operator/decide`로 **선행 없이** 관측 가능. | 세 갈래의 처리 코드는 실재한다 — 같은 파일이 APPROVED/REJECTED/EXPIRED를 정착 결정으로 가르고 자체 `TIMEOUT`을 별도로 발급하며(비-2xx는 결정이 아니라 실패로 구분한다), in-band 통지는 `session_mcp_notices.go`가 만든다. 이 파일이 살 것: 세 경우 모두 **외부 호출 0** · 실패가 in-band 마커로 남음 · 세션이 `active` 유지 · 큐 미폐색 · (d) 후속 write 정상 처리. |
 | `approval-gated-workload.md#시나리오 6` | go | **시나리오 3의 승인 경로 파일.** 공유 볼륨에 파일을 만드는 수단이 「승인된 외부 도구 호출」이라 그 배선을 먼저 세운다(같은 스위트, 같은 대역). | RWX 볼륨은 #98·#100으로 착지했다 — `control-plane/internal/adapter/k8s/shared_volume.go`의 `ReadWriteMany` 클레임, `deploy/shared-volume-provisioner.yaml`(local-path `sharedFileSystemPath`), `deploy/kind-config.yaml`의 전 노드 동일 마운트, `control-plane/test/shared_volume_test.go`·`approval_gated_shared_volume_test.go`. **「RWX가 미구현이라 막혔다」는 더 이상 참이 아니다.** 이 파일이 살 것: (a) 워크로드와 MCP 컨테이너가 같은 파일을 보고 프록시에는 마운트되지 않음 (b) **동결을 건너뛴** 다음 실행도 그 파일을 봄 (c) 복원 후 잔존 (d) `cursorBefore` 델타와 `offset=0` 전체 (e) 다른 세션은 마운트 불가. |
-| `claude-code-workload.md#시나리오 3` | go | **없음** | 직렬 큐는 실재하고(`data-plane/cmd/agent/claude.go`의 프롬프트 큐), 관측 수단에도 선례가 있다 — `control-plane/test/e2e_e2_prompt_invocation_test.go`가 프로세스 테이블에서 invocation argv를 세는 프로브를 이미 세웠다(자기 프로세스와 flag를 언급만 하는 프로세스를 거르는 두 가드까지). 이 파일이 살 것: 두 실행 구간의 **비중첩**(동시 argv 수가 1을 넘지 않음)과 read(`offset=0`) 누적 순서 = write 순서. 시나리오 2와의 경계: 2는 「write 1회 = 1 실행」, 3은 **두 write 사이의 순서**. |
-| `claude-code-workload.md#시나리오 4` | go | **없음** | stream 계약이 실재한다 — `control-plane/internal/api/api.go`가 `Last-Event-ID`를 query 커서보다 우선하고, output 이벤트가 `id=nextOffset`과 `{offset,payloadBase64,nextOffset}`을 싣는다. 이 파일이 살 것: UTF-8 경계로 갈린 두 chunk · 중단 후 `Last-Event-ID` 재연결의 **무손실·무중복** · past-end 커서의 payload 없는 reset이 `lastAccess`를 바꾸지 않음 · read(0)로 콘솔을 교체한 뒤 마지막 커서 read가 **빈 델타**이고 raw stream-json final/result로 text delta가 중복되지 않음. |
-| `claude-code-workload.md#시나리오 6` | go | **없음.** 동결은 `POST /sessions/{id}/snapshot` 직접 호출로 만들어 60분 대기를 피한다(그 대기 자체는 `lifecycle.md#시나리오 1` 예외가 소유). 다만 「동결 전 대화를 참조하는 프롬프트가 정상 응답」의 **의미** 판정은 상수 대역이라 살 수 없으므로, `claude-code-workload.md#시나리오 5` 예외와 같은 이유로 그 절반은 이 파일의 단언에서 빼고 나머지를 산다. | 아카이브 경로가 실재한다 — `data-plane/cmd/agent/claude_archive.go`(대화·작업 디렉터리·출력 버퍼), `checkpoint.go`, 그리고 kind에서 CRIU 갈래가 꺼져 있다는 사실(`deploy/kind-config.yaml`의 `NOTE(criu)`)이 「CRIU dump가 호출되지 않는다」를 관측 가능하게 만든다. 이 파일이 살 것: CRIU 미호출 · 아카이브 생성 · pod 회수 · `preparing`/archive ref를 담은 `committing`의 durable 순서 · 복원 후 파일 잔존 · (a) `cursorBefore` 델타 · (b) `offset=0`의 전·후 순서. |
+| `claude-code-workload.md#시나리오 3` | go | **없음** | 직렬 큐는 실재하고(`data-plane/cmd/agent/claude.go`의 프롬프트 큐), 관측 수단에도 선례가 있다 — `control-plane/test/e2e_e2_prompt_invocation_test.go`가 프로세스 테이블에서 invocation argv를 세는 프로브를 이미 세웠다(자기 프로세스와 flag를 언급만 하는 프로세스를 거르는 두 가드까지). 이 파일이 살 것: 두 실행 구간의 **비중첩**(동시 argv 수가 1을 넘지 않음)과 read(`offset=0`) 누적 순서 = write 순서. 시나리오 2와의 경계: 2는 「write 1회 = 1 실행」, 3은 **두 write 사이의 순서**. ⚠️ **2026-09-10 실측** — 기대 결과의 뒷절반(read(`offset=0`) 누적 순서 = write 순서)은 이 SUT 에서 **귀속할 표지가 없다**: 공급자 대역이 프롬프트와 무관하게 같은 상수 한 줄을 돌려주므로(`deploy/e2e-anthropic-fake.yaml` 의 `REPLY`) 출력 버퍼의 두 응답이 **바이트 동일**이다. 앞절반(비중첩)은 시나리오 2 의 파일이 **이미** 같은 프로브로 산다(동시 argv 수가 1을 넘으면 실패). `선행` 은 그대로 **없음**이지만 — 앞절반만 다시 사는 파일은 지금도 쓸 수 있다 — 그렇게 쓰면 시나리오 2 와 거의 같은 단언이 된다는 것을 알고 집을 것. 뒷절반이 사려면 대역이 프롬프트별로 갈리는 응답을 낼 수 있어야 하고, 그 대역은 「e2e 충실도 허용목록」의 `CLAUDE-PROVIDER` 행 소관이다. |
+| `claude-code-workload.md#시나리오 4` | go | **없음** | stream 계약이 실재한다 — `control-plane/internal/api/api.go`가 `Last-Event-ID`를 query 커서보다 우선하고, output 이벤트가 `id=nextOffset`과 `{offset,payloadBase64,nextOffset}`을 싣는다. 이 파일이 살 것: UTF-8 경계로 갈린 두 chunk · 중단 후 `Last-Event-ID` 재연결의 **무손실·무중복** · past-end 커서의 payload 없는 reset이 `lastAccess`를 바꾸지 않음 · read(0)로 콘솔을 교체한 뒤 마지막 커서 read가 **빈 델타**이고 raw stream-json final/result로 text delta가 중복되지 않음. ⚠️ **2026-09-10 실측** — 실행 단계 첫 줄의 「UTF-8 경계의 SSE output 두 chunk」는 이 SUT 에서 **만들 재료가 없다**: 대역의 응답은 `REPLY` 상수 하나의 `text_delta` 이고 **순수 ASCII 32바이트**라 다중바이트 문자가 없고 청크 경계(`data-plane/cmd/agent/output_stream.go` 의 `outputStreamChunkBytes`, 64 KiB)에도 한참 못 미친다 — ASCII 는 어디서 잘라도 code-point 경계라 그 단언이 **vacuous** 하다. 남은 갈래 중 「마지막 커서 read 가 빈 델타이고 text delta 가 중복되지 않음」은 시나리오 2 의 파일이 프롬프트 N 개에 마커 정확히 N 개로 이미 사고, past-end reset 과 `Last-Event-ID` 우선은 `state-api.md#시나리오 6` 의 파일이 shell 세션에서 산다. `선행` 은 그대로 **없음**이지만(경계 절을 빼고 저작하는 것은 지금도 가능하다) **헤드라인이 빠진 파일이 된다**는 것을 알고 집을 것 — 경계를 실제로 사려면 대역이 다중바이트·다중 델타를 낼 수 있어야 하고 그 대역은 `CLAUDE-PROVIDER` 행 소관이다. |
 | `claude-code-workload.md#시나리오 8` | go | **상한 주입 훅.** `claudeConfig`에 `RunOutputLimit`·`ScrollbackLimit` 필드는 있는데 `data-plane/cmd/agent/main.go`가 그 둘을 env로 읽지 않아 배포 pod는 항상 16 MiB/256 MiB다 — e2e가 그만큼을 만들어 낼 수 없다. `control-plane/test/e2e_e2_prompt_invocation_test.go` 헤더가 같은 벽을 이미 적는다(「the stand-in cannot be made to emit that much」). 축소값 env 배선은 사용자 가시 동작을 바꾸지 않는 테스트 훅 — data-plane 소관. | 상한 로직 자체는 실재한다 — `data-plane/cmd/agent/claude.go`의 invocation/누적 두 마커, `claude_stream.go`의 truncation·session-full 전이, `control-plane/internal/api/api.go`의 413/507 매핑. (a) 1 MiB 초과 프롬프트 413은 **선행 없이도** 지금 관측 가능하고 이미 시나리오 2의 파일이 산다 — 이 파일은 (b)~(e), 즉 truncation 마커의 live append · 기존 bytes 불변 · cumulative terminal marker · 신규 write 507 · checkpoint/restore 뒤 buffer·마커·`nextOffset`·resume state 동일을 산다. |
 | `claude-code-workload.md#시나리오 9` | playwright | **모킹 허용목록 등재.** SPA의 오류 복구는 실 스트림이 원리적으로 내지 않는 사건이라 route 가로채기가 필요하다. 그 방식은 지금 여정 spec `web/e2e/journeys/j6-stream-recovery.spec.ts`에만 있고, 최상위 매칭 단위로 올리려면 e2e 충실도 허용목록(`STREAM-RESET-REPLAY` 계열) 등재가 선행이다 — 「e2e 충실도 허용목록」 절 소관. | 서버 쪽 상태 계약은 실재한다(`control-plane/internal/api/api.go`의 stream 핸들러, snapshot의 invalid-state 거부). 이 파일이 살 것: EventSource 즉시 close · GET session 후 **active/idle만** 마지막 커서로 backoff 재연결 · snapshot은 read fallback 없이 Restore 화면. `state-api.md#시나리오 6`과의 경계: 6은 **API 커서·상태 계약**(go), 9는 **브라우저 복구 동작**(playwright). |
 | `lifecycle.md#시나리오 4` | playwright | 시나리오 9와 **같은 모킹 허용목록 선행**(같은 가로채기를 쓴다). 동결 자체는 `POST /snapshot`으로 만들 수 있어 60분 대기는 필요 없다. | SPA의 단절 처리 경로는 실재한다(`web/src`의 EventSource 핸들링, `j6-stream-recovery.spec.ts`가 여정으로 이미 훑는다). 이 파일이 배타적으로 살 것: 단절 뒤 **자동 stream/read 재시도가 없다**는 음성 단언과 「사용자가 명시적으로 복원하기 전에는 새 pod가 생기지 않는다」(파드 수가 그라운드-트루스). 시나리오 9와의 경계: 9는 상태별 재연결 정책 전반, 4는 **자동 복원 금지** 한 조항. 둘을 한 파일에 담으면 규칙 1의 중복이 된다. |
@@ -460,6 +460,13 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 > 칸도 건드리지 않았으므로 남은 `없음`의 감소는 전부 저작 때문이고, 재분류는 한 건도 섞여 있지 않다.
 > 슬라이스 1 문단이 남겨 두었던 「남은 `없음`은 …이다」 이름 목록은 이 저작으로 곧바로 낡으므로
 > 걷어냈다 — 위 문단이 스스로 금지한 사본이다. 정본은 표의 `선행` 칸이니 행별로 읽을 것.
+>
+> **2026-09-10 저작 슬라이스 3**: `claude-code-workload.md#시나리오 6`을 저작해 이 표에서 뺐다 — 남은
+> `없음` 행 중 이 SUT 에서 **헤드라인 단언까지** 관측 가능한 유일한 행이었다. 이 슬라이스도 **저작만
+> 한다**: 어떤 행의 `선행` 칸도 건드리지 않았으므로 `없음`의 감소는 전부 저작 때문이고 재분류는 0건이다.
+> 같은 실행에서 `claude-code #3`·`#4` 두 행의 **`근거` 칸**에만 실측 제약을 적어 넣었다(각각 「read 순서
+> 귀속 불가」·「UTF-8 경계 재료 없음」, 원인은 둘 다 상수 응답 대역) — 분류를 바꾸는 것이 아니라 **두
+> 사이클이 각각 따로 지불한 측정을 행에 남겨** 세 번째가 다시 재지 않게 하는 것이다.
 
 ## 비-시나리오 파일 등재
 
@@ -491,8 +498,8 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 - 시나리오 총계: 37
 - 예외: 3
 - 구현 대기: 0
-- 저작 대기: 11
-- 시나리오 매칭 파일: 23
+- 저작 대기: 10
+- 시나리오 매칭 파일: 24
 - 공백: 0
 <!-- scenario-summary:end -->
 
@@ -722,13 +729,16 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 ## 남은 미검증 분기 (공백은 아님)
 
 전용 파일은 있으나 그 안에서 아직 단언하지 못하는 경로. **공백(전용 파일이 없는 AC)과 다르다** —
-파일은 이미 그 AC의 주검증이고, 막힌 것은 그 안의 갈래 하나다. 이유는 네 갈래다: (1) `idle`
+파일은 이미 그 AC의 주검증이고, 막힌 것은 그 안의 갈래 하나다. 이유는 여섯 갈래다: (1) `idle`
 상태에 도달할 방법이 없다(AC-B1의 트리거 정책과 함께 풀린다), (2) `approval-gated` 타입에
 스냅샷 전략이 등록돼 있지 않다(AC-F5의 아카이브 전략과 함께 풀린다), (3) SUT의 CNI가
 NetworkPolicy를 **집행하지 않아** 차단 갈래에 관측 대상 자체가 없다(kindnet — `deploy/`에
 `disableDefaultCNI` 0파일), (4) **표면이 이 SUT에서 비어 있다** — 찾을 텍스트가 없으므로 음성
 단언이 vacuous하다. (4)는 실측으로만 알 수 있고 실제로 CI가 먼저 알려 줬다: AC-F6 파일의 첫
-실행이 자기 대조군에 걸려 빨개졌다.
+실행이 자기 대조군에 걸려 빨개졌다. (5) **대역이 그 산출물을 만들 수 없다** — 공급자 대역의 응답은
+프롬프트와 무관한 상수 한 줄이라 「이어진 대화」를 가리키는 문장도, 다중바이트 경계도 나오지 않는다
+(`claude-code-workload.md#시나리오 5` 예외와 같은 벽). (6) **밖에서 재면 경쟁이다** — 한 API 호출의
+in-flight 위상은 전이와 경주해야 보이고, 운으로 이긴 관측은 단언이 아니라 flake다.
 
 | 경로 | 소유 파일 | 막힌 이유 |
 | --- | --- | --- |
@@ -743,6 +753,8 @@ NetworkPolicy를 **집행하지 않아** 차단 갈래에 관측 대상 자체�
 | control-plane **요청 단위 로그**에 토큰 부재 | 〃 | 요청 로거(`withLogging`)가 `Debug`로 적고 핸들러가 기본 `Info`라 **세션 수명 동안 한 줄도 나오지 않는다**(CI 실측 — 이 파일의 첫 실행이 그 대조군에 걸렸다). 소유 파일이 사는 것은 **프로세스 시작부터의 전체 로그**이고, 그 로그가 Secret에서 해소한 값(optional `model`)을 실제로 echo한다는 것을 두 번째 대조군으로 둔다. 요청 단위 로그를 켜는 것은 **제품 결정**(로그 수준 또는 `Info` 요청 로그)이라 이 원장의 산출물(e2e 파일 + 등재 문서) 밖이다 |
 | 동결 시 워크로드·헬퍼 파드 **동반 회수** | `e2e_f4_helper_pod_test.go` | `approval-gated`에 아카이브 전략이 등록돼 있지 않아 `checkpointerFor`가 `ErrCheckpointDisabled`를 내고 공개 API가 503으로 거부한다 — **결함이 아니라 의도된 계약**이며(`internal/service/workload_type_test.go`의 `TestSnapshotIsRefusedForApprovalGated`가 그 계약을 산다) 아카이브 전략 없이 동결하면 복원할 수 없는 체크포인트 뒤로 파드 쌍을 회수하게 된다. 선행은 **AC-F5**이고 소관은 `tbm_session-platform-docs-impl`이다. |
 | 복원 시 **새 쌍** 기동 + 워크로드 파드의 헬퍼 주소 재배선 | 〃 | 〃 (동결이 선행이라 복원 진입 자체가 없다) |
+| 동결 전 대화를 참조하는 프롬프트의 **정상 응답**(의미) | `e2e_claude_code_6_archive_freeze_test.go` | 대역이 프롬프트와 무관한 상수 한 줄을 돌려주므로(`deploy/e2e-anthropic-fake.yaml`) 「대화가 이어졌다」를 가리키는 문장 자체가 만들어지지 않는다 — `claude-code-workload.md#시나리오 5` 예외와 **같은 벽·같은 해제 조건**(provider opt-in smoke)이다. 소유 파일이 사는 것은 그 의미가 타고 갈 **배선**이고 그쪽은 전부 산다: 워크스페이스 파일 · 출력 scrollback · `--continue` 가 아카이브를 건넜다는 것 |
+| 스냅샷 트랜잭션의 durable `preparing` → `committing` 순서 | 〃 | 한 API 호출의 in-flight 위상 둘이라 밖에서 관측하려면 전이와 경쟁해야 한다. `control-plane/internal/service/manager_test.go` 가 저장소와 시계를 주입해 그 순서를 소유한다(`TestSnapshotPersistsPrepareAndCommitBeforeSideEffects` · `TestPreparingSnapshotRecoversAfterControlPlaneRestart` · `TestPreparingRecoveryOwnerClaimFencesExpiredHolderCommit`). 제품 표면이 위상을 노출하게 되면 이 행이 소유 파일로 돌아온다 |
 | 서버 body read의 **30초 제한** | `e2e_state_api_5_wire_validation_test.go` | 시나리오 5 기대 결과의 마지막 문장. 관측하려면 본문을 30초에 걸쳐 **느리게** 흘려보내야 하는데, 그것은 요청 하나를 30초 이상 붙잡고 있는 테스트가 되어 이 스위트의 시간 예산(`go test -timeout=30m`에 파드 프로비저닝이 이미 들어 있다)과 맞지 않는다. 소유 파일이 사는 것은 **크기** 축(8 MiB wire·1 MiB prompt)이고, 시간 축은 여기 남는다. 선행은 「느린 업로드를 흉내 내는 하네스」이며 그 자체는 제품 변경이 아니다 — 다음 슬라이스가 이 스위트에 붙이면 그때 소유 파일이 같은 자리에서 산다 |
 
 **동결·복원 두 행**은 **잊히지 않는다** — 소유 파일의 `RefusedFreezeReclaimsNeitherPod`가 거부 계약 자체를
