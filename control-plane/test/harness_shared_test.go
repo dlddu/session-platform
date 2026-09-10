@@ -1,20 +1,9 @@
 //go:build e2e
 
-// Package e2e_test drives the *deployed* control-plane SUT over HTTP (build tag
-// `e2e`, run via `make e2e-up && go test -tags=e2e ./test/...`).
-//
-// Unlike integration_test.go (which mounts the handlers in-process), this suite
-// is a black box: it only knows the wire contract (the /api/v1 surface and its
-// JSON DTOs) and talks to whatever E2E_BASE_URL points at — the kind-deployed
-// control-plane (default http://localhost:8080, see deploy/ + scripts/e2e).
-//
-// LAYOUT — one test scenario per file. Every `e2e_*_test.go` in this directory
-// declares exactly one scenario in its header
-// (`// 검증 시나리오: lifecycle.md#시나리오 2`); that declaration is the
-// machine-checkable scenario↔file mapping (scripts/e2e/check-scenario-mapping.sh,
-// registry in docs/test/e2e.md). THIS file is deliberately NOT named `e2e_*`:
-// it holds the shared harness only, so it is not a matching unit and needs no
-// scenario declaration.
+// Package e2e_test drives the deployed control-plane SUT over HTTP as a black
+// box — it knows the wire contract and nothing of the internal domain types.
+// How to run it, what the SUT is, how files map to scenarios, and why this file
+// is not a matching unit are all in docs/test/e2e.md.
 package e2e_test
 
 import (
@@ -38,9 +27,8 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 )
 
-// Creating a session provisions a real pod and waits for it to report Ready
-// (the in-cluster client-go orchestrator), so the create calls can take longer
-// than a stub round-trip — the timeout has headroom for image pull + schedule.
+// The budget is sized for the slowest call, create, which blocks on a real pod:
+// image pull and scheduling both land inside it.
 var client = &http.Client{Timeout: 90 * time.Second}
 
 func baseURL() string {
@@ -50,9 +38,8 @@ func baseURL() string {
 	return "http://localhost:8080"
 }
 
-// session mirrors the JSON the API emits (control-plane/api/openapi.yaml). It is
-// declared locally so the e2e suite asserts the wire contract independently of
-// the internal domain types.
+// Mirrors control-plane/api/openapi.yaml, declared here rather than imported for
+// the reason e2e_f1 gives.
 type session struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
@@ -74,8 +61,6 @@ type writeResp struct {
 	Path    string  `json:"path"`
 }
 
-// do performs a request against the SUT and returns the response plus the
-// fully-read body, failing the test on transport errors.
 func do(t *testing.T, method, path string, body any) (*http.Response, []byte) {
 	t.Helper()
 	var r io.Reader
@@ -103,8 +88,7 @@ func do(t *testing.T, method, path string, body any) (*http.Response, []byte) {
 	return resp, out
 }
 
-// uniqueName derives a collision-free session name from the test name; the SUT
-// state is shared across runs, so names must be unique.
+// The SUT keeps its state across runs, so the test name alone would collide.
 func uniqueName(t *testing.T) string {
 	t.Helper()
 	base := strings.NewReplacer("/", "-", " ", "-").Replace(t.Name())
@@ -124,7 +108,6 @@ func createSession(t *testing.T, name string) session {
 	return s
 }
 
-// getSession reads a session back from the API.
 func getSession(t *testing.T, id string) session {
 	t.Helper()
 	resp, body := do(t, http.MethodGet, "/api/v1/sessions/"+id, nil)
@@ -138,13 +121,8 @@ func getSession(t *testing.T, id string) session {
 	return s
 }
 
-// snapshotSession freezes a session through the product snapshot endpoint
-// (POST /sessions/{id}/snapshot, the same one manual archiving uses). Only the
-// *automatic* idle->snapshot trigger policy is still open (AC-B1,
-// service/session.go TODO(policy)); the manual endpoint gives this suite a
-// deterministic way to reach the snapshot state without waiting out the idle
-// window. It reports ok=false when the SUT predates the endpoint, so callers
-// skip instead of failing.
+// Freezing goes through the product endpoint rather than an injected trigger;
+// why that became possible is the retired SNAPSHOT-TRIG entry in docs/test/e2e.md.
 func snapshotSession(t *testing.T, id string) (session, bool) {
 	t.Helper()
 	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+id+"/snapshot", nil)
@@ -161,9 +139,6 @@ func snapshotSession(t *testing.T, id string) (session, bool) {
 	return frozen, true
 }
 
-// sessionNamespace is where the deployed control plane provisions its data plane
-// pods — the same namespace it runs in (default in the kind deploy/). Overridable
-// for clusters that place the control plane elsewhere.
 func sessionNamespace() string {
 	if v := os.Getenv("E2E_SESSION_NAMESPACE"); v != "" {
 		return v
@@ -171,10 +146,8 @@ func sessionNamespace() string {
 	return "default"
 }
 
-// kubeClient builds a client for the cluster the SUT runs in, from the ambient
-// kubeconfig (kind writes one) or the in-cluster config. It also returns the
-// rest config so callers can open exec streams. It reports ok=false when neither
-// is available, so a run pointed at a non-cluster SUT skips rather than fails.
+// ok=false rather than a fatal: E2E_BASE_URL may point at a SUT whose cluster
+// this runner has no credentials for, and those runs skip the kube assertions.
 func kubeClient(t *testing.T) (kubernetes.Interface, *rest.Config, bool) {
 	t.Helper()
 	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
@@ -191,8 +164,8 @@ func kubeClient(t *testing.T) (kubernetes.Interface, *rest.Config, bool) {
 	return cs, cfg, true
 }
 
-// getPodEventually fetches a pod, tolerating brief API eventual-consistency.
-// Create returns only after the pod is Ready, so it should already exist.
+// The pod is already Ready by the time create returns, so this retries only the
+// kube API's own brief eventual consistency — never a pod that is still coming up.
 func getPodEventually(t *testing.T, cs kubernetes.Interface, ns, name string) *corev1.Pod {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
@@ -211,7 +184,6 @@ func getPodEventually(t *testing.T, cs kubernetes.Interface, ns, name string) *c
 	}
 }
 
-// writeShell posts a payload to the session's write endpoint.
 func writeShell(t *testing.T, id, payload string) {
 	t.Helper()
 	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+id+"/write", map[string]string{"payload": payload})
@@ -220,7 +192,6 @@ func writeShell(t *testing.T, id, payload string) {
 	}
 }
 
-// readShellAt reads the session's shell output after offset.
 func readShellAt(t *testing.T, id string, offset int64) readResp {
 	t.Helper()
 	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+id+"/read", map[string]int64{"offset": offset})
@@ -234,9 +205,9 @@ func readShellAt(t *testing.T, id string, offset int64) readResp {
 	return r
 }
 
-// eventuallyShellRead polls read at offset until ok(payload) holds. Shell
-// output timing is non-deterministic (bash prompt, command scheduling), so
-// all output assertions are containment + eventually, never exact matches.
+// Shell output timing is non-deterministic (bash prompt, command scheduling),
+// so every output assertion in this suite is containment + eventually rather
+// than an exact match.
 func eventuallyShellRead(t *testing.T, id string, offset int64, ok func(string) bool) readResp {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
@@ -253,10 +224,9 @@ func eventuallyShellRead(t *testing.T, id string, offset int64, ok func(string) 
 	}
 }
 
-// execInPod runs command in the pod's (single) container via the exec
-// subresource. Only this e2e runner uses pods/exec, authorised by its own
-// kubeconfig — the control plane never execs into pods (it dials the session
-// agent over the network), so its RBAC stays exec-free.
+// pods/exec here is authorised by the *runner's* kubeconfig, not the SUT's
+// ServiceAccount: the control plane dials the agent over the network and never
+// execs, so nothing observed through this helper is evidence that it could.
 func execInPod(ctx context.Context, cs kubernetes.Interface, cfg *rest.Config, ns, pod string, command []string) (string, string, error) {
 	req := cs.CoreV1().RESTClient().Post().
 		Resource("pods").Name(pod).Namespace(ns).SubResource("exec").
@@ -274,10 +244,9 @@ func execInPod(ctx context.Context, cs kubernetes.Interface, cfg *rest.Config, n
 	return stdout.String(), stderr.String(), err
 }
 
-// ptyShellProbe prints "comm tty" for every process in the pod whose stdin is
-// a PTY slave — i.e. the PTY-attached processes. The probe itself is exec'd
-// without a TTY (stdin is a pipe/null), so neither it nor its command-
-// substitution subshells ever match.
+// The probe cannot count itself: it is exec'd without a TTY (stdin is a pipe or
+// null), so neither it nor its command-substitution subshells match the
+// /dev/pts/* test below. Without that, every run would report at least one hit.
 const ptyShellProbe = `for d in /proc/[0-9]*; do
   tty=$(readlink "$d/fd/0" 2>/dev/null) || continue
   case "$tty" in /dev/pts/*) echo "$(cat "$d/comm" 2>/dev/null) $tty" ;; esac
