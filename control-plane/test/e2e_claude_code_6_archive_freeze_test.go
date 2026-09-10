@@ -2,40 +2,8 @@
 
 // 검증 시나리오: claude-code-workload.md#시나리오 6
 //
-// docs/prd/claude-code-workload.md AC-E5 — and with it the `claude-code` type
-// path of AC-B1/B2/B3, which the shell files (e2e_b2/e2e_b3) only ever drive
-// through CRIU. Driven against the deployed SUT.
-//
-// What this file deliberately does NOT assert, and why:
-//
-//   - the post-freeze prompt answering in the scenario's *semantic* sense (an
-//     answer that refers back to the pre-freeze conversation, or that names the
-//     file made before the freeze). The in-cluster provider stand-in replies
-//     with one constant string to every prompt — deploy/e2e-anthropic-fake.yaml
-//     says so itself ("여기 응답은 결정적 상수") — so no wording can be
-//     attributed to the archived conversation. That is the same wall that put
-//     claude-code-workload.md#시나리오 5 on the exception list. What is buyable
-//     is the *wiring* that meaning would ride on, and this file buys exactly
-//     that: workspace tree, output scrollback and resume flag all cross the
-//     archive into a new pod.
-//   - the durable `preparing` → `committing` ordering inside the snapshot
-//     transaction. Both are in-flight phases of a single API call, so observing
-//     them from outside is a race against the transition rather than a contract
-//     — and a test that wins that race by luck is a flake, not an assertion.
-//     control-plane/internal/service/manager_test.go owns the ordering
-//     (prepare/commit, crash-boundary recovery, owner fence) where the store
-//     and the clock can be injected.
-//   - the 60-minute idle trigger that reaches the same freeze in production:
-//     lifecycle.md#시나리오 1's exception row owns it. This file uses
-//     POST /sessions/{id}/snapshot, which the scenario's own 실행 단계 names as
-//     the alternative ("유휴 한계 도달(또는 스냅샷 직접 호출)").
-//
-// Boundary with the neighbours: architecture.md#시나리오 3's file owns pod
-// reclaim as such and lifecycle.md#시나리오 2·3's files own restore-into-a-new-pod
-// and cursor integrity — all three for *shell* sessions, whose freeze is CRIU.
-// What is exclusive here is the other strategy: a type whose pod never carries
-// the CRIU privilege, freezes into a filesystem archive, and comes back with its
-// files and its `--continue` state intact.
+// 이 파일이 무엇을 사고 무엇을 사지 않는지, 그리고 이웃 파일과의 경계는
+// docs/test/e2e.md 의 매핑 행과 §「남은 미검증 분기」가 갖는다.
 package e2e_test
 
 import (
@@ -54,10 +22,8 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-// The state root the control plane hands the agent (CLAUDE_CODE_STATE_DIR) and
-// the workspace inside it that a claude-code invocation runs in. Both are
-// asserted here as the *wire* the archive is taken from: the volume mounts at
-// the parent, and the archived tree is rooted at the state dir.
+// The state root the control plane hands the agent (CLAUDE_CODE_STATE_DIR) and the
+// workspace inside it; the volume mounts at the state root's parent.
 const (
 	e5StateVolumePath = "/session"
 	e5WorkspaceDir    = "/session/state/workspace"
@@ -68,7 +34,6 @@ const (
 	e5PromptAfterRestore = "e5-prompt-after-restore"
 )
 
-// containerSpec returns the named container of a pod, or nil.
 func containerSpec(pod *corev1.Pod, name string) *corev1.Container {
 	for i := range pod.Spec.Containers {
 		if pod.Spec.Containers[i].Name == name {
@@ -92,15 +57,6 @@ func deleteSessionOnCleanup(t *testing.T, id string) {
 	})
 }
 
-// The scenario's first expected result is a negative one — "동결 시 CRIU dump가
-// 호출되지 않고". Watching for the absence of a dump while the pod is being torn
-// down is a race, so this buys the negative structurally instead: CRIU dumps a
-// process tree from inside the pod and the platform grants that pod the
-// privilege it needs (k8s.WithCheckpointPrivileged, wired from the deployment's
-// CRIU gate). A claude-code pod never receives it, so no dump can have run in
-// it — and the shell session created alongside proves the gate really is on in
-// this SUT, so the absence is a decision about this type rather than a gate
-// that is off everywhere.
 func TestClaudeCodeFreeze_ArchivedTypeNeverCarriesTheCRIUPrivilege(t *testing.T) {
 	cs, _, ok := kubeClient(t)
 	if !ok {
@@ -108,7 +64,6 @@ func TestClaudeCodeFreeze_ArchivedTypeNeverCarriesTheCRIUPrivilege(t *testing.T)
 	}
 	ns := sessionNamespace()
 
-	// Control first: the type whose freeze *is* CRIU.
 	shell := createSession(t, uniqueName(t))
 	deleteSessionOnCleanup(t, shell.ID)
 	shellPod := getPodEventually(t, cs, ns, shell.Pod)
@@ -129,8 +84,6 @@ func TestClaudeCodeFreeze_ArchivedTypeNeverCarriesTheCRIUPrivilege(t *testing.T)
 			c.SecurityContext)
 	}
 
-	// The positive half: the thing the archive is taken from is a mounted tree,
-	// present in the very pod that has no way to dump a process image.
 	var mounted bool
 	for _, m := range c.VolumeMounts {
 		if m.MountPath == e5StateVolumePath {
@@ -144,8 +97,6 @@ func TestClaudeCodeFreeze_ArchivedTypeNeverCarriesTheCRIUPrivilege(t *testing.T)
 	}
 }
 
-// The round trip. One freeze, one restore, and every surface the scenario names
-// that a constant-reply provider still lets us observe.
 func TestClaudeCodeFreeze_ArchiveRoundTripsWorkspaceHistoryAndResume(t *testing.T) {
 	cs, cfg, ok := kubeClient(t)
 	if !ok {
@@ -155,16 +106,12 @@ func TestClaudeCodeFreeze_ArchiveRoundTripsWorkspaceHistoryAndResume(t *testing.
 	s := claudeSession(t)
 	oldPod := s.Pod
 
-	// A file in the workspace stands in for the scenario's "touch marker.txt"
-	// prompt: the stand-in provider cannot run a tool, so the file is placed the
-	// only other way the workspace can be reached. What the scenario asks of it
-	// is unchanged — that it is still there after the freeze.
+	// Placed by exec, not by a prompt: the stand-in provider cannot run a tool —
+	// e2e.md's exception row for this file records that wall.
 	nonce := fmt.Sprintf("e5-workspace-%d", time.Now().UnixNano())
 	markerPath := e5WorkspaceDir + "/e5-marker.txt"
 	execOK(t, cs, cfg, ns, oldPod, "seed the workspace marker",
 		fmt.Sprintf("printf '%%s' %q > %q", nonce, markerPath))
-	// Reading it back before the freeze is what makes the post-restore read an
-	// assertion rather than a hopeful cat: the probe itself is known to work.
 	if got := execOK(t, cs, cfg, ns, oldPod, "read back the workspace marker",
 		fmt.Sprintf("cat %q", markerPath)); got != nonce {
 		t.Fatalf("pre-freeze marker read back as %q, want %q — the probe cannot attest to anything after "+
@@ -216,16 +163,12 @@ func TestClaudeCodeFreeze_ArchiveRoundTripsWorkspaceHistoryAndResume(t *testing.
 			"the output archive is what carries it across (AC-E5); payload=%q", got, restored.Payload)
 	}
 
-	// (1) the workspace tree crossed the archive.
 	if got := execOK(t, cs, cfg, ns, newPod, "read the workspace marker after restore",
 		fmt.Sprintf("cat %q", markerPath)); got != nonce {
 		t.Fatalf("workspace marker after restore = %q, want %q — the freeze archives the session's files "+
 			"and the restore lays them back down in the new pod (AC-E5)", got, nonce)
 	}
 
-	// (2) the resume flag crossed it too. `--continue` on the first invocation
-	// of a *new* pod can only come from state that was archived: a fresh pod
-	// starts a fresh conversation, and the pre-freeze run is what set it.
 	probe := startClaudeArgvProbe(t, cs, cfg, ns, newPod)
 	time.Sleep(3 * time.Second)
 	writePromptOK(t, s.ID, e5PromptAfterRestore)
@@ -248,13 +191,11 @@ func TestClaudeCodeFreeze_ArchiveRoundTripsWorkspaceHistoryAndResume(t *testing.
 	// invocation a moment so the two reads below see the same cursor.
 	time.Sleep(5 * time.Second)
 
-	// (b) offset=0 holds pre- and post-freeze output, in that order.
 	full := readShellAt(t, s.ID, 0)
 	if got := strings.Count(full.Payload, providerReplyMarker); got != 2 {
 		t.Fatalf("offset=0 after restore carries %d provider replies, want 2 (one from each side of the "+
 			"freeze) (AC-E5); payload=%q", got, full.Payload)
 	}
-	// (a) the pre-freeze cursor still points at exactly the new output.
 	delta := readShellAt(t, s.ID, cursorBefore)
 	if full.NextOffset != delta.NextOffset {
 		t.Fatalf("the buffer moved between the two reads (full=%d delta=%d); the ordering assertion below "+
@@ -265,9 +206,6 @@ func TestClaudeCodeFreeze_ArchiveRoundTripsWorkspaceHistoryAndResume(t *testing.
 			"cursor issued before the freeze must still address only what came after it (AC-E5); payload=%q",
 			cursorBefore, got, delta.Payload)
 	}
-	// Ordering, byte for byte: the delta is the tail of the whole history. This
-	// is what "동결 전·후 출력이 순서대로" means when both replies are the same
-	// constant string and counting them cannot tell which came first.
 	if !strings.HasSuffix(full.Payload, delta.Payload) {
 		t.Fatalf("the delta from cursor %d is not the tail of the offset=0 history — post-freeze output must "+
 			"sit after the archived output, not interleaved with it (AC-E5); full=%q delta=%q",
@@ -303,8 +241,6 @@ func waitPodReclaimed(t *testing.T, cs kubernetes.Interface, ns, name string) {
 	}
 }
 
-// execOK runs one /bin/sh -c command in the session container and fails the test
-// with the stderr if it does not succeed.
 func execOK(t *testing.T, cs kubernetes.Interface, cfg *rest.Config, ns, pod, what, script string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -316,8 +252,6 @@ func execOK(t *testing.T, cs kubernetes.Interface, cfg *rest.Config, ns, pod, wh
 	return strings.TrimSpace(out)
 }
 
-// claudeArgvProbeRun is a probe attached to a pod's process table; invocations()
-// blocks for its result and returns the distinct argv lines it saw, in order.
 type claudeArgvProbeRun struct {
 	done chan struct {
 		out    string
