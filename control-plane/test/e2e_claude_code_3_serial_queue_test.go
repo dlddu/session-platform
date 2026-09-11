@@ -39,7 +39,8 @@
 //     which holds a fake runner open. This file needs only the weaker fact that
 //     the *second* write is accepted mid-flight, which it can observe directly.
 //   - exact argv, one-shot lifetime and `--continue`. 시나리오 2 owns all three;
-//     the process probe is reused here for its concurrency count alone.
+//     the process probe is reused here only to count concurrent invocations and
+//     to read off which prompt each one carried, never to check the flags.
 //   - the reply's meaning. The stand-in reflects a directive's label and size and
 //     nothing else, so conversational ordering of *content* stays with
 //     시나리오 5's exception.
@@ -236,36 +237,41 @@ func TestClaudeSerialQueue_InvocationsNeverRunConcurrently(t *testing.T) {
 		t.Fatalf("argv probe in %s: %v (stderr=%q)", s.Pod, res.err, res.stderr)
 	}
 
-	// The probe prints one line per change, so a rising count is a start. Counting
-	// edges rather than lines is what keeps an argv-only change — same count, new
-	// command line — from being read as another invocation.
+	// The probe prints one line per *change*, of either the count or the command
+	// line, so the unit of an invocation is a distinct argv and not a rising
+	// count. Counting rising edges undercounts here, and measurably so: this SUT
+	// hands one invocation over to the next inside a single 50ms sample, which
+	// shows up as `1 <slow argv>` followed by `1 <fast argv>` with no zero in
+	// between. That sequence is a serial handoff — the count never reached 2 —
+	// but an edge counter reads it as one invocation.
 	var (
 		maxConcurrent int
-		starts        int
-		prevCount     int
+		observed      []string
 		lastCount     = -1
 	)
 	for _, line := range strings.Split(res.out, "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		countField, _, _ := strings.Cut(line, "\t")
+		countField, argv, _ := strings.Cut(line, "\t")
 		n, err := strconv.Atoi(strings.TrimSpace(countField))
 		if err != nil {
 			t.Fatalf("probe emitted an unparseable line %q (full output=%q)", line, res.out)
 		}
-		if n > prevCount {
-			starts += n - prevCount
-		}
 		if n > maxConcurrent {
 			maxConcurrent = n
 		}
-		prevCount, lastCount = n, n
+		lastCount = n
+		if argv = strings.TrimSpace(argv); argv != "" {
+			if len(observed) == 0 || observed[len(observed)-1] != argv {
+				observed = append(observed, argv)
+			}
+		}
 	}
 
-	if starts < 2 {
-		t.Fatalf("the probe saw %d invocation start(s), want 2 — both accepted writes must run "+
-			"(AC-E2); probe output=%q", starts, res.out)
+	if len(observed) < 2 {
+		t.Fatalf("the probe saw %d invocation(s), want 2 — both accepted writes must run (AC-E2); "+
+			"probe output=%q", len(observed), res.out)
 	}
 	if maxConcurrent > 1 {
 		t.Fatalf("%d `claude` processes ran at once — the second write was accepted while the first "+
@@ -276,5 +282,18 @@ func TestClaudeSerialQueue_InvocationsNeverRunConcurrently(t *testing.T) {
 		t.Fatalf("the probe stopped while %d `claude` process(es) were still running — invocations are "+
 			"one-shot (AC-E2); probe output=%q", lastCount, res.out)
 	}
-	t.Logf("probe saw %d invocation start(s), never more than %d running at once", starts, maxConcurrent)
+
+	// The same ordering the buffer shows, one layer down: the processes ran in
+	// the order the writes were issued. The buffer could in principle be ordered
+	// by something downstream of execution; this cannot.
+	if !strings.Contains(observed[0], cc3SlowPrompt) {
+		t.Fatalf("the first invocation ran %q, want the prompt written first (%s) — the queue runs "+
+			"prompts in the order they were accepted (AC-E2)", observed[0], cc3SlowPrompt)
+	}
+	if !strings.Contains(observed[1], cc3FastPrompt) {
+		t.Fatalf("the second invocation ran %q, want the prompt written second (%s) (AC-E2)",
+			observed[1], cc3FastPrompt)
+	}
+	t.Logf("probe saw %d invocation(s) in write order, never more than %d running at once",
+		len(observed), maxConcurrent)
 }
