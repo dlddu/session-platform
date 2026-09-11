@@ -1,0 +1,264 @@
+//go:build e2e
+
+// 검증 시나리오: claude-code-workload.md#시나리오 3
+//
+// docs/prd/claude-code-workload.md AC-E2, driven against the in-cluster provider
+// stand-in registered as `CLAUDE-PROVIDER` in docs/test/e2e.md.
+//
+// The scenario is about *two* writes where the second is issued before the first
+// invocation has finished, and what the platform owes for that is two things:
+// the runs do not overlap, and the output accumulates in the order the writes
+// were sent.
+//
+// Order is what this file is for, and it is bought by inverting the sizes. The
+// first prompt asks the stand-in for the largest body a directive may ask for
+// (200000 filler runes) and the second for a 40-rune one, so a session that ran
+// its queue concurrently — or drained it out of order — would land the short
+// reply first. Two same-sized replies would satisfy the same assertion under any
+// implementation and buy nothing.
+//
+// Inverting the sizes is also what turns the scenario's precondition from an
+// assumption into a measurement. e2e_e2_prompt_invocation_test.go's header
+// records that on this SUT an invocation is not slower than a write's own round
+// trip, so a burst of equal prompts may never overlap at all — and "they did not
+// overlap" over an empty window is vacuous. Here the second write returns while
+// the first reply is still arriving, and cc3IssueOverlapped proves that from the
+// buffer before anything below asserts serialisation.
+//
+// What this file deliberately does NOT assert, and why:
+//
+//   - that a write returns before its own invocation finishes. That clause
+//     belongs to 시나리오 2 and stays where 시나리오 2's file left it:
+//     data-plane/cmd/agent/claude_test.go's TestClaudeWriteIsNonBlockingAndSerial,
+//     which holds a fake runner open. This file needs only the weaker fact that
+//     the *second* write is accepted mid-flight, which it can observe directly.
+//   - exact argv, one-shot lifetime and `--continue`. 시나리오 2 owns all three;
+//     the process probe is reused here for its concurrency count alone.
+//   - the reply's meaning. The stand-in reflects a directive's label and size and
+//     nothing else, so conversational ordering of *content* stays with
+//     시나리오 5's exception.
+//   - byte-level cursor contracts on the way out (chunk boundaries, resume,
+//     reset). Those are 시나리오 4's, driven through the same stand-in.
+package e2e_test
+
+import (
+	"context"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
+// The directive pair and the replies it produces. Byte counts are written out
+// rather than derived from each other, so that a change on either side fails
+// here instead of quietly agreeing with itself; MAX_RUNES in
+// deploy/e2e-anthropic-fake.yaml is the ceiling on the first one.
+const (
+	cc3SlowPrompt = "e2e-reply:ccthree-slow:200000:64"
+	cc3SlowPrefix = "ccthree-slow:"
+	cc3SlowRunes  = 200000
+	// len("ccthree-slow:") + 3 bytes per filler rune (U+AC00).
+	cc3SlowBytes = 13 + 3*cc3SlowRunes
+
+	cc3FastPrompt = "e2e-reply:ccthree-fast:40:1"
+	cc3FastPrefix = "ccthree-fast:"
+	cc3FastRunes  = 40
+	cc3FastBytes  = 13 + 3*cc3FastRunes
+)
+
+// The projector closes a message with a newline when the assistant text does not
+// already end in one (data-plane/cmd/agent/claude_stream.go finishMessage), and
+// two invocations run here.
+const cc3Terminators = 2
+
+// cc3IssueOverlapped sends the slow prompt and then the fast one with nothing in
+// between, and returns the buffer as it stood the moment the second write
+// returned.
+//
+// That buffer is the scenario's precondition, not a formality. If it already
+// held the whole slow reply then the first invocation had finished before the
+// second write was even accepted, there was no overlap to observe, and every
+// assertion downstream would be measuring a queue that was never contended. That
+// is a fact about how fast this SUT is rather than about the platform, so the
+// helper says so loudly instead of letting the run pass quietly.
+func cc3IssueOverlapped(t *testing.T, id string) readResp {
+	t.Helper()
+	if before := readShellAt(t, id, 0); before.NextOffset != 0 {
+		t.Fatalf("a fresh claude-code session already holds %d bytes of output; this file reads "+
+			"order off absolute positions and cannot start from a dirty buffer", before.NextOffset)
+	}
+
+	writePromptOK(t, id, cc3SlowPrompt)
+	writePromptOK(t, id, cc3FastPrompt)
+	mid := readShellAt(t, id, 0)
+
+	if mid.NextOffset >= cc3SlowBytes {
+		t.Fatalf("the first reply (%d bytes) had already fully landed (%d bytes buffered) by the time "+
+			"the second write returned — the two writes never overlapped, so nothing below would be "+
+			"measuring serialisation. Raise the first directive's size, or the SUT got faster.",
+			cc3SlowBytes, mid.NextOffset)
+	}
+	// The negative half of the same moment: the queue may not have started the
+	// second prompt beside the first one.
+	if strings.Contains(mid.Payload, cc3FastPrefix) {
+		t.Fatalf("the second reply was already in the buffer when its own write returned (%d bytes "+
+			"buffered) — it must queue behind the running invocation, not run beside it (AC-E2)",
+			mid.NextOffset)
+	}
+	t.Logf("second write accepted with %d/%d bytes of the first reply buffered", mid.NextOffset, cc3SlowBytes)
+	return mid
+}
+
+// cc3Settled waits for both replies to land and for the buffer to stop moving.
+//
+// Reaching the byte count is not enough on its own: the slow reply arrives as 64
+// deltas and its terminating newline lands after the last of them, so a wait that
+// stopped at the threshold could hand back a buffer that is still growing — and
+// the assertions here read positions out of a buffer they assume is final.
+func cc3Settled(t *testing.T, id string) readResp {
+	t.Helper()
+	r := eventuallyClaudeOutput(t, id, 5*time.Minute, func(p string) bool {
+		return len(p) >= cc3SlowBytes+cc3FastBytes
+	})
+	deadline := time.Now().Add(time.Minute)
+	for {
+		time.Sleep(2 * time.Second)
+		again := readShellAt(t, id, 0)
+		if again.NextOffset == r.NextOffset {
+			return again
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("session %s output never stopped growing (%d -> %d)", id, r.NextOffset, again.NextOffset)
+		}
+		r = again
+	}
+}
+
+// The headline: the two replies sit in the buffer in the order their writes were
+// issued, even though the first is four thousand times the size of the second
+// and was still streaming when the second was accepted.
+func TestClaudeSerialQueue_ReadZeroAccumulatesInWriteOrder(t *testing.T) {
+	s := claudeSession(t)
+	cc3IssueOverlapped(t, s.ID)
+
+	full := cc3Settled(t, s.ID)
+
+	slow := strings.Index(full.Payload, cc3SlowPrefix)
+	fast := strings.Index(full.Payload, cc3FastPrefix)
+	if slow < 0 || fast < 0 {
+		t.Fatalf("read(0) is missing a reply (slow=%d fast=%d) in %d bytes", slow, fast, full.NextOffset)
+	}
+	if slow != 0 {
+		t.Fatalf("the first reply starts at byte %d, want 0 — the buffer was empty before the writes, "+
+			"so nothing may precede it", slow)
+	}
+	// Position rather than relative order: the short reply has to begin after the
+	// long one's last byte. Two replies that interleaved would still satisfy a
+	// naive `slow < fast`, and interleaving is exactly what a concurrent queue
+	// would produce here.
+	if fast < cc3SlowBytes {
+		t.Fatalf("the second reply starts at byte %d, inside the first reply's %d bytes — a session "+
+			"runs its prompts one at a time and appends in write order (AC-E2)", fast, cc3SlowBytes)
+	}
+	if got := strings.Count(full.Payload, cc3SlowPrefix); got != 1 {
+		t.Fatalf("the first reply's label appears %d times, want exactly 1 — one accepted write is "+
+			"one run (AC-E2)", got)
+	}
+	if got := strings.Count(full.Payload, cc3FastPrefix); got != 1 {
+		t.Fatalf("the second reply's label appears %d times, want exactly 1 — one accepted write is "+
+			"one run (AC-E2)", got)
+	}
+	// Nothing else got in, and nothing ran twice. A drain that reordered *and*
+	// replayed a prompt could still pass the position checks; this one it cannot.
+	if want := int64(cc3SlowBytes + cc3FastBytes); full.NextOffset < want || full.NextOffset > want+cc3Terminators {
+		t.Fatalf("buffer is %d bytes, want %d plus at most %d terminating byte(s)",
+			full.NextOffset, want, cc3Terminators)
+	}
+	t.Logf("slow reply at [0,%d), fast reply at [%d,%d), buffer settled at %d bytes",
+		cc3SlowBytes, fast, fast+cc3FastBytes, full.NextOffset)
+}
+
+// The same overlap watched from inside the pod: the second prompt is accepted
+// while the first is running, and the CLI still never runs twice at once.
+//
+// 시나리오 2's file counts the same thing with the same probe, but it issues a
+// burst of equal prompts and its own header records that each of them had
+// answered before the next was issued — so that count may have had no window to
+// find anything in. Here the window is established first, by cc3IssueOverlapped,
+// which is what makes the number below mean something.
+func TestClaudeSerialQueue_InvocationsNeverRunConcurrently(t *testing.T) {
+	cs, cfg, ok := kubeClient(t)
+	if !ok {
+		t.Skip("no cluster access; counting concurrent invocations needs the deployed SUT")
+	}
+	ns := sessionNamespace()
+	s := claudeSession(t)
+
+	// Sampling starts before the writes so the first invocation cannot slip in
+	// between session creation and the probe attaching.
+	type probeResult struct {
+		out    string
+		stderr string
+		err    error
+	}
+	done := make(chan probeResult, 1)
+	const probeWindow = 240
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), (probeWindow+30)*time.Second)
+		defer cancel()
+		out, errOut, err := execInContainer(ctx, cs, cfg, ns, s.Pod, workloadContainer,
+			[]string{"/bin/sh", "-c", claudeArgvProbe, "probe", strconv.Itoa(probeWindow)})
+		done <- probeResult{out: out, stderr: errOut, err: err}
+	}()
+	time.Sleep(3 * time.Second)
+
+	cc3IssueOverlapped(t, s.ID)
+	cc3Settled(t, s.ID)
+
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("argv probe in %s: %v (stderr=%q)", s.Pod, res.err, res.stderr)
+	}
+
+	// The probe prints one line per change, so a rising count is a start. Counting
+	// edges rather than lines is what keeps an argv-only change — same count, new
+	// command line — from being read as another invocation.
+	var (
+		maxConcurrent int
+		starts        int
+		prevCount     int
+		lastCount     = -1
+	)
+	for _, line := range strings.Split(res.out, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		countField, _, _ := strings.Cut(line, "\t")
+		n, err := strconv.Atoi(strings.TrimSpace(countField))
+		if err != nil {
+			t.Fatalf("probe emitted an unparseable line %q (full output=%q)", line, res.out)
+		}
+		if n > prevCount {
+			starts += n - prevCount
+		}
+		if n > maxConcurrent {
+			maxConcurrent = n
+		}
+		prevCount, lastCount = n, n
+	}
+
+	if starts < 2 {
+		t.Fatalf("the probe saw %d invocation start(s), want 2 — both accepted writes must run "+
+			"(AC-E2); probe output=%q", starts, res.out)
+	}
+	if maxConcurrent > 1 {
+		t.Fatalf("%d `claude` processes ran at once — the second write was accepted while the first "+
+			"invocation was still running, and a session must still run them one after the other "+
+			"(AC-E2); probe output=%q", maxConcurrent, res.out)
+	}
+	if lastCount != 0 {
+		t.Fatalf("the probe stopped while %d `claude` process(es) were still running — invocations are "+
+			"one-shot (AC-E2); probe output=%q", lastCount, res.out)
+	}
+	t.Logf("probe saw %d invocation start(s), never more than %d running at once", starts, maxConcurrent)
+}
