@@ -77,6 +77,24 @@ def fail(rule: str, message: str) -> None:
     failures.append(f"[{rule}] {message}")
 
 
+def policy_docs() -> list[pathlib.Path]:
+    """R5 가 보는 범위 — 정책 디렉터리 안의 모든 마크다운(정렬).
+
+    원장 한 파일만 보면 이 규칙은 조용히 헛돈다. 줄 번호 좌표를 가장 많이 적는 곳은 원장이
+    아니라 `passes/` 의 판정 상세이고, 디렉터리로 이전하기 전 R5 는 단일 파일 전체(본문 +
+    원장 + 상세)를 덮고 있었다 — 여기서 원장으로 좁히면 이전 자체가 강제력을 줄인다.
+    그 축소는 **좁아진 범위 안에 위반이 없는 한 rc=0** 이라 이 게이트에도 CI 에도 잡히지
+    않으므로, 범위를 넓히는 것과 함께 그 크기를 출력에 싣는다(아래 `main`).
+    """
+    docs = sorted(POLICY_DIR.rglob("*.md"))
+    if not docs:
+        raise SystemExit(
+            f"정책 디렉터리에 마크다운이 하나도 없다: {POLICY_DIR.relative_to(REPO_ROOT)}"
+            " — R5 가 아무것도 스캔하지 못하는 상태는 '위반 0' 으로 보여 초록으로 새어 나간다."
+        )
+    return docs
+
+
 def scan_files() -> list[str]:
     """모델 as-is 지문과 동일한 스캔 범위(레포 상대 경로, 정렬)."""
     out = subprocess.run(
@@ -240,12 +258,18 @@ def main() -> int:
                 f" 실측 `{actual_fingerprint}`. 줄 수가 같아도 내용이 바뀌면 재판정 대상이다.",
             )
 
-    # R5 — 줄 번호 좌표 금지
-    for lineno, line in enumerate(text.splitlines(), 1):
-        for hit in LINE_COORDINATE_RE.finditer(line):
-            fail(
-                "R5",
-                f"{LEDGER.name} {lineno} 번째 줄에 줄 번호 좌표 `{hit.group(0)}` 이 있다."
+    # R5 — 줄 번호 좌표 금지(정책 디렉터리의 모든 마크다운)
+    r5_docs = policy_docs()
+    r5_lines = 0
+    for doc in r5_docs:
+        rel = doc.relative_to(REPO_ROOT)
+        lines = doc.read_text(encoding="utf-8").splitlines()
+        r5_lines += len(lines)
+        for lineno, line in enumerate(lines, 1):
+            for hit in LINE_COORDINATE_RE.finditer(line):
+                fail(
+                    "R5",
+                    f"{rel} {lineno} 번째 줄에 줄 번호 좌표 `{hit.group(0)}` 이 있다."
                     " 줄 번호는 다음 판정이 그 파일을 건드리는 순간 밀려나고 어떤 규칙도 그것을"
                     " 재측정하지 않는다 — 심볼 이름이나 AC 번호로 적을 것.",
                 )
@@ -271,6 +295,10 @@ def main() -> int:
     print(
         f"OK: 규칙 R1~R5 위반 없음 — {census(hits)}"
         f" · 판정 완료 {judged}줄({share:.1f}%) / 등재 범위 {len(rows)}"
+        # R5 가 무엇을 덮었는지 함께 싣는다. 스캔 범위가 줄어드는 사고는 좁아진 범위 안에
+        # 위반이 없는 한 rc=0 이라 초록으로 새어 나가므로, 크기를 눈에 보이게 두는 것이
+        # 이 게이트가 자기 강제력의 축소를 알리는 유일한 수단이다.
+        f" · R5 스캔 {len(r5_docs)}파일 {r5_lines}줄"
     )
     for row in rows:
         print(
