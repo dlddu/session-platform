@@ -14,13 +14,22 @@
 #     여전히 결정적 상수이고, 실 Claude CLI 의 프롬프트 루프가 이 표면으로 만족되는지는 이
 #     배선이 단언하지 않는다(등재 행의 '잔여' 칸에 명시).
 #
-# 응답 **형태**는 프롬프트가 고른다(2026-09-10). 프롬프트에 `e2e-reply:<label>:<runes>:<deltas>`
-# 지시자가 있으면 그 label 을 앞에 단 다중바이트 본문을 `deltas` 개의 델타로 나눠 내고, 없으면
-# 아래 `REPLY` 상수 경로 그대로다 — 지시자를 쓰지 않는 호출자에게는 이 배선이 부모와 구별되지
-# 않는다. 상수 하나만 낼 수 있었을 때 등재 행이 자기 잔여로 적어 둔 두 가지 중 **한 invocation 이
-# 내는 델타가 1 개**라는 쪽이 이것으로 풀린다(응답이 프롬프트의 *의미*를 반영하지 않는다는 쪽은
-# 그대로 남는다 — 그건 실 모델이라야 한다). 지시자를 프롬프트로 나르는 이유는 그것이 테스트에서
-# 이 대역까지 닿는 유일한 채널이기 때문이고, 그래서 새 env 도 새 엔드포인트도 늘지 않는다.
+# 응답 **형태**는 프롬프트가 고른다(2026-09-10). 프롬프트에
+# `e2e-reply:<label>:<runes>:<deltas>[:<delayMs>]` 지시자가 있으면 그 label 을 앞에 단 다중바이트
+# 본문을 `deltas` 개의 델타로 나눠 내고, 없으면 아래 `REPLY` 상수 경로 그대로다 — 지시자를 쓰지
+# 않는 호출자에게는 이 배선이 부모와 구별되지 않는다. 상수 하나만 낼 수 있었을 때 등재 행이 자기
+# 잔여로 적어 둔 두 가지 중 **한 invocation 이 내는 델타가 1 개**라는 쪽이 이것으로 풀린다(응답이
+# 프롬프트의 *의미*를 반영하지 않는다는 쪽은 그대로 남는다 — 그건 실 모델이라야 한다). 지시자를
+# 프롬프트로 나르는 이유는 그것이 테스트에서 이 대역까지 닿는 유일한 채널이기 때문이고, 그래서
+# 새 env 도 새 엔드포인트도 늘지 않는다.
+#
+# 넷째 칸 `delayMs` 는 **응답이 걸리는 시간**을 고르는 선택 항이다(2026-09-11, 생략하면 0 이라
+# 기존 호출자에게는 부모와 글자 그대로 같은 경로다). 크기로는 시간을 살 수 없다는 것이 측정으로
+# 확인됐기 때문에 들였다 — `claude-code-workload.md#시나리오 3` 저작 슬라이스가 이 대역이 허용하는
+# **최대 응답**(200000 룬 = 600013 바이트, 64 델타)을 지시하고도 첫 invocation 이 **둘째 write 의
+# 왕복 안에서 이미 끝나** 있는 것을 배포 SUT 에서 관측했다(버퍼 600148 바이트 = 두 응답 모두 완료).
+# 그 시나리오의 전제는 「첫 실행이 끝나기 전에 둘째 write」이므로, 겹칠 창을 만들 수단이 없으면
+# 저작해도 그 전제를 살 수 없다. 델타 사이에만 쉬므로 프레임의 모양은 바뀌지 않는다.
 #
 # test-only 라는 말이 붙는 것은 이 대역 자체다. `deploy/minio.yaml` 이나
 # `deploy/plugin-marketplace-git.yaml` 과 달리 프로덕션과 같은 코드 경로가 도는 실물이 아니다.
@@ -93,13 +102,18 @@ data:
     // A shaped reply is opt-in and keyed off the prompt, the only channel a test
     // has into this process. Everything about the shape is in the directive, so
     // the deployment carries no test knobs of its own.
-    const SHAPE_RE = /e2e-reply:([a-z][a-z0-9-]*):(\d+):(\d+)/;
+    const SHAPE_RE = /e2e-reply:([a-z][a-z0-9-]*):(\d+):(\d+)(?::(\d+))?/;
     // Three bytes per rune. The point of a multi-byte body is that a cut at a
     // fixed byte offset lands *inside* a character, which is what makes the
     // platform's code-point back-off observable instead of vacuous.
     const FILLER = "가";
     const MAX_RUNES = 200000;
     const MAX_DELTAS = 64;
+    // The pause between deltas, and the only way a test can make one invocation
+    // outlast another's write round trip — size cannot do it, which the header
+    // records as a measurement rather than a guess. Capped per delta, so the
+    // longest reply this stand-in can be asked for is MAX_DELTAS * MAX_DELAY_MS.
+    const MAX_DELAY_MS = 250;
 
     // `--continue` replays the whole conversation, so an earlier directive is
     // still in the history on every later invocation. Only the newest user turn
@@ -123,11 +137,17 @@ data:
 
     function replyShape(msg) {
       const found = SHAPE_RE.exec(lastUserText(msg));
-      if (!found) return { text: REPLY, deltas: 1 };
+      if (!found) return { text: REPLY, deltas: 1, delayMs: 0 };
       const runes = Math.min(Number(found[2]), MAX_RUNES);
       const deltas = Math.min(Math.max(Number(found[3]), 1), MAX_DELTAS);
-      return { text: found[1] + ":" + FILLER.repeat(runes), deltas };
+      // Absent fourth field -> 0, which skips the await entirely below rather
+      // than awaiting a zero timer: an omitted directive field must leave the
+      // emit sequence exactly as it was before this field existed.
+      const delayMs = found[4] === undefined ? 0 : Math.min(Number(found[4]), MAX_DELAY_MS);
+      return { text: found[1] + ":" + FILLER.repeat(runes), deltas, delayMs };
     }
+
+    const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
     // Split on character boundaries: a delta's `text` is a JSON string, so a
     // fragment ending mid-rune could not be encoded here at all. The mid-rune
@@ -166,7 +186,7 @@ data:
     // Written out one event at a time and flushed, so a client that buffers the
     // whole body would look different from one that streams. That difference is
     // the thing the proxy's stream tests care about.
-    function streamMessage(res, shape) {
+    async function streamMessage(res, shape) {
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-store",
@@ -183,6 +203,7 @@ data:
       });
       emit("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
       for (const fragment of splitText(shape.text, shape.deltas)) {
+        if (shape.delayMs) await sleep(shape.delayMs);
         emit("content_block_delta", {
           type: "content_block_delta",
           index: 0,
@@ -239,7 +260,10 @@ data:
           }
           const shape = replyShape(msg);
           if (msg && msg.stream === true) {
-            return streamMessage(res, shape);
+            // streamMessage only became async so a delta gap could be awaited;
+            // with delayMs 0 it never suspends and the whole body still runs in
+            // this tick. A rejection can only be a dead socket, so drop it.
+            return streamMessage(res, shape).catch(() => res.destroy());
           }
           return send(res, 200, messageBody(shape.text));
         });

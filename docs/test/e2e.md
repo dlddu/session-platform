@@ -368,7 +368,7 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 | `architecture.md#시나리오 3` | `control-plane/test/e2e_a3_pod_reclaim_test.go` | go | AC-A3 | 동결 시 API `pod:""` + 클러스터 그라운드-트루스로 Pod 삭제/terminating 확인 |
 | `claude-code-workload.md#시나리오 1` | `control-plane/test/e2e_e1_workload_type_test.go` | go | AC-E1 | `workloadType=claude-code` 세션이 SUT에서 서고 그 pod에서 Claude CLI가 실제로 실행됨 / 필드 생략은 shell / 잘못된 값은 pod 생성 전 400 / 타입·모델은 생성 후 불변 |
 | `claude-code-workload.md#시나리오 2` | `control-plane/test/e2e_e2_prompt_invocation_test.go` | go | AC-E2 | write = 프롬프트 1회 실행 — 배포 SUT에서 실 `claude` 프로세스가 기동되고 응답이 세션 출력에 투영됨 / burst의 모든 프롬프트가 큐에 수락돼 각각 1회씩 실행됨 / 프로세스 테이블에서 본 exact argv·원샷 수명·직렬 큐(동시 실행 없음)·첫 성공 뒤에만 `--continue` / 1 MiB 초과 프롬프트는 public API 413이고 실행되지 않음 (비블로킹 반환 자체는 SUT에서 관측 불가 — invocation이 write 왕복보다 느리지 않다. `data-plane/cmd/agent/claude_test.go`의 `TestClaudeWriteIsNonBlockingAndSerial`이 fake runner로 소유) |
-| `claude-code-workload.md#시나리오 3` | `control-plane/test/e2e_claude_code_3_serial_queue_test.go` | go | AC-E2 (직렬 큐·출력 순서) | **연속 write 의 직렬 실행과 출력 누적 순서**를 배포 SUT 에서 — 겹침 창을 **먼저 세운 뒤에** 잰다: 첫 프롬프트가 대역이 허용하는 최대 응답(200000 룬 → 600013바이트)을, 둘째가 133바이트를 지시해 **크기를 역전**시키고, 둘째 write 가 반환된 순간의 `read(0)` 이 첫 응답을 **아직 미완**으로 담고 둘째 라벨은 담지 않음을 확인해 「첫 실행이 끝나기 전에 둘째 write」라는 전제를 가정이 아니라 **측정**으로 세운다(전제가 깨지면 SUT 가 빨라진 것이므로 테스트가 그렇게 말하며 실패한다) / 그 뒤 settle 된 `read(0)` 이 첫 응답을 **[0, 600013)** 에, 둘째를 **그 뒤**에 담고 두 라벨이 각각 정확히 1회이며 전체 길이가 두 응답 + 종결 바이트 2 이내 — 병렬·순서 미보장 구현이라면 133바이트가 먼저 착지하므로 이 순서 단언은 **공허하지 않다**(같은 크기 두 응답이면 어떤 구현에서도 참이라 아무것도 사지 못한다) / 파드 안 프로세스 테이블에서 동시 `claude` 수가 **1 을 넘지 않고** 시작이 2회이며 마지막이 0. 시나리오 2 와의 경계: 2는 **invocation 자체**(exact argv·원샷 수명·burst 수락)이고 3은 **두 write 사이의 순서**다 — 비중첩은 2의 파일도 같은 프로브로 세지만 그 파일 헤더가 「invocation 이 write 왕복보다 느리지 않다」고 적어 **겹칠 창이 비어 있을 수 있으므로**, 여기서는 창을 세운 뒤에 센다. 시나리오 4 와의 경계: 4는 같은 대역으로 **커서 표면**(UTF-8 경계 chunk·재개·중복 부재)을 산다. **비블로킹 반환 자체는 이 파일에 없다** — `data-plane/cmd/agent/claude_test.go` 의 `TestClaudeWriteIsNonBlockingAndSerial` 이 fake runner 를 붙잡아 소유한다 |
+| `claude-code-workload.md#시나리오 3` | `control-plane/test/e2e_claude_code_3_serial_queue_test.go` | go | AC-E2 (직렬 큐·출력 순서) | **연속 write 의 직렬 실행과 출력 누적 순서**를 배포 SUT 에서 — 겹침 창을 **먼저 세운 뒤에** 잰다. 이 SUT 에서 그 창은 저절로 생기지 않는다: 대역이 허용하는 **최대 응답**(200000 룬 = 600013바이트, 64 델타)을 지시해도 첫 invocation 이 **둘째 write 의 왕복 안에서 이미 끝나** 있는 것을 실측했다(버퍼 600148 = 두 응답 모두 완료). 크기로는 시간을 못 산다 ⇒ 대역의 지시자에 **델타 간격**을 더해(선택 넷째 칸, 생략 시 0 이라 기존 호출자에게 부모와 바이트 동일) 첫 프롬프트가 `64×150ms` = **최소 9.6초**를, 둘째가 **1초 미만**을 쓰게 한다 / 그 창에서 둘째 write 가 반환된 순간의 `read(0)` 이 첫 응답을 **아직 미완**으로 담고 둘째 라벨은 담지 않음을 확인해 「첫 실행이 끝나기 전에 둘째 write」라는 전제를 가정이 아니라 **측정**으로 세운다(전제가 깨지면 테스트가 그렇게 말하며 실패한다 — 조용히 통과하지 않는다) / 그 뒤 settle 된 `read(0)` 이 첫 응답을 **[0, 12013)** 에, 둘째를 **그 뒤**에 담고 두 라벨이 각각 정확히 1회이며 전체 길이가 두 응답 + 종결 바이트 2 이내 — 둘째가 **90배 짧고 20배 빠르므로** 병렬·순서 미보장 구현이라면 그쪽이 먼저 착지한다, 즉 이 순서 단언은 **공허하지 않다**(같은 크기·같은 속도 두 응답이면 어떤 구현에서도 참이라 아무것도 사지 못한다) / 파드 안 프로세스 테이블에서 동시 `claude` 수가 **1 을 넘지 않고** 시작이 2회이며 마지막이 0. 시나리오 2 와의 경계: 2는 **invocation 자체**(exact argv·원샷 수명·burst 수락)이고 3은 **두 write 사이의 순서**다 — 비중첩은 2의 파일도 같은 프로브로 세지만 그 파일 헤더가 「invocation 이 write 왕복보다 느리지 않다」고 적어 **겹칠 창이 비어 있을 수 있으므로**, 여기서는 창을 만든 뒤에 센다. 시나리오 4 와의 경계: 4는 같은 대역으로 **커서 표면**(UTF-8 경계 chunk·재개·중복 부재)을 산다. **비블로킹 반환 자체는 이 파일에 없다** — `data-plane/cmd/agent/claude_test.go` 의 `TestClaudeWriteIsNonBlockingAndSerial` 이 fake runner 를 붙잡아 소유한다 |
 | `claude-code-workload.md#시나리오 4` | `control-plane/test/e2e_claude_code_4_stream_reconnect_test.go` | go | AC-E3 (live stream·재접속·read reconcile) | **claude-code 세션의 라이브 출력 왕복**을 배포 SUT 에서 — 헤드라인인 **UTF-8 경계로 갈린 두 chunk** 를 공허하지 않게 산다: 프롬프트가 지시한 다중바이트 응답 75006바이트를 `offset=0` 으로 stream 하면 첫 output 이벤트가 64 KiB(65536)가 아니라 **65535** 에서 끊긴다 — 그 바이트가 룬의 시작이고 65536 은 **연속 바이트**임을 버퍼에서 직접 확인해(`buf[65535]` 선두 · `buf[65536]` 연속) 한계선이 실제로 문자 중간에 떨어졌음을, 즉 백오프가 **일어난 결정**이었음을 증명한 뒤에 그 숫자를 단언한다(ASCII 본문이면 둘 다 65536 이라 이 단언은 아무것도 사지 않는다) / 두 chunk 가 각각 유효 UTF-8 이고 이어 붙이면 같은 시점 `read(0)` 버퍼를 **바이트로 재현** / 첫 이벤트 뒤 끊고 query 에는 `?offset=0` 을 둔 채 `Last-Event-ID` 로 재연결하면 **재개 커서에서 이어지고** 그 뒤 도착한 두 번째 프롬프트의 응답이 정확히 1회, 앞선 응답의 머리 바이트는 **재전송되지 않음** / 현재 길이를 넘는 커서는 payload 없는 **`reset`** 이고 그 `id` = 현재 길이이며 그 신호 자체는 `lastAccess` 를 바꾸지 않음 / `read(0)` 이 두 응답을 **쓴 순서대로** 담고 마지막 커서 read 는 **빈 델타** / 응답 라벨이 버퍼에 **정확히 1회** — raw stream-json 의 final/result 레코드가 이미 부분 델타로 낸 텍스트를 다시 투영하지 않는다는 것을 계수로 산다. `state-api.md#시나리오 6` 과의 경계: 6은 **상태별 계약과 커서 오류 갈래**를 shell PTY 바이트로 사고(임의 바이트라 UTF-8 경계가 계약이 아니다), 4는 **claude-code 의 경계·재개·중복 부재**다. 시나리오 2와의 경계: 2는 **invocation**(argv·수명·큐), 4는 그 출력이 커서 표면으로 나오는 방식이다. **응답의 *의미*는 이 파일에 없다** — 대역은 지시자의 라벨과 크기만 반영하므로 대화 연속성은 `claude-code-workload.md#시나리오 5` 의 예외가 계속 소유한다 |
 | `claude-code-workload.md#시나리오 6` | `control-plane/test/e2e_claude_code_6_archive_freeze_test.go` | go | AC-E5 (AC-B1/B2/B3의 `claude-code` 경로) | **CRIU 가 아니라 파일시스템 아카이브로 동결·복원되는 타입**을 배포 SUT 에서 — 「동결 시 CRIU dump 가 호출되지 않는다」를 해체 중인 파드를 훔쳐보는 경쟁 대신 **구조로** 산다: CRIU 는 파드 안에서 프로세스 트리를 뜨고 플랫폼은 그 특권을 `shell` 파드에만 준다(`k8s.WithCheckpointPrivileged`, 배포의 CRIU 게이트 배선) — claude-code 워크로드 컨테이너는 그것을 **받지 않으므로** 그 안에서 dump 가 돌 수 없고, 같은 SUT 에 세운 shell 세션이 **특권을 받는다**는 대조군이 그 부재를 「게이트가 꺼져서」가 아니라 **이 타입의 결정**으로 못박는다(대조군이 특권을 안 받으면 판별자가 없다고 보고 skip 한다) / 아카이브가 뜰 대상이 실재함 — 그 파드가 `/session` 에 볼륨을 마운트하고 있음 / 동결 시 API `pod:""` + **클러스터 그라운드-트루스**로 파드 회수 / **왕복 세 갈래가 새 파드로 건너감** — 동결 전 워크스페이스에 심은 마커가 **이름이 다른** 복원 파드에서 같은 내용으로 읽히고(그 프로브가 동결 **전에** 동작한다는 것을 먼저 확인해 음성이 아닌 양성 결과를 자기검증한다), 복원 직후 `read(0)` 이 동결 전 응답 1건을 담으며(출력 scrollback), 복원된 파드의 **첫** invocation argv 가 `--continue` 를 단다 — 새 파드는 새 대화로 시작하므로 그 플래그의 출처는 아카이브뿐이다 / (a) 동결 전 커서의 델타가 동결 **후** 출력 1건만 담고 (b) `offset=0` 이 전·후 2건을 담으며 **델타가 그 꼬리와 바이트 동일** — 두 응답이 같은 상수 문자열이라 개수로는 순서를 못 가르므로 순서는 바이트로 산다. **두 갈래는 이 파일에 없다**(동결 전 대화를 참조하는 프롬프트의 **의미** 판정 · 스냅샷 트랜잭션의 durable `preparing`/`committing` 순서) — 아래 §「남은 미검증 분기」에 등재했다. 파드 회수 자체(`architecture.md#시나리오 3`)·복원이 **새** 파드로 온다는 것(`lifecycle.md#시나리오 2`)·복원 후 커서 무결성(`lifecycle.md#시나리오 3`)은 전부 **shell(=CRIU) 경로**로 각자의 파일이 이미 사므로 다시 사지 않는다 — 이 파일이 배타적으로 사는 것은 같은 계약이 **다른 전략**으로 성립하는가다 |
 | `claude-code-workload.md#시나리오 7` | `control-plane/test/e2e_e6_credential_placement_test.go` | go | AC-E6 | **자격 증명의 배치와 그 배치가 사는 격리**를 배포 SUT에서 — 공급자 `base-url`·`auth-token`·optional `ca-cert`는 사이드카 `claude-credentials`에만 / 필수 `k3s-mcp-token`과 optional `k3s-mcp-url`·`plugin-marketplace-url`은 주 컨테이너에만 / optional `model`은 주 컨테이너에만이고 concrete model은 literal이 Secret 기본값을 이김 / 주 컨테이너가 실 플랫폼 토큰을 **어떤 `/proc/*/environ`으로도 읽지 못함**(같은 프로브가 placeholder는 찾으므로 음성 결과가 자기검증된다) / pod가 `data-plane` SA로 서고 실 authorizer가 pods는 allow·secrets는 deny(SubjectAccessReview) / 생성 요청의 자격 증명 필드는 400이고 세션 조회·read 어디에도 두 토큰 값이 없음. 비교하는 비밀 값은 전부 클러스터 Secret에서 읽으므로 이 파일은 자격 증명 사본을 갖지 않는다. **프록시의 행위 계약**(헤더 허용목록·1xx redaction·64 MiB 상한·split-token tail-safe·`ca-cert` 파싱 실패 시 시작 거부)은 `data-plane/cmd/agent/credential_proxy*_test.go`가, **제출되는 pod spec**은 `control-plane/test/workload_type_orchestrator_test.go`(태그 `integration`)가 이미 소유하므로 여기서 다시 사지 않는다 — e2e가 배타적으로 살 수 있는 것은 배포된 그라운드-트루스다 |
@@ -481,18 +481,29 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 > 귀속 불가」·「UTF-8 경계 재료 없음」, 원인은 둘 다 상수 응답 대역) — 분류를 바꾸는 것이 아니라 **두
 > 사이클이 각각 따로 지불한 측정을 행에 남겨** 세 번째가 다시 재지 않게 하는 것이다.
 >
-> **2026-09-11 저작 슬라이스 5**: `claude-code-workload.md#시나리오 3`을 저작해 이 표에서 뺐다 —
-> 슬라이스 4가 대역을 넓혀 뒷절반의 벽을 치운 뒤 이 행이 남아 있던 이유는 **파일이 없다**는 것
-> 하나뿐이었고, 그래서 이번에는 **저작만 한다**: `deploy/`·`data-plane/`·`web/`·`scripts/`는 0줄이고
+> **2026-09-11 저작 슬라이스 5**: `claude-code-workload.md#시나리오 3`을 저작해 이 표에서 뺐다.
 > 어떤 행의 `선행` 칸도 건드리지 않았으므로 이번 `없음`의 감소(2 → 1)는 **전부 저작 때문**이고
 > 재분류는 0건이다. 다음에 무엇을 집을 수 있는지의 정본은 여전히 위 표의 `선행` 칸이다.
 >
-> 앞선 저작들과 다른 점이 하나 있다 — **겹침 창을 먼저 세운다.** 이 시나리오의 전제는 「첫 실행이
-> 끝나기 전에 둘째 write」인데, `control-plane/test/e2e_e2_prompt_invocation_test.go` 헤더가 적어 둔
-> 대로 이 SUT에서 invocation은 write 왕복보다 느리지 않아, 같은 크기 프롬프트를 잇달아 보내면 **겹칠
-> 창 자체가 비어** 「겹치지 않았다」가 공허해진다. 그래서 두 프롬프트의 **크기를 역전**시켜(600013바이트
-> / 133바이트) 둘째 write가 반환된 시점의 버퍼로 전제를 **측정한 뒤에** 순서와 비중첩을 잰다. 같은
-> 역전이 순서 단언도 떠받친다 — 병렬로 돌았다면 짧은 쪽이 먼저 착지하기 때문이다.
+> **이 슬라이스도 저작만 하지 않았다** — 슬라이스 4와 같은 이유로, 다만 벽이 다르다. 이 시나리오의
+> 전제는 「첫 실행이 끝나기 전에 둘째 write」인데 이 SUT에는 **그 창이 없다.**
+> `control-plane/test/e2e_e2_prompt_invocation_test.go` 헤더가 「invocation이 write 왕복보다 느리지
+> 않다」고 적어 둔 것을 이번에 끝까지 재 봤다: 대역이 허용하는 **최대 응답**(200000룬 = 600013바이트,
+> 64델타)을 지시해도 **둘째 write가 반환된 시점에 첫 응답이 이미 완결**돼 있었다(배포 SUT 실측,
+> 버퍼 600148바이트 = 두 응답 모두 완료). 첫 시도는 정확히 그 자리에서 빨갛게 멈췄고, 그것이 이
+> 문단의 근거다 — **크기로는 시간을 살 수 없다.**
+>
+> 그래서 파일을 쓰기 전에 대역을 넓혔다(`deploy/e2e-anthropic-fake.yaml` — 지시자에 선택 넷째 칸
+> `delayMs`를 더해 델타 **사이**에만 쉰다. 생략하면 0이고, 기존 다섯 가지 응답 형태를 부모와
+> 대조해 **바이트 동일**임을 확인했다 — 스트리밍·버퍼드 각각의 무지시자·3칸 지시자 경로다). 첫
+> 프롬프트가 `64×150ms` = 최소 9.6초를, 둘째가 1초 미만을 쓰므로 창이 생기고, 그 창에서 둘째
+> write가 반환된 시점의 버퍼로 전제를 **측정한 뒤에** 순서와 비중첩을 잰다. 같은 역전이 순서
+> 단언도 떠받친다 — 둘째가 90배 짧고 20배 빠르니 병렬로 돌았다면 그쪽이 먼저 착지한다.
+>
+> 이 확장은 등재 행 `CLAUDE-PROVIDER`의 **잔여를 하나도 줄이지 않는다**(응답이 프롬프트의 *의미*를
+> 반영하지 않는다는 잔여는 그대로다). 그래서 슬라이스 4와 달리 그 행을 건드리지 않았다 — 「충실도」
+> 절은 자매 모델 `tbm_session-platform-e2e-mock-policy`의 소관이고, 줄일 잔여가 없는데 손대면
+> 이중 계상이 된다.
 >
 > `approval-gated-workload.md#시나리오 3`을 이번에 묶지 않은 이유는 난이도가 아니라 **축**이다. 그 행은
 > 슬라이스 4가 적어 둔 그대로 대역이 `tool_use` 블록을 낼 수 있어야 열리고, 그것은 저작이 아니라 대역

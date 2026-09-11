@@ -10,20 +10,26 @@
 // the runs do not overlap, and the output accumulates in the order the writes
 // were sent.
 //
-// Order is what this file is for, and it is bought by inverting the sizes. The
-// first prompt asks the stand-in for the largest body a directive may ask for
-// (200000 filler runes) and the second for a 40-rune one, so a session that ran
-// its queue concurrently — or drained it out of order — would land the short
-// reply first. Two same-sized replies would satisfy the same assertion under any
-// implementation and buy nothing.
+// Both halves need the first invocation to still be running when the second
+// write is accepted, and on this SUT that window does not occur by itself.
+// e2e_e2_prompt_invocation_test.go's header already records that an invocation
+// is not slower than a write's own round trip; this file measured how far that
+// goes. Asking the stand-in for the largest body a directive could name — 200000
+// runes, 600013 bytes, 64 deltas — still left the whole reply on disk before the
+// *second* write returned (buffer 600148 = both replies complete). Size cannot
+// buy time here.
 //
-// Inverting the sizes is also what turns the scenario's precondition from an
-// assumption into a measurement. e2e_e2_prompt_invocation_test.go's header
-// records that on this SUT an invocation is not slower than a write's own round
-// trip, so a burst of equal prompts may never overlap at all — and "they did not
-// overlap" over an empty window is vacuous. Here the second write returns while
-// the first reply is still arriving, and cc3IssueOverlapped proves that from the
-// buffer before anything below asserts serialisation.
+// So the directive carries a delta gap instead (the optional fourth field added
+// to deploy/e2e-anthropic-fake.yaml for this file), and the first prompt asks for
+// 64 deltas 150ms apart — a reply that takes ~9.6s to finish against a second one
+// that takes well under a second. That inversion does double duty:
+//
+//   - it creates the window, so cc3IssueOverlapped can prove from the buffer that
+//     the second write really was accepted mid-flight rather than assuming it;
+//   - it makes the ordering assertion non-vacuous. The second reply is both
+//     shorter (133 bytes against 12013) and faster, so a session that ran its
+//     queue concurrently, or drained it out of order, would land it first. Two
+//     equal replies would satisfy the same assertion under any implementation.
 //
 // What this file deliberately does NOT assert, and why:
 //
@@ -51,15 +57,21 @@ import (
 
 // The directive pair and the replies it produces. Byte counts are written out
 // rather than derived from each other, so that a change on either side fails
-// here instead of quietly agreeing with itself; MAX_RUNES in
-// deploy/e2e-anthropic-fake.yaml is the ceiling on the first one.
+// here instead of quietly agreeing with itself; MAX_DELTAS and MAX_DELAY_MS in
+// deploy/e2e-anthropic-fake.yaml are the ceilings on the first one's duration.
 const (
-	cc3SlowPrompt = "e2e-reply:ccthree-slow:200000:64"
-	cc3SlowPrefix = "ccthree-slow:"
-	cc3SlowRunes  = 200000
+	// 64 deltas, 150ms apart: the reply cannot finish in less than ~9.6s, which
+	// is the window the second write has to land in.
+	cc3SlowPrompt  = "e2e-reply:ccthree-slow:4000:64:150"
+	cc3SlowPrefix  = "ccthree-slow:"
+	cc3SlowRunes   = 4000
+	cc3SlowDeltas  = 64
+	cc3SlowDelayMs = 150
+	cc3SlowFloorMs = cc3SlowDeltas * cc3SlowDelayMs
 	// len("ccthree-slow:") + 3 bytes per filler rune (U+AC00).
 	cc3SlowBytes = 13 + 3*cc3SlowRunes
 
+	// No fourth field: this one is as fast as the stand-in can answer.
 	cc3FastPrompt = "e2e-reply:ccthree-fast:40:1"
 	cc3FastPrefix = "ccthree-fast:"
 	cc3FastRunes  = 40
@@ -95,8 +107,12 @@ func cc3IssueOverlapped(t *testing.T, id string) readResp {
 	if mid.NextOffset >= cc3SlowBytes {
 		t.Fatalf("the first reply (%d bytes) had already fully landed (%d bytes buffered) by the time "+
 			"the second write returned — the two writes never overlapped, so nothing below would be "+
-			"measuring serialisation. Raise the first directive's size, or the SUT got faster.",
-			cc3SlowBytes, mid.NextOffset)
+			"measuring serialisation. The stand-in was asked to spend at least %dms on it, so either "+
+			"the delta gap stopped being honoured or this SUT got dramatically faster; raise "+
+			"cc3SlowDelayMs (MAX_DELAY_MS in deploy/e2e-anthropic-fake.yaml is the ceiling). Note "+
+			"that raising the *size* does not help — 600013 bytes was measured landing inside one "+
+			"write's round trip, which is why the gap exists.",
+			cc3SlowBytes, mid.NextOffset, cc3SlowFloorMs)
 	}
 	// The negative half of the same moment: the queue may not have started the
 	// second prompt beside the first one.
@@ -135,8 +151,8 @@ func cc3Settled(t *testing.T, id string) readResp {
 }
 
 // The headline: the two replies sit in the buffer in the order their writes were
-// issued, even though the first is four thousand times the size of the second
-// and was still streaming when the second was accepted.
+// issued, even though the first is ninety times the size of the second, takes
+// twenty times as long, and was still streaming when the second was accepted.
 func TestClaudeSerialQueue_ReadZeroAccumulatesInWriteOrder(t *testing.T) {
 	s := claudeSession(t)
 	cc3IssueOverlapped(t, s.ID)
