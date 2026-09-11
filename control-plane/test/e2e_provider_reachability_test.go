@@ -100,6 +100,37 @@ func TestProviderStreamingResponseSurvivesTheCredentialProxy(t *testing.T) {
 	}
 }
 
+// The name is illustrative and the directive is the stand-in's, both documented
+// where they live (deploy/e2e-anthropic-fake.yaml).
+const providerToolName = "mcp__session-platform-session-mcp__web_fetch_get"
+const providerToolPrompt = `e2e-tool:` + providerToolName + `:{\"url\":\"https://example.test/doc\"}`
+
+// This case is the only thing standing between a regression here and a silent
+// one: if the stand-in stopped emitting tool_use, the seam set and the allowlist
+// would both hold still, and the approval round trip would go back to being
+// unenterable with every gate green.
+func TestProviderEmitsAToolUseBlockWhenThePromptAsksForOne(t *testing.T) {
+	pod := newClaudeSessionPod(t)
+
+	buffered := curlProxy(t, pod, `{"model":"claude-e2e-model","max_tokens":16,`+
+		`"messages":[{"role":"user","content":"`+providerToolPrompt+`"}]}`)
+	for _, want := range []string{`"type":"tool_use"`, providerToolName, `"stop_reason":"tool_use"`} {
+		if !strings.Contains(buffered, want) {
+			t.Fatalf("buffered reply is missing %q: %q", want, buffered)
+		}
+	}
+
+	// A tool call streams as input_json_delta, which the other streaming case
+	// never sees.
+	streamed := curlProxy(t, pod, `{"model":"claude-e2e-model","max_tokens":16,"stream":true,`+
+		`"messages":[{"role":"user","content":"`+providerToolPrompt+`"}]}`)
+	for _, want := range []string{`"type":"tool_use"`, `"type":"input_json_delta"`, `"stop_reason":"tool_use"`} {
+		if !strings.Contains(streamed, want) {
+			t.Fatalf("streamed reply is missing %q: %q", want, streamed)
+		}
+	}
+}
+
 // The stand-in answers 401 to anything but the platform token, so a reply
 // carrying the marker is what proves the injection happened and the forged
 // header was dropped.
