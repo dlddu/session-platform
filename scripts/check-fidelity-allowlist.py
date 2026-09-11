@@ -21,14 +21,25 @@
   R9  「미해소 위반」 원장 == 승인되지 않은 인터셉트 쌍 집합이고, 각 행에 위조 내용과 제거
       경로가 적혀 있으며, 개수가 선언된 상한과 정확히 같다(늘면 실패, 줄이면 상한도 내린다).
   R10 「차단 요인」 원장의 각 행이 가리키는 리터럴이 그 파일에 실제로 있다. 카테고리 판정이
-      GATE/TRIG/EXT/NET/없음 중 하나이고, '해소 시' 칸이 예고한 CODE 가 아직 등재 표에
-      없다(= 차단이 남아 있다). 차단이 풀려 리터럴이 사라지거나 CODE 가 등재되면 행을
-      갱신해야 한다.
+      GATE/TRIG/EXT/NET/없음/확장 중 하나이고, 해소가 **신규 등재**로 끝나는 판정에서는
+      '해소 시' 칸이 예고한 CODE 가 아직 등재 표에 없다(= 차단이 남아 있다). 판정이
+      `확장`(이미 등재된 치환의 표현력을 넓혀 닫는다)이면 검사가 뒤집혀, 넓힐 대상 CODE 가
+      등재 표에 **있어야** 한다. 차단이 풀려 리터럴이 사라지면 어느 판정이든 행을 갱신해야 한다.
+  R11 「차단 요인」 원장의 각 행이 `소관`·`선행`·`재검토 시점`을 **칸으로** 갖는다. 소관은
+      정합성 모델 id(`tbm_…`) 또는 `이 모델`이고(부정문 산문은 소관이 아니다), 선행은 비어
+      있지 않으며(없으면 `없음`), 재검토 시점은 ISO 날짜 또는 관측 가능한 사건(task id ·
+      PR 번호 · 백틱 리터럴)이다.
 
-R10 이 다루는 것은 seam 이 **아니다**. seam 은 "실환경을 치환한 흔적"이라 스캔에 잡히지만,
-차단 요인은 "치환조차 없어서 e2e 가 그 경로를 아예 밟지 못하는 이유"라 코드 어디에도 토큰을
-남기지 않는다(그래서 R5 가 영원히 침묵한다). 그 공백의 원인을 산문에만 적어 두면 원인이
+R10·R11 이 다루는 것은 seam 이 **아니다**. seam 은 "실환경을 치환한 흔적"이라 스캔에 잡히지만,
+차단 요인은 "e2e 가 그 경로를 아예 밟지 못하는 이유"라 코드에 토큰을 남기지 않는다(그래서 R5 가
+영원히 침묵한다). 형태는 둘이다 — 치환조차 없는 공백과, **등재된 치환의 표현력이 모자라 경로에
+진입조차 못 하는 경우**. 후자는 등재↔코드가 1:1 이고 seam 집합도 움직이지 않아 R5·as-is 지문
+양쪽이 침묵하므로, 이 원장이 아니면 어느 기계도 세지 않는다. 그 원인을 산문에만 적어 두면 원인이
 고쳐져도 문서가 낡을 뿐 아무도 모르므로, 원장으로 옮겨 리터럴 단위로 대조한다.
+
+R11 은 **형태만** 본다 — 재검토 시점이 지났는지는 보지 않는다. 경과 판정은 정합성 감지
+(`tbm_session-platform-e2e-mock-policy`)의 몫이고 그쪽이 작업을 연다. 시계로 CI 를 빨갛게 만들면
+그 빨강은 원인과 무관한 PR 에 떨어진다.
 
 스캔 스코프와 토큰 정규식은 정합성 모델 `tbm_session-platform-e2e-mock-policy`의 as-is
 버전 스크립트와 **동일하게** 유지한다(둘 중 하나만 바뀌면 감지 루프와 CI 게이트가 서로
@@ -40,6 +51,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,7 +107,29 @@ CATEGORIES = {"GATE", "TRIG", "EXT", "NET"}
 # 차단 요인의 카테고리 판정. '없음'은 "해소는 실배포로 하고 등재는 하지 않는다"는 판정이다
 # (MinIO 선례 — 실물을 클러스터에 세울 수 있으면 EXT 를 쓸 수 없다).
 NO_CATEGORY = "없음"
-BLOCKER_VERDICTS = CATEGORIES | {NO_CATEGORY}
+# '확장'은 세 번째 해소 형태다 — 신규 등재도 실배포도 아니고, **이미 등재된 치환의 표현력을
+# 넓혀** 닫는다. 이 판정에서는 아래 R10 의 예고 CODE 검사가 뒤집힌다(없어야 → 있어야).
+EXTENSION_VERDICT = "확장"
+BLOCKER_VERDICTS = CATEGORIES | {NO_CATEGORY, EXTENSION_VERDICT}
+
+# 차단 요인 표의 칸 계약. 행을 위치로 읽으므로 이름·순서가 바뀌면 즉시 실패시킨다.
+BLOCKER_COLUMNS = [
+    "무엇이 막는가",
+    "코드 위치",
+    "리터럴",
+    "판정",
+    "소관",
+    "선행",
+    "재검토 시점",
+    "해소 시",
+]
+
+# 차단 요인의 '소관' — 넘기려면 받는 쪽을 지목해야 한다. 부정문 산문("이 표의 소관이 아니다")은
+# 이 형태에 맞지 않아 그대로 걸린다.
+OWNER_RE = re.compile(r"^(?:tbm_[a-z0-9][a-z0-9_-]*|이 모델)$")
+# 차단 요인의 '재검토 시점' — ISO 날짜, 또는 관측 가능한 사건(task id · PR 번호 · 코드 리터럴).
+REVIEW_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+REVIEW_EVENT_RE = re.compile(r"^(?:rct_\d{8}-\d{4}|#\d+|`[^`]+`)$")
 NON_SEAM = {"-", "—", "–"}  # 회계 표에서 '등재 대상 아님'을 뜻하는 CODE 자리표
 VIOLATION_CODE = "위반"  # 회계 표에서 '승인되지 않은, 제거 대상인 치환'을 뜻하는 CODE 자리표
 
@@ -206,6 +240,16 @@ def table_rows(lines: list[str]) -> list[list[str]]:
     return rows[1:] if rows else []  # 첫 행은 헤더
 
 
+def table_header(lines: list[str]) -> list[str] | None:
+    """표의 헤더 행 셀 목록. 차단 요인 표는 칸을 **위치로** 읽으므로(아래 R10) 선언된 칸 이름과
+    순서가 계약이다 — 헤더만 바꿔 놓으면 문서와 파서가 다른 것을 가리킨다."""
+    for line in lines:
+        s = line.strip()
+        if s.startswith("|"):
+            return [c.strip() for c in s.strip("|").split("|")]
+    return None
+
+
 def unquote(cell: str) -> str:
     return cell.strip().strip("`").strip()
 
@@ -292,17 +336,28 @@ def main() -> int:
     # seam 이 아니므로 스캔에 잡히지 않는다. 리터럴로 대조해 "원인이 고쳐졌는데 문서만
     # 낡는" 경우를 막는다. 여기 있는 동안은 아직 등재가 아니다 — 판정만 미리 확정한다.
     tracked = tracked_files()
+    blk_header = table_header(blk_block)
+    if blk_header is not None and blk_header != BLOCKER_COLUMNS:
+        fail(
+            "R10",
+            f"차단 요인 표의 칸 선언이 계약과 다르다: {blk_header} != {BLOCKER_COLUMNS} — "
+            "행은 위치로 읽히므로 이름이나 순서를 바꾸면 문서와 게이트가 다른 칸을 가리킨다",
+        )
     blockers = 0
+    actionable = 0
     for cells in table_rows(blk_block):
-        if len(cells) < 5:
-            fail("R10", f"차단 요인 표 행의 칸이 모자란다(5칸 필요): {cells}")
+        if len(cells) < 8:
+            fail("R10", f"차단 요인 표 행의 칸이 모자란다(8칸 필요): {cells}")
             continue
-        what, path, literal, verdict, on_close = (
+        what, path, literal, verdict, owner, prereq, review, on_close = (
             cells[0],
             unquote(cells[1]),
             unquote(cells[2]),
             unquote(cells[3]),
-            cells[4],
+            unquote(cells[4]),
+            unquote(cells[5]),
+            unquote(cells[6]),
+            cells[7],
         )
         blockers += 1
         if not what.strip() or what.strip() in NON_SEAM:
@@ -328,13 +383,56 @@ def main() -> int:
                 "바뀌었다. 행을 갱신하거나 지우고, 해소됐으면 '해소 시' 칸이 예고한 등재/실배포를 "
                 "함께 반영할 것",
             )
-        for code in PROMISED_CODE_RE.findall(on_close):
-            if code in registry:
+        promised = PROMISED_CODE_RE.findall(on_close)
+        if verdict == EXTENSION_VERDICT:
+            # 해소가 "이미 등재된 치환을 넓히는 것"이라면 검사는 뒤집힌다 — 넓힐 대상이
+            # 등재돼 있어야 한다. 이 행이 살아 있는지는 리터럴 대조가 판정한다.
+            if not any(code in registry for code in promised):
                 fail(
                     "R10",
-                    f"{path}: 차단 요인이 아직 남아 있는데 예고 CODE `{code}` 는 이미 등재 표에 "
-                    "있다 — 등재됐으면 이 행은 차단 요인이 아니라 seam 이다. 행을 지울 것",
+                    f"{path}: 판정이 '{EXTENSION_VERDICT}' 인데 '해소 시' 칸이 넓힐 대상 CODE 를 "
+                    "지목하지 않는다 — 이미 등재된 CODE 를 백틱으로 적을 것(넓힐 대상이 없으면 "
+                    f"'{EXTENSION_VERDICT}' 이 아니라 신규 등재나 '{NO_CATEGORY}' 이다)",
                 )
+        else:
+            for code in promised:
+                if code in registry:
+                    fail(
+                        "R10",
+                        f"{path}: 차단 요인이 아직 남아 있는데 예고 CODE `{code}` 는 이미 등재 표에 "
+                        "있다 — 등재됐으면 이 행은 차단 요인이 아니라 seam 이다. 행을 지우거나, "
+                        f"이미 등재된 치환을 넓혀 닫는 형태면 판정을 '{EXTENSION_VERDICT}' 으로 적을 것",
+                    )
+
+        # R11 — 소관·선행·재검토 시점을 칸으로 갖춘다. 산문에 섞으면 사람은 읽어도 게이트와
+        # 정합성 감지는 못 읽어 인계가 유실된다.
+        if not OWNER_RE.match(owner):
+            fail(
+                "R11",
+                f"{path}: '소관' 칸 {owner!r} 이 기계 판독 가능한 형태가 아니다 — 정합성 모델 "
+                "id(`tbm_…`) 또는 `이 모델` 이어야 한다. 부정문('…의 소관이 아니다')은 소관이 "
+                "아니고, 산문에 섞어 적으면 다음 감지가 읽지 못한다",
+            )
+        if not prereq or prereq in NON_SEAM:
+            fail(
+                "R11",
+                f"{path}: '선행' 칸이 비어 있다 — 먼저 풀려야 하는 것을 적고, 없으면 "
+                f"'{NO_CATEGORY}' 이라 적을 것(그러면 그 행은 착수 가능이다)",
+            )
+        if REVIEW_DATE_RE.match(review):
+            try:
+                date.fromisoformat(review)
+            except ValueError:
+                fail("R11", f"{path}: '재검토 시점' {review!r} 은 존재하지 않는 날짜다")
+        elif not REVIEW_EVENT_RE.match(review):
+            fail(
+                "R11",
+                f"{path}: '재검토 시점' 칸 {review!r} 이 기계 판독 가능한 형태가 아니다 — "
+                "ISO 날짜(YYYY-MM-DD) 또는 관측 가능한 사건(task id `rct_…` · PR 번호 `#NN` · "
+                "백틱 코드 리터럴)이어야 한다. '언젠가 제품이 바뀌면' 같은 것은 재검토 시점이 아니다",
+            )
+        if prereq == NO_CATEGORY and owner == "이 모델":
+            actionable += 1
 
     # --- 회계 표 (ledger): 파일 | 토큰 | CODE | 사유 -----------------------------
     ledger: set[tuple[str, str]] = set()
@@ -442,6 +540,7 @@ def main() -> int:
         "non_seam": non_seam_rows,
         "violation": len(violations),
         "blocker": blockers,
+        "actionable": actionable,
         "intercept": len(intercepts),
     }
     declared = parse_summary(sum_block)
@@ -487,7 +586,10 @@ def main() -> int:
         f"web 네트워크 인터셉트 {expect['intercept']}건 "
         f"(승인 {len(approved_intercepts)} · 위반 {len(violations)}, 상한 {budget})"
     )
-    print(f"  차단 요인 {expect['blocker']}건 (아직 seam 이 아니다 — 판정만 확정돼 있다)")
+    print(
+        f"  차단 요인 {expect['blocker']}건 (아직 seam 이 아니다 — 판정만 확정돼 있다) · "
+        f"착수 가능 {expect['actionable']}건 (선행 없음 + 소관 '이 모델')"
+    )
     return 0
 
 
@@ -503,6 +605,7 @@ SUMMARY_KEYS = {
     "non_seam": "비-seam",
     "violation": "미해소 위반",
     "blocker": "차단 요인",
+    "actionable": "착수 가능",
     "intercept": "인터셉트",
 }
 
