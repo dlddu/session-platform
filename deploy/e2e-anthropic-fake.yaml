@@ -23,6 +23,17 @@
 # 프롬프트로 나르는 이유는 그것이 테스트에서 이 대역까지 닿는 유일한 채널이기 때문이고, 그래서
 # 새 env 도 새 엔드포인트도 늘지 않는다.
 #
+# **도구 호출도 같은 채널로 고른다**(2026-09-11). 프롬프트에 `e2e-tool:<도구명>:<JSON 입력>` 이
+# 있으면 대역은 text 대신 `tool_use` content block 하나를 내고 `stop_reason` 도 `tool_use` 로
+# 답한다. 그 전까지 이 대역이 낼 수 있는 content 는 text 한 블록뿐이라 **모델이 도구를 부르는
+# 갈래가 이 표면에서 시작되지 않았고**, 승인 왕복(`approval-gated-workload.md#시나리오 3`)은
+# 게이트웨이 대역과 제품 경로가 전 구간 실재하는데도 진입 자체가 불가능했다. 도구명과 입력을
+# 지시자가 **축자로** 나르므로 대역은 세션이 어떤 MCP 도구를 등록했는지 몰라도 된다 — 그 목록은
+# `data-plane/cmd/agent/session_mcp_tools.go` 에 있고, 여기에 이름 표를 두면 제품이 움직일 때마다
+# 대역이 따라가야 한다. 도구 결과를 되돌려 보내는 턴은 `content` 가 `tool_result` 뿐이라 아래
+# `lastUserText()` 가 빈 문자열을 돌려주고, 그래서 지시자 없는 호출로 떨어져 상수 응답 +
+# `end_turn` 으로 턴이 닫힌다 — 루프를 끝내려고 새 상태를 들이지 않는다.
+#
 # 넷째 칸 `delayMs` 는 **응답이 걸리는 시간**을 고르는 선택 항이다(2026-09-11, 생략하면 0 이라
 # 기존 호출자에게는 부모와 글자 그대로 같은 경로다). 크기로는 시간을 살 수 없다는 것이 측정으로
 # 확인됐기 때문에 들였다 — `claude-code-workload.md#시나리오 3` 저작 슬라이스가 이 대역이 허용하는
@@ -103,6 +114,14 @@ data:
     // has into this process. Everything about the shape is in the directive, so
     // the deployment carries no test knobs of its own.
     const SHAPE_RE = /e2e-reply:([a-z][a-z0-9-]*):(\d+):(\d+)(?::(\d+))?/;
+    // A tool call is opt-in on the same channel and for the same reason. The
+    // input is the rest of the line from its opening brace, not a colon-separated
+    // field, because the one argument this session's tool takes is a URL and a
+    // URL is full of colons. The closing brace is deliberately not part of the
+    // match: a directive that names a tool must be honoured or rejected out loud,
+    // and requiring one here would make an unterminated input fall through to the
+    // text reply instead — the one outcome a test could mistake for success.
+    const TOOL_RE = /e2e-tool:([A-Za-z0-9_][A-Za-z0-9_.-]*):(\{.*)$/m;
     // Three bytes per rune. The point of a multi-byte body is that a cut at a
     // fixed byte offset lands *inside* a character, which is what makes the
     // platform's code-point back-off observable instead of vacuous.
@@ -135,16 +154,41 @@ data:
       return "";
     }
 
+    // Unique within this process: a conversation may call a tool more than once
+    // and the client matches each tool_result back to the id it was given.
+    let toolUseSeq = 0;
+
     function replyShape(msg) {
-      const found = SHAPE_RE.exec(lastUserText(msg));
-      if (!found) return { text: REPLY, deltas: 1, delayMs: 0 };
+      const prompt = lastUserText(msg);
+      const called = TOOL_RE.exec(prompt);
+      if (called) {
+        let input;
+        try {
+          input = JSON.parse(called[2]);
+        } catch (e) {
+          // A directive that names a tool but carries unparsable input is a bug
+          // in the test that wrote it. Falling back to the constant reply would
+          // bury that behind whatever the caller asserts next, so it is answered
+          // where it happened.
+          return { kind: "invalid", detail: "the e2e-tool directive's input is not JSON" };
+        }
+        toolUseSeq += 1;
+        return {
+          kind: "tool_use",
+          id: "toolu_e2e" + String(toolUseSeq).padStart(18, "0"),
+          name: called[1],
+          input,
+        };
+      }
+      const found = SHAPE_RE.exec(prompt);
+      if (!found) return { kind: "text", text: REPLY, deltas: 1, delayMs: 0 };
       const runes = Math.min(Number(found[2]), MAX_RUNES);
       const deltas = Math.min(Math.max(Number(found[3]), 1), MAX_DELTAS);
       // Absent fourth field -> 0, which skips the await entirely below rather
       // than awaiting a zero timer: an omitted directive field must leave the
       // emit sequence exactly as it was before this field existed.
       const delayMs = found[4] === undefined ? 0 : Math.min(Number(found[4]), MAX_DELAY_MS);
-      return { text: found[1] + ":" + FILLER.repeat(runes), deltas, delayMs };
+      return { kind: "text", text: found[1] + ":" + FILLER.repeat(runes), deltas, delayMs };
     }
 
     const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -170,14 +214,23 @@ data:
       res.end(body);
     }
 
-    function messageBody(text) {
+    function contentBlocks(shape) {
+      if (shape.kind === "tool_use") {
+        return [{ type: "tool_use", id: shape.id, name: shape.name, input: shape.input }];
+      }
+      return [{ type: "text", text: shape.text }];
+    }
+
+    function messageBody(shape) {
       return {
         id: "msg_e2e0000000000000000000000",
         type: "message",
         role: "assistant",
         model: MODEL,
-        content: [{ type: "text", text }],
-        stop_reason: "end_turn",
+        content: contentBlocks(shape),
+        // A turn that ends in a tool call has to say so, or the client has no
+        // reason to run the tool and hand a result back.
+        stop_reason: shape.kind === "tool_use" ? "tool_use" : "end_turn",
         stop_sequence: null,
         usage: { input_tokens: 1, output_tokens: 1 },
       };
@@ -196,24 +249,41 @@ data:
         res.write("event: " + event + "\n");
         res.write("data: " + JSON.stringify(data) + "\n\n");
       };
-      const message = messageBody(shape.text);
+      const message = messageBody(shape);
       emit("message_start", {
         type: "message_start",
         message: { ...message, content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } },
       });
-      emit("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
-      for (const fragment of splitText(shape.text, shape.deltas)) {
-        if (shape.delayMs) await sleep(shape.delayMs);
+      if (shape.kind === "tool_use") {
+        emit("content_block_start", {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: shape.id, name: shape.name, input: {} },
+        });
+        // One fragment, deliberately. `deltas` exists so a reply body can be cut
+        // at a byte offset that lands inside a character; a tool input has no
+        // such question to answer, because the client concatenates every
+        // partial_json before parsing it and a cut leaves no trace in this SUT.
         emit("content_block_delta", {
           type: "content_block_delta",
           index: 0,
-          delta: { type: "text_delta", text: fragment },
+          delta: { type: "input_json_delta", partial_json: JSON.stringify(shape.input) },
         });
+      } else {
+        emit("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+        for (const fragment of splitText(shape.text, shape.deltas)) {
+          if (shape.delayMs) await sleep(shape.delayMs);
+          emit("content_block_delta", {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: fragment },
+          });
+        }
       }
       emit("content_block_stop", { type: "content_block_stop", index: 0 });
       emit("message_delta", {
         type: "message_delta",
-        delta: { stop_reason: "end_turn", stop_sequence: null },
+        delta: { stop_reason: message.stop_reason, stop_sequence: null },
         usage: { output_tokens: 1 },
       });
       emit("message_stop", { type: "message_stop" });
@@ -259,13 +329,19 @@ data:
             return send(res, 404, { type: "error", error: { type: "not_found_error", message: "not found" } });
           }
           const shape = replyShape(msg);
+          if (shape.kind === "invalid") {
+            return send(res, 400, {
+              type: "error",
+              error: { type: "invalid_request_error", message: shape.detail },
+            });
+          }
           if (msg && msg.stream === true) {
             // streamMessage only became async so a delta gap could be awaited;
             // with delayMs 0 it never suspends and the whole body still runs in
             // this tick. A rejection can only be a dead socket, so drop it.
             return streamMessage(res, shape).catch(() => res.destroy());
           }
-          return send(res, 200, messageBody(shape.text));
+          return send(res, 200, messageBody(shape));
         });
       },
     );
