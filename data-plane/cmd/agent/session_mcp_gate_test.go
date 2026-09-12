@@ -110,6 +110,24 @@ func TestSessionMCPOffersTheGatedToolWhenTheGateExists(t *testing.T) {
 	}
 }
 
+// In-cluster origins are a target of this tool and many of them do not serve
+// TLS, so plaintext http is accepted — and it is gated like everything else.
+func TestSessionMCPAcceptsPlaintextTarget(t *testing.T) {
+	const target = "http://rates.internal.svc.cluster.local/v1/latest"
+	g := newGatedMCP(t, "APPROVED")
+	body := g.call(t, target)
+	_, isError, text := toolResult(t, body)
+	if isError {
+		t.Fatalf("plaintext target was refused: %s", text)
+	}
+	if got := g.gateway.created.Load(); got != 1 {
+		t.Errorf("created %d approval requests, want exactly 1", got)
+	}
+	if len(g.fetched) != 1 || g.fetched[0] != target {
+		t.Fatalf("fetched %v, want the approved URL", g.fetched)
+	}
+}
+
 // Scenario 3 of docs/test/approval-gated-workload.md, minus the parts that need
 // a cluster: the outbound call happens once, and only after the decision.
 func TestSessionMCPFetchesOnlyAfterApproval(t *testing.T) {
@@ -217,9 +235,10 @@ func TestSessionMCPGatewayOutageIsAToolFailure(t *testing.T) {
 func TestSessionMCPRejectsUnapprovableTargets(t *testing.T) {
 	for _, tc := range []struct{ name, url string }{
 		{"empty", ""},
-		{"plaintext http", "http://rates.vendor.example/v1/latest"},
 		{"file scheme", "file:///etc/passwd"},
+		{"ftp scheme", "ftp://rates.vendor.example/v1/latest"},
 		{"no host", "https://"},
+		{"no host, http", "http://"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			g := newGatedMCP(t, "APPROVED")

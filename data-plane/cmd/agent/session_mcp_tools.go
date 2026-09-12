@@ -82,7 +82,7 @@ func (c sessionMCPConfig) toolDefinitions() []any {
 			"properties": map[string]any{
 				"url": map[string]any{
 					"type":        "string",
-					"description": "The https URL to fetch.",
+					"description": "The http or https URL to fetch.",
 				},
 			},
 			"required":             []any{"url"},
@@ -215,8 +215,11 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 }
 
 // validateFetchTarget keeps the tool to what a human can meaningfully approve.
-// https only: an approval that reads as a URL should not be satisfiable by a
-// plaintext or non-HTTP scheme the approver did not have in mind.
+// http(s) only: an approval that reads as a URL should not be satisfiable by a
+// scheme the approver did not have in mind — file:// and friends would make the
+// same approval text mean something else entirely. Plaintext http is allowed
+// because in-cluster origins are a real target for this tool and many of them
+// do not serve TLS; the scheme stays visible in the URL the approver reads.
 func validateFetchTarget(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -226,8 +229,8 @@ func validateFetchTarget(raw string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("url is not a valid URL")
 	}
-	if parsed.Scheme != "https" {
-		return "", fmt.Errorf("url must be https, got %q", parsed.Scheme)
+	if parsed.Scheme != "https" && parsed.Scheme != "http" {
+		return "", fmt.Errorf("url must be http or https, got %q", parsed.Scheme)
 	}
 	if parsed.Host == "" {
 		return "", fmt.Errorf("url has no host")
