@@ -110,8 +110,7 @@ func TestSessionMCPOffersTheGatedToolWhenTheGateExists(t *testing.T) {
 	}
 }
 
-// In-cluster origins are a target of this tool and many of them do not serve
-// TLS, so plaintext http is accepted — and it is gated like everything else.
+// Plaintext is inside R4's line, and inside the gate like everything else.
 func TestSessionMCPAcceptsPlaintextTarget(t *testing.T) {
 	const target = "http://rates.internal.svc.cluster.local/v1/latest"
 	g := newGatedMCP(t, "APPROVED")

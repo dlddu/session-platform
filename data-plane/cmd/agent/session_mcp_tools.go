@@ -215,11 +215,7 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 }
 
 // validateFetchTarget keeps the tool to what a human can meaningfully approve.
-// http(s) only: an approval that reads as a URL should not be satisfiable by a
-// scheme the approver did not have in mind — file:// and friends would make the
-// same approval text mean something else entirely. Plaintext http is allowed
-// because in-cluster origins are a real target for this tool and many of them
-// do not serve TLS; the scheme stays visible in the URL the approver reads.
+// The scheme rule and why it is drawn there: `docs/session-mcp-tool-surface.md` R4.
 func validateFetchTarget(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
