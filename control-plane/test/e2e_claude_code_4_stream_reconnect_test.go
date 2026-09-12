@@ -2,26 +2,8 @@
 
 // 검증 시나리오: claude-code-workload.md#시나리오 4
 //
-// docs/prd/claude-code-workload.md AC-E3, driven against the in-cluster provider
-// stand-in registered as `CLAUDE-PROVIDER` in docs/test/e2e.md.
-//
-// The scenario's headline is a pair of SSE output chunks split on a UTF-8
-// boundary, and until this PR the SUT could not produce one: the stand-in
-// answered every prompt with the same 32 ASCII bytes, so the buffer never
-// reached the 64 KiB chunk limit and — since every byte of ASCII is a
-// code-point boundary — a cut that ignored runes would have looked identical to
-// one that respected them. The stand-in now shapes its reply from a directive
-// in the prompt, which is what lets the assertions below be about the platform
-// rather than about the fixture.
-//
-// What this file deliberately does NOT assert, and why:
-//
-//   - that the reply's *meaning* follows the prompt. The stand-in reflects the
-//     directive's label and size, nothing more; conversational continuity is
-//     claude-code-workload.md#시나리오 5, which stays on the exception list for
-//     exactly that reason.
-//   - the 16 MiB per-invocation truncation marker: still far above what a
-//     directive is allowed to ask for (MAX_RUNES caps the body well under it).
+// 이 파일이 사는 것, 이웃 시나리오와의 경계, 그리고 헤드라인을 사기 위해 대역을 먼저 넓힌
+// 경위는 docs/test/e2e.md 의 매핑 행과 저작 슬라이스 노트가 갖는다.
 package e2e_test
 
 import (
@@ -33,19 +15,16 @@ import (
 	"unicode/utf8"
 )
 
-// The directives this file sends to the stand-in, and the replies they produce.
 // Sizes are written out rather than computed so that a change to either side
 // fails here instead of quietly agreeing with itself.
 const (
 	cc4AlphaPrompt = "e2e-reply:alpha:25000:12"
 	cc4AlphaPrefix = "alpha:"
 	cc4AlphaRunes  = 25000
-	// len("alpha:") + 3 bytes per rune.
-	cc4AlphaBytes = 6 + 3*cc4AlphaRunes
+	cc4AlphaBytes  = 6 + 3*cc4AlphaRunes
 
-	// The small shapes. Their byte counts matter as much as the big one's: a
-	// threshold that is merely *reachable* would let a wait return while the
-	// reply is still arriving, and then every cursor below races the tail.
+	// Their byte counts matter as much as the big one's: a threshold that is merely
+	// *reachable* would let a wait return while the reply is still arriving.
 	cc4SmallRunes = 40
 
 	cc4BetaPrompt = "e2e-reply:beta:40:4"
@@ -56,7 +35,6 @@ const (
 	cc4GammaPrefix = "gamma:"
 	cc4GammaBytes  = 6 + 3*cc4SmallRunes
 
-	// The filler rune the stand-in repeats (U+AC00), three bytes wide.
 	cc4Filler = "가"
 )
 
@@ -65,32 +43,20 @@ const (
 // fails this file instead of travelling into it silently.
 const cc4ChunkLimit = 64 << 10
 
-// Where the first chunk of the alpha reply has to end.
-//
-// Runes start at byte 6, 9, 12, … so a rune begins at 65535 (65535-6 is
-// divisible by 3) and byte 65536 is one byte into it. A chunker that took the
-// limit literally would hand out 65536 and split that rune; scrollback.streamChunk
-// backs off to the last complete rune instead, which is this number. With an
-// ASCII body both would be 65536 and the assertion would buy nothing.
+// Where the first chunk has to end; the derivation is in the mapping row.
 const cc4FirstChunkEnd = 65535
 
-// The projector terminates a message with a newline when the assistant text does
-// not already end in one (data-plane/cmd/agent/claude_stream.go finishMessage),
-// so an invocation contributes its reply plus at most that one byte.
+// At most one per invocation; data-plane/cmd/agent/claude_stream.go finishMessage owns the rule.
 const cc4MessageTerminator = 1
 
 func cc4AlphaReply() []byte {
 	return []byte(cc4AlphaPrefix + strings.Repeat(cc4Filler, cc4AlphaRunes))
 }
 
-// cc4Settled writes one prompt and waits for its whole reply to land *and stop
-// growing*, returning the final buffer.
-//
-// Reaching the byte count is not enough on its own. The reply arrives as a
-// dozen deltas and the message-terminating newline lands after the last of
-// them, so a wait that stopped at the threshold could hand back a buffer that
-// is still moving — and every assertion here compares a fixed buffer against a
-// live stream, so a moving one turns a contract into a race.
+// The settle loop is not belt and braces: the message-terminating newline lands
+// after the last delta, so a wait that stops at the byte threshold can hand back a
+// buffer that is still moving — and every assertion here compares a fixed buffer
+// against a live stream, so a moving one turns a contract into a race.
 func cc4Settled(t *testing.T, id, prompt string, atLeast int) readResp {
 	t.Helper()
 	writePromptOK(t, id, prompt)
@@ -111,23 +77,17 @@ func cc4Settled(t *testing.T, id, prompt string, atLeast int) readResp {
 	}
 }
 
-// The whole scenario in one place: a reply large enough to be chunked, cut at a
-// boundary the platform had to choose, and projected exactly once.
 func TestClaudeStream_ChunkCutsBackOffToACodePointBoundary(t *testing.T) {
 	s := claudeSession(t)
 
 	full := cc4Settled(t, s.ID, cc4AlphaPrompt, cc4AlphaBytes)
 	buf := []byte(full.Payload)
 
-	// The reply arrived intact. Comparing the bytes — not a substring search —
-	// is what rules out a truncated or re-encoded body upstream.
+	// Bytes, not a substring search: that is what rules out a re-encoded body upstream.
 	if want := cc4AlphaReply(); !bytes.Equal(buf[:cc4AlphaBytes], want) {
 		t.Fatalf("first %d bytes of the buffer are not the alpha reply (got prefix %q)",
 			cc4AlphaBytes, string(buf[:min(64, len(buf))]))
 	}
-	// One invocation, one projection. A `result` record replaying the same text
-	// would double the buffer, so the count is the assertion the scenario's last
-	// clause asks for: raw stream-json final/result does not duplicate the delta.
 	if got := strings.Count(full.Payload, cc4AlphaPrefix); got != 1 {
 		t.Fatalf("alpha reply projected %d times, want exactly 1 — a result record must not "+
 			"replay text already emitted as partial deltas", got)
@@ -137,8 +97,6 @@ func TestClaudeStream_ChunkCutsBackOffToACodePointBoundary(t *testing.T) {
 			full.NextOffset, cc4AlphaBytes, cc4MessageTerminator)
 	}
 
-	// Non-vacuity, proved from the bytes themselves: the limit really does land
-	// inside a character here, so backing off was a decision and not a no-op.
 	if buf[cc4FirstChunkEnd]&0xC0 == 0x80 {
 		t.Fatalf("byte %d should begin a rune; the boundary assertion below would be meaningless",
 			cc4FirstChunkEnd)
@@ -179,8 +137,6 @@ func TestClaudeStream_ChunkCutsBackOffToACodePointBoundary(t *testing.T) {
 		d1.NextOffset, d2.Offset, d2.NextOffset)
 }
 
-// A reconnecting client resumes from the id it last saw, even when the query
-// string says otherwise — and the bytes it already has are not sent again.
 func TestClaudeStream_LastEventIDBeatsQueryAndResumesWithoutReplay(t *testing.T) {
 	s := claudeSession(t)
 	cc4Settled(t, s.ID, cc4AlphaPrompt, cc4AlphaBytes)
@@ -193,8 +149,6 @@ func TestClaudeStream_LastEventIDBeatsQueryAndResumesWithoutReplay(t *testing.T)
 		t.Fatalf("first chunk ended at %d, want %d", d1.NextOffset, cc4FirstChunkEnd)
 	}
 
-	// The query asks for the very beginning; the header asks to continue. The
-	// header has to win, or a reconnect would replay everything already drawn.
 	resumed := s6Open(t, s.ID, "?offset=0", strconv.FormatInt(d1.NextOffset, 10), 5*time.Minute)
 	next, _ := resumed.nextEvent(t)
 	d2, _ := s6Output(t, next)
@@ -203,8 +157,6 @@ func TestClaudeStream_LastEventIDBeatsQueryAndResumesWithoutReplay(t *testing.T)
 			d2.Offset, d1.NextOffset)
 	}
 
-	// Everything the resumed stream delivers from here on, including a second
-	// prompt's reply, must be new bytes only.
 	writePromptOK(t, s.ID, cc4BetaPrompt)
 	seen := bytes.Buffer{}
 	seen.Write(mustPayload(t, next))
@@ -225,16 +177,12 @@ func TestClaudeStream_LastEventIDBeatsQueryAndResumesWithoutReplay(t *testing.T)
 	}
 }
 
-// mustPayload decodes an output frame, failing on a reset — the caller here is
-// only ever positioned inside the buffer.
 func mustPayload(t *testing.T, f s6Frame) []byte {
 	t.Helper()
 	_, payload := s6Output(t, f)
 	return payload
 }
 
-// A cursor past the end is answered with a signal, not data — and answering it
-// is not access.
 func TestClaudeStream_PastEndResetsWithoutTouchingLastAccess(t *testing.T) {
 	s := claudeSession(t)
 	full := cc4Settled(t, s.ID, cc4GammaPrompt, cc4GammaBytes)
@@ -259,9 +207,6 @@ func TestClaudeStream_PastEndResetsWithoutTouchingLastAccess(t *testing.T) {
 	}
 }
 
-// read(0) is the recovery path the SPA takes when its decoder is no longer
-// trustworthy: it must return the whole history in order, and the cursor it
-// hands back must then be empty.
 func TestClaudeStream_ReadZeroReturnsFullHistoryAndLastCursorIsEmpty(t *testing.T) {
 	s := claudeSession(t)
 	cc4Settled(t, s.ID, cc4GammaPrompt, cc4GammaBytes)
