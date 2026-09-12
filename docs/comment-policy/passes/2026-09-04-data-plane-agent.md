@@ -107,3 +107,41 @@ as-is 지문 이동의 재감지가 다음 task로 잇는다.
 **유지 34줄** — 파일 목적 문단과 pull 포인터, 「set이지 counter가 아닌 이유」, 「미지 kind가 유휴
 카운트를 붙잡지 못하게」, `observeApprovalNotices`가 claude-code에도 있는 이유(게이트도 헬퍼도
 없어 아무도 발행하지 않는다), 그리고 위 표에서 한 줄로 줄인 테스트 doc 7줄.
+
+## 증분 재판정 — 세션 MCP 등록 자리 수정 슬라이스 (2026-09-12 (2))
+
+CLI 가 MCP 서버를 읽지 않는 파일에 등록하고 있던 결함을 고치면서 이 범위에 신규 1파일
+(`claude_mcp_registration.go`)이 들어오고 `claude.go`·`approval_gated_test.go` 의 주석이 움직였다.
+**93줄 판정, 제거 26 · 유지 67**(865 → 916).
+
+**이 슬라이스의 지배 형태는 앞선 패스들과 달랐다.** 베낀 원본이 문서나 매핑 행이 아니라 **같은 PR 이 방금
+만든 파일 헤더**였다 — 초안은 `claude_mcp_registration.go` 헤더가 소유한 「CLI 2.1.220 관측」을
+`claude.go` 세 자리와 테스트 세 자리에 각각 한 번씩 더 적고 있었고, 여섯 곳 전부 **스스로 그 파일을
+가리키면서** 내용을 함께 옮겼다(정책 본문의 「포인터는 남기고 사본은 지운다」가 그리는 바로 그 형태).
+초안 137줄을 판정에서 127줄로 줄인 10줄이 그것이다.
+
+**낡아 거짓이 된 주석 1건**도 포함한다 — `claude.go` 의 `Tools` 필드 doc 이 「session HOME 의
+settings.json 에 쓰인다」였는데, 이 슬라이스가 등록을 CLI 설정으로 옮기면서 그 문장이 절반만 참이
+됐다. 제거 근거가 강해지는 유형이다.
+
+| 위치 | 제거한 것 | 이미 말하는 곳 (복원 경로) |
+| --- | --- | --- |
+| `claude.go` `claudeManagedSettings.MCPServers` (4→3) | 「CLI 는 이 파일에서 MCP 서버를 읽지 않는다」 | ① `claude_mcp_registration.go` 패키지 헤더가 그 관측의 정본이다. **남긴 것은 필드가 남아 있는 이유** — 쓰이지 않는 필드가 `DisallowUnknownFields` 아래 옛 아카이브를 디코드하려고 존재한다는 것은 코드 형태로 보이지 않는다 |
+| `claude.go` `ensureClaudeManagedSettings` doc (6→5) | 「표면은 두 파일에 걸치고 이것이 둘 다 쓰는 유일한 진입점이다 — 권한은 settings.json, 등록은 CLI 설정」 | ① 함수 본문이 두 호출을 그대로 보여 준다. **「한쪽만 쓰면 도구가 조용히 사라진다」는 남겼다** — 실패가 무증상이라는 것이 이 함수를 하나로 합친 이유이고, 그 사실은 코드에 나타나지 않는다 |
+| `claude.go` `validateClaudeManagedSettings` doc (7→5) | 「MCP 표면의 두 반쪽이 떨어져 살아서 두 파일에 걸친다」 | ① 함수 본문의 `loadClaudeManagedSettings` + `loadClaudeMCPRegistration` 두 호출 · ① `validateClaudeToolSurface` 시그니처가 두 인자로 같은 말을 한다 |
+| `claude.go` `Tools` 필드 doc (1→1, 재작성) | 「session HOME 의 settings.json 에 쓰인다」 — 이 슬라이스가 등록을 옮겨 **거짓이 됐다** | ① `ensureStateDirs` 가 어디로 가는지 보여 준다. 포인터 성격의 1줄로 다시 썼다 |
+| `claude.go` `loadClaudeManagedSettings` doc (6→2) | `requireToolSurface` 분기의 존재 이유 서술 전부 | ① **그 플래그가 사라졌다** — 도구 표면 판정이 `validateClaudeToolSurface` 로 나가면서 이 doc 이 설명하던 대상 자체가 없어졌다 |
+| `approval_gated_test.go` 테스트 doc 3곳 (16→6) | 「pinned CLI 는 자기 설정에서 MCP 를 읽고 settings.json 의 mcpServers 를 무시한다」 · 「CLI 가 파일을 매 실행 재작성하며 machine·account 식별자와 프로젝트 기록을 넣는다」 · 「검증은 양쪽 위치를 받고 다음 부팅이 옮긴다」 | ① 셋 다 `claude_mcp_registration.go` 헤더와 `validateClaudeToolSurface` 인라인이 소유한다. **「이 테스트가 무엇이 깨지면 걸리는가」 한 줄씩만 남겼다** |
+
+**유지 67줄** — 대부분이 신규 파일 헤더이고, 그 헤더가 이 슬라이스의 **유일한 복원 불가능 지식**을
+담는다: 핀된 CLI 2.1.220 에서 `$HOME/.claude/settings.json` 의 `mcpServers` 는 **오류 없이 무시되고**
+(`claude mcp list` 가 「No MCP servers configured」, 도구 호출은 `No such tool available`),
+`$HOME/.claude.json` 의 같은 블록은 연결된다는 관측. CLI 문서에 없고, 설정 파일이 읽지 않는 키를
+불평 없이 받기 때문에 **신호가 「도구가 없다」 하나뿐**이다 — 이 레포 어디에도, 업스트림 어디에도
+적혀 있지 않다. 같은 헤더가 CLI 가 그 파일을 소유한다는 관측(매 실행 재작성·식별자 주입)도 갖고,
+그것이 「렌더링하지 않고 머지한다」는 설계의 근거다.
+
+나머지 유지는 셋이다: `registersSessionMCP` 가 **다른 서버를 관대하게 지나치는 이유**(AC-F2 의 egress
+허용목록이 이미 막으므로 복원을 깨뜨릴 값이 없다), `validateClaudeToolSurface` 의 **옛 등록 자리를
+계속 받는 이유**(거절하면 지금 동결된 세션이 복원 불가가 된다), 그리고 각 테스트가 무엇을 재는지
+한 줄씩.
