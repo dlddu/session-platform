@@ -284,6 +284,15 @@ func restoreClaudeArchive(r io.Reader, stateDir, sharedDir string) ([]byte, erro
 			}
 			rel := strings.TrimPrefix(cleanName, claudeArchiveSharedRoot)
 			rel = strings.TrimPrefix(rel, "/")
+			if rel == "" {
+				// What crosses is the volume's contents, not the mount's own
+				// mode — the directory that mode would land on here is the
+				// staging one, and without owner write it strands its entries.
+				if header.Typeflag != tar.TypeDir {
+					return nil, errors.New("claude archive shared root must be a directory")
+				}
+				continue
+			}
 			if err := extractClaudeStateEntry(
 				tr, header, claudeArchiveSharedRoot, extractedShared, rel, &dirModes,
 			); err != nil {

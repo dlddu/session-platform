@@ -763,6 +763,14 @@ func TestClaudeArchiveCarriesTheSharedVolumeAcrossFreezeAndRestore(t *testing.T)
 	if dirInfo.Mode().Perm() != 0o750 {
 		t.Fatalf("restored shared directory mode = %v, want 0750", dirInfo.Mode().Perm())
 	}
+
+	if before, err := os.Stat(shared1); err != nil {
+		t.Fatal(err)
+	} else if after, err := os.Stat(shared2); err != nil {
+		t.Fatal(err)
+	} else if after.Mode().Perm() != before.Mode().Perm() {
+		t.Fatalf("restore changed the mount's own mode to %v; it is not the archive's to set", after.Mode().Perm())
+	}
 }
 
 // The compatibility invariant claudeArchiveSharedRoot's doc states, measured.
