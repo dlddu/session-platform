@@ -51,6 +51,11 @@ const (
 	approvalGatewayAPIKeyEnv = "APPROVAL_GATEWAY_API_KEY"
 	approvalGatewayUserIDEnv = "APPROVAL_GATEWAY_USER_ID"
 	sessionIDEnv             = "SESSION_ID"
+	// sharedVolumeDirEnv is the session's shared volume (AC-F5), read by both
+	// halves of the pair: the MCP container spills large approved responses
+	// there and the workload container's agent reads them back. Keep in sync
+	// with control-plane/internal/adapter/k8s (SharedVolumeDirEnvVar).
+	sharedVolumeDirEnv = "SESSION_SHARED_DIR"
 
 	defaultShell = "/bin/bash"
 	// defaultAddr: keep the port in sync with the control plane orchestrator's
@@ -145,8 +150,9 @@ func main() {
 			logger.Warn("session MCP has no approval gate; it will offer no tools", "err", err)
 			gateway = nil
 		}
-		handler = sessionMCPRoutes(logger, newSessionMCPConfig(gateway))
-		logger.Info("session MCP started", "addr", addr, "gated", gateway != nil)
+		shared := env(sharedVolumeDirEnv, "")
+		handler = sessionMCPRoutes(logger, newSessionMCPConfig(gateway, shared))
+		logger.Info("session MCP started", "addr", addr, "gated", gateway != nil, "shared_dir", shared)
 	case workloadCredentialProxy:
 		placement, err := credentialProxyPlacementFromEnv()
 		if err != nil {
@@ -609,7 +615,8 @@ func agentToolSurface(workload string) (toolSurface, error) {
 		if err != nil {
 			return toolSurface{}, err
 		}
-		return toolSurface{SessionMCP: mcpURL}, nil
+		// The same volume the MCP container spills into (AC-F5).
+		return toolSurface{SessionMCP: mcpURL, SharedDir: env(sharedVolumeDirEnv, "")}, nil
 	default:
 		return toolSurface{}, fmt.Errorf("workload %q has no agent tool surface", workload)
 	}

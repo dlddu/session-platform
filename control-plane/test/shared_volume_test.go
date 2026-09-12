@@ -208,3 +208,55 @@ func TestSharedVolume_ClaimIsReclaimedWithTheSession(t *testing.T) {
 		time.Sleep(time.Second)
 	}
 }
+
+// The path is only half the wiring: the data plane has to be *told* it. The MCP
+// container spills large approved responses into this directory and the
+// workload's agent reads them back from it (AC-F5), and neither can do that
+// from a pod spec it cannot see. Reading the value out of the running
+// containers rather than out of the spec is what makes this an assertion about
+// the deployed SUT — an image that ignored the variable would still pass a spec
+// check.
+func TestSharedVolume_BothContainersAreToldWhereItIs(t *testing.T) {
+	cs, cfg, ok := kubeClient(t)
+	if !ok {
+		t.Skip("no cluster: what a running container was told is a claim about deployed pods")
+	}
+	ns := sessionNamespace()
+
+	s := f4Create(t)
+	helper := f4TheHelperPod(t, cs, ns, s)
+	workload := getPodEventually(t, cs, ns, s.Pod)
+	claim := sharedClaimFor(t, cs, ns, s.ID)
+
+	const readEnv = `set -eu; printf %s "${SESSION_SHARED_DIR-}"`
+	helperDir := strings.TrimSpace(f4Sh(t, cs, cfg, ns, helper.Name, sessionMCPContainer, readEnv))
+	workloadDir := strings.TrimSpace(f4Sh(t, cs, cfg, ns, workload.Name, workloadContainer, readEnv))
+	if helperDir == "" || workloadDir == "" {
+		t.Fatalf("SESSION_SHARED_DIR is %q in the MCP container and %q in the workload container; "+
+			"a mounted volume nothing was told about is one nothing writes to (AC-F5)", helperDir, workloadDir)
+	}
+	if helperDir != workloadDir {
+		t.Fatalf("the pair was told different directories — MCP %q, workload %q (AC-F5)", helperDir, workloadDir)
+	}
+	// And it is the mount, not merely a directory both agree on.
+	if got := mountsOfClaim(&helper, claim.Name)[sessionMCPContainer]; got != helperDir {
+		t.Fatalf("MCP container mounts claim %s at %q but was told %q (AC-F5)", claim.Name, got, helperDir)
+	}
+	if got := mountsOfClaim(workload, claim.Name)[workloadContainer]; got != workloadDir {
+		t.Fatalf("workload container mounts claim %s at %q but was told %q (AC-F5)", claim.Name, got, workloadDir)
+	}
+
+	// The spill subtree is created by the MCP on first use, so what is checked
+	// here is that a directory made under that path by one container is the
+	// directory the other one reads — the property a per-node class would break
+	// one level below the probe file the case above writes.
+	marker := fmt.Sprintf("f5-env-%s", s.ID)
+	f4Sh(t, cs, cfg, ns, helper.Name, sessionMCPContainer,
+		`set -eu; mkdir -p "$1/web_fetch_get"; printf '%s' "$2" > "$1/web_fetch_get/probe.body"`, helperDir, marker)
+	got := strings.TrimSpace(f4Sh(t, cs, cfg, ns, workload.Name, workloadContainer,
+		`set -eu; cat "$1/web_fetch_get/probe.body"`, workloadDir))
+	if got != marker {
+		t.Fatalf("workload read %q under %s but the MCP wrote %q — a spilled file would not arrive (AC-F5)",
+			got, workloadDir, marker)
+	}
+}
