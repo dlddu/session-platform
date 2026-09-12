@@ -9,7 +9,7 @@
 > AC-F3·F5·F6이, *지금 실제로 무엇을 내는가*는 `data-plane/cmd/agent/session_mcp_tools.go`의
 > `toolDefinitions`가 갖는다. 이 문서는 그 둘 사이의 **판정 기준과 구현 대상 등재**만 갖고 사본을 두지 않는다 —
 > 도구의 인자·응답 스키마를 여기에 다시 적으면 코드가 바뀔 때 조용히 거짓이 된다
-> (`doc-tracker.md`가 사본 때문에 세 번 겪은 형태, 그 처방은 [`comment-policy.md`](./comment-policy.md)의 운영 규칙).
+> (`doc-tracker.md`가 사본 때문에 세 번 겪은 형태, 그 처방은 [`comment-policy/README.md`](./comment-policy/README.md)의 운영 규칙).
 
 ## 왜 이 문서가 있나
 
@@ -166,4 +166,4 @@ R4(사람이 읽고 판정할 수 있는 컨텍스트)가 함께 설계되어야
 - [`test/approval-gated-workload.md`](./test/approval-gated-workload.md) — 위 AC의 검증 시나리오
 - [`doc-tracker.md`](./doc-tracker.md) — 열린 항목(공유 볼륨 소비자 부재 · CA 슬롯 반려 · 정책 실집행 미검증)
 - [`mockups/gated-workspace.html`](./mockups/gated-workspace.html) · [`user-journeys/JRN-approval-gated-work.md`](./user-journeys/JRN-approval-gated-work.md) — 사람이 보는 쪽
-- [`comment-policy.md`](./comment-policy.md) — 「포인터는 남기고 사본은 지운다」의 정본
+- [`comment-policy/README.md`](./comment-policy/README.md) — 「포인터는 남기고 사본은 지운다」의 정본

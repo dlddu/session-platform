@@ -105,7 +105,7 @@ check-fidelity:
 check-scenario-mapping:
 	./scripts/e2e/check-scenario-mapping.sh
 
-## check-comment-policy: 주석 판정 원장(docs/comment-policy.md) <-> 실제 주석 대조.
+## check-comment-policy: 주석 판정 원장(docs/comment-policy/ledger.md) <-> 실제 주석 대조.
 ## 등재된 범위의 줄 수·지문을 모델 as-is 지문과 같은 추출로 재측정해, 판정 이후 그 범위에
 ## 주석이 더해졌으면 실패한다. python3 표준 라이브러리만 쓴다.
 check-comment-policy:
