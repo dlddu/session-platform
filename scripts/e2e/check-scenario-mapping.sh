@@ -2,36 +2,39 @@
 # check-scenario-mapping.sh — enforce the 테스트 시나리오 ↔ e2e 1:1 mapping mechanically.
 #
 # The rules it checks live in docs/test/e2e.md ("시나리오 ↔ e2e 매핑 규칙"):
-#   1. scenario → file: every scenario that is on none of the three registration
-#      tables (exceptions, pending implementation, authoring backlog) is declared
-#      by exactly one matching-unit file.
+#   1. scenario → file: every scenario that is on neither registration table
+#      (exceptions, deferrals) is declared by exactly one matching-unit file.
 #   2. file → scenario: every matching-unit file declares exactly one existing
 #      scenario (or `없음` for a registered smoke/infra file).
 #   3. non-scenario files must be registered in docs/test/e2e.md.
-#   4. the three registration tables may only name scenarios that exist, none may
-#      name a scenario that also has a declaring file, and no scenario may sit in
-#      two of them at once.
+#   4. the two registration tables may only name scenarios that exist, neither may
+#      name a scenario that also has a declaring file, and no scenario may sit on
+#      both at once.
 #   5. no declaration may reference a scenario that does not exist.
 #   6. the registry's mapping rows, non-scenario rows and totals must match
 #      reality.
-#   7. a scenario that is implemented and not excepted but has no file yet goes
-#      on the authoring backlog with its suite, its prerequisite and its evidence.
-#   8. no unclassified gap: a scenario with neither a file nor a row in one of
-#      the three tables fails the run. A gap is a judgement someone has to write
+#   7. a scenario that is not excepted but cannot have a matching file right now
+#      goes on the deferral table with its reason, its current stand-in
+#      verification (if any), its owner and its release condition.
+#   8. no unclassified gap: a scenario with neither a file nor a row on one of
+#      the two tables fails the run. A gap is a judgement someone has to write
 #      down, not a counter that may quietly grow — 2026-09-08 축 교체 left 16 of
 #      them standing under a green run, which is what this rule exists to stop.
-#      Escape hatch for a new scenario: one row in 「저작 대기」 saying which suite
-#      will own it and what has to land first.
+#      Escape hatch for a new scenario: one row in 「유예」 saying why it cannot
+#      have a file yet and what has to land first.
 #
 # Matching units (everything else — the shared harness, web/e2e/journeys/**,
-# integration/unit/envtest suites — is deliberately outside):
-#   - control-plane/test/e2e_*_test.go      (Go API e2e, build tag `e2e`)
+# the Go suites, integration/unit/envtest — is deliberately outside):
 #   - web/e2e/*.spec.ts                     (Playwright, top level only)
+#
+# Go tests under control-plane/test/ are NOT matching units. They may stand in for
+# a deferred scenario and keep declaring it; the registry's 유예 표 must then name
+# the same pair in its 현행 대체 검증 column, which this script checks as a diff.
 #
 # Sources of truth: the `### 시나리오 N: …` headings of docs/test/*.md (the
 # registry docs/test/e2e.md itself excluded) for the scenario set, the
 # `// 검증 시나리오:` header of each matching file for the mapping, docs/test/e2e.md
-# for the registry (exceptions, pending, backlog, non-scenario files, totals).
+# for the registry (exceptions, deferrals, non-scenario files, totals).
 #
 # Scenario identifier = `<문서 파일명>#시나리오 <N>` where `<N>` is the heading's own
 # number token — including sub-numbers such as `2-1`, which really occur
@@ -76,7 +79,7 @@ fi
 : >"$tmp/decl"   # "<path>\t<scenario id>"
 : >"$tmp/nonsc"  # "<path>"
 matching=0
-for f in control-plane/test/e2e_*_test.go web/e2e/*.spec.ts; do
+for f in web/e2e/*.spec.ts; do
 	[ -e "$f" ] || continue
 	matching=$((matching + 1))
 	n=$(grep -cE '^//[[:space:]]*검증 시나리오:' "$f" || true)
@@ -106,6 +109,26 @@ for f in control-plane/test/e2e_*_test.go web/e2e/*.spec.ts; do
 	esac
 done
 
+# rule 6: a declaration outside the matching space is a stand-in, not a mapping.
+# Go tests under control-plane/test/ may still declare the scenario they verify —
+# that is useful to a reader of the test — but every such pair must be named by
+# the 유예 표 as (시나리오, 현행 대체 검증). Checked as a diff below, so a stale
+# declaration and a stale table row both turn the gate red.
+: >"$tmp/standin"   # "<path>\t<scenario id>"
+for f in control-plane/test/*_test.go web/e2e/*/*.spec.ts; do
+	[ -e "$f" ] || continue
+	grep -qE '^//[[:space:]]*검증 시나리오:' "$f" || continue
+	v=$(grep -m1 -E '^//[[:space:]]*검증 시나리오:' "$f" | sed -E 's|^//[[:space:]]*검증 시나리오:[[:space:]]*||' | sed -E 's/[[:space:]]+$//')
+	case "$v" in
+	없음*) continue ;;
+	esac
+	if ! grep -qxF "$v" "$tmp/scenarios"; then
+		err "$f: 존재하지 않는 시나리오 '$v' 를 선언한다 (규칙 5 참조 무결성)"
+		continue
+	fi
+	printf '%s\t%s\n' "$f" "$v" >>"$tmp/standin"
+done
+
 # rule 1: no scenario declared by two files
 { cut -f2 "$tmp/decl" | sort | uniq -d || true; } >"$tmp/dups"
 while read -r sc; do
@@ -123,7 +146,7 @@ block() { # block <marker> -> the lines between <!-- marker:begin --> / :end
 		on
 	' "$REGISTRY"
 }
-for m in scenario-mapping scenario-exceptions scenario-pending scenario-backlog scenario-nonscenario scenario-summary; do
+for m in scenario-mapping scenario-exceptions scenario-deferred scenario-nonscenario scenario-summary; do
 	if ! grep -q "<!-- $m:begin -->" "$REGISTRY" || ! grep -q "<!-- $m:end -->" "$REGISTRY"; then
 		err "$REGISTRY 에 <!-- $m:begin --> / <!-- $m:end --> 블록이 없다 (규칙 6)"
 	fi
@@ -131,13 +154,13 @@ done
 [ "$fail" -eq 0 ] || exit 1
 
 # first backticked cell of each table row -> one id/path per line. `|| true`
-# everywhere a table may legitimately be empty (구현 대기 표) — a matchless grep
+# everywhere a table may legitimately be empty (유예 표가 비는 날) — a matchless grep
 # returns 1 and `set -e` would kill the run before any FAIL is printed.
 first_cell() { { grep -E '^\| *`[^`]+`' || true; } | sed -E 's/^\| *`([^`]+)`.*/\1/'; }
 
-# the three registration tables: registered scenarios must exist and must not
+# the two registration tables: registered scenarios must exist and must not
 # also be declared by a file.
-for kind in exceptions pending backlog; do
+for kind in exceptions deferred; do
 	block "scenario-$kind" | first_cell | sort -u >"$tmp/$kind"
 	while read -r sc; do
 		[ -n "$sc" ] || continue
@@ -147,8 +170,8 @@ for kind in exceptions pending backlog; do
 		fi
 	done <"$tmp/$kind"
 done
-# …and no scenario may sit in two of them. The three answer different questions
-# (영구 면제 / 구현이 없다 / 파일이 없다) and a scenario has one answer.
+# …and no scenario may sit on both. The two answer different questions
+# (영구 면제 / 지금은 둘 수 없다) and a scenario has one answer.
 overlap() { # overlap <a> <b> <말>
 	comm -12 "$tmp/$1" "$tmp/$2" >"$tmp/both"
 	while read -r sc; do
@@ -156,9 +179,17 @@ overlap() { # overlap <a> <b> <말>
 		err "'$sc' 가 $3에 모두 있다 — 한 시나리오의 판정은 하나다 (규칙 4·6)"
 	done <"$tmp/both"
 }
-overlap exceptions pending "예외 목록과 구현 대기 표"
-overlap exceptions backlog "예외 목록과 저작 대기 표"
-overlap pending backlog "구현 대기 표와 저작 대기 표"
+overlap exceptions deferred "예외 표와 유예 표"
+
+# stand-in rows: "| `<scenario>` | <사유> | `<path>` | …"  ->  "<path>\t<scenario>".
+# 세 번째 칸이 백틱 경로인 행만 — `없음` 인 행(대체 검증이 없는 유예)은 대조 대상이 아니다.
+{ block scenario-deferred | grep -E '^\| *`[^`]+` *\|[^|]*\| *`[^`]+` *\|' || true; } |
+	sed -E 's/^\| *`([^`]+)` *\|[^|]*\| *`([^`]+)`.*/\2\t\1/' | sort >"$tmp/doc_standin"
+sort "$tmp/standin" >"$tmp/real_standin"
+if ! diff -u "$tmp/doc_standin" "$tmp/real_standin" >"$tmp/standin_diff"; then
+	err "$REGISTRY 유예 표의 '현행 대체 검증' 이 매칭 단위 밖 파일의 실제 선언과 다르다 (규칙 6):"
+	sed 's/^/       /' "$tmp/standin_diff" >&2
+fi
 
 # mapping rows: "| `<scenario>` | `<path>` | …"  ->  "<path>\t<scenario>"
 { block scenario-mapping | grep -E '^\| *`[^`]+` *\| *`[^`]+`' || true; } |
@@ -179,10 +210,9 @@ fi
 
 # ------------------------------------------------------------------- aggregate
 exc_total=$(grep -c . "$tmp/exceptions" || true)
-pend_total=$(grep -c . "$tmp/pending" || true)
-back_total=$(grep -c . "$tmp/backlog" || true)
+def_total=$(grep -c . "$tmp/deferred" || true)
 decl_total=$(grep -c . "$tmp/declared" || true)
-sort -u "$tmp/declared" "$tmp/exceptions" "$tmp/pending" "$tmp/backlog" >"$tmp/covered"
+sort -u "$tmp/declared" "$tmp/exceptions" "$tmp/deferred" >"$tmp/covered"
 comm -23 "$tmp/scenarios" "$tmp/covered" >"$tmp/gaps"
 gap_total=$(grep -c . "$tmp/gaps" || true)
 # ` · ` joined — scenario ids contain spaces, so a space-joined list is ambiguous.
@@ -199,8 +229,7 @@ check_num() { # check_num <label> <expected>
 }
 check_num "시나리오 총계" "$sc_total"
 check_num "예외" "$exc_total"
-check_num "구현 대기" "$pend_total"
-check_num "저작 대기" "$back_total"
+check_num "유예" "$def_total"
 check_num "시나리오 매칭 파일" "$decl_total"
 check_num "공백" "$gap_total"
 
@@ -209,18 +238,18 @@ if [ "$gap_total" -gt 0 ] && [ "$doc_gaps" != "$gap_list" ]; then
 	err "$REGISTRY 집계의 공백 목록 '$doc_gaps' ≠ 실제 '$gap_list' (규칙 6)"
 fi
 
-# 규칙 8 — 미분류 공백은 실패다. 파일도 없고 세 표 어디에도 없는 시나리오는 "아직 판정하지
+# 규칙 8 — 미분류 공백은 실패다. 파일도 없고 두 표 어디에도 없는 시나리오는 "아직 판정하지
 # 않았다"는 뜻이고, 그것이 초록 아래 조용히 쌓이는 것을 막는 것이 이 검사다. 새 시나리오를
-# 추가하는 PR 이 붉어지면 고치는 법은 한 줄이다 — 「저작 대기」에 스위트와 선행을 적어 넣는 것.
+# 추가하는 PR 이 붉어지면 고치는 법은 한 줄이다 — 「유예」에 사유와 해제 조건을 적어 넣는 것.
 if [ "$gap_total" -gt 0 ]; then
-	err "미분류 공백 $gap_total개 — 파일도 없고 예외·구현 대기·저작 대기 어디에도 없다 (규칙 8): $gap_list"
+	err "미분류 공백 $gap_total개 — 파일도 없고 예외·유예 어디에도 없다 (규칙 8): $gap_list"
 fi
 
-# 불변식 — (시나리오 − 예외 − 구현 대기 − 저작 대기) = 매칭 파일 + 공백. 규칙 8 이 공백을 0 으로
-# 묶으므로 실질은 좌변 = 매칭 파일이고, 저작 대기가 0 이 되는 날 완전 1:1 이 된다. 이 줄이
-# 어긋나면 위의 개별 검사 중 하나가 이미 붉다.
-if [ $((sc_total - exc_total - pend_total - back_total)) -ne $((decl_total + gap_total)) ]; then
-	err "불변식 위반: (시나리오 $sc_total − 예외 $exc_total − 구현 대기 $pend_total − 저작 대기 $back_total) ≠ 매칭 파일 $decl_total + 공백 $gap_total"
+# 불변식 — (시나리오 − 예외 − 유예) = 매칭 파일 + 공백. 규칙 8 이 공백을 0 으로 묶으므로 실질은
+# 좌변 = 매칭 파일이고, 유예가 0 이 되는 날 완전 1:1 이 된다. 이 줄이 어긋나면 위의 개별 검사
+# 중 하나가 이미 붉다.
+if [ $((sc_total - exc_total - def_total)) -ne $((decl_total + gap_total)) ]; then
+	err "불변식 위반: (시나리오 $sc_total − 예외 $exc_total − 유예 $def_total) ≠ 매칭 파일 $decl_total + 공백 $gap_total"
 fi
 
 # --------------------------------------------------------------------- verdict
@@ -229,9 +258,9 @@ if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
 
-printf '시나리오 ↔ e2e 1:1 OK — 시나리오 %s개 = 매칭 파일 %s + 예외 %s + 구현 대기 %s + 저작 대기 %s + 공백 %s (매칭 단위 %s개, 비-시나리오 %s개)\n' \
-	"$sc_total" "$decl_total" "$exc_total" "$pend_total" "$back_total" "$gap_total" "$matching" "$(grep -c . "$tmp/nonsc" || true)"
-# 규칙 8 이 위에서 공백을 0 으로 묶으므로 여기 도달하면 남은 잔여는 저작 대기뿐이다. 그 목록을
-# 찍어 두면 다음 슬라이스가 무엇을 집어야 하는지 CI 로그에서 바로 보인다.
-[ "$back_total" -eq 0 ] || printf '저작 대기(판정은 끝났고 전용 파일만 없는 시나리오): %s\n' \
-	"$(paste -sd'\n' "$tmp/backlog" | sed -e ':a' -e 'N' -e '$!ba' -e 's/\n/ · /g')"
+printf '시나리오 ↔ e2e 1:1 OK — 시나리오 %s개 = 매칭 파일 %s + 예외 %s + 유예 %s + 공백 %s (매칭 단위 %s개, 비-시나리오 %s개)\n' \
+	"$sc_total" "$decl_total" "$exc_total" "$def_total" "$gap_total" "$matching" "$(grep -c . "$tmp/nonsc" || true)"
+# 규칙 8 이 위에서 공백을 0 으로 묶으므로 여기 도달하면 남은 잔여는 유예뿐이다. 그 목록을 찍어
+# 두면 다음 슬라이스가 무엇을 집어야 하는지 CI 로그에서 바로 보인다.
+[ "$def_total" -eq 0 ] || printf '유예(전용 spec 이 아직 없는 시나리오): %s\n' \
+	"$(paste -sd'\n' "$tmp/deferred" | sed -e ':a' -e 'N' -e '$!ba' -e 's/\n/ · /g')"
