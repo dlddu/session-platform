@@ -54,7 +54,7 @@ func ensureClaudeMCPRegistration(homeDir string, tools toolSurface) error {
 		}
 		delete(servers, sessionMCPServerName)
 	} else {
-		want, err := json.Marshal(claudeMCPServer{Type: "http", URL: tools.SessionMCP})
+		want, err := json.Marshal(claudeMCPServer{Type: "http", URL: tools.sessionMCPEndpoint()})
 		if err != nil {
 			return err
 		}

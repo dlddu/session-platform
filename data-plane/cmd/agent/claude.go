@@ -156,6 +156,19 @@ type toolSurface struct {
 	SharedDir string
 }
 
+// sessionMCPEndpoint is the URL a client has to POST to, which is not the
+// address the control plane injects.
+//
+// Getting this wrong is silent rather than loud: the pinned CLI answers a 404
+// at the MCP endpoint by reporting a server with no tools, not an address it
+// could not reach, so the session runs on and the model never reaches the gate.
+func (t toolSurface) sessionMCPEndpoint() string {
+	if t.SessionMCP == "" {
+		return ""
+	}
+	return t.SessionMCP + sessionMCPPath
+}
+
 type claudeRuntimeState struct {
 	Version int  `json:"version"`
 	HasRun  bool `json:"hasRun"`
