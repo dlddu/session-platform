@@ -401,7 +401,7 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 | --- | --- | --- | --- | --- |
 | `approval-gated-workload.md#시나리오 1` | `control-plane/test/e2e_f1_workload_type_test.go` | go | AC-F1 | `workloadType=approval-gated` 세션이 배포 SUT에서 서고 그 pod 집합이 워크로드 파드 + **세션 전속 헬퍼 파드 1개**(라벨 `session-id`+`pod-role=helper`로 조회, 컨테이너 정확히 둘 — 세션 MCP·credential-proxy — 이 모두 Ready)임 / 타입 축이 실제로 판별함 — 필드 생략과 explicit `shell`은 헬퍼 파드를 0개 만든다 / 근접 오타(`approval_gated`·전후 공백·대문자·`approvalgated`)와 explicit `""`·`null`·비문자열은 **pod 생성 전** 400(세션 파드 수 불변이 그라운드-트루스) / 생성 후 `/read`·`/write`·`/switch`의 타입·모델 변경은 400이고 원래 값 유지. 승인 왕복(AC-F3)·공유 볼륨(AC-F5)·컨테이너별 자격 증명 분리(AC-F6)는 각자의 AC가 소유하므로 여기서 사지 않는다 — 이 파일이 사는 것은 **타입 축과 그것이 세우는 파드 집합**이다 |
 | `approval-gated-workload.md#시나리오 3` | `control-plane/test/e2e_approval_gated_3_approval_path_test.go` | go | AC-F3 | **승인 경로의 한 왕복**을 배포 SUT 에서 — 도구 호출 프롬프트를 write 하면 그 write 가 **게이트를 기다리지 않고 반환**하고, 그 반환이 공허하지 않음을 **순서로** 산다: 반환 뒤에 관측되는 `awaiting approval` 마커는 게이트가 대기에 **진입할 때** 발행되고 그 대기는 아래의 결정 전에는 끝날 수 없으므로, write 가 invocation 을 완주시키고 온 것일 수 없다(시간은 보조 지표로만 두고 CLI 의 60초 도구 예산보다 한참 아래라는 천장만 확인한다) / 대기 표시가 세션의 append-only 출력에 **in-band 로 투영**되고 SSE 와 **같은 커서의** `read` 가 같은 바이트를 봄(스트림이 offset 0 부터 이어 붙인 바이트가 같은 순간 `read(0)` 의 접두사) / 마커가 이름으로 지목하는 도구가 **세션 MCP 가 등재한 이름**(`web_fetch_get`)이고 외부 식별자가 **`{세션ID}:{요청ID}`** 형태이며 그 세션 절반이 이 세션의 id 임 — 대역은 CLI 가 네임스페이스한 이름(`mcp__session-platform-session-mcp__web_fetch_get`)으로 지시받으므로, 마커가 **맨 이름**을 달고 오는 것이 곧 CLI 가 그 네임스페이스 이름을 이 서버의 등재 도구로 **해소했다**는 관측이다(자매 원장 `CLAUDE-PROVIDER` 잔여가 「대역이 내는 도구 이름이 세션 MCP 가 실제로 등재한 것과 같은지는 여기서 확인되지 않는다」며 이 파일을 지목한 그 대조) / **대기가 실재함** — 게이트웨이 대역에 직접 물어 그 요청을 `PENDING` 으로 **들고 있음**을 확인한다(마커만 보면 허공에 찍힌 글자와 구별되지 않는다. 이 관측과 「결정 마커가 아직 없다」 둘 다 우리가 결정을 내리는 순간 뒤집히므로 공허하지 않다) / 대역의 `/operator/decide` 로 **승인한 뒤에야** 결정 마커가 오고, 그것이 대기 마커와 **같은 외부 식별자**를 달고 **같은 바이트열에 이어 붙으며**(결정 시점 버퍼가 대기 시점 버퍼의 확장) 순서가 대기 → 결정이고 정확히 1회임 / 그 마커를 실어 나르는 **커서 계약** — event id = `nextOffset`, decoded 길이 = 커서 이동폭(`s6Output` 이 소유), 그리고 스트림이 멈춘 커서가 전부 **UTF-8 code-point 경계**임. 경계 단언이 공허하지 않은 근거는 마커 자신이다 — `renderApprovalNotice` 가 em dash 와 middle dot 으로 쓰므로 커서가 넘나드는 바이트에 다중바이트 룬이 실제로 들어 있고, 테스트가 그 룬의 존재를 **먼저 확인한 뒤에** 경계를 잰다. **승인 후 실제 아웃바운드 GET 이 정확히 1회 일어나는 것은 이 파일에 없다** — 시나리오 사전 조건의 「호출을 관찰할 수 있는 외부 테스트 upstream」이 이 SUT 에 없고(차단 요인 `FETCH-ORIGIN`), 같은 이유로 「결정 전 upstream 무도달」의 음성 단언도 공허해서 싣지 않았다. 둘 다 아래 §「남은 미검증 분기」에 등재했다. 타입 축과 파드 집합(AC-F1)·헬퍼 파드의 수명과 경계(AC-F4)·자격 증명 배치(AC-F6)는 각자의 파일이 소유한다 — 이 파일이 배타적으로 사는 것은 **게이트를 통과하는 한 번의 왕복과 그 순서**다 |
-| `approval-gated-workload.md#시나리오 7` | `control-plane/test/e2e_f4_helper_pod_test.go` | go | AC-F4 | **헬퍼 파드의 귀속·수명·컨테이너 경계**를 배포 SUT에서 — 세션 2개가 서로 다른 헬퍼 파드를 갖고 각자 자기 `session-id` 라벨만 지니며 공개 API의 `auxiliaryPods`와 클러스터 조회가 같은 파드를 지목함 / **삭제** 시 워크로드 파드와 헬퍼 파드가 **둘 다** 회수됨(클러스터에서 삭제/terminating) / **거부된 동결은 아무것도 회수하지 않음** — `POST /snapshot`이 503 `checkpoint strategy is disabled`를 돌려주고 세션은 `active`에 그대로이며 워크로드 파드와 **그 헬퍼 파드가 이름까지 같은 것으로** 살아 Ready임(수명이 API 호출이 아니라 세션 종료 사건에 결합돼 있다는 것을 음성 방향에서 산다) / 두 헬퍼 컨테이너가 PID 네임스페이스를 공유하지 않아 서로의 `/proc/*/environ`을 읽지 못함(각 컨테이너가 자기 `DATA_PLANE_WORKLOAD` 마커는 찾으므로 음성 결과가 자기검증되고, 두 마커가 다름도 먼저 확인한다). **동결 시 동반 회수와 복원 갈래는 이 파일에 없다** — AC-F5의 아카이브 전략이 선행이라 아래 §「남은 미검증 분기」에 등재했고, 위 거부 케이스가 그 선행이 풀리는 순간 빨개져 되살릴 자리를 지목한다. 제출되는 pod spec·자격 증명 분리·워크로드 파드 실패 시 회수·복원 쌍 생성은 `control-plane/test/approval_gated_orchestrator_test.go`(태그 `integration`)가 이미 소유하므로 다시 사지 않는다 — e2e가 배타적으로 사는 것은 **실 API server가 실제로 지운 파드·거부 뒤에도 실제로 서 있는 파드·실 kubelet이 가른 네임스페이스**다(단위 스텁은 살아남은 파드의 **수**만 세고 어느 쪽인지 말하지 못한다). 타입 축과 파드 집합의 모양(AC-F1)·네트워크 경계(AC-F2)·컨테이너별 자격 증명(AC-F6)은 각자의 AC가 소유한다 |
+| `approval-gated-workload.md#시나리오 7` | `control-plane/test/e2e_f4_helper_pod_test.go` | go | AC-F4 | **헬퍼 파드의 귀속·수명·컨테이너 경계**를 배포 SUT에서 — 세션 2개가 서로 다른 헬퍼 파드를 갖고 각자 자기 `session-id` 라벨만 지니며 공개 API의 `auxiliaryPods`와 클러스터 조회가 같은 파드를 지목함 / **삭제** 시 워크로드 파드와 헬퍼 파드가 **둘 다** 회수됨(클러스터에서 삭제/terminating) / **동결이 두 파드를 함께 회수함** — `POST /snapshot`이 200이고 API의 `pod`가 비며 `auxiliaryPods`가 사라지고, 클러스터에서도 워크로드 파드와 헬퍼 파드가 **둘 다** 삭제/terminating임 / **복원이 새 쌍을 세우고 워크로드를 그 쌍에 다시 배선함** — 복원된 워크로드 파드도 헬퍼 파드도 동결 전과 **이름이 다르고**, 워크로드 컨테이너의 `SESSION_MCP_URL`이 **이번 라운드 헬퍼의 실제 `status.podIP`** 를 담으며 동결 전 값과 다름(동결 **전에** 그 값을 먼저 재 두므로 「재배선됐다」가 파드 재생성에 대한 가정이 아니라 측정이다) / 두 헬퍼 컨테이너가 PID 네임스페이스를 공유하지 않아 서로의 `/proc/*/environ`을 읽지 못함(각 컨테이너가 자기 `DATA_PLANE_WORKLOAD` 마커는 찾으므로 음성 결과가 자기검증되고, 두 마커가 다름도 먼저 확인한다). **두 갈래는 2026-09-12에 들어왔다** — AC-F5의 아카이브 전략이 선행이었고 그것이 착지하면서, 그때까지 자리를 지키던 거부 케이스가 예고대로 빨개져 무엇을 되살릴지 지목했다. 제출되는 pod spec·자격 증명 분리·워크로드 파드 실패 시 회수·복원 쌍 생성은 `control-plane/test/approval_gated_orchestrator_test.go`(태그 `integration`)가 이미 소유하므로 다시 사지 않는다 — e2e가 배타적으로 사는 것은 **실 API server가 실제로 지운 파드·거부 뒤에도 실제로 서 있는 파드·실 kubelet이 가른 네임스페이스**다(단위 스텁은 살아남은 파드의 **수**만 세고 어느 쪽인지 말하지 못한다). 타입 축과 파드 집합의 모양(AC-F1)·네트워크 경계(AC-F2)·컨테이너별 자격 증명(AC-F6)은 각자의 AC가 소유한다 |
 | `approval-gated-workload.md#시나리오 8` | `control-plane/test/e2e_f6_credential_split_test.go` | go | AC-F6 | **두 자격 증명의 컨테이너별 배치**를 배포 SUT에서 — 게이트웨이 3종(`APPROVAL_GATEWAY_URL`·`_API_KEY`·`_USER_ID`)이 헬퍼 파드의 `session-mcp` 컨테이너에만 `approval-gateway-credentials`의 `url`/`api-key`/`user-id`로 **필수** 주입되고 `credential-proxy`·워크로드 컨테이너엔 이름으로도 **키로도** 없음 / 공급자 3종(`base-url`·`auth-token` 필수 + optional `ca-cert`)은 같은 파드의 `credential-proxy`에만 있고 그 컨테이너가 `DATA_PLANE_PROXY_PLACEMENT=helper`·`DATA_PLANE_AGENT_ADDR=0.0.0.0:8091`로 **loopback이 아니라 파드 네트워크에 바인딩**함(AC-E6과 갈리는 유일한 지점) / 워크로드 컨테이너는 Secret ref를 하나도 갖지 않고(optional `model` 제외) `ANTHROPIC_BASE_URL`·`SESSION_MCP_URL`이 **헬퍼 파드의 실제 `status.podIP`** 와 일치하며 `ANTHROPIC_AUTH_TOKEN`은 placeholder, `K3S_MCP_TOKEN`은 **없음**(✅ 2026-09-03 확정 항목) / 실제로 해소된 환경 — `session-mcp`가 api-key를, `credential-proxy`가 auth-token을 해소하고 워크로드 컨테이너의 `/proc/*/environ` 어디에도 그 둘이 없음(자기 placeholder를 찾는 대조군이 먼저 붙어 음성 결과가 자기검증된다) / 생성 요청의 `userId`·게이트웨이 필드·공급자 자격 증명은 **400**이고 세션이 생기지 않음 / 네 토큰 문자열이 세션 조회 응답·목록 응답·`read` **응답**·**control-plane 파드 로그**에 없음 — 넷 다 **표면별 대조군을 먼저 통과시킨 뒤에** 찾는다(앞 셋은 자기 세션 id를 담아야 하고, 로그는 프로세스 시작 줄을 담아야 하며 거기에 Secret에서 해소한 값 하나(optional `model`)가 실제로 echo돼 있어야 한다) / model 계약이 claude-code와 동일. 제출되는 pod spec은 `approval_gated_orchestrator_test.go`(태그 `integration`)가, 프록시의 **동작** 계약은 `data-plane/cmd/agent/credential_proxy*_test.go`가 이미 소유하므로 다시 사지 않는다 — e2e가 배타적으로 사는 것은 **Secret에서 실제로 해소된 환경과 API server가 실제로 배정한 IP**다. 타입 축과 파드 집합(AC-F1)·귀속과 수명과 PID 경계(AC-F4)·네트워크 경계(AC-F2)는 각자의 AC가 소유한다. **다섯 갈래는 이 파일에 없다**(차단 둘 · 승인 컨텍스트 · `read`의 **scrollback** 반쪽 · control-plane 로그의 **요청 단위** 반쪽) — 아래 §「남은 미검증 분기」에 등재했다 |
 | `architecture.md#시나리오 1` | `control-plane/test/e2e_a1_plane_separation_test.go` | go | AC-A1 | 세션 워크로드가 control-plane pod 밖의 자기 Pod에서 돈다 + control-plane pod엔 워크로드(쉘)가 없다(distroless — exec 실패) |
 | `architecture.md#시나리오 2` | `control-plane/test/e2e_a2_dedicated_pod_test.go` | go | AC-A2 | 생성 = active + 전용 pod, `session-id` 라벨 1:1, N 세션 → 고유 Pod N개 |
@@ -789,6 +789,12 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 > 것은 없다** — 이것이 "반쪽만 단언하는 파일"과 갈리는 지점이다. 이 판정을 실측이 뒤집는 경우는 하나,
 > 아카이브 전략이 등록되는 때이고 그때는 파일이 스스로 빨개진다.
 >
+> ✅ **그 하나가 실제로 일어났다** *(2026-09-12)*. AC-F5의 아카이브 전략이 등록되면서 거부 케이스가
+> 예고대로 빨개졌고, 그 자리에 **동결 시 동반 회수**와 **복원 시 새 쌍 기동 + 헬퍼 주소 재배선**이
+> 들어왔다. 두 갈래는 §「남은 미검증 분기」에서 내려왔다. 판정의 결론은 바뀌지 않는다 — 관측 가능한
+> AC-F4의 갈래 중 단언되지 않은 것은 여전히 없고, 달라진 것은 **관측 가능한 것의 집합**뿐이다.
+> 예고한 대로 파일이 스스로 빨개져 되살릴 자리를 지목했다는 점에서, 이 규범이 실제로 집행된 사례다.
+>
 > ✅ **같은 규범을 AC-F6에도 판정했다 — 걸리지 않는다** *(2026-09-07, 첫 CI 실행 뒤 개정)*.
 > AC-F6 전용 파일은 검증 방법이 열거하는 것 중 다섯 갈래를 갖지 않는다: **차단 둘**(워크로드
 > 파드 → 게이트웨이·공급자 origin 직접 연결, 다른 세션 → 이 헬퍼 파드 ingress), **승인 컨텍스트**,
@@ -810,14 +816,13 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 > §「남은 미검증 분기」에 등재했고, **AC-F4 쪽과 달리 CI가 집행하는 기한이 없다**는 것도 거기
 > 적었다 — 이 다섯을 다시 여는 것은 **다음 감지**다.
 >
-> ⚠️ **AC-F5에는 선행이 하나 더 있다.** 공유 RWX 볼륨 **자체는 착지했다** —
-> `control-plane/internal/adapter/k8s/shared_volume.go`의 ReadWriteMany 클레임, 워크로드 컨테이너와
-> 헬퍼 파드 `session-mcp` 컨테이너의 같은 경로 마운트, 그리고 배포 SUT에서 그것을 단언하는
-> `control-plane/test/shared_volume_test.go`가 있다. 남은 선행은 **후반**이고, 그 상태는 여기에
-> 베끼지 않는다 — 정본은 아래 §「남은 미검증 분기」의 두 행과 `../doc-tracker.md`의 AC-F5 항목이며,
-> 세 자리가 같은 말을 하면 하나만 움직여도 나머지 둘이 거짓이 된다. ⓐ·ⓑ가 풀려도 F5 전용 파일은
-> 그 후반이 착지한 뒤이고, 구현은 `tbm_session-platform-docs-impl`의 몫이다. 그때까지 F5는
-> 규칙 7의 성격(순서를 기다리는 공백)을 그대로 갖는다.
+> ✅ **AC-F5의 후반도 착지했다** *(2026-09-12)*. 공유 RWX 볼륨 자체(`shared_volume.go`의 ReadWriteMany
+> 클레임, 워크로드 컨테이너와 헬퍼 파드 `session-mcp` 컨테이너의 같은 경로 마운트)에 이어, 그 내용을
+> 파일시스템 아카이브에 실어 동결·복원을 건너 나르는 축이 들어왔다. `control-plane/test/shared_volume_test.go`가
+> 배포 SUT에서 왕복까지 단언한다 — 클레임이 옛 헬퍼와 함께 회수된 뒤 **이름이 다른 새 쌍의 같은 경로**에서
+> 같은 바이트가 읽힌다. 그 상태를 여기에 베끼지 않는 규칙은 그대로다 — 정본은 `../doc-tracker.md`의
+> AC-F5 항목이며, 두 자리가 같은 말을 하면 하나만 움직여도 다른 하나가 거짓이 된다. F5는 더 이상
+> 규칙 7의 성격(순서를 기다리는 공백)을 갖지 않는다.
 > ② **AC-F2·F4** → 그때 비로소 규칙 4 예외의 근거가 선다. F2(egress 차단)는 **현재 e2e 하네스에서
 > 검증할 수 없다** — `deploy/kind-config.yaml`이 `disableDefaultCNI`를 켜지 않아 클러스터가 기본
 > kindnet으로 뜨고, kindnet은 **NetworkPolicy를 집행하지 않는다**. 따라서 정책 오브젝트의 존재·셀렉터·
@@ -851,9 +856,11 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 ## 남은 미검증 분기 (공백은 아님)
 
 전용 파일은 있으나 그 안에서 아직 단언하지 못하는 경로. **공백(전용 파일이 없는 AC)과 다르다** —
-파일은 이미 그 AC의 주검증이고, 막힌 것은 그 안의 갈래 하나다. 이유는 여섯 갈래다: (1) `idle`
-상태에 도달할 방법이 없다(AC-B1의 트리거 정책과 함께 풀린다), (2) `approval-gated` 타입에
-스냅샷 전략이 등록돼 있지 않다(AC-F5의 아카이브 전략과 함께 풀린다), (3) SUT의 CNI가
+파일은 이미 그 AC의 주검증이고, 막힌 것은 그 안의 갈래 하나다. 이유는 여섯 갈래였고 **하나는
+해소됐다**: (1) `idle` 상태에 도달할 방법이 없다(AC-B1의 트리거 정책과 함께 풀린다), ~~(2)
+`approval-gated` 타입에 스냅샷 전략이 등록돼 있지 않다~~ *— 2026-09-12 해소. AC-F5의 아카이브
+전략이 등록되며 이 이유로 막혀 있던 두 행(동결 시 동반 회수 · 복원 시 새 쌍)이 표에서 내려왔고,
+번호는 아래 이유들을 밀지 않도록 비워 둔다*, (3) SUT의 CNI가
 NetworkPolicy를 **집행하지 않아** 차단 갈래에 관측 대상 자체가 없다(kindnet — `deploy/`에
 `disableDefaultCNI` 0파일), (4) **표면이 이 SUT에서 비어 있다** — 찾을 텍스트가 없으므로 음성
 단언이 vacuous하다. (4)는 실측으로만 알 수 있고 실제로 CI가 먼저 알려 줬다: AC-F6 파일의 첫
@@ -875,8 +882,6 @@ in-flight 위상은 전이와 경주해야 보이고, 운으로 이긴 관측은
 | control-plane **요청 단위 로그**에 토큰 부재 | 〃 | 요청 로거(`withLogging`)가 `Debug`로 적고 핸들러가 기본 `Info`라 **세션 수명 동안 한 줄도 나오지 않는다**(CI 실측 — 이 파일의 첫 실행이 그 대조군에 걸렸다). 소유 파일이 사는 것은 **프로세스 시작부터의 전체 로그**이고, 그 로그가 Secret에서 해소한 값(optional `model`)을 실제로 echo한다는 것을 두 번째 대조군으로 둔다. 요청 단위 로그를 켜는 것은 **제품 결정**(로그 수준 또는 `Info` 요청 로그)이라 이 원장의 산출물(e2e 파일 + 등재 문서) 밖이다 |
 | 승인 후 **실제 아웃바운드 GET 이 정확히 1회** 일어나고 그 응답이 같은 바이트열에 이어 붙음 | `e2e_approval_gated_3_approval_path_test.go` | 시나리오 3 사전 조건의 「호출을 관찰할 수 있는 외부 테스트 upstream」이 이 SUT 에 **없다**. 도구는 https 만 받는데(`validateFetchTarget`) 그 호출을 내는 MCP 컨테이너의 fetch 는 시스템 루트만 신뢰하는 기본 클라이언트고(`session_mcp_tools.go` 의 `http.DefaultClient`), 그 컨테이너엔 사설 발급자를 넣을 자리가 없다 — credential-proxy 가 optional `ca-cert` 로 하는 일을 여기서는 할 수 없다. 차단 요인 `FETCH-ORIGIN` 이 그 판정과 해제 조건을 갖고 소관은 `tbm_session-platform-e2e-mock-policy` 다. 소유 파일이 사는 것은 **게이트까지**이고, 게이트를 통과했다는 결정 마커가 그 경계의 마지막 관측이다 |
 | 결정 **전** 테스트 upstream **무도달**(음성) | 〃 | 〃 의 뒷면이다 — 닿을 수 있는 upstream 이 애초에 없으므로 「도달하지 않았다」가 결정 전이든 후든 **vacuous** 하다. 그 자리를 소유 파일은 공허하지 않은 둘로 대신 산다: 게이트웨이 대역이 그 요청을 `PENDING` 으로 들고 있음과, 출력에 결정 마커가 아직 없음. 둘 다 결정을 내리는 순간 뒤집힌다. `FETCH-ORIGIN` 이 풀려 실물 origin 이 서면 이 행과 위 행이 **함께** 소유 파일로 돌아온다 |
-| 동결 시 워크로드·헬퍼 파드 **동반 회수** | `e2e_f4_helper_pod_test.go` | `approval-gated`에 아카이브 전략이 등록돼 있지 않아 `checkpointerFor`가 `ErrCheckpointDisabled`를 내고 공개 API가 503으로 거부한다 — **결함이 아니라 의도된 계약**이며(`internal/service/workload_type_test.go`의 `TestSnapshotIsRefusedForApprovalGated`가 그 계약을 산다) 아카이브 전략 없이 동결하면 복원할 수 없는 체크포인트 뒤로 파드 쌍을 회수하게 된다. 선행은 **AC-F5**이고 소관은 `tbm_session-platform-docs-impl`이다. |
-| 복원 시 **새 쌍** 기동 + 워크로드 파드의 헬퍼 주소 재배선 | 〃 | 〃 (동결이 선행이라 복원 진입 자체가 없다) |
 | 동결 전 대화를 참조하는 프롬프트의 **정상 응답**(의미) | `e2e_claude_code_6_archive_freeze_test.go` | 대역이 프롬프트와 무관한 상수 한 줄을 돌려주므로(`deploy/e2e-anthropic-fake.yaml`) 「대화가 이어졌다」를 가리키는 문장 자체가 만들어지지 않는다 — `claude-code-workload.md#시나리오 5` 예외와 **같은 벽·같은 해제 조건**(provider opt-in smoke)이다. 소유 파일이 사는 것은 그 의미가 타고 갈 **배선**이고 그쪽은 전부 산다: 워크스페이스 파일 · 출력 scrollback · `--continue` 가 아카이브를 건넜다는 것 |
 | 스냅샷 트랜잭션의 durable `preparing` → `committing` 순서 | 〃 | 한 API 호출의 in-flight 위상 둘이라 밖에서 관측하려면 전이와 경쟁해야 한다. `control-plane/internal/service/manager_test.go` 가 저장소와 시계를 주입해 그 순서를 소유한다(`TestSnapshotPersistsPrepareAndCommitBeforeSideEffects` · `TestPreparingSnapshotRecoversAfterControlPlaneRestart` · `TestPreparingRecoveryOwnerClaimFencesExpiredHolderCommit`). 제품 표면이 위상을 노출하게 되면 이 행이 소유 파일로 돌아온다 |
 | 서버 body read의 **30초 제한** | `e2e_state_api_5_wire_validation_test.go` | 시나리오 5 기대 결과의 마지막 문장. 관측하려면 본문을 30초에 걸쳐 **느리게** 흘려보내야 하는데, 그것은 요청 하나를 30초 이상 붙잡고 있는 테스트가 되어 이 스위트의 시간 예산(`go test -timeout=30m`에 파드 프로비저닝이 이미 들어 있다)과 맞지 않는다. 소유 파일이 사는 것은 **크기** 축(8 MiB wire·1 MiB prompt)이고, 시간 축은 여기 남는다. 선행은 「느린 업로드를 흉내 내는 하네스」이며 그 자체는 제품 변경이 아니다 — 다음 슬라이스가 이 스위트에 붙이면 그때 소유 파일이 같은 자리에서 산다 |
