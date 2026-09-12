@@ -51,6 +51,17 @@ const (
 	// see the FETCH-ORIGIN note in the header — but it still has to be one the
 	// gate will accept, so it is https.
 	f3Prompt = "e2e-tool:" + providerToolName + `:{"url":"https://example.test/doc"}`
+	// The marker names the tool the *session MCP* registers, not the namespaced
+	// name the CLI hands the model: renderApprovalNotice prints the gate's own
+	// webFetchGetTool (data-plane/cmd/agent/session_mcp_tools.go). The two names
+	// differ on purpose, and that is what makes this assertion worth making —
+	// the stand-in is instructed with providerToolName, so a marker carrying the
+	// bare name is proof the CLI *resolved* the namespaced name onto this
+	// server's registered tool. Asserting providerToolName here instead would
+	// assert the CLI's own spelling back at itself; asserting this one buys the
+	// cross-check the sibling ledger's CLAUDE-PROVIDER entry says is missing
+	// ("대역이 내는 도구 이름이 세션 MCP 가 실제로 등재한 것과 같은지").
+	f3MarkerToolName = "web_fetch_get"
 	// data-plane/cmd/agent/session_mcp_tools.go requestIDPrefix, same reason.
 	f3RequestIDPrefix = "req-"
 	// The CLI gives an MCP tool call 60s before it cancels it, so the decision
@@ -170,8 +181,11 @@ func TestApprovalGatedApprovalPath_WriteReturnsBeforeTheGateAndTheWaitIsAnnounce
 	// ---------------------------------------------------------------- 대기 표시
 	waiting := f3EventuallyMarker(t, f.ID, f3AwaitingPrefix)
 	tool, externalID := f3Marker(t, waiting.Payload, f3AwaitingPrefix)
-	if tool != providerToolName {
-		t.Fatalf("the wait marker names tool %q, want %q", tool, providerToolName)
+	if tool != f3MarkerToolName {
+		t.Fatalf("the wait marker names tool %q, want %q (the name the session MCP "+
+			"registers; the stand-in was instructed with %q, so this marker is where "+
+			"the CLI's resolution of that namespaced name becomes observable)",
+			tool, f3MarkerToolName, providerToolName)
 	}
 
 	// ------------------------------------------------------- 외부 식별자의 모양
