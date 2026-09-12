@@ -413,6 +413,11 @@ func validateHelperEndpoint(raw string, wantPort int) error {
 	if host == "" {
 		return errors.New("must include a host")
 	}
+	// A path here would silently move the endpoint its clients build; see
+	// sessionMCPEndpoint for why that failure is silent rather than loud.
+	if parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("must be a bare host and port; its clients append their own paths")
+	}
 	return nil
 }
 
