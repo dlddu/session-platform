@@ -25,3 +25,22 @@ Ready에 이르지 못함)는 `docs/test/e2e.md`가 좌표까지 들어 적고 �
 (Secret 투영 실수를 감추게 된다), `claudeCodeModels`가 API 허용목록이 아니라 표시 설정이라는 구분,
 그리고 `mock-exception: CRIU-GATE` 등재 블록(자매 모델 `tbm_session-platform-e2e-mock-policy`
 소관이라 손대지 않았다).
+
+## 2026-09-12 증분 재판정 — AC-F5 후반(아카이브) 슬라이스
+
+조립 루트에 초안이 10줄을 더했고, **낡아 거짓이 된 1줄**을 교체했다.
+**10줄 판정, 제거 4 · 유지 6**(65 → 70).
+
+교체한 1줄은 체크포인트 스토어 게이트 위의 「`CRIU_ENABLED` for shell, `CLAUDE_CODE_ARCHIVE_ENABLED`
+for claude-code」다 — 이제 그 게이트가 두 타입을 켜므로 열거가 거짓이 됐다.
+
+| 위치 | 제거한 것 | 이미 말하는 곳 (복원 경로) |
+| --- | --- | --- |
+| 게이트 블록 위 (5→2) | 「이 게이트가 허용하는 것은 타입이 아니라 전략(아카이브를 `CHECKPOINT_S3_*` 에 쓰는 것)이다」 · 「두 타입 모두에 등록한다」 | ① 같은 파일 아래쪽 `claudeArchiveEnabled` config 필드 doc 이 전략 서술의 정본이다 · ① 둘째는 바로 아래 `append` 두 줄 |
+| approval-gated 등록 자리 (4→2) | 「없으면 이 타입에 전략이 없고 `POST /snapshot` 은 503 이며 유휴 리퍼가 이 세션들을 영영 지나친다」 | ① `reaper.go` 의 `ErrCheckpointDisabled → continue` 분기 · ② `doc-tracker.md` 의 AC-F5 항목이 같은 사실을 소유한다 |
+
+**유지 6줄** — 둘 다 레포 안에 복원 경로가 없다. **왜 env 이름을 바꾸지 않았는가**(이름을 고치면 그
+값을 세우는 모든 오버레이와 함께 착지해야 하고 그중 일부는 이 레포 밖에 있다)와, **왜 approval-gated
+등록에는 claude-code 와 달리 이미지 검사가 없는가**(설정되지 않은 타입은 애초에 스냅샷할 세션을
+만들지 못한다). 후자는 코드에 **비대칭만 보이고 이유가 안 보이는** 자리라, 없으면 다음 사람이
+「빠뜨린 검사」로 읽고 더한다.

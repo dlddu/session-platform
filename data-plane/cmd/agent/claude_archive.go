@@ -16,34 +16,39 @@ import (
 const (
 	claudeArchiveScrollback = "scrollback"
 	claudeArchiveStateRoot  = "state"
+	// A session with no shared volume (AC-F5) produces an archive byte-identical
+	// to the ones written before this member existed, which is what keeps every
+	// already-stored archive restorable.
+	claudeArchiveSharedRoot = "shared"
 )
 
 // writeClaudeArchive captures the complete filesystem-backed Claude state plus
 // the already-redacted output buffer. The worker is drained before this runs,
 // so the tree and the resume flag cannot change while it is walked.
-func writeClaudeArchive(w io.Writer, stateDir string, scrollback []byte) error {
+//
+// The shared tree is the exception: it is written by a container this agent does
+// not drain — the helper pod's MCP spills into it — so the per-entry identity
+// checks below are load-bearing rather than defensive.
+func writeClaudeArchive(w io.Writer, stateDir, sharedDir string, scrollback []byte) error {
 	if int64(len(scrollback)) > maxClaudeScrollbackBytes {
 		return fmt.Errorf("claude scrollback exceeds %d bytes", maxClaudeScrollbackBytes)
 	}
 	w = &claudeArchiveLimitWriter{writer: w, remaining: maxClaudeArchiveBytes}
-	rootInfo, err := os.Lstat(stateDir)
-	if err != nil {
-		return fmt.Errorf("inspect claude state root: %w", err)
-	}
-	if !rootInfo.IsDir() {
-		return errors.New("claude state root is not a directory")
-	}
-	root, err := os.OpenRoot(stateDir)
-	if err != nil {
-		return fmt.Errorf("open claude state root: %w", err)
-	}
-	defer root.Close()
-	openedRootInfo, err := root.Stat(".")
+
+	// Every root is opened before the first byte is written, so an archive that
+	// cannot be completed is never begun.
+	stateRoot, err := openClaudeArchiveRoot("claude state", stateDir)
 	if err != nil {
 		return err
 	}
-	if !os.SameFile(rootInfo, openedRootInfo) {
-		return errors.New("claude state root changed while archiving")
+	defer stateRoot.Close()
+	var sharedRoot *os.Root
+	if sharedDir != "" {
+		sharedRoot, err = openClaudeArchiveRoot("claude shared volume", sharedDir)
+		if err != nil {
+			return err
+		}
+		defer sharedRoot.Close()
 	}
 
 	tw := tar.NewWriter(w)
@@ -59,20 +64,68 @@ func writeClaudeArchive(w io.Writer, stateDir string, scrollback []byte) error {
 	}
 
 	entryCount := 1 // scrollback
-	err = filepath.WalkDir(stateDir, func(name string, entry fs.DirEntry, walkErr error) error {
+	if err := writeClaudeArchiveTree(
+		tw, stateRoot, claudeArchiveStateRoot, "claude state", stateDir, &entryCount,
+	); err != nil {
+		_ = tw.Close()
+		return err
+	}
+	if sharedRoot != nil {
+		if err := writeClaudeArchiveTree(
+			tw, sharedRoot, claudeArchiveSharedRoot, "claude shared volume", sharedDir, &entryCount,
+		); err != nil {
+			_ = tw.Close()
+			return err
+		}
+	}
+	return tw.Close()
+}
+
+// openClaudeArchiveRoot proves the opened handle is the directory that was
+// inspected, so a swap between the two calls cannot redirect the walk.
+func openClaudeArchiveRoot(label, dir string) (*os.Root, error) {
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return nil, fmt.Errorf("inspect %s root: %w", label, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%s root is not a directory", label)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, fmt.Errorf("open %s root: %w", label, err)
+	}
+	opened, err := root.Stat(".")
+	if err != nil {
+		root.Close()
+		return nil, err
+	}
+	if !os.SameFile(info, opened) {
+		root.Close()
+		return nil, fmt.Errorf("%s root changed while archiving", label)
+	}
+	return root, nil
+}
+
+// writeClaudeArchiveTree shares its entry budget across trees, because the limit
+// belongs to the archive rather than to either directory.
+func writeClaudeArchiveTree(
+	tw *tar.Writer, root *os.Root, archiveRoot, label, dir string, entryCount *int,
+) error {
+	return filepath.WalkDir(dir, func(name string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		rel, err := filepath.Rel(stateDir, name)
+		rel, err := filepath.Rel(dir, name)
 		if err != nil {
 			return err
 		}
-		archiveName := claudeArchiveStateRoot
+		archiveName := archiveRoot
 		if rel != "." {
 			archiveName += "/" + filepath.ToSlash(rel)
 		}
-		entryCount++
-		if entryCount > maxClaudeArchiveEntries {
+		*entryCount++
+		if *entryCount > maxClaudeArchiveEntries {
 			return fmt.Errorf("claude archive exceeds %d entries", maxClaudeArchiveEntries)
 		}
 
@@ -92,7 +145,7 @@ func writeClaudeArchive(w io.Writer, stateDir string, scrollback []byte) error {
 				return err
 			}
 		default:
-			return fmt.Errorf("unsupported claude state entry %s (%s)", name, info.Mode())
+			return fmt.Errorf("unsupported %s entry %s (%s)", label, name, info.Mode())
 		}
 		if len(archiveName) > maxClaudeArchivePathBytes || len(link) > maxClaudeArchivePathBytes {
 			return errors.New("claude archive entry path is too long")
@@ -123,7 +176,7 @@ func writeClaudeArchive(w io.Writer, stateDir string, scrollback []byte) error {
 		}
 		if !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
 			f.Close()
-			return fmt.Errorf("claude state entry changed while archiving: %s", name)
+			return fmt.Errorf("%s entry changed while archiving: %s", label, name)
 		}
 		_, copyErr := io.CopyN(tw, f, info.Size())
 		closeErr := f.Close()
@@ -132,11 +185,6 @@ func writeClaudeArchive(w io.Writer, stateDir string, scrollback []byte) error {
 		}
 		return closeErr
 	})
-	if err != nil {
-		_ = tw.Close()
-		return err
-	}
-	return tw.Close()
 }
 
 type restoredDirMode struct {
@@ -147,7 +195,12 @@ type restoredDirMode struct {
 // restoreClaudeArchive validates and extracts into a fresh sibling directory,
 // then atomically swaps that directory into place. A malformed archive never
 // partially mutates the live target.
-func restoreClaudeArchive(r io.Reader, stateDir string) ([]byte, error) {
+//
+// The shared volume (AC-F5) cannot take the same route: sharedDir is a mount
+// point, and a mount point cannot be renamed over. Its entries are therefore
+// staged inside the mount — same filesystem, so the install is still a rename
+// — and moved in one by one only after the whole archive has validated.
+func restoreClaudeArchive(r io.Reader, stateDir, sharedDir string) ([]byte, error) {
 	stateDir = filepath.Clean(stateDir)
 	if !filepath.IsAbs(stateDir) || stateDir == string(filepath.Separator) {
 		return nil, fmt.Errorf("unsafe claude state target %q", stateDir)
@@ -162,6 +215,14 @@ func restoreClaudeArchive(r io.Reader, stateDir string) ([]byte, error) {
 	}
 	defer os.RemoveAll(tempRoot)
 	extractedState := filepath.Join(tempRoot, claudeArchiveStateRoot)
+	// Created on the first shared entry: an archive without one never touches a
+	// mount it was not given.
+	extractedShared := ""
+	defer func() {
+		if extractedShared != "" {
+			_ = os.RemoveAll(extractedShared)
+		}
+	}()
 
 	tr := tar.NewReader(r)
 	var scrollback []byte
@@ -209,13 +270,36 @@ func restoreClaudeArchive(r io.Reader, stateDir string) ([]byte, error) {
 			sawScrollback = true
 			continue
 		}
+		if cleanName == claudeArchiveSharedRoot || strings.HasPrefix(cleanName, claudeArchiveSharedRoot+"/") {
+			// Dropping these silently would turn a configuration change between
+			// freeze and restore into the loss of files a human approved.
+			if sharedDir == "" {
+				return nil, errors.New("claude archive carries a shared volume but this session mounts none")
+			}
+			if extractedShared == "" {
+				extractedShared, err = os.MkdirTemp(sharedDir, "."+claudeArchiveSharedRoot+"-restore-")
+				if err != nil {
+					return nil, fmt.Errorf("create shared volume staging dir: %w", err)
+				}
+			}
+			rel := strings.TrimPrefix(cleanName, claudeArchiveSharedRoot)
+			rel = strings.TrimPrefix(rel, "/")
+			if err := extractClaudeStateEntry(
+				tr, header, claudeArchiveSharedRoot, extractedShared, rel, &dirModes,
+			); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if cleanName != claudeArchiveStateRoot && !strings.HasPrefix(cleanName, claudeArchiveStateRoot+"/") {
 			return nil, fmt.Errorf("unexpected claude archive entry %q", header.Name)
 		}
 		sawState = true
 		rel := strings.TrimPrefix(cleanName, claudeArchiveStateRoot)
 		rel = strings.TrimPrefix(rel, "/")
-		if err := extractClaudeStateEntry(tr, header, extractedState, rel, &dirModes); err != nil {
+		if err := extractClaudeStateEntry(
+			tr, header, claudeArchiveStateRoot, extractedState, rel, &dirModes,
+		); err != nil {
 			return nil, err
 		}
 	}
@@ -245,10 +329,39 @@ func restoreClaudeArchive(r io.Reader, stateDir string) ([]byte, error) {
 			return nil, fmt.Errorf("restore directory mode %s: %w", item.name, err)
 		}
 	}
+	// The shared volume goes in first: its failure leaves the live state tree
+	// exactly as it was, which is the stronger of the two guarantees to keep.
+	if extractedShared != "" {
+		if err := installSharedVolumeContents(extractedShared, sharedDir); err != nil {
+			return nil, err
+		}
+	}
 	if err := installClaudeState(extractedState, stateDir); err != nil {
 		return nil, err
 	}
 	return scrollback, nil
+}
+
+// installSharedVolumeContents treats a name already present as a refusal rather
+// than a merge: the only things a restore target's freshly provisioned claim can
+// hold are another round's leftovers or a half-finished restore.
+func installSharedVolumeContents(staged, target string) error {
+	entries, err := os.ReadDir(staged)
+	if err != nil {
+		return fmt.Errorf("read restored shared volume: %w", err)
+	}
+	for _, entry := range entries {
+		dst := filepath.Join(target, entry.Name())
+		if _, err := os.Lstat(dst); err == nil {
+			return fmt.Errorf("restored shared volume entry %q already exists", entry.Name())
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Rename(filepath.Join(staged, entry.Name()), dst); err != nil {
+			return fmt.Errorf("install restored shared volume entry %q: %w", entry.Name(), err)
+		}
+	}
+	return nil
 }
 
 type claudeArchiveLimitWriter struct {
@@ -276,9 +389,11 @@ func cleanClaudeArchiveName(name string) (string, error) {
 	return clean, nil
 }
 
-func extractClaudeStateEntry(tr *tar.Reader, header *tar.Header, root, rel string, dirModes *[]restoredDirMode) error {
+func extractClaudeStateEntry(
+	tr *tar.Reader, header *tar.Header, archiveRoot, root, rel string, dirModes *[]restoredDirMode,
+) error {
 	if rel == "" && header.Typeflag != tar.TypeDir {
-		return errors.New("claude archive state root must be a directory")
+		return fmt.Errorf("claude archive %s root must be a directory", archiveRoot)
 	}
 	dst, err := safeClaudeArchiveDestination(root, rel)
 	if err != nil {

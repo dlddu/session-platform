@@ -86,7 +86,8 @@ func main() {
 
 	// Snapshot archives may contain workspace and conversation data. They are
 	// sent to the configured durable store only behind an explicit mechanism
-	// gate: CRIU_ENABLED for shell, CLAUDE_CODE_ARCHIVE_ENABLED for claude-code.
+	// gate: CRIU_ENABLED for shell, CLAUDE_CODE_ARCHIVE_ENABLED for the two
+	// filesystem-archive types.
 	var cstore criu.CheckpointStore
 	if cfg.criuEnabled || cfg.claudeArchiveEnabled {
 		cstore, err = buildCheckpointStore(cfg)
@@ -107,6 +108,8 @@ func main() {
 			"store", cfg.checkpointStoreDesc())
 	}
 
+	// Renaming this gate to match what it now covers would have to land in step
+	// with every overlay that sets it, including ones outside this repository.
 	var serviceOpts []service.Option
 	if cfg.claudeArchiveEnabled {
 		if cfg.dataPlaneClaudeCodeImage == "" {
@@ -117,7 +120,14 @@ func main() {
 			session.WorkloadTypeClaudeCode,
 			criu.NewAgentArchiveCheckpointer(agentClient, cstore),
 		))
-		logger.Info("claude-code filesystem archive enabled", "store", cfg.checkpointStoreDesc())
+		// No image check to match claude-code's above: a type left unconfigured
+		// cannot produce a session to snapshot in the first place (AC-F5).
+		serviceOpts = append(serviceOpts, service.WithWorkloadCheckpointer(
+			session.WorkloadTypeApprovalGated,
+			criu.NewAgentArchiveCheckpointer(agentClient, cstore),
+		))
+		logger.Info("filesystem archive enabled for claude-code and approval-gated",
+			"store", cfg.checkpointStoreDesc())
 	}
 	mgr := service.New(orch, store, shellCkpt, agentClient, serviceOpts...)
 	snapshotEnabled := shellCkpt.Enabled() || cfg.claudeArchiveEnabled

@@ -297,13 +297,43 @@ func TestLegacySessionRecordRestoresAsShell(t *testing.T) {
 	}
 }
 
-// AC-F5 is not implemented, so an approval-gated session has no archive
-// strategy. It must therefore refuse to freeze rather than fall through to the
-// shell's CRIU checkpointer: that would reclaim the pod pair behind a
-// checkpoint that cannot restore the workload — the exact data-loss shape
-// checkpointerFor exists to prevent. The refusal is what a later slice removes
-// by registering this type's archive strategy.
-func TestSnapshotIsRefusedForApprovalGated(t *testing.T) {
+// AC-F5 (AC-B1/B3's approval-gated path).
+func TestSnapshotArchivesAnApprovalGatedSession(t *testing.T) {
+	ctx := context.Background()
+	ckpt := criu.NewStubCheckpointer(true)
+	orch := k8s.NewStubOrchestrator("sessions")
+	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
+	svc := service.New(
+		orch, store, criu.NewStubCheckpointer(false), agent.NewStubClient(),
+		service.WithWorkloadCheckpointer(session.WorkloadTypeApprovalGated, ckpt),
+	)
+
+	sess, err := svc.Create(ctx, session.CreateRequest{
+		Name: "ag-archive", WorkloadType: session.WorkloadTypeApprovalGated,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// The shell checkpointer above is disabled, so a snapshot that succeeds here
+	// could only have gone through the strategy registered for this type.
+	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	after, err := svc.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if after.State != session.StateSnapshot {
+		t.Fatalf("state = %q after a snapshot, want %q", after.State, session.StateSnapshot)
+	}
+	if n := orch.RunningCount(); n != 0 {
+		t.Errorf("snapshot left %d pods running, want the pair reclaimed (AC-A3/AC-F4)", n)
+	}
+}
+
+// The deployment this case stands for is one that left the archive gate off,
+// which is why it survives the slice that registered the strategy.
+func TestSnapshotIsRefusedForApprovalGatedWithoutAStrategy(t *testing.T) {
 	ctx := context.Background()
 	svc, orch, _ := newServiceWithOrch()
 
