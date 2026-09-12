@@ -130,24 +130,43 @@ func readManagedSettings(t *testing.T, homeDir string) claudeManagedSettings {
 	return settings
 }
 
+func readCLIConfig(t *testing.T, homeDir string) map[string]json.RawMessage {
+	t.Helper()
+	config, err := readClaudeCLIConfig(filepath.Join(homeDir, claudeCLIConfigFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return config
+}
+
+func registeredSessionMCP(t *testing.T, homeDir string) claudeMCPServer {
+	t.Helper()
+	servers, err := loadClaudeMCPRegistration(homeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return servers[sessionMCPServerName]
+}
+
 // AC-F6: the session MCP is registered as the agent's only outward tool
-// surface, and the marketplace plugin is not enabled.
+// surface, and the marketplace plugin is not enabled. *Where* it is registered
+// is the load-bearing part (claude_mcp_registration.go) — nothing else here
+// fails when it is wrong, which is how it shipped wrong.
 func TestApprovalGatedManagedSettingsRegisterOnlyTheSessionMCP(t *testing.T) {
 	homeDir := t.TempDir()
 	const mcpURL = "http://10.42.0.9:8092"
 	if err := ensureClaudeManagedSettings(homeDir, toolSurface{SessionMCP: mcpURL}); err != nil {
 		t.Fatalf("write managed settings: %v", err)
 	}
+	if server := registeredSessionMCP(t, homeDir); server.URL != mcpURL || server.Type != "http" {
+		t.Fatalf("registered session MCP = %+v, want the helper address over http", server)
+	}
 	settings := readManagedSettings(t, homeDir)
+	if len(settings.MCPServers) != 0 {
+		t.Fatalf("settings.json carries mcpServers = %v; the CLI never reads it there", settings.MCPServers)
+	}
 	if len(settings.EnabledPlugins) != 0 {
 		t.Fatalf("enabledPlugins = %v, want none", settings.EnabledPlugins)
-	}
-	server, ok := settings.MCPServers[sessionMCPServerName]
-	if !ok || server.URL != mcpURL || server.Type != "http" {
-		t.Fatalf("mcpServers = %v, want the session MCP over http", settings.MCPServers)
-	}
-	if len(settings.MCPServers) != 1 {
-		t.Fatalf("mcpServers = %v, want exactly one", settings.MCPServers)
 	}
 	for _, tool := range claudeManagedTools {
 		if !containsString(settings.Permissions.Allow, tool) {
@@ -172,23 +191,113 @@ func TestRestoredManagedSettingsArePointedAtTheCurrentSessionMCP(t *testing.T) {
 	if err := ensureClaudeManagedSettings(homeDir, toolSurface{SessionMCP: "http://10.42.1.4:8092"}); err != nil {
 		t.Fatalf("re-point managed settings: %v", err)
 	}
-	settings := readManagedSettings(t, homeDir)
-	if got := settings.MCPServers[sessionMCPServerName].URL; got != "http://10.42.1.4:8092" {
+	if got := registeredSessionMCP(t, homeDir).URL; got != "http://10.42.1.4:8092" {
 		t.Fatalf("session MCP = %q, want this round's helper pod", got)
 	}
-	if n := len(settings.MCPServers); n != 1 {
-		t.Fatalf("mcpServers = %d, want the stale entry replaced rather than accumulated", n)
+	servers, err := loadClaudeMCPRegistration(homeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(servers) != 1 {
+		t.Fatalf("registered servers = %v, want the stale entry replaced rather than accumulated", servers)
 	}
 }
 
-// The two surfaces are alternatives, not a menu: a settings file must never
-// carry both, in either direction.
-func TestManagedSettingsRejectMixedToolSurfaces(t *testing.T) {
+// The merge contract (claude_mcp_registration.go): anything the CLI put in its
+// config has to survive the round trip.
+func TestMCPRegistrationPreservesTheCLIsOwnConfig(t *testing.T) {
+	homeDir := t.TempDir()
+	existing := []byte(`{
+	  "machineID": "m-1",
+	  "userID": "u-1",
+	  "projects": {"/session/state/workspace": {"lastSessionId": "s-1"}},
+	  "mcpServers": {"something-the-session-added": {"type": "http", "url": "http://10.42.0.9:9000"}}
+	}`)
+	if err := os.WriteFile(filepath.Join(homeDir, claudeCLIConfigFile), existing, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureClaudeManagedSettings(homeDir, toolSurface{SessionMCP: "http://10.42.0.9:8092"}); err != nil {
+		t.Fatal(err)
+	}
+
+	config := readCLIConfig(t, homeDir)
+	for key, want := range map[string]string{"machineID": `"m-1"`, "userID": `"u-1"`} {
+		if string(config[key]) != want {
+			t.Fatalf("%s = %s, want the CLI's own value %s preserved", key, config[key], want)
+		}
+	}
+	if !strings.Contains(string(config["projects"]), "s-1") {
+		t.Fatalf("projects = %s, want the CLI's conversation state preserved", config["projects"])
+	}
+	servers, err := loadClaudeMCPRegistration(homeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := servers["something-the-session-added"].URL; got != "http://10.42.0.9:9000" {
+		t.Fatalf("session's own MCP server = %q, want it left alone", got)
+	}
+	if got := servers[sessionMCPServerName].URL; got != "http://10.42.0.9:8092" {
+		t.Fatalf("session MCP = %q, want it merged in alongside", got)
+	}
+}
+
+// A snapshot taken while the registration was written into settings.json still
+// has to restore: rejecting it would cost the session its state.
+func TestArchivedSettingsRegistrationIsAcceptedThenMoved(t *testing.T) {
 	homeDir := t.TempDir()
 	settingsDir := filepath.Join(homeDir, claudeSettingsDir)
 	if err := os.MkdirAll(settingsDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	legacy := managedSettingsFor(toolSurface{SessionMCP: "http://10.42.0.9:8092"})
+	legacy.MCPServers = map[string]claudeMCPServer{
+		sessionMCPServerName: {Type: "http", URL: "http://10.42.0.9:8092"},
+	}
+	if err := storeClaudeManagedSettings(settingsDir, filepath.Join(settingsDir, claudeSettingsFile), legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateClaudeManagedSettings(homeDir); err != nil {
+		t.Fatalf("archive with the old registration site rejected: %v", err)
+	}
+
+	if err := ensureClaudeManagedSettings(homeDir, toolSurface{SessionMCP: "http://10.42.1.4:8092"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := registeredSessionMCP(t, homeDir).URL; got != "http://10.42.1.4:8092" {
+		t.Fatalf("session MCP = %q, want it moved to the CLI config at this round's address", got)
+	}
+	if servers := readManagedSettings(t, homeDir).MCPServers; len(servers) != 0 {
+		t.Fatalf("settings.json still carries mcpServers = %v, want the unread copy dropped", servers)
+	}
+}
+
+// claude-code has no session MCP (AC-F6's 2026-09-03 decision). A stale
+// registration must be cleared rather than left pointing at a dead helper pod.
+func TestPluginToolSurfaceClearsAnyMCPRegistration(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := ensureClaudeManagedSettings(homeDir, toolSurface{SessionMCP: "http://10.42.0.9:8092"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugin: true}); err != nil {
+		t.Fatal(err)
+	}
+	servers, err := loadClaudeMCPRegistration(homeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := servers[sessionMCPServerName]; ok {
+		t.Fatalf("registered servers = %v, want the session MCP cleared", servers)
+	}
+}
+
+// The two surfaces are alternatives, not a menu: a session HOME must never
+// carry both, in either direction.
+func TestManagedSettingsRejectMixedToolSurfaces(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := ensureClaudeManagedSettings(homeDir, toolSurface{SessionMCP: "http://10.42.0.9:8092"}); err != nil {
+		t.Fatal(err)
+	}
+	settingsDir := filepath.Join(homeDir, claudeSettingsDir)
 	mixed := managedSettingsFor(toolSurface{SessionMCP: "http://10.42.0.9:8092"})
 	mixed.EnabledPlugins = map[string]bool{claudeSessionPlatformPlugin: true}
 	if err := storeClaudeManagedSettings(settingsDir, filepath.Join(settingsDir, claudeSettingsFile), mixed); err != nil {
@@ -253,4 +362,37 @@ func TestRestoredManagedSettingsDropAStaleSharedDirectory(t *testing.T) {
 	if len(got) != 1 || got[0] != "/shared" {
 		t.Fatalf("additionalDirectories = %v, want only this round's volume", got)
 	}
+}
+
+// The permission and the registration are two halves of one surface; neither
+// half alone is a valid archive.
+func TestManagedSettingsRejectHalfDeclaredMCPSurface(t *testing.T) {
+	t.Run("permitted but not registered", func(t *testing.T) {
+		homeDir := t.TempDir()
+		settingsDir := filepath.Join(homeDir, claudeSettingsDir)
+		if err := os.MkdirAll(settingsDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		settings := managedSettingsFor(toolSurface{SessionMCP: "http://10.42.0.9:8092"})
+		if err := storeClaudeManagedSettings(settingsDir, filepath.Join(settingsDir, claudeSettingsFile), settings); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateClaudeManagedSettings(homeDir); err == nil {
+			t.Fatal("a permitted-but-unregistered session MCP was accepted")
+		}
+	})
+	t.Run("registered but not permitted", func(t *testing.T) {
+		homeDir := t.TempDir()
+		if err := ensureClaudeManagedSettings(homeDir, toolSurface{SessionMCP: "http://10.42.0.9:8092"}); err != nil {
+			t.Fatal(err)
+		}
+		settingsDir := filepath.Join(homeDir, claudeSettingsDir)
+		stripped := managedSettingsFor(toolSurface{})
+		if err := storeClaudeManagedSettings(settingsDir, filepath.Join(settingsDir, claudeSettingsFile), stripped); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateClaudeManagedSettings(homeDir); err == nil {
+			t.Fatal("a registered-but-unpermitted session MCP was accepted")
+		}
+	})
 }

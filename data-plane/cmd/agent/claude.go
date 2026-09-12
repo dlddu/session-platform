@@ -137,7 +137,7 @@ type claudeConfig struct {
 	RunTimeout      time.Duration
 	RunOutputLimit  int
 	ScrollbackLimit int
-	// Tools is written into the session HOME's settings.json.
+	// Tools is written into the session HOME on boot.
 	Tools toolSurface
 }
 
@@ -761,8 +761,11 @@ type claudeManagedSettings struct {
 		// where there is one (AC-F5).
 		AdditionalDirectories []string `json:"additionalDirectories,omitempty"`
 	} `json:"permissions"`
-	EnabledPlugins map[string]bool            `json:"enabledPlugins"`
-	MCPServers     map[string]claudeMCPServer `json:"mcpServers,omitempty"`
+	EnabledPlugins map[string]bool `json:"enabledPlugins"`
+	// MCPServers is no longer written (claude_mcp_registration.go). The field
+	// stays so archives taken while it was still decode under
+	// DisallowUnknownFields; ensureClaudeManagedSettings then drops it.
+	MCPServers map[string]claudeMCPServer `json:"mcpServers,omitempty"`
 }
 
 // claudeMCPServer is one registered MCP server. The session MCP is reached over
@@ -782,9 +785,6 @@ func managedSettingsFor(tools toolSurface) claudeManagedSettings {
 		settings.EnabledPlugins[claudeSessionPlatformPlugin] = true
 	}
 	if tools.SessionMCP != "" {
-		settings.MCPServers = map[string]claudeMCPServer{
-			sessionMCPServerName: {Type: "http", URL: tools.SessionMCP},
-		}
 		settings.Permissions.Allow = append(settings.Permissions.Allow, sessionMCPPermission)
 	}
 	if tools.SharedDir != "" {
@@ -793,12 +793,23 @@ func managedSettingsFor(tools toolSurface) claudeManagedSettings {
 	return settings
 }
 
-// ensureClaudeManagedSettings installs the managed settings, or normalises the
-// ones an archive brought back, to this pod's tool surface. Normalising rather
-// than trusting the archive matters for approval-gated: the session MCP lives
-// in a helper pod whose address is new on every restore (AC-F4), so a restored
-// settings file always names the *previous* round's MCP.
+// ensureClaudeManagedSettings installs this pod's tool surface into the session
+// HOME, or normalises the one an archive brought back. Normalising rather than
+// trusting the archive matters for approval-gated: the session MCP lives in a
+// helper pod whose address is new on every restore (AC-F4), so a restored HOME
+// always names the *previous* round's MCP.
+//
+// Both halves of the surface are written here (claude_mcp_registration.go):
+// writing one without the other yields a session whose tools are silently
+// absent.
 func ensureClaudeManagedSettings(homeDir string, tools toolSurface) error {
+	if err := ensureClaudeSettingsFile(homeDir, tools); err != nil {
+		return err
+	}
+	return ensureClaudeMCPRegistration(homeDir, tools)
+}
+
+func ensureClaudeSettingsFile(homeDir string, tools toolSurface) error {
 	settingsDir := filepath.Join(homeDir, claudeSettingsDir)
 	if err := os.MkdirAll(settingsDir, 0o700); err != nil {
 		return fmt.Errorf("create claude settings directory: %w", err)
@@ -806,7 +817,7 @@ func ensureClaudeManagedSettings(homeDir string, tools toolSurface) error {
 	settingsPath := filepath.Join(settingsDir, claudeSettingsFile)
 	want := managedSettingsFor(tools)
 	if _, err := os.Lstat(settingsPath); err == nil {
-		settings, err := loadClaudeManagedSettings(homeDir, false)
+		settings, err := loadClaudeManagedSettings(homeDir)
 		if err != nil {
 			return err
 		}
@@ -907,18 +918,60 @@ func storeClaudeManagedSettings(settingsDir, settingsPath string, settings claud
 	return nil
 }
 
+// validateClaudeManagedSettings insists the session HOME declares exactly one of
+// the two sanctioned tool surfaces — the marketplace plugin (AC-E6) or a session
+// MCP (AC-F6). Archive validation runs it before the workload type of the pod
+// doing the restore is relevant, and the pod normalises to its own surface right
+// afterwards (ensureClaudeManagedSettings).
 func validateClaudeManagedSettings(homeDir string) error {
-	_, err := loadClaudeManagedSettings(homeDir, true)
-	return err
+	settings, err := loadClaudeManagedSettings(homeDir)
+	if err != nil {
+		return err
+	}
+	registered, err := loadClaudeMCPRegistration(homeDir)
+	if err != nil {
+		return err
+	}
+	return validateClaudeToolSurface(settings, registered)
 }
 
-// loadClaudeManagedSettings reads the managed settings. With requireToolSurface
-// it also insists the file declares exactly one of the two sanctioned tool
-// surfaces — the marketplace plugin (AC-E6) or a session MCP (AC-F6) — which is
-// what archive validation needs: it runs before the workload type of the pod
-// doing the restore is relevant, and the pod normalises to its own surface
-// right afterwards (ensureClaudeManagedSettings).
-func loadClaudeManagedSettings(homeDir string, requireToolSurface bool) (claudeManagedSettings, error) {
+// validateClaudeToolSurface is the exactly-one rule over the two halves.
+func validateClaudeToolSurface(settings claudeManagedSettings, registered map[string]claudeMCPServer) error {
+	plugin := len(settings.EnabledPlugins) == 1 && settings.EnabledPlugins[claudeSessionPlatformPlugin]
+	// An archive taken while the registration was written into settings.json
+	// still names the surface there, so either location counts as registered —
+	// ensureClaudeMCPRegistration moves it on the boot right after this.
+	mcp := registersSessionMCP(registered) || registersSessionMCP(settings.MCPServers)
+	permitted := containsString(settings.Permissions.Allow, sessionMCPPermission)
+	switch {
+	case mcp && !permitted:
+		return errors.New("claude managed settings registers the session MCP without permitting it")
+	case permitted && !mcp:
+		return errors.New("claude managed settings permits the session MCP without registering it")
+	case plugin == mcp:
+		return fmt.Errorf(
+			"claude managed settings must declare exactly one platform tool surface: %s or the %s server",
+			claudeSessionPlatformPlugin, sessionMCPServerName)
+	case plugin && (len(settings.MCPServers) != 0 || len(registered) != 0):
+		return errors.New("claude managed settings must not mix the managed plugin with an MCP server")
+	case mcp && len(settings.EnabledPlugins) != 0:
+		return errors.New("claude managed settings must not mix a session MCP with an enabled plugin")
+	}
+	return nil
+}
+
+// registersSessionMCP reports whether servers carry the platform's own entry.
+// Anything else a session registered is left alone: AC-F2's egress list means
+// the agent cannot reach it anyway, and failing the restore over it would cost
+// the session its state.
+func registersSessionMCP(servers map[string]claudeMCPServer) bool {
+	server, ok := servers[sessionMCPServerName]
+	return ok && server.Type == "http"
+}
+
+// loadClaudeManagedSettings reads and shape-checks the platform-owned settings
+// file. The tool surface it belongs to is decided by validateClaudeToolSurface.
+func loadClaudeManagedSettings(homeDir string) (claudeManagedSettings, error) {
 	var settings claudeManagedSettings
 	settingsDir := filepath.Join(homeDir, claudeSettingsDir)
 	dirInfo, err := os.Lstat(settingsDir)
@@ -975,47 +1028,23 @@ func loadClaudeManagedSettings(homeDir string, requireToolSurface bool) (claudeM
 	if _, ok := allowed[sessionMCPPermission]; ok {
 		// The one sanctioned addition to AC-E2's list, and only for the type
 		// whose tool surface *is* that MCP server (AC-F6).
-		if len(settings.MCPServers) == 0 {
-			return settings, errors.New("claude managed settings permits the session MCP without registering it")
-		}
 		permitted++
 	}
 	if len(allowed) != permitted {
 		return settings, errors.New("claude managed settings contains non-platform permissions")
 	}
-	if !requireToolSurface {
-		// Normalisation path: the caller rewrites the managed parts right after,
-		// so an archive carrying none of them — or the shape of a type this pod
-		// is not — is acceptable. Something the platform never installs is not.
-		for name := range settings.EnabledPlugins {
-			if name != claudeSessionPlatformPlugin {
-				return settings, fmt.Errorf("claude managed settings enables unmanaged plugin %s", name)
-			}
-		}
-		for name := range settings.MCPServers {
-			if name != sessionMCPServerName {
-				return settings, fmt.Errorf("claude managed settings registers unmanaged MCP server %s", name)
-			}
-		}
-		return settings, nil
-	}
-	plugin := len(settings.EnabledPlugins) == 1 && settings.EnabledPlugins[claudeSessionPlatformPlugin]
-	mcp := len(settings.MCPServers) == 1 && settings.MCPServers[sessionMCPServerName].Type == "http"
-	if mcp {
-		if _, ok := allowed[sessionMCPPermission]; !ok {
-			return settings, errors.New("claude managed settings registers the session MCP without permitting it")
+	// An archive carrying none of the managed parts — or the shape of a type
+	// this pod is not — is acceptable: the caller rewrites them right after.
+	// Something the platform never installs is not.
+	for name := range settings.EnabledPlugins {
+		if name != claudeSessionPlatformPlugin {
+			return settings, fmt.Errorf("claude managed settings enables unmanaged plugin %s", name)
 		}
 	}
-	if plugin == mcp {
-		return settings, fmt.Errorf(
-			"claude managed settings must declare exactly one platform tool surface: %s or the %s server",
-			claudeSessionPlatformPlugin, sessionMCPServerName)
-	}
-	if plugin && len(settings.MCPServers) != 0 {
-		return settings, errors.New("claude managed settings must not mix the managed plugin with an MCP server")
-	}
-	if mcp && len(settings.EnabledPlugins) != 0 {
-		return settings, errors.New("claude managed settings must not mix a session MCP with an enabled plugin")
+	for name := range settings.MCPServers {
+		if name != sessionMCPServerName {
+			return settings, fmt.Errorf("claude managed settings registers unmanaged MCP server %s", name)
+		}
 	}
 	return settings, nil
 }
