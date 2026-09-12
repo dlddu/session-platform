@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -158,7 +159,7 @@ func TestApprovalGatedManagedSettingsRegisterOnlyTheSessionMCP(t *testing.T) {
 	if err := ensureClaudeManagedSettings(homeDir, toolSurface{SessionMCP: mcpURL}); err != nil {
 		t.Fatalf("write managed settings: %v", err)
 	}
-	if server := registeredSessionMCP(t, homeDir); server.URL != mcpURL || server.Type != "http" {
+	if server := registeredSessionMCP(t, homeDir); server.URL != mcpURL+sessionMCPPath || server.Type != "http" {
 		t.Fatalf("registered session MCP = %+v, want the helper address over http", server)
 	}
 	settings := readManagedSettings(t, homeDir)
@@ -191,7 +192,7 @@ func TestRestoredManagedSettingsArePointedAtTheCurrentSessionMCP(t *testing.T) {
 	if err := ensureClaudeManagedSettings(homeDir, toolSurface{SessionMCP: "http://10.42.1.4:8092"}); err != nil {
 		t.Fatalf("re-point managed settings: %v", err)
 	}
-	if got := registeredSessionMCP(t, homeDir).URL; got != "http://10.42.1.4:8092" {
+	if got := registeredSessionMCP(t, homeDir).URL; got != "http://10.42.1.4:8092"+sessionMCPPath {
 		t.Fatalf("session MCP = %q, want this round's helper pod", got)
 	}
 	servers, err := loadClaudeMCPRegistration(homeDir)
@@ -236,7 +237,7 @@ func TestMCPRegistrationPreservesTheCLIsOwnConfig(t *testing.T) {
 	if got := servers["something-the-session-added"].URL; got != "http://10.42.0.9:9000" {
 		t.Fatalf("session's own MCP server = %q, want it left alone", got)
 	}
-	if got := servers[sessionMCPServerName].URL; got != "http://10.42.0.9:8092" {
+	if got := servers[sessionMCPServerName].URL; got != "http://10.42.0.9:8092"+sessionMCPPath {
 		t.Fatalf("session MCP = %q, want it merged in alongside", got)
 	}
 }
@@ -263,7 +264,7 @@ func TestArchivedSettingsRegistrationIsAcceptedThenMoved(t *testing.T) {
 	if err := ensureClaudeManagedSettings(homeDir, toolSurface{SessionMCP: "http://10.42.1.4:8092"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := registeredSessionMCP(t, homeDir).URL; got != "http://10.42.1.4:8092" {
+	if got := registeredSessionMCP(t, homeDir).URL; got != "http://10.42.1.4:8092"+sessionMCPPath {
 		t.Fatalf("session MCP = %q, want it moved to the CLI config at this round's address", got)
 	}
 	if servers := readManagedSettings(t, homeDir).MCPServers; len(servers) != 0 {
@@ -395,4 +396,39 @@ func TestManagedSettingsRejectHalfDeclaredMCPSurface(t *testing.T) {
 			t.Fatal("a registered-but-unpermitted session MCP was accepted")
 		}
 	})
+}
+
+// AC-F6: the address handed to the CLI has to be one the session MCP answers
+// on. Comparing it against the value the control plane injected reads the
+// implementation back instead, and what that misses is silent — a session sees
+// a server with no tools rather than an error.
+func TestRegisteredSessionMCPAnswersWhereItSaysItDoes(t *testing.T) {
+	srv := newSessionMCPServer(t)
+	homeDir := t.TempDir()
+	if err := ensureClaudeManagedSettings(homeDir, toolSurface{SessionMCP: srv.URL}); err != nil {
+		t.Fatalf("write managed settings: %v", err)
+	}
+	registered := registeredSessionMCP(t, homeDir).URL
+	resp, err := http.Post(registered, "application/json",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("initialize at the registered %q = %d, want the JSON-RPC dispatch to answer", registered, resp.StatusCode)
+	}
+	var body struct {
+		Result struct {
+			ServerInfo struct {
+				Name string `json:"name"`
+			} `json:"serverInfo"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Result.ServerInfo.Name != sessionMCPServerName {
+		t.Fatalf("handshake at %q answered as %q, want %s", registered, body.Result.ServerInfo.Name, sessionMCPServerName)
+	}
 }

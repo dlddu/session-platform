@@ -54,7 +54,11 @@ func ensureClaudeMCPRegistration(homeDir string, tools toolSurface) error {
 		}
 		delete(servers, sessionMCPServerName)
 	} else {
-		want, err := json.Marshal(claudeMCPServer{Type: "http", URL: tools.SessionMCP})
+		// SESSION_MCP_URL arrives as a bare base: the control plane builds it from
+		// the helper pod's IP and port, and every consumer joins its own path.
+		// Getting that join wrong raises nothing — the CLI reports a server with
+		// no tools, never an error.
+		want, err := json.Marshal(claudeMCPServer{Type: "http", URL: tools.SessionMCP + sessionMCPPath})
 		if err != nil {
 			return err
 		}
