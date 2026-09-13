@@ -4,11 +4,14 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -661,4 +664,237 @@ func TestClaudeCheckpointErrorsRedactCredentialLiterals(t *testing.T) {
 	if strings.Contains(string(body), secret) || !strings.Contains(string(body), redactedLiteral) {
 		t.Fatalf("checkpoint error was not redacted: %q", body)
 	}
+}
+
+func sharedArchiveWorkload(t *testing.T, runner commandRunner, restoreMode bool) (*claudeWorkload, *httptest.Server, string) {
+	t.Helper()
+	base := t.TempDir()
+	sharedDir := filepath.Join(base, "shared")
+	if err := os.Mkdir(sharedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c, srv := newClaudeTestServerWithTools(
+		t, runner, "claude-shared", restoreMode, nil, filepath.Join(base, "state"),
+		toolSurface{SessionMCP: "http://10.42.0.9:8092", SharedDir: sharedDir},
+	)
+	return c, srv, sharedDir
+}
+
+func claudeArchiveEntryNames(t *testing.T, archive []byte) []string {
+	t.Helper()
+	var names []string
+	tr := tar.NewReader(bytes.NewReader(archive))
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			return names
+		}
+		if err != nil {
+			t.Fatalf("read archive: %v", err)
+		}
+		names = append(names, header.Name)
+	}
+}
+
+func postClaudeCheckpoint(t *testing.T, srv *httptest.Server) []byte {
+	t.Helper()
+	resp, err := http.Post(srv.URL+"/checkpoint", "", nil)
+	if err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	archive, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("checkpoint status=%d err=%v body=%s", resp.StatusCode, err, archive)
+	}
+	return archive
+}
+
+func postClaudeRestore(t *testing.T, srv *httptest.Server, archive []byte) (int, string) {
+	t.Helper()
+	resp, err := http.Post(srv.URL+"/restore", "application/x-tar", bytes.NewReader(archive))
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	return resp.StatusCode, string(body)
+}
+
+// AC-F5's second half. The claim is reclaimed with the helper pod that owns it,
+// so nothing in the cluster survives for the restored pair to re-read.
+func TestClaudeArchiveCarriesTheSharedVolumeAcrossFreezeAndRestore(t *testing.T) {
+	c1, srv1, shared1 := sharedArchiveWorkload(t, newFakeClaudeRunner(), false)
+	if err := os.MkdirAll(filepath.Join(shared1, "web_fetch_get"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	spilled := filepath.Join(shared1, "web_fetch_get", "req-42.body")
+	if err := os.WriteFile(spilled, []byte("approved-download"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	waitClaudeIdle(t, c1)
+	archive := postClaudeCheckpoint(t, srv1)
+
+	names := claudeArchiveEntryNames(t, archive)
+	if !slices.Contains(names, "shared/web_fetch_get/req-42.body") {
+		t.Fatalf("archive entries = %q, want the spilled file under %q", names, claudeArchiveSharedRoot)
+	}
+
+	_, srv2, shared2 := sharedArchiveWorkload(t, newFakeClaudeRunner(), true)
+	if status, body := postClaudeRestore(t, srv2, archive); status != http.StatusOK {
+		t.Fatalf("restore status=%d body=%s", status, body)
+	}
+	restored := filepath.Join(shared2, "web_fetch_get", "req-42.body")
+	got, err := os.ReadFile(restored)
+	if err != nil || string(got) != "approved-download" {
+		t.Fatalf("restored shared file = %q err=%v, want %q", got, err, "approved-download")
+	}
+	info, err := os.Stat(restored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("restored shared file mode = %v, want 0640", info.Mode().Perm())
+	}
+	dirInfo, err := os.Stat(filepath.Join(shared2, "web_fetch_get"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirInfo.Mode().Perm() != 0o750 {
+		t.Fatalf("restored shared directory mode = %v, want 0750", dirInfo.Mode().Perm())
+	}
+
+	if before, err := os.Stat(shared1); err != nil {
+		t.Fatal(err)
+	} else if after, err := os.Stat(shared2); err != nil {
+		t.Fatal(err)
+	} else if after.Mode().Perm() != before.Mode().Perm() {
+		t.Fatalf("restore changed the mount's own mode to %v; it is not the archive's to set", after.Mode().Perm())
+	}
+}
+
+// The compatibility invariant claudeArchiveSharedRoot's doc states, measured.
+func TestClaudeArchiveOmitsTheSharedMemberWithoutAVolume(t *testing.T) {
+	c, srv := newClaudeTestServer(t, newFakeClaudeRunner(), "claude-noshared", false, nil)
+	waitClaudeIdle(t, c)
+	for _, name := range claudeArchiveEntryNames(t, postClaudeCheckpoint(t, srv)) {
+		if name == claudeArchiveSharedRoot || strings.HasPrefix(name, claudeArchiveSharedRoot+"/") {
+			t.Fatalf("archive of a session without a shared volume carries %q", name)
+		}
+	}
+}
+
+func TestClaudeRestoreRefusesASharedVolumeItCannotMount(t *testing.T) {
+	c1, srv1, shared1 := sharedArchiveWorkload(t, newFakeClaudeRunner(), false)
+	if err := os.WriteFile(filepath.Join(shared1, "artifact.bin"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitClaudeIdle(t, c1)
+	archive := postClaudeCheckpoint(t, srv1)
+
+	stateDir := filepath.Join(t.TempDir(), "restored-state")
+	_, srv2 := newClaudeTestServerAt(t, newFakeClaudeRunner(), "claude-noshared", true, nil, stateDir)
+	status, body := postClaudeRestore(t, srv2, archive)
+	if status == http.StatusOK {
+		t.Fatal("restore into a session with no shared volume succeeded; the approved artifacts were dropped")
+	}
+	if !strings.Contains(body, "mounts none") {
+		t.Fatalf("restore refusal = %q, want it to name the missing mount", body)
+	}
+	// The same "never partially mutates the live target" contract, from outside.
+	if _, err := os.Stat(filepath.Join(stateDir, "workspace")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stat restored workspace after a refused restore: %v, want it absent", err)
+	}
+}
+
+func TestClaudeSharedRestoreRefusesToMergeIntoAnOccupiedVolume(t *testing.T) {
+	c1, srv1, shared1 := sharedArchiveWorkload(t, newFakeClaudeRunner(), false)
+	if err := os.WriteFile(filepath.Join(shared1, "artifact.bin"), []byte("archived"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitClaudeIdle(t, c1)
+	archive := postClaudeCheckpoint(t, srv1)
+
+	_, srv2, shared2 := sharedArchiveWorkload(t, newFakeClaudeRunner(), true)
+	occupied := filepath.Join(shared2, "artifact.bin")
+	if err := os.WriteFile(occupied, []byte("someone-elses"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, body := postClaudeRestore(t, srv2, archive)
+	if status == http.StatusOK {
+		t.Fatal("restore merged into an occupied shared volume")
+	}
+	if !strings.Contains(body, "already exists") {
+		t.Fatalf("restore refusal = %q, want it to name the collision", body)
+	}
+	if got, err := os.ReadFile(occupied); err != nil || string(got) != "someone-elses" {
+		t.Fatalf("occupant after a refused restore = %q err=%v, want it untouched", got, err)
+	}
+}
+
+// Only the symlink cases reach the shared branch — a lexical `..` normalises
+// away before the dispatch and is refused as a member nothing owns, which is why
+// that case asserts the volume is untouched rather than naming a guard.
+func TestClaudeSharedRestoreRejectsTraversal(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		badName string
+		link    string
+	}{
+		{name: "path escape", badName: claudeArchiveSharedRoot + "/../escape.txt"},
+		{name: "absolute symlink", badName: claudeArchiveSharedRoot + "/link", link: "/etc/passwd"},
+		{name: "chained symlink escape", badName: claudeArchiveSharedRoot + "/link", link: "sub/../../escape"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, srv, shared := sharedArchiveWorkload(t, newFakeClaudeRunner(), true)
+			status, body := postClaudeRestore(t, srv, maliciousClaudeSharedArchive(t, tc.badName, tc.link))
+			if status == http.StatusOK {
+				t.Fatalf("hostile shared entry %q was accepted", tc.badName)
+			}
+			_ = body
+			entries, err := os.ReadDir(shared)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("shared volume holds %d entries after a rejected restore, want 0", len(entries))
+			}
+		})
+	}
+}
+
+func maliciousClaudeSharedArchive(t *testing.T, badName, link string) []byte {
+	t.Helper()
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	write := func(header *tar.Header, body string) {
+		t.Helper()
+		header.Size = int64(len(body))
+		if err := tw.WriteHeader(header); err != nil {
+			t.Fatal(err)
+		}
+		if body != "" {
+			if _, err := io.WriteString(tw, body); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	write(&tar.Header{Name: claudeArchiveScrollback, Typeflag: tar.TypeReg, Mode: 0o600}, "")
+	write(&tar.Header{Name: claudeArchiveStateRoot, Typeflag: tar.TypeDir, Mode: 0o700}, "")
+	write(&tar.Header{Name: "state/workspace", Typeflag: tar.TypeDir, Mode: 0o700}, "")
+	write(&tar.Header{Name: "state/home", Typeflag: tar.TypeDir, Mode: 0o700}, "")
+	write(&tar.Header{Name: claudeArchiveSharedRoot, Typeflag: tar.TypeDir, Mode: 0o755}, "")
+	header := &tar.Header{Name: badName, Mode: 0o600}
+	if link == "" {
+		header.Typeflag = tar.TypeReg
+		write(header, "bad")
+	} else {
+		header.Typeflag = tar.TypeSymlink
+		header.Linkname = link
+		write(header, "")
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return archive.Bytes()
 }

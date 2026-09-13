@@ -3,14 +3,6 @@
 // 검증 시나리오: approval-gated-workload.md#시나리오 7
 //
 // docs/prd/approval-gated-workload.md AC-F4, asserted on the deployed SUT.
-//
-// The snapshot half of reclaim and the restore round are not observable yet —
-// this type has no archive strategy registered, so checkpointerFor returns
-// ErrCheckpointDisabled and the API answers 503. Rather than skip past the hole,
-// the refused-freeze case asserts that refusal and its ground truth, so this
-// file turns red the moment the precondition lifts and its failure message says
-// what to put back. Both branches are registered in docs/test/e2e.md
-// § "남은 미검증 분기 (공백은 아님)".
 package e2e_test
 
 import (
@@ -143,6 +135,21 @@ func f4WorkloadMarker(t *testing.T, cs kubernetes.Interface, cfg *rest.Config, n
 	return "DATA_PLANE_WORKLOAD=" + got
 }
 
+const f4ReadSessionMCPURL = `printf %s "${SESSION_MCP_URL-}"`
+
+func f4Switch(t *testing.T, id string) f4Session {
+	t.Helper()
+	resp, raw := do(t, http.MethodPost, "/api/v1/sessions/"+id+"/switch", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("switch %s: status=%d body=%s", id, resp.StatusCode, raw)
+	}
+	var s f4Session
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatalf("decode switch %s: %v body=%s", id, err, raw)
+	}
+	return s
+}
+
 // A helper shared between sessions would show up under both selectors; one
 // mislabelled would show up under neither.
 func TestApprovalGatedHelperPod_IsDedicatedToOneSession(t *testing.T) {
@@ -190,95 +197,81 @@ func TestApprovalGatedHelperPod_IsDedicatedToOneSession(t *testing.T) {
 	}
 }
 
-// checkpointDisabledMessage is what the product says when a workload type has no
-// snapshot strategy (control-plane/internal/session's ErrCheckpointDisabled,
-// mapped to 503 by the API). Written out rather than imported so that a change
-// to the contract fails this assertion instead of agreeing with it silently.
-const checkpointDisabledMessage = "checkpoint strategy is disabled"
-
-// restoreTheFreezeBranches is the instruction this file owes whoever registers
-// approval-gated's archive strategy, which is the moment the case below stops
-// being true.
-const restoreTheFreezeBranches = "AC-F5's archive strategy has landed for approval-gated. " +
-	"Delete this case and put AC-F4's own freeze/restore branches back in its place: both pods reclaimed by " +
-	"POST /snapshot, and a restore that provisions a fresh pair with the workload pod rewired to this restore's " +
-	"helper IP. Then drop the two rows this file owns in docs/test/e2e.md § \"남은 미검증 분기 (공백은 아님)\". " +
-	"control-plane/internal/service/workload_type_test.go's TestSnapshotIsRefusedForApprovalGated turns red in " +
-	"the same moment and wants the same edit"
-
-func TestApprovalGatedHelperPod_RefusedFreezeReclaimsNeitherPod(t *testing.T) {
-	cs, _, ok := kubeClient(t)
+func TestApprovalGatedHelperPod_FreezeReclaimsBothPodsAndRestoreRewiresTheNewPair(t *testing.T) {
+	cs, cfg, ok := kubeClient(t)
 	if !ok {
-		t.Skip("no cluster: what a refused freeze leaves standing is a claim about deployed pods")
+		t.Skip("no cluster: what a freeze reclaims and what a restore provisions are claims about deployed pods")
 	}
 	ns := sessionNamespace()
 
 	s := f4Create(t)
 	helper := f4TheHelperPod(t, cs, ns, s)
-	getPodEventually(t, cs, ns, s.Pod) // both halves exist before the attempt
-
-	// Not snapshotSession: that helper treats any non-200 as a fatal harness
-	// error, and here the non-200 is the contract under test.
-	resp, body := do(t, http.MethodPost, "/api/v1/sessions/"+s.ID+"/snapshot", nil)
-	if resp.StatusCode == http.StatusOK {
-		t.Fatalf("snapshot on an approval-gated session succeeded (body=%s). %s", body, restoreTheFreezeBranches)
-	}
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("snapshot status=%d body=%s, want %d — the documented refusal for a type with no archive strategy",
-			resp.StatusCode, body, http.StatusServiceUnavailable)
-	}
-	var refusal struct {
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal(body, &refusal); err != nil {
-		t.Fatalf("decode snapshot refusal: %v body=%s", err, body)
-	}
-	if refusal.Error != checkpointDisabledMessage {
-		t.Fatalf("refusal = %q, want %q — a 503 for some other reason would not tell us the pods are safe",
-			refusal.Error, checkpointDisabledMessage)
+	getPodEventually(t, cs, ns, s.Pod) // both halves exist before the freeze
+	// Read before the freeze so that comparing it after the restore makes
+	// "rewired" a measured fact rather than an assumption about pod recreation.
+	mcpBefore := strings.TrimSpace(f4Sh(t, cs, cfg, ns, s.Pod, workloadContainer, f4ReadSessionMCPURL))
+	if mcpBefore == "" {
+		t.Fatal("workload container has no SESSION_MCP_URL before the freeze; there is nothing to see rewired (AC-F4)")
 	}
 
-	got := f4Get(t, s.ID)
-	if got.State != "active" {
-		t.Fatalf("state after a refused freeze = %q, want it unchanged at active", got.State)
+	frozen, found := snapshotSession(t, s.ID)
+	if !found {
+		t.Fatal("snapshot endpoint reported the session missing")
 	}
-	if got.Pod != s.Pod {
-		t.Fatalf("workload pod after a refused freeze = %q, want it unchanged at %q", got.Pod, s.Pod)
+	if frozen.State != "snapshot" {
+		t.Fatalf("state after a freeze = %q, want snapshot (AC-B1)", frozen.State)
 	}
-	stillNamed := false
-	for _, name := range got.AuxiliaryPods {
-		if name == helper.Name {
-			stillNamed = true
+
+	// AC-A3's reclaim is only whole when both pods are gone.
+	afterFreeze := f4Get(t, s.ID)
+	if afterFreeze.Pod != "" {
+		t.Fatalf("workload pod after a freeze = %q, want it released (AC-A3)", afterFreeze.Pod)
+	}
+	if len(afterFreeze.AuxiliaryPods) != 0 {
+		t.Fatalf("auxiliaryPods after a freeze = %v, want none — the helper is reclaimed with the workload (AC-F4)",
+			afterFreeze.AuxiliaryPods)
+	}
+	f4AwaitReclaimed(t, cs, ns, s.Pod, "the freeze")
+	f4AwaitReclaimed(t, cs, ns, helper.Name, "the freeze")
+	if helpers := helperPodsFor(t, cs, ns, s.ID); len(helpers) != 0 {
+		for _, h := range helpers {
+			if h.DeletionTimestamp == nil {
+				t.Fatalf("helper pod %s is still standing after the freeze — the pair was not reclaimed together (AC-F4)", h.Name)
+			}
 		}
 	}
-	if !stillNamed {
-		t.Fatalf("auxiliaryPods after a refused freeze = %v, want it to still name helper pod %q (AC-F4)",
-			got.AuxiliaryPods, helper.Name)
-	}
 
-	// Then the cluster's, which is the one that costs resources. A refusal that
-	// reclaimed the helper anyway would leave the session active and unable to
-	// reach its MCP — the exact half-torn state checkpointerFor exists to avoid.
-	getPodEventually(t, cs, ns, s.Pod)
-	helpers := helperPodsFor(t, cs, ns, s.ID)
-	if len(helpers) != 1 {
-		t.Fatalf("session %s selects %d helper pods after a refused freeze, want exactly the one it had (AC-F4)",
-			s.ID, len(helpers))
+	restored := f4Switch(t, s.ID)
+	if restored.State != "active" {
+		t.Fatalf("state after accessing a frozen session = %q, want active (AC-B2)", restored.State)
 	}
-	survivor := helpers[0]
-	if survivor.Name != helper.Name {
-		t.Fatalf("helper pod after a refused freeze = %q, want the original %q — the refusal replaced it (AC-F4)",
-			survivor.Name, helper.Name)
+	if restored.Pod == "" || restored.Pod == s.Pod {
+		t.Fatalf("restored workload pod = %q, want a new one (the freeze reclaimed %q) (AC-B2)", restored.Pod, s.Pod)
+	}
+	newHelper := f4TheHelperPod(t, cs, ns, restored)
+	if newHelper.Name == helper.Name {
+		t.Fatalf("restored onto helper pod %q, the one the freeze reclaimed — the restore round gets its own (AC-F4)", helper.Name)
+	}
+	if newHelper.Status.PodIP == "" {
+		t.Fatalf("restored helper pod %s has no pod IP; the workload cannot have been given one (AC-F4)", newHelper.Name)
 	}
 	for _, name := range []string{sessionMCPContainer, helperCredProxyContainer} {
-		found, ready := containerReady(&survivor, name)
-		if !found {
-			t.Fatalf("helper pod %s publishes no status for container %q after a refused freeze", survivor.Name, name)
+		found, ready := containerReady(&newHelper, name)
+		if !found || !ready {
+			t.Fatalf("restored helper pod %s container %q found=%v ready=%v — the restore round came up half-formed (AC-F4)",
+				newHelper.Name, name, found, ready)
 		}
-		if !ready {
-			t.Fatalf("helper pod %s container %q is not Ready after a refused freeze — the refusal disturbed the pair (AC-F4)",
-				survivor.Name, name)
-		}
+	}
+
+	// A workload still holding the reclaimed helper's address would satisfy
+	// every assertion above and reach nothing.
+	mcpAfter := strings.TrimSpace(f4Sh(t, cs, cfg, ns, restored.Pod, workloadContainer, f4ReadSessionMCPURL))
+	if !strings.Contains(mcpAfter, newHelper.Status.PodIP) {
+		t.Fatalf("restored workload was given SESSION_MCP_URL=%q, which does not name this round's helper IP %q (AC-F4)",
+			mcpAfter, newHelper.Status.PodIP)
+	}
+	if mcpAfter == mcpBefore {
+		t.Fatalf("restored workload still holds the pre-freeze SESSION_MCP_URL %q — it is pointed at a reclaimed pod (AC-F4)", mcpBefore)
 	}
 }
 
