@@ -83,9 +83,9 @@ func toolResult(t *testing.T, body map[string]any) (result map[string]any, isErr
 	return result, isError, text
 }
 
-// The gate exists, so the tool exists — exactly one, and the one the reference
-// implementation and the mockup both name.
-func TestSessionMCPOffersTheGatedToolWhenTheGateExists(t *testing.T) {
+// The gate exists, so the surface exists: the gated fetch and the ungated
+// diagnostic, and nothing else.
+func TestSessionMCPOffersItsToolsWhenTheGateExists(t *testing.T) {
 	g := newGatedMCP(t, "APPROVED")
 	_, body := postMCP(t, g.server, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	result, ok := body["result"].(map[string]any)
@@ -93,20 +93,77 @@ func TestSessionMCPOffersTheGatedToolWhenTheGateExists(t *testing.T) {
 		t.Fatalf("tools/list body = %v, want a result", body)
 	}
 	tools, ok := result["tools"].([]any)
-	if !ok || len(tools) != 1 {
-		t.Fatalf("tools = %v, want exactly one gated tool", result["tools"])
+	if !ok || len(tools) != 2 {
+		t.Fatalf("tools = %v, want exactly the two listed tools", result["tools"])
 	}
-	tool, ok := tools[0].(map[string]any)
-	if !ok || tool["name"] != webFetchGetTool {
-		t.Fatalf("tool = %v, want %q", tools[0], webFetchGetTool)
+	byName := map[string]map[string]any{}
+	for _, raw := range tools {
+		tool, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("tool = %v, want an object", raw)
+		}
+		name, _ := tool["name"].(string)
+		byName[name] = tool
 	}
-	schema, ok := tool["inputSchema"].(map[string]any)
+
+	fetch, ok := byName[webFetchGetTool]
 	if !ok {
-		t.Fatalf("tool has no input schema: %v", tool)
+		t.Fatalf("tools = %v, want one named %q", tools, webFetchGetTool)
 	}
-	props, ok := schema["properties"].(map[string]any)
-	if !ok || props["url"] == nil {
-		t.Fatalf("input schema = %v, want a url argument", schema)
+	fetchSchema, ok := fetch["inputSchema"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool has no input schema: %v", fetch)
+	}
+	fetchProps, ok := fetchSchema["properties"].(map[string]any)
+	if !ok || fetchProps["url"] == nil {
+		t.Fatalf("input schema = %v, want a url argument", fetchSchema)
+	}
+
+	ping, ok := byName[pingTool]
+	if !ok {
+		t.Fatalf("tools = %v, want one named %q", tools, pingTool)
+	}
+	pingSchema, ok := ping["inputSchema"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool has no input schema: %v", ping)
+	}
+	pingProps, ok := pingSchema["properties"].(map[string]any)
+	if !ok || len(pingProps) != 0 {
+		t.Fatalf("input schema = %v, want no arguments", pingSchema)
+	}
+	if pingSchema["additionalProperties"] != false {
+		t.Errorf("input schema = %v, want additionalProperties false", pingSchema)
+	}
+}
+
+// The two zeroes are the point — a wiring check that woke a human would not be one.
+func TestSessionMCPPingAnswersWithoutAnApprovalRequest(t *testing.T) {
+	g := newGatedMCP(t, "APPROVED")
+	_, decoded := postMCP(t, g.server,
+		`{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"`+pingTool+`","arguments":{}}}`)
+	_, isError, text := toolResult(t, decoded)
+	if isError {
+		t.Fatalf("ping returned a tool error: %s", text)
+	}
+	if text != pingReply {
+		t.Errorf("ping = %q, want %q", text, pingReply)
+	}
+	if got := g.gateway.created.Load(); got != 0 {
+		t.Errorf("created %d approval requests for ping, want 0", got)
+	}
+	if got := g.upstream.Load(); got != 0 {
+		t.Errorf("upstream reached %d times for ping, want 0", got)
+	}
+}
+
+// R2 reaches the ungated tool too — docs/session-mcp-tool-surface.md says why.
+func TestSessionMCPUngatedContainerHasNoPing(t *testing.T) {
+	srv := newSessionMCPServer(t)
+	_, decoded := postMCP(t, srv,
+		`{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"`+pingTool+`","arguments":{}}}`)
+	_, isError, _ := toolResult(t, decoded)
+	if !isError {
+		t.Fatal("an ungated container answered ping")
 	}
 }
 
