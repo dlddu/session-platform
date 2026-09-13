@@ -136,3 +136,38 @@ func TestLoadConfigRejectsInvalidClaudeCodeDefaultModel(t *testing.T) {
 		t.Fatalf("loadConfig error = %v, want CLAUDE_CODE_DEFAULT_MODEL error", err)
 	}
 }
+
+// The approval-gated archive gate is separate so it can be dropped on its own,
+// and it inherits claude-code's value so that separating it costs no manifest
+// change. Both halves are asserted here: without them a later default flip
+// would silently turn the type off in every deployment that never names it.
+func TestLoadConfigApprovalGatedArchiveGate(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		claude         string
+		approvalGated  string
+		wantClaude     bool
+		wantApprovalAG bool
+	}{
+		{name: "unset inherits the enabled claude-code gate", claude: "true", approvalGated: "", wantClaude: true, wantApprovalAG: true},
+		{name: "unset inherits the disabled claude-code gate", claude: "", approvalGated: "", wantClaude: false, wantApprovalAG: false},
+		{name: "explicit false is the kill switch", claude: "true", approvalGated: "false", wantClaude: true, wantApprovalAG: false},
+		{name: "explicit true stands on its own", claude: "", approvalGated: "true", wantClaude: false, wantApprovalAG: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CODE_ARCHIVE_ENABLED", tt.claude)
+			t.Setenv("SESSION_APPROVAL_GATED_ARCHIVE_ENABLED", tt.approvalGated)
+
+			cfg, err := loadConfig()
+			if err != nil {
+				t.Fatalf("loadConfig: %v", err)
+			}
+			if cfg.claudeArchiveEnabled != tt.wantClaude {
+				t.Errorf("claudeArchiveEnabled = %v, want %v", cfg.claudeArchiveEnabled, tt.wantClaude)
+			}
+			if cfg.approvalGatedArchiveEnabled != tt.wantApprovalAG {
+				t.Errorf("approvalGatedArchiveEnabled = %v, want %v", cfg.approvalGatedArchiveEnabled, tt.wantApprovalAG)
+			}
+		})
+	}
+}

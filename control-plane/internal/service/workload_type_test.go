@@ -331,8 +331,9 @@ func TestSnapshotArchivesAnApprovalGatedSession(t *testing.T) {
 	}
 }
 
-// The deployment this case stands for is one that left the archive gate off,
-// which is why it survives the slice that registered the strategy.
+// The deployment this case stands for is one that dropped this type's own gate
+// (SESSION_APPROVAL_GATED_ARCHIVE_ENABLED) or inherited it off — the case that
+// gate exists for, which is why it survives the slice that registered the strategy.
 func TestSnapshotIsRefusedForApprovalGatedWithoutAStrategy(t *testing.T) {
 	ctx := context.Background()
 	svc, orch, _ := newServiceWithOrch()
