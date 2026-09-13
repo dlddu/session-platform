@@ -265,7 +265,7 @@ seam 스캔이 잡는 `(파일, 토큰)` 쌍마다 한 행이다. 등재 seam에
 
 > **시나리오 검증 범위**: 바로 위 「집계」는 **모킹 충실도**의 것이고, 시나리오 ↔ e2e 1:1
 > 커버리지는 별개다. 그쪽 정본은 아래 「시나리오 ↔ e2e 파일 매핑」·「시나리오 예외 목록」·
-> 「구현 대기」와, 그 뒤 「집계」의 `scenario-summary` 블록(총계 · 예외 · 구현 대기 ·
+> 「유예」와, 그 뒤 「집계」의 `scenario-summary` 블록(총계 · 예외 · 유예 ·
 > 시나리오 매칭 파일 · 공백 목록)이다.
 >
 > **그 숫자를 여기로 옮겨 적지 말 것.** `scripts/e2e/check-scenario-mapping.sh`는 `scenario-summary`
@@ -328,7 +328,7 @@ Playwright 리포트/trace를 아티팩트로 올린다. ci.yml의 lint/unit/bui
 ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 있다(둘 다 모든 PR에서 실행):
 
 - **`시나리오 ↔ e2e 1:1 mapping` 잡** — `scripts/e2e/check-scenario-mapping.sh`. 아래 매핑 표·예외
-  목록·구현 대기 표·집계가 실제 파일 헤더 선언 및 `docs/test/*.md`의 시나리오 집합과 일치하는지
+  목록·유예 표·집계가 실제 파일 헤더 선언 및 `docs/test/*.md`의 시나리오 집합과 일치하는지
   검사한다. 파일이나 시나리오를 추가·이동·삭제했는데 등재를 갱신하지 않으면 여기서 막힌다.
 - **`go vet (e2e build tag)`** — e2e 스위트는 빌드 태그 뒤에 있어 기본 vet이 컴파일하지
   않는다. 이 스텝이 없으면 e2e 파일의 타입 오류를 kind 잡에 가서야 알게 된다.
@@ -347,38 +347,52 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 서수를 다시 매기지 않는다. 문서 중간에 시나리오가 삽입돼 번호가 밀리면 **식별자가 바뀐 것**이므로
 헤더 선언과 아래 표를 함께 갱신한다.
 
-**매칭 단위**는 두 스위트를 합친 하나의 공간이다:
+**매칭 단위**는 Playwright 단일 스위트다:
 
-- `control-plane/test/e2e_*_test.go` — Go API e2e (빌드 태그 `e2e`)
 - `web/e2e/*.spec.ts` — Playwright (**최상위만**)
+
+`control-plane/test/`의 Go 테스트는 **매칭 단위가 아니다.** 다만 유예 행의 **현행 대체 검증**으로서
+자신이 검증하는 시나리오를 계속 선언할 수 있다 — 테스트를 읽는 사람에게 그 한 줄이 필요하다. 대신
+그 선언과 유예 표의 `현행 대체 검증` 칸이 **정확히 같은 쌍**이어야 하고, 게이트가 둘을 diff로
+대조한다(규칙 6). 선언이 낡아도, 표가 낡아도 빨개진다.
 
 규칙:
 
-1. **시나리오 → 파일 유일**: 예외 목록·구현 대기 표·저작 대기 표 **어디에도 없는** 시나리오는
-   자신을 선언한 파일을 정확히 1개 갖는다. 0개면 공백, 2개 이상이면 중복 — 둘 다 위반이다.
+1. **시나리오 → 파일 유일**: 예외 표·유예 표 **어느 쪽에도 없는** 시나리오는 자신을 선언한 매칭 단위
+   파일을 정확히 1개 갖는다. 0개면 공백, 2개 이상이면 중복 — 둘 다 위반이다.
 2. **파일 → 시나리오 유일**: 매칭 단위 파일은 **실재하는 시나리오** 정확히 1개만 선언한다. 셋업으로
-   다른 시나리오의 경로를 경유하는 것은 검증으로 세지 않는다 — 선언한 것만 센다.
-3. **비-시나리오 파일**: 스모크/인프라 검증만 하는 파일은 `// 검증 시나리오: 없음 (스모크·인프라)`로
+   다른 시나리오의 경로를 경유하는 것은 검증으로 세지 않는다 — 선언한 것만 센다. 뒤집어서, **매칭
+   단위가 아닌 파일은 선언을 갖지 않는다.**
+3. **비-시나리오 파일**: 스모크/인프라 검증만 하는 매칭 단위 파일은 `// 검증 시나리오: 없음 (스모크·인프라)`로
    선언하고 아래 「비-시나리오 파일 등재」에 올린다. 어디에도 없는 파일은 고아(위반).
-4. **예외 목록**: e2e 자동 검증이 곤란한 시나리오는 사유·대체 검증 수단과 함께 아래 「시나리오 예외
-   목록」에 올린다. 등재된 시나리오는 파일이 없어도 위반이 아니다. **"아직 구현되지 않았다"는 예외
-   사유가 아니다** — 그것은 규칙 6의 구현 대기 사유다.
-5. **참조 무결성**: 존재하지 않는 시나리오를 선언하거나 세 표(예외·구현 대기·저작 대기) 중
-   어디에든 등재하면 위반. 한 시나리오를 두 표에 동시에 올리는 것도 위반이다 — 세 표는 서로 다른
-   질문에 답하고(영구 면제 / 구현이 없다 / 파일이 없다) 한 시나리오의 판정은 하나다.
-6. **구현 대기**: 시나리오가 기술하는 기능이 아직 구현되지 않아 e2e가 관측할 대상 자체가 없으면
-   「구현 대기」 표에 **미구현 근거·담당·해제 조건**과 함께 올린다. 구현이 착지하면 1:1 판정 대상으로
-   복귀한다. 구현 자체는 이 원장의 몫이 아니다.
-7. **저작 대기**: 기능은 구현돼 있고 예외 사유도 없는데 전용 파일이 아직 없는 시나리오는 「저작
-   대기」 표에 **스위트·선행·근거**와 함께 올린다. 예외(영구 면제)·구현 대기(대상 부재)와 달리 이것은
-   **할 일이 확정된 잔여**이고, 행이 지워지는 방법은 하나뿐이다 — 그 시나리오를 선언하는 파일이
-   생기는 것. 선행 칸은 「누가 무엇을 하면 이 파일을 쓸 수 있는지」로 적는다. 「구현이 없다」를 선행에
-   적지 않는다 — 그러면 규칙 6의 구현 대기이지 저작 대기가 아니다.
+4. **예외 표(영구 면제)**: e2e 자동 검증이 **원리적으로** 곤란한 시나리오는 사유·대체 검증 수단과 함께
+   「시나리오 예외 목록」에 올린다. 등재된 시나리오는 파일이 없어도 위반이 아니다. **"지금은 둘 수
+   없다"는 예외 사유가 아니다** — 그것은 규칙 7의 유예다.
+5. **참조 무결성**: 존재하지 않는 시나리오를 선언하거나 두 표 중 어디에든 등재하면 위반. 한 시나리오를
+   두 표에 동시에 올리는 것도 위반이다 — 둘은 서로 다른 질문에 답하고(영구 면제 / 지금은 둘 수 없다)
+   한 시나리오의 판정은 하나다.
+6. **매칭 단위 밖 선언은 대체 검증이다**: `control-plane/test/**`와 `web/e2e/*/`(하위 디렉터리)의
+   파일이 `// 검증 시나리오:` 헤더를 가지면, 그것은 매핑이 아니라 **그 시나리오의 현행 대체 검증**을
+   뜻한다. 유예 표가 같은 쌍을 `현행 대체 검증` 칸에 갖고 있어야 하며, 게이트가 양쪽을 대조한다.
+   대체 검증이 없는 유예 행의 그 칸은 `없음`이고, 그런 행에는 대응하는 선언이 없어야 한다.
+7. **유예 표(임시 보류)**: 예외 사유는 없는데 **지금 매칭 파일을 둘 수 없는** 시나리오는 「유예」 표에
+   **사유 · 현행 대체 검증 · 소관 · 해제 조건**과 함께 올린다. 사유는 무엇이든 될 수 있다 — 기능
+   미구현, 다른 스위트가 아직 그 검증을 들고 있음, 하네스 선행에 막힘. 행이 사라지는 방법은 그
+   시나리오를 선언하는 매칭 단위 파일이 생기는 것 하나뿐이고, 해제 조건은 반드시 **누가 무엇을 하면
+   풀리는지**로 적는다. 해소가 이 원장 밖이면 `소관` 칸이 그 소유자를 지목한다.
 8. **집계 일치와 미분류 공백 금지**: 아래 「집계」가 1~7의 실제 상태와 일치해야 한다. 불변식은
-   **(시나리오 − 예외 − 구현 대기 − 저작 대기) = (매칭 파일 + 공백)** 이고, **공백이 1 이상이면
-   게이트가 실패한다.** 공백은 「아직 판정하지 않았다」는 뜻이고 그것이 초록 아래 쌓이는 것을 막는
-   것이 이 규칙이다. 새 시나리오를 추가해 붉어졌다면 고치는 법은 한 줄이다 — 세 표 중 맞는 곳에
-   행을 더하거나, 파일을 쓰거나. 저작 대기가 0이 되는 날 완전 1:1이다.
+   **(시나리오 − 예외 − 유예) = (매칭 파일 + 공백)** 이고, **공백이 1 이상이면 게이트가 실패한다.**
+   공백은 「아직 판정하지 않았다」는 뜻이고 그것이 초록 아래 쌓이는 것을 막는 것이 이 규칙이다. 새
+   시나리오를 추가해 붉어졌다면 고치는 법은 한 줄이다 — 두 표 중 맞는 곳에 행을 더하거나, 파일을
+   쓰거나. 유예가 0이 되는 날 완전 1:1이다.
+
+> **2026-09-12 매칭 공간 축소.** 매칭 단위가 `control-plane/test/e2e_*_test.go` + `web/e2e/*.spec.ts`
+> 합집합에서 **Playwright 최상위 단독**으로 좁혀졌다. 그때까지 Go 파일이 들고 있던 27개 시나리오는
+> 검증이 사라진 것이 아니라 **매칭 공간 밖으로 나간 것**이라, 전부 유예 표에 `현행 대체 검증 = 그 Go
+> 파일`로 등재했다. 같은 개정에서 「구현 대기」와 「저작 대기」 두 표가 **유예 표 하나로 합쳐졌다** —
+> 둘은 사유가 다를 뿐 답하는 질문("지금 파일을 둘 수 없다")이 같아서, 사유를 표의 칸으로 내리면 표가
+> 하나로 족하다. Go 파일의 `// 검증 시나리오:` 헤더는 **그대로 둔다** — 이제 매핑이 아니라 대체 검증
+> 선언이고(규칙 6), 게이트가 유예 표와 대조한다. 그 파일이 삭제될 때 선언도 함께 사라진다.
 
 > **2026-09-08 축 교체.** 이 문서는 2026-09-08까지 **AC ↔ e2e** 1:1을 등재했다. 판정 축이 AC에서
 > **테스트 시나리오**로 바뀌면서 헤더 선언(`검증 AC:` → `검증 시나리오:`)·등재 표·게이트를 함께
@@ -397,35 +411,8 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 단일 AC 키 자체가 거짓이 된다). 개명 슬라이스가 오면 나머지도 이 모양으로 모인다.
 
 <!-- scenario-mapping:begin -->
-| 시나리오 | 파일 | 스위트 | 기존 AC 키(참고) | 무엇을 단언하나 |
-| --- | --- | --- | --- | --- |
-| `approval-gated-workload.md#시나리오 1` | `control-plane/test/e2e_f1_workload_type_test.go` | go | AC-F1 | `workloadType=approval-gated` 세션이 배포 SUT에서 서고 그 pod 집합이 워크로드 파드 + **세션 전속 헬퍼 파드 1개**(라벨 `session-id`+`pod-role=helper`로 조회, 컨테이너 정확히 둘 — 세션 MCP·credential-proxy — 이 모두 Ready)임 / 타입 축이 실제로 판별함 — 필드 생략과 explicit `shell`은 헬퍼 파드를 0개 만든다 / 근접 오타(`approval_gated`·전후 공백·대문자·`approvalgated`)와 explicit `""`·`null`·비문자열은 **pod 생성 전** 400(세션 파드 수 불변이 그라운드-트루스) / 생성 후 `/read`·`/write`·`/switch`의 타입·모델 변경은 400이고 원래 값 유지. 승인 왕복(AC-F3)·공유 볼륨(AC-F5)·컨테이너별 자격 증명 분리(AC-F6)는 각자의 AC가 소유하므로 여기서 사지 않는다 — 이 파일이 사는 것은 **타입 축과 그것이 세우는 파드 집합**이다 |
-| `approval-gated-workload.md#시나리오 3` | `control-plane/test/e2e_approval_gated_3_approval_path_test.go` | go | AC-F3 | **승인 경로의 한 왕복**을 배포 SUT 에서 — 도구 호출 프롬프트를 write 하면 그 write 가 **게이트를 기다리지 않고 반환**하고, 그 반환이 공허하지 않음을 **순서로** 산다: 반환 뒤에 관측되는 `awaiting approval` 마커는 게이트가 대기에 **진입할 때** 발행되고 그 대기는 아래의 결정 전에는 끝날 수 없으므로, write 가 invocation 을 완주시키고 온 것일 수 없다(시간은 보조 지표로만 두고 CLI 의 60초 도구 예산보다 한참 아래라는 천장만 확인한다) / 대기 표시가 세션의 append-only 출력에 **in-band 로 투영**되고 SSE 와 **같은 커서의** `read` 가 같은 바이트를 봄(스트림이 offset 0 부터 이어 붙인 바이트가 같은 순간 `read(0)` 의 접두사) / 마커가 이름으로 지목하는 도구가 **세션 MCP 가 등재한 이름**(`web_fetch_get`)이고 외부 식별자가 **`{세션ID}:{요청ID}`** 형태이며 그 세션 절반이 이 세션의 id 임 — 대역은 CLI 가 네임스페이스한 이름(`mcp__session-platform-session-mcp__web_fetch_get`)으로 지시받으므로, 마커가 **맨 이름**을 달고 오는 것이 곧 CLI 가 그 네임스페이스 이름을 이 서버의 등재 도구로 **해소했다**는 관측이다(자매 원장 `CLAUDE-PROVIDER` 잔여가 「대역이 내는 도구 이름이 세션 MCP 가 실제로 등재한 것과 같은지는 여기서 확인되지 않는다」며 이 파일을 지목한 그 대조) / **대기가 실재함** — 게이트웨이 대역에 직접 물어 그 요청을 `PENDING` 으로 **들고 있음**을 확인한다(마커만 보면 허공에 찍힌 글자와 구별되지 않는다. 이 관측과 「결정 마커가 아직 없다」 둘 다 우리가 결정을 내리는 순간 뒤집히므로 공허하지 않다) / 대역의 `/operator/decide` 로 **승인한 뒤에야** 결정 마커가 오고, 그것이 대기 마커와 **같은 외부 식별자**를 달고 **같은 바이트열에 이어 붙으며**(결정 시점 버퍼가 대기 시점 버퍼의 확장) 순서가 대기 → 결정이고 정확히 1회임 / 그 마커를 실어 나르는 **커서 계약** — event id = `nextOffset`, decoded 길이 = 커서 이동폭(`s6Output` 이 소유), 그리고 스트림이 멈춘 커서가 전부 **UTF-8 code-point 경계**임. 경계 단언이 공허하지 않은 근거는 마커 자신이다 — `renderApprovalNotice` 가 em dash 와 middle dot 으로 쓰므로 커서가 넘나드는 바이트에 다중바이트 룬이 실제로 들어 있고, 테스트가 그 룬의 존재를 **먼저 확인한 뒤에** 경계를 잰다. **승인 후 실제 아웃바운드 GET 이 정확히 1회 일어나는 것은 이 파일에 없다** — 시나리오 사전 조건의 「호출을 관찰할 수 있는 외부 테스트 upstream」이 이 SUT 에 없고(차단 요인 `FETCH-ORIGIN`), 같은 이유로 「결정 전 upstream 무도달」의 음성 단언도 공허해서 싣지 않았다. 둘 다 아래 §「남은 미검증 분기」에 등재했다. 타입 축과 파드 집합(AC-F1)·헬퍼 파드의 수명과 경계(AC-F4)·자격 증명 배치(AC-F6)는 각자의 파일이 소유한다 — 이 파일이 배타적으로 사는 것은 **게이트를 통과하는 한 번의 왕복과 그 순서**다 |
-| `approval-gated-workload.md#시나리오 7` | `control-plane/test/e2e_f4_helper_pod_test.go` | go | AC-F4 | **헬퍼 파드의 귀속·수명·컨테이너 경계**를 배포 SUT에서 — 세션 2개가 서로 다른 헬퍼 파드를 갖고 각자 자기 `session-id` 라벨만 지니며 공개 API의 `auxiliaryPods`와 클러스터 조회가 같은 파드를 지목함 / **삭제** 시 워크로드 파드와 헬퍼 파드가 **둘 다** 회수됨(클러스터에서 삭제/terminating) / **동결이 두 파드를 함께 회수함** — `POST /snapshot`이 200이고 API의 `pod`가 비며 `auxiliaryPods`가 사라지고, 클러스터에서도 워크로드 파드와 헬퍼 파드가 **둘 다** 삭제/terminating임 / **복원이 새 쌍을 세우고 워크로드를 그 쌍에 다시 배선함** — 복원된 워크로드 파드도 헬퍼 파드도 동결 전과 **이름이 다르고**, 워크로드 컨테이너의 `SESSION_MCP_URL`이 **이번 라운드 헬퍼의 실제 `status.podIP`** 를 담으며 동결 전 값과 다름(동결 **전에** 그 값을 먼저 재 두므로 「재배선됐다」가 파드 재생성에 대한 가정이 아니라 측정이다) / 두 헬퍼 컨테이너가 PID 네임스페이스를 공유하지 않아 서로의 `/proc/*/environ`을 읽지 못함(각 컨테이너가 자기 `DATA_PLANE_WORKLOAD` 마커는 찾으므로 음성 결과가 자기검증되고, 두 마커가 다름도 먼저 확인한다). **두 갈래는 2026-09-12에 들어왔다** — AC-F5의 아카이브 전략이 선행이었고 그것이 착지하면서, 그때까지 자리를 지키던 거부 케이스가 예고대로 빨개져 무엇을 되살릴지 지목했다. 제출되는 pod spec·자격 증명 분리·워크로드 파드 실패 시 회수·복원 쌍 생성은 `control-plane/test/approval_gated_orchestrator_test.go`(태그 `integration`)가 이미 소유하므로 다시 사지 않는다 — e2e가 배타적으로 사는 것은 **실 API server가 실제로 지운 파드·거부 뒤에도 실제로 서 있는 파드·실 kubelet이 가른 네임스페이스**다(단위 스텁은 살아남은 파드의 **수**만 세고 어느 쪽인지 말하지 못한다). 타입 축과 파드 집합의 모양(AC-F1)·네트워크 경계(AC-F2)·컨테이너별 자격 증명(AC-F6)은 각자의 AC가 소유한다 |
-| `approval-gated-workload.md#시나리오 8` | `control-plane/test/e2e_f6_credential_split_test.go` | go | AC-F6 | **두 자격 증명의 컨테이너별 배치**를 배포 SUT에서 — 게이트웨이 3종(`APPROVAL_GATEWAY_URL`·`_API_KEY`·`_USER_ID`)이 헬퍼 파드의 `session-mcp` 컨테이너에만 `approval-gateway-credentials`의 `url`/`api-key`/`user-id`로 **필수** 주입되고 `credential-proxy`·워크로드 컨테이너엔 이름으로도 **키로도** 없음 / 공급자 3종(`base-url`·`auth-token` 필수 + optional `ca-cert`)은 같은 파드의 `credential-proxy`에만 있고 그 컨테이너가 `DATA_PLANE_PROXY_PLACEMENT=helper`·`DATA_PLANE_AGENT_ADDR=0.0.0.0:8091`로 **loopback이 아니라 파드 네트워크에 바인딩**함(AC-E6과 갈리는 유일한 지점) / 워크로드 컨테이너는 Secret ref를 하나도 갖지 않고(optional `model` 제외) `ANTHROPIC_BASE_URL`·`SESSION_MCP_URL`이 **헬퍼 파드의 실제 `status.podIP`** 와 일치하며 `ANTHROPIC_AUTH_TOKEN`은 placeholder, `K3S_MCP_TOKEN`은 **없음**(✅ 2026-09-03 확정 항목) / 실제로 해소된 환경 — `session-mcp`가 api-key를, `credential-proxy`가 auth-token을 해소하고 워크로드 컨테이너의 `/proc/*/environ` 어디에도 그 둘이 없음(자기 placeholder를 찾는 대조군이 먼저 붙어 음성 결과가 자기검증된다) / 생성 요청의 `userId`·게이트웨이 필드·공급자 자격 증명은 **400**이고 세션이 생기지 않음 / 네 토큰 문자열이 세션 조회 응답·목록 응답·`read` **응답**·**control-plane 파드 로그**에 없음 — 넷 다 **표면별 대조군을 먼저 통과시킨 뒤에** 찾는다(앞 셋은 자기 세션 id를 담아야 하고, 로그는 프로세스 시작 줄을 담아야 하며 거기에 Secret에서 해소한 값 하나(optional `model`)가 실제로 echo돼 있어야 한다) / model 계약이 claude-code와 동일. 제출되는 pod spec은 `approval_gated_orchestrator_test.go`(태그 `integration`)가, 프록시의 **동작** 계약은 `data-plane/cmd/agent/credential_proxy*_test.go`가 이미 소유하므로 다시 사지 않는다 — e2e가 배타적으로 사는 것은 **Secret에서 실제로 해소된 환경과 API server가 실제로 배정한 IP**다. 타입 축과 파드 집합(AC-F1)·귀속과 수명과 PID 경계(AC-F4)·네트워크 경계(AC-F2)는 각자의 AC가 소유한다. **다섯 갈래는 이 파일에 없다**(차단 둘 · 승인 컨텍스트 · `read`의 **scrollback** 반쪽 · control-plane 로그의 **요청 단위** 반쪽) — 아래 §「남은 미검증 분기」에 등재했다 |
-| `architecture.md#시나리오 1` | `control-plane/test/e2e_a1_plane_separation_test.go` | go | AC-A1 | 세션 워크로드가 control-plane pod 밖의 자기 Pod에서 돈다 + control-plane pod엔 워크로드(쉘)가 없다(distroless — exec 실패) |
-| `architecture.md#시나리오 2` | `control-plane/test/e2e_a2_dedicated_pod_test.go` | go | AC-A2 | 생성 = active + 전용 pod, `session-id` 라벨 1:1, N 세션 → 고유 Pod N개 |
-| `architecture.md#시나리오 2-1` | `control-plane/test/e2e_architecture_2_1_auxiliary_pod_test.go` | go | AC-A2 (AC-F4 구체화) | **보조 파드가 생겨도 AC-A2의 1:1 진술이 깨지지 않는다**를 배포 SUT에서 — approval-gated 세션 둘이 각각 `session-id` 라벨로 파드 2개를 갖지만 `pod-role=workload`로 좁힌 같은 선택자는 여전히 **정확히 1개**를 돌려주고 그것이 API의 `pod`와 같음(그 「1」이 구성상 참인 수가 아님은 **보조 파드가 없는 shell 세션에서 두 선택자가 일치**한다는 대조군이 산다) / 보조 파드는 세션마다 별개라 두 세션이 **서로 다른 4개**의 파드로 갈리고 API의 `auxiliaryPods`와 클러스터 조회가 같은 것을 지목함 / 한 세션 삭제가 **그 세션에서 멈춤** — 다른 세션의 파드 둘이 `DeletionTimestamp` 없이 Running·Ready로 남고 그 세션의 `pod`·`auxiliaryPods`도 불변. **삭제된 세션 자신의 파드 둘이 회수되는 것은 이 파일의 산출이 아니라 대조군이다** — `approval-gated-workload.md#시나리오 7`이 소유하며, 아무것도 지우지 않는 delete라면 「다른 세션이 남았다」가 공허해지기 때문에 여기서 함께 관측할 뿐이다. 헬퍼 파드의 귀속·수명·PID 경계(AC-F4)·존재와 컨테이너 구성(AC-F1)·자격 증명 배치(AC-F6)는 각자의 파일이 소유한다 |
-| `architecture.md#시나리오 3` | `control-plane/test/e2e_a3_pod_reclaim_test.go` | go | AC-A3 | 동결 시 API `pod:""` + 클러스터 그라운드-트루스로 Pod 삭제/terminating 확인 |
-| `claude-code-workload.md#시나리오 1` | `control-plane/test/e2e_e1_workload_type_test.go` | go | AC-E1 | `workloadType=claude-code` 세션이 SUT에서 서고 그 pod에서 Claude CLI가 실제로 실행됨 / 필드 생략은 shell / 잘못된 값은 pod 생성 전 400 / 타입·모델은 생성 후 불변 |
-| `claude-code-workload.md#시나리오 2` | `control-plane/test/e2e_e2_prompt_invocation_test.go` | go | AC-E2 | write = 프롬프트 1회 실행 — 배포 SUT에서 실 `claude` 프로세스가 기동되고 응답이 세션 출력에 투영됨 / burst의 모든 프롬프트가 큐에 수락돼 각각 1회씩 실행됨 / 프로세스 테이블에서 본 exact argv·원샷 수명·직렬 큐(동시 실행 없음)·첫 성공 뒤에만 `--continue` / 1 MiB 초과 프롬프트는 public API 413이고 실행되지 않음 (비블로킹 반환 자체는 SUT에서 관측 불가 — invocation이 write 왕복보다 느리지 않다. `data-plane/cmd/agent/claude_test.go`의 `TestClaudeWriteIsNonBlockingAndSerial`이 fake runner로 소유) |
-| `claude-code-workload.md#시나리오 3` | `control-plane/test/e2e_claude_code_3_serial_queue_test.go` | go | AC-E2 (직렬 큐·출력 순서) | **연속 write 의 직렬 실행과 출력 누적 순서**를 배포 SUT 에서 — 겹침 창을 **먼저 세운 뒤에** 잰다. 이 SUT 에서 그 창은 저절로 생기지 않는다: 대역이 허용하는 **최대 응답**(200000 룬 = 600013바이트, 64 델타)을 지시해도 첫 invocation 이 **둘째 write 의 왕복 안에서 이미 끝나** 있는 것을 실측했다(버퍼 600148 = 두 응답 모두 완료). 크기로는 시간을 못 산다 ⇒ 대역의 지시자에 **델타 간격**을 더해(선택 넷째 칸, 생략 시 0 이라 기존 호출자에게 부모와 바이트 동일) 첫 프롬프트가 `64×150ms` = **최소 9.6초**를, 둘째가 **1초 미만**을 쓰게 한다 / 그 창에서 둘째 write 가 반환된 순간의 `read(0)` 이 첫 응답을 **아직 미완**으로 담고 둘째 라벨은 담지 않음을 확인해 「첫 실행이 끝나기 전에 둘째 write」라는 전제를 가정이 아니라 **측정**으로 세운다(전제가 깨지면 테스트가 그렇게 말하며 실패한다 — 조용히 통과하지 않는다) / 그 뒤 settle 된 `read(0)` 이 첫 응답을 **[0, 12013)** 에, 둘째를 **그 뒤**에 담고 두 라벨이 각각 정확히 1회이며 전체 길이가 두 응답 + 종결 바이트 2 이내 — 둘째가 **90배 짧고 20배 빠르므로** 병렬·순서 미보장 구현이라면 그쪽이 먼저 착지한다, 즉 이 순서 단언은 **공허하지 않다**(같은 크기·같은 속도 두 응답이면 어떤 구현에서도 참이라 아무것도 사지 못한다) / 파드 안 프로세스 테이블에서 동시 `claude` 수가 **1 을 넘지 않고**, 관측된 두 invocation 의 argv 가 **write 순서 그대로**(첫 argv 에 첫 프롬프트, 둘째에 둘째)이며 마지막이 0 — 버퍼 순서는 원리상 실행 **뒤**의 무엇인가가 정렬했을 수도 있지만 프로세스 순서는 그럴 수 없다. ⚠️ 이 SUT 는 invocation 인계를 프로브의 50ms 표본 **안에서** 끝내므로 둘 사이에 0 이 찍히지 않는다(`1 <argv A>` → `1 <argv B>`) — 그래서 세는 단위는 상승 에지가 아니라 **서로 다른 argv** 다. 에지로 세면 직렬 인계를 invocation 1 회로 오독한다(실측). 시나리오 2 와의 경계: 2는 **invocation 자체**(exact argv·원샷 수명·burst 수락)이고 3은 **두 write 사이의 순서**다 — 비중첩은 2의 파일도 같은 프로브로 세지만 그 파일 헤더가 「invocation 이 write 왕복보다 느리지 않다」고 적어 **겹칠 창이 비어 있을 수 있으므로**, 여기서는 창을 만든 뒤에 센다. 시나리오 4 와의 경계: 4는 같은 대역으로 **커서 표면**(UTF-8 경계 chunk·재개·중복 부재)을 산다. **비블로킹 반환 자체는 이 파일에 없다** — `data-plane/cmd/agent/claude_test.go` 의 `TestClaudeWriteIsNonBlockingAndSerial` 이 fake runner 를 붙잡아 소유한다 |
-| `claude-code-workload.md#시나리오 4` | `control-plane/test/e2e_claude_code_4_stream_reconnect_test.go` | go | AC-E3 (live stream·재접속·read reconcile) | **claude-code 세션의 라이브 출력 왕복**을 배포 SUT 에서 — 헤드라인인 **UTF-8 경계로 갈린 두 chunk** 를 공허하지 않게 산다: 프롬프트가 지시한 다중바이트 응답 75006바이트를 `offset=0` 으로 stream 하면 첫 output 이벤트가 64 KiB(65536)가 아니라 **65535** 에서 끊긴다 — 그 바이트가 룬의 시작이고 65536 은 **연속 바이트**임을 버퍼에서 직접 확인해(`buf[65535]` 선두 · `buf[65536]` 연속) 한계선이 실제로 문자 중간에 떨어졌음을, 즉 백오프가 **일어난 결정**이었음을 증명한 뒤에 그 숫자를 단언한다(ASCII 본문이면 둘 다 65536 이라 이 단언은 아무것도 사지 않는다) / 두 chunk 가 각각 유효 UTF-8 이고 이어 붙이면 같은 시점 `read(0)` 버퍼를 **바이트로 재현** / 첫 이벤트 뒤 끊고 query 에는 `?offset=0` 을 둔 채 `Last-Event-ID` 로 재연결하면 **재개 커서에서 이어지고** 그 뒤 도착한 두 번째 프롬프트의 응답이 정확히 1회, 앞선 응답의 머리 바이트는 **재전송되지 않음** / 현재 길이를 넘는 커서는 payload 없는 **`reset`** 이고 그 `id` = 현재 길이이며 그 신호 자체는 `lastAccess` 를 바꾸지 않음 / `read(0)` 이 두 응답을 **쓴 순서대로** 담고 마지막 커서 read 는 **빈 델타** / 응답 라벨이 버퍼에 **정확히 1회** — raw stream-json 의 final/result 레코드가 이미 부분 델타로 낸 텍스트를 다시 투영하지 않는다는 것을 계수로 산다. `state-api.md#시나리오 6` 과의 경계: 6은 **상태별 계약과 커서 오류 갈래**를 shell PTY 바이트로 사고(임의 바이트라 UTF-8 경계가 계약이 아니다), 4는 **claude-code 의 경계·재개·중복 부재**다. 시나리오 2와의 경계: 2는 **invocation**(argv·수명·큐), 4는 그 출력이 커서 표면으로 나오는 방식이다. **응답의 *의미*는 이 파일에 없다** — 대역은 지시자의 라벨과 크기만 반영하므로 대화 연속성은 `claude-code-workload.md#시나리오 5` 의 예외가 계속 소유한다 |
-| `claude-code-workload.md#시나리오 6` | `control-plane/test/e2e_claude_code_6_archive_freeze_test.go` | go | AC-E5 (AC-B1/B2/B3의 `claude-code` 경로) | **CRIU 가 아니라 파일시스템 아카이브로 동결·복원되는 타입**을 배포 SUT 에서 — 「동결 시 CRIU dump 가 호출되지 않는다」를 해체 중인 파드를 훔쳐보는 경쟁 대신 **구조로** 산다: CRIU 는 파드 안에서 프로세스 트리를 뜨고 플랫폼은 그 특권을 `shell` 파드에만 준다(`k8s.WithCheckpointPrivileged`, 배포의 CRIU 게이트 배선) — claude-code 워크로드 컨테이너는 그것을 **받지 않으므로** 그 안에서 dump 가 돌 수 없고, 같은 SUT 에 세운 shell 세션이 **특권을 받는다**는 대조군이 그 부재를 「게이트가 꺼져서」가 아니라 **이 타입의 결정**으로 못박는다(대조군이 특권을 안 받으면 판별자가 없다고 보고 skip 한다) / 아카이브가 뜰 대상이 실재함 — 그 파드가 `/session` 에 볼륨을 마운트하고 있음 / 동결 시 API `pod:""` + **클러스터 그라운드-트루스**로 파드 회수 / **왕복 세 갈래가 새 파드로 건너감** — 동결 전 워크스페이스에 심은 마커가 **이름이 다른** 복원 파드에서 같은 내용으로 읽히고(그 프로브가 동결 **전에** 동작한다는 것을 먼저 확인해 음성이 아닌 양성 결과를 자기검증한다), 복원 직후 `read(0)` 이 동결 전 응답 1건을 담으며(출력 scrollback), 복원된 파드의 **첫** invocation argv 가 `--continue` 를 단다 — 새 파드는 새 대화로 시작하므로 그 플래그의 출처는 아카이브뿐이다 / (a) 동결 전 커서의 델타가 동결 **후** 출력 1건만 담고 (b) `offset=0` 이 전·후 2건을 담으며 **델타가 그 꼬리와 바이트 동일** — 두 응답이 같은 상수 문자열이라 개수로는 순서를 못 가르므로 순서는 바이트로 산다. **두 갈래는 이 파일에 없다**(동결 전 대화를 참조하는 프롬프트의 **의미** 판정 · 스냅샷 트랜잭션의 durable `preparing`/`committing` 순서) — 아래 §「남은 미검증 분기」에 등재했다. 파드 회수 자체(`architecture.md#시나리오 3`)·복원이 **새** 파드로 온다는 것(`lifecycle.md#시나리오 2`)·복원 후 커서 무결성(`lifecycle.md#시나리오 3`)은 전부 **shell(=CRIU) 경로**로 각자의 파일이 이미 사므로 다시 사지 않는다 — 이 파일이 배타적으로 사는 것은 같은 계약이 **다른 전략**으로 성립하는가다 |
-| `claude-code-workload.md#시나리오 7` | `control-plane/test/e2e_e6_credential_placement_test.go` | go | AC-E6 | **자격 증명의 배치와 그 배치가 사는 격리**를 배포 SUT에서 — 공급자 `base-url`·`auth-token`·optional `ca-cert`는 사이드카 `claude-credentials`에만 / 필수 `k3s-mcp-token`과 optional `k3s-mcp-url`·`plugin-marketplace-url`은 주 컨테이너에만 / optional `model`은 주 컨테이너에만이고 concrete model은 literal이 Secret 기본값을 이김 / 주 컨테이너가 실 플랫폼 토큰을 **어떤 `/proc/*/environ`으로도 읽지 못함**(같은 프로브가 placeholder는 찾으므로 음성 결과가 자기검증된다) / pod가 `data-plane` SA로 서고 실 authorizer가 pods는 allow·secrets는 deny(SubjectAccessReview) / 생성 요청의 자격 증명 필드는 400이고 세션 조회·read 어디에도 두 토큰 값이 없음. 비교하는 비밀 값은 전부 클러스터 Secret에서 읽으므로 이 파일은 자격 증명 사본을 갖지 않는다. **프록시의 행위 계약**(헤더 허용목록·1xx redaction·64 MiB 상한·split-token tail-safe·`ca-cert` 파싱 실패 시 시작 거부)은 `data-plane/cmd/agent/credential_proxy*_test.go`가, **제출되는 pod spec**은 `control-plane/test/workload_type_orchestrator_test.go`(태그 `integration`)가 이미 소유하므로 여기서 다시 사지 않는다 — e2e가 배타적으로 살 수 있는 것은 배포된 그라운드-트루스다 |
-| `lifecycle.md#시나리오 2` | `control-plane/test/e2e_b2_snapshot_restore_test.go` | go | AC-B2 | snapshot 세션 접근(switch) → `active` 전이 + **새 pod**로 복원(동결 전 pod가 아님) |
-| `lifecycle.md#시나리오 3` | `control-plane/test/e2e_b3_restore_integrity_test.go` | go | AC-B3 | 동결 전 발급 커서가 복원 후에도 유효(델타만), `offset=0`은 동결 전·후 전체 이력을 순서대로 |
-| `shell-workload.md#시나리오 1` | `control-plane/test/e2e_d1_pty_shell_test.go` | go | AC-D1 | 세션 pod 안 PTY 부착 프로세스 정확히 1개이며 `bash` |
-| `shell-workload.md#시나리오 2` | `control-plane/test/e2e_d2_shell_write_test.go` | go | AC-D2 | write → 쉘 stdin 주입(계산 마커로 실행 확인), 3초 명령에 비블로킹, 연속 write가 같은 쉘로 |
-| `shell-workload.md#시나리오 3` | `control-plane/test/e2e_d3_read_cursor_test.go` | go | AC-D3 | 커서 read는 델타만, `offset=0` 재조회는 전체 이력 순서 보존(비파괴) |
-| `shell-workload.md#시나리오 4` | `control-plane/test/e2e_d4_process_tree_test.go` | go | AC-D4 | 동결 전 `export`/`cd`가 복원 후 그대로(`$D4MARK`, `pwd`) — B3의 인메모리 구체 마커 |
-| `shell-workload.md#시나리오 5` | `control-plane/test/e2e_d5_idle_definition_test.go` | go | AC-D5 | read만 해도 `lastAccess` 갱신 / 쉘 자체 출력만으로는 미갱신(GET은 접근으로 세지 않음) |
-| `state-api.md#시나리오 1` | `control-plane/test/e2e_c1_atomic_state_test.go` | go | AC-C1 | 2-replica 공유 store에 24-way 동시 요청 → 단일 active 수렴·중복 pod 없음 |
-| `state-api.md#시나리오 2` | `control-plane/test/e2e_c2_read_branches_test.go` | go | AC-C2 | read 분기: `active` / `snapshot->restore->read`, 호출 후 항상 active |
-| `state-api.md#시나리오 3` | `control-plane/test/e2e_c3_write_branches_test.go` | go | AC-C3 | write 분기: `active` / `snapshot->restore->write`(거부 아님), 호출 후 항상 active |
-| `state-api.md#시나리오 4` | `control-plane/test/e2e_c4_session_switch_test.go` | go | AC-C4 | active 대상 switch = no-op(재기동 없음), 다건 세션을 오가도 각자 상태·pod 보존 |
-| `state-api.md#시나리오 5` | `control-plane/test/e2e_state_api_5_wire_validation_test.go` | go | AC-C2·C3·C4 (wire validation) | **요청 본문이 세션에 닿기 전에 무엇이 걸러지는가**를 배포 SUT에서 — (a) 본문 생략 3종이 기본값으로 처리됨(read=`offset 0`이라 **호출 전에 만든 출력이 돌아옴** · write=빈 payload라 대기 중인 미제출 줄이 제출되지 않음 · switch=필드 없음이라 AC-C4 no-op으로 pod·상태 불변) / (b)(c) top-level·필드·배열 속 `null` · unknown field · malformed · trailing input · 비-객체 top level이 **read·write·switch 셋 모두**에서 400 `invalid input`이고, 그 왕복 뒤 쉘 출력·`workloadType`·`model`·상태가 전부 불변(같은 route가 **선언된 필드**에는 200을 준다는 대조군과, switch가 read의 필드마저 undeclared로 거절한다는 음성 대조를 함께 둔다) / (d) wire 상한이 **정확히 8 MiB** — 같은 모양의 본문이 `8388608`바이트면 400(선언 안 된 필드에서 떨어진다), **한 바이트 더한** `8388609`바이트면 413 `request body exceeds size limit` / (e) snapshot `claude-code` 세션의 decoded 1 MiB 초과 prompt가 413 `workload prompt exceeds size limit`이고 세션이 `snapshot`·pod 없음 그대로이며 **살아 있는 파드가 하나도 생기지 않음**(= 거부가 복원보다 앞선다. 같은 세션의 작은 프롬프트가 `active`로 200을 받는다는 대조군이 그 413을 크기 문제로 못박는다). immutable metadata를 read/write/switch로 바꾸려는 시도가 400이라는 것 자체는 `approval-gated-workload.md#시나리오 1`의 파일이 타입 축으로 이미 사므로 여기서 다시 사지 않는다 — 이 파일이 사는 것은 그 **기전**(타입별 특수 검사가 아니라 세 route 공통 `DisallowUnknownFields`라서 기본 타입 세션에서도 unknown field와 **같은 표에서** 떨어진다)과, f1이 사지 않는 **agent side effect 부재**다. 「snapshot 세션에 write하면 복원된다」는 `state-api.md#시나리오 3`이 소유하므로 인용만 한다 — (e)가 사는 것은 그 복원이 **일어나지 않았다**는 쪽이다. **서버 body read 30초 제한은 이 파일에 없다** — 아래 §「남은 미검증 분기」에 등재했다 |
-| `state-api.md#시나리오 6` | `control-plane/test/e2e_state_api_6_stream_contract_test.go` | go | AC-E3 (passive stream) | **passive live output stream 의 상태 계약과 커서 계약**을 배포 SUT 에서 — active 세션이 **기존 pod 에서만** stream 하고 왕복 전후로 상태·pod·`lastAccess` 가 **셋 다 불변**(SSE 는 activity 가 아니다) / output 이벤트가 `id` = `data.nextOffset` 이고 `{offset,payloadBase64,nextOffset}` 이며 decoded byte 길이가 커서 이동폭과 정확히 같고, offset 0 부터 이어 붙인 바이트가 같은 시점 `read(0)` 의 payload 를 **바이트로 재현**함(두 표면이 같은 append-only 기록을 본다) / `Last-Event-ID` 가 query `offset` 을 **이김** — `?offset=0` 과 함께 보내도 재개 커서 앞의 마커가 **재전송되지 않고** 뒤의 마커만 온다(마커를 `$((…))` 산술로 써서 PTY 의 명령행 에코가 토큰을 담지 않게 만든 뒤 판정한다) / 현재 길이를 넘는 커서는 조용한 대기가 아니라 **`reset`** 이고 그 `id` = `nextOffset` 이 요청한 stale 커서보다 뒤·실재 바이트보다 앞 / `-1`·`1.5`·`abc`·int64 overflow 는 **400 `invalid input`**(같은 세션·같은 route 가 정상 커서에 200 을 주는 대조군을 같은 케이스 안에 둔다) / snapshot 세션은 **422 `session in invalid state for operation`** 이고 거부 뒤에도 상태가 `snapshot`·pod 가 빈 문자열 그대로임(read/write/switch 와 달리 **복원하지 않는다**) / keepalive 는 output 도 activity 도 아니지만(하트비트 프레임 뒤에도 셋 다 불변) **뒤이은 `read(0)` 은 일반 Read API 의미**를 가져 `lastAccess` 를 갱신함. `claude-code-workload.md#시나리오 4` 와의 경계: 4는 **claude-code 세션의 라이브 왕복**(UTF-8 경계로 갈린 두 chunk · 중단 후 재연결의 무손실·무중복 · raw stream-json 과의 중복 부재)이고, 6은 **상태별 계약과 커서 오류 갈래**다 — 여기서는 shell PTY 바이트를 실어 나르므로 UTF-8 경계를 사지 않는다(임의 바이트라 경계 자체가 계약이 아니다). read 가 `lastAccess` 를 갱신한다는 것은 `state-api.md#시나리오 2` 의 파일이 이미 사므로 인용만 한다 — 여기서 쓰는 것은 keepalive 뒤의 대조뿐이다. **`idle` 갈래는 이 파일에 없다** — 이 SUT 에 idle 진입 트리거가 없어 아래 §「남은 미검증 분기」에 등재했다 |
+| 시나리오 | 파일 | 스위트 | 무엇을 단언하나 |
+| --- | --- | --- | --- |
 <!-- scenario-mapping:end -->
 
 ## 시나리오 예외 목록
@@ -440,150 +427,59 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 | `claude-code-workload.md#시나리오 5` | 기대 결과가 **실 모델의 의미 응답**이다 — 두 번째 답에 「다르마」가 들어 있고, 세 번째 답이 `marker.txt`를 언급해야 한다. SUT의 공급자는 상수 응답 대역이라(`deploy/e2e-anthropic-fake.yaml`이 스스로 「여기 응답은 결정적 상수」라 적는다) 그 문장들을 만들 수 없고, 실 공급자를 붙이면 외부 자격 증명·과금과 비결정적 산출물에 판정을 맡기게 된다. 문서 자신의 비고도 같은 결론을 적는다 — 「실제 응답 의미(“다르마” 포함)는 provider opt-in smoke 대상」. | `data-plane/cmd/agent/claude_test.go`(첫 성공 실행 뒤에만 `--continue`가 붙고 실패 뒤에는 붙지 않음, 세션 고정 HOME·workdir argv) + `claude_archive_test.go`(아카이브 왕복 뒤에도 같은 대화 상태로 재개) + `architecture.md#시나리오 2`의 e2e(세션 간 격리를 파드 1:1로) + provider opt-in smoke. 배선이 아니라 **의미**만 남은 잔여이므로, opt-in smoke가 상설 잡이 되면 예외를 걷는다. |
 <!-- scenario-exceptions:end -->
 
-## 구현 대기
+## 유예
 
-시나리오가 기술하는 기능이 아직 구현되지 않아 e2e가 관측할 대상 자체가 없는 시나리오(규칙 6).
-예외(영구 면제)와 달리 **임시 등재**이며, 구현이 착지하면 1:1 판정 대상으로 복귀한다.
+예외 사유는 없는데 **지금 매칭 파일을 둘 수 없는** 시나리오(규칙 7). 예외(영구 면제)와 달리 **임시
+등재**이며, 해제 조건이 충족되면 1:1 판정 대상으로 복귀한다. 사유는 한 가지가 아니다 — 기능 미구현,
+다른 스위트가 아직 그 검증을 들고 있음, 하네스 선행에 막힘이 모두 여기 온다.
 
-<!-- scenario-pending:begin -->
-| 시나리오 | 미구현 근거 | 담당 | 해제 조건 |
-| --- | --- | --- | --- |
-<!-- scenario-pending:end -->
+읽는 법: **`해제 조건`이 「지금 바로 할 수 있는 일」인 행부터 집는다.** 그 밖의 행은 `소관`이 가리키는
+쪽이 움직여야 열린다. 「현행 대체 검증」이 있는 행은 **커버리지 구멍이 아니다** — 검증은 돌고 있고
+매칭 공간 밖에 있을 뿐이라, 그 행의 해제는 새 검증을 발명하는 일이 아니라 옮겨 적는 일이다.
 
-> **이 표가 비어 있는 것은 이제 판정 결과다** (2026-09-08 분류 슬라이스). 축 교체가 남긴 공백 16건을
-> 시나리오별로 재어 보니 **어느 것도 규칙 6의 "관측할 대상 자체가 없음"이 아니었다** — 승인 왕복
-> (`data-plane/cmd/agent/approval_gateway.go`·`approval_wait.go`·`session_mcp_gate.go`), RWX 공유 볼륨
-> (`k8s/shared_volume.go`·`deploy/shared-volume-provisioner.yaml`), 출력 상한과 413/507
-> (`data-plane/cmd/agent/claude.go`·`control-plane/internal/api/api.go`), strict JSON 검증과
-> Last-Event-ID 우선(같은 `api.go`), 세션 전속 헬퍼 파드(`k8s/client_orchestrator.go`)가 전부 main에
-> 실재한다. 각 근거의 인용은 아래 「저작 대기」 표의 해당 행에 있다. 16건이 갈린 곳은 **예외 2 · 저작
-> 대기 14**이고, 남은 벽은 구현이 아니라 **하네스**(정책 집행 CNI, 상한 주입 훅, 시계, 모킹 허용목록)와
-> **아직 쓰지 않은 파일**이다.
->
-> 이 표가 다시 채워지는 것은 **새 시나리오가 미구현 기능을 기술할 때**다. 그때 「구현이 없다」는
-> 저작 대기의 선행이 아니라 여기의 미구현 근거로 적고, 해제 조건은 반드시 **누가 무엇을 하면
-> 풀리는지**로 쓴다 — 「구현이 없다」를 해제 조건으로 적으면 순환이라 그 행은 영구히 나오지 못한다.
+<!-- scenario-deferred:begin -->
+| 시나리오 | 사유 | 현행 대체 검증 | 소관 | 해제 조건 | 근거 |
+| --- | --- | --- | --- | --- | --- |
+| `approval-gated-workload.md#시나리오 1` | **Playwright 이관 미완료 — kube 관측 의존.** 이 시나리오의 기대 결과는 pod 파일시스템·프로세스 트리·`remotecommand` exec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**이며, 어느 쪽인지는 이 행을 집는 슬라이스가 판정한다. | `control-plane/test/e2e_f1_workload_type_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_f1_workload_type_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. 이관을 택하면 관측 경로를 최소 테스트 계측으로 내야 하고, 그것이 제품 동작을 바꾸면 경계를 넘은 것이라 예외로 간다. | `control-plane/test/e2e_f1_workload_type_test.go` 가 지금 이 시나리오를 온전히 검증한다 — 이관·예외 어느 판정이 나도 그 단언 내용은 옮겨 적을 재료다. |
+| `approval-gated-workload.md#시나리오 3` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_approval_gated_3_approval_path_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_approval_gated_3_approval_path_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. |
+| `approval-gated-workload.md#시나리오 7` | **Playwright 이관 미완료 — kube 관측 의존.** 이 시나리오의 기대 결과는 pod 파일시스템·프로세스 트리·`remotecommand` exec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**이며, 어느 쪽인지는 이 행을 집는 슬라이스가 판정한다. | `control-plane/test/e2e_f4_helper_pod_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_f4_helper_pod_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. 이관을 택하면 관측 경로를 최소 테스트 계측으로 내야 하고, 그것이 제품 동작을 바꾸면 경계를 넘은 것이라 예외로 간다. | `control-plane/test/e2e_f4_helper_pod_test.go` 가 지금 이 시나리오를 온전히 검증한다 — 이관·예외 어느 판정이 나도 그 단언 내용은 옮겨 적을 재료다. |
+| `approval-gated-workload.md#시나리오 8` | **Playwright 이관 미완료 — kube 관측 의존.** 이 시나리오의 기대 결과는 pod 파일시스템·프로세스 트리·`remotecommand` exec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**이며, 어느 쪽인지는 이 행을 집는 슬라이스가 판정한다. | `control-plane/test/e2e_f6_credential_split_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_f6_credential_split_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. 이관을 택하면 관측 경로를 최소 테스트 계측으로 내야 하고, 그것이 제품 동작을 바꾸면 경계를 넘은 것이라 예외로 간다. | `control-plane/test/e2e_f6_credential_split_test.go` 가 지금 이 시나리오를 온전히 검증한다 — 이관·예외 어느 판정이 나도 그 단언 내용은 옮겨 적을 재료다. |
+| `architecture.md#시나리오 1` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_a1_plane_separation_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_a1_plane_separation_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. |
+| `architecture.md#시나리오 2` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_a2_dedicated_pod_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_a2_dedicated_pod_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. |
+| `architecture.md#시나리오 2-1` | **Playwright 이관 미완료 — kube 관측 의존.** 이 시나리오의 기대 결과는 pod 파일시스템·프로세스 트리·`remotecommand` exec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**이며, 어느 쪽인지는 이 행을 집는 슬라이스가 판정한다. | `control-plane/test/e2e_architecture_2_1_auxiliary_pod_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_architecture_2_1_auxiliary_pod_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. 이관을 택하면 관측 경로를 최소 테스트 계측으로 내야 하고, 그것이 제품 동작을 바꾸면 경계를 넘은 것이라 예외로 간다. | `control-plane/test/e2e_architecture_2_1_auxiliary_pod_test.go` 가 지금 이 시나리오를 온전히 검증한다 — 이관·예외 어느 판정이 나도 그 단언 내용은 옮겨 적을 재료다. |
+| `architecture.md#시나리오 3` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_a3_pod_reclaim_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_a3_pod_reclaim_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. 승격 재료가 이미 있다 — `web/e2e/journeys/session-deletion.spec.ts` 가 이 시나리오의 화면을 훑는다(규칙 2 를 맞춰 시나리오 단위로 쪼개 최상위로 올린다). |
+| `claude-code-workload.md#시나리오 1` | **Playwright 이관 미완료 — kube 관측 의존.** 이 시나리오의 기대 결과는 pod 파일시스템·프로세스 트리·`remotecommand` exec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**이며, 어느 쪽인지는 이 행을 집는 슬라이스가 판정한다. | `control-plane/test/e2e_e1_workload_type_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_e1_workload_type_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. 이관을 택하면 관측 경로를 최소 테스트 계측으로 내야 하고, 그것이 제품 동작을 바꾸면 경계를 넘은 것이라 예외로 간다. | `control-plane/test/e2e_e1_workload_type_test.go` 가 지금 이 시나리오를 온전히 검증한다 — 이관·예외 어느 판정이 나도 그 단언 내용은 옮겨 적을 재료다. |
+| `claude-code-workload.md#시나리오 2` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_e2_prompt_invocation_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_e2_prompt_invocation_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. |
+| `claude-code-workload.md#시나리오 3` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_claude_code_3_serial_queue_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_claude_code_3_serial_queue_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. |
+| `claude-code-workload.md#시나리오 4` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_claude_code_4_stream_reconnect_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_claude_code_4_stream_reconnect_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. 승격 재료가 이미 있다 — `web/e2e/journeys/j6-stream-recovery.spec.ts` 가 이 시나리오의 화면을 훑는다(규칙 2 를 맞춰 시나리오 단위로 쪼개 최상위로 올린다). |
+| `claude-code-workload.md#시나리오 6` | **Playwright 이관 미완료 — kube 관측 의존.** 이 시나리오의 기대 결과는 pod 파일시스템·프로세스 트리·`remotecommand` exec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**이며, 어느 쪽인지는 이 행을 집는 슬라이스가 판정한다. | `control-plane/test/e2e_claude_code_6_archive_freeze_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_claude_code_6_archive_freeze_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. 이관을 택하면 관측 경로를 최소 테스트 계측으로 내야 하고, 그것이 제품 동작을 바꾸면 경계를 넘은 것이라 예외로 간다. | `control-plane/test/e2e_claude_code_6_archive_freeze_test.go` 가 지금 이 시나리오를 온전히 검증한다 — 이관·예외 어느 판정이 나도 그 단언 내용은 옮겨 적을 재료다. |
+| `claude-code-workload.md#시나리오 7` | **Playwright 이관 미완료 — kube 관측 의존.** 이 시나리오의 기대 결과는 pod 파일시스템·프로세스 트리·`remotecommand` exec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**이며, 어느 쪽인지는 이 행을 집는 슬라이스가 판정한다. | `control-plane/test/e2e_e6_credential_placement_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_e6_credential_placement_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. 이관을 택하면 관측 경로를 최소 테스트 계측으로 내야 하고, 그것이 제품 동작을 바꾸면 경계를 넘은 것이라 예외로 간다. | `control-plane/test/e2e_e6_credential_placement_test.go` 가 지금 이 시나리오를 온전히 검증한다 — 이관·예외 어느 판정이 나도 그 단언 내용은 옮겨 적을 재료다. |
+| `lifecycle.md#시나리오 2` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_b2_snapshot_restore_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_b2_snapshot_restore_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. |
+| `lifecycle.md#시나리오 3` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_b3_restore_integrity_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_b3_restore_integrity_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. |
+| `shell-workload.md#시나리오 1` | **Playwright 이관 미완료 — kube 관측 의존.** 이 시나리오의 기대 결과는 pod 파일시스템·프로세스 트리·`remotecommand` exec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**이며, 어느 쪽인지는 이 행을 집는 슬라이스가 판정한다. | `control-plane/test/e2e_d1_pty_shell_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_d1_pty_shell_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. 이관을 택하면 관측 경로를 최소 테스트 계측으로 내야 하고, 그것이 제품 동작을 바꾸면 경계를 넘은 것이라 예외로 간다. | `control-plane/test/e2e_d1_pty_shell_test.go` 가 지금 이 시나리오를 온전히 검증한다 — 이관·예외 어느 판정이 나도 그 단언 내용은 옮겨 적을 재료다. |
+| `shell-workload.md#시나리오 2` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_d2_shell_write_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_d2_shell_write_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. 승격 재료가 이미 있다 — `web/e2e/journeys/j5-shell-interaction.spec.ts` 가 이 시나리오의 화면을 훑는다(규칙 2 를 맞춰 시나리오 단위로 쪼개 최상위로 올린다). |
+| `shell-workload.md#시나리오 3` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_d3_read_cursor_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_d3_read_cursor_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. 승격 재료가 이미 있다 — `web/e2e/journeys/j5-shell-interaction.spec.ts` 가 이 시나리오의 화면을 훑는다(규칙 2 를 맞춰 시나리오 단위로 쪼개 최상위로 올린다). |
+| `shell-workload.md#시나리오 4` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_d4_process_tree_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_d4_process_tree_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. |
+| `shell-workload.md#시나리오 5` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_d5_idle_definition_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_d5_idle_definition_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. |
+| `state-api.md#시나리오 1` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_c1_atomic_state_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_c1_atomic_state_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. |
+| `state-api.md#시나리오 2` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_c2_read_branches_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_c2_read_branches_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. |
+| `state-api.md#시나리오 3` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_c3_write_branches_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_c3_write_branches_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. |
+| `state-api.md#시나리오 4` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_c4_session_switch_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_c4_session_switch_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. 승격 재료가 이미 있다 — `web/e2e/journeys/j3-multi-session-switch.spec.ts` 가 이 시나리오의 화면을 훑는다(규칙 2 를 맞춰 시나리오 단위로 쪼개 최상위로 올린다). |
+| `state-api.md#시나리오 5` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_state_api_5_wire_validation_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_state_api_5_wire_validation_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. |
+| `state-api.md#시나리오 6` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_state_api_6_stream_contract_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_state_api_6_stream_contract_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. |
+| `approval-gated-workload.md#시나리오 2` | **전용 spec 미저작.** 기능은 착지했고 예외 사유도 없는데 전용 파일이 아직 없다(개정 전 「저작 대기」). 개정 전 예정 스위트는 `go` 였으나 매칭 공간이 Playwright 단독이 되어 **최상위 spec 으로 저작한다**. | 없음 | 하네스(정책 집행 CNI) | **정책 집행 CNI.** kind SUT는 kindnet이라 NetworkPolicy를 집행하지 않는다(`deploy/kind-config.yaml`에 `disableDefaultCNI`가 없다). calico 등을 overlay에 세우거나 실클러스터 잡을 더해야 차단을 관측할 수 있다 — 하네스 소관. | 정책 오브젝트는 실재한다 — `control-plane/internal/adapter/k8s/network_policy.go`가 세션마다 egress·ingress를 만들고, `control-plane/test/approval_gated_network_policy_test.go`(태그 `integration`)가 셀렉터·헬퍼 파드 소유권·타입별 유무·복원 라운드를 fake clientset으로 산다. e2e가 배타적으로 살 것은 **집행**이다: (a)(b)(c) 성공과 (d)(e)(f)(g) 차단, 그리고 (h) 세션 삭제 시 정책 오브젝트 동반 소멸. |
+| `approval-gated-workload.md#시나리오 2-1` | **전용 spec 미저작.** 기능은 착지했고 예외 사유도 없는데 전용 파일이 아직 없다(개정 전 「저작 대기」). 개정 전 예정 스위트는 `go` 였으나 매칭 공간이 Playwright 단독이 되어 **최상위 spec 으로 저작한다**. | 없음 | 하네스(정책 집행 CNI) | 시나리오 2와 **같은 CNI 선행** — (c) 우회 차단 갈래에만 걸린다. (a)(b)는 지금도 관측 가능하므로 두 시나리오를 한 슬라이스로 묶는 편이 싸다. | 프록시 단일 통로는 실물이다 — `data-plane/cmd/agent/credential_proxy.go`와 대역 `deploy/e2e-anthropic-fake.yaml`(bearer를 검사해 틀리면 401). `control-plane/test/e2e_provider_reachability_test.go`(비-시나리오 등재)가 이미 「헬퍼를 거쳐 도달하고 호출자가 붙인 Authorization이 플랫폼 토큰으로 대체된다」를 산다. 이 파일이 더할 것: **출발 파드의 배타성**(upstream에 닿은 연결이 전부 헬퍼 출발)과 (b) 프록시 중단 시 실행만 실패하고 승인 경로는 계속 도는 것. |
+| `approval-gated-workload.md#시나리오 4` | **전용 spec 미저작.** 기능은 착지했고 예외 사유도 없는데 전용 파일이 아직 없다(개정 전 「저작 대기」). 개정 전 예정 스위트는 `go` 였으나 매칭 공간이 Playwright 단독이 되어 **최상위 spec 으로 저작한다**. | 없음 | data-plane 구현(타임아웃 주입 훅) | **폴링 타임아웃 주입** — (c) 갈래만. `data-plane/cmd/agent/approval_gateway.go`의 `defaultApprovalTimeout`이 10분 상수이고 `newApprovalGateway`가 `timeout` 필드를 env로 받지 않아, 지금 (c)를 사려면 CI가 10분을 기다려야 한다. 축소값 주입은 사용자 가시 동작을 바꾸지 않는 테스트 훅이다 — data-plane 소관. (a) 거절·(b) 만료는 대역의 `/operator/decide`로 **선행 없이** 관측 가능. | 세 갈래의 처리 코드는 실재한다 — 같은 파일이 APPROVED/REJECTED/EXPIRED를 정착 결정으로 가르고 자체 `TIMEOUT`을 별도로 발급하며(비-2xx는 결정이 아니라 실패로 구분한다), in-band 통지는 `session_mcp_notices.go`가 만든다. 이 파일이 살 것: 세 경우 모두 **외부 호출 0** · 실패가 in-band 마커로 남음 · 세션이 `active` 유지 · 큐 미폐색 · (d) 후속 write 정상 처리. |
+| `approval-gated-workload.md#시나리오 6` | **전용 spec 미저작.** 기능은 착지했고 예외 사유도 없는데 전용 파일이 아직 없다(개정 전 「저작 대기」). 개정 전 예정 스위트는 `go` 였으나 매칭 공간이 Playwright 단독이 되어 **최상위 spec 으로 저작한다**. | 없음 | 이 모델 | **없음** (2026-09-12 에 풀렸다). 선행이던 「시나리오 3 의 승인 경로 파일」은 `control-plane/test/e2e_approval_gated_3_approval_path_test.go` 가 세웠고, 공유 볼륨에 파일을 만드는 수단도 실재한다 — `session_mcp_tools.go` 의 `spillBody` 가 `maxInlineBodyBytes`(100 000) 초과 응답을 `bodyPath`/`bodyBytes` 로 볼륨에 떨군다(AC-F5 전반, #101). ⚠️ **(c) 복원 갈래만은 아직 못 산다** — 이 타입은 `POST /snapshot` 이 503 `checkpoint strategy is disabled` 라(`ErrCheckpointDisabled`) 동결 자체가 없다. 그 한 갈래는 AC-F5 아카이브 전략이 선행이고 소관은 `tbm_session-platform-docs-impl` 이다. | RWX 볼륨은 #98·#100으로 착지했다 — `control-plane/internal/adapter/k8s/shared_volume.go`의 `ReadWriteMany` 클레임, `deploy/shared-volume-provisioner.yaml`(local-path `sharedFileSystemPath`), `deploy/kind-config.yaml`의 전 노드 동일 마운트, `control-plane/test/shared_volume_test.go`·`approval_gated_shared_volume_test.go`. **「RWX가 미구현이라 막혔다」는 더 이상 참이 아니다.** 이 파일이 살 것: (a) 워크로드와 MCP 컨테이너가 같은 파일을 보고 프록시에는 마운트되지 않음 (b) **동결을 건너뛴** 다음 실행도 그 파일을 봄 (c) 복원 후 잔존 (d) `cursorBefore` 델타와 `offset=0` 전체 (e) 다른 세션은 마운트 불가. |
+| `claude-code-workload.md#시나리오 8` | **전용 spec 미저작.** 기능은 착지했고 예외 사유도 없는데 전용 파일이 아직 없다(개정 전 「저작 대기」). 개정 전 예정 스위트는 `go` 였으나 매칭 공간이 Playwright 단독이 되어 **최상위 spec 으로 저작한다**. | 없음 | data-plane 구현(상한 주입 훅) | **상한 주입 훅.** `claudeConfig`에 `RunOutputLimit`·`ScrollbackLimit` 필드는 있는데 `data-plane/cmd/agent/main.go`가 그 둘을 env로 읽지 않아 배포 pod는 항상 16 MiB/256 MiB다 — e2e가 그만큼을 만들어 낼 수 없다. `control-plane/test/e2e_e2_prompt_invocation_test.go` 헤더가 같은 벽을 이미 적는다(「the stand-in cannot be made to emit that much」). 축소값 env 배선은 사용자 가시 동작을 바꾸지 않는 테스트 훅 — data-plane 소관. | 상한 로직 자체는 실재한다 — `data-plane/cmd/agent/claude.go`의 invocation/누적 두 마커, `claude_stream.go`의 truncation·session-full 전이, `control-plane/internal/api/api.go`의 413/507 매핑. (a) 1 MiB 초과 프롬프트 413은 **선행 없이도** 지금 관측 가능하고 이미 시나리오 2의 파일이 산다 — 이 파일은 (b)~(e), 즉 truncation 마커의 live append · 기존 bytes 불변 · cumulative terminal marker · 신규 write 507 · checkpoint/restore 뒤 buffer·마커·`nextOffset`·resume state 동일을 산다. |
+| `claude-code-workload.md#시나리오 9` | **전용 spec 미저작.** 기능은 착지했고 예외 사유도 없는데 전용 파일이 아직 없다(개정 전 「저작 대기」). 개정 전 예정 스위트는 `playwright` 였으나 매칭 공간이 Playwright 단독이 되어 **최상위 spec 으로 저작한다**. | 없음 | `tbm_session-platform-e2e-mock-policy` | **모킹 허용목록 등재.** SPA의 오류 복구는 실 스트림이 원리적으로 내지 않는 사건이라 route 가로채기가 필요하다. 그 방식은 지금 여정 spec `web/e2e/journeys/j6-stream-recovery.spec.ts`에만 있고, 최상위 매칭 단위로 올리려면 e2e 충실도 허용목록(`STREAM-RESET-REPLAY` 계열) 등재가 선행이다 — 「e2e 충실도 허용목록」 절 소관. | 서버 쪽 상태 계약은 실재한다(`control-plane/internal/api/api.go`의 stream 핸들러, snapshot의 invalid-state 거부). 이 파일이 살 것: EventSource 즉시 close · GET session 후 **active/idle만** 마지막 커서로 backoff 재연결 · snapshot은 read fallback 없이 Restore 화면. `state-api.md#시나리오 6`과의 경계: 6은 **API 커서·상태 계약**(go), 9는 **브라우저 복구 동작**(playwright). |
+| `lifecycle.md#시나리오 4` | **전용 spec 미저작.** 기능은 착지했고 예외 사유도 없는데 전용 파일이 아직 없다(개정 전 「저작 대기」). 개정 전 예정 스위트는 `playwright` 였으나 매칭 공간이 Playwright 단독이 되어 **최상위 spec 으로 저작한다**. | 없음 | `tbm_session-platform-e2e-mock-policy` | 시나리오 9와 **같은 모킹 허용목록 선행**(같은 가로채기를 쓴다). 동결 자체는 `POST /snapshot`으로 만들 수 있어 60분 대기는 필요 없다. | SPA의 단절 처리 경로는 실재한다(`web/src`의 EventSource 핸들링, `j6-stream-recovery.spec.ts`가 여정으로 이미 훑는다). 이 파일이 배타적으로 살 것: 단절 뒤 **자동 stream/read 재시도가 없다**는 음성 단언과 「사용자가 명시적으로 복원하기 전에는 새 pod가 생기지 않는다」(파드 수가 그라운드-트루스). 시나리오 9와의 경계: 9는 상태별 재연결 정책 전반, 4는 **자동 복원 금지** 한 조항. 둘을 한 파일에 담으면 규칙 1의 중복이 된다. |
+<!-- scenario-deferred:end -->
 
-## 저작 대기
-
-구현은 착지했고 예외 사유도 없는데 **전용 파일이 아직 없는** 시나리오(규칙 7). 예외(영구 면제)·구현
-대기(대상 부재)와 달리 **할 일이 확정된 잔여**이고, 행이 사라지는 방법은 그 시나리오를 선언하는 파일이
-생기는 것 하나뿐이다.
-
-읽는 법: **선행이 `없음`인 행은 지금 바로 집을 수 있다.** 그 밖의 선행은 「누가 무엇을 하면 이 파일을
-쓸 수 있는지」이고, 그 선행 작업 자체는 이 원장의 몫이 아니다(각 행에 소유자를 적었다).
-
-<!-- scenario-backlog:begin -->
-| 시나리오 | 스위트 | 선행 | 근거 — 무엇이 이미 있고, 이 파일이 무엇을 살 것인가 |
-| --- | --- | --- | --- |
-| `approval-gated-workload.md#시나리오 2` | go | **정책 집행 CNI.** kind SUT는 kindnet이라 NetworkPolicy를 집행하지 않는다(`deploy/kind-config.yaml`에 `disableDefaultCNI`가 없다). calico 등을 overlay에 세우거나 실클러스터 잡을 더해야 차단을 관측할 수 있다 — 하네스 소관. | 정책 오브젝트는 실재한다 — `control-plane/internal/adapter/k8s/network_policy.go`가 세션마다 egress·ingress를 만들고, `control-plane/test/approval_gated_network_policy_test.go`(태그 `integration`)가 셀렉터·헬퍼 파드 소유권·타입별 유무·복원 라운드를 fake clientset으로 산다. e2e가 배타적으로 살 것은 **집행**이다: (a)(b)(c) 성공과 (d)(e)(f)(g) 차단, 그리고 (h) 세션 삭제 시 정책 오브젝트 동반 소멸. |
-| `approval-gated-workload.md#시나리오 2-1` | go | 시나리오 2와 **같은 CNI 선행** — (c) 우회 차단 갈래에만 걸린다. (a)(b)는 지금도 관측 가능하므로 두 시나리오를 한 슬라이스로 묶는 편이 싸다. | 프록시 단일 통로는 실물이다 — `data-plane/cmd/agent/credential_proxy.go`와 대역 `deploy/e2e-anthropic-fake.yaml`(bearer를 검사해 틀리면 401). `control-plane/test/e2e_provider_reachability_test.go`(비-시나리오 등재)가 이미 「헬퍼를 거쳐 도달하고 호출자가 붙인 Authorization이 플랫폼 토큰으로 대체된다」를 산다. 이 파일이 더할 것: **출발 파드의 배타성**(upstream에 닿은 연결이 전부 헬퍼 출발)과 (b) 프록시 중단 시 실행만 실패하고 승인 경로는 계속 도는 것. |
-| `approval-gated-workload.md#시나리오 4` | go | **폴링 타임아웃 주입** — (c) 갈래만. `data-plane/cmd/agent/approval_gateway.go`의 `defaultApprovalTimeout`이 10분 상수이고 `newApprovalGateway`가 `timeout` 필드를 env로 받지 않아, 지금 (c)를 사려면 CI가 10분을 기다려야 한다. 축소값 주입은 사용자 가시 동작을 바꾸지 않는 테스트 훅이다 — data-plane 소관. (a) 거절·(b) 만료는 대역의 `/operator/decide`로 **선행 없이** 관측 가능. | 세 갈래의 처리 코드는 실재한다 — 같은 파일이 APPROVED/REJECTED/EXPIRED를 정착 결정으로 가르고 자체 `TIMEOUT`을 별도로 발급하며(비-2xx는 결정이 아니라 실패로 구분한다), in-band 통지는 `session_mcp_notices.go`가 만든다. 이 파일이 살 것: 세 경우 모두 **외부 호출 0** · 실패가 in-band 마커로 남음 · 세션이 `active` 유지 · 큐 미폐색 · (d) 후속 write 정상 처리. |
-| `approval-gated-workload.md#시나리오 6` | go | **없음** (2026-09-12 에 풀렸다). 선행이던 「시나리오 3 의 승인 경로 파일」은 `control-plane/test/e2e_approval_gated_3_approval_path_test.go` 가 세웠고, 공유 볼륨에 파일을 만드는 수단도 실재한다 — `session_mcp_tools.go` 의 `spillBody` 가 `maxInlineBodyBytes`(100 000) 초과 응답을 `bodyPath`/`bodyBytes` 로 볼륨에 떨군다(AC-F5 전반, #101). ⚠️ **(c) 복원 갈래만은 아직 못 산다** — 이 타입은 `POST /snapshot` 이 503 `checkpoint strategy is disabled` 라(`ErrCheckpointDisabled`) 동결 자체가 없다. 그 한 갈래는 AC-F5 아카이브 전략이 선행이고 소관은 `tbm_session-platform-docs-impl` 이다. | RWX 볼륨은 #98·#100으로 착지했다 — `control-plane/internal/adapter/k8s/shared_volume.go`의 `ReadWriteMany` 클레임, `deploy/shared-volume-provisioner.yaml`(local-path `sharedFileSystemPath`), `deploy/kind-config.yaml`의 전 노드 동일 마운트, `control-plane/test/shared_volume_test.go`·`approval_gated_shared_volume_test.go`. **「RWX가 미구현이라 막혔다」는 더 이상 참이 아니다.** 이 파일이 살 것: (a) 워크로드와 MCP 컨테이너가 같은 파일을 보고 프록시에는 마운트되지 않음 (b) **동결을 건너뛴** 다음 실행도 그 파일을 봄 (c) 복원 후 잔존 (d) `cursorBefore` 델타와 `offset=0` 전체 (e) 다른 세션은 마운트 불가. |
-| `claude-code-workload.md#시나리오 8` | go | **상한 주입 훅.** `claudeConfig`에 `RunOutputLimit`·`ScrollbackLimit` 필드는 있는데 `data-plane/cmd/agent/main.go`가 그 둘을 env로 읽지 않아 배포 pod는 항상 16 MiB/256 MiB다 — e2e가 그만큼을 만들어 낼 수 없다. `control-plane/test/e2e_e2_prompt_invocation_test.go` 헤더가 같은 벽을 이미 적는다(「the stand-in cannot be made to emit that much」). 축소값 env 배선은 사용자 가시 동작을 바꾸지 않는 테스트 훅 — data-plane 소관. | 상한 로직 자체는 실재한다 — `data-plane/cmd/agent/claude.go`의 invocation/누적 두 마커, `claude_stream.go`의 truncation·session-full 전이, `control-plane/internal/api/api.go`의 413/507 매핑. (a) 1 MiB 초과 프롬프트 413은 **선행 없이도** 지금 관측 가능하고 이미 시나리오 2의 파일이 산다 — 이 파일은 (b)~(e), 즉 truncation 마커의 live append · 기존 bytes 불변 · cumulative terminal marker · 신규 write 507 · checkpoint/restore 뒤 buffer·마커·`nextOffset`·resume state 동일을 산다. |
-| `claude-code-workload.md#시나리오 9` | playwright | **모킹 허용목록 등재.** SPA의 오류 복구는 실 스트림이 원리적으로 내지 않는 사건이라 route 가로채기가 필요하다. 그 방식은 지금 여정 spec `web/e2e/journeys/j6-stream-recovery.spec.ts`에만 있고, 최상위 매칭 단위로 올리려면 e2e 충실도 허용목록(`STREAM-RESET-REPLAY` 계열) 등재가 선행이다 — 「e2e 충실도 허용목록」 절 소관. | 서버 쪽 상태 계약은 실재한다(`control-plane/internal/api/api.go`의 stream 핸들러, snapshot의 invalid-state 거부). 이 파일이 살 것: EventSource 즉시 close · GET session 후 **active/idle만** 마지막 커서로 backoff 재연결 · snapshot은 read fallback 없이 Restore 화면. `state-api.md#시나리오 6`과의 경계: 6은 **API 커서·상태 계약**(go), 9는 **브라우저 복구 동작**(playwright). |
-| `lifecycle.md#시나리오 4` | playwright | 시나리오 9와 **같은 모킹 허용목록 선행**(같은 가로채기를 쓴다). 동결 자체는 `POST /snapshot`으로 만들 수 있어 60분 대기는 필요 없다. | SPA의 단절 처리 경로는 실재한다(`web/src`의 EventSource 핸들링, `j6-stream-recovery.spec.ts`가 여정으로 이미 훑는다). 이 파일이 배타적으로 살 것: 단절 뒤 **자동 stream/read 재시도가 없다**는 음성 단언과 「사용자가 명시적으로 복원하기 전에는 새 pod가 생기지 않는다」(파드 수가 그라운드-트루스). 시나리오 9와의 경계: 9는 상태별 재연결 정책 전반, 4는 **자동 복원 금지** 한 조항. 둘을 한 파일에 담으면 규칙 1의 중복이 된다. |
-<!-- scenario-backlog:end -->
-
-> **저작 순서 제안.** 지금 바로 집을 수 있는 것은 **선행이 `없음`인 행**이고, 그 목록의 정본은 위 표의
-> `선행` 칸이다 — 그 수를 여기에 다시 적지 않는다(행이 하나 지워질 때마다 낡는 사본이 되고, 게이트는
-> 이 산문을 읽지 않아 얼마나 틀려도 CI가 잡지 못한다. 개정 전 이 문단이 실제로 그렇게 틀려 있었다:
-> 표에 `없음`이 7행인데 6건이라고 적고 있었다). **그 순서 이득은 2026-09-12 에 실현됐다** —
-> `approval-gated-workload.md#시나리오 3`을 세우자 시나리오 6의 선행이 함께 풀려 그 행의 `선행`이
-> `없음`이 됐다(그 행은 (c) 복원 갈래 하나만 AC-F5 를 기다린다). CNI 2건·상한 훅 1건·모킹 2건은 각자의
-> 선행 소유자가 움직인 뒤에 집는다.
->
-> **2026-09-08 저작 슬라이스 1**: `architecture.md#시나리오 2-1`·`state-api.md#시나리오 5`(가장 싼 둘 —
-> 새 대역 없음, 클러스터 부하 최소)를 저작해 이 표에서 뺐다.
->
-> **2026-09-09 저작 슬라이스 2**: `state-api.md#시나리오 6`을 저작해 이 표에서 뺐다 — 새 대역도 새
-> 하네스도 없이 배포 SUT의 wire 계약만으로 관측된다. 이 슬라이스는 **저작만 한다**: 어떤 행의 `선행`
-> 칸도 건드리지 않았으므로 남은 `없음`의 감소는 전부 저작 때문이고, 재분류는 한 건도 섞여 있지 않다.
-> 슬라이스 1 문단이 남겨 두었던 「남은 `없음`은 …이다」 이름 목록은 이 저작으로 곧바로 낡으므로
-> 걷어냈다 — 위 문단이 스스로 금지한 사본이다. 정본은 표의 `선행` 칸이니 행별로 읽을 것.
->
-> **2026-09-10 저작 슬라이스 4**: `claude-code-workload.md#시나리오 4`를 저작해 이 표에서 뺐다. 앞선 세
-> 슬라이스와 달리 이번에는 **저작만 하지 않았다** — 이 행의 헤드라인(UTF-8 경계로 갈린 두 chunk)은 남은
-> `없음` 행 셋이 **공통으로** 막혀 있던 한 지점, 곧 공급자 대역이 프롬프트와 무관한 상수 ASCII 32바이트를
-> 델타 하나로 낸다는 성질 때문에 **저작해도 살 수 없는** 것이었다. 그래서 파일을 쓰기 전에 대역을 넓혔다
-> (`deploy/e2e-anthropic-fake.yaml` — 프롬프트의 `e2e-reply:` 지시자가 응답의 라벨·크기·델타 수를 고르고,
-> 지시자가 없으면 기존 상수 경로 그대로라 기존 호출자에게는 부모와 구별되지 않는다). 그 벽은 자매 모델의
-> 「등재된 seam」 `CLAUDE-PROVIDER` 행이 **자기 잔여로 이미 선언**해 둔 것이고, 그 행이 스스로 「둘 다
-> 대역을 넓히면 풀린다」고 적고 있었다 — 이번 슬라이스가 그 문장을 실행했고 같은 행의 잔여 칸을 함께
-> 갱신했다. **`claude-code #3`의 선행 칸은 건드리지 않았다**(계속 `없음`) — 대신 `근거` 칸에 뒷절반의 벽이
-> 이 PR 로 해소됐음을 적었다. 즉 이번 `없음`의 감소(3 → 2)는 **전부 저작 때문**이고 재분류는 0건이다.
-> 남은 `approval-gated #3`은 이 확장만으로는 열리지 않는다 — 그 행은 대역이 `tool_use` 블록을 낼 수 있어야
-> 하고, 그것은 다음 확장이다.
->
-> **2026-09-10 저작 슬라이스 3**: `claude-code-workload.md#시나리오 6`을 저작해 이 표에서 뺐다 — 남은
-> `없음` 행 중 이 SUT 에서 **헤드라인 단언까지** 관측 가능한 유일한 행이었다. 이 슬라이스도 **저작만
-> 한다**: 어떤 행의 `선행` 칸도 건드리지 않았으므로 `없음`의 감소는 전부 저작 때문이고 재분류는 0건이다.
-> 같은 실행에서 `claude-code #3`·`#4` 두 행의 **`근거` 칸**에만 실측 제약을 적어 넣었다(각각 「read 순서
-> 귀속 불가」·「UTF-8 경계 재료 없음」, 원인은 둘 다 상수 응답 대역) — 분류를 바꾸는 것이 아니라 **두
-> 사이클이 각각 따로 지불한 측정을 행에 남겨** 세 번째가 다시 재지 않게 하는 것이다.
->
-> **2026-09-11 저작 슬라이스 5**: `claude-code-workload.md#시나리오 3`을 저작해 이 표에서 뺐다.
-> 어떤 행의 `선행` 칸도 건드리지 않았으므로 이번 `없음`의 감소(2 → 1)는 **전부 저작 때문**이고
-> 재분류는 0건이다. 다음에 무엇을 집을 수 있는지의 정본은 여전히 위 표의 `선행` 칸이다.
->
-> **이 슬라이스도 저작만 하지 않았다** — 슬라이스 4와 같은 이유로, 다만 벽이 다르다. 이 시나리오의
-> 전제는 「첫 실행이 끝나기 전에 둘째 write」인데 이 SUT에는 **그 창이 없다.**
-> `control-plane/test/e2e_e2_prompt_invocation_test.go` 헤더가 「invocation이 write 왕복보다 느리지
-> 않다」고 적어 둔 것을 이번에 끝까지 재 봤다: 대역이 허용하는 **최대 응답**(200000룬 = 600013바이트,
-> 64델타)을 지시해도 **둘째 write가 반환된 시점에 첫 응답이 이미 완결**돼 있었다(배포 SUT 실측,
-> 버퍼 600148바이트 = 두 응답 모두 완료). 첫 시도는 정확히 그 자리에서 빨갛게 멈췄고, 그것이 이
-> 문단의 근거다 — **크기로는 시간을 살 수 없다.**
->
-> 그래서 파일을 쓰기 전에 대역을 넓혔다(`deploy/e2e-anthropic-fake.yaml` — 지시자에 선택 넷째 칸
-> `delayMs`를 더해 델타 **사이**에만 쉰다. 생략하면 0이고, 기존 다섯 가지 응답 형태를 부모와
-> 대조해 **바이트 동일**임을 확인했다 — 스트리밍·버퍼드 각각의 무지시자·3칸 지시자 경로다). 첫
-> 프롬프트가 `64×150ms` = 최소 9.6초를, 둘째가 1초 미만을 쓰므로 창이 생기고, 그 창에서 둘째
-> write가 반환된 시점의 버퍼로 전제를 **측정한 뒤에** 순서와 비중첩을 잰다. 같은 역전이 순서
-> 단언도 떠받친다 — 둘째가 90배 짧고 20배 빠르니 병렬로 돌았다면 그쪽이 먼저 착지한다.
->
-> 이 확장은 등재 행 `CLAUDE-PROVIDER`의 **잔여를 하나도 줄이지 않는다**(응답이 프롬프트의 *의미*를
-> 반영하지 않는다는 잔여는 그대로다). 그래서 슬라이스 4와 달리 그 행을 건드리지 않았다 — 「충실도」
-> 절은 자매 모델 `tbm_session-platform-e2e-mock-policy`의 소관이고, 줄일 잔여가 없는데 손대면
-> 이중 계상이 된다.
->
-> `approval-gated-workload.md#시나리오 3`을 이번에 묶지 않은 이유는 난이도가 아니라 **축**이다. 그 행은
-> 슬라이스 4가 적어 둔 그대로 대역이 `tool_use` 블록을 낼 수 있어야 열리고, 그것은 저작이 아니라 대역
-> 확장이다 — 한 슬라이스에 두 축을 담으면 「저작만 했다」는 이 문단의 주장을 다음 감지가 대조할 지점이
-> 사라진다.
->
-> **2026-09-12 저작 슬라이스 6**: `approval-gated-workload.md#시나리오 3`을 저작해 이 표에서 뺐다 —
-> 슬라이스 5가 「대역이 `tool_use` 블록을 낼 수 있어야 열린다」고 적어 둔 그 조건이 2026-09-11 에
-> 충족됐고, 그 뒤에 남아 있던 벽 **둘**이 하루 사이에 차례로 무너졌다. 둘 다 세션 MCP 등재의 결함이고
-> 서로 다른 것이다: ⑴ 제품이 세션 MCP 를 **핀된 CLI 가 읽지 않는 파일**에 등록하던 것을
-> #120(`claude_mcp_registration.go` 가 쓰는 자리)이 고쳤고, ⑵ 그렇게 옮겨 간 등재가 **자기가 서비스하지
-> 않는 주소**(경로 없는 루트)를 가리켜 CLI 가 404 를 받고 도구를 하나도 못 보던 것을
-> #125(`tools.SessionMCP` → `tools.sessionMCPEndpoint()`, 즉 `+ /mcp`)가 고쳤다. ⑴ 만으로는 열리지
-> 않았다는 것이 이 파일의 이력에 남아 있다 — 아래를 보라. 이 슬라이스는 **저작만 한다** — 재분류 0건이고,
-> 대역(`deploy/`)도 제품 코드도 건드리지 않았다.
->
-> ⚠️ **이 슬라이스는 앞서 열렸던 재분류 PR 둘을 대체한다. 그 둘이 곧 위 ⑴⑵ 를 드러낸 관측이다.**
-> ① PR #118(2026-09-11)은 같은 행을 「구현 대기」로 내리려 했고 근거는 ⑴ 이었다. 반려 뒤 #120·#101 이
-> 그 근거를 소멸시켜 머지하지 않고 닫았다. ② PR #123(2026-09-12)은 ⑴ 이 고쳐진 main 에서 이 파일을
-> **실제로 저작해 배포 SUT 에 돌렸고 빨갰다** — 승인 대기 마커가 90초 안에 한 번도 나오지 않았다
-> ([run 34685103754](https://github.com/dlddu/session-platform/actions/runs/34685103754)). 그 실패를
-> 코드로 특정한 것이 ⑵ 였고, 그래서 그 PR 은 다시 재분류로 바뀌었다. ③ 그 특정이 #125 의 수정으로
-> 이어지자 재분류의 근거가 또 소멸했고, 보존해 둔 브랜치(`proof/scenario-3-approval-path`)를 #125 이후의
-> main 에 rebase 해 **같은 파일을 다시 돌린 것이 이 PR** 이다. 재분류가 두 번 다 틀렸다는 것이 아니라
-> 두 번 다 **그 사이에 참이 아니게 됐다** — 그리고 그 각각이 제품 결함 하나씩을 잡아냈다.
-> 다음 감지가 이 표의 감소를 저작으로 읽어도 되는 이유가 그것이다: 이번 감소 1 은 전부 저작이다.
->
-> 📌 **세 번째 빨강은 제품이 아니라 이 파일이었다 — 그것이 ⑵ 가 마지막 제품 벽이었다는 증거다.**
-> #125 이후 첫 실행([run 34689079299](https://github.com/dlddu/session-platform/actions/runs/34689079299))
-> 에서 대기 마커는 **13.7초 만에 나왔다**. 90초를 기다려도 아무것도 오지 않던 직전 실행과 대조하면,
-> 승인 왕복이 배포 SUT 에서 실제로 돈다는 뜻이다. 걸린 것은 단언 하나였다 — 마커가 `web_fetch_get` 을
-> 지목하는데 이 파일은 `mcp__…__web_fetch_get` 을 기대했다. `renderApprovalNotice` 가 찍는 것은
-> **세션 MCP 가 등재한 이름**이고 네임스페이스 이름은 CLI 안에서만 산다. 기대값을 맨 이름으로 고쳤고,
-> 그 수정은 단언을 **약하게 하는 것이 아니라 강하게 한다**: 대역은 네임스페이스 이름으로 지시받으므로,
-> 맨 이름이 실린 마커는 CLI 가 그 이름을 이 서버의 등재 도구로 **해소했다**는 관측이 된다.
->
-> 이 파일이 **사지 않은** 조항 둘(승인 후 실제 아웃바운드 GET · 결정 전 upstream 무도달)은 §「남은
-> 미검증 분기」에 등재했다. 둘을 막는 것은 하나(`FETCH-ORIGIN`)이고, 그것이 풀리면 두 행이 함께
-> 소유 파일로 돌아온다.
+> **이 표가 비는 날 완전 1:1이다.** 현재 잔여는 두 갈래다 — 이관 27(매칭 공간 축소가 만든 부채, 검증은
+> 이미 있다)과 미저작 7(개정 전부터의 잔여, 검증이 아직 없다). 둘을 한 표에 두는 것은 해제 방법이
+> 다르기 때문이 아니라 **집계에 세는 방법이 같기** 때문이다. 어느 쪽인지는 `현행 대체 검증` 칸이
+> 말한다 — 채워져 있으면 이관, `없음`이면 미저작이다.
 
 ## 비-시나리오 파일 등재
 
@@ -592,9 +488,7 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 <!-- scenario-nonscenario:begin -->
 | 파일 | 스위트 | 무엇을 검증하나 |
 | --- | --- | --- |
-| `control-plane/test/e2e_smoke_test.go` | go | healthz 200 / `{"status":"ok"}`, 생성→목록→조회 API 표면 왕복, 없는 id → 404 에러 매핑 |
 | `web/e2e/smoke.spec.ts` | playwright | SPA 부팅·baseURL 배선(Sessions 콘솔 헤딩 + New session 진입점) |
-| `control-plane/test/e2e_provider_reachability_test.go` | go | 배포 SUT의 claude-code 세션 pod가 credential-proxy를 거쳐 인클러스터 provider에 도달하는지 — 버퍼드·SSE 두 응답 형태와, 호출자가 붙인 `Authorization`이 플랫폼 토큰으로 대체되는 것, 그리고 프롬프트 지시자가 요구할 때 대역이 `tool_use` 블록(스트리밍은 `input_json_delta`)과 `stop_reason: "tool_use"` 를 내는 것 |
 <!-- scenario-nonscenario:end -->
 
 ## 매칭 단위 밖
@@ -603,8 +497,9 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 
 | 대상 | 왜 밖인가 |
 | --- | --- |
-| `control-plane/test/harness_shared_test.go` | 공용 하네스(HTTP DTO·헬퍼·kube 클라이언트)만 담는다. 파일명이 `e2e_`로 시작하지 않아 매칭 단위가 아니다. |
-| `web/e2e/journeys/**.spec.ts` (j1·j3·j5·j6-agent-prompt-loop·j6-model-selection·j6-stream-recovery·deferred·session-deletion·manual-archive) | 여정 spec은 **여정 하나를 통째로** 훑어 여러 시나리오의 화면을 경유한다. 통합 1:1 공간에서 각 시나리오의 주검증은 더 날카로운 단언을 가진 Go 파일이 소유하므로(예: write 비블로킹, PTY 프로세스 수, 커서 델타), 여정 spec은 최상위 밖으로 내려 매칭 대상에서 제외하고 **브라우저 회귀 커버리지로 계속 실행**한다(playwright `testDir: ./e2e`가 재귀 탐색). 여정 통합 검증을 1:1 공간의 1급 유형으로 올리려면 모델 판정 기준 개정이 필요하다.<br>**2026-08-30 추가**: `j6-*`(#24)·`session-deletion`(#27)·`manual-archive`(#36)도 같은 이유로 여기에 있다 — j6는 E1~E6를 한 여정으로 묶어 훑고(2026-09-05에 세 파일로 나뉘었으나 셋 다 여정 spec 이라 판정은 같다), `session-deletion`의 자원 회수 계약은 `e2e_a3_pod_reclaim_test.go`가 이미 AC-A3로 소유하며(양쪽에서 선언하면 규칙 1 중복), `manual-archive`는 claude-code 아카이브 UI 경로다. 셋 다 브라우저 회귀 커버리지로 계속 실행된다. |
+| `control-plane/test/e2e_*_test.go` (29파일) | **2026-09-12 매칭 공간 축소로 나갔다.** Go API e2e 는 계속 실행되고 헤더 선언도 그대로 갖지만, 그 선언은 이제 매핑이 아니라 **대체 검증 표시**다(규칙 6) — 유예 표의 `현행 대체 검증` 칸이 같은 쌍을 갖고 게이트가 대조한다. 각 파일의 내용은 대응하는 유예 행이 해제될 때 최상위 spec 으로 옮겨지고, 그 PR 에서 파일이 제거된다. |
+| `control-plane/test/harness_shared_test.go` | 공용 하네스(HTTP DTO·헬퍼·kube 클라이언트)만 담는다. |
+| `web/e2e/journeys/**.spec.ts` (j1·j3·j5·j6-agent-prompt-loop·j6-model-selection·j6-stream-recovery·deferred·session-deletion·manual-archive) | 여정 spec 은 **여정 하나를 통째로** 훑어 여러 시나리오의 화면을 경유하므로 「파일 1개 = 시나리오 1개」(규칙 2)에 맞지 않는다. 최상위가 아니라 매칭 단위가 아니고 **브라우저 회귀 커버리지로 계속 실행된다**(playwright `testDir: ./e2e` 가 재귀 탐색). <br>**2026-09-12**: 개정 전 이들을 밖에 둔 사유는 「주검증을 더 날카로운 Go 파일이 소유한다」였고 그 사유는 매칭 공간 축소로 소멸했다. 이제 이들은 **승격 재료**다 — 유예 행을 집을 때 규칙 2 에 맞춰 **시나리오 단위로 쪼개** 최상위 spec 으로 올리고, 내용이 다 빠져나가면 그 파일을 제거한다. 어느 행이 어느 여정 spec 을 재료로 삼는지는 유예 표의 `근거` 칸이 지목한다. |
 | `control-plane/test/integration_test.go`·`client_orchestrator_test.go` | 빌드 태그 `integration` — 인프로세스 통합. |
 | `control-plane/internal/**/*_test.go`, envtest 잡 | 단위·envtest. 예외 목록의 "대체 검증 수단"으로만 인용된다. |
 | `scripts/e2e/*.sh`, `deploy/`, `web/playwright.config.ts`, `Makefile`, `.github/workflows/e2e.yml` | 실행 하네스. |
@@ -614,13 +509,12 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 <!-- scenario-summary:begin -->
 - 시나리오 총계: 37
 - 예외: 3
-- 구현 대기: 0
-- 저작 대기: 7
-- 시나리오 매칭 파일: 27
+- 유예: 34
+- 시나리오 매칭 파일: 0
 - 공백: 0
 <!-- scenario-summary:end -->
 
-**공백**은 전용 파일도 예외·구현 대기 등재도 아직 없는 시나리오다. **어느 시나리오가 공백인지는
+**공백**은 전용 파일도 예외·유예 등재도 아직 없는 시나리오다. **어느 시나리오가 공백인지는
 바로 위 `scenario-summary` 블록이 정본**이며, 그 목록을 여기에 다시 적지 않는다 — §「시나리오 검증
 범위」가 경고한 그대로 블록 밖 사본은 `scripts/e2e/check-scenario-mapping.sh`가 파싱하지 않아,
 얼마나 틀려도 CI가 잡지 못한다. 실제로 개정 전 축에서 이 문단의 사본은 #75가 AC-E2를 공백에서 뺀
@@ -629,8 +523,8 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 **2026-09-08 축 교체 직후의 공백은 "새로 생긴 결손"이 아니라 매칭 공간이 넓어진 결과다.** AC 27개를
 재던 공간이 시나리오 37개로 넓어졌고(한 AC를 여러 시나리오가 나눠 기술한다), 이 슬라이스는 기존
 20개 파일을 **각자 주검증하는 시나리오 하나**에 다시 이었을 뿐 새 파일을 저작하지 않았다. 공백을
-줄이는 것은 다음 슬라이스들의 몫이고, 그 첫 걸음은 각 공백이 **예외**인지 **구현 대기**인지
-**전용 파일 저작 대상**인지를 시나리오별 근거로 가르는 일이다.
+줄이는 것은 다음 슬라이스들의 몫이고, 그 첫 걸음은 각 공백이 **예외**인지 **유예**인지를
+시나리오별 근거로 가르는 일이다.
 
 > ## 축 교체 전(AC 기준) 판정 이력 — **동결**
 >
@@ -638,7 +532,7 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 > 그 판정의 근거(선행이 무엇이었고 언제 어떻게 풀렸는지)는 코드·문서만으로는 복원되지 않으므로
 > 그대로 남긴다. 다만 **판정 정본이 아니다** — 지금 무엇이 공백인지는 언제나 위
 > `scenario-summary` 블록이고, 아래 AC 키는 각 시나리오 문서의 `**검증 AC**` 줄을 통해서만
-> 시나리오와 이어진다. **새 판정을 이 절에 덧붙이지 말 것.** 새 근거는 위 예외 목록·구현 대기
+> 시나리오와 이어진다. **새 판정을 이 절에 덧붙이지 말 것.** 새 근거는 위 예외 목록·유예
 > 표의 칸에 적는다 — 그쪽만 게이트가 읽는다.
 
 > **AC-E1은 2026-09-04에 공백에서 나왔다.** 이 AC를 막고 있던 것은 구현이 아니라 **SUT에서
