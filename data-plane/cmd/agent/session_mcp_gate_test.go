@@ -83,7 +83,7 @@ func toolResult(t *testing.T, body map[string]any) (result map[string]any, isErr
 	return result, isError, text
 }
 
-// The gate exists, so the surface exists: the gated fetch and the ungated
+// The gate exists, so the surface exists: the two gated tools and the ungated
 // diagnostic, and nothing else.
 func TestSessionMCPOffersItsToolsWhenTheGateExists(t *testing.T) {
 	g := newGatedMCP(t, "APPROVED")
@@ -93,8 +93,8 @@ func TestSessionMCPOffersItsToolsWhenTheGateExists(t *testing.T) {
 		t.Fatalf("tools/list body = %v, want a result", body)
 	}
 	tools, ok := result["tools"].([]any)
-	if !ok || len(tools) != 2 {
-		t.Fatalf("tools = %v, want exactly the two listed tools", result["tools"])
+	if !ok || len(tools) != 3 {
+		t.Fatalf("tools = %v, want exactly the three listed tools", result["tools"])
 	}
 	byName := map[string]map[string]any{}
 	for _, raw := range tools {
@@ -117,6 +117,27 @@ func TestSessionMCPOffersItsToolsWhenTheGateExists(t *testing.T) {
 	fetchProps, ok := fetchSchema["properties"].(map[string]any)
 	if !ok || fetchProps["url"] == nil {
 		t.Fatalf("input schema = %v, want a url argument", fetchSchema)
+	}
+
+	clone, ok := byName[gitCloneTool]
+	if !ok {
+		t.Fatalf("tools = %v, want one named %q", tools, gitCloneTool)
+	}
+	cloneSchema, ok := clone["inputSchema"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool has no input schema: %v", clone)
+	}
+	cloneProps, ok := cloneSchema["properties"].(map[string]any)
+	if !ok || cloneProps["url"] == nil || cloneProps["branch"] == nil {
+		t.Fatalf("input schema = %v, want url and branch arguments", cloneSchema)
+	}
+	// No `directory`: R11 and this entry's own ruling put the path on this
+	// server, not on the caller (docs/session-mcp-tool-surface.md).
+	if cloneProps["directory"] != nil {
+		t.Errorf("input schema = %v, want no caller-chosen directory", cloneSchema)
+	}
+	if cloneSchema["additionalProperties"] != false {
+		t.Errorf("input schema = %v, want additionalProperties false", cloneSchema)
 	}
 
 	ping, ok := byName[pingTool]
