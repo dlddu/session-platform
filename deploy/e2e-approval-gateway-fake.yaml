@@ -18,10 +18,11 @@
 # `deploy/plugin-marketplace-git.yaml` 과 달리 프로덕션과 같은 코드 경로가 도는 실물이 아니다.
 #
 # 왜 평문 HTTP 인가: 게이트웨이 클라이언트는 스킴을 강제하지 않는다 — `newApprovalGateway`
-# (data-plane/cmd/agent/approval_gateway.go)는 네 값의 non-empty 만 검사한다. https 강제가 걸리는
-# 곳은 도구의 **대상 URL** 쪽이고(session_mcp_tools.go 의 `url must be https`), 게이트웨이가
-# 아니다. anthropic-fake 가 사설 CA 까지 세운 것은 credential-proxy 가 upstream 스킴을 https 로
-# 강제하기 때문이며, 여기에는 그 강제가 없으므로 인증서를 흉내 낼 근거도 없다.
+# (data-plane/cmd/agent/approval_gateway.go)는 네 값의 non-empty 만 검사한다. 도구의 **대상 URL**
+# 쪽도 2026-09-12(#129)부터 강제하지 않는다 — `validateFetchTarget` 이 `http` 와 `https` 를 함께
+# 받는다(`url must be http or https`). 이 경로에서 https 를 요구하는 것은 credential-proxy 의
+# upstream 스킴뿐이고, anthropic-fake 가 사설 CA 까지 세운 것이 그 때문이다. 여기에는 그 강제가
+# 없으므로 인증서를 흉내 낼 근거도 없다.
 apiVersion: v1
 kind: ConfigMap
 metadata:
