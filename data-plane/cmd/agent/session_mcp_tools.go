@@ -1,7 +1,7 @@
-// The session MCP's tool surface (AC-F3): one tool, `web_fetch_get`, and the
-// approval gate it has to pass through.
+// The session MCP's tool surface (AC-F3): `web_fetch_get` behind the approval
+// gate, and `ping`, which answers without one because it reaches nothing.
 //
-// The tool's name, arguments and response shape are the reference
+// `web_fetch_get`'s name, arguments and response shape are the reference
 // implementation's (dlddu/pure-agent, mcp-server/src/tools/web-fetch-get.ts),
 // which is also what docs/mockups/gated-workspace.html draws.
 package main
@@ -24,6 +24,10 @@ const (
 	// webFetchGetTool is the one external tool an approval-gated session has.
 	// Adding a second one means adding a second gated handler, never a bypass.
 	webFetchGetTool = "web_fetch_get"
+	// pingTool is ungated (R1 does not reach a tool that leaves nothing) but is
+	// still listed only when the gate is — docs/session-mcp-tool-surface.md R2.
+	pingTool  = "ping"
+	pingReply = "pong"
 	// maxInlineBodyBytes is the line AC-F5 draws between a response small enough
 	// to ride the tool result and one that goes to the shared volume as a file.
 	// It keeps its old value: what changes is that exceeding it now spills
@@ -73,22 +77,34 @@ func (c sessionMCPConfig) toolDefinitions() []any {
 	if !c.gated() {
 		return []any{}
 	}
-	return []any{map[string]any{
-		"name": webFetchGetTool,
-		"description": "Fetch a URL with GET. Every call needs human approval before " +
-			"it leaves the session, and the response is returned only if the request was approved.",
-		"inputSchema": map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"url": map[string]any{
-					"type":        "string",
-					"description": "The http or https URL to fetch.",
+	return []any{
+		map[string]any{
+			"name": webFetchGetTool,
+			"description": "Fetch a URL with GET. Every call needs human approval before " +
+				"it leaves the session, and the response is returned only if the request was approved.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"url": map[string]any{
+						"type":        "string",
+						"description": "The http or https URL to fetch.",
+					},
 				},
+				"required":             []any{"url"},
+				"additionalProperties": false,
 			},
-			"required":             []any{"url"},
-			"additionalProperties": false,
 		},
-	}}
+		map[string]any{
+			"name": pingTool,
+			"description": "Answer immediately. Takes no arguments, makes no outbound call and " +
+				"needs no approval; calling it shows that this tool surface is reachable and callable.",
+			"inputSchema": map[string]any{
+				"type":                 "object",
+				"properties":           map[string]any{},
+				"additionalProperties": false,
+			},
+		},
+	}
 }
 
 // callTool runs one tools/call. The returned value is normally an MCP tool
@@ -105,12 +121,17 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 			return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: "tools/call params are not an object"}
 		}
 	}
-	if call.Name != webFetchGetTool {
+	switch call.Name {
+	case webFetchGetTool, pingTool:
+	default:
 		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: fmt.Sprintf("no tool named %q", call.Name)}
 	}
 	if !c.gated() {
 		// Reachable only if a client calls a tool this server never listed.
-		return mcpToolError("the approval gate is not configured, so no external call can be made"), nil
+		return mcpToolError("the approval gate is not configured, so this server lists no tools"), nil
+	}
+	if call.Name == pingTool {
+		return mcpToolText(pingReply), nil
 	}
 
 	var args struct {
