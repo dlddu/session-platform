@@ -118,7 +118,7 @@
 
   프록시의 **동작 계약은 AC-E6을 그대로 재사용한다** — 시작 시 HTTPS upstream origin 고정(평문 HTTP upstream은 시작 거부), 허용 목록 밖 요청 헤더 제거와 플랫폼 토큰 단일 주입, CONNECT·Upgrade·trailer 거부, 중간 1xx를 포함한 응답의 토큰 redaction, raw upstream 64 MiB 상한 안에서의 SSE 증분 전달, response-read 경계를 넘는 tail-safe redaction, optional `ca-cert`로 시스템 루트에 사설 발급자를 **추가**하는 신뢰 확대가 모두 동일하다. **다른 것은 배치와 바인딩뿐이다**: 워크로드 파드의 사이드카가 아니라 헬퍼 파드의 컨테이너이므로 loopback이 아니라 파드 IP에 바인딩하고, 대신 **자기 세션의 워크로드 파드에서 오는 연결만 받도록 ingress를 제한한다**(AC-F2). 같은 헬퍼 파드의 MCP 컨테이너는 이 프록시에 loopback으로 닿을 수 있으나 공급자 토큰은 여전히 프록시 컨테이너의 환경에만 있다. optional `model`/`models`의 기본값·soft catalog와 runner 출력의 증분 redaction도 AC-E6 그대로다.
 
-  **`k3s-mcp-token`과 런타임 plugin 부트스트랩은 이 타입에 두지 않는다**(아래 확정 항목). 대신 주 컨테이너의 에이전트는 시작할 때 **그 세션 헬퍼 파드의 MCP를 MCP 서버로 등록**하고, 세션 HOME의 플랫폼 관리 설정은 AC-E2의 도구 허용 목록(`Read`·`Write`·`Edit`·`Glob`·`Grep`·`Bash`)에 그 MCP만 더한다 — marketplace plugin은 활성화하지 않는다. 즉 이 타입에서 **에이전트가 파드 밖에 닿는 유일한 도구 표면은 세션 MCP**이고, 그 표면은 전부 AC-F3의 승인 게이트를 지난다.
+  **`k3s-mcp-token`과 런타임 plugin 부트스트랩은 이 타입에 두지 않는다**(아래 확정 항목). 대신 주 컨테이너의 에이전트는 시작할 때 **그 세션 헬퍼 파드의 MCP를 MCP 서버로 등록**하고, 세션 HOME의 플랫폼 관리 설정은 AC-E2의 도구 허용 목록(`Read`·`Write`·`Edit`·`Glob`·`Grep`·`Bash`)에 그 MCP만 더한다 — marketplace plugin은 활성화하지 않는다. 즉 이 타입에서 **에이전트가 파드 밖에 닿는 유일한 도구 표면은 세션 MCP**이고, 그 표면에서 **파드 밖에 닿는 도구는 전부** AC-F3의 승인 게이트를 지난다(표면에 그 밖의 도구가 서는 조건은 `../session-mcp-tool-surface.md`의 R1·R2가 갖는다).
 
   게이트웨이 키·`userId`·공급자 토큰은 세션 조회 응답·로그·read·SSE 출력 어디에도 노출되지 않으며, 승인 요청에 실리는 컨텍스트에도 포함되지 않는다.
 - **달성 가치**: V1
