@@ -599,7 +599,7 @@ func (c *claudeWorkload) restore(r io.Reader) error {
 	c.restoring = true
 	c.mu.Unlock()
 
-	scrollbackBytes, err := restoreClaudeArchive(r, c.stateDir)
+	scrollbackBytes, err := restoreClaudeArchive(r, c.stateDir, c.tools.SharedDir)
 	if err != nil {
 		c.finishFailedRestore()
 		return err
@@ -1192,7 +1192,7 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 				c.abortCheckpoint()
 			}
 		}()
-		if err := writeClaudeArchive(archive, c.stateDir, scrollbackBytes); err != nil {
+		if err := writeClaudeArchive(archive, c.stateDir, c.tools.SharedDir, scrollbackBytes); err != nil {
 			http.Error(w, "build checkpoint archive: "+c.redactString(err.Error()), http.StatusInternalServerError)
 			return
 		}
