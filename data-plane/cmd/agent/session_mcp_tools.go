@@ -1,9 +1,11 @@
-// The session MCP's tool surface (AC-F3): `web_fetch_get` behind the approval
-// gate, and `ping`, which answers without one because it reaches nothing.
+// The session MCP's tool surface (AC-F3): `web_fetch_get` and `git_clone`
+// behind the approval gate, and `ping`, which answers without one because it
+// reaches nothing.
 //
 // `web_fetch_get`'s name, arguments and response shape are the reference
 // implementation's (dlddu/pure-agent, mcp-server/src/tools/web-fetch-get.ts),
-// which is also what docs/mockups/gated-workspace.html draws.
+// which is also what docs/mockups/gated-workspace.html draws. `git_clone` lives
+// in session_mcp_git.go.
 package main
 
 import (
@@ -21,8 +23,9 @@ import (
 )
 
 const (
-	// webFetchGetTool is the one external tool an approval-gated session has.
-	// Adding a second one means adding a second gated handler, never a bypass.
+	// webFetchGetTool was the first external tool an approval-gated session had.
+	// The second one (gitCloneTool) arrived as a second gated handler, which is
+	// the only way another one ever arrives — never as a bypass.
 	webFetchGetTool = "web_fetch_get"
 	// pingTool is ungated (R1 does not reach a tool that leaves nothing) but is
 	// still listed only when the gate is — docs/session-mcp-tool-surface.md R2.
@@ -49,6 +52,8 @@ type sessionMCPConfig struct {
 	gateway *approvalGateway
 	// fetch performs the approved outbound call.
 	fetch func(ctx context.Context, target string) (*http.Response, error)
+	// clone performs the approved clone (session_mcp_git.go).
+	clone func(ctx context.Context, target, branch, dest string) error
 	// notices carries the wait and its decision to whoever is tailing, which in
 	// a real session is the workload pod's agent (session_mcp_notice_tail.go).
 	notices *noticeFeed
@@ -63,6 +68,7 @@ func newSessionMCPConfig(gateway *approvalGateway, sharedDir string) sessionMCPC
 	return sessionMCPConfig{
 		gateway:   gateway,
 		fetch:     fetchURL,
+		clone:     cloneRepository,
 		notices:   newNoticeFeed(),
 		sharedDir: strings.TrimSpace(sharedDir),
 	}
@@ -88,6 +94,27 @@ func (c sessionMCPConfig) toolDefinitions() []any {
 					"url": map[string]any{
 						"type":        "string",
 						"description": "The http or https URL to fetch.",
+					},
+				},
+				"required":             []any{"url"},
+				"additionalProperties": false,
+			},
+		},
+		map[string]any{
+			"name": gitCloneTool,
+			"description": "Clone a public git repository into this session's shared volume. Every call needs " +
+				"human approval before it leaves the session, and the clone happens only if the request was " +
+				"approved. The destination directory is chosen by this server and returned in the result.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"url": map[string]any{
+						"type":        "string",
+						"description": "The http or https URL of a public git repository.",
+					},
+					"branch": map[string]any{
+						"type":        "string",
+						"description": "Branch to check out after cloning. Omit for the repository's default branch.",
 					},
 				},
 				"required":             []any{"url"},
@@ -122,7 +149,7 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 		}
 	}
 	switch call.Name {
-	case webFetchGetTool, pingTool:
+	case webFetchGetTool, gitCloneTool, pingTool:
 	default:
 		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: fmt.Sprintf("no tool named %q", call.Name)}
 	}
@@ -132,6 +159,9 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 	}
 	if call.Name == pingTool {
 		return mcpToolText(pingReply), nil
+	}
+	if call.Name == gitCloneTool {
+		return c.callGitClone(ctx, logger, call.Arguments)
 	}
 
 	var args struct {
