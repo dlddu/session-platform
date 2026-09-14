@@ -16,7 +16,7 @@ Pod 오브젝트**가 1:1로 기동되고(client-go), 세션 상태는 **ConfigM
 오버레이(`deploy/`)에서 게이트 ON(agent-driven in-pod CRIU + MinIO 아카이브 저장소)으로
 배포되고 **제품** snapshot endpoint(`POST /api/v1/sessions/{id}/snapshot`)를 통해
 **snapshot→pod 회수→접근 시 새 pod로 복원→쉘 상태 보존 왕복이 실 단언으로 검증**된다
-(AC-B2/B3/D4 전용 파일 `e2e_b2_snapshot_restore_test.go`·`e2e_b3_restore_integrity_test.go`·`e2e_d4_process_tree_test.go`; e2e 워크플로의 CRIU 프로브가 러너 커널의 in-pod
+(AC-B2/B3/D4 전용 파일 `web/e2e/lifecycle-2-snapshot-restore.spec.ts`·`e2e_b3_restore_integrity_test.go`·`e2e_d4_process_tree_test.go` — B2 만 2026-09-14 에 Playwright 로 이관됐고 셋 다 같은 e2e 잡에서 같은 SUT 를 친다; e2e 워크플로의 CRIU 프로브가 러너 커널의 in-pod
 criu 지원을 확인). 운영 reaper는 마지막 read/write부터 60분에 도달한 세션을 스캔해
 snapshot한다. 다만 배포 e2e에는 60분 시계를 가속하거나 `lastAccess`를 주입하는 제품 API가
 없어 실제 시간 경계 시드는 skip이다.
@@ -406,16 +406,21 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 ## 시나리오 ↔ e2e 파일 매핑
 
 파일 단위 표다(테스트 함수 단위가 아니다). 한 시나리오의 전용 파일은 두 스위트 중 **한쪽에만**
-있다. **축 교체 이전에 있던 파일의 이름은 아직 옛 AC 키를 따른다**(`e2e_b2_snapshot_restore_test.go`)
+있다. **축 교체 이전에 있던 파일의 이름은 아직 옛 AC 키를 따른다**(`e2e_b3_restore_integrity_test.go`)
 — 파일명 규약은 모델이 강제하지 않고, 개명은 주석 판정 원장(`docs/comment-policy/ledger.md`)의 등재 경로를
 깨므로 별도 슬라이스다. **축 교체 이후에 새로 저작하는 파일은 시나리오 키를 따른다**
 (`e2e_<문서 키>_<N>_<슬러그>_test.go`, 예: `e2e_state_api_5_wire_validation_test.go`) — 지킬 옛 AC 키가
 없는 파일에 없는 키를 지어 붙이지 않기 위해서다(`state-api.md#시나리오 5`처럼 AC 셋에 걸친 시나리오는
 단일 AC 키 자체가 거짓이 된다). 개명 슬라이스가 오면 나머지도 이 모양으로 모인다.
 
+**이관으로 새로 서는 매칭 단위(Playwright)도 같은 모양을 확장자만 바꿔 쓴다** —
+`<문서 키>-<N>-<슬러그>.spec.ts`(예: `web/e2e/lifecycle-2-snapshot-restore.spec.ts`). 이관은 옛 AC
+키를 이어받을 이유가 없다(옮겨 가는 것은 파일이 아니라 단언이고, 새 파일은 축 교체 이후에 태어난다).
+
 <!-- scenario-mapping:begin -->
 | 시나리오 | 파일 | 스위트 | 무엇을 단언하나 |
 | --- | --- | --- | --- |
+| `lifecycle.md#시나리오 2` | `web/e2e/lifecycle-2-snapshot-restore.spec.ts` | playwright | 제품 `POST /snapshot` 으로 동결한 세션에 **명시적 접근**(`POST /switch`)을 하면 `active` 로 전이하고 **동결 전과 다른 pod** 위에 복원된다는 것, 그리고 그 전이가 뒤이은 조회에도 같은 pod 로 남아 있다는 것. |
 <!-- scenario-mapping:end -->
 
 ## 시나리오 예외 목록
@@ -457,7 +462,6 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 | `claude-code-workload.md#시나리오 4` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_claude_code_4_stream_reconnect_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_claude_code_4_stream_reconnect_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. 승격 재료가 이미 있다 — `web/e2e/journeys/j6-stream-recovery.spec.ts` 가 이 시나리오의 화면을 훑는다(규칙 2 를 맞춰 시나리오 단위로 쪼개 최상위로 올린다). |
 | `claude-code-workload.md#시나리오 6` | **Playwright 이관 미완료 — kube 관측 의존.** 이 시나리오의 기대 결과는 pod 파일시스템·프로세스 트리·`remotecommand` exec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**이며, 어느 쪽인지는 이 행을 집는 슬라이스가 판정한다. | `control-plane/test/e2e_claude_code_6_archive_freeze_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_claude_code_6_archive_freeze_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. 이관을 택하면 관측 경로를 최소 테스트 계측으로 내야 하고, 그것이 제품 동작을 바꾸면 경계를 넘은 것이라 예외로 간다. | `control-plane/test/e2e_claude_code_6_archive_freeze_test.go` 가 지금 이 시나리오를 온전히 검증한다 — 이관·예외 어느 판정이 나도 그 단언 내용은 옮겨 적을 재료다. |
 | `claude-code-workload.md#시나리오 7` | **Playwright 이관 미완료 — kube 관측 의존.** 이 시나리오의 기대 결과는 pod 파일시스템·프로세스 트리·`remotecommand` exec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**이며, 어느 쪽인지는 이 행을 집는 슬라이스가 판정한다. | `control-plane/test/e2e_e6_credential_placement_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_e6_credential_placement_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. 이관을 택하면 관측 경로를 최소 테스트 계측으로 내야 하고, 그것이 제품 동작을 바꾸면 경계를 넘은 것이라 예외로 간다. | `control-plane/test/e2e_e6_credential_placement_test.go` 가 지금 이 시나리오를 온전히 검증한다 — 이관·예외 어느 판정이 나도 그 단언 내용은 옮겨 적을 재료다. |
-| `lifecycle.md#시나리오 2` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_b2_snapshot_restore_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_b2_snapshot_restore_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. |
 | `lifecycle.md#시나리오 3` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_b3_restore_integrity_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_b3_restore_integrity_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. |
 | `shell-workload.md#시나리오 1` | **Playwright 이관 미완료 — kube 관측 의존.** 이 시나리오의 기대 결과는 pod 파일시스템·프로세스 트리·`remotecommand` exec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**이며, 어느 쪽인지는 이 행을 집는 슬라이스가 판정한다. | `control-plane/test/e2e_d1_pty_shell_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_d1_pty_shell_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. 이관을 택하면 관측 경로를 최소 테스트 계측으로 내야 하고, 그것이 제품 동작을 바꾸면 경계를 넘은 것이라 예외로 간다. | `control-plane/test/e2e_d1_pty_shell_test.go` 가 지금 이 시나리오를 온전히 검증한다 — 이관·예외 어느 판정이 나도 그 단언 내용은 옮겨 적을 재료다. |
 | `shell-workload.md#시나리오 2` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_d2_shell_write_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_d2_shell_write_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. 승격 재료가 이미 있다 — `web/e2e/journeys/j5-shell-interaction.spec.ts` 가 이 시나리오의 화면을 훑는다(규칙 2 를 맞춰 시나리오 단위로 쪼개 최상위로 올린다). |
@@ -479,10 +483,16 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 | `lifecycle.md#시나리오 4` | **전용 spec 미저작.** 기능은 착지했고 예외 사유도 없는데 전용 파일이 아직 없다(개정 전 「저작 대기」). 개정 전 예정 스위트는 `playwright` 였으나 매칭 공간이 Playwright 단독이 되어 **최상위 spec 으로 저작한다**. | 없음 | `tbm_session-platform-e2e-mock-policy` | 시나리오 9와 **같은 모킹 허용목록 선행**(같은 가로채기를 쓴다). 동결 자체는 `POST /snapshot`으로 만들 수 있어 60분 대기는 필요 없다. | SPA의 단절 처리 경로는 실재한다(`web/src`의 EventSource 핸들링, `j6-stream-recovery.spec.ts`가 여정으로 이미 훑는다). 이 파일이 배타적으로 살 것: 단절 뒤 **자동 stream/read 재시도가 없다**는 음성 단언과 「사용자가 명시적으로 복원하기 전에는 새 pod가 생기지 않는다」(파드 수가 그라운드-트루스). 시나리오 9와의 경계: 9는 상태별 재연결 정책 전반, 4는 **자동 복원 금지** 한 조항. 둘을 한 파일에 담으면 규칙 1의 중복이 된다. |
 <!-- scenario-deferred:end -->
 
-> **이 표가 비는 날 완전 1:1이다.** 현재 잔여는 두 갈래다 — 이관 27(매칭 공간 축소가 만든 부채, 검증은
+> **이 표가 비는 날 완전 1:1이다.** 현재 잔여는 두 갈래다 — 이관 26(매칭 공간 축소가 만든 부채, 검증은
 > 이미 있다)과 미저작 7(개정 전부터의 잔여, 검증이 아직 없다). 둘을 한 표에 두는 것은 해제 방법이
 > 다르기 때문이 아니라 **집계에 세는 방법이 같기** 때문이다. 어느 쪽인지는 `현행 대체 검증` 칸이
 > 말한다 — 채워져 있으면 이관, `없음`이면 미저작이다.
+>
+> **2026-09-14: 이관 27 → 26.** 첫 이관이 착지했다 — `lifecycle.md#시나리오 2` 가 유예 표를 떠나
+> 매핑 표로 갔고(`web/e2e/lifecycle-2-snapshot-restore.spec.ts`), 같은 PR 이 대체 검증이던
+> `control-plane/test/e2e_b2_snapshot_restore_test.go` 를 지웠다. 축 개정 #132 이후 **매칭 파일이
+> 0 이 아니게 된 첫 순간**이고, 남은 26 행의 해제도 같은 모양이다(spec 신설 + 같은 PR 에서 Go 파일
+> 제거 + 이 표·매핑 표·집계 동시 이동 + 지워진 파일명을 인용하던 산문 수선).
 
 ## 비-시나리오 파일 등재
 
@@ -500,7 +510,7 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 
 | 대상 | 왜 밖인가 |
 | --- | --- |
-| `control-plane/test/e2e_*_test.go` (29파일) | **2026-09-12 매칭 공간 축소로 나갔다.** Go API e2e 는 계속 실행되고 헤더 선언도 그대로 갖지만, 그 선언은 이제 매핑이 아니라 **대체 검증 표시**다(규칙 6) — 유예 표의 `현행 대체 검증` 칸이 같은 쌍을 갖고 게이트가 대조한다. 각 파일의 내용은 대응하는 유예 행이 해제될 때 최상위 spec 으로 옮겨지고, 그 PR 에서 파일이 제거된다. |
+| `control-plane/test/e2e_*_test.go` (28파일) | **2026-09-12 매칭 공간 축소로 나갔다.** Go API e2e 는 계속 실행되고 헤더 선언도 그대로 갖지만, 그 선언은 이제 매핑이 아니라 **대체 검증 표시**다(규칙 6) — 유예 표의 `현행 대체 검증` 칸이 같은 쌍을 갖고 게이트가 대조한다. 각 파일의 내용은 대응하는 유예 행이 해제될 때 최상위 spec 으로 옮겨지고, 그 PR 에서 파일이 제거된다. |
 | `control-plane/test/harness_shared_test.go` | 공용 하네스(HTTP DTO·헬퍼·kube 클라이언트)만 담는다. |
 | `web/e2e/journeys/**.spec.ts` (j1·j3·j5·j6-agent-prompt-loop·j6-model-selection·j6-stream-recovery·deferred·session-deletion·manual-archive) | 여정 spec 은 **여정 하나를 통째로** 훑어 여러 시나리오의 화면을 경유하므로 「파일 1개 = 시나리오 1개」(규칙 2)에 맞지 않는다. 최상위가 아니라 매칭 단위가 아니고 **브라우저 회귀 커버리지로 계속 실행된다**(playwright `testDir: ./e2e` 가 재귀 탐색). <br>**2026-09-12**: 개정 전 이들을 밖에 둔 사유는 「주검증을 더 날카로운 Go 파일이 소유한다」였고 그 사유는 매칭 공간 축소로 소멸했다. 이제 이들은 **승격 재료**다 — 유예 행을 집을 때 규칙 2 에 맞춰 **시나리오 단위로 쪼개** 최상위 spec 으로 올리고, 내용이 다 빠져나가면 그 파일을 제거한다. 어느 행이 어느 여정 spec 을 재료로 삼는지는 유예 표의 `근거` 칸이 지목한다. |
 | `control-plane/test/integration_test.go`·`client_orchestrator_test.go` | 빌드 태그 `integration` — 인프로세스 통합. |
@@ -512,8 +522,8 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 <!-- scenario-summary:begin -->
 - 시나리오 총계: 37
 - 예외: 3
-- 유예: 34
-- 시나리오 매칭 파일: 0
+- 유예: 33
+- 시나리오 매칭 파일: 1
 - 공백: 0
 <!-- scenario-summary:end -->
 
