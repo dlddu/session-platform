@@ -87,6 +87,11 @@ kubectl rollout status deploy/anthropic-fake --timeout=120s
 # its listener. The Secret it authenticates against is applied above with the
 # rest of the overlay, so nothing else has to be ordered here.
 kubectl rollout status deploy/approval-gateway-fake --timeout=120s
+# The origin an approved external tool call fetches (deploy/fetch-origin.yaml).
+# Same reason once more: the approval round trip ends in a real GET, and the
+# first one must not race this listener — a refused connection there would look
+# like the tool failing rather than the origin still starting.
+kubectl rollout status deploy/fetch-origin --timeout=120s
 # The ReadWriteMany provisioner behind AC-F5's session-shared volume
 # (deploy/shared-volume-provisioner.yaml). Same reason as the fixtures above:
 # the first approval-gated session must not race it. Without the class its

@@ -50,6 +50,14 @@ resources:
   # gatekeeper *client*, so there is no gateway server to deploy for real.
   - e2e-approval-gateway-fake.yaml
 
+  # The origin an approved `web_fetch_get` actually fetches. Not a mock
+  # exception: a static document over plain HTTP can be deployed for real here,
+  # and the definition's EXT clause says that when it can, EXT may not be used —
+  # the same reason MinIO and the marketplace remote sit outside the allowlist.
+  # Without it the approval path could only be observed as far as the gate,
+  # because the target URL named a host that does not exist in this cluster.
+  - fetch-origin.yaml
+
   # The ReadWriteMany class AC-F5's session-shared volume is provisioned from.
   # kind's default class is node-local and refuses a ReadWriteMany claim, so
   # without this the volume cannot stand here at all — see the file's header
