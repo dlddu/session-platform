@@ -3,9 +3,18 @@
 // 검증 시나리오: approval-gated-workload.md#시나리오 3
 //
 // AC-F3 (docs/prd/approval-gated-workload.md), asserted on the deployed SUT.
-// What this file buys — and the two branches it deliberately leaves unbought,
-// both held by the blocker `FETCH-ORIGIN` — is docs/test/e2e.md: the mapping row
-// the line above names, and its §「남은 미검증 분기」.
+// What this file buys — and the one branch it still leaves unbought — is
+// docs/test/e2e.md: the mapping row the line above names, and its
+// §「남은 미검증 분기」.
+//
+// The approved call now ends somewhere real: deploy/fetch-origin.yaml stands a
+// plain-HTTP origin in the cluster, so the two branches that used to sit past
+// this file's edge — nothing reaches the upstream before the decision, and
+// exactly one GET after it — are assertions here rather than table rows. What
+// stays unbought is whether the fetched bytes surface in the session buffer:
+// the provider stand-in answers the tool_result turn with its constant line, so
+// the body never returns through the model, and whether the CLI echoes a tool
+// result into the scrollback is not something this SUT decides.
 package e2e_test
 
 import (
@@ -25,15 +34,43 @@ const (
 	// written out rather than imported for the reason e2e_f1 gives.
 	f3AwaitingPrefix = "[session-platform: awaiting approval — "
 	f3ApprovedPrefix = "[session-platform: approval approved — "
-	// The directive grammar is deploy/e2e-anthropic-fake.yaml's.
-	f3Prompt         = "e2e-tool:" + providerToolName + `:{"url":"https://example.test/doc"}`
+	// The origin deploy/fetch-origin.yaml stands, addressed by its Service name.
+	// Plain HTTP on purpose: the MCP container trusts only the system roots and
+	// has nowhere to put a private issuer, and an origin with no certificate has
+	// nothing to verify. validateFetchTarget takes http as well as https.
+	f3OriginBase     = "http://fetch-origin:8080"
 	f3MarkerToolName = "web_fetch_get"
 	// data-plane/cmd/agent/session_mcp_tools.go requestIDPrefix, same reason.
 	f3RequestIDPrefix = "req-"
 	// 60s is the CLI's ceiling on one MCP tool call — it cancels there rather
 	// than waiting longer, and that number lives only in its behaviour.
 	f3MarkerBudget = 90 * time.Second
+	// The decision notice is published *before* the outbound call is made, so
+	// the approval marker is not evidence that the GET already happened. This
+	// is how long the call itself is given after that marker.
+	f3FetchBudget = 60 * time.Second
+	// How long "exactly one" is held open after the first arrival, so a second
+	// call would have somewhere to show up.
+	f3FetchSettle = 5 * time.Second
 )
+
+// f3DocPath keys the fetch to this session: one origin serves the whole
+// cluster, so "exactly once" is only meaningful scoped to a caller. A path
+// segment rather than a query string — the URL travels through a prompt, and a
+// 32-hex session id carries nothing that anything on that trip would expand.
+func f3DocPath(sessionID string) string { return "/doc/" + sessionID }
+
+// The directive grammar is deploy/e2e-anthropic-fake.yaml's.
+func f3PromptFor(sessionID string) string {
+	return "e2e-tool:" + providerToolName +
+		`:{"url":"` + f3OriginBase + f3DocPath(sessionID) + `"}`
+}
+
+// f3OriginEntry is one line of the origin's own access log.
+type f3OriginEntry struct {
+	Method string `json:"method"`
+	URL    string `json:"url"`
+}
 
 type f3Session struct {
 	typedSession
@@ -93,6 +130,50 @@ func (f f3Session) gatewayStatus(t *testing.T, externalID string) string {
 	return ""
 }
 
+// originHits is the origin's own access log, read from inside the very
+// container that makes the fetch. Nothing is substituted to observe the call —
+// the origin counts its own visitors, and /access-log is a window onto that
+// count that does not log itself, so reading it cannot manufacture the arrival
+// it reports.
+func (f f3Session) originHits(t *testing.T) []f3OriginEntry {
+	t.Helper()
+	helpers := helperPodsFor(t, f.cs, f.ns, f.ID)
+	if len(helpers) != 1 {
+		t.Fatalf("approval-gated session %s has %d helper pods, want exactly 1", f.ID, len(helpers))
+	}
+	script := `curl -sS --fail-with-body --max-time 20 "$1"`
+	raw := f4Sh(t, f.cs, f.cfg, f.ns, helpers[0].Name, sessionMCPContainer, script, f3OriginBase+"/access-log")
+	var entries []f3OriginEntry
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		t.Fatalf("decode the origin's access log: %v raw=%s", err, raw)
+	}
+	var mine []f3OriginEntry
+	for _, e := range entries {
+		if e.URL == f3DocPath(f.ID) {
+			mine = append(mine, e)
+		}
+	}
+	return mine
+}
+
+// The approved call is waited for rather than slept on: it rides a CLI round
+// trip and a gateway poll interval, neither of which has a fixed duration.
+func (f f3Session) eventuallyFetched(t *testing.T) []f3OriginEntry {
+	t.Helper()
+	deadline := time.Now().Add(f3FetchBudget)
+	for {
+		if hits := f.originHits(t); len(hits) > 0 {
+			return hits
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("nothing reached %s%s within %s of the approval — the gateway "+
+				"settled APPROVED, so what is missing is the outbound call itself",
+				f3OriginBase, f3DocPath(f.ID), f3FetchBudget)
+		}
+		time.Sleep(time.Second)
+	}
+}
+
 func f3Marker(t *testing.T, buf, prefix string) (tool, externalID string) {
 	t.Helper()
 	i := strings.Index(buf, prefix)
@@ -123,7 +204,7 @@ func TestApprovalGatedApprovalPath_WriteReturnsBeforeTheGateAndTheWaitIsAnnounce
 	stream := s6Open(t, f.ID, "?offset=0", "", f3MarkerBudget+30*time.Second)
 
 	started := time.Now()
-	writeShell(t, f.ID, f3Prompt)
+	writeShell(t, f.ID, f3PromptFor(f.ID))
 	writeTook := time.Since(started)
 
 	waiting := f3EventuallyMarker(t, f.ID, f3AwaitingPrefix)
@@ -157,6 +238,15 @@ func TestApprovalGatedApprovalPath_WriteReturnsBeforeTheGateAndTheWaitIsAnnounce
 
 	if got := f.gatewayStatus(t, externalID); got != "PENDING" {
 		t.Fatalf("the gateway holds request %s as %q, want PENDING before anyone decides", externalID, got)
+	}
+
+	// The gate's whole point, from the upstream's side: while the request is
+	// held, the origin has seen nothing. This is not vacuous — the origin is
+	// reachable from this container, and the same assertion at the end of this
+	// test observes the arrival that proves it.
+	if hits := f.originHits(t); len(hits) != 0 {
+		t.Fatalf("the origin was already visited %d time(s) while the request was still "+
+			"PENDING, want 0 before a decision: %+v", len(hits), hits)
 	}
 
 	streamed, bounds := f3DrainUntil(t, stream, f3AwaitingPrefix)
@@ -208,6 +298,26 @@ func TestApprovalGatedApprovalPath_WriteReturnsBeforeTheGateAndTheWaitIsAnnounce
 	}
 	if got := f.gatewayStatus(t, externalID); got != "APPROVED" {
 		t.Fatalf("the gateway holds request %s as %q after the decision, want APPROVED", externalID, got)
+	}
+
+	// And now the other side of the gate: the approval is what lets the call
+	// out, and it lets exactly one out. The marker above cannot stand in for
+	// this — it is published before the call is made.
+	hits := f.eventuallyFetched(t)
+	if len(hits) != 1 {
+		t.Fatalf("the origin recorded %d visits for this session, want exactly 1 for one "+
+			"approved call: %+v", len(hits), hits)
+	}
+	if hits[0].Method != http.MethodGet {
+		t.Fatalf("the origin recorded a %s, want the GET the tool approves", hits[0].Method)
+	}
+	// A second call would arrive after the first, so the count is re-read once
+	// the session has had time to produce one: "exactly one" has to outlive the
+	// moment the first arrived.
+	time.Sleep(f3FetchSettle)
+	if again := f.originHits(t); len(again) != 1 {
+		t.Fatalf("the origin recorded %d visits %s after the first, want the approved call "+
+			"to be the only one: %+v", len(again), f3FetchSettle, again)
 	}
 }
 
