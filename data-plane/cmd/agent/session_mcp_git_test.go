@@ -184,9 +184,7 @@ func TestSessionMCPCloneRejectsUnapprovableTargets(t *testing.T) {
 	}
 }
 
-// A deployment with no ReadWriteMany class has nowhere to put a clone, and
-// unlike a large fetch there is no shorter shape to fall back to. Nobody is
-// woken for a call that cannot succeed.
+// Why it refuses before asking a human: docs/session-mcp-tool-surface.md.
 func TestSessionMCPCloneNeedsASharedVolume(t *testing.T) {
 	c := newClonedMCP(t, "", "APPROVED")
 	_, isError, text := toolResult(t, c.call(t, map[string]any{"url": "https://github.com/dlddu/pure-agent.git"}))
@@ -278,10 +276,9 @@ func TestSessionMCPFailedCloneLeavesNothingBehind(t *testing.T) {
 	}
 }
 
-// The command line, asserted directly: the emptied credential helper is what
-// keeps "public repositories only" from depending on the container's config,
-// and `--` is what stops git from reading a repository URL as an option even if
-// the validation above ever gains a gap.
+// The command line, asserted directly: the emptied credential helper (see
+// session_mcp_git.go's cloneArgs), and `--`, which stops git from reading a
+// repository URL as an option even if the validation above ever gains a gap.
 func TestCloneArgsRefuseCredentialsAndStopFlagParsing(t *testing.T) {
 	withDefault := cloneArgs("https://github.com/dlddu/pure-agent.git", noBranch, "/shared/git_clone/req-1")
 	want := []string{"-c", "credential.helper=", "clone", "--", "https://github.com/dlddu/pure-agent.git", "/shared/git_clone/req-1"}

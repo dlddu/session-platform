@@ -30,8 +30,7 @@ const (
 	// maxCloneErrorBytes bounds what a failed clone can put in a tool result. A
 	// remote controls this text, so it is capped rather than trusted.
 	maxCloneErrorBytes = 4 << 10
-	// gitBin is looked up on PATH. The runtime image installs it and fails its
-	// own build without it (data-plane/Dockerfile).
+	// gitBin — what keeps it on PATH: data-plane/Dockerfile's runtime stage.
 	gitBin = "git"
 	// noBranch keeps the branch key present in both the approval context and the
 	// result without claiming a branch nobody asked for.
@@ -98,9 +97,7 @@ func (c sessionMCPConfig) callGitClone(ctx context.Context, logger *slog.Logger,
 		clone = cloneRepository
 	}
 	if err := clone(ctx, target, branch, dest); err != nil {
-		// Without this the agent could find a path the tool never named, holding
-		// a repository git did not finish — spillBody avoids the same thing by
-		// only ever publishing a complete file.
+		// spillBody publishes only complete files for the same reason.
 		if rmErr := os.RemoveAll(dest); rmErr != nil {
 			logger.Error("could not remove the failed clone", "tool", gitCloneTool, "path", dest, "err", rmErr)
 		}
@@ -178,10 +175,9 @@ func validateCloneBranch(raw string) (string, error) {
 func isCloneControlChar(r rune) bool { return r < 0x20 || r == 0x7f }
 
 // cloneArgs builds the command line. Its two guards: the emptied credential
-// helper list, which is how "public repositories only" stays a property of this
-// command (see this file's header), and `--`, which stops option parsing even
-// though a leading dash is already refused above — the second guard is there
-// for a validation gap the first one might one day have.
+// helper list (see this file's header), and `--`, which stops option parsing
+// even though a leading dash is already refused above — the second guard is
+// there for a validation gap the first one might one day have.
 func cloneArgs(target, branch, dest string) []string {
 	args := []string{"-c", "credential.helper=", "clone"}
 	if branch != noBranch {
