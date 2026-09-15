@@ -28,9 +28,10 @@ data:
   server.js: |
     // A static document served over plain HTTP, plus the origin's own access log.
     //
-    //   GET /doc[/<key>] -> 200 text/plain, the document below  (logged)
-    //   GET /access-log  -> 200 application/json, [{method, url, at}, ...]
-    //   GET /healthz     -> 200 text/plain
+    //   GET /doc[/<key>]       -> 200 text/plain, the document below (logged)
+    //   GET /large-doc[/<key>] -> 200 text/plain, 128 KiB (logged)
+    //   GET /access-log        -> 200 application/json, [{method, url, at}, ...]
+    //   GET /healthz           -> 200 text/plain
     //
     // The trailing key is free-form and is carried into the log verbatim, so a
     // caller can pick out its own requests: one origin serves the whole cluster
@@ -48,6 +49,10 @@ data:
         "\n" +
         "이 문서는 승인된 web_fetch_get 이 실제로 가져가는 본문이다.\n" +
         "내용 자체에는 의미가 없고, 이 바이트열이 도구 결과로 돌아간다는 것만이 의미다.\n";
+    const LARGE_DOCUMENT = Buffer.alloc(
+      128 * 1024,
+      "session-platform e2e large fetch origin\n",
+    );
 
     // Every request this origin served, in order. Bounded so a long-running
     // cluster cannot grow it without limit; e2e reads it within one session.
@@ -86,12 +91,14 @@ data:
 
       record(req);
 
-      if (path === "/doc" || path.startsWith("/doc/")) {
+      const large = path === "/large-doc" || path.startsWith("/large-doc/");
+      if (large || path === "/doc" || path.startsWith("/doc/")) {
+        const body = large ? LARGE_DOCUMENT : DOCUMENT;
         res.writeHead(200, {
           "Content-Type": "text/plain; charset=utf-8",
-          "Content-Length": Buffer.byteLength(DOCUMENT),
+          "Content-Length": Buffer.byteLength(body),
         });
-        res.end(DOCUMENT);
+        res.end(body);
         return;
       }
 
