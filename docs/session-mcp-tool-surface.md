@@ -28,7 +28,7 @@
 > AC-F3·F5·F6이, *지금 실제로 무엇을 내는가*는 `data-plane/cmd/agent/session_mcp_tools.go`의
 > `toolDefinitions`가 갖는다. 이 문서는 그 둘 사이의 **판정 기준과 구현 대상 등재**만 갖고 사본을 두지 않는다 —
 > 도구의 인자·응답 스키마를 여기에 다시 적으면 코드가 바뀔 때 조용히 거짓이 된다
-> (`doc-tracker.md`가 사본 때문에 세 번 겪은 형태, 그 처방은 [`comment-policy/README.md`](./comment-policy/README.md)의 운영 규칙).
+> (`doc-tracker/`가 사본 때문에 세 번 겪은 형태, 그 처방은 [`comment-policy/README.md`](./comment-policy/README.md)의 운영 규칙).
 
 ## 왜 이 문서가 있나
 
@@ -131,7 +131,7 @@ helper 목록을 비우고 프롬프트를 끈 채 돈다. 프롬프트만 끄�
   게이트웨이 3종뿐이다. 여기에 Secret을 하나 더 요구하는 도구는 **AC-F6의 자격 증명 배치 결정을 다시
   여는 일**이라, 이 문서의 등재만으로는 진행할 수 없다.
 - **R10 사설 CA 원본은 지금 설 수 없다** — MCP 컨테이너의 fetch는 시스템 루트만 신뢰하고 CA를 넣을
-  자리가 없다. 그 자리를 만들려던 시도는 **수요가 0이라 반려됐다**(2026-09-07, `doc-tracker.md`의 ③).
+  자리가 없다. 그 자리를 만들려던 시도는 **수요가 0이라 반려됐다**(2026-09-07, `doc-tracker/`의 ③).
   사설 발급자 https 원본을 대상으로 삼는 도구는 그 판정을 먼저 뒤집어야 한다.
 - **R11 큰 결과물은 파일로** — 인라인 본문 상한을 늘려 대응하지 않는다. 큰 결과물은 AC-F5의 공유 볼륨에
   쓰고 에이전트가 파일로 읽는다. `web_fetch_get`이 이미 그 경로를 타므로, 새 도구는 자리를 새로 만드는
@@ -221,6 +221,6 @@ R4(사람이 읽고 판정할 수 있는 컨텍스트)가 함께 설계되어야
 
 - [`prd/approval-gated-workload.md`](./prd/approval-gated-workload.md) — AC-F3(게이트)·F5(공유 볼륨)·F6(자격 증명 배치)의 정본
 - [`test/approval-gated-workload.md`](./test/approval-gated-workload.md) — 위 AC의 검증 시나리오
-- [`doc-tracker.md`](./doc-tracker.md) — 이 표면의 선행·차단 요인이 걸려 있는 **열린 항목의 정본**(무엇이 열려 있는지의 목록은 그쪽이 갖는다)
+- [`doc-tracker/`](./doc-tracker/index.md) — 이 표면의 선행·차단 요인이 걸려 있는 **열린 항목의 정본**(무엇이 열려 있는지의 목록은 그쪽이 갖는다)
 - [`mockups/gated-workspace.html`](./mockups/gated-workspace.html) · [`user-journeys/JRN-approval-gated-work.md`](./user-journeys/JRN-approval-gated-work.md) — 사람이 보는 쪽
 - [`comment-policy/README.md`](./comment-policy/README.md) — 「포인터는 남기고 사본은 지운다」의 정본
