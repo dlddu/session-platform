@@ -262,7 +262,7 @@ CRIU_ENABLED=1 DATA_PLANE_IMAGE=<criu-포함 agent-image> \
   S3 AssumeRole/IAM은 대상 환경 smoke가 필요하다.
 - **권한 범위**: 현재 게이트 on shell pod는 privileged다. capability/AppArmor/procMount 최소화가 후속이다.
 - **실행 중 포그라운드 프로세스/FD 캡처 온전성**: AC-D4 마커는 우선 env·cwd 위주. 실행 중 프로세스
-  케이스는 트리거 정책 확정과 함께 후속 시나리오로(범위 밖, `doc-tracker.md`).
+  케이스는 트리거 정책 확정과 함께 후속 시나리오로(범위 밖, `doc-tracker/`).
 
 ## 관련 문서
 - `docs/prd/shell-workload.md` — AC-D4(보존 상태), offset·복원 설계 노트(커서 유효).

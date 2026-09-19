@@ -736,7 +736,7 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 > `control-plane/internal/adapter/k8s/shared_volume.go`의 ReadWriteMany 클레임, 워크로드 컨테이너와
 > 헬퍼 파드 `session-mcp` 컨테이너의 같은 경로 마운트, 그리고 배포 SUT에서 그것을 단언하는
 > `control-plane/test/shared_volume_test.go`가 있다. 남은 선행은 **후반**이고, 그 상태는 여기에
-> 베끼지 않는다 — 정본은 아래 §「남은 미검증 분기」의 두 행과 `../doc-tracker.md`의 AC-F5 항목이며,
+> 베끼지 않는다 — 정본은 아래 §「남은 미검증 분기」의 두 행과 `../doc-tracker/`의 AC-F5 항목이며,
 > 세 자리가 같은 말을 하면 하나만 움직여도 나머지 둘이 거짓이 된다. ⓐ·ⓑ가 풀려도 F5 전용 파일은
 > 그 후반이 착지한 뒤이고, 구현은 `tbm_session-platform-docs-impl`의 몫이다. 그때까지 F5는
 > 규칙 7의 성격(순서를 기다리는 공백)을 그대로 갖는다.

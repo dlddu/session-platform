@@ -35,9 +35,9 @@
 - **구체화 대상**: AC-C2(Read API 상태별 분기)의 "read" 시맨틱
 - **검증 방법**: 여러 명령을 write한 뒤 read(`offset=0`)하면 모든 명령의 출력이 실행 순서대로 전부 포함됨을 확인한다. 그 응답의 `nextOffset`으로 곧바로 다시 read하면 (새 출력이 없는 한) 빈 `payload`가 반환되고, 그 사이 새 명령을 write했다면 커서 이후의 신규 출력만 반환됨을 확인한다. `offset=0` 재조회는 여전히 전체 출력을 반환함을 확인한다(비파괴성).
 
-> 📌 **설계 노트 (버퍼 증가)**: 페이지네이션은 `offset` 커서로 해소되어 반복 read의 `payload` 크기는 델타만큼으로 유지된다. shell 누적 버퍼 자체의 상한/ring buffer는 계속 보류 항목이다. snapshot 때는 `/checkpoint`가 scrollback을 CRIU images와 같은 archive에 별도 직렬화하고 `/restore`가 preload한다. `../doc-tracker.md`의 열린 항목 참고.
+> 📌 **설계 노트 (버퍼 증가)**: 페이지네이션은 `offset` 커서로 해소되어 반복 read의 `payload` 크기는 델타만큼으로 유지된다. shell 누적 버퍼 자체의 상한/ring buffer는 계속 보류 항목이다. snapshot 때는 `/checkpoint`가 scrollback을 CRIU images와 같은 archive에 별도 직렬화하고 `/restore`가 preload한다. `../doc-tracker/`의 열린 항목 참고.
 
-> 📌 **설계 노트 (offset과 복원)** — *2026-08-08 갱신 (STP-shell-state-carry/CRIU)*: snapshot→restore(AC-B2/AC-D4)를 거친 세션에서 복원 전 발급된 `nextOffset` 커서는 **유효하게 유지된다**. scrollback은 에이전트 메모리에 있지만 CRIU 대상은 쉘 프로세스 트리이므로, `/checkpoint`가 버퍼를 archive에 별도 직렬화하고 `/restore`가 CRIU restore 전에 동일 바이트열로 preload한다. 따라서 복원 후 클라이언트는 복원 전 `nextOffset`으로 read하면 델타만 받고(전체 재전송 아님), `offset=0`은 여전히 동결 전·후 전체 이력을 반환한다. (컨테이너 *재시작*(RestartPolicy Always)은 빈 버퍼의 새 에이전트로 시작하므로 이와 다르다 — 복원은 이어지고, 재시작은 이어지지 않는다.) 누적 버퍼 자체의 상한/ring buffer는 계속 열린 항목(`../doc-tracker.md`).
+> 📌 **설계 노트 (offset과 복원)** — *2026-08-08 갱신 (STP-shell-state-carry/CRIU)*: snapshot→restore(AC-B2/AC-D4)를 거친 세션에서 복원 전 발급된 `nextOffset` 커서는 **유효하게 유지된다**. scrollback은 에이전트 메모리에 있지만 CRIU 대상은 쉘 프로세스 트리이므로, `/checkpoint`가 버퍼를 archive에 별도 직렬화하고 `/restore`가 CRIU restore 전에 동일 바이트열로 preload한다. 따라서 복원 후 클라이언트는 복원 전 `nextOffset`으로 read하면 델타만 받고(전체 재전송 아님), `offset=0`은 여전히 동결 전·후 전체 이력을 반환한다. (컨테이너 *재시작*(RestartPolicy Always)은 빈 버퍼의 새 에이전트로 시작하므로 이와 다르다 — 복원은 이어지고, 재시작은 이어지지 않는다.) 누적 버퍼 자체의 상한/ring buffer는 계속 열린 항목(`../doc-tracker/`).
 
 ### AC-D4: 쉘 프로세스 트리 = 보존 대상 상태
 - **설명**: 세션이 snapshot으로 동결될 때 CRIU 체크포인트의 대상은 이 쉘 프로세스 트리이며, 보존되는 "인메모리 상태"(AC-B3)는 구체적으로 다음을 포함한다: 환경 변수, 현재 작업 디렉터리, 쉘 변수·함수·alias, 실행 중인 포그라운드 자식 프로세스, 열린 파일 디스크립터. 복원(AC-B2) 후 쉘은 동결 직전의 프롬프트·작업 맥락 그대로 재개되어, 이어서 write하면 동결 이전 문맥 위에서 실행된다.
@@ -51,4 +51,4 @@
 - **구체화 대상**: AC-B1(60분 유휴 후 스냅샷)의 "마지막 read/write 이후 경과 시간"
 - **검증 방법**: write 없이 read만 반복해도 `lastAccess`가 갱신됨을 확인한다. 반대로 read/write 없이 쉘이 자체 출력만 내는 상황에서는 `lastAccess`가 갱신되지 않아 유휴 카운트가 진행됨을 확인한다.
 
-> ⚠️ **미해결 (트리거 정책과 연동)**: 장시간 실행되는 포그라운드 작업(예: `make build`)이 도는 도중 60분 클라이언트 유휴가 도달하면, AC-D5 정의상 스냅샷 대상이 된다. CRIU는 실행 중 프로세스도 체크포인트하므로 기술적으로는 가능하나, "바쁜 쉘을 동결해도 되는가"는 AC-B1의 **스냅샷 트리거 정책**(grace/override, `session.go`의 `TODO(policy)`)과 함께 결정해야 할 별개의 열린 항목이다. `../doc-tracker.md` 참고.
+> ⚠️ **미해결 (트리거 정책과 연동)**: 장시간 실행되는 포그라운드 작업(예: `make build`)이 도는 도중 60분 클라이언트 유휴가 도달하면, AC-D5 정의상 스냅샷 대상이 된다. CRIU는 실행 중 프로세스도 체크포인트하므로 기술적으로는 가능하나, "바쁜 쉘을 동결해도 되는가"는 AC-B1의 **스냅샷 트리거 정책**(grace/override, `session.go`의 `TODO(policy)`)과 함께 결정해야 할 별개의 열린 항목이다. `../doc-tracker/` 참고.
