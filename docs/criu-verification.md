@@ -3,9 +3,10 @@
 > 상태: **agent-driven in-pod CRIU 구현 + kind 배포 e2e 왕복 검증** — *2026-08-08 갱신*.
 > `shell` snapshot은 pod 에이전트가 CRIU dump/restore를 실행하고 control plane이 archive를
 > durable S3로 중계한다. `deploy/` overlay는 `CRIU_ENABLED=1`과 MinIO를 켜며 제품 snapshot
-> endpoint를 호출하는 AC별 e2e 파일(`e2e_b2_snapshot_restore_test.go`·`e2e_b3_restore_integrity_test.go`·
-> `e2e_d4_process_tree_test.go`)이 실제 dump→pod 회수→새 pod restore와 cursor
-> 연속성을 단언한다. production base의 전략 게이트는 기본 off이고, 이때 snapshot 요청은 live pod를
+> endpoint를 호출하는 AC별 e2e 파일(`web/e2e/lifecycle-2-snapshot-restore.spec.ts`·
+> `e2e_b3_restore_integrity_test.go`·`e2e_d4_process_tree_test.go`)이 실제 dump→pod 회수→새 pod restore와 cursor
+> 연속성을 단언한다(B2 는 2026-09-14 시나리오 ↔ e2e 이관으로 Playwright 스위트에 있고, 셋 다
+> 같은 e2e 잡이 같은 kind SUT 를 상대로 돌린다). production base의 전략 게이트는 기본 off이고, 이때 snapshot 요청은 live pod를
 > 보존한 채 실패한다. 남은 항목은 production S3/IAM 프로비저닝, 권한 최소화, 그리고 dump 성공 뒤
 > Stop/final metadata 실패를 복구하는 shell 전용 transaction/reconcile 프로토콜이다.
 
@@ -118,10 +119,11 @@
   Go 1.24가 Linux 리스너에 MPTCP를 기본 활성화하는데 CRIU는 MPTCP 소켓을 체크포인트하지 못하므로,
   에이전트 :8090 리스너(및 세션 쉘이 상속하는 환경)를 plain TCP로 고정.
 - `control-plane/test/integration_test.go` — `TestScenario4_CRIUIntegrity`(마커 왕복 + 커서 연속성).
-- `control-plane/test/e2e_b2_snapshot_restore_test.go`·`e2e_b3_restore_integrity_test.go`·
+- `web/e2e/lifecycle-2-snapshot-restore.spec.ts` · `control-plane/test/e2e_b3_restore_integrity_test.go`·
   `e2e_d4_process_tree_test.go` — 배포 SUT 대상 CRIU 왕복을 AC별로 나눠 단언한다(B2 = 접근 시
-  새 pod로 복원, B3 = 이력·커서 무결성, D4 = env/cwd 등 쉘 프로세스 트리 보존). AC ↔ 파일
-  매핑은 `docs/test/e2e.md`.
+  새 pod로 복원, B3 = 이력·커서 무결성, D4 = env/cwd 등 쉘 프로세스 트리 보존). 스위트가 갈리는
+  것은 2026-09-12 매칭 공간 축소(Playwright 단독) 때문이고, B2 가 2026-09-14 에 먼저 이관됐다 —
+  셋 다 `e2e` 워크플로의 한 잡에서 같은 kind SUT 를 친다. 시나리오 ↔ 파일 매핑은 `docs/test/e2e.md`.
 
 ## 실검증 현황 (2026-07-22, k3s)
 
