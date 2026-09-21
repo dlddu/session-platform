@@ -6,15 +6,6 @@
 // What this file buys — and the one branch it still leaves unbought — is
 // docs/test/e2e.md: the mapping row the line above names, and its
 // §「남은 미검증 분기」.
-//
-// The approved call now ends somewhere real: deploy/fetch-origin.yaml stands a
-// plain-HTTP origin in the cluster, so the two branches that used to sit past
-// this file's edge — nothing reaches the upstream before the decision, and
-// exactly one GET after it — are assertions here rather than table rows. What
-// stays unbought is whether the fetched bytes surface in the session buffer:
-// the provider stand-in answers the tool_result turn with its constant line, so
-// the body never returns through the model, and whether the CLI echoes a tool
-// result into the scrollback is not something this SUT decides.
 package e2e_test
 
 import (
@@ -35,9 +26,7 @@ const (
 	f3AwaitingPrefix = "[session-platform: awaiting approval — "
 	f3ApprovedPrefix = "[session-platform: approval approved — "
 	// The origin deploy/fetch-origin.yaml stands, addressed by its Service name.
-	// Plain HTTP on purpose: the MCP container trusts only the system roots and
-	// has nowhere to put a private issuer, and an origin with no certificate has
-	// nothing to verify. validateFetchTarget takes http as well as https.
+	// Its header owns why that address is plain http.
 	f3OriginBase     = "http://fetch-origin:8080"
 	f3MarkerToolName = "web_fetch_get"
 	// data-plane/cmd/agent/session_mcp_tools.go requestIDPrefix, same reason.
