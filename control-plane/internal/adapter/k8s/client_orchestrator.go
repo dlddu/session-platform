@@ -192,11 +192,12 @@ const (
 // dedicated data plane pod per session through client-go, and dials the pod's
 // session agent to prove the shell is reachable (AC-D1).
 type ClientOrchestrator struct {
-	client                  kubernetes.Interface
-	namespace               string
-	image                   string
-	claudeCredentialsSecret string // platform Secret referenced by claude-code pods
-	approvalGatewaySecret   string // platform Secret referenced by approval-gated helper pods
+	client                   kubernetes.Interface
+	namespace                string
+	image                    string
+	claudeCredentialsSecret  string // platform Secret referenced by claude-code pods
+	approvalGatewaySecret    string // platform Secret referenced by approval-gated helper pods
+	miniMaxCredentialsSecret string
 	// AC-F5's per-session shared claim — see shared_volume.go.
 	sharedVolumeStorageClass string
 	sharedVolumeSize         resource.Quantity
@@ -301,15 +302,16 @@ func WithReadiness(pollInterval, timeout time.Duration) Option {
 // namespace (see BuildClient).
 func NewClientOrchestrator(client kubernetes.Interface, namespace string, opts ...Option) *ClientOrchestrator {
 	o := &ClientOrchestrator{
-		client:                  client,
-		namespace:               namespace,
-		image:                   defaultDataPlaneImage,
-		agentPort:               AgentPort,
-		claudeCredentialsSecret: defaultClaudeCredentialsSecret,
-		approvalGatewaySecret:   defaultApprovalGatewaySecret,
-		sharedVolumeSize:        resource.MustParse(defaultSharedVolumeSize),
-		pollInterval:            defaultPollInterval,
-		readyTimeout:            defaultReadyTimeout,
+		client:                   client,
+		namespace:                namespace,
+		image:                    defaultDataPlaneImage,
+		agentPort:                AgentPort,
+		claudeCredentialsSecret:  defaultClaudeCredentialsSecret,
+		approvalGatewaySecret:    defaultApprovalGatewaySecret,
+		miniMaxCredentialsSecret: defaultMiniMaxCredentialsSecret,
+		sharedVolumeSize:         resource.MustParse(defaultSharedVolumeSize),
+		pollInterval:             defaultPollInterval,
+		readyTimeout:             defaultReadyTimeout,
 	}
 	for _, opt := range opts {
 		opt(o)
@@ -619,6 +621,8 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		}
 		// No sidecar: moving the proxy out of this pod is the whole point of
 		// AC-F2's arrangement.
+	case session.WorkloadTypeMiniMaxCode:
+		sidecars, volumes = o.miniMaxCodePod(&container, image, model)
 	}
 	if o.checkpointPrivileged && workloadType == session.WorkloadTypeShell {
 		// See WithCheckpointPrivileged. This makes CRIU-enabled session shells

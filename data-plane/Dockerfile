@@ -45,9 +45,16 @@ RUN curl -fsSL "https://github.com/checkpoint-restore/criu/archive/refs/tags/v${
 # moving npm "latest" tag.
 FROM node:22-trixie-slim AS claude-build
 ARG CLAUDE_CODE_VERSION=2.1.220
+# The MiniMax Code CLI (`mcode`) for the minimax-code workload, pinned the same
+# way. It needs Node 22.19+, which this stage provides, and installs from the
+# public npm package rather than the vendor's curl|bash installer so the image
+# stays reproducible and ships one Node runtime, not two.
+ARG MINIMAX_CODE_VERSION=0.6.12
 ENV DISABLE_AUTOUPDATER=1
 RUN npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && claude --version \
+ && npm install --global "@minimax-ai/code@${MINIMAX_CODE_VERSION}" \
+ && mcode --version \
  && npm cache clean --force
 
 # ---- stage 4: install the official GitHub CLI release ----
@@ -103,7 +110,7 @@ RUN gh --version
 # npm installation metadata, and the pinned Claude Code package together.
 COPY --from=claude-build /usr/local/ /usr/local/
 ENV DISABLE_AUTOUPDATER=1
-RUN node --version && npm --version && claude --version
+RUN node --version && npm --version && claude --version && mcode --version
 COPY --from=criu-build /src/criu/criu /usr/local/sbin/criu
 # Fail the image build (i.e. in CI) if the copied binary is missing a shared
 # library here, instead of discovering it when a session pod tries to checkpoint.

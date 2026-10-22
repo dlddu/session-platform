@@ -612,7 +612,7 @@ export function Workspace() {
               {gated
                 ? "approval-gated session"
                 : isAgent
-                  ? "claude-code session"
+                  ? `${sess.workloadType} session`
                   : "session shell"}
             </span>
             <span data-testid="ws-console-pod">
@@ -696,7 +696,9 @@ export function Workspace() {
                 gated
                   ? "send a prompt — outbound calls wait for your approval"
                   : isAgent
-                    ? "send a prompt — runs claude -p once in the session pod"
+                    ? sess.workloadType === "minimax-code"
+                      ? "send a prompt — runs mcode exec once in the session pod"
+                      : "send a prompt — runs claude -p once in the session pod"
                     : "run a command — executes in the session shell (bash)"
               }
               spellCheck={isAgent}

@@ -75,7 +75,7 @@ var modelNamePattern = regexp.MustCompile(`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}
 // default. Use that on the way in and this to reject explicit garbage.
 func (w WorkloadType) Valid() bool {
 	switch w {
-	case WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeApprovalGated:
+	case WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeApprovalGated, WorkloadTypeMiniMaxCode:
 		return true
 	default:
 		return false
@@ -114,7 +114,7 @@ func NormalizeModel(workload WorkloadType, model string) (string, error) {
 			return "", ErrInvalidInput
 		}
 		return "", nil
-	case WorkloadTypeClaudeCode, WorkloadTypeApprovalGated:
+	case WorkloadTypeClaudeCode, WorkloadTypeApprovalGated, WorkloadTypeMiniMaxCode:
 		if model == "" {
 			return PlatformDefaultModel, nil
 		}

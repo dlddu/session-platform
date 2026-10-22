@@ -139,6 +139,7 @@ type claudeConfig struct {
 	ScrollbackLimit int
 	// Tools is written into the session HOME on boot.
 	Tools toolSurface
+	CLI   agentCLI
 }
 
 // toolSurface is what the platform lets a session's agent reach beyond its own
@@ -190,6 +191,7 @@ type claudeWorkload struct {
 	logger   *slog.Logger
 	redact   []string
 	tools    toolSurface
+	cli      agentCLI
 	out      scrollback
 
 	// approvals is what AC-F3's idle exception is decided from.
@@ -268,6 +270,10 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 	if int64(scrollbackLimit) > maxClaudeScrollbackBytes {
 		return nil, errors.New("claude scrollback limit exceeds archive maximum")
 	}
+	cli := cfg.CLI
+	if cli == nil {
+		cli = claudeCLI{}
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &claudeWorkload{
@@ -280,6 +286,7 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 		logger:          logger,
 		redact:          normaliseRedactionLiterals(cfg.Redact),
 		tools:           cfg.Tools,
+		cli:             cli,
 		runTimeout:      runTimeout,
 		runOutputLimit:  runOutputLimit,
 		scrollbackLimit: scrollbackLimit,
@@ -314,7 +321,7 @@ func (c *claudeWorkload) ensureStateDirs() error {
 			return fmt.Errorf("create claude state directory %s: %w", dir, err)
 		}
 	}
-	return ensureClaudeManagedSettings(c.homeDir, c.tools)
+	return c.cli.ensureHome(c.homeDir, c.tools)
 }
 
 func (c *claudeWorkload) Close() {
@@ -395,7 +402,7 @@ func (c *claudeWorkload) runWorker() {
 			func() { c.logger.Warn("claude session output limit reached; rejecting new prompts") },
 		)
 		stdoutUTF8 := newUTF8NormalizingWriter(output)
-		stdout := newClaudeStreamProjector(stdoutUTF8)
+		stdout := c.cli.newProjector(stdoutUTF8)
 		stderr := newUTF8NormalizingWriter(output)
 		runCtx, cancelRun := context.WithTimeout(c.ctx, c.runTimeout)
 		err := c.runner.Run(runCtx, c.argv(job.prompt, resume), runnerOptions{
@@ -433,12 +440,16 @@ func (c *claudeWorkload) runWorker() {
 }
 
 func (c *claudeWorkload) argv(prompt string, resume bool) []string {
-	argv := []string{c.binary}
+	return c.cli.argv(c.binary, c.model, prompt, resume)
+}
+
+func claudeArgv(binary, model, prompt string, resume bool) []string {
+	argv := []string{binary}
 	if resume {
 		argv = append(argv, "--continue")
 	}
-	if c.model != "" && c.model != platformDefaultModel {
-		argv = append(argv, "--model", c.model)
+	if model != "" && model != platformDefaultModel {
+		argv = append(argv, "--model", model)
 	}
 	// The option delimiter prevents a prompt beginning with "--" from changing
 	// any platform-controlled flag.
@@ -498,7 +509,7 @@ func (c *claudeWorkload) beginCheckpoint(ctx context.Context, requestedID string
 		c.abortCheckpoint()
 		return nil, "", err
 	}
-	if err := validateRestoredClaudeState(c.stateDir); err != nil {
+	if err := c.cli.validateState(c.stateDir); err != nil {
 		c.abortCheckpoint()
 		return nil, "", fmt.Errorf("validate live claude state: %w", err)
 	}
@@ -599,7 +610,7 @@ func (c *claudeWorkload) restore(r io.Reader) error {
 	c.restoring = true
 	c.mu.Unlock()
 
-	scrollbackBytes, err := restoreClaudeArchive(r, c.stateDir)
+	scrollbackBytes, err := restoreClaudeArchive(r, c.stateDir, c.cli.validateState)
 	if err != nil {
 		c.finishFailedRestore()
 		return err
@@ -1067,11 +1078,11 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		status := "awaiting restore"
 		if c.isReady() {
-			_, _ = w.Write([]byte(`{"status":"ok","workload":"claude-code"}`))
-			return
+			status = "ok"
 		}
-		_, _ = w.Write([]byte(`{"status":"awaiting restore","workload":"claude-code"}`))
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": status, "workload": c.cli.workloadName()})
 	})
 
 	// AC-F3's idle exception, read side. It stays answerable while the workload

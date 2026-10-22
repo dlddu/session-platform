@@ -8,9 +8,9 @@ needs (AC-A2). The control plane provisions and reclaims these pods via the
 The runtime image includes `git`, `gh`, `curl`, `jq`, and `kubectl` for use by
 interactive shell and Claude Code workloads.
 
-## Status: shell, claude-code, approval-gated, mcp, and credential-proxy agents built
+## Status: shell, claude-code, approval-gated, minimax-code, mcp, and credential-proxy agents built
 
-`DATA_PLANE_WORKLOAD` selects one of five modes across a session's pods:
+`DATA_PLANE_WORKLOAD` selects one of six modes across a session's pods:
 
 - `shell` (default) launches one PTY-attached interactive shell
   (`DATA_PLANE_SHELL`, default `/bin/bash`). Write is shell stdin, read is
@@ -44,6 +44,28 @@ interactive shell and Claude Code workloads.
   pod is rebuilt with a new address on every restore, the registered MCP URL is
   rewritten from the environment at startup rather than trusted from the
   archive.
+- `minimax-code` runs the MiniMax Code CLI on the same one-shot runner as
+  `claude-code` — queue, bounds, cursor, resume flag and archive are shared
+  (AC-G2/G4). Each job executes
+  `mcode exec --config CONFIG --model custom_provider:session-platform/MODEL
+  --permission smart --output-format stream-json [--continue] -- PROMPT`, and
+  the agent projects only the `contentDelta` text of `agent_message` items;
+  reasoning, tool-call and lifecycle records are dropped, and a failed turn is
+  reported through mcode's own stderr diagnostics. `CONFIG` is a platform-managed
+  file written at startup *beside* the state tree (so it is never archived): it
+  declares one Anthropic-messages provider at `http://127.0.0.1:8091` with the
+  non-secret placeholder key and the session's model, and turns data
+  contribution and self-update off; the agent also sets
+  `MCODE_DISABLE_EVAL_CAPTURE=1` so no run uploads step reports. `MINIMAX_CODE_MODEL` selects the model; `platform-default`
+  or empty runs `MiniMax-M3.1-Flash`, because mcode, unlike Claude Code, has no
+  installation default to fall back to. The container gets no Claude bootstrap
+  and refuses to start if any provider key (`ANTHROPIC_API_KEY`,
+  `MINIMAX_API_KEY`, `MCODE_PROVIDER_API_KEY`, …) or `K3S_MCP_TOKEN` is set
+  (AC-G3). Its credential-proxy sidecar is the `claude-code` one pointed at the
+  `minimax-code-credentials` Secret, whose `base-url` is MiniMax's
+  Anthropic-compatible endpoint (for example `https://api.minimax.io/anthropic`)
+  and whose `auth-token` may be a Token Plan subscription key: MiniMax accepts
+  it as `Authorization: Bearer`, which is exactly what the proxy injects.
 - `mcp` is the session MCP that runs in the helper pod's other container
   (AC-F4). It serves `/healthz` and a JSON-RPC endpoint at `/mcp` that answers
   `initialize`, `ping`, `tools/list` and `tools/call`. It offers one external

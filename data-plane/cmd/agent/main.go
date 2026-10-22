@@ -137,6 +137,15 @@ func main() {
 		}
 		logger.Info("agent workload started", "workload", workload, "addr", addr,
 			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode)
+	case workloadMiniMaxCode:
+		claude, err := newMiniMaxWorkloadFromEnv(logger, restoreMode)
+		if err != nil {
+			logger.Error("failed to initialise agent workload", "workload", workload, "err", err)
+			os.Exit(1)
+		}
+		a.claude = claude
+		logger.Info("agent workload started", "workload", workload, "addr", addr,
+			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode)
 	case workloadSessionMCP:
 		// AC-F4's helper pod container; it serves its own routes rather than the
 		// workload agent's (session_mcp.go).
