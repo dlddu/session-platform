@@ -56,4 +56,3 @@
 
 ## 남은 일
 - `docs/test/minimax-code-workload.md`(테스트 시나리오)와 그 e2e 매핑. 지금 검증은 단위·통합 테스트(`control-plane/test/minimax_code_orchestrator_test.go` 등)까지이며, 시나리오를 만들면 `scripts/e2e/check-scenario-mapping.sh`의 규칙에 따라 e2e 파일이나 유예 행이 함께 필요하다.
-- SPA의 생성 화면 선택지. 지금은 API로만 만들 수 있고, 만들어진 세션은 기존 에이전트 작업 공간으로 열린다.

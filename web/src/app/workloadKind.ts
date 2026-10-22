@@ -12,3 +12,7 @@ export function isAgentWorkload(workloadType: WorkloadType): boolean {
 export function isGatedWorkload(workloadType: WorkloadType): boolean {
   return workloadType === "approval-gated";
 }
+
+export function hasModelChoice(workloadType: WorkloadType): boolean {
+  return isAgentWorkload(workloadType) && workloadType !== "minimax-code";
+}
