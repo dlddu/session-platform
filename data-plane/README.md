@@ -48,13 +48,16 @@ interactive shell and Claude Code workloads.
   `claude-code` — queue, bounds, cursor, resume flag and archive are shared
   (AC-G2/G4). Each job executes
   `mcode exec --config CONFIG --model custom_provider:session-platform/MODEL
-  --permission smart --output-format stream-json [--continue] -- PROMPT`, and
+  --permission full --effort xhigh --output-format stream-json [--continue] --
+  PROMPT`, and
   the agent projects only the `contentDelta` text of `agent_message` items;
   reasoning, tool-call and lifecycle records are dropped, and a failed turn is
   reported through mcode's own stderr diagnostics. `CONFIG` is a platform-managed
   file written at startup *beside* the state tree (so it is never archived): it
   declares one Anthropic-messages provider at `http://127.0.0.1:8091` with the
-  non-secret placeholder key and the session's model, and turns data
+  non-secret placeholder key and the session's model (with the effort levels
+  mcode needs to accept `--effort`, and the 512k/128k token limits for
+  `MiniMax-M3.1-Flash`), and turns data
   contribution and self-update off; the agent also sets
   `MCODE_DISABLE_EVAL_CAPTURE=1` so no run uploads step reports. `MINIMAX_CODE_MODEL` selects the model; `platform-default`
   or empty runs `MiniMax-M3.1-Flash`, because mcode, unlike Claude Code, has no

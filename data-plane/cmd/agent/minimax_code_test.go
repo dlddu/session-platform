@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -43,7 +44,7 @@ func newMiniMaxTestServerAt(t *testing.T, runner commandRunner, model string, re
 func miniMaxArgv(cli miniMaxCLI, model string, resume bool, prompt string) []string {
 	argv := []string{"mcode", "exec", "--config", cli.configPath,
 		"--model", "custom_provider:session-platform/" + model,
-		"--permission", "smart", "--output-format", "stream-json"}
+		"--permission", "full", "--effort", "xhigh", "--output-format", "stream-json"}
 	if resume {
 		argv = append(argv, "--continue")
 	}
@@ -150,6 +151,59 @@ func TestMiniMaxManagedConfig(t *testing.T) {
 	}
 	if config.DataContribution.Enabled {
 		t.Fatal("managed config must not opt sessions into data contribution")
+	}
+}
+
+type miniMaxModelShape struct {
+	Reasoning bool `json:"reasoning"`
+	Thinking  struct {
+		EffortOptions []string `json:"effortOptions"`
+	} `json:"thinking"`
+	ThinkingConfig struct {
+		Mode string `json:"mode"`
+	} `json:"thinking_config"`
+	Limit *struct {
+		Context int `json:"context"`
+		Output  int `json:"output"`
+	} `json:"limit"`
+}
+
+// AC-G2: mcode refuses --effort for a model whose definition lists no effort
+// options, and without a limit it caps every response at 16384 tokens. The
+// managed config therefore declares the effort levels for any session model,
+// and the real token limits for the models they are known for.
+func TestMiniMaxManagedModelDefinition(t *testing.T) {
+	for _, tc := range []struct {
+		model            string
+		context, output  int
+		wantsKnownLimits bool
+	}{
+		{model: miniMaxDefaultModel, context: 512000, output: 128000, wantsKnownLimits: true},
+		{model: "MiniMax-M2.7"},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			_, cli, _ := newMiniMaxTestServerAt(t, newFakeClaudeRunner(), tc.model, false, filepath.Join(t.TempDir(), "state"))
+			raw, ok := readMiniMaxConfig(t, cli.configPath).CustomProvider["session-platform"].Models[tc.model]
+			if !ok {
+				t.Fatalf("managed config does not declare %s", tc.model)
+			}
+			var model miniMaxModelShape
+			if err := json.Unmarshal(raw, &model); err != nil {
+				t.Fatalf("decode model definition: %v\n%s", err, raw)
+			}
+			if !model.Reasoning || model.ThinkingConfig.Mode != "forced_on" {
+				t.Fatalf("model %s must reason with thinking forced on: %s", tc.model, raw)
+			}
+			if !slices.Contains(model.Thinking.EffortOptions, miniMaxEffort) {
+				t.Fatalf("effort options %q do not offer the pinned effort %q", model.Thinking.EffortOptions, miniMaxEffort)
+			}
+			switch {
+			case tc.wantsKnownLimits && (model.Limit == nil || model.Limit.Context != tc.context || model.Limit.Output != tc.output):
+				t.Fatalf("limit = %s, want context %d output %d", raw, tc.context, tc.output)
+			case !tc.wantsKnownLimits && model.Limit != nil:
+				t.Fatalf("model %s must keep mcode's fallback limits, got %+v", tc.model, *model.Limit)
+			}
+		})
 	}
 }
 
