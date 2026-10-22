@@ -12,6 +12,7 @@ const WORKLOAD_TAG: Record<string, string> = {
   shell: "$ shell",
   "claude-code": "◇ claude-code",
   "approval-gated": "⏸ approval-gated",
+  "minimax-code": "◇ minimax-code",
 };
 
 // control-plane/internal/session.MaxIdle 의 사본이다 — 어느 게이트도 둘을 대조하지 않는다.

@@ -107,6 +107,13 @@ docs/                 value / PRD·AC / journeys / mockups / CRIU verification n
   receives a non-secret placeholder. Every data plane pod uses the dedicated
   `data-plane` ServiceAccount, whose cluster-wide built-in `view` binding gives
   read-only Kubernetes access while excluding Secrets.
+  `minimax-code` runs the MiniMax Code CLI (`mcode exec`) on that same one-shot
+  runner, queue, cursor and archive (AC-G1~G4). It gets the same loopback proxy
+  sidecar reading its own `minimax-code-credentials` Secret — whose
+  `auth-token` may be a MiniMax Token Plan subscription key — and no Claude
+  plugin bootstrap; its archive sits behind its own
+  `MINIMAX_CODE_ARCHIVE_ENABLED` gate. See
+  [`docs/prd/minimax-code-workload.md`](docs/prd/minimax-code-workload.md).
 - **Lifecycle**: 60-min max idle → workload snapshot + pod reclaim (AC-B1);
   access → restore into a new pod (AC-B2). Shell uses CRIU behind
   `CRIU_ENABLED`; Claude uses a filesystem archive behind the independent,

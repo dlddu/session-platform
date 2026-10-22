@@ -612,7 +612,7 @@ export function Workspace() {
               {gated
                 ? "approval-gated session"
                 : isAgent
-                  ? "claude-code session"
+                  ? `${sess.workloadType} session`
                   : "session shell"}
             </span>
             <span data-testid="ws-console-pod">

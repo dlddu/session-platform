@@ -147,7 +147,7 @@ type restoredDirMode struct {
 // restoreClaudeArchive validates and extracts into a fresh sibling directory,
 // then atomically swaps that directory into place. A malformed archive never
 // partially mutates the live target.
-func restoreClaudeArchive(r io.Reader, stateDir string) ([]byte, error) {
+func restoreClaudeArchive(r io.Reader, stateDir string, validate func(string) error) ([]byte, error) {
 	stateDir = filepath.Clean(stateDir)
 	if !filepath.IsAbs(stateDir) || stateDir == string(filepath.Separator) {
 		return nil, fmt.Errorf("unsafe claude state target %q", stateDir)
@@ -231,7 +231,7 @@ func restoreClaudeArchive(r io.Reader, stateDir string) ([]byte, error) {
 	// Validate every checkpoint invariant while the previous live state is
 	// still intact. A checkpoint always contains these entries; silently
 	// recreating a missing workspace/home would turn corruption into data loss.
-	if err := validateRestoredClaudeState(extractedState); err != nil {
+	if err := validate(extractedState); err != nil {
 		return nil, err
 	}
 
@@ -422,6 +422,13 @@ func validateClaudeSymlink(rel, link string) error {
 }
 
 func validateRestoredClaudeState(root string) error {
+	if err := validateRestoredAgentState(root); err != nil {
+		return err
+	}
+	return validateClaudeManagedSettings(filepath.Join(root, "home"))
+}
+
+func validateRestoredAgentState(root string) error {
 	rootInfo, err := os.Lstat(root)
 	if err != nil {
 		return err
@@ -452,10 +459,8 @@ func validateRestoredClaudeState(root string) error {
 	if !info.Mode().IsRegular() {
 		return errors.New("claude archive runtime state is not a regular file")
 	}
-	if _, err = loadRequiredClaudeRuntimeState(root); err != nil {
-		return err
-	}
-	return validateClaudeManagedSettings(filepath.Join(root, "home"))
+	_, err = loadRequiredClaudeRuntimeState(root)
+	return err
 }
 
 func installClaudeState(staged, target string) error {

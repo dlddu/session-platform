@@ -57,6 +57,7 @@ func main() {
 		"data_plane_image", cfg.dataPlaneImage,
 		"data_plane_claude_code_image", cfg.dataPlaneClaudeCodeImage,
 		"data_plane_approval_gated_image", cfg.dataPlaneApprovalGatedImage,
+		"data_plane_minimax_code_image", cfg.miniMax.image,
 		"data_plane_shell", cfg.dataPlaneShell,
 		"claude_code_default_model", cfg.claudeCodeDefaultModel,
 		"claude_code_models", len(cfg.claudeCodeModels),
@@ -74,7 +75,9 @@ func main() {
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, cfg.dataPlaneClaudeCodeImage),
 		// Same for approval-gated (AC-F1).
 		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, cfg.dataPlaneApprovalGatedImage),
+		k8s.WithWorkloadImage(session.WorkloadTypeMiniMaxCode, cfg.miniMax.image),
 		k8s.WithClaudeCredentialsSecret(cfg.claudeCredentialsSecret),
+		k8s.WithMiniMaxCredentialsSecret(cfg.miniMax.credentialsSecret),
 		k8s.WithApprovalGatewaySecret(cfg.approvalGatewaySecret),
 		k8s.WithSharedVolume(cfg.sharedVolumeStorageClass, cfg.sharedVolumeSize),
 		k8s.WithCheckpointPrivileged(cfg.criuEnabled))
@@ -88,7 +91,7 @@ func main() {
 	// sent to the configured durable store only behind an explicit mechanism
 	// gate: CRIU_ENABLED for shell, CLAUDE_CODE_ARCHIVE_ENABLED for claude-code.
 	var cstore criu.CheckpointStore
-	if cfg.criuEnabled || cfg.claudeArchiveEnabled {
+	if cfg.criuEnabled || cfg.claudeArchiveEnabled || cfg.miniMax.archiveEnabled {
 		cstore, err = buildCheckpointStore(cfg)
 		if err != nil {
 			logger.Error("checkpoint store misconfigured", "err", err)
@@ -119,8 +122,17 @@ func main() {
 		))
 		logger.Info("claude-code filesystem archive enabled", "store", cfg.checkpointStoreDesc())
 	}
+	miniMaxArchive, err := miniMaxArchiveOption(cfg.miniMax, agentClient, cstore)
+	if err != nil {
+		logger.Error("minimax-code archive misconfigured", "err", err)
+		os.Exit(1)
+	}
+	if miniMaxArchive != nil {
+		serviceOpts = append(serviceOpts, miniMaxArchive)
+		logger.Info("minimax-code filesystem archive enabled", "store", cfg.checkpointStoreDesc())
+	}
 	mgr := service.New(orch, store, shellCkpt, agentClient, serviceOpts...)
-	snapshotEnabled := shellCkpt.Enabled() || cfg.claudeArchiveEnabled
+	snapshotEnabled := shellCkpt.Enabled() || cfg.claudeArchiveEnabled || cfg.miniMax.archiveEnabled
 
 	// AC-B1: the operational idle->snapshot trigger. Manual snapshots reach the
 	// same manager operation through the product API, without the idle wait.
@@ -210,6 +222,7 @@ type config struct {
 	checkpointS3Prefix      string
 	checkpointS3SessionName string
 	checkpointS3Endpoint    string
+	miniMax                 miniMaxConfig
 }
 
 // buildCheckpointStore builds the checkpoint archive backend.
@@ -278,6 +291,7 @@ func loadConfig() (config, error) {
 		checkpointS3Region:          env("CHECKPOINT_S3_REGION", env("AWS_REGION", "")),
 		checkpointS3Prefix:          env("CHECKPOINT_S3_PREFIX", "checkpoints"),
 		checkpointS3SessionName:     env("CHECKPOINT_S3_SESSION_NAME", ""),
+		miniMax:                     loadMiniMaxConfig(),
 	}, nil
 }
 

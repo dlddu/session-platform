@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -338,7 +339,7 @@ func (s *Service) Write(ctx context.Context, id, payload string) (*session.Write
 	if err != nil {
 		return nil, err
 	}
-	if current.WorkloadType == session.WorkloadTypeClaudeCode && len(payload) > session.MaxClaudePromptBytes {
+	if current.WorkloadType.ArchivesThroughAgent() && len(payload) > session.MaxClaudePromptBytes {
 		return nil, session.ErrWorkloadPromptTooLarge
 	}
 	sess, branch, err := s.activate(ctx, id)
@@ -437,10 +438,10 @@ func (s *Service) snapshot(ctx context.Context, id string, idleCutoff *time.Time
 	if err != nil {
 		return nil, err
 	}
-	if sess.WorkloadType == session.WorkloadTypeClaudeCode {
+	if sess.WorkloadType.ArchivesThroughAgent() {
 		generated, ok := ckpt.(generationCheckpointer)
 		if !ok {
-			return nil, errors.New("claude-code checkpoint strategy lacks durable generation support")
+			return nil, fmt.Errorf("%s checkpoint strategy lacks durable generation support", sess.WorkloadType)
 		}
 		frozen, err := s.snapshotWithTransactionLocked(ctx, sess, token, ckpt, generated)
 		if err == nil && snapshotted != nil {
