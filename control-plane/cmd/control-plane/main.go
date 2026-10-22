@@ -37,6 +37,9 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	cfg, err := loadConfig()
+	if err == nil {
+		err = validateMiniMaxSecret(cfg.miniMax, cfg.claudeCredentialsSecret)
+	}
 	if err != nil {
 		logger.Error("invalid runtime configuration", "err", err)
 		os.Exit(1)

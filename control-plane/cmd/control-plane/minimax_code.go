@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
@@ -32,6 +34,16 @@ func loadMiniMaxConfig() miniMaxConfig {
 		credentialsSecret: env("MINIMAX_CODE_CREDENTIALS_SECRET", "minimax-code-credentials"),
 		archiveEnabled:    envBool("MINIMAX_CODE_ARCHIVE_ENABLED", false),
 	}
+}
+
+// validateMiniMaxSecret refuses a configuration where minimax-code would read
+// the claude-code Secret. AC-G3 promises the two types never share provider
+// credentials, and naming the same Secret twice would break that silently.
+func validateMiniMaxSecret(cfg miniMaxConfig, claudeSecret string) error {
+	if strings.TrimSpace(cfg.credentialsSecret) == strings.TrimSpace(claudeSecret) {
+		return fmt.Errorf("MINIMAX_CODE_CREDENTIALS_SECRET must differ from CLAUDE_CODE_CREDENTIALS_SECRET (both %q)", claudeSecret)
+	}
+	return nil
 }
 
 // miniMaxArchiveOption returns the service option that installs the

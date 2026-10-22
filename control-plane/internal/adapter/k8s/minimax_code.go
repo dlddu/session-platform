@@ -1,6 +1,8 @@
 package k8s
 
 import (
+	"strings"
+
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/dlddu/session-platform/control-plane/internal/session"
@@ -27,7 +29,7 @@ const (
 // pods project their provider keys from (AC-G3).
 func WithMiniMaxCredentialsSecret(name string) Option {
 	return func(o *ClientOrchestrator) {
-		if name != "" {
+		if name = strings.TrimSpace(name); name != "" {
 			o.miniMaxCredentialsSecret = name
 		}
 	}

@@ -125,6 +125,9 @@ func (m miniMaxCLI) renderConfig() ([]byte, error) {
 	config := map[string]any{
 		"defaultModel":     "custom_provider:" + miniMaxProviderID + "/" + m.model,
 		"dataContribution": map[string]any{"enabled": false},
+		// The installed CLI is the image's pinned version; it must not replace
+		// itself mid-session, as DISABLE_AUTOUPDATER guarantees for Claude.
+		"promptConfig": map[string]any{"autoUpdate": false},
 		"custom_provider": map[string]any{
 			miniMaxProviderID: map[string]any{
 				"name":    miniMaxProviderID,
@@ -177,6 +180,22 @@ func writeMiniMaxConfig(path string, content []byte) error {
 	return nil
 }
 
+// miniMaxCredentialEnv is every credential variable either CLI could pick up
+// on its own, as of @minimax-ai/code 0.6.12 and the Claude names above. The
+// control plane injects none of them; refusing to start on any is defence in
+// depth, and the same list feeds output redaction.
+var miniMaxCredentialEnv = []string{
+	"ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_FOUNDRY_API_KEY",
+	"CLAUDE_CODE_OAUTH_TOKEN", "K3S_MCP_TOKEN",
+	"MINIMAX_API_KEY", "MINIMAX_CN_API_KEY", "MCODE_PROVIDER_API_KEY", "MAVIS_ACCESS_TOKEN",
+	"OPENAI_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+}
+
+// miniMaxDisableEvalCaptureEnv turns off mcode's step-report upload, which is
+// separate from the dataContribution switch in the managed config. The agent
+// sets it on itself so every mcode run inherits it, whatever the pod spec says.
+const miniMaxDisableEvalCaptureEnv = "MCODE_DISABLE_EVAL_CAPTURE"
+
 // validateMiniMaxProxyClientEnv is the minimax-code counterpart of
 // validateClaudeProxyClientEnv (AC-G3): the CLI container must point at the
 // loopback proxy with the placeholder, and must hold no credential of any kind
@@ -189,10 +208,7 @@ func validateMiniMaxProxyClientEnv() error {
 	if os.Getenv("ANTHROPIC_AUTH_TOKEN") != claudeProxyPlaceholderToken {
 		return errors.New("minimax-code must use the non-secret credential proxy placeholder")
 	}
-	for _, name := range []string{
-		"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "K3S_MCP_TOKEN",
-		"MINIMAX_API_KEY", "MCODE_PROVIDER_API_KEY",
-	} {
+	for _, name := range miniMaxCredentialEnv {
 		if os.Getenv(name) != "" {
 			return fmt.Errorf("minimax-code container must not receive %s", name)
 		}
@@ -204,6 +220,9 @@ func validateMiniMaxProxyClientEnv() error {
 // environment the control plane injects (AC-G3).
 func newMiniMaxWorkloadFromEnv(logger *slog.Logger, restoreMode bool) (*claudeWorkload, error) {
 	if err := validateMiniMaxProxyClientEnv(); err != nil {
+		return nil, err
+	}
+	if err := os.Setenv(miniMaxDisableEvalCaptureEnv, "1"); err != nil {
 		return nil, err
 	}
 	runTimeout, err := durationEnv("CLAUDE_CODE_RUN_TIMEOUT", defaultClaudeRunTimeout)
@@ -223,10 +242,18 @@ func newMiniMaxWorkloadFromEnv(logger *slog.Logger, restoreMode bool) (*claudeWo
 		RestoreMode: restoreMode,
 		Runner:      execCommandRunner{},
 		Logger:      logger,
-		Redact:      credentialLiteralsFromEnv(),
+		Redact:      miniMaxRedactionLiterals(),
 		RunTimeout:  runTimeout,
 		CLI:         cli,
 	})
+}
+
+func miniMaxRedactionLiterals() []string {
+	literals := credentialLiteralsFromEnv()
+	for _, name := range miniMaxCredentialEnv {
+		literals = append(literals, os.Getenv(name))
+	}
+	return normaliseRedactionLiterals(literals)
 }
 
 // miniMaxStreamProjector turns `mcode exec --output-format stream-json` into the
@@ -282,19 +309,45 @@ func (p *miniMaxStreamProjector) Close() error {
 	return p.finishMessage()
 }
 
+// miniMaxStreamEnvelope keeps every field it does not need as raw JSON, so a
+// record whose shape it does not expect still decodes and is then dropped.
+// Only a line that is not JSON at all is treated as a diagnostic: a valid
+// record that merely failed to decode must never reach the session verbatim,
+// because tool records carry tool output (and could carry anything).
 type miniMaxStreamEnvelope struct {
-	Type string `json:"type"`
-	Item *struct {
-		ID           string `json:"id"`
-		Type         string `json:"type"`
-		ContentDelta string `json:"contentDelta"`
-		Content      string `json:"content"`
-	} `json:"item"`
+	Type string          `json:"type"`
+	Item json.RawMessage `json:"item"`
+}
+
+type miniMaxStreamItem struct {
+	ID           string `json:"id"`
+	Type         string `json:"type"`
+	ContentDelta string `json:"contentDelta"`
+	Content      string `json:"content"`
+}
+
+// agentMessage returns the record's agent_message item, or nil for anything
+// else, including an agent_message whose text fields are not strings.
+func (e miniMaxStreamEnvelope) agentMessage() *miniMaxStreamItem {
+	if len(e.Item) == 0 {
+		return nil
+	}
+	var kind struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(e.Item, &kind) != nil || kind.Type != "agent_message" {
+		return nil
+	}
+	var item miniMaxStreamItem
+	if json.Unmarshal(e.Item, &item) != nil {
+		return nil
+	}
+	return &item
 }
 
 func (p *miniMaxStreamProjector) projectLine(line []byte, hadNewline bool) error {
 	var envelope miniMaxStreamEnvelope
-	if len(line) == 0 || json.Unmarshal(line, &envelope) != nil {
+	if len(line) == 0 || !json.Valid(line) {
 		if _, err := p.dst.Write(line); err != nil {
 			return err
 		}
@@ -304,8 +357,11 @@ func (p *miniMaxStreamProjector) projectLine(line []byte, hadNewline bool) error
 		}
 		return nil
 	}
-	item := envelope.Item
-	if item == nil || item.Type != "agent_message" {
+	if json.Unmarshal(line, &envelope) != nil {
+		return nil
+	}
+	item := envelope.agentMessage()
+	if item == nil {
 		if envelope.Type == "turn.completed" || envelope.Type == "exec.completed" {
 			return p.finishMessage()
 		}

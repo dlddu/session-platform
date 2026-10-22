@@ -55,7 +55,8 @@ interactive shell and Claude Code workloads.
   file written at startup *beside* the state tree (so it is never archived): it
   declares one Anthropic-messages provider at `http://127.0.0.1:8091` with the
   non-secret placeholder key and the session's model, and turns data
-  contribution off. `MINIMAX_CODE_MODEL` selects the model; `platform-default`
+  contribution and self-update off; the agent also sets
+  `MCODE_DISABLE_EVAL_CAPTURE=1` so no run uploads step reports. `MINIMAX_CODE_MODEL` selects the model; `platform-default`
   or empty runs `MiniMax-M3`, because mcode, unlike Claude Code, has no
   installation default to fall back to. The container gets no Claude bootstrap
   and refuses to start if any provider key (`ANTHROPIC_API_KEY`,

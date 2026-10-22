@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
 	"encoding/json"
 	"io"
@@ -214,7 +215,7 @@ func TestValidateMiniMaxProxyClientEnv(t *testing.T) {
 	good := func(t *testing.T) {
 		t.Setenv("ANTHROPIC_BASE_URL", claudeProxyBaseURL)
 		t.Setenv("ANTHROPIC_AUTH_TOKEN", claudeProxyPlaceholderToken)
-		for _, name := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "K3S_MCP_TOKEN", "MINIMAX_API_KEY", "MCODE_PROVIDER_API_KEY"} {
+		for _, name := range miniMaxCredentialEnv {
 			t.Setenv(name, "")
 		}
 	}
@@ -238,7 +239,7 @@ func TestValidateMiniMaxProxyClientEnv(t *testing.T) {
 			t.Fatal("want an error")
 		}
 	})
-	for _, name := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "K3S_MCP_TOKEN", "MINIMAX_API_KEY", "MCODE_PROVIDER_API_KEY"} {
+	for _, name := range miniMaxCredentialEnv {
 		t.Run(name+" is refused", func(t *testing.T) {
 			good(t)
 			t.Setenv(name, "secret")
@@ -284,6 +285,18 @@ func TestMiniMaxArchiveRestoreRoundTrip(t *testing.T) {
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("checkpoint status=%d err=%v body=%s", resp.StatusCode, err, archive)
 	}
+	entries := tarEntryNames(t, archive)
+	if !entries["state/home/.minimax/v2/session.json"] || !entries["state/workspace/marker.txt"] {
+		t.Fatalf("archive is missing session state: %v", entries)
+	}
+	for name := range entries {
+		if strings.Contains(name, miniMaxConfigDirName) {
+			t.Fatalf("archive carries the managed config %q", name)
+		}
+	}
+	if bytes.Contains(archive, []byte(claudeProxyPlaceholderToken)) {
+		t.Fatal("archive carries the provider placeholder, so the managed config leaked into the state tree")
+	}
 
 	runner2 := newFakeClaudeRunner()
 	c2, cli2, srv2 := newMiniMaxTestServerAt(t, runner2, "MiniMax-M3", true, filepath.Join(t.TempDir(), "restored"))
@@ -305,14 +318,53 @@ func TestMiniMaxArchiveRestoreRoundTrip(t *testing.T) {
 	if got, err := os.ReadFile(filepath.Join(c2.workDir, "marker.txt")); err != nil || string(got) != "workspace" {
 		t.Fatalf("workspace after restore = %q err=%v", got, err)
 	}
-	if _, err := os.Stat(cli2.configPath); err != nil {
-		t.Fatalf("restored pod did not write its managed config: %v", err)
+	if rel, err := filepath.Rel(c2.stateDir, cli2.configPath); err != nil || !strings.HasPrefix(rel, "..") {
+		t.Fatalf("restored managed config %q is not outside the state tree %q", cli2.configPath, c2.stateDir)
+	}
+	if got := readMiniMaxConfig(t, cli2.configPath); got.CustomProvider["session-platform"].Options.BaseURL != claudeProxyBaseURL {
+		t.Fatalf("restored pod's managed config = %+v, want the loopback proxy", got)
 	}
 
 	writeViaHTTP(t, srv2, "continue", http.StatusOK)
 	run := receiveClaudeRun(t, runner2.started)
 	if want := miniMaxArgv(cli2, "MiniMax-M3", true, "continue"); !reflect.DeepEqual(run.argv, want) {
 		t.Fatalf("post-restore argv = %q, want %q", run.argv, want)
+	}
+}
+
+func tarEntryNames(t *testing.T, archive []byte) map[string]bool {
+	t.Helper()
+	names := map[string]bool{}
+	tr := tar.NewReader(bytes.NewReader(archive))
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			return names
+		}
+		if err != nil {
+			t.Fatalf("read archive: %v", err)
+		}
+		names[header.Name] = true
+	}
+}
+
+// A record that is valid JSON but not the expected shape — here a tool item
+// whose content is an object — is dropped, never echoed as raw text.
+func TestMiniMaxStreamProjectorDropsUnexpectedRecords(t *testing.T) {
+	var out bytes.Buffer
+	p := newMiniMaxStreamProjector(&out)
+	stream := `{"type":"item.completed","item":{"id":"c","type":"tool_call","content":{"stdout":"secret-ish tool output"}}}` + "\n" +
+		`{"type":"item.completed","item":{"id":"m","type":"agent_message","content":["not","a","string"]}}` + "\n" +
+		`["unexpected","array"]` + "\n" +
+		`{"type":"item.completed","item":{"id":"m2","type":"agent_message","content":"ok"}}` + "\n"
+	if _, err := io.WriteString(p, stream); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if out.String() != "ok\n" {
+		t.Fatalf("projected = %q, want only %q", out.String(), "ok\n")
 	}
 }
 

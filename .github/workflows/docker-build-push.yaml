@@ -111,7 +111,8 @@ jobs:
 
           # 고쳐야 할 자리는 셋이고 형태가 둘이다:
           #   1) 컨테이너의 image: 줄 (control-plane, 1곳)
-          #   2) DATA_PLANE_IMAGE / DATA_PLANE_CLAUDE_CODE_IMAGE 의 env value (2곳)
+          #   2) DATA_PLANE_*_IMAGE 의 env value (DATA_PLANE_IMAGE · CLAUDE_CODE ·
+          #      APPROVAL_GATED · MINIMAX_CODE — 이미지 문자열이 같아 아래 sed 하나가 모두 잡는다)
           # env value 는 kustomize 의 images 변환이 건드리지 못하는 자리라(문자열일
           # 뿐 image 필드가 아니다) 여기서 함께 다뤄야 한다.
           #

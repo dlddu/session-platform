@@ -16,17 +16,35 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
+// generationRecorder is the archive checkpointer installed for minimax-code. It
+// counts generation-fenced checkpoints and refuses the plain single-call one,
+// so a test passes only if the service took the AC-E5 transaction path.
+type generationRecorder struct {
+	*criu.StubCheckpointer
+	generations int
+}
+
+func (g *generationRecorder) Checkpoint(context.Context, k8s.PodRef) (*session.Checkpoint, error) {
+	return nil, errors.New("minimax-code must be checkpointed with a durable generation")
+}
+
+func (g *generationRecorder) CheckpointWithGeneration(ctx context.Context, ref k8s.PodRef, generation string) (*session.Checkpoint, error) {
+	g.generations++
+	return g.StubCheckpointer.CheckpointWithGeneration(ctx, ref, generation)
+}
+
 // newMiniMaxService wires the archive checkpointer for minimax-code only when
 // archive is true, mirroring MINIMAX_CODE_ARCHIVE_ENABLED (AC-G4).
-func newMiniMaxService(archive bool) (*service.Service, *k8s.StubOrchestrator) {
+func newMiniMaxService(archive bool) (*service.Service, *k8s.StubOrchestrator, *generationRecorder) {
 	orch := k8s.NewStubOrchestrator("sessions")
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
 	ckpt := criu.NewStubCheckpointer(true)
+	recorder := &generationRecorder{StubCheckpointer: criu.NewStubCheckpointer(true)}
 	var opts []service.Option
 	if archive {
-		opts = append(opts, service.WithWorkloadCheckpointer(session.WorkloadTypeMiniMaxCode, ckpt))
+		opts = append(opts, service.WithWorkloadCheckpointer(session.WorkloadTypeMiniMaxCode, recorder))
 	}
-	return service.New(orch, store, ckpt, agent.NewStubClient(), opts...), orch
+	return service.New(orch, store, ckpt, agent.NewStubClient(), opts...), orch, recorder
 }
 
 // AC-G1: the type and its model reach provisioning with the AC-E6 contract.
@@ -38,7 +56,7 @@ func TestMiniMaxCodeCreateAppliesTypeAndModel(t *testing.T) {
 		{model: "", want: session.PlatformDefaultModel},
 		{model: "MiniMax-M3", want: "MiniMax-M3"},
 	} {
-		svc, orch := newMiniMaxService(false)
+		svc, orch, _ := newMiniMaxService(false)
 		sess, err := svc.Create(ctx, session.CreateRequest{
 			Name: "mm", WorkloadType: session.WorkloadTypeMiniMaxCode, Model: tc.model,
 		})
@@ -61,7 +79,7 @@ func TestMiniMaxCodeCreateAppliesTypeAndModel(t *testing.T) {
 // generation-fenced archive path as claude-code and keeps its settings.
 func TestMiniMaxCodeSurvivesSnapshotRestore(t *testing.T) {
 	ctx := context.Background()
-	svc, orch := newMiniMaxService(true)
+	svc, orch, recorder := newMiniMaxService(true)
 	sess, err := svc.Create(ctx, session.CreateRequest{
 		Name: "mm-round-trip", WorkloadType: session.WorkloadTypeMiniMaxCode, Model: "MiniMax-M3",
 	})
@@ -74,6 +92,9 @@ func TestMiniMaxCodeSurvivesSnapshotRestore(t *testing.T) {
 	}
 	if frozen.State != session.StateSnapshot || orch.RunningCount() != 0 {
 		t.Fatalf("after snapshot: state %q with %d pods, want snapshot with none", frozen.State, orch.RunningCount())
+	}
+	if recorder.generations != 1 {
+		t.Fatalf("generation-fenced checkpoints = %d, want 1", recorder.generations)
 	}
 	restored, err := svc.Restore(ctx, sess.ID)
 	if err != nil {
@@ -91,7 +112,7 @@ func TestMiniMaxCodeSurvivesSnapshotRestore(t *testing.T) {
 // through to the shell's checkpointer, and keeps its pod.
 func TestMiniMaxCodeSnapshotIsRefusedWithoutItsGate(t *testing.T) {
 	ctx := context.Background()
-	svc, orch := newMiniMaxService(false)
+	svc, orch, _ := newMiniMaxService(false)
 	sess, err := svc.Create(ctx, session.CreateRequest{Name: "mm-no-gate", WorkloadType: session.WorkloadTypeMiniMaxCode})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -108,7 +129,7 @@ func TestMiniMaxCodeSnapshotIsRefusedWithoutItsGate(t *testing.T) {
 // thaw a snapshotted session.
 func TestMiniMaxCodeOversizedPromptIsRejectedBeforeRestore(t *testing.T) {
 	ctx := context.Background()
-	svc, orch := newMiniMaxService(true)
+	svc, orch, _ := newMiniMaxService(true)
 	sess, err := svc.Create(ctx, session.CreateRequest{Name: "mm-limited", WorkloadType: session.WorkloadTypeMiniMaxCode})
 	if err != nil {
 		t.Fatalf("create: %v", err)

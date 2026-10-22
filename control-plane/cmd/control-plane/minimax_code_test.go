@@ -30,6 +30,16 @@ func TestLoadMiniMaxConfigReadsEnvironment(t *testing.T) {
 	}
 }
 
+// AC-G3: the two agent types must not be configured onto one Secret.
+func TestValidateMiniMaxSecret(t *testing.T) {
+	if err := validateMiniMaxSecret(miniMaxConfig{credentialsSecret: "minimax-code-credentials"}, "claude-code-credentials"); err != nil {
+		t.Fatalf("distinct secrets: %v", err)
+	}
+	if err := validateMiniMaxSecret(miniMaxConfig{credentialsSecret: " shared "}, "shared"); err == nil {
+		t.Fatal("shared secret: want an error")
+	}
+}
+
 // AC-G4: the archive gate is off by default, and turning it on for a type with
 // no image is a startup error rather than a silently dead gate.
 func TestMiniMaxArchiveOption(t *testing.T) {
