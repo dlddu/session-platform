@@ -34,13 +34,13 @@
   ```
   mcode exec --config <관리형 설정> \
     --model custom_provider:session-platform/<모델> \
-    --permission smart --output-format stream-json [--continue] -- "<payload>"
+    --permission full --effort xhigh --output-format stream-json [--continue] -- "<payload>"
   ```
 
-  `--` 뒤 payload는 옵션이 아닌 단일 positional argv다. 권한은 `mcode`의 비대화 기본값 `smart`로 **고정**한다 — 상위 버전의 기본값 변경이 무인 실행의 권한을 조용히 넓히지 못하게 하기 위해서다. data plane은 stdout JSONL에서 `agent_message` 항목의 `contentDelta`만 순서대로 투영하고, 항목이 끝날 때(`item.completed`) 줄바꿈을 맞춘다. 델타 없이 끝난 항목은 완료 레코드의 `content`로 한 번만 투영한다. reasoning·tool_call·생명주기 레코드는 사용자 출력이 아니다. 실패한 turn은 `mcode`가 stderr에도 보고하므로 별도로 투영하지 않으며, stderr는 AC-E3대로 진단 출력으로 같은 버퍼에 합쳐진다.
+  `--` 뒤 payload는 옵션이 아닌 단일 positional argv다. 권한은 `full`, 추론 강도는 `xhigh`로 **고정**한다 — 실행은 무인이므로 사람에게 묻고 멈추는 모드(`smart`는 사람 없이 대부분의 셸 명령을 거부한다)는 turn을 실패시킬 뿐이고, 도구의 경계는 실제 자격 증명을 갖지 않는 세션 파드다(AC-G3). 고정값이므로 상위 버전의 기본값 변경이 실행 방식을 조용히 바꾸지 못한다. `mcode`는 모델 정의에 추론 강도 선택지가 없으면 `--effort`를 거부하고, 토큰 한도가 없으면 응답을 16384 토큰으로 자르므로, 관리형 설정은 세션 모델에 추론 강도 선택지(항상 켜진 adaptive thinking)를 선언하고 한도가 알려진 모델(`MiniMax-M3.1-Flash`: 컨텍스트 512k·출력 128k)에는 그 한도도 선언한다. data plane은 stdout JSONL에서 `agent_message` 항목의 `contentDelta`만 순서대로 투영하고, 항목이 끝날 때(`item.completed`) 줄바꿈을 맞춘다. 델타 없이 끝난 항목은 완료 레코드의 `content`로 한 번만 투영한다. reasoning·tool_call·생명주기 레코드는 사용자 출력이 아니다. 실패한 turn은 `mcode`가 stderr에도 보고하므로 별도로 투영하지 않으며, stderr는 AC-E3대로 진단 출력으로 같은 버퍼에 합쳐진다.
 - **달성 가치**: V3, V4
 - **구체화 대상**: AC-C2(read)·AC-C3(write) — AC-E2/E3의 투영 규칙을 이 CLI의 스트림 형식에 맞춰 바꾼 것
-- **검증 방법**: 첫 write의 argv에 `--continue`가 없고 성공 후 두 번째 write에는 있음을 확인한다. `--`로 시작하는 프롬프트가 옵션으로 해석되지 않음을 확인한다. reasoning·tool_call이 섞인 스트림에서 assistant 텍스트만, 중복 없이, 메시지마다 줄바꿈되어 투영됨을 확인한다.
+- **검증 방법**: 모든 write의 argv에 `--permission full --effort xhigh`가 있고, 관리형 설정의 세션 모델 정의가 `xhigh`를 추론 강도 선택지로 담으며 `MiniMax-M3.1-Flash`에는 512k/128k 한도를 담음을 확인한다. 첫 write의 argv에 `--continue`가 없고 성공 후 두 번째 write에는 있음을 확인한다. `--`로 시작하는 프롬프트가 옵션으로 해석되지 않음을 확인한다. reasoning·tool_call이 섞인 스트림에서 assistant 텍스트만, 중복 없이, 메시지마다 줄바꿈되어 투영됨을 확인한다.
 
 ### AC-G3: 공급자 자격 증명은 이 타입 전용 Secret, 배치는 AC-E6 사이드카
 - **설명**: 플랫폼 Secret `minimax-code-credentials`(이름은 control plane 설정으로 바꿀 수 있다)의 키 이름과 의미는 AC-E6과 같다 — 필수 `base-url`·`auth-token`은 credential-proxy 사이드카에만, 선택 `ca-cert`도 사이드카에만, 선택 `model`은 `platform-default` 세션의 주 컨테이너에만 주입된다. `base-url`은 MiniMax의 Anthropic 호환 엔드포인트(예: `https://api.minimax.io/anthropic`)이고 `auth-token`은 Token Plan **Subscription Key** 또는 종량제 API 키다. proxy는 AC-E6 그대로 HTTPS origin을 고정하고 허용 목록 헤더만 전달한 뒤 토큰을 `Authorization: Bearer`로 주입하는데, MiniMax는 두 종류의 키 모두 이 형식을 받는다. 주 컨테이너는 `ANTHROPIC_BASE_URL=http://127.0.0.1:8091`과 비밀이 아닌 placeholder만 보고, 시작 시 `ANTHROPIC_API_KEY`·`CLAUDE_CODE_OAUTH_TOKEN`·`MINIMAX_API_KEY`·`MCODE_PROVIDER_API_KEY`·`K3S_MCP_TOKEN` 등 두 CLI가 스스로 읽을 수 있는 자격 증명 변수가 하나라도 있으면 기동을 거부한다. control plane은 `minimax-code` Secret 이름이 `claude-code` Secret 이름과 같으면 기동을 거부한다. `claude-code`의 플러그인 부트스트랩(K3s MCP 토큰)은 이 타입에 없다. `mcode`가 읽는 설정은 data plane이 기동할 때마다 **상태 트리 바깥**에 다시 쓰는 관리형 파일 하나로, loopback proxy를 가리키는 Anthropic-messages 공급자 하나와 세션 모델만 선언하고 데이터 기여(data contribution)와 자가 업데이트를 끈다. agent는 `MCODE_DISABLE_EVAL_CAPTURE=1`도 설정해 실행 단계 보고 업로드를 막는다. 이 파일은 아카이브되지 않으므로 복원이 낡은 설정을 되살릴 수 없다. **두 타입의 Secret은 서로 섞이지 않는다** — `minimax-code` 파드의 어떤 컨테이너도 `claude-code` Secret을 참조하지 않는다.
