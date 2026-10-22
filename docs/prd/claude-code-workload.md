@@ -114,4 +114,6 @@
 
 > ✅ **구현 결정 (모델 카탈로그, 2026-08-09)**: optional `model`과 `models`는 control-plane rollout 단위의 UI default와 soft catalog다. `GET /api/v1/config`가 concrete default 또는 fallback alias와 catalog를 공개하되 Create Session API의 allowlist로 사용하지 않으며, 빈 catalog는 기존 free-text 입력을 보존한다.
 
+> ✅ **구현 결정 (워크로드 타입 목록, 2026-10-23)**: `GET /api/v1/config`가 `workloadTypes` 배열로 이 배포가 생성할 수 있는 타입(셸은 항상, 나머지는 이미지가 설정된 것만)을 표시 순서대로 공개한다. 각 항목은 `type`·`label`·`description`·`takesModel`·`input`(`prompt`|`terminal`)·`defaultModel`·`models`이고, `defaultModel`·`models`의 의미는 위 모델 카탈로그 결정과 같다(`takesModel=false`면 `defaultModel`은 `null`, `models`는 빈 배열). approval-gated는 claude-code Secret의 `model`/`models`를 그대로 보이고, minimax-code는 control plane이 그 Secret을 읽지 않으므로 `platform-default`와 빈 catalog다. 외부 클라이언트는 이 목록으로 타입 선택과 생성 요청 검증을 하므로 타입 추가에 클라이언트 배포가 필요 없다. 기존 `claudeCode` 필드는 하위 호환을 위해 유지한다. 목록은 표시용이며 Create Session API의 검증 범위를 바꾸지 않는다.
+
 > ✅ **구현 결정 (이미지/모드, 2026-08-08)**: 하나의 data-plane 이미지에 PTY shell, CRIU, Claude Code CLI를 포함하고 `DATA_PLANE_WORKLOAD`로 시작 모드를 분기한다. Kubernetes pod label/env와 control-plane의 immutable workload spec이 선택한 모드를 끝까지 전달한다.

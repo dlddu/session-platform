@@ -60,7 +60,9 @@ paths:
       summary: Get non-sensitive runtime configuration
       operationId: getRuntimeConfig
       description: >
-        Returns the Claude Code model picker configuration captured when this
+        Returns the workload types this deployment offers (with each type's
+        input style and model picker configuration) and, for existing clients,
+        the Claude Code model picker configuration, all captured when this
         control-plane process started. `defaultModel` is the effective concrete
         model projected from the Secret, or the stable `platform-default`
         session alias when that value is missing or empty. `models` is an
@@ -85,6 +87,21 @@ paths:
                 claudeCode:
                   defaultModel: "~anthropic/claude-opus-latest"
                   models: [sonnet, opus]
+                workloadTypes:
+                  - type: shell
+                    label: Shell
+                    description: Interactive bash. You type the commands.
+                    takesModel: false
+                    input: terminal
+                    defaultModel: null
+                    models: []
+                  - type: claude-code
+                    label: Claude Code
+                    description: Agent CLI. You send prompts, it does the work.
+                    takesModel: true
+                    input: prompt
+                    defaultModel: "~anthropic/claude-opus-latest"
+                    models: [sonnet, opus]
   /sessions:
     get:
       summary: List sessions
@@ -418,10 +435,59 @@ components:
     RuntimeConfig:
       type: object
       additionalProperties: false
-      required: [claudeCode]
+      required: [claudeCode, workloadTypes]
       properties:
         claudeCode:
           $ref: "#/components/schemas/ClaudeCodeConfig"
+        workloadTypes:
+          type: array
+          description: >
+            Workload types this deployment can create, in display order (shell
+            first). A non-default type is listed only when its data plane image
+            is configured, so a client that builds its picker and create-request
+            validation from this list needs no release when a type is added.
+            `claudeCode` predates this list and repeats its `claude-code` entry
+            for existing clients.
+          items:
+            $ref: "#/components/schemas/WorkloadTypeConfig"
+    WorkloadTypeConfig:
+      type: object
+      additionalProperties: false
+      required: [type, label, description, takesModel, input, defaultModel, models]
+      properties:
+        type:
+          type: string
+          description: Value for the create request's `workloadType`. Clients should ignore types they do not know.
+        label:
+          type: string
+          description: Short human-readable name for a picker.
+        description:
+          type: string
+          description: One-line explanation for a picker.
+        takesModel:
+          type: boolean
+          description: Whether a create request for this type may carry `model`. A model on a type where this is false is rejected with 400.
+        input:
+          type: string
+          enum: [prompt, terminal]
+          description: >
+            How the session is driven. `terminal` writes keystrokes to a PTY and
+            reads a terminal screen; `prompt` writes whole prompts to a serial
+            agent queue and reads its text stream.
+        defaultModel:
+          type: string
+          nullable: true
+          maxLength: 128
+          description: >
+            Same meaning as `ClaudeCodeConfig.defaultModel` for this type: the
+            concrete Secret-backed default, or `platform-default`. `null`
+            exactly when `takesModel` is false.
+        models:
+          type: array
+          uniqueItems: true
+          description: Same meaning as `ClaudeCodeConfig.models` for this type. Always empty when `takesModel` is false.
+          items:
+            type: string
     ClaudeCodeConfig:
       type: object
       additionalProperties: false
