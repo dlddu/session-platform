@@ -15,9 +15,15 @@ import (
 )
 
 type API struct {
-	mgr                    session.Manager
-	claudeCodeDefaultModel string
-	claudeCodeModels       []string
+	mgr          session.Manager
+	modelConfigs map[session.WorkloadType]modelConfig
+	// nil offers every known type; an empty map offers none.
+	offered map[session.WorkloadType]bool
+}
+
+type modelConfig struct {
+	defaultModel string
+	models       []string
 }
 
 const maxRequestBodyBytes = 8 << 20
@@ -28,17 +34,29 @@ type Option func(*API)
 // picker configuration to the SPA. Copying it keeps the API's startup snapshot
 // immutable.
 func WithClaudeCodeModelConfig(defaultModel string, models []string) Option {
+	return WithWorkloadModelConfig(session.WorkloadTypeClaudeCode, defaultModel, models)
+}
+
+func WithWorkloadModelConfig(w session.WorkloadType, defaultModel string, models []string) Option {
 	return func(a *API) {
-		a.claudeCodeDefaultModel = defaultModel
-		a.claudeCodeModels = append([]string{}, models...)
+		a.modelConfigs[w] = modelConfig{defaultModel: defaultModel, models: append([]string{}, models...)}
+	}
+}
+
+// WithOfferedWorkloadTypes filters GET /config only; create still validates against every known type.
+func WithOfferedWorkloadTypes(types ...session.WorkloadType) Option {
+	return func(a *API) {
+		a.offered = make(map[session.WorkloadType]bool, len(types))
+		for _, w := range types {
+			a.offered[w] = true
+		}
 	}
 }
 
 func New(mgr session.Manager, opts ...Option) *API {
 	a := &API{
-		mgr:                    mgr,
-		claudeCodeDefaultModel: session.PlatformDefaultModel,
-		claudeCodeModels:       []string{},
+		mgr:          mgr,
+		modelConfigs: map[session.WorkloadType]modelConfig{},
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -96,7 +114,20 @@ type writeResp struct {
 }
 
 type runtimeConfigResp struct {
-	ClaudeCode claudeCodeConfigResp `json:"claudeCode"`
+	// ClaudeCode predates WorkloadTypes and is kept for existing clients.
+	ClaudeCode    claudeCodeConfigResp   `json:"claudeCode"`
+	WorkloadTypes []workloadTypeConfResp `json:"workloadTypes"`
+}
+
+type workloadTypeConfResp struct {
+	Type        session.WorkloadType `json:"type"`
+	Label       string               `json:"label"`
+	Description string               `json:"description"`
+	TakesModel  bool                 `json:"takesModel"`
+	Input       session.InputMode    `json:"input"`
+	// DefaultModel is null exactly when TakesModel is false.
+	DefaultModel *string  `json:"defaultModel"`
+	Models       []string `json:"models"`
 }
 
 type claudeCodeConfigResp struct {
@@ -118,10 +149,40 @@ func (a *API) runtimeConfig(w http.ResponseWriter, _ *http.Request) {
 	// Avoid browser/proxy caching so a control-plane rollout immediately
 	// exposes its new snapshot.
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, runtimeConfigResp{ClaudeCode: claudeCodeConfigResp{
-		DefaultModel: a.claudeCodeDefaultModel,
-		Models:       append([]string{}, a.claudeCodeModels...),
-	}})
+	claude := a.modelConfig(session.WorkloadTypeClaudeCode)
+	resp := runtimeConfigResp{
+		ClaudeCode:    claudeCodeConfigResp{DefaultModel: claude.defaultModel, Models: claude.models},
+		WorkloadTypes: []workloadTypeConfResp{},
+	}
+	for _, info := range session.WorkloadTypes() {
+		if a.offered != nil && !a.offered[info.Type] {
+			continue
+		}
+		entry := workloadTypeConfResp{
+			Type:        info.Type,
+			Label:       info.Label,
+			Description: info.Description,
+			TakesModel:  info.TakesModel,
+			Input:       info.Input,
+			Models:      []string{},
+		}
+		if info.TakesModel {
+			mc := a.modelConfig(info.Type)
+			entry.DefaultModel = &mc.defaultModel
+			entry.Models = mc.models
+		}
+		resp.WorkloadTypes = append(resp.WorkloadTypes, entry)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (a *API) modelConfig(w session.WorkloadType) modelConfig {
+	mc, ok := a.modelConfigs[w]
+	if !ok || mc.defaultModel == "" {
+		mc.defaultModel = session.PlatformDefaultModel
+	}
+	mc.models = append([]string{}, mc.models...)
+	return mc
 }
 
 func (a *API) createSession(w http.ResponseWriter, r *http.Request) {

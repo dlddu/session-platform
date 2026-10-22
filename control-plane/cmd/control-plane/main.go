@@ -144,6 +144,9 @@ func main() {
 	mux := http.NewServeMux()
 	api.New(mgr,
 		api.WithClaudeCodeModelConfig(cfg.claudeCodeDefaultModel, cfg.claudeCodeModels),
+		// approval-gated reads the same Secret's model keys (AC-F6 → AC-E6).
+		api.WithWorkloadModelConfig(session.WorkloadTypeApprovalGated, cfg.claudeCodeDefaultModel, cfg.claudeCodeModels),
+		api.WithOfferedWorkloadTypes(cfg.offeredWorkloadTypes()...),
 	).Routes(mux)
 	mux.Handle("/", static.Handler())
 
@@ -226,6 +229,21 @@ type config struct {
 	checkpointS3SessionName string
 	checkpointS3Endpoint    string
 	miniMax                 miniMaxConfig
+}
+
+// GET /config lists only these, so clients never offer a type whose create would fail.
+func (c config) offeredWorkloadTypes() []session.WorkloadType {
+	types := []session.WorkloadType{session.WorkloadTypeShell}
+	for w, image := range map[session.WorkloadType]string{
+		session.WorkloadTypeClaudeCode:    c.dataPlaneClaudeCodeImage,
+		session.WorkloadTypeApprovalGated: c.dataPlaneApprovalGatedImage,
+		session.WorkloadTypeMiniMaxCode:   c.miniMax.image,
+	} {
+		if image != "" {
+			types = append(types, w)
+		}
+	}
+	return types
 }
 
 // buildCheckpointStore builds the checkpoint archive backend.
