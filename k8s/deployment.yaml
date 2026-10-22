@@ -150,14 +150,14 @@ spec:
             # Secret 이 없으면 이 타입의 세션 생성만 실패하고 다른 타입은 영향이 없다.
             - name: MINIMAX_CODE_CREDENTIALS_SECRET
               value: "minimax-code-credentials"
-            # 이 타입 전용 데이터 전송 게이트(AC-G4). 일부러 off 로 둔다: PR 프리뷰
-            # 오버레이(flux-cd-apps apps/session-platform-preview)는 S3 를 주입하지 않고
-            # CLAUDE_CODE_ARCHIVE_ENABLED 만 이름으로 끄므로, base 에서 이 값을 켜면 프리뷰의
-            # control plane 이 체크포인트 저장소 없이 기동하다 종료한다. 켜려면 프리뷰
-            # 오버레이에 같은 이름의 false 를 먼저 넣는다. off 인 동안 이 타입의 세션은
-            # 동결되지 않고 파드를 유지한다(동결 요청은 ErrCheckpointDisabled).
+            # 이 타입 전용 데이터 전송 게이트(AC-G4). on 이면 minimax-code 세션의 작업
+            # 디렉터리·대화 기록·출력 아카이브가 위 CHECKPOINT_S3_* 로 간다.
+            # ⚠️ PR 프리뷰 오버레이(flux-cd-apps apps/session-platform-preview)는 S3 를
+            # 주입하지 않으므로 이 이름을 false 로 덮어써야 한다 — 안 그러면 프리뷰의
+            # control plane 이 체크포인트 저장소 없이 기동하다 종료한다. 그 오버레이 변경이
+            # 이 값보다 먼저 들어가 있어야 한다.
             - name: MINIMAX_CODE_ARCHIVE_ENABLED
-              value: "false"
+              value: "true"
           readinessProbe:
             httpGet:
               path: /api/v1/healthz

@@ -28,7 +28,7 @@ const (
 	// Secret names no model. Claude Code has an installation default it can
 	// fall back to by omitting --model; mcode resolves a model only through a
 	// provider entry, so the platform has to name one (AC-G1).
-	miniMaxDefaultModel = "MiniMax-M3"
+	miniMaxDefaultModel = "MiniMax-M3.1-Flash"
 	// miniMaxProviderID names the one provider entry the managed config
 	// declares. The CLI addresses models as custom_provider:<id>/<model>.
 	miniMaxProviderID = "session-platform"

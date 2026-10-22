@@ -57,7 +57,7 @@ interactive shell and Claude Code workloads.
   non-secret placeholder key and the session's model, and turns data
   contribution and self-update off; the agent also sets
   `MCODE_DISABLE_EVAL_CAPTURE=1` so no run uploads step reports. `MINIMAX_CODE_MODEL` selects the model; `platform-default`
-  or empty runs `MiniMax-M3`, because mcode, unlike Claude Code, has no
+  or empty runs `MiniMax-M3.1-Flash`, because mcode, unlike Claude Code, has no
   installation default to fall back to. The container gets no Claude bootstrap
   and refuses to start if any provider key (`ANTHROPIC_API_KEY`,
   `MINIMAX_API_KEY`, `MCODE_PROVIDER_API_KEY`, …) or `K3S_MCP_TOKEN` is set
