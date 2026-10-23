@@ -25,7 +25,6 @@ const router = createBrowserRouter([
       },
       { path: "/session/:id", element: <Workspace /> },
       { path: "/agent/:id", element: <Workspace /> },
-      { path: "/gated/:id", element: <Workspace /> },
       { path: "/restore/:id", element: <Restore /> },
     ],
   },

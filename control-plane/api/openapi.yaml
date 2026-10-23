@@ -9,7 +9,7 @@ info:
     uniform "ensure active then serve": read, write and switch promote
     idle->active (AC-C1) or restore snapshot->active (AC-B2) before serving.
     A session picks a workload type at creation (AC-E1): `shell` (the default),
-    `claude-code`, `approval-gated` or `minimax-code`. The type is immutable for the session's lifetime — no
+    `claude-code` or `minimax-code`. The type is immutable for the session's lifetime — no
     endpoint changes it, and a restore keeps it — so switching workloads means
     creating a new session. For `shell`, write injects the payload into the PTY
     stdin (AC-D2); for `claude-code` (and the agent types that reuse its
@@ -452,15 +452,13 @@ components:
       enum: [active, idle, snapshot]
     WorkloadType:
       type: string
-      enum: [shell, claude-code, approval-gated, minimax-code]
+      enum: [shell, claude-code, minimax-code]
       default: shell
       description: >
-        Which data plane workload the session runs (AC-E1/AC-F1). Fixed at
+        Which data plane workload the session runs (AC-E1/AC-G1). Fixed at
         creation and immutable afterwards. `shell` is an interactive PTY shell
         (AC-D1~D5); `claude-code` is the Claude Code CLI workload (AC-E2~E6);
-        `approval-gated` is the same agent execution model behind a human
-        approval gate, provisioned as a workload pod plus a session-scoped
-        helper pod (AC-F1~F6); `minimax-code` is the MiniMax Code CLI
+        `minimax-code` is the MiniMax Code CLI
         (`mcode`) on that same execution model, with its own provider Secret
         behind the same credential proxy (AC-G1~G4). Each non-default type requires the control plane
         to have an image configured for it, and creating a session of a type
@@ -484,8 +482,8 @@ components:
           type: string
           description: >
             Immutable model identifier for the agent workload types. Present
-            for `claude-code`, `approval-gated` and `minimax-code`, which share
-            this contract (AC-E6, reused by AC-F1 and AC-G1); omitted at creation resolves to
+            for `claude-code` and `minimax-code`, which share
+            this contract (AC-E6, reused by AC-G1); omitted at creation resolves to
             `platform-default`.
             Whenever the primary container starts, including a restart, that
             alias resolves through the optional Secret model and then the CLI
@@ -503,8 +501,7 @@ components:
             workload themselves (AC-A2's auxiliary-pod clause). They share the
             workload pod's lifetime and are reclaimed with it, so this is absent
             exactly when `pod` is. `shell`, `claude-code` and `minimax-code`
-            sessions provision none; an `approval-gated` session lists its one helper pod here
-            (AC-F4).
+            sessions provision none.
         createdAt: { type: string, format: date-time }
         lastAccess: { type: string, format: date-time }
         checkpoint: { $ref: "#/components/schemas/Checkpoint" }
@@ -529,8 +526,8 @@ components:
           type: string
           pattern: '^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$'
           description: >
-            Model for this session. Valid when workloadType is `claude-code`,
-            `approval-gated` or `minimax-code`; omitted resolves to `platform-default`. A concrete
+            Model for this session. Valid when workloadType is `claude-code`
+            or `minimax-code`; omitted resolves to `platform-default`. A concrete
             value is passed literally and takes precedence over the platform
             Secret default. The catalog returned by GET /config is advisory,
             not an allowlist. Credentials are never accepted in this request.

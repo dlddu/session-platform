@@ -5,13 +5,12 @@ import type { Session } from "../api/types";
 import { StateBadge } from "./StateBadge";
 import { ClockIcon, CrystalIcon, PodIcon } from "./icons";
 import { sessionEntryPath } from "./sessionRoutes";
-import { isAgentWorkload, isGatedWorkload } from "./workloadKind";
+import { isAgentWorkload } from "./workloadKind";
 
 // 동결 어휘는 타입별로 갈린다 — 아카이브(AC-E5) vs CRIU 체크포인트(AC-D4).
 const WORKLOAD_TAG: Record<string, string> = {
   shell: "$ shell",
   "claude-code": "◇ claude-code",
-  "approval-gated": "⏸ approval-gated",
   "minimax-code": "◇ minimax-code",
 };
 
@@ -108,11 +107,9 @@ function SnapshotBody({ s, now }: { s: Session; now: number }) {
       </div>
       <div className="snap-hint">
         <ClockIcon size={13} />{" "}
-        {isGatedWorkload(s.workloadType)
-          ? "open to restore the archive — the gate is re-armed on resume"
-          : isAgentWorkload(s.workloadType)
-            ? "open to restore the archive and continue the conversation"
-            : "open to thaw and resume exactly where it froze"}
+        {isAgentWorkload(s.workloadType)
+          ? "open to restore the archive and continue the conversation"
+          : "open to thaw and resume exactly where it froze"}
       </div>
     </>
   );
@@ -205,11 +202,7 @@ export function SessionCard({
           <span
             className={
               "workload-tag" +
-              (isGatedWorkload(s.workloadType)
-                ? " workload-tag-gated"
-                : isAgentWorkload(s.workloadType)
-                  ? " workload-tag-agent"
-                  : "")
+              (isAgentWorkload(s.workloadType) ? " workload-tag-agent" : "")
             }
             title={"workloadType=" + s.workloadType}
           >

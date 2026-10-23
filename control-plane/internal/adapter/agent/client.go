@@ -253,40 +253,6 @@ func (c *HTTPClient) Read(ctx context.Context, pod string, offset int64) (string
 	return out.Payload, out.NextOffset, nil
 }
 
-// AwaitingApproval reports whether the pod is blocked on a human decision right
-// now (AC-F3). It is deliberately not on the Client interface — the service
-// reaches it through an optional capability assertion, as it does
-// CheckpointWithGeneration.
-func (c *HTTPClient) AwaitingApproval(ctx context.Context, pod string) (bool, error) {
-	ip, err := c.resolve(ctx, pod)
-	if err != nil {
-		return false, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL(ip)+"/approval", nil)
-	if err != nil {
-		return false, err
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return false, fmt.Errorf("read approval wait from session pod %s: %w", pod, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return false, fmt.Errorf(
-			"read approval wait from session pod %s: agent returned %d: %s",
-			pod, resp.StatusCode, strings.TrimSpace(string(body)),
-		)
-	}
-	var out struct {
-		Awaiting bool `json:"awaiting"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return false, fmt.Errorf("decode approval wait from session pod %s: %w", pod, err)
-	}
-	return out.Awaiting, nil
-}
-
 // Stream opens the data plane's long-lived SSE output feed at offset, over the
 // context-bounded streaming client rather than the short Read one.
 func (c *HTTPClient) Stream(ctx context.Context, pod string, offset int64) (io.ReadCloser, error) {

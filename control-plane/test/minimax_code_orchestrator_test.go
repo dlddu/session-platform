@@ -32,7 +32,7 @@ func newMiniMaxOrchestrator(t *testing.T, opts ...k8s.Option) (*k8s.ClientOrches
 }
 
 // AC-G1: the type provisions one workload pod running the agent plus its
-// credential proxy sidecar, and nothing else — no helper pod.
+// credential proxy sidecar, and nothing else — no auxiliary pod.
 func TestMiniMaxCode_PodSpec(t *testing.T) {
 	orch, pods := newMiniMaxOrchestrator(t)
 	set, err := orch.Start(context.Background(), "mm01", k8s.WorkloadSpec{Type: session.WorkloadTypeMiniMaxCode})

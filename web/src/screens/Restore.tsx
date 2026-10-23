@@ -5,7 +5,7 @@ import { api } from "../api/client";
 import type { Session } from "../api/types";
 import { DeleteSessionDialog } from "../app/DeleteSessionDialog";
 import { liveSessionPath } from "../app/sessionRoutes";
-import { isAgentWorkload, isGatedWorkload } from "../app/workloadKind";
+import { isAgentWorkload } from "../app/workloadKind";
 import { useToast } from "../app/Toast";
 
 const AGENT_RESTORE_COPY =
@@ -13,12 +13,8 @@ const AGENT_RESTORE_COPY =
   "and accumulated output. No CRIU checkpoint is used.";
 const SHELL_RESTORE_COPY =
   "The checkpoint will thaw into a fresh pod and resume the shell exactly where it froze.";
-const GATED_RESTORE_COPY =
-  "A fresh workload pod and a fresh helper pod will restore the conversation " +
-  "history, working directory, shared volume, and accumulated output. The " +
-  "approval gate is re-armed; nothing that was pending survives the freeze.";
 
-// 복원 메커니즘의 타입별 분기는 AC-B2 · AC-D4 · AC-E5 · AC-F4/F5 가 정본이다.
+// 복원 메커니즘의 타입별 분기는 AC-B2 · AC-D4 · AC-E5 가 정본이다.
 export function Restore() {
   const { id = "" } = useParams();
   const [sess, setSess] = useState<Session | null>(null);
@@ -65,11 +61,7 @@ export function Restore() {
   if (!sess) return <div className="pad empty">Loading…</div>;
 
   const isAgent = isAgentWorkload(sess.workloadType);
-  const restoreCopy = isGatedWorkload(sess.workloadType)
-    ? GATED_RESTORE_COPY
-    : isAgent
-      ? AGENT_RESTORE_COPY
-      : SHELL_RESTORE_COPY;
+  const restoreCopy = isAgent ? AGENT_RESTORE_COPY : SHELL_RESTORE_COPY;
   const resumeLabel = busy
     ? isAgent
       ? "Restoring…"

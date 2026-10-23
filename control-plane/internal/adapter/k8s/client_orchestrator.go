@@ -15,7 +15,6 @@ import (
 	"github.com/gorilla/websocket"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
@@ -32,15 +31,13 @@ const (
 	// and not only in control plane state.
 	LabelWorkloadType = "session-platform.dev/workload-type"
 	// LabelPodRole separates a session's workload pod from the session-scoped
-	// auxiliary pods that serve it (AC-A2's auxiliary-pod clause, AC-F4). Every
-	// pod carries the session id, so a selector that keyed off LabelSessionID
-	// alone would count a helper pod as a second workload pod for the session;
+	// auxiliary pods that serve it (AC-A2's auxiliary-pod clause). Every pod
+	// carries the session id, so a selector that keyed off LabelSessionID alone
+	// would count an auxiliary pod as a second workload pod for the session;
 	// this label is what lets such a selector stay narrow.
 	LabelPodRole = "session-platform.dev/pod-role"
 	// PodRoleWorkload marks the pod running the session's workload.
 	PodRoleWorkload = "workload"
-	// PodRoleHelper marks a session-scoped auxiliary pod (AC-F4).
-	PodRoleHelper = "helper"
 	// labelManagedBy marks the pods this control plane owns so a stray selector
 	// never reclaims something it did not create.
 	labelManagedBy = "app.kubernetes.io/managed-by"
@@ -125,46 +122,6 @@ const (
 	credentialProxyPlaceholderToken = "session-platform-proxy"
 	agentAddrEnvVar                 = "DATA_PLANE_AGENT_ADDR"
 
-	// Approval-gated runtime configuration (AC-F4/AC-F6).
-	defaultApprovalGatewaySecret = "approval-gateway-credentials"
-	// SessionMCPContainerName is the helper pod container that exposes the
-	// session's external tools behind the approval gate (AC-F3).
-	SessionMCPContainerName = "session-mcp"
-	// HelperCredentialProxyContainerName is the helper pod's provider proxy
-	// (AC-F6; contract AC-E6 — see credentialProxyContainer).
-	HelperCredentialProxyContainerName = "credential-proxy"
-	sessionMCPWorkload                 = "mcp"
-	// SessionMCPPort is where the helper pod's MCP container serves the session
-	// MCP endpoint and its readiness probe.
-	SessionMCPPort     = 8092
-	sessionMCPPortName = "mcp"
-	// SessionMCPURLEnvVar tells the workload pod's agent where its session MCP
-	// is (AC-F6).
-	SessionMCPURLEnvVar = "SESSION_MCP_URL"
-	// helperProxyListenAddr binds the helper pod's proxy to the pod network
-	// rather than loopback (AC-F6). What keeps that reachable-from-anywhere bind
-	// safe is AC-F2's ingress policy in network_policy.go — and only where the
-	// CNI enforces NetworkPolicy (docs/doc-tracker.md).
-	helperProxyListenAddr = "0.0.0.0:8091"
-	// CredentialProxyPlacementEnvVar tells a credential-proxy container which of
-	// its two sanctioned placements it is in, so the data plane can open the
-	// pod-network bind for the helper without opening it for the sidecar too.
-	// Keep the values in sync with data-plane/cmd/agent (proxyPlacementEnv).
-	CredentialProxyPlacementEnvVar = "DATA_PLANE_PROXY_PLACEMENT"
-	proxyPlacementSidecar          = "sidecar"
-	proxyPlacementHelper           = "helper"
-	// The gateway triple (AC-F6) — see helperPodSpec for where it is projected.
-	ApprovalGatewayURLEnvVar       = "APPROVAL_GATEWAY_URL"
-	ApprovalGatewayAPIKeyEnvVar    = "APPROVAL_GATEWAY_API_KEY"
-	ApprovalGatewayUserIDEnvVar    = "APPROVAL_GATEWAY_USER_ID"
-	ApprovalGatewayURLSecretKey    = "url"
-	ApprovalGatewayAPIKeySecretKey = "api-key"
-	ApprovalGatewayUserIDSecretKey = "user-id"
-	// SessionIDEnvVar tells the MCP container which session it serves — the
-	// session half of AC-F3's external identifier.
-	// Keep in sync with data-plane/cmd/agent (sessionIDEnv).
-	SessionIDEnvVar = "SESSION_ID"
-
 	// restoreModeEnvVar tells a restore-target agent to wait for POST /restore
 	// instead of starting a fresh workload (AC-D4, AC-E5).
 	// Keep in sync with data-plane/cmd/agent (restoreModeEnv).
@@ -196,11 +153,7 @@ type ClientOrchestrator struct {
 	namespace                string
 	image                    string
 	claudeCredentialsSecret  string // platform Secret referenced by claude-code pods
-	approvalGatewaySecret    string // platform Secret referenced by approval-gated helper pods
 	miniMaxCredentialsSecret string
-	// AC-F5's per-session shared claim — see shared_volume.go.
-	sharedVolumeStorageClass string
-	sharedVolumeSize         resource.Quantity
 	workloadImages           map[session.WorkloadType]string
 	shell                    string // DATA_PLANE_SHELL override injected into pods ("" = agent default)
 	checkpointPrivileged     bool   // run session pods privileged for in-pod CRIU (CRIU_ENABLED)
@@ -243,16 +196,6 @@ func WithClaudeCredentialsSecret(name string) Option {
 	return func(o *ClientOrchestrator) {
 		if strings.TrimSpace(name) != "" {
 			o.claudeCredentialsSecret = strings.TrimSpace(name)
-		}
-	}
-}
-
-// WithApprovalGatewaySecret selects the platform-managed Secret the session MCP
-// container projects the gateway triple from (AC-F6).
-func WithApprovalGatewaySecret(name string) Option {
-	return func(o *ClientOrchestrator) {
-		if strings.TrimSpace(name) != "" {
-			o.approvalGatewaySecret = strings.TrimSpace(name)
 		}
 	}
 }
@@ -307,9 +250,7 @@ func NewClientOrchestrator(client kubernetes.Interface, namespace string, opts .
 		image:                    defaultDataPlaneImage,
 		agentPort:                AgentPort,
 		claudeCredentialsSecret:  defaultClaudeCredentialsSecret,
-		approvalGatewaySecret:    defaultApprovalGatewaySecret,
 		miniMaxCredentialsSecret: defaultMiniMaxCredentialsSecret,
-		sharedVolumeSize:         resource.MustParse(defaultSharedVolumeSize),
 		pollInterval:             defaultPollInterval,
 		readyTimeout:             defaultReadyTimeout,
 	}
@@ -358,97 +299,41 @@ func namespaceFromServiceAccount() string {
 // Namespace reports the namespace this orchestrator provisions pods in.
 func (o *ClientOrchestrator) Namespace() string { return o.namespace }
 
-// Start provisions the session's fresh pod set (AC-A1/A2, AC-F4).
+// Start provisions the session's fresh pod set (AC-A1/A2).
 func (o *ClientOrchestrator) Start(ctx context.Context, sessionID string, workload WorkloadSpec) (SessionPods, error) {
 	return o.startSet(ctx, sessionID, "", workload)
 }
 
-// startSet provisions a session's whole pod set, fresh or restore-target
-// (see buildPod). Auxiliary pods come up *first* because the workload pod is configured
-// with their addresses: AC-F4 states the restored workload pod is injected with
-// the helper pod created for that restore, which is only knowable once it is
-// Ready and has an IP. If the workload pod then fails, the auxiliary pods are
-// reclaimed with it rather than left behind (AC-A3 hygiene) — and AC-F2's
-// network policies go with them, because the helper pod owns them.
+// startSet provisions a session's pod set, fresh or restore-target (see
+// buildPod). Every current workload type runs in its workload pod alone, so the
+// set carries no auxiliary pods.
 func (o *ClientOrchestrator) startSet(ctx context.Context, sessionID, checkpointRef string, workload WorkloadSpec) (SessionPods, error) {
-	workloadType, err := session.NormalizeWorkloadType(workload.Type)
-	if err != nil {
-		return SessionPods{}, err
-	}
 	suffix := ""
 	if checkpointRef != "" {
+		var err error
 		if suffix, err = restoreSuffix(); err != nil {
 			return SessionPods{}, err
 		}
 	}
-
-	var auxiliary []PodRef
-	var helper helperEndpoints
-	if workloadType == session.WorkloadTypeApprovalGated {
-		spec, err := o.helperPodSpec(sessionID, suffix, workloadType)
-		if err != nil {
-			return SessionPods{}, err
-		}
-		ref, err := o.provision(ctx, spec, func(created *corev1.Pod) error {
-			if err := o.applySharedVolumeClaim(ctx, sessionID, created); err != nil {
-				return err
-			}
-			return o.applySessionNetworkPolicies(ctx, sessionID, created)
-		})
-		if err != nil {
-			return SessionPods{}, err
-		}
-		if ref.IP == "" {
-			o.cleanup(ref)
-			return SessionPods{}, fmt.Errorf("helper pod %s reported Ready without a pod IP", ref.Name)
-		}
-		auxiliary = append(auxiliary, ref)
-		helper = endpointsFor(ref.IP)
-	}
-
-	spec, err := o.buildPod(sessionID, checkpointRef, suffix, workload, helper)
+	spec, err := o.buildPod(sessionID, checkpointRef, suffix, workload)
 	if err != nil {
-		o.cleanup(auxiliary...)
 		return SessionPods{}, err
 	}
-	ref, err := o.provision(ctx, spec, nil)
+	ref, err := o.provision(ctx, spec)
 	if err != nil {
-		o.cleanup(auxiliary...)
 		return SessionPods{}, err
 	}
-	return SessionPods{Workload: ref, Auxiliary: auxiliary}, nil
-}
-
-// helperEndpoints are the in-cluster addresses of a session's helper pod, as
-// injected into its workload pod (AC-F6). The zero value means the session has
-// no helper pod.
-type helperEndpoints struct {
-	ProxyURL string
-	MCPURL   string
-}
-
-func endpointsFor(podIP string) helperEndpoints {
-	return helperEndpoints{
-		ProxyURL: "http://" + net.JoinHostPort(podIP, strconv.Itoa(credentialProxyPort)),
-		MCPURL:   "http://" + net.JoinHostPort(podIP, strconv.Itoa(SessionMCPPort)),
-	}
+	return SessionPods{Workload: ref}, nil
 }
 
 // provision creates a pod from spec, waits for its workload agent to report
 // Ready, and returns its ref with the pod IP recorded.
-func (o *ClientOrchestrator) provision(ctx context.Context, spec *corev1.Pod, afterCreate func(created *corev1.Pod) error) (PodRef, error) {
+func (o *ClientOrchestrator) provision(ctx context.Context, spec *corev1.Pod) (PodRef, error) {
 	created, err := o.client.CoreV1().Pods(o.namespace).Create(ctx, spec, metav1.CreateOptions{})
 	if err != nil {
 		return PodRef{}, fmt.Errorf("create pod %s: %w", spec.Name, err)
 	}
 	ref := PodRef{Name: created.Name, Namespace: o.namespace}
-	// afterCreate runs against the created object — see applySessionNetworkPolicies.
-	if afterCreate != nil {
-		if err := afterCreate(created); err != nil {
-			o.cleanup(ref)
-			return PodRef{}, err
-		}
-	}
 	pod, err := o.waitReady(ctx, ref.Name)
 	if err != nil {
 		o.cleanup(ref)
@@ -509,8 +394,8 @@ func (o *ClientOrchestrator) imageFor(workload session.WorkloadType) (string, er
 // buildPod assembles the session's workload pod. checkpointRef == "" yields a
 // fresh session pod (no annotation) under the session's deterministic name; a
 // non-empty ref yields a restore-target pod named with the provisioning round's
-// suffix, which its helper pod shares so a set is recognisable as one round.
-func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, workload WorkloadSpec, helper helperEndpoints) (*corev1.Pod, error) {
+// suffix.
+func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, workload WorkloadSpec) (*corev1.Pod, error) {
 	workloadType, err := session.NormalizeWorkloadType(workload.Type)
 	if err != nil {
 		return nil, err
@@ -585,42 +470,6 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		})
 
 		sidecars = append(sidecars, o.claudeCredentialProxy(image))
-	case session.WorkloadTypeApprovalGated:
-		// AC-F6: this container holds *no* external credential. The K3s MCP
-		// token and the marketplace plugin bootstrap are deliberately absent —
-		// their omission is the decision, not an oversight.
-		modelEnv := corev1.EnvVar{Name: ClaudeCodeModelEnvVar, Value: model}
-		if model == session.PlatformDefaultModel {
-			modelEnv = optionalSecretEnv(
-				ClaudeCodeModelEnvVar,
-				o.claudeCredentialsSecret,
-				ClaudeCodeModelSecretKey,
-			)
-		}
-		container.Env = append(container.Env,
-			modelEnv,
-			corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: claudeCodeStateDir},
-			corev1.EnvVar{Name: AnthropicBaseURLEnvVar, Value: helper.ProxyURL},
-			corev1.EnvVar{Name: AnthropicAuthTokenEnvVar, Value: credentialProxyPlaceholderToken},
-			corev1.EnvVar{Name: SessionMCPURLEnvVar, Value: helper.MCPURL},
-		)
-		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-			Name: claudeCodeStateVolumeName, MountPath: claudeCodeStateVolumePath,
-		})
-		volumes = append(volumes, corev1.Volume{
-			Name:         claudeCodeStateVolumeName,
-			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
-		})
-		// The file-exchange volume this session shares with its helper pod's MCP
-		// container (AC-F5), when the deployment has named a class that serves it.
-		if o.sharedVolumeEnabled() {
-			container.VolumeMounts = append(container.VolumeMounts, sharedVolumeMount())
-			container.Env = append(container.Env,
-				corev1.EnvVar{Name: SharedVolumeDirEnvVar, Value: SharedVolumeMountPath})
-			volumes = append(volumes, sharedVolume(sharedClaimName(helperPodNameFor(sessionID, suffix))))
-		}
-		// No sidecar: moving the proxy out of this pod is the whole point of
-		// AC-F2's arrangement.
 	case session.WorkloadTypeMiniMaxCode:
 		sidecars, volumes = o.miniMaxCodePod(&container, image, model)
 	}
@@ -673,115 +522,29 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 	}, nil
 }
 
-// helperPodSpec assembles an approval-gated session's helper pod: the session
-// MCP that fronts the approval gate (AC-F3) and the provider credential proxy
-// AC-F2 moved out of the workload pod (AC-F4/AC-F6).
-//
-// Unlike the workload pod it gets no Kubernetes identity — nothing in it needs
-// the API server, and the pod holds both of the platform's external secrets.
-func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadType session.WorkloadType) (*corev1.Pod, error) {
-	image, err := o.imageFor(workloadType)
-	if err != nil {
-		return nil, err
-	}
-	name := helperPodNameFor(sessionID, suffix)
-	automountServiceAccountToken := false
-
-	mcp := corev1.Container{
-		Name:            SessionMCPContainerName,
-		Image:           image,
-		ImagePullPolicy: pullPolicyForImage(image),
-		Ports: []corev1.ContainerPort{{
-			Name:          sessionMCPPortName,
-			ContainerPort: SessionMCPPort,
-			Protocol:      corev1.ProtocolTCP,
-		}},
-		Env: []corev1.EnvVar{
-			{Name: workloadEnvVar, Value: sessionMCPWorkload},
-			{Name: agentAddrEnvVar, Value: ":" + strconv.Itoa(SessionMCPPort)},
-			{Name: SessionIDEnvVar, Value: sessionID},
-			// AC-F6: the gateway triple lives here and nowhere else. The
-			// notification target is a platform-wide value, never per session.
-			secretEnv(ApprovalGatewayURLEnvVar, o.approvalGatewaySecret, ApprovalGatewayURLSecretKey),
-			secretEnv(ApprovalGatewayAPIKeyEnvVar, o.approvalGatewaySecret, ApprovalGatewayAPIKeySecretKey),
-			secretEnv(ApprovalGatewayUserIDEnvVar, o.approvalGatewaySecret, ApprovalGatewayUserIDSecretKey),
-		},
-		// An exec probe for the same reason the proxy container uses one, plus
-		// one specific to this pod: an HTTP probe originates at the kubelet, not
-		// at a pod, and AC-F2's ingress policy admits only this session's
-		// workload pod. Under a CNI that enforces the policy, an HTTP probe
-		// would be the one caller the boundary is designed to reject — and the
-		// helper pod would never reach Ready.
-		ReadinessProbe: &corev1.Probe{
-			ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{
-				"/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/" + strconv.Itoa(SessionMCPPort),
-			}}},
-			InitialDelaySeconds: 1,
-			PeriodSeconds:       2,
-		},
-		SecurityContext: hardenedSecurityContext(),
-	}
-	// AC-F5's shared claim, when configured. Its absence from the proxy container
-	// built below is the decision, not an omission.
-	var helperVolumes []corev1.Volume
-	if o.sharedVolumeEnabled() {
-		mcp.VolumeMounts = []corev1.VolumeMount{sharedVolumeMount()}
-		mcp.Env = append(mcp.Env, corev1.EnvVar{Name: SharedVolumeDirEnvVar, Value: SharedVolumeMountPath})
-		helperVolumes = []corev1.Volume{sharedVolume(sharedClaimName(name))}
-	}
-
-	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: o.namespace,
-			Labels: map[string]string{
-				LabelSessionID:    sessionID,
-				LabelWorkloadType: string(workloadType),
-				LabelPodRole:      PodRoleHelper,
-				labelManagedBy:    managedByValue,
-			},
-		},
-		Spec: corev1.PodSpec{
-			RestartPolicy:                corev1.RestartPolicyAlways,
-			AutomountServiceAccountToken: &automountServiceAccountToken,
-			Containers: []corev1.Container{
-				mcp,
-				o.credentialProxyContainer(HelperCredentialProxyContainerName, image, helperProxyListenAddr, proxyPlacementHelper),
-			},
-			Volumes: helperVolumes,
-		},
-	}, nil
-}
-
 // claudeCredentialProxy holds provider credentials outside the tool-running
 // container (AC-E6).
 func (o *ClientOrchestrator) claudeCredentialProxy(image string) corev1.Container {
-	return o.credentialProxyContainer(ClaudeCredentialsContainerName, image, credentialProxyListenAddr, proxyPlacementSidecar)
+	return o.credentialProxyContainer(ClaudeCredentialsContainerName, image)
 }
 
-// credentialProxyContainer builds the provider proxy in either of its two
-// placements. One behaviour contract (AC-E6) for both; only the placement and
-// bind address differ (AC-F6).
-func (o *ClientOrchestrator) credentialProxyContainer(name, image, listenAddr, placement string) corev1.Container {
+// credentialProxyContainer builds the loopback-bound provider proxy sidecar
+// (AC-E6) shared by the agent workload types.
+func (o *ClientOrchestrator) credentialProxyContainer(name, image string) corev1.Container {
 	return corev1.Container{
 		Name:            name,
 		Image:           image,
 		ImagePullPolicy: pullPolicyForImage(image),
 		Env: []corev1.EnvVar{
 			{Name: workloadEnvVar, Value: credentialProxyWorkload},
-			{Name: agentAddrEnvVar, Value: listenAddr},
-			// Declared rather than inferred from the bind address: the data
-			// plane refuses a bind its placement does not sanction, and a
-			// missing declaration means the restrictive one.
-			{Name: CredentialProxyPlacementEnvVar, Value: placement},
+			{Name: agentAddrEnvVar, Value: credentialProxyListenAddr},
 			secretEnv(AnthropicBaseURLEnvVar, o.claudeCredentialsSecret, ClaudeCodeBaseURLSecretKey),
 			secretEnv(AnthropicAuthTokenEnvVar, o.claudeCredentialsSecret, ClaudeCodeAuthTokenSecretKey),
 			optionalSecretEnv(AnthropicCACertEnvVar, o.claudeCredentialsSecret, ClaudeCodeCACertSecretKey),
 		},
 		// An exec probe reaches the proxy over loopback from inside its own
-		// container, which works for both placements. An HTTP probe would come
-		// from the kubelet at the pod IP and would force the loopback-bound
-		// sidecar placement onto the cluster network.
+		// container. An HTTP probe would come from the kubelet at the pod IP and
+		// would force the loopback-bound sidecar onto the cluster network.
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{
 				"/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/" + strconv.Itoa(credentialProxyPort),
@@ -793,7 +556,7 @@ func (o *ClientOrchestrator) credentialProxyContainer(name, image, listenAddr, p
 	}
 }
 
-// hardenedSecurityContext is the profile the platform's own helper containers
+// hardenedSecurityContext is the profile the platform's own sidecar containers
 // run under: they execute no user or model code.
 func hardenedSecurityContext() *corev1.SecurityContext {
 	runAsNonRoot := true
@@ -836,21 +599,6 @@ func podName(sessionID string) string {
 	return "sess-" + sessionID
 }
 
-// helperPodName derives the deterministic name of a session's helper pod (AC-F4).
-func helperPodName(sessionID string) string {
-	return podName(sessionID) + "-helper"
-}
-
-// helperPodNameFor names the round's helper pod: deterministic for a fresh set,
-// suffixed for a restore round. Both pod specs and the shared claim go through
-// it, so the workload pod cannot end up naming a claim the helper pod does not.
-func helperPodNameFor(sessionID, suffix string) string {
-	if suffix != "" {
-		return helperRestorePodName(sessionID, suffix)
-	}
-	return helperPodName(sessionID)
-}
-
 // restoreSuffix generates the per-provisioning-round suffix shared by a restore
 // target's pods, so a set is recognisable as one round.
 //
@@ -874,12 +622,6 @@ func restoreSuffix() (string, error) {
 // label, not the name, carries the 1:1 session mapping — AC-A2).
 func restorePodName(sessionID, suffix string) string {
 	return podName(sessionID) + "-r" + suffix
-}
-
-// helperRestorePodName names a restore round's helper pod, sharing the workload
-// pod's suffix so the two stay obviously paired.
-func helperRestorePodName(sessionID, suffix string) string {
-	return podName(sessionID) + "-h" + suffix
 }
 
 // pullPolicyForImage mirrors kubelet's own default: a mutable :latest (or

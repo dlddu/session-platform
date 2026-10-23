@@ -82,26 +82,6 @@ kubectl rollout status deploy/plugin-marketplace-git --timeout=180s
 # The provider stand-in a claude-code session talks to once it is running. Same
 # reason again: the first prompt must not race its TLS listener coming up.
 kubectl rollout status deploy/anthropic-fake --timeout=120s
-# The gateway stand-in an approval-gated session's helper pod calls before every
-# external tool call. Same reason once more: the first gated call must not race
-# its listener. The Secret it authenticates against is applied above with the
-# rest of the overlay, so nothing else has to be ordered here.
-kubectl rollout status deploy/approval-gateway-fake --timeout=120s
-# The origin an approved external tool call fetches (deploy/fetch-origin.yaml).
-# Same reason once more: the approval round trip ends in a real GET, and the
-# first one must not race this listener — a refused connection there would look
-# like the tool failing rather than the origin still starting.
-kubectl rollout status deploy/fetch-origin --timeout=120s
-# The ReadWriteMany provisioner behind AC-F5's session-shared volume
-# (deploy/shared-volume-provisioner.yaml). Same reason as the fixtures above:
-# the first approval-gated session must not race it. Without the class its
-# claim never binds and the session hangs instead of failing, so the existence
-# check below turns a 90-second mystery into one line.
-kubectl -n session-shared-storage rollout status deploy/local-path-provisioner --timeout=120s
-if ! kubectl get storageclass session-shared >/dev/null 2>&1; then
-  echo "e2e: StorageClass 'session-shared' is missing — AC-F5's shared volume cannot be provisioned" >&2
-  exit 1
-fi
 kubectl rollout status deploy/control-plane --timeout=120s
 
 echo "e2e: polling $BASE_URL/api/v1/healthz"

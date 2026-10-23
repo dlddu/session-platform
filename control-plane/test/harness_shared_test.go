@@ -251,3 +251,19 @@ const ptyShellProbe = `for d in /proc/[0-9]*; do
   tty=$(readlink "$d/fd/0" 2>/dev/null) || continue
   case "$tty" in /dev/pts/*) echo "$(cat "$d/comm" 2>/dev/null) $tty" ;; esac
 done`
+
+// labelSessionID is the session-id pod label as the deployed pod spec spells
+// it. Written out rather than imported: this suite asserts the deployed ground
+// truth, so it must fail when the control plane's label drifts — importing the
+// constant would make the assertion agree with any rename by construction.
+const labelSessionID = "session-id"
+
+// podsBySelector lists the pods in ns matching a label selector.
+func podsBySelector(t *testing.T, cs kubernetes.Interface, ns, selector string) []corev1.Pod {
+	t.Helper()
+	list, err := cs.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		t.Fatalf("list pods in %s with %q: %v", ns, selector, err)
+	}
+	return list.Items
+}

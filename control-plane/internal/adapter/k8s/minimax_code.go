@@ -64,7 +64,7 @@ func (o *ClientOrchestrator) miniMaxCodePod(container *corev1.Container, image, 
 // AC-E6) re-pointed at this type's Secret. Every provider key the proxy reads
 // moves; none is left referring to the claude-code Secret.
 func (o *ClientOrchestrator) miniMaxCredentialProxy(image string) corev1.Container {
-	proxy := o.credentialProxyContainer(MiniMaxCredentialsContainerName, image, credentialProxyListenAddr, proxyPlacementSidecar)
+	proxy := o.credentialProxyContainer(MiniMaxCredentialsContainerName, image)
 	for i := range proxy.Env {
 		ref := proxy.Env[i].ValueFrom
 		if ref != nil && ref.SecretKeyRef != nil && ref.SecretKeyRef.Name == o.claudeCredentialsSecret {

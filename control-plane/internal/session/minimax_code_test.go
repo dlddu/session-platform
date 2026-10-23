@@ -26,13 +26,12 @@ func TestMiniMaxCodeWorkloadType(t *testing.T) {
 }
 
 // The service's archive path covers claude-code and minimax-code and nothing
-// else; approval-gated keeps refusing to freeze until its own wiring lands.
+// else.
 func TestArchivesThroughAgent(t *testing.T) {
 	for w, want := range map[WorkloadType]bool{
-		WorkloadTypeShell:         false,
-		WorkloadTypeClaudeCode:    true,
-		WorkloadTypeApprovalGated: false,
-		WorkloadTypeMiniMaxCode:   true,
+		WorkloadTypeShell:       false,
+		WorkloadTypeClaudeCode:  true,
+		WorkloadTypeMiniMaxCode: true,
 	} {
 		if got := w.ArchivesThroughAgent(); got != want {
 			t.Errorf("%s.ArchivesThroughAgent() = %v, want %v", w, got, want)

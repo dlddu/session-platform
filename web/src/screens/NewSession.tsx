@@ -4,11 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { Session, WorkloadType } from "../api/types";
 import { liveSessionPath } from "../app/sessionRoutes";
-import {
-  hasModelChoice,
-  isAgentWorkload,
-  isGatedWorkload,
-} from "../app/workloadKind";
+import { hasModelChoice, isAgentWorkload } from "../app/workloadKind";
 
 // 세 단계는 **시각적 어포던스일 뿐이다** — 생성 호출은 백엔드에서 원자적이라
 // (AC-A1/A2) 이 단계들에 대응하는 서버 상태가 없다.
@@ -311,24 +307,6 @@ export function NewSession() {
                     platform's default MiniMax model.
                   </small>
                 </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={workloadType === "approval-gated"}
-                  className={
-                    "workload-option wide" +
-                    (workloadType === "approval-gated" ? " selected" : "")
-                  }
-                  data-testid="new-session-workload-approval-gated"
-                  onClick={() => setWorkloadType("approval-gated")}
-                >
-                  <span className="workload-icon gated" aria-hidden="true">⏸</span>
-                  <strong>approval-gated</strong>
-                  <small>
-                    Same agent, but it cannot reach the outside on its own —
-                    every outbound call waits for your approval.
-                  </small>
-                </button>
               </div>
             </fieldset>
             {hasModelChoice(workloadType) ? (
@@ -373,13 +351,11 @@ export function NewSession() {
             <div className="immutable-note">
               <span aria-hidden="true">▣</span>
               <span>
-                {isGatedWorkload(workloadType)
-                  ? "Workload type and model choice are fixed for this session. The session also gets a helper pod that holds the approval gate and the only route out."
-                  : workloadType === "minimax-code"
-                    ? "Workload type is fixed for this session. It runs the platform default MiniMax model, resolved at container start."
-                    : isAgentWorkload(workloadType)
-                      ? "Workload type and model choice are fixed for this session. Platform default resolves to the configured default at container start."
-                      : "Workload type is fixed for the lifetime of this session."}
+                {workloadType === "minimax-code"
+                  ? "Workload type is fixed for this session. It runs the platform default MiniMax model, resolved at container start."
+                  : isAgentWorkload(workloadType)
+                    ? "Workload type and model choice are fixed for this session. Platform default resolves to the configured default at container start."
+                    : "Workload type is fixed for the lifetime of this session."}
               </span>
             </div>
             {error && (
@@ -413,11 +389,9 @@ export function NewSession() {
                 const status = i < done ? "ok" : i === done ? "run" : "";
                 const displayLabel =
                   i === 1
-                    ? isGatedWorkload(workloadType)
-                      ? "Schedule dedicated pod + helper pod (gated agent)"
-                      : isAgentWorkload(workloadType)
-                        ? "Schedule dedicated pod (agent CLI)"
-                        : "Schedule dedicated pod (shell)"
+                    ? isAgentWorkload(workloadType)
+                      ? "Schedule dedicated pod (agent CLI)"
+                      : "Schedule dedicated pod (shell)"
                     : label;
                 return (
                   <div key={label} className={`step ${status}`.trimEnd()}>

@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -45,11 +44,6 @@ type agentCheckpointAborter interface {
 	AbortCheckpoint(context.Context, string, string) error
 }
 
-// approvalWaitReporter answers whether a session is blocked on a human (AC-F3).
-type approvalWaitReporter interface {
-	AwaitingApproval(context.Context, string) (bool, error)
-}
-
 // Option customises workload-specific service behaviour.
 type Option func(*Service)
 
@@ -60,16 +54,6 @@ func WithWorkloadCheckpointer(workload session.WorkloadType, ckpt criu.Checkpoin
 	return func(s *Service) {
 		if ckpt != nil {
 			s.ckpts[workload] = ckpt
-		}
-	}
-}
-
-// WithClock replaces the service clock, which a test must own to pin AC-F3's
-// idle exception (docs/test/approval-gated-workload.md scenario 5).
-func WithClock(now func() time.Time) Option {
-	return func(s *Service) {
-		if now != nil {
-			s.now = now
 		}
 	}
 }
@@ -194,7 +178,7 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 	if err != nil {
 		return nil, err
 	}
-	// Only the workload pod runs a session agent (AC-F4).
+	// Only the workload pod runs a session agent (AC-A2).
 	if err := s.orch.Reach(ctx, pods.Workload); err != nil {
 		// A pod whose workload agent is unreachable must not become active;
 		// reclaim the whole set instead of leaking it (AC-A3 hygiene).
@@ -423,11 +407,6 @@ func (s *Service) snapshot(ctx context.Context, id string, idleCutoff *time.Time
 		}
 		if sess.LastAccess.After(*idleCutoff) {
 			return sess, nil
-		}
-		if s.holdingForApproval(ctx, sess) {
-			// AC-F3's exception to AC-B1: the one place the platform
-			// advances lastAccess with no client access behind it.
-			return s.touchGet(ctx, id)
 		}
 	}
 	if sess.State == session.StateSnapshot {
@@ -808,7 +787,7 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 		return nil, err
 	}
 	// The archive is applied to the workload pod; auxiliary pods hold no
-	// session state and are started fresh alongside it (AC-B2, AC-F4).
+	// session state and are started fresh alongside it (AC-B2).
 	if err := ckpt.Restore(ctx, sess.Checkpoint, pods.Workload); err != nil {
 		s.stopPodsBestEffort(pods.All())
 		return nil, err
@@ -875,7 +854,7 @@ func (s *Service) stopPodsBestEffort(pods []k8s.PodRef) {
 }
 
 // sessionPodRefs builds orchestrator refs for every pod a session record names,
-// workload pod first (AC-A2's workload pod plus AC-F4's auxiliary pods). Refs
+// workload pod first (AC-A2's workload pod plus its auxiliary pods). Refs
 // rebuilt from stored state carry the name only; the orchestrator falls back to
 // its own namespace.
 func sessionPodRefs(sess *session.Session) []k8s.PodRef {
@@ -971,28 +950,6 @@ func (s *Service) Terminate(ctx context.Context, id string) (retErr error) {
 	retErr = s.store.Delete(ctx, id, token)
 	deleteCommitted = retErr == nil
 	return retErr
-}
-
-// holdingForApproval reports whether the idle count must be held because the
-// session is waiting on a human (AC-F3).
-//
-// Its only caller is the reaper path (idleCutoff != nil) — which is why a
-// user-driven Snapshot still freezes a waiting session, as AC-F3 requires.
-func (s *Service) holdingForApproval(ctx context.Context, sess *session.Session) bool {
-	if sess.WorkloadType != session.WorkloadTypeApprovalGated || sess.Pod == "" {
-		return false
-	}
-	reporter, ok := s.agent.(approvalWaitReporter)
-	if !ok {
-		return false
-	}
-	awaiting, err := reporter.AwaitingApproval(ctx, sess.Pod)
-	if err != nil {
-		slog.Warn("approval wait unreadable; applying the ordinary idle rule",
-			"session", sess.ID, "pod", sess.Pod, "err", err)
-		return false
-	}
-	return awaiting
 }
 
 // touch updates LastAccess without changing state.

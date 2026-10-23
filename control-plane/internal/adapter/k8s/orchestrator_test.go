@@ -66,7 +66,7 @@ func TestStubOrchestratorStopAcceptsNamespaceOptionalRef(t *testing.T) {
 }
 
 // TestStubOrchestratorStartsAuxiliaryPods: a session's pod set is the workload
-// pod plus the auxiliary pods its type requires (AC-A2, AC-F4).
+// pod plus the auxiliary pods its type requires (AC-A2).
 func TestStubOrchestratorStartsAuxiliaryPods(t *testing.T) {
 	orch := k8s.NewStubOrchestrator("sessions")
 	orch.SetAuxiliaryPods(1)

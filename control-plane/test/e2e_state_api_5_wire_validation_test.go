@@ -315,7 +315,7 @@ func TestWireValidation_OversizePromptIsRefusedBeforeRestore(t *testing.T) {
 	// A pod the snapshot already reclaimed can still answer List for the length
 	// of its termination grace, so "no pod" is stated as "none that is not
 	// already going away" — a restore would have produced a live one.
-	for _, p := range a21PodsBySelector(t, cs, ns, labelSessionID+"="+s.ID) {
+	for _, p := range podsBySelector(t, cs, ns, labelSessionID+"="+s.ID) {
 		if p.DeletionTimestamp == nil {
 			t.Fatalf("session %s still has live pod %s after the refused prompt — the restore ran before the size check",
 				s.ID, p.Name)

@@ -3,9 +3,9 @@
 export type State = "active" | "idle" | "snapshot";
 
 /**
- * AC-E1/AC-F1. 화면은 리터럴이 아니라 계열로 갈린다 — `app/workloadKind.ts`.
+ * AC-E1/AC-G1. 화면은 리터럴이 아니라 계열로 갈린다 — `app/workloadKind.ts`.
  */
-export type WorkloadType = "shell" | "claude-code" | "approval-gated" | "minimax-code";
+export type WorkloadType = "shell" | "claude-code" | "minimax-code";
 
 export interface PlatformConfig {
   claudeCode: {
@@ -30,7 +30,7 @@ export interface Session {
   /** The session's dedicated workload pod — the 1:1 subject of AC-A2. */
   pod?: string;
   /**
-   * AC-A2 의 보조 파드 조항 · AC-F4. 워크로드 파드와 수명을 공유하므로 이 필드는
+   * AC-A2 의 보조 파드 조항. 워크로드 파드와 수명을 공유하므로 이 필드는
    * `pod` 이 없을 때 정확히 함께 없다.
    */
   auxiliaryPods?: string[];

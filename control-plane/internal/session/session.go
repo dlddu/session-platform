@@ -52,9 +52,6 @@ const (
 	// WorkloadTypeClaudeCode — the Claude Code CLI workload
 	// (docs/prd/claude-code-workload.md, AC-E2~E6).
 	WorkloadTypeClaudeCode WorkloadType = "claude-code"
-	// WorkloadTypeApprovalGated — the approval-gated agent workload
-	// (docs/prd/approval-gated-workload.md, AC-F1~F6).
-	WorkloadTypeApprovalGated WorkloadType = "approval-gated"
 
 	// PlatformDefaultModel is the stable session-level alias for the model
 	// selected by the platform's optional Secret configuration (falling back to
@@ -75,7 +72,7 @@ var modelNamePattern = regexp.MustCompile(`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}
 // default. Use that on the way in and this to reject explicit garbage.
 func (w WorkloadType) Valid() bool {
 	switch w {
-	case WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeApprovalGated, WorkloadTypeMiniMaxCode:
+	case WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode:
 		return true
 	default:
 		return false
@@ -104,8 +101,6 @@ func NormalizeWorkloadType(w WorkloadType) (WorkloadType, error) {
 // accepting a meaningless immutable setting. The agent types resolve an omitted
 // model to PlatformDefaultModel; concrete model identifiers are kept verbatim
 // after trimming and are passed to the CLI as a single argv element.
-// approval-gated shares this contract unchanged — AC-F1 states the model field
-// follows AC-E6 exactly, so the two agent types must not drift apart here.
 func NormalizeModel(workload WorkloadType, model string) (string, error) {
 	model = strings.TrimSpace(model)
 	switch workload {
@@ -114,7 +109,7 @@ func NormalizeModel(workload WorkloadType, model string) (string, error) {
 			return "", ErrInvalidInput
 		}
 		return "", nil
-	case WorkloadTypeClaudeCode, WorkloadTypeApprovalGated, WorkloadTypeMiniMaxCode:
+	case WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode:
 		if model == "" {
 			return PlatformDefaultModel, nil
 		}
@@ -186,10 +181,9 @@ type Session struct {
 	// NormalizeWorkloadType.
 	WorkloadType WorkloadType `json:"workloadType,omitempty"`
 	// Model is meaningful only for the agent workload types (claude-code and
-	// approval-gated) and, like the workload type, is fixed at creation.
+	// minimax-code) and, like the workload type, is fixed at creation.
 	// "platform-default" delegates selection to the platform-managed Secret and
-	// then the Claude Code installation fallback (AC-E6, reused verbatim by
-	// AC-F1).
+	// then the Claude Code installation fallback (AC-E6).
 	Model string `json:"model,omitempty"`
 	Name  string `json:"name"`
 	State State  `json:"state"`
@@ -198,12 +192,10 @@ type Session struct {
 	// when the session is snapshotted/reclaimed.
 	Pod string `json:"pod,omitempty"`
 	// AuxiliaryPods names the session-scoped pods that serve the workload pod
-	// without running the workload themselves (AC-A2's auxiliary-pod clause;
-	// AC-F4's helper pod is the first of them). They are session-exclusive,
-	// share the workload pod's lifetime, and are reclaimed with it (AC-A3) —
-	// so this is empty exactly when Pod is. shell and claude-code provision
-	// none, leaving it absent from the wire; approval-gated provisions exactly
-	// one — its helper pod.
+	// without running the workload themselves (AC-A2's auxiliary-pod clause).
+	// They are session-exclusive, share the workload pod's lifetime, and are
+	// reclaimed with it (AC-A3) — so this is empty exactly when Pod is. No
+	// current workload type provisions one, so it stays absent from the wire.
 	AuxiliaryPods []string    `json:"auxiliaryPods,omitempty"`
 	CreatedAt     time.Time   `json:"createdAt"`
 	LastAccess    time.Time   `json:"lastAccess"`           // last read/write; drives idle/snapshot timing (AC-B1)
@@ -223,7 +215,7 @@ func (s *Session) IdleFor(now time.Time) time.Duration {
 // skipping empty names. Lifecycle code that reclaims, restores or deletes a
 // session works on this set rather than on Pod alone: AC-A3's reclamation and
 // AC-B1/AC-B2's freeze and restore hold across the workload pod *and* its
-// auxiliary pods (AC-F4). A snapshotted session has no pods, so this is empty.
+// auxiliary pods. A snapshotted session has no pods, so this is empty.
 func (s *Session) Pods() []string {
 	pods := make([]string, 0, 1+len(s.AuxiliaryPods))
 	if s.Pod != "" {

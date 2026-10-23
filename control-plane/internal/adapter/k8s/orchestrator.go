@@ -23,7 +23,7 @@ type PodRef struct {
 
 func (p PodRef) String() string { return p.Namespace + "/" + p.Name }
 
-// SessionPods is the set of pods one session owns (AC-A2, AC-F4).
+// SessionPods is the set of pods one session owns (AC-A2).
 // Provisioning returns the whole set because reclamation, freeze and restore
 // hold across it, not across the workload pod alone.
 type SessionPods struct {
@@ -71,7 +71,7 @@ type WorkloadSpec struct {
 // dedicated workload pod and any session-scoped auxiliary pods.
 //
 // AC mapping:
-//   - Start       → AC-A1, AC-A2, AC-E1, AC-F4
+//   - Start       → AC-A1, AC-A2, AC-E1
 //   - Stop        → AC-A3
 //   - RestoreInto → AC-B2
 //   - Reach       → AC-D1/AC-E1

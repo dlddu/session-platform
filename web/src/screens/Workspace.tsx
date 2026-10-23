@@ -1,4 +1,4 @@
-// mockup: docs/mockups/workspace.html, docs/mockups/agent-workspace.html, docs/mockups/gated-workspace.html
+// mockup: docs/mockups/workspace.html, docs/mockups/agent-workspace.html
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
@@ -11,7 +11,7 @@ import type {
 import { DeleteSessionDialog } from "../app/DeleteSessionDialog";
 import { StateBadge } from "../app/StateBadge";
 import { useToast } from "../app/Toast";
-import { isAgentWorkload, isGatedWorkload } from "../app/workloadKind";
+import { isAgentWorkload } from "../app/workloadKind";
 
 const SHELL_READ_DELAYS_MS = [250, 700] as const;
 const STREAM_RECONNECT_BASE_MS = 250;
@@ -54,8 +54,7 @@ function displayModel(model?: string): string {
 }
 
 // 한 화면이 workloadType 으로 상호작용 모델을 갈라 쓴다 — shell 은 커서 read 루프,
-// 에이전트 계열은 SSE 다(AC-E3). approval-gated 가 claude-code 와 갈리는 것은 실행을
-// 「모는 방식」이 아니라 그 둘레뿐이라(AC-F3), 커서 규약은 손대지 않는다.
+// 에이전트 계열은 SSE 다(AC-E3).
 export function Workspace() {
   const { id = "" } = useParams();
   const [sess, setSess] = useState<Session | null>(null);
@@ -575,9 +574,6 @@ export function Workspace() {
   if (!sess) return <div className="pad empty">Loading…</div>;
 
   const isAgent = isAgentWorkload(sess.workloadType);
-  const gated = isGatedWorkload(sess.workloadType);
-  // AC-F4/F2 — auxiliaryPods 의 첫 항목이 그 세션의 헬퍼 파드다.
-  const helperPod = sess.auxiliaryPods?.[0];
   const frozen = sess.state === "snapshot";
   const modelLabel = displayModel(sess.model?.trim());
   const archiveButtonLabel = archiving
@@ -609,11 +605,7 @@ export function Workspace() {
         <div className={"console" + (isAgent ? " agent-console" : "")}>
           <div className="console-bar">
             <span>
-              {gated
-                ? "approval-gated session"
-                : isAgent
-                  ? `${sess.workloadType} session`
-                  : "session shell"}
+              {isAgent ? `${sess.workloadType} session` : "session shell"}
             </span>
             <span data-testid="ws-console-pod">
               {sess.pod ? `pod/${sess.pod}` : "pod reclaimed"}
@@ -668,11 +660,9 @@ export function Workspace() {
           >
             {term === "" ? (
               <span className="term-empty">
-                {gated
-                  ? "// ready — responses stream here; anything leaving the pod waits for your approval"
-                  : isAgent
-                    ? "// ready — agent responses stream here automatically"
-                    : "// attached — the shell's output since session start appears here"}
+                {isAgent
+                  ? "// ready — agent responses stream here automatically"
+                  : "// attached — the shell's output since session start appears here"}
               </span>
             ) : (
               term
@@ -693,13 +683,11 @@ export function Workspace() {
               value={cmd}
               onChange={(event) => setCmd(event.target.value)}
               placeholder={
-                gated
-                  ? "send a prompt — outbound calls wait for your approval"
-                  : isAgent
-                    ? sess.workloadType === "minimax-code"
-                      ? "send a prompt — runs mcode exec once in the session pod"
-                      : "send a prompt — runs claude -p once in the session pod"
-                    : "run a command — executes in the session shell (bash)"
+                isAgent
+                  ? sess.workloadType === "minimax-code"
+                    ? "send a prompt — runs mcode exec once in the session pod"
+                    : "send a prompt — runs claude -p once in the session pod"
+                  : "run a command — executes in the session shell (bash)"
               }
               spellCheck={isAgent}
               autoComplete="off"
@@ -745,43 +733,9 @@ export function Workspace() {
                 <span>Model</span>
                 <strong>{modelLabel}</strong>
               </div>
-              {gated ? (
-                <div className="workload-kv">
-                  <span>Helper pod</span>
-                  <strong data-testid="ws-helper-pod">
-                    {helperPod ? `helper/${helperPod}` : "reclaimed"}
-                  </strong>
-                </div>
-              ) : null}
               <p>
                 Each prompt runs once and exits. Responses stream live and
                 remain replayable through the session's offset cursor.
-                {gated
-                  ? " A call waiting on approval keeps its place in the queue and holds the idle timer, so the session is not archived out from under it."
-                  : ""}
-              </p>
-            </div>
-          ) : null}
-          {gated ? (
-            <div className="panel egress-panel" data-testid="ws-egress">
-              <h4>Egress</h4>
-              <ul className="egress-list">
-                <li className="egress-allow">kube-dns</li>
-                <li className="egress-allow" data-testid="ws-egress-helper">
-                  {helperPod
-                    ? `helper/${helperPod}`
-                    : "this session's helper pod"}
-                </li>
-                <li className="egress-deny">every external origin</li>
-                <li className="egress-deny">other sessions' helper pods</li>
-                <li className="egress-deny">the approval gateway itself</li>
-              </ul>
-              <p>
-                No external origin is on this list. The credential proxy lives
-                in the helper pod rather than beside the agent, so every
-                connection out of the workload pod ends at this session's own
-                helper — and the workload pod holds no external credential at
-                all.
               </p>
             </div>
           ) : null}

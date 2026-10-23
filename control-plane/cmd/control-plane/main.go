@@ -20,8 +20,6 @@ import (
 	"syscall"
 	"time"
 
-	"k8s.io/apimachinery/pkg/api/resource"
-
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/checkpointstore"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
@@ -59,7 +57,6 @@ func main() {
 		"criu_enabled", cfg.criuEnabled,
 		"data_plane_image", cfg.dataPlaneImage,
 		"data_plane_claude_code_image", cfg.dataPlaneClaudeCodeImage,
-		"data_plane_approval_gated_image", cfg.dataPlaneApprovalGatedImage,
 		"data_plane_minimax_code_image", cfg.miniMax.image,
 		"data_plane_shell", cfg.dataPlaneShell,
 		"claude_code_default_model", cfg.claudeCodeDefaultModel,
@@ -76,13 +73,9 @@ func main() {
 		k8s.WithImage(cfg.dataPlaneImage), k8s.WithShell(cfg.dataPlaneShell),
 		// Per-type image (AC-E1); empty is a no-op — see the config fields.
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, cfg.dataPlaneClaudeCodeImage),
-		// Same for approval-gated (AC-F1).
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, cfg.dataPlaneApprovalGatedImage),
 		k8s.WithWorkloadImage(session.WorkloadTypeMiniMaxCode, cfg.miniMax.image),
 		k8s.WithClaudeCredentialsSecret(cfg.claudeCredentialsSecret),
 		k8s.WithMiniMaxCredentialsSecret(cfg.miniMax.credentialsSecret),
-		k8s.WithApprovalGatewaySecret(cfg.approvalGatewaySecret),
-		k8s.WithSharedVolume(cfg.sharedVolumeStorageClass, cfg.sharedVolumeSize),
 		k8s.WithCheckpointPrivileged(cfg.criuEnabled))
 	store := configmap.NewStore(client, namespace)
 	// Shell I/O (write→stdin, read→scrollback delta) AND checkpoint/restore ride
@@ -187,19 +180,6 @@ type config struct {
 	// sessions (AC-E1). Unset means the type is not deployable here: creating
 	// such a session fails loudly rather than getting a shell pod.
 	dataPlaneClaudeCodeImage string
-	// dataPlaneApprovalGatedImage is the image for `workloadType=approval-gated`
-	// sessions and their helper pods (AC-F1/AC-F4). Unset means the type is not
-	// deployable here.
-	dataPlaneApprovalGatedImage string
-	// approvalGatewaySecret names the platform Secret whose url/api-key/user-id
-	// keys are projected into the helper pod's MCP container only (AC-F6).
-	approvalGatewaySecret string
-	// sharedVolumeStorageClass and sharedVolumeSize size the ReadWriteMany claim
-	// an approval-gated session's two pods share (AC-F5; see WithSharedVolume).
-	// An empty class leaves the volume off: only a deployment that knows which
-	// of its classes serves ReadWriteMany can ask for one that will bind.
-	sharedVolumeStorageClass string
-	sharedVolumeSize         resource.Quantity
 	// claudeArchiveEnabled explicitly permits workspace/conversation/output
 	// archives to be written to CHECKPOINT_S3_* (default false).
 	claudeArchiveEnabled    bool
@@ -264,37 +244,26 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("CLAUDE_CODE_MODELS: %w", err)
 	}
-	// Parsed even when the volume is off, so a typo surfaces at startup rather
-	// than on the day the class is configured. Unlike envDuration/envBool below
-	// a bad value fails startup: a claim that binds at an unintended size is worse.
-	sharedVolumeSize, err := resource.ParseQuantity(env("SESSION_SHARED_VOLUME_SIZE", "1Gi"))
-	if err != nil {
-		return config{}, fmt.Errorf("SESSION_SHARED_VOLUME_SIZE: %w", err)
-	}
 	return config{
 		addr:           env("CP_ADDR", ":8080"),
 		dataPlaneImage: env("DATA_PLANE_IMAGE", ""),
 		// Propagated into session pods; the agent launches
 		// ${DATA_PLANE_SHELL:-/bin/bash} on a PTY (AC-D1).
-		dataPlaneShell:              env("DATA_PLANE_SHELL", ""),
-		dataPlaneClaudeCodeImage:    env("DATA_PLANE_CLAUDE_CODE_IMAGE", ""),
-		dataPlaneApprovalGatedImage: env("DATA_PLANE_APPROVAL_GATED_IMAGE", ""),
-		approvalGatewaySecret:       env("APPROVAL_GATEWAY_SECRET", "approval-gateway-credentials"),
-		sharedVolumeStorageClass:    env("SESSION_SHARED_VOLUME_STORAGE_CLASS", ""),
-		sharedVolumeSize:            sharedVolumeSize,
-		claudeArchiveEnabled:        envBool("CLAUDE_CODE_ARCHIVE_ENABLED", false),
-		claudeCredentialsSecret:     env("CLAUDE_CODE_CREDENTIALS_SECRET", "claude-code-credentials"),
-		claudeCodeDefaultModel:      claudeCodeDefaultModel,
-		claudeCodeModels:            claudeCodeModels,
-		criuEnabled:                 envBool("CRIU_ENABLED", false),
-		idleScanInterval:            envDuration("IDLE_SCAN_INTERVAL", time.Minute),
-		checkpointS3Endpoint:        env("CHECKPOINT_S3_ENDPOINT", ""),
-		checkpointS3Bucket:          env("CHECKPOINT_S3_BUCKET", ""),
-		checkpointS3RoleARN:         env("CHECKPOINT_S3_ROLE_ARN", ""),
-		checkpointS3Region:          env("CHECKPOINT_S3_REGION", env("AWS_REGION", "")),
-		checkpointS3Prefix:          env("CHECKPOINT_S3_PREFIX", "checkpoints"),
-		checkpointS3SessionName:     env("CHECKPOINT_S3_SESSION_NAME", ""),
-		miniMax:                     loadMiniMaxConfig(),
+		dataPlaneShell:           env("DATA_PLANE_SHELL", ""),
+		dataPlaneClaudeCodeImage: env("DATA_PLANE_CLAUDE_CODE_IMAGE", ""),
+		claudeArchiveEnabled:     envBool("CLAUDE_CODE_ARCHIVE_ENABLED", false),
+		claudeCredentialsSecret:  env("CLAUDE_CODE_CREDENTIALS_SECRET", "claude-code-credentials"),
+		claudeCodeDefaultModel:   claudeCodeDefaultModel,
+		claudeCodeModels:         claudeCodeModels,
+		criuEnabled:              envBool("CRIU_ENABLED", false),
+		idleScanInterval:         envDuration("IDLE_SCAN_INTERVAL", time.Minute),
+		checkpointS3Endpoint:     env("CHECKPOINT_S3_ENDPOINT", ""),
+		checkpointS3Bucket:       env("CHECKPOINT_S3_BUCKET", ""),
+		checkpointS3RoleARN:      env("CHECKPOINT_S3_ROLE_ARN", ""),
+		checkpointS3Region:       env("CHECKPOINT_S3_REGION", env("AWS_REGION", "")),
+		checkpointS3Prefix:       env("CHECKPOINT_S3_PREFIX", "checkpoints"),
+		checkpointS3SessionName:  env("CHECKPOINT_S3_SESSION_NAME", ""),
+		miniMax:                  loadMiniMaxConfig(),
 	}, nil
 }
 

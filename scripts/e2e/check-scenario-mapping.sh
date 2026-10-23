@@ -38,7 +38,7 @@
 #
 # Scenario identifier = `<문서 파일명>#시나리오 <N>` where `<N>` is the heading's own
 # number token — including sub-numbers such as `2-1`, which really occur
-# (approval-gated-workload.md, architecture.md). Copy it from the heading; do not
+# (architecture.md). Copy it from the heading; do not
 # renumber.
 #
 # Runs anywhere — no cluster, no toolchain beyond coreutils.

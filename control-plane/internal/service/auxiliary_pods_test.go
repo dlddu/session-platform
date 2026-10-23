@@ -17,13 +17,12 @@ import (
 
 // These tests cover the half of AC-A2 that only became expressible once the
 // session record stopped naming a single pod: a session owns one *workload*
-// pod plus the session-scoped auxiliary pods that serve it (AC-F4's helper pod
-// is the first such pod), and the lifecycle holds across that whole set.
+// pod plus the session-scoped auxiliary pods that serve it, and the lifecycle
+// holds across that whole set.
 //
-// No workload type provisions an auxiliary pod yet: AC-F1's approval-gated type
-// is not implemented, and shell/claude-code need none. The stub's
-// SetAuxiliaryPods knob stands in for that future type so the contract is
-// pinned before its first consumer arrives.
+// No current workload type provisions an auxiliary pod. The stub's
+// SetAuxiliaryPods knob stands in for such a type so the contract stays pinned
+// without one.
 
 func newAuxService(aux int) (*service.Service, *k8s.StubOrchestrator, *configmap.Store) {
 	orch := k8s.NewStubOrchestrator("sessions")
@@ -46,7 +45,7 @@ func TestCreateRecordsTheWholePodSet(t *testing.T) {
 		t.Fatal("create should record the workload pod")
 	}
 	if len(sess.AuxiliaryPods) != 1 {
-		t.Fatalf("auxiliary pods = %v, want exactly 1 (AC-F4: one session-scoped helper)", sess.AuxiliaryPods)
+		t.Fatalf("auxiliary pods = %v, want exactly 1 (one session-scoped auxiliary pod)", sess.AuxiliaryPods)
 	}
 	if sess.AuxiliaryPods[0] == sess.Pod {
 		t.Fatal("the auxiliary pod must be a distinct pod, not the workload pod again")
@@ -71,7 +70,7 @@ func TestCreateRecordsTheWholePodSet(t *testing.T) {
 }
 
 // TestSnapshotReclaimsTheWholePodSet: freezing a session reclaims every pod it
-// owns, not just the workload pod (AC-A3, AC-F4). The record must forget both,
+// owns, not just the workload pod (AC-A3). The record must forget both,
 // so a snapshotted session names no pod at all.
 func TestSnapshotReclaimsTheWholePodSet(t *testing.T) {
 	ctx := context.Background()
@@ -130,7 +129,7 @@ func TestRestoreProvisionsAFreshPodSet(t *testing.T) {
 }
 
 // TestTerminateReclaimsTheWholePodSet: deleting a session reclaims every pod it
-// owns (AC-A3). Reclaiming only the workload pod would leak the helper pod for
+// owns (AC-A3). Reclaiming only the workload pod would leak the auxiliary pod for
 // the cluster's lifetime, since nothing else references it.
 func TestTerminateReclaimsTheWholePodSet(t *testing.T) {
 	ctx := context.Background()
@@ -179,7 +178,7 @@ func TestFailedCreateReclaimsTheWholePodSet(t *testing.T) {
 }
 
 // TestReachTargetsOnlyTheWorkloadPod: auxiliary pods run no session agent, so
-// the AC-D1/AC-E1 readiness probe must dial the workload pod alone (AC-F4).
+// the AC-D1/AC-E1 readiness probe must dial the workload pod alone (AC-A2).
 func TestReachTargetsOnlyTheWorkloadPod(t *testing.T) {
 	ctx := context.Background()
 	stub := k8s.NewStubOrchestrator("sessions")
