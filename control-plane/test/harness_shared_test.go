@@ -258,7 +258,6 @@ done`
 // constant would make the assertion agree with any rename by construction.
 const labelSessionID = "session-id"
 
-// podsBySelector lists the pods in ns matching a label selector.
 func podsBySelector(t *testing.T, cs kubernetes.Interface, ns, selector string) []corev1.Pod {
 	t.Helper()
 	list, err := cs.CoreV1().Pods(ns).List(context.Background(), metav1.ListOptions{LabelSelector: selector})
