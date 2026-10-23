@@ -1,18 +1,18 @@
 # PRD: 세션 워크로드 — MiniMax Code CLI (minimax-code)
 
 > 대상 요구사항: 세션 워크로드 타입에 **MiniMax Code CLI(`mcode`) 에이전트** 추가
-> (`shell`·`claude-code`·`approval-gated`와 병존하는 네 번째 타입, `claude-code-workload.md`와 대응 관계)
+> (`shell`·`claude-code`와 병존하는 세 번째 타입, `claude-code-workload.md`와 대응 관계)
 
 ## 달성 가치
-- **V8 목적에 맞는 작업 환경 선택** — 세션 생성 시 네 번째 작업 환경(MiniMax 모델로 도는 코딩 에이전트)을 고를 수 있게 하고, 선택과 무관하게 V1~V5 보장이 동일하게 성립함을 확정 (AC-G1)
+- **V8 목적에 맞는 작업 환경 선택** — 세션 생성 시 세 번째 작업 환경(MiniMax 모델로 도는 코딩 에이전트)을 고를 수 있게 하고, 선택과 무관하게 V1~V5 보장이 동일하게 성립함을 확정 (AC-G1)
 - **V1 세션 격리** — 공급자 자격 증명을 도구가 도는 컨테이너 밖에 두고, 다른 타입의 자격 증명과도 섞지 않음 (AC-A1/A2 구체화)
 - **V2 유휴 자원 회수** — `claude-code`와 같은 파일시스템 아카이브로 동결·회수 (AC-B1·A3의 타입별 경로)
 - **V3 끊김 없는 세션 연속성** — 대화 문맥·작업 디렉터리·누적 출력이 동결·복원을 건너 보존됨 (AC-B2/B3 구체화), write/read를 프롬프트·실행 출력 시맨틱으로 확정 (AC-C2/C3 구체화)
 - **V4 자유로운 멀티세션 전환** — 전환 후에도 동일한 offset 커서 규약으로 출력을 이어 읽음 (AC-C2 구체화)
 
-> 📌 **가치 연결 규칙**: `claude-code-workload.md`·`approval-gated-workload.md`와 동일하게, 각 AC의 달성 가치는
+> 📌 **가치 연결 규칙**: `claude-code-workload.md`와 동일하게, 각 AC의 달성 가치는
 > 자신이 구체화하는 상위 AC의 가치를 상속한다. **AC-G1(타입 선택)만 예외**로 추상 가치 **V8**에 직접 연결한다
-> — AC-E1·AC-F1과 같은 이유이며, 타입이 늘어도 `../values.md`는 변하지 않는다. 새 가치는 신설하지 않는다.
+> — AC-E1과 같은 이유이며, 타입이 늘어도 `../values.md`는 변하지 않는다. 새 가치는 신설하지 않는다.
 
 > 이 PRD는 **"같은 실행 모델 위에서 공급자와 CLI만 바꾼다"** 는 한 가지 성질을 세션 워크로드 타입으로 못박는다.
 > 실행 모델(원샷 프롬프트·직렬 큐·커서 규약·대화 연속성·아카이브)은 `claude-code`와 같으므로 **복제하지 않고
@@ -23,9 +23,9 @@
 ## Acceptance Criteria
 
 ### AC-G1: 워크로드 타입 `minimax-code` 선택
-- **설명**: 세션 생성 요청의 `workloadType` 허용값에 `minimax-code`가 추가되어 `shell`·`claude-code`·`approval-gated`·`minimax-code` 네 가지가 된다. 필드 생략만 `shell`로 해석하는 규칙, explicit empty/null/비문자열·허용값 밖 입력을 pod 생성 전에 400으로 거부하는 규칙, 타입 불변 규칙은 AC-E1과 같다. control plane은 이 타입에 대해 **워크로드 파드 하나**(주 컨테이너 + credential-proxy 사이드카)만 프로비저닝하며 헬퍼 파드는 없다. 배포가 이 타입의 이미지를 설정하지 않았으면 생성은 셸로 되돌아가지 않고 실패한다. `model` 필드 계약(생략=`platform-default` 별칭, 불변, pattern 검증, 구체 값은 Secret 기본값보다 우선)은 AC-E6을 그대로 따른다. 다만 Claude Code와 달리 `mcode`는 공급자 항목을 통해서만 모델을 고르므로, `platform-default`이면서 Secret에 `model` 키가 없거나 비어 있을 때는 `--model` 생략 대신 data plane 내장 기본값 `MiniMax-M3.1-Flash`를 쓴다.
+- **설명**: 세션 생성 요청의 `workloadType` 허용값에 `minimax-code`가 추가되어 `shell`·`claude-code`·`minimax-code` 세 가지가 된다. 필드 생략만 `shell`로 해석하는 규칙, explicit empty/null/비문자열·허용값 밖 입력을 pod 생성 전에 400으로 거부하는 규칙, 타입 불변 규칙은 AC-E1과 같다. control plane은 이 타입에 대해 **워크로드 파드 하나**(주 컨테이너 + credential-proxy 사이드카)만 프로비저닝하며 보조 파드(AC-A2)는 없다. 배포가 이 타입의 이미지를 설정하지 않았으면 생성은 셸로 되돌아가지 않고 실패한다. `model` 필드 계약(생략=`platform-default` 별칭, 불변, pattern 검증, 구체 값은 Secret 기본값보다 우선)은 AC-E6을 그대로 따른다. 다만 Claude Code와 달리 `mcode`는 공급자 항목을 통해서만 모델을 고르므로, `platform-default`이면서 Secret에 `model` 키가 없거나 비어 있을 때는 `--model` 생략 대신 data plane 내장 기본값 `MiniMax-M3.1-Flash`를 쓴다.
 - **달성 가치**: V8, V1
-- **구체화 대상**: AC-A1의 "실제 세션 워크로드" — 이제 네 갈래로 분기한다 (AC-D1=`shell`, AC-E2~E6=`claude-code`, AC-F2~F6=`approval-gated`, AC-G2~G4=`minimax-code`)
+- **구체화 대상**: AC-A1의 "실제 세션 워크로드" — 이제 세 갈래로 분기한다 (AC-D1=`shell`, AC-E2~E6=`claude-code`, AC-G2~G4=`minimax-code`) *(2026-10-23: `approval-gated`(AC-F1~F6) 제거로 네 갈래 → 세 갈래)*
 - **검증 방법**: `workloadType=minimax-code`로 세션을 생성하면 워크로드 파드 하나(컨테이너 둘)가 기동되고 조회 응답의 타입·모델이 기대값임을 확인한다. 이미지 미설정 배포에서는 pod 없이 실패함을 확인한다. 잘못된 model은 400임을 확인한다.
 
 ### AC-G2: write = `mcode exec` 1회 실행, read = assistant 메시지 텍스트

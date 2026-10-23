@@ -485,13 +485,6 @@
             <span class="t-n">minimax-code</span>
             <span class="t-d">MiniMax Code CLI on the same prompt loop. Runs the platform's default MiniMax model.</span>
           </button>
-          <button class="type wide" data-type="approval-gated" onclick="pickType('approval-gated')">
-            <span class="t-ic">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 21 6v6c0 5-3.8 8.9-9 10-5.2-1.1-9-5-9-10V6l9-4Z"/><path d="M9 12l2 2 4-4"/></svg>
-            </span>
-            <span class="t-n">approval-gated</span>
-            <span class="t-d">Same agent, but it cannot reach the outside on its own — every outbound call waits for your approval.</span>
-          </button>
         </div>
 
         <div class="model-field" id="model-field">
@@ -511,7 +504,7 @@
       </div>
 
       <div class="guarantee">
-        <b>Same guarantees whichever you pick</b> — dedicated pod isolation, idle reclaim, restore-on-access, free switching, and consistent state apply to every workload type. Only the freeze mechanism, and whether outbound calls need your approval, differ.
+        <b>Same guarantees whichever you pick</b> — dedicated pod isolation, idle reclaim, restore-on-access, free switching, and consistent state apply to every workload type. Only the freeze mechanism differs.
       </div>
 
       <div class="modal-foot">
@@ -559,8 +552,8 @@ let sessions = [
   {id:'0a17', name:'model-train-7b', type:'shell', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'2h ago', checkpoint:'412 MB', reclaim:'2 vCPU · 4 GB'},
   {id:'c83d', name:'doc-migration', type:'claude-code', model:'platform default', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'18m ago', checkpoint:'38 MB archive', reclaim:'1 vCPU · 2 GB'}
 ];
-// workloadType은 세션 수명 동안 불변 (AC-E1/AC-F1) · 링크 대상이 타입에 따라 갈린다
-const WS_PAGE = {'claude-code':'agent-workspace.html', 'minimax-code':'agent-workspace.html', 'approval-gated':'gated-workspace.html', 'shell':'workspace.html'};
+// workloadType은 세션 수명 동안 불변 (AC-E1/AC-G1) · 링크 대상이 타입에 따라 갈린다
+const WS_PAGE = {'claude-code':'agent-workspace.html', 'minimax-code':'agent-workspace.html', 'shell':'workspace.html'};
 function wsHref(s){
   if(s.state==='snapshot') return `restore.html?id=${s.id}`;
   return `${WS_PAGE[s.type]||'workspace.html'}?id=${s.id}`;
@@ -568,8 +561,8 @@ function wsHref(s){
 function typeTag(s){
   if(s.type==='claude-code')
     return `<span class="pod" style="color:#b79ae0" title="workloadType=claude-code">◇ claude-code</span>`;
-  if(s.type==='approval-gated')
-    return `<span class="pod" style="color:var(--idle)" title="workloadType=approval-gated">⏸ approval-gated</span>`;
+  if(s.type==='minimax-code')
+    return `<span class="pod" style="color:#b79ae0" title="workloadType=minimax-code">◇ minimax-code</span>`;
   return `<span class="pod" style="color:var(--text-faint)" title="workloadType=shell">$ shell</span>`;
 }
 function fmtSec(s){const m=Math.floor(s/60),ss=s%60;return m+':'+String(ss).padStart(2,'0');}
@@ -664,10 +657,10 @@ function startGridTick(){
 let provBusy=false;
 let draft = { type:'shell', model:'platform-default' };
 
-// 에이전트 계열 타입(claude-code · approval-gated · minimax-code) (AC-E6 · AC-F1 · AC-G1)
-const AGENT_TYPES = ['claude-code','approval-gated','minimax-code'];
+// 에이전트 계열 타입(claude-code · minimax-code) (AC-E6 · AC-G1)
+const AGENT_TYPES = ['claude-code','minimax-code'];
 // minimax-code는 model을 고르지 않는다 — 항상 플랫폼 기본 MiniMax 모델 (AC-G1)
-const MODEL_CHOICE_TYPES = ['claude-code','approval-gated'];
+const MODEL_CHOICE_TYPES = ['claude-code'];
 function pickType(t){
   if(provBusy) return;
   draft.type = t;
@@ -698,11 +691,9 @@ function startProvision(){
   document.getElementById('phase-prov').classList.add('on');
   document.getElementById('prov-type').textContent =
     isAgent ? `workloadType=${draft.type} · model=${MODEL_CHOICE_TYPES.includes(draft.type) ? MODEL_LABEL[draft.model] : 'platform default'}` : 'workloadType=shell';
-  // control plane은 타입에 따라 서로 다른 워크로드로 pod를 프로비저닝한다 (AC-E1/AC-F1)
-  // approval-gated는 워크로드 파드와 함께 세션 전용 MCP 보조 파드를 세운다 (AC-F4)
+  // control plane은 타입에 따라 서로 다른 워크로드로 pod를 프로비저닝한다 (AC-E1/AC-G1)
   document.getElementById('prov-step-2').textContent =
-    draft.type==='approval-gated' ? 'Schedule dedicated pod + session MCP pod'
-    : isAgent ? 'Schedule dedicated pod (agent CLI image)' : 'Schedule dedicated pod (shell image)';
+    isAgent ? 'Schedule dedicated pod (agent CLI image)' : 'Schedule dedicated pod (shell image)';
 
   const steps=[...document.querySelectorAll('#prov-steps .step')];
   steps.forEach(s=>{s.className='step'; s.querySelector('.done-t').textContent='';
@@ -730,8 +721,7 @@ function startProvision(){
       sessions.unshift(s);
       setTimeout(()=>{
         closeModal(); provBusy=false; renderGrid(); renderSummary();
-        toast(draft.type==='approval-gated' ? 'approval-gated session created — outbound calls will need your approval'
-          : isAgent ? 'claude-code session created on a dedicated pod' : 'shell session created on a dedicated pod','warm');
+        toast(isAgent ? `${draft.type} session created on a dedicated pod` : 'shell session created on a dedicated pod','warm');
       }, reduce?80:480);
     }
   };

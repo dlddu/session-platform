@@ -17,28 +17,17 @@
 > 이 PRD는 세션 워크로드가 **단수(인터랙티브 쉘)에서 복수(타입)로 확장**되는 변경을 다룬다.
 > AC-E1이 타입 선택이라는 새 축을 도입하고, AC-E2~E6은 `claude-code` 타입에서 기존 AC들
 > (AC-A1·B1·B2·B3·C2·C3)이 어떻게 구체화되는지를 못박는다. 다른 타입의 대응 명세는
-> `shell-workload.md`(AC-D1~D5)와 `approval-gated-workload.md`(AC-F1~F6)이며, 세 문서는 같은 상위 AC에
+> `shell-workload.md`(AC-D1~D5)와 `minimax-code-workload.md`(AC-G1~G4)이며, 세 문서는 같은 상위 AC에
 > 대한 **타입별 구체화**로 나란히 존재한다.
 >
-> 📌 **역참조 (2026-09-03)**: `approval-gated` 타입은 이 문서의 배선을 **복제하지 않고 재사용한다** —
-> 원샷 실행·직렬 큐·offset 커서·파일시스템 아카이브(AC-E2/E3/E5), credential-proxy의 **동작 계약**과
-> optional `model`/`models` 기본값·soft catalog, 출력 증분 redaction(AC-E6)이 그대로 적용된다.
-> 그 위에 얹히는 차이(egress 제한·승인 게이트·보조 파드·공유 볼륨·게이트웨이 자격 증명)만
-> AC-F2~F6이 정의한다. **따라서 AC-E2·E3·E5·E6을 고칠 때는 `approval-gated`도 함께 바뀐다.**
->
-> ⚠️ **두 가지는 재사용하지 않는다 (2026-09-03 확정)**: ① credential-proxy의 **배치** — 이 문서는 워크로드
-> 파드 안의 loopback 사이드카이고, `approval-gated`는 같은 계약의 프록시를 **세션 헬퍼 보조 파드의 컨테이너**로
-> 옮겨 파드 IP에 바인딩한다(AC-F2·F4·F6). 동작 계약이 갈라지지 않도록 **정본은 계속 AC-E6**이며 배치만 타입별로 다르다.
-> ② 주 컨테이너의 `k3s-mcp-token`과 **런타임 plugin 부트스트랩** — 부트스트랩이 K3s MCP·`github.com`으로
-> 직접 나가야 하는데 `approval-gated`의 egress 허용 목록에 그 목적지가 없다. 2026-09-03에 그 타입에서는
-> **부트스트랩을 아예 두지 않는 것**으로 확정했다(AC-F6). 따라서 이 문서의 plugin 배선을 고쳐도
-> `approval-gated`는 영향을 받지 않으며, 반대로 **plugin이 제공하는 플랫폼 도구를 그 타입도 써야 한다면
-> 세션 MCP 쪽에 따로 실어야 한다.**
+> 📌 **역참조**: `minimax-code` 타입은 이 문서의 배선(원샷 실행·직렬 큐·offset 커서·파일시스템 아카이브·
+> credential-proxy 동작 계약)을 재사용한다 — 차이는 `minimax-code-workload.md`가 정의한다.
+> *(2026-10-23: 이 배선을 재사용하던 또 하나의 타입 `approval-gated`(AC-F1~F6)와 그 역참조는 타입 제거와 함께 걷혔다.)*
 
 ## Acceptance Criteria
 
 ### AC-E1: 세션 워크로드 타입 선택
-- **설명**: 세션 생성 요청은 워크로드 타입 `workloadType`을 받는다. 허용값은 `shell`·`claude-code`·`approval-gated`(AC-F1)이며, **필드 생략만** `shell` 기본값으로 해석한다(explicit empty/null/비문자열은 400). 타입은 세션 수명 동안 **불변**이다(타입을 바꾸려면 새 세션을 만든다). 하나의 세션은 정확히 하나의 워크로드 타입을 가지고, control plane은 타입에 따라 서로 다른 data plane 워크로드(에이전트 모드/이미지)로 pod를 프로비저닝한다. 타입이 늘어나도 AC-A1(control plane은 워크로드를 직접 실행하지 않음)과 AC-A2(1 세션 = 1 전용 워크로드 파드)는 그대로 유지된다.
+- **설명**: 세션 생성 요청은 워크로드 타입 `workloadType`을 받는다. 허용값은 `shell`·`claude-code`·`minimax-code`(AC-G1)이며, **필드 생략만** `shell` 기본값으로 해석한다(explicit empty/null/비문자열은 400). 타입은 세션 수명 동안 **불변**이다(타입을 바꾸려면 새 세션을 만든다). 하나의 세션은 정확히 하나의 워크로드 타입을 가지고, control plane은 타입에 따라 서로 다른 data plane 워크로드(에이전트 모드/이미지)로 pod를 프로비저닝한다. 타입이 늘어나도 AC-A1(control plane은 워크로드를 직접 실행하지 않음)과 AC-A2(1 세션 = 1 전용 워크로드 파드)는 그대로 유지된다.
 - **달성 가치**: V8, V1
 - **구체화 대상**: AC-A1의 "실제 세션 워크로드" — 이제 **타입별로 분기**한다 (AC-D1은 `shell` 타입의 구체화, AC-E1~E6은 `claude-code` 타입의 구체화)
 - **검증 방법**: `workloadType=claude-code`로 세션을 생성하면 해당 pod에서 클로드 코드 CLI 실행이 가능하고, `workloadType` 미지정 생성은 기존과 동일하게 `shell` 세션으로 동작함을 확인한다. explicit `""`/`null`/비문자열과 허용값 외 타입은 pod 생성 전 400으로 거부됨을 확인한다. 기존 세션 route에 workload/model 변경 필드를 보내면 400이고 원래 값이 유지됨을 확인한다.

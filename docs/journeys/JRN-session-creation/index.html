@@ -169,13 +169,13 @@
           <span><span class="t-name">claude-code</span><span class="t-desc">에이전트에게 프롬프트로 일을 시킨다.</span></span>
         </label>
         <label>
-          <input type="radio" name="wtype" value="approval-gated">
-          <span><span class="t-name">approval-gated</span><span class="t-desc">밖으로 나가는 호출마다 사람이 승인한다.</span></span>
+          <input type="radio" name="wtype" value="minimax-code">
+          <span><span class="t-name">minimax-code</span><span class="t-desc">같은 프롬프트 루프를 MiniMax 모델로 돌린다.</span></span>
         </label>
       </div>
 
       <label class="field">
-        <span class="lab">Model — <span class="mono">claude-code</span> · <span class="mono">approval-gated</span> 에서만 씁니다</span>
+        <span class="lab">Model — <span class="mono">claude-code</span> 에서만 씁니다</span>
         <select id="sess-model" data-required-input disabled>
           <option value="platform-default">platform default</option>
           <option value="model-a">model-a</option>
@@ -364,7 +364,7 @@
 
   Array.prototype.forEach.call(document.querySelectorAll('input[name=wtype]'), function (r) {
     r.addEventListener('change', function () {
-      modelSel.disabled = document.querySelector('input[name=wtype]:checked').value === 'shell';
+      modelSel.disabled = document.querySelector('input[name=wtype]:checked').value !== 'claude-code';
       clearCreateError();
     });
   });
@@ -458,7 +458,7 @@
           createError('세션 이름이 필요합니다 (400) — pod 를 만들기 전에 거부했습니다.', false);
           return;
         }
-        if (type !== 'shell' && modelSel.value === 'model-retired') {
+        if (type === 'claude-code' && modelSel.value === 'model-retired') {
           createError('지원이 끝난 모델입니다 (400) — pod 를 만들기 전에 거부했습니다.', true);
           return;
         }

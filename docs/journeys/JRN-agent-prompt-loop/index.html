@@ -166,8 +166,8 @@
           <span class="td">목표를 설명하고 맡깁니다. 보낸 뒤 다른 일을 봐도 됩니다.</span>
         </label>
         <label>
-          <span class="tt"><input type="radio" name="wl" value="approval-gated" id="wl-gated" data-required-input>승인 게이트 에이전트</span>
-          <span class="td">밖으로 나가는 호출마다 내 승인을 받습니다.</span>
+          <span class="tt"><input type="radio" name="wl" value="minimax-code" id="wl-minimax" data-required-input>MiniMax 에이전트</span>
+          <span class="td">같은 방식으로 맡기되 MiniMax 모델로 돕니다. 모델은 플랫폼 기본값입니다.</span>
         </label>
       </div>
 
@@ -190,13 +190,6 @@
       </div>
 
       <p class="state-note" data-state-note hidden></p>
-
-      <div class="proto-bar">
-        <span class="cap">여기서 갈라지는 길</span>
-        <a id="br-need-gate" href="../JRN-approval-gated-work/index.html#STP-gated-prompt-submit"
-           data-branch-row="8"
-           data-branch-target="JRN-approval-gated-work#STP-gated-prompt-submit">외부 접근에 사람의 승인이 필요하다면</a>
-      </div>
     </div>
 
     <details class="step-meta">
@@ -204,7 +197,7 @@
       <dl>
         <dt>단계</dt><dd><code>STP-workload-choice</code> 작업 환경을 고른다</dd>
         <dt>터치포인트</dt><dd>New session 모달의 workload type 카드 3종과 model 선택</dd>
-        <dt>연결 AC</dt><dd>AC-E1, AC-E6, AC-F1 (보조 AC-A1·A2)</dd>
+        <dt>연결 AC</dt><dd>AC-E1, AC-E6, AC-G1 (보조 AC-A1·A2)</dd>
         <dt>페인포인트</dt><dd>불변이라는 사실을 고른 뒤에 알면 세션을 버리고 다시 만든다 — 선택 시점에 명시하고, 각 환경이 어떤 일에 맞는지 한 줄로 적는다.</dd>
       </dl>
     </details>
@@ -453,7 +446,7 @@
   }
 
   /* ---------- STP-workload-choice ---------- */
-  var TYPE_LABEL = { 'shell': 'shell', 'claude-code': 'claude-code', 'approval-gated': 'approval-gated' };
+  var TYPE_LABEL = { 'shell': 'shell', 'claude-code': 'claude-code', 'minimax-code': 'minimax-code' };
 
   function chosenType() {
     var r = document.querySelector('input[name="wl"]:checked');
@@ -462,8 +455,8 @@
 
   Array.prototype.forEach.call(document.querySelectorAll('input[name="wl"]'), function (r) {
     r.addEventListener('change', function () {
-      noteIn(r, r.value === 'approval-gated'
-        ? '승인 게이트를 고르면 사용 루프는 별도 여정으로 이어집니다 — 이 화면은 고르는 순간만 담습니다.'
+      noteIn(r, r.value === 'minimax-code'
+        ? 'MiniMax 에이전트는 모델을 고르지 않습니다 — 항상 플랫폼 기본 MiniMax 모델로 돕니다. 타입은 세션 수명 동안 고정됩니다.'
         : '고른 타입은 세션 수명 동안 고정됩니다. 바꾸려면 새 세션을 만듭니다.');
     });
   });
