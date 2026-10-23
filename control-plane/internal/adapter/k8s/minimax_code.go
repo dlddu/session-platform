@@ -39,6 +39,14 @@ const (
 	// Keep in sync with data-plane/cmd/agent (workloadK3SMCPProxy, k3sMCPProxyPort).
 	k3sMCPProxyWorkload = "k3s-mcp-proxy"
 	k3sMCPProxyPort     = 8093
+
+	// MiniMaxMarketplaceDirEnvVar is where the K3s MCP proxy clones the plugin
+	// marketplace (AC-G5). Its root filesystem is read-only, so the clone gets
+	// an emptyDir of its own; nothing else mounts it.
+	// Keep in sync with data-plane/cmd/agent (miniMaxMarketplaceDirEnv).
+	MiniMaxMarketplaceDirEnvVar = "MINIMAX_CODE_MARKETPLACE_DIR"
+	miniMaxMarketplaceVolume    = "marketplace"
+	miniMaxMarketplacePath      = "/var/lib/session-platform-marketplace"
 )
 
 // WithMiniMaxCredentialsSecret selects the platform-managed Secret minimax-code
@@ -112,8 +120,8 @@ func (o *ClientOrchestrator) repointToMiniMaxSecret(proxy *corev1.Container) {
 
 // miniMaxK3SMCPProxy is the helper pod container in front of the K3s MCP
 // (AC-G5). It reuses the provider proxy's hardening, helper placement and
-// in-container probe; only its workload, port and the one Secret key it reads
-// differ.
+// in-container probe; its workload, port, the one Secret key it reads and the
+// scratch volume its marketplace clone needs differ.
 func (o *ClientOrchestrator) miniMaxK3SMCPProxy(image string) corev1.Container {
 	port := strconv.Itoa(k3sMCPProxyPort)
 	proxy := o.credentialProxyContainer(MiniMaxK3SMCPProxyContainerName, image, ":"+port, proxyPlacementHelper)
@@ -121,10 +129,24 @@ func (o *ClientOrchestrator) miniMaxK3SMCPProxy(image string) corev1.Container {
 		{Name: workloadEnvVar, Value: k3sMCPProxyWorkload},
 		{Name: agentAddrEnvVar, Value: ":" + port},
 		{Name: CredentialProxyPlacementEnvVar, Value: proxyPlacementHelper},
+		{Name: MiniMaxMarketplaceDirEnvVar, Value: miniMaxMarketplacePath},
 		optionalSecretEnv(K3SMCPTokenEnvVar, o.miniMaxCredentialsSecret, MiniMaxK3SMCPTokenSecretKey),
 	}
+	proxy.VolumeMounts = []corev1.VolumeMount{{Name: miniMaxMarketplaceVolume, MountPath: miniMaxMarketplacePath}}
 	proxy.ReadinessProbe.Exec.Command = []string{"/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/" + port}
 	return proxy
+}
+
+// helperProxyVolumes are the helper pod volumes its proxy containers need:
+// the K3s MCP proxy's marketplace scratch space, for the type that runs it.
+func helperProxyVolumes(workloadType session.WorkloadType) []corev1.Volume {
+	if workloadType != session.WorkloadTypeMiniMaxCode {
+		return nil
+	}
+	return []corev1.Volume{{
+		Name:         miniMaxMarketplaceVolume,
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	}}
 }
 
 // helperPolicyPorts are the helper pod ports a session's network policies

@@ -49,15 +49,26 @@ func k3sMCPProxyRequestHeaderAllowed(name string) bool {
 // keeps minimax-code sessions working without the K3s tools. The health route
 // says which of the two it is, so the workload agent can leave the K3s server
 // out rather than fail the pod.
-func newK3SMCPProxy(rawURL, token string, logger *slog.Logger) (http.Handler, error) {
+func newK3SMCPProxy(rawURL, token string, logger *slog.Logger) (*k3sMCPProxy, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	// As for the provider proxy: no ambient HTTP(S)_PROXY may redirect the token.
 	transport.Proxy = nil
 	return newK3SMCPProxyWithTransport(rawURL, token, logger, transport)
 }
 
-func newK3SMCPProxyWithTransport(rawURL, token string, logger *slog.Logger, transport http.RoundTripper) (http.Handler, error) {
+// k3sMCPProxy is the proxy's handler plus, when it holds a token, the
+// marketplace bootstrap the caller starts (minimax_marketplace.go).
+type k3sMCPProxy struct {
+	http.Handler
+	seeder *miniMaxMarketplaceSeeder
+}
+
+func newK3SMCPProxyWithTransport(rawURL, token string, logger *slog.Logger, transport http.RoundTripper) (*k3sMCPProxy, error) {
 	origin, err := k3sMCPOrigin(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	mcpPath, err := k3sMCPPath(rawURL)
 	if err != nil {
 		return nil, err
 	}
@@ -87,6 +98,13 @@ func newK3SMCPProxyWithTransport(rawURL, token string, logger *slog.Logger, tran
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(health)
 	})
+	result := &k3sMCPProxy{Handler: mux}
+	if upstream != nil {
+		result.seeder = newMiniMaxMarketplaceSeeder(upstream, mcpPath, logger)
+		mux.HandleFunc(miniMaxPluginSeedPath, result.seeder.serveSeed)
+	} else {
+		mux.HandleFunc(miniMaxPluginSeedPath, serveUnconfiguredSeed)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if upstream == nil {
 			http.Error(w, "k3s mcp proxy has no token configured", http.StatusServiceUnavailable)
@@ -94,7 +112,23 @@ func newK3SMCPProxyWithTransport(rawURL, token string, logger *slog.Logger, tran
 		}
 		upstream.ServeHTTP(w, r)
 	})
-	return mux, nil
+	return result, nil
+}
+
+// k3sMCPPath is the K3s MCP endpoint's path on its origin, which is where the
+// marketplace bootstrap sends its own call.
+func k3sMCPPath(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		raw = defaultK3SMCPURL
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", errors.New("k3s mcp URL is invalid")
+	}
+	if parsed.EscapedPath() == "" {
+		return "/", nil
+	}
+	return parsed.EscapedPath(), nil
 }
 
 // k3sMCPOrigin reduces the configured MCP URL to its origin. The client keeps

@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -201,6 +202,9 @@ func main() {
 			os.Exit(1)
 		}
 		handler = proxy
+		if proxy.seeder != nil {
+			go proxy.seeder.run(context.Background())
+		}
 		logger.Info("k3s mcp proxy started", "addr", addr, "configured", token != "")
 	default:
 		logger.Error("unknown data plane workload", "workload", workload)

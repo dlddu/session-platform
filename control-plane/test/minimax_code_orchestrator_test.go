@@ -207,6 +207,29 @@ func TestMiniMaxCode_K3SMCPProxyHoldsTheToken(t *testing.T) {
 			}
 		}
 	}
+	// AC-G5: the marketplace clone needs writable scratch under a read-only
+	// root; only this container mounts it, and it is an emptyDir of the pod.
+	dir, _ := envValue(proxy, k8s.MiniMaxMarketplaceDirEnvVar)
+	if len(proxy.VolumeMounts) != 1 || proxy.VolumeMounts[0].MountPath != dir || dir == "" {
+		t.Errorf("k3s mcp proxy mounts = %+v, %s = %q; want one scratch mount at that path", proxy.VolumeMounts, k8s.MiniMaxMarketplaceDirEnvVar, dir)
+	} else {
+		var scratch *corev1.Volume
+		for i := range set.helper.Spec.Volumes {
+			if set.helper.Spec.Volumes[i].Name == proxy.VolumeMounts[0].Name {
+				scratch = &set.helper.Spec.Volumes[i]
+			}
+		}
+		if scratch == nil || scratch.EmptyDir == nil {
+			t.Errorf("marketplace scratch volume = %+v, want an emptyDir", scratch)
+		}
+	}
+	for _, name := range []string{k8s.SessionMCPContainerName, k8s.HelperCredentialProxyContainerName} {
+		for _, m := range container(t, set.helper, name).VolumeMounts {
+			if m.MountPath == dir {
+				t.Errorf("container %s mounts the marketplace scratch", name)
+			}
+		}
+	}
 	probe := proxy.ReadinessProbe
 	if probe == nil || probe.Exec == nil || !strings.Contains(strings.Join(probe.Exec.Command, " "), "/127.0.0.1/8093") {
 		t.Errorf("readiness probe = %+v, want an in-container check of 127.0.0.1:8093", probe)

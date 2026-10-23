@@ -62,9 +62,10 @@ type miniMaxCLI struct {
 	model       string
 	// k3sProxyURL is the helper pod's K3s MCP proxy, or empty for none (AC-G5).
 	k3sProxyURL string
-	// k3sConfigured reports whether that proxy holds a token; a field so tests
-	// need no server.
-	k3sConfigured func(baseURL string) (bool, error)
+	// fetchSeed reads that proxy's marketplace bundle; a field so tests need no
+	// server.
+	fetchSeed func(baseURL string) (miniMaxSeedBundle, error)
+	logger    *slog.Logger
 }
 
 func newMiniMaxCLI(stateDir, model, baseURL, placeholder string) (miniMaxCLI, error) {
@@ -131,33 +132,46 @@ func (m miniMaxCLI) ensureHome(homeDir string, tools toolSurface) error {
 	}
 	seedDir := ""
 	if tools.SessionMCP != "" {
-		k3sURL, err := m.k3sPluginURL()
+		plugins, err := m.marketplacePlugins()
 		if err != nil {
 			return err
 		}
 		seedDir = filepath.Join(filepath.Dir(m.configPath), "plugins")
-		if err := stageMiniMaxPlugins(seedDir, tools.sessionMCPEndpoint(), k3sURL); err != nil {
+		if err := stageMiniMaxPlugins(seedDir, tools.sessionMCPEndpoint(), m.k3sProxyURL, plugins, m.log()); err != nil {
 			return err
 		}
 	}
 	return syncMiniMaxPlugins(homeDir, seedDir)
 }
 
-// k3sPluginURL is the K3s MCP server address mcode should register, or empty
-// when there is no proxy or it holds no token.
-func (m miniMaxCLI) k3sPluginURL() (string, error) {
+// marketplacePlugins is the proxy's bundle when it has one ready, and nothing
+// when there is no proxy, it holds no token, or its bootstrap failed.
+func (m miniMaxCLI) marketplacePlugins() ([]miniMaxSeedPlugin, error) {
 	if m.k3sProxyURL == "" {
-		return "", nil
+		return nil, nil
 	}
-	probe := m.k3sConfigured
-	if probe == nil {
-		probe = k3sProxyConfigured
+	fetch := m.fetchSeed
+	if fetch == nil {
+		fetch = fetchMiniMaxSeed
 	}
-	configured, err := probe(m.k3sProxyURL)
-	if err != nil || !configured {
-		return "", err
+	bundle, err := fetch(m.k3sProxyURL)
+	if err != nil {
+		return nil, err
 	}
-	return k3sProxyMCPURL(m.k3sProxyURL)
+	switch bundle.State {
+	case miniMaxSeedStateReady:
+		return bundle.Plugins, nil
+	case miniMaxSeedStateFailed:
+		m.log().Warn("minimax plugin marketplace unavailable; running without its plugins", "err", bundle.Error)
+	}
+	return nil, nil
+}
+
+func (m miniMaxCLI) log() *slog.Logger {
+	if m.logger == nil {
+		return slog.Default()
+	}
+	return m.logger
 }
 
 // validateState is the type-neutral half of AC-E5's integrity check. There is
@@ -298,6 +312,7 @@ func newMiniMaxWorkloadFromEnv(logger *slog.Logger, restoreMode bool) (*claudeWo
 		return nil, err
 	}
 	cli.k3sProxyURL = endpoints.k3sProxy
+	cli.logger = logger
 	claude, err := newClaudeWorkload(claudeConfig{
 		StateDir:    stateDir,
 		Model:       model,

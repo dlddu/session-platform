@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -145,84 +146,162 @@ func pluginServer(t *testing.T, home, plugin string) (string, map[string]any) {
 	return "", nil
 }
 
-func newTestMiniMaxHome(t *testing.T, configured bool, probeErr error) (miniMaxCLI, string, *int) {
+func seedFiles(files map[string]string) map[string]string {
+	encoded := make(map[string]string, len(files))
+	for path, content := range files {
+		encoded[path] = base64.StdEncoding.EncodeToString([]byte(content))
+	}
+	return encoded
+}
+
+// The shape the real marketplace ships: an OAuth client id mcode rejects, a
+// bearer header with a ${VAR} mcode would send literally, and — to prove the
+// re-pointing is per server — one server the pod cannot reach.
+var testMarketplaceBundle = miniMaxSeedBundle{State: miniMaxSeedStateReady, Plugins: []miniMaxSeedPlugin{
+	{Name: "mcp-servers", Files: seedFiles(map[string]string{
+		".claude-plugin/plugin.json": `{"name":"mcp-servers","mcpServers":["./mcp/k3s.json"]}`,
+		"mcp/k3s.json": `{"mcpServers":{
+			"k3s":{"type":"http","url":"https://homelab-k3s-mcp.llkm.nl/mcp","oauthClientId":"homelab-k3s-mcp",
+				"headers":{"Authorization":"Bearer ${K3S_MCP_TOKEN}","X-Trace":"1"}},
+			"elsewhere":{"type":"http","url":"https://example.com/mcp"}}}`,
+	})},
+	{Name: "development", Files: seedFiles(map[string]string{
+		".claude-plugin/plugin.json": `{"name":"development","skills":["./skillset/x"]}`,
+		"skillset/x/SKILL.md":        "# x\n",
+	})},
+}}
+
+func newTestMiniMaxHome(t *testing.T, bundle miniMaxSeedBundle, fetchErr error) (miniMaxCLI, string, *int) {
 	t.Helper()
 	dir := t.TempDir()
 	cli, err := newMiniMaxCLI(filepath.Join(dir, "state"), "", "http://10.1.2.3:8091", claudeProxyPlaceholderToken)
 	if err != nil {
 		t.Fatal(err)
 	}
-	probes := 0
+	fetches := 0
 	cli.k3sProxyURL = "http://10.1.2.3:8093"
-	cli.k3sConfigured = func(baseURL string) (bool, error) {
-		probes++
+	cli.fetchSeed = func(baseURL string) (miniMaxSeedBundle, error) {
+		fetches++
 		if baseURL != cli.k3sProxyURL {
-			t.Errorf("probed %q, want the K3s proxy %q", baseURL, cli.k3sProxyURL)
+			t.Errorf("fetched the seed from %q, want the K3s proxy %q", baseURL, cli.k3sProxyURL)
 		}
-		return configured, probeErr
+		return bundle, fetchErr
 	}
-	return cli, filepath.Join(dir, "state", "home"), &probes
+	return cli, filepath.Join(dir, "state", "home"), &fetches
 }
 
 var testMiniMaxTools = toolSurface{SessionMCP: "http://10.1.2.3:8092"}
 
-// AC-G5/AC-G6: both servers point at the helper pod, carry no auth of their
-// own, and use the names claude-code's tools already have.
-func TestMiniMaxEnsureHomeRegistersHelperServers(t *testing.T) {
-	cli, home, _ := newTestMiniMaxHome(t, true, nil)
+func readServers(t *testing.T, path string) map[string]map[string]any {
+	t.Helper()
+	var doc struct {
+		MCPServers map[string]map[string]any `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(readFile(t, path)), &doc); err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	return doc.MCPServers
+}
+
+// AC-G5/AC-G6: the session MCP plugin plus every marketplace plugin, with the
+// K3s MCP server alone re-pointed at the proxy and stripped of its own auth.
+func TestMiniMaxEnsureHomeInstallsMarketplacePlugins(t *testing.T) {
+	cli, home, _ := newTestMiniMaxHome(t, testMarketplaceBundle, nil)
 	if err := cli.ensureHome(home, testMiniMaxTools); err != nil {
 		t.Fatalf("ensureHome: %v", err)
 	}
-	for _, tc := range []struct{ plugin, server, url string }{
-		{miniMaxSessionPluginName, sessionMCPServerName, "http://10.1.2.3:8092/mcp"},
-		{miniMaxK3SPluginName, "k3s", "http://10.1.2.3:8093/mcp"},
-	} {
-		name, server := pluginServer(t, home, tc.plugin)
-		if name != tc.server || server["type"] != "http" || server["url"] != tc.url || len(server) != 2 {
-			t.Errorf("plugin %s server %s = %v, want only type http and url %s", tc.plugin, name, server, tc.url)
-		}
-		if _, err := os.Stat(filepath.Join(miniMaxPluginsDir(home), tc.plugin, miniMaxManagedPluginMarker)); err != nil {
-			t.Errorf("plugin %s is not marked as the platform's: %v", tc.plugin, err)
-		}
+	plugins := miniMaxPluginsDir(home)
+
+	name, server := pluginServer(t, home, miniMaxSessionPluginName)
+	if name != sessionMCPServerName || server["url"] != "http://10.1.2.3:8092/mcp" || len(server) != 2 {
+		t.Errorf("session MCP server %s = %v, want only type http and the helper MCP URL", name, server)
 	}
-	if _, err := os.Stat(cli.configPath); err != nil {
-		t.Errorf("ensureHome did not write the managed config: %v", err)
+
+	servers := readServers(t, filepath.Join(plugins, "mcp-servers", "mcp", "k3s.json"))
+	k3s := servers["k3s"]
+	if k3s["url"] != "http://10.1.2.3:8093/mcp" {
+		t.Errorf("k3s url = %v, want the proxy", k3s["url"])
+	}
+	if _, ok := k3s["oauthClientId"]; ok {
+		t.Errorf("k3s server still carries oauthClientId: %v", k3s)
+	}
+	headers, _ := k3s["headers"].(map[string]any)
+	if _, ok := headers["Authorization"]; ok || headers["X-Trace"] != "1" {
+		t.Errorf("k3s headers = %v, want Authorization removed and the rest kept", headers)
+	}
+	if _, ok := servers["elsewhere"]; ok {
+		t.Error("a server the pod cannot reach was kept")
+	}
+	if got := readFile(t, filepath.Join(plugins, "development", "skillset", "x", "SKILL.md")); got != "# x\n" {
+		t.Errorf("skill = %q, want the marketplace file", got)
+	}
+	for _, plugin := range []string{miniMaxSessionPluginName, "mcp-servers", "development"} {
+		if _, err := os.Stat(filepath.Join(plugins, plugin, miniMaxManagedPluginMarker)); err != nil {
+			t.Errorf("plugin %s is not marked as the platform's: %v", plugin, err)
+		}
 	}
 	if rel, err := filepath.Rel(filepath.Dir(home), filepath.Dir(cli.configPath)); err != nil || !strings.HasPrefix(rel, "..") {
 		t.Errorf("staging dir %s is inside the state tree", filepath.Dir(cli.configPath))
 	}
 }
 
-// AC-G5: a proxy without a token means no K3s server, and a restored HOME that
-// still lists one from an earlier pod loses it.
-func TestMiniMaxEnsureHomeOmitsAnUnconfiguredK3SProxy(t *testing.T) {
-	cli, home, _ := newTestMiniMaxHome(t, true, nil)
-	if err := cli.ensureHome(home, testMiniMaxTools); err != nil {
-		t.Fatalf("ensureHome: %v", err)
-	}
-	cli.k3sConfigured = func(string) (bool, error) { return false, nil }
-	if err := cli.ensureHome(home, testMiniMaxTools); err != nil {
-		t.Fatalf("ensureHome: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(miniMaxPluginsDir(home), miniMaxK3SPluginName)); !os.IsNotExist(err) {
-		t.Errorf("K3s plugin survived an unconfigured proxy: %v", err)
-	}
-	if name, _ := pluginServer(t, home, miniMaxSessionPluginName); name != sessionMCPServerName {
-		t.Errorf("session MCP server = %q, want %q", name, sessionMCPServerName)
+// A failed or absent marketplace leaves the session MCP plugin alone, and a
+// restored HOME that still holds an earlier pod's marketplace plugins loses
+// them.
+func TestMiniMaxEnsureHomeWithoutAMarketplaceKeepsOnlyTheSessionPlugin(t *testing.T) {
+	for _, state := range []string{miniMaxSeedStateFailed, miniMaxSeedStateUnconfigured} {
+		t.Run(state, func(t *testing.T) {
+			cli, home, _ := newTestMiniMaxHome(t, testMarketplaceBundle, nil)
+			if err := cli.ensureHome(home, testMiniMaxTools); err != nil {
+				t.Fatalf("ensureHome: %v", err)
+			}
+			cli.fetchSeed = func(string) (miniMaxSeedBundle, error) {
+				return miniMaxSeedBundle{State: state, Plugins: []miniMaxSeedPlugin{}}, nil
+			}
+			if err := cli.ensureHome(home, testMiniMaxTools); err != nil {
+				t.Fatalf("ensureHome: %v", err)
+			}
+			entries, _ := os.ReadDir(miniMaxPluginsDir(home))
+			if len(entries) != 1 || entries[0].Name() != miniMaxSessionPluginName {
+				t.Errorf("plugins = %v, want only %s", entries, miniMaxSessionPluginName)
+			}
+		})
 	}
 }
 
 // An unreachable proxy is a broken helper pod, not a missing key: the boot
 // fails rather than silently running without the tools.
 func TestMiniMaxEnsureHomeFailsOnAnUnreachableK3SProxy(t *testing.T) {
-	cli, home, _ := newTestMiniMaxHome(t, false, errors.New("connection refused"))
+	cli, home, _ := newTestMiniMaxHome(t, miniMaxSeedBundle{}, errors.New("connection refused"))
 	if err := cli.ensureHome(home, testMiniMaxTools); err == nil {
 		t.Fatal("ensureHome succeeded with an unreachable K3s proxy")
 	}
 }
 
+func TestMiniMaxEnsureHomeRefusesAPluginNamedLikeTheSessionPlugin(t *testing.T) {
+	bundle := miniMaxSeedBundle{State: miniMaxSeedStateReady, Plugins: []miniMaxSeedPlugin{{
+		Name:  miniMaxSessionPluginName,
+		Files: seedFiles(map[string]string{".claude-plugin/plugin.json": `{}`}),
+	}}}
+	cli, home, _ := newTestMiniMaxHome(t, bundle, nil)
+	if err := cli.ensureHome(home, testMiniMaxTools); err == nil {
+		t.Fatal("ensureHome let a marketplace plugin replace the session MCP plugin")
+	}
+}
+
+func TestMiniMaxEnsureHomeRefusesAPathOutsideThePlugin(t *testing.T) {
+	bundle := miniMaxSeedBundle{State: miniMaxSeedStateReady, Plugins: []miniMaxSeedPlugin{{
+		Name:  "evil",
+		Files: seedFiles(map[string]string{"../escape.json": `{}`}),
+	}}}
+	cli, home, _ := newTestMiniMaxHome(t, bundle, nil)
+	if err := cli.ensureHome(home, testMiniMaxTools); err == nil {
+		t.Fatal("ensureHome wrote a seed file outside its plugin")
+	}
+}
+
 func TestMiniMaxEnsureHomeWithoutSessionMCPInstallsNothing(t *testing.T) {
-	cli, home, probes := newTestMiniMaxHome(t, true, nil)
+	cli, home, fetches := newTestMiniMaxHome(t, testMarketplaceBundle, nil)
 	writeSeedPlugin(t, miniMaxPluginsDir(home), "stale", `{}`)
 	if err := os.WriteFile(filepath.Join(miniMaxPluginsDir(home), "stale", miniMaxManagedPluginMarker), nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -233,24 +312,30 @@ func TestMiniMaxEnsureHomeWithoutSessionMCPInstallsNothing(t *testing.T) {
 	if entries, _ := os.ReadDir(miniMaxPluginsDir(home)); len(entries) != 0 {
 		t.Errorf("plugins = %v, want none", entries)
 	}
-	if *probes != 0 {
-		t.Errorf("probed the K3s proxy %d times without a session MCP", *probes)
+	if *fetches != 0 {
+		t.Errorf("fetched the seed %d times without a session MCP", *fetches)
 	}
 }
 
-func TestK3SProxyConfiguredReadsHealth(t *testing.T) {
-	for _, configured := range []bool{true, false} {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != k3sMCPProxyHealthz {
-				http.NotFound(w, r)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "configured": configured})
-		}))
-		got, err := k3sProxyConfigured(srv.URL)
-		srv.Close()
-		if err != nil || got != configured {
-			t.Errorf("configured = %v, %v; want %v", got, err, configured)
+// The agent waits out the proxy's bootstrap (503) and takes the bundle.
+func TestFetchMiniMaxSeedWaitsForTheBootstrap(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != miniMaxPluginSeedPath {
+			http.NotFound(w, r)
+			return
 		}
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(miniMaxSeedBundle{State: miniMaxSeedStateBootstrapping})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(testMarketplaceBundle)
+	}))
+	defer srv.Close()
+	got, err := fetchMiniMaxSeed(srv.URL)
+	if err != nil || got.State != miniMaxSeedStateReady || len(got.Plugins) != 2 || calls != 2 {
+		t.Fatalf("seed = %+v, %v after %d calls; want the ready bundle on the second", got.State, err, calls)
 	}
 }

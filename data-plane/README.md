@@ -75,15 +75,16 @@ interactive shell and Claude Code workloads.
   `https://api.minimax.io/anthropic`) and whose `auth-token` may be a Token Plan
   subscription key: MiniMax accepts it as `Authorization: Bearer`, which is
   exactly what the proxy injects. On every start and restore the agent stages
-  two Claude-format plugins beside the managed config and copies them into
-  `~/.minimax/plugins/`, removing only plugins it marked as its own:
-  `session-platform`, registering the session MCP as
-  `session-platform-session-mcp` (its external tools pass the approval gate and
-  the agent tails the MCP's notices into the output, AC-F3), and — only when the
-  K3s MCP proxy's `/healthz` reports `configured: true` — `mcp-servers`,
-  registering `k3s` at the proxy (AC-G5). Neither server carries auth of its own;
-  the K3s MCP tools are not behind the session gate because the K3s MCP gates
-  its own writes.
+  Claude-format plugins beside the managed config and copies them into
+  `~/.minimax/plugins/`, removing only plugins it marked as its own: its own
+  `session-platform-session-mcp`, registering the session MCP (its external
+  tools pass the approval gate and the agent tails the MCP's notices into the
+  output, AC-F3), plus every plugin of the K3s MCP proxy's `/plugin-seed` bundle.
+  In that bundle only MCP servers change: the one whose URL is `K3S_MCP_URL` is
+  re-pointed at the proxy with its OAuth field and `Authorization` header
+  removed, and any other server is dropped with a warning, since the pod cannot
+  reach it. The K3s MCP tools are not behind the session gate because the K3s
+  MCP gates its own writes.
 - `k3s-mcp-proxy` is the `minimax-code` helper pod's K3s MCP proxy: the
   credential-proxy implementation with the MCP Streamable HTTP header allowlist
   (`Accept`, `Content-Type`, `Mcp-Session-Id`, `Mcp-Protocol-Version`,
@@ -92,6 +93,14 @@ interactive shell and Claude Code workloads.
   origin of `K3S_MCP_URL` (default `https://homelab-k3s-mcp.llkm.nl`) with
   `K3S_MCP_TOKEN` as the bearer. Without a token it still starts, reports
   `configured: false` on `/healthz`, and answers everything else with 503.
+  With a token it also bootstraps the plugin marketplace for the workload pod,
+  which cannot reach GitHub: it asks the K3s MCP for a `plugin-marketplace` read
+  token through its own handler in process, clones
+  `MINIMAX_CODE_PLUGIN_MARKETPLACE_URL` into `MINIMAX_CODE_MARKETPLACE_DIR` with a
+  URL-scoped header, and serves the plugins named in `MINIMAX_CODE_PLUGINS`
+  (default `mcp-servers`) — manifest plus the files its `skills`, `commands`,
+  `agents` and `mcpServers` fields name, never hooks — at `GET /plugin-seed`
+  (503 while bootstrapping, then `ready`, `failed` or `unconfigured`).
 - `mcp` is the session MCP that runs in the helper pod's other container
   (AC-F4). It serves `/healthz` and a JSON-RPC endpoint at `/mcp` that answers
   `initialize`, `ping`, `tools/list` and `tools/call`. It offers one external
