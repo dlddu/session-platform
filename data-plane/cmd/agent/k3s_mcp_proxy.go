@@ -1,0 +1,114 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"strings"
+)
+
+// The minimax-code workload reaches the homelab K3s MCP the way it reaches its
+// model provider: through a loopback sidecar that holds the token (AC-G5). mcode
+// expands no environment variable in a plugin's MCP headers, so a token the CLI
+// could use would have to be written into HOME, which is archived. The sidecar
+// keeps that token out of the CLI container and out of every archive.
+const (
+	workloadK3SMCPProxy = "k3s-mcp-proxy"
+
+	// Keep in sync with control-plane/internal/adapter/k8s (K3SMCPProxyListenAddr)
+	// and entrypoint.sh (K3S_MCP_PROXY_URL default).
+	k3sMCPProxyPort    = 8093
+	k3sMCPTokenEnv     = "K3S_MCP_TOKEN"
+	k3sMCPURLEnv       = "K3S_MCP_URL"
+	defaultK3SMCPURL   = "https://homelab-k3s-mcp.llkm.nl/mcp"
+	k3sMCPProxyHealthz = "/healthz"
+)
+
+// k3sMCPProxyRequestHeaderAllowed is the MCP Streamable HTTP request surface.
+// Anything else — above all a caller-supplied Authorization — is dropped before
+// the sidecar installs its own bearer.
+func k3sMCPProxyRequestHeaderAllowed(name string) bool {
+	switch http.CanonicalHeaderKey(name) {
+	case "Accept",
+		"Content-Type",
+		"Last-Event-Id",
+		"Mcp-Protocol-Version",
+		"Mcp-Session-Id",
+		"User-Agent":
+		return true
+	default:
+		return false
+	}
+}
+
+// newK3SMCPProxy serves the K3s MCP origin on loopback. An empty token is not a
+// start failure: the Secret key is optional, and a deployment that has not set
+// it keeps minimax-code sessions working without the plugin. The health route
+// says which of the two it is, so the entrypoint can skip the bootstrap rather
+// than fail the pod.
+func newK3SMCPProxy(rawURL, token string, logger *slog.Logger) (http.Handler, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// As for the provider proxy: no ambient HTTP(S)_PROXY may redirect the token.
+	transport.Proxy = nil
+	return newK3SMCPProxyWithTransport(rawURL, token, logger, transport)
+}
+
+func newK3SMCPProxyWithTransport(rawURL, token string, logger *slog.Logger, transport http.RoundTripper) (http.Handler, error) {
+	origin, err := k3sMCPOrigin(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	configured := token != ""
+	var upstream http.Handler
+	if configured {
+		proxy, err := newHeaderScopedProxy(origin, token, logger, transport, k3sMCPProxyRequestHeaderAllowed)
+		if err != nil {
+			return nil, err
+		}
+		upstream = proxy
+	}
+	health, err := json.Marshal(map[string]any{
+		"status":     "ok",
+		"workload":   workloadK3SMCPProxy,
+		"configured": configured,
+	})
+	if err != nil {
+		return nil, err
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc(k3sMCPProxyHealthz, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(health)
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if upstream == nil {
+			http.Error(w, "k3s mcp proxy has no token configured", http.StatusServiceUnavailable)
+			return
+		}
+		upstream.ServeHTTP(w, r)
+	})
+	return mux, nil
+}
+
+// k3sMCPOrigin reduces the configured MCP URL to its origin. The client keeps
+// the path (the plugin's own URL, re-pointed at loopback), so forwarding to the
+// full URL would double it.
+func k3sMCPOrigin(raw string) (string, error) {
+	if strings.TrimSpace(raw) == "" {
+		raw = defaultK3SMCPURL
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", errors.New("k3s mcp URL is invalid")
+	}
+	if parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
+		return "", errors.New("k3s mcp URL must be an https URL without user info")
+	}
+	return parsed.Scheme + "://" + parsed.Host, nil
+}

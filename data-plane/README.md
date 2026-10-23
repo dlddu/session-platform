@@ -8,7 +8,7 @@ needs (AC-A2). The control plane provisions and reclaims these pods via the
 The runtime image includes `git`, `gh`, `curl`, `jq`, and `kubectl` for use by
 interactive shell and Claude Code workloads.
 
-## Status: shell, claude-code, approval-gated, minimax-code, mcp, and credential-proxy agents built
+## Status: shell, claude-code, approval-gated, minimax-code, mcp, credential-proxy, and k3s-mcp-proxy agents built
 
 `DATA_PLANE_WORKLOAD` selects one of six modes across a session's pods:
 
@@ -69,6 +69,22 @@ interactive shell and Claude Code workloads.
   Anthropic-compatible endpoint (for example `https://api.minimax.io/anthropic`)
   and whose `auth-token` may be a Token Plan subscription key: MiniMax accepts
   it as `Authorization: Bearer`, which is exactly what the proxy injects.
+  The homelab K3s MCP reaches this type through a second loopback sidecar,
+  `k3s-mcp-proxy` (AC-G5), because mcode neither expands `${VAR}` in plugin MCP
+  headers nor accepts OAuth fields, and HOME is archived. When that sidecar has
+  a token, the entrypoint asks it (never the K3s MCP directly) for a
+  `plugin-marketplace` read token, clones the marketplace with a URL-scoped
+  header, and stages the `mcp-servers` plugin outside the state tree with its
+  K3s MCP server re-pointed at `http://127.0.0.1:8093` and stripped of its own
+  auth. The agent copies that seed into `~/.minimax/plugins/` on every start and
+  restore and removes only plugins it marked as its own.
+- `k3s-mcp-proxy` is the `minimax-code` pod's K3s MCP sidecar: the
+  credential-proxy implementation with the MCP Streamable HTTP header allowlist
+  (`Accept`, `Content-Type`, `Mcp-Session-Id`, `Mcp-Protocol-Version`,
+  `Last-Event-Id`, `User-Agent`), bound to `127.0.0.1:8093`, forwarding to the
+  origin of `K3S_MCP_URL` (default `https://homelab-k3s-mcp.llkm.nl`) with
+  `K3S_MCP_TOKEN` as the bearer. Without a token it still starts, reports
+  `configured: false` on `/healthz`, and answers everything else with 503.
 - `mcp` is the session MCP that runs in the helper pod's other container
   (AC-F4). It serves `/healthz` and a JSON-RPC endpoint at `/mcp` that answers
   `initialize`, `ping`, `tools/list` and `tools/call`. It offers one external

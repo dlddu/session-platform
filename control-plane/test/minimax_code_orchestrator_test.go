@@ -31,8 +31,9 @@ func newMiniMaxOrchestrator(t *testing.T, opts ...k8s.Option) (*k8s.ClientOrches
 	return orch, func() []corev1.Pod { return listPods(t, cs) }
 }
 
-// AC-G1: the type provisions one workload pod running the agent plus its
-// credential proxy sidecar, and nothing else — no helper pod.
+// AC-G1/AC-G5: the type provisions one workload pod running the agent plus its
+// two loopback sidecars (provider proxy, K3s MCP proxy), and nothing else — no
+// helper pod.
 func TestMiniMaxCode_PodSpec(t *testing.T) {
 	orch, pods := newMiniMaxOrchestrator(t)
 	set, err := orch.Start(context.Background(), "mm01", k8s.WorkloadSpec{Type: session.WorkloadTypeMiniMaxCode})
@@ -50,8 +51,8 @@ func TestMiniMaxCode_PodSpec(t *testing.T) {
 	if got := pod.Labels[k8s.LabelWorkloadType]; got != string(session.WorkloadTypeMiniMaxCode) {
 		t.Errorf("%s label = %q, want %q", k8s.LabelWorkloadType, got, session.WorkloadTypeMiniMaxCode)
 	}
-	if len(pod.Spec.Containers) != 2 {
-		t.Fatalf("containers = %d, want agent + credential proxy", len(pod.Spec.Containers))
+	if len(pod.Spec.Containers) != 3 {
+		t.Fatalf("containers = %d, want agent + credential proxy + k3s mcp proxy", len(pod.Spec.Containers))
 	}
 	main, ok := containerNamed(pod, k8s.ContainerName)
 	if !ok {
@@ -155,6 +156,54 @@ func TestMiniMaxCode_ProxyReadsItsOwnSecret(t *testing.T) {
 	}
 	if s := proxy.SecurityContext; s == nil || s.ReadOnlyRootFilesystem == nil || !*s.ReadOnlyRootFilesystem {
 		t.Errorf("credential proxy security context is not hardened: %+v", s)
+	}
+}
+
+// AC-G5: the K3s MCP token lives only in its own loopback sidecar, read from
+// this type's Secret as an optional key so a deployment without it still runs.
+func TestMiniMaxCode_K3SMCPProxyHoldsTheToken(t *testing.T) {
+	orch, pods := newMiniMaxOrchestrator(t)
+	if _, err := orch.Start(context.Background(), "mm07", k8s.WorkloadSpec{Type: session.WorkloadTypeMiniMaxCode}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	pod := pods()[0]
+	proxy, ok := containerNamed(pod, k8s.MiniMaxK3SMCPProxyContainerName)
+	if !ok {
+		t.Fatalf("missing container %q", k8s.MiniMaxK3SMCPProxyContainerName)
+	}
+	if got, _ := envOf(proxy, "DATA_PLANE_WORKLOAD"); got != "k3s-mcp-proxy" {
+		t.Errorf("workload = %q, want k3s-mcp-proxy", got)
+	}
+	if got, _ := envOf(proxy, "DATA_PLANE_AGENT_ADDR"); got != "127.0.0.1:8093" {
+		t.Errorf("listen address = %q, want loopback 8093", got)
+	}
+	token, ok := envVarOf(proxy, k8s.K3SMCPTokenEnvVar)
+	if !ok || token.ValueFrom == nil || token.ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("%s is not Secret-backed: %+v", k8s.K3SMCPTokenEnvVar, token)
+	}
+	ref := token.ValueFrom.SecretKeyRef
+	if ref.Name != "minimax-provider" || ref.Key != "k3s-mcp-token" || ref.Optional == nil || !*ref.Optional {
+		t.Errorf("token selector = %+v, want optional minimax-provider/k3s-mcp-token", ref)
+	}
+	for _, name := range []string{k8s.AnthropicBaseURLEnvVar, k8s.AnthropicAuthTokenEnvVar, k8s.AnthropicCACertEnvVar} {
+		if _, ok := envVarOf(proxy, name); ok {
+			t.Errorf("k3s mcp proxy must not receive the provider's %s", name)
+		}
+	}
+	for _, c := range pod.Spec.Containers {
+		if c.Name == k8s.MiniMaxK3SMCPProxyContainerName {
+			continue
+		}
+		if _, ok := envVarOf(c, k8s.K3SMCPTokenEnvVar); ok {
+			t.Errorf("container %s receives the K3s MCP token", c.Name)
+		}
+	}
+	probe := proxy.ReadinessProbe
+	if probe == nil || probe.Exec == nil || !strings.Contains(strings.Join(probe.Exec.Command, " "), "/127.0.0.1/8093") {
+		t.Errorf("readiness probe = %+v, want an in-container check of 127.0.0.1:8093", probe)
+	}
+	if s := proxy.SecurityContext; s == nil || s.ReadOnlyRootFilesystem == nil || !*s.ReadOnlyRootFilesystem {
+		t.Errorf("k3s mcp proxy security context is not hardened: %+v", s)
 	}
 }
 

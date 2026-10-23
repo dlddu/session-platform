@@ -113,6 +113,16 @@ func newCredentialProxyWithTransport(
 	logger *slog.Logger,
 	transport http.RoundTripper,
 ) (*credentialProxy, error) {
+	return newHeaderScopedProxy(rawUpstream, token, logger, transport, credentialProxyRequestHeaderAllowed)
+}
+
+func newHeaderScopedProxy(
+	rawUpstream string,
+	token string,
+	logger *slog.Logger,
+	transport http.RoundTripper,
+	headerAllowed func(string) bool,
+) (*credentialProxy, error) {
 	upstream, err := parseCredentialProxyUpstream(rawUpstream)
 	if err != nil {
 		return nil, err
@@ -140,7 +150,7 @@ func newCredentialProxyWithTransport(
 		// The configured upstream is the only possible destination and virtual host.
 		request.Host = upstream.Host
 		for name := range request.Header {
-			if !credentialProxyRequestHeaderAllowed(name) {
+			if !headerAllowed(name) {
 				request.Header.Del(name)
 			}
 		}

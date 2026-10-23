@@ -184,6 +184,19 @@ func main() {
 		}
 		handler = proxy
 		logger.Info("credential proxy started", "addr", addr, "placement", string(placement))
+	case workloadK3SMCPProxy:
+		if err := validateCredentialProxyBindAddr(addr, proxyPlacementSidecar); err != nil {
+			logger.Error("invalid k3s-mcp-proxy bind address", "err", err)
+			os.Exit(1)
+		}
+		token := os.Getenv(k3sMCPTokenEnv)
+		proxy, err := newK3SMCPProxy(os.Getenv(k3sMCPURLEnv), token, logger)
+		if err != nil {
+			logger.Error("failed to initialise k3s mcp proxy", "err", err)
+			os.Exit(1)
+		}
+		handler = proxy
+		logger.Info("k3s mcp proxy started", "addr", addr, "configured", token != "")
 	default:
 		logger.Error("unknown data plane workload", "workload", workload)
 		os.Exit(1)

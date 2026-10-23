@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -23,6 +24,17 @@ const (
 	// MiniMaxCredentialsContainerName identifies this type's isolated Secret
 	// holder, the counterpart of ClaudeCredentialsContainerName.
 	MiniMaxCredentialsContainerName = "minimax-credentials"
+	// MiniMaxK3SMCPProxyContainerName holds this type's K3s MCP token (AC-G5).
+	// The CLI container reaches the K3s MCP only through it, on loopback, so
+	// the token never enters the container whose HOME is archived.
+	MiniMaxK3SMCPProxyContainerName = "k3s-mcp-proxy"
+	// MiniMaxK3SMCPTokenSecretKey is optional: without it the sidecar starts
+	// unconfigured and the session runs without the K3s MCP plugin. Same key
+	// name as claude-code's, in this type's own Secret.
+	MiniMaxK3SMCPTokenSecretKey = ClaudeCodeK3SMCPTokenSecretKey
+	// Keep in sync with data-plane/cmd/agent (workloadK3SMCPProxy, k3sMCPProxyPort).
+	k3sMCPProxyWorkload = "k3s-mcp-proxy"
+	k3sMCPProxyPort     = 8093
 )
 
 // WithMiniMaxCredentialsSecret selects the platform-managed Secret minimax-code
@@ -57,7 +69,7 @@ func (o *ClientOrchestrator) miniMaxCodePod(container *corev1.Container, image, 
 		Name:         claudeCodeStateVolumeName,
 		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 	}}
-	return []corev1.Container{o.miniMaxCredentialProxy(image)}, volumes
+	return []corev1.Container{o.miniMaxCredentialProxy(image), o.miniMaxK3SMCPProxy(image)}, volumes
 }
 
 // miniMaxCredentialProxy is the claude-code sidecar (one behaviour contract,
@@ -71,5 +83,20 @@ func (o *ClientOrchestrator) miniMaxCredentialProxy(image string) corev1.Contain
 			ref.SecretKeyRef.Name = o.miniMaxCredentialsSecret
 		}
 	}
+	return proxy
+}
+
+// miniMaxK3SMCPProxy is the loopback sidecar in front of the K3s MCP (AC-G5).
+// It reuses the provider proxy's hardening and in-container probe; only its
+// workload, port and the one Secret key it reads differ.
+func (o *ClientOrchestrator) miniMaxK3SMCPProxy(image string) corev1.Container {
+	port := strconv.Itoa(k3sMCPProxyPort)
+	proxy := o.credentialProxyContainer(MiniMaxK3SMCPProxyContainerName, image, "127.0.0.1:"+port, proxyPlacementSidecar)
+	proxy.Env = []corev1.EnvVar{
+		{Name: workloadEnvVar, Value: k3sMCPProxyWorkload},
+		{Name: agentAddrEnvVar, Value: "127.0.0.1:" + port},
+		optionalSecretEnv(K3SMCPTokenEnvVar, o.miniMaxCredentialsSecret, MiniMaxK3SMCPTokenSecretKey),
+	}
+	proxy.ReadinessProbe.Exec.Command = []string{"/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/" + port}
 	return proxy
 }

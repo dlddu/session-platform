@@ -58,6 +58,9 @@ type miniMaxCLI struct {
 	baseURL     string
 	placeholder string
 	model       string
+	// pluginSeedDir is where the entrypoint staged the platform's plugins, or
+	// empty when it staged none (AC-G5).
+	pluginSeedDir string
 }
 
 func newMiniMaxCLI(stateDir, model, baseURL, placeholder string) (miniMaxCLI, error) {
@@ -110,14 +113,17 @@ func (miniMaxCLI) newProjector(dst io.Writer) io.WriteCloser {
 	return newMiniMaxStreamProjector(dst)
 }
 
-// ensureHome writes the managed config. HOME itself needs nothing from the
-// platform: mcode creates its own data directory on first run.
-func (m miniMaxCLI) ensureHome(string, toolSurface) error {
+// ensureHome writes the managed config and installs the staged plugins. mcode
+// creates the rest of its data directory on first run.
+func (m miniMaxCLI) ensureHome(homeDir string, _ toolSurface) error {
 	content, err := m.renderConfig()
 	if err != nil {
 		return err
 	}
-	return writeMiniMaxConfig(m.configPath, content)
+	if err := writeMiniMaxConfig(m.configPath, content); err != nil {
+		return err
+	}
+	return syncMiniMaxPlugins(homeDir, m.pluginSeedDir)
 }
 
 // validateState is the type-neutral half of AC-E5's integrity check. There is
@@ -275,6 +281,7 @@ func newMiniMaxWorkloadFromEnv(logger *slog.Logger, restoreMode bool) (*claudeWo
 	if err != nil {
 		return nil, err
 	}
+	cli.pluginSeedDir = os.Getenv(miniMaxPluginSeedEnv)
 	return newClaudeWorkload(claudeConfig{
 		StateDir:    stateDir,
 		Model:       model,
