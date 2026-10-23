@@ -1,16 +1,15 @@
 # data-plane
 
 The data plane is where actual session workloads run — one dedicated workload
-pod per session, plus any session-scoped auxiliary pods the workload type
-needs (AC-A2). The control plane provisions and reclaims these pods via the
-`PodOrchestrator` port.
+pod per session (AC-A2). The control plane provisions and reclaims these pods
+via the `PodOrchestrator` port.
 
 The runtime image includes `git`, `gh`, `curl`, `jq`, and `kubectl` for use by
 interactive shell and Claude Code workloads.
 
-## Status: shell, claude-code, approval-gated, minimax-code, mcp, and credential-proxy agents built
+## Status: shell, claude-code, minimax-code, and credential-proxy agents built
 
-`DATA_PLANE_WORKLOAD` selects one of six modes across a session's pods:
+`DATA_PLANE_WORKLOAD` selects one of four modes across a session's pods:
 
 - `shell` (default) launches one PTY-attached interactive shell
   (`DATA_PLANE_SHELL`, default `/bin/bash`). Write is shell stdin, read is
@@ -32,18 +31,6 @@ interactive shell and Claude Code workloads.
   prompt is limited to 1 MiB; an oversized write is not queued and returns 413.
   The pending queue is bounded to 64 prompts and 8 MiB; a new write that would
   exceed either bound returns 429 while already accepted prompts keep draining.
-- `approval-gated` runs the same one-shot execution model as `claude-code` —
-  the queue, cursor, archive and model contracts are reused unchanged — with the
-  tool surface AC-F6 prescribes for that type. It receives no `K3S_MCP_TOKEN`
-  and enables no marketplace plugin; instead the managed `settings.json`
-  registers the session MCP at `SESSION_MCP_URL` as an `http` server and permits
-  it alongside the same six file tools. Its `ANTHROPIC_BASE_URL` points at the
-  session helper pod's proxy (port 8091) rather than loopback, and the agent
-  refuses to start if that endpoint is loopback, is on the wrong port, or if any
-  real provider credential or the K3s MCP token is present. Because the helper
-  pod is rebuilt with a new address on every restore, the registered MCP URL is
-  rewritten from the environment at startup rather than trusted from the
-  archive.
 - `minimax-code` runs the MiniMax Code CLI on the same one-shot runner as
   `claude-code` — queue, bounds, cursor, resume flag and archive are shared
   (AC-G2/G4). Each job executes
@@ -66,19 +53,6 @@ interactive shell and Claude Code workloads.
   Anthropic-compatible endpoint (for example `https://api.minimax.io/anthropic`)
   and whose `auth-token` may be a Token Plan subscription key: MiniMax accepts
   it as `Authorization: Bearer`, which is exactly what the proxy injects.
-- `mcp` is the session MCP that runs in the helper pod's other container
-  (AC-F4). It serves `/healthz` and a JSON-RPC endpoint at `/mcp` that answers
-  `initialize`, `ping`, `tools/list` and `tools/call`. It offers one external
-  tool, `web_fetch_get`, and every call to it passes the human approval gate
-  (AC-F3): the request is created on the approval gateway named by
-  `APPROVAL_GATEWAY_URL` under the external identifier
-  `{SESSION_ID}:{requestID}`, and the outbound GET happens only after an
-  APPROVED decision. A rejection, expiry, poll timeout or gateway outage comes
-  back as an `isError` tool result, never as a transport error, so the agent
-  reads the refusal and carries on with the session still `active`. **Without
-  the gateway environment the tool list is empty** — a container that cannot ask
-  a human offers nothing rather than reaching out ungated. It keeps no state —
-  the helper pod is discarded on freeze and rebuilt on restore.
 - `credential-proxy` holds the provider credentials outside the tool-running
   container. It reads the real
   `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, pins every request to that
@@ -89,16 +63,10 @@ interactive shell and Claude Code workloads.
   flushed chunk reaches Claude before upstream EOF, while a streaming literal
   redactor holds possible token suffixes across response reads so a split
   credential is never exposed transiently. This does not buffer the full
-  Anthropic SSE response. Set
-  `DATA_PLANE_AGENT_ADDR` to match its placement, declared by
-  `DATA_PLANE_PROXY_PLACEMENT`: `sidecar` (the default when unset) is the
-  `claude-code` arrangement and accepts loopback binds only, while `helper` is
-  the `approval-gated` arrangement in the session helper pod and requires a
-  pod-network bind because its client is a pod away (AC-F6). Each placement
-  rejects the other's address, so opening the wider bind for the helper cannot
-  reach the sidecar. What keeps the wider bind safe is AC-F2's ingress policy,
-  which the control plane creates with the helper pod and which admits only that
-  session's workload pod. Its `/healthz` endpoint never contacts the upstream.
+  Anthropic SSE response. It runs as a sidecar of the `claude-code` or
+  `minimax-code` workload pod, so `DATA_PLANE_AGENT_ADDR` must be a loopback
+  address; any other bind is refused at startup. Its `/healthz` endpoint never
+  contacts the upstream.
 
 Claude's cwd (`workspace/`) and HOME (`home/`) live under
 `CLAUDE_CODE_STATE_DIR` (default `/session/state`). Kubernetes mounts the
@@ -114,7 +82,7 @@ token only through a process-scoped Git HTTPS Authorization header while running
 `claude plugin marketplace add https://github.com/dlddu/plugin-marketplace.git`
 and `claude plugin install session-platform@dlddu-plugins`, then exports the
 runtime plugin seed and execs the agent. The GitHub token is unset before the
-agent starts; every other workload — `shell`, `approval-gated`, `mcp` and
+agent starts; every other workload — `shell`, `minimax-code` and
 `credential-proxy` — skips this bootstrap.
 Provider authentication credentials are not present in the Claude container or
 inherited by its Bash tools. That container receives

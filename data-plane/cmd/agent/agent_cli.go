@@ -18,15 +18,14 @@ type agentCLI interface {
 	newProjector(dst io.Writer) io.WriteCloser
 	// ensureHome installs or normalises the platform-managed parts of the
 	// session HOME, on boot and right after a restore.
-	ensureHome(homeDir string, tools toolSurface) error
+	ensureHome(homeDir string) error
 	// validateState checks an archived or live state tree before it is
 	// archived or installed (AC-E5's integrity check).
 	validateState(root string) error
 }
 
-// claudeCLI is the Claude Code CLI shared by claude-code and approval-gated.
-// It is the default when a config names no CLI, so those two types run exactly
-// as they did before the seam existed.
+// claudeCLI is the Claude Code CLI of the claude-code workload. It is the
+// default when a config names no CLI.
 type claudeCLI struct{}
 
 func (claudeCLI) workloadName() string { return workloadClaudeCode }
@@ -39,8 +38,8 @@ func (claudeCLI) newProjector(dst io.Writer) io.WriteCloser {
 	return newClaudeStreamProjector(dst)
 }
 
-func (claudeCLI) ensureHome(homeDir string, tools toolSurface) error {
-	return ensureClaudeManagedSettings(homeDir, tools)
+func (claudeCLI) ensureHome(homeDir string) error {
+	return ensureClaudeManagedSettings(homeDir)
 }
 
 func (claudeCLI) validateState(root string) error {

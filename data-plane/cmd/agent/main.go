@@ -1,9 +1,8 @@
 // Command agent is the data plane entrypoint for every workload mode, selected
 // by DATA_PLANE_WORKLOAD (default "shell"). The switch in main lists them, and
 // each mode's contract lives with its own code: shell here (AC-D1~D4),
-// claude-code and approval-gated in claude.go (AC-E2~E5) with their tool
-// surfaces in agentToolSurface below, mcp in session_mcp.go, credential-proxy
-// in credential_proxy.go.
+// claude-code in claude.go (AC-E2~E5), minimax-code in minimax_code.go,
+// credential-proxy in credential_proxy.go.
 package main
 
 import (
@@ -30,32 +29,10 @@ const (
 	workloadEnv             = "DATA_PLANE_WORKLOAD"
 	workloadShell           = "shell"
 	workloadClaudeCode      = "claude-code"
-	workloadApprovalGated   = "approval-gated"
-	workloadSessionMCP      = "mcp"
 	workloadCredentialProxy = "credential-proxy"
 
 	claudeProxyBaseURL          = "http://127.0.0.1:8091"
 	claudeProxyPlaceholderToken = "session-platform-proxy"
-	// helperProxyPort and sessionMCPPort are the ports of this session's helper
-	// pod (AC-F2). Keep them in sync with the control plane orchestrator
-	// (credentialProxyPort, SessionMCPPort).
-	helperProxyPort = 8091
-	sessionMCPPort  = 8092
-	// proxyPlacementEnv is read by credentialProxyPlacementFromEnv.
-	proxyPlacementEnv = "DATA_PLANE_PROXY_PLACEMENT"
-	// sessionMCPURLEnv carries the address of this session's MCP (AC-F6).
-	sessionMCPURLEnv = "SESSION_MCP_URL"
-	// The MCP container's own environment (AC-F6). Keep in sync with
-	// control-plane/internal/adapter/k8s (ApprovalGateway*EnvVar, SessionIDEnvVar).
-	approvalGatewayURLEnv    = "APPROVAL_GATEWAY_URL"
-	approvalGatewayAPIKeyEnv = "APPROVAL_GATEWAY_API_KEY"
-	approvalGatewayUserIDEnv = "APPROVAL_GATEWAY_USER_ID"
-	sessionIDEnv             = "SESSION_ID"
-	// sharedVolumeDirEnv is the session's shared volume (AC-F5), read by both
-	// halves of the pair: the MCP container spills large approved responses
-	// there and the workload container's agent reads them back. Keep in sync
-	// with control-plane/internal/adapter/k8s (SharedVolumeDirEnvVar).
-	sharedVolumeDirEnv = "SESSION_SHARED_DIR"
 
 	defaultShell = "/bin/bash"
 	// defaultAddr: keep the port in sync with the control plane orchestrator's
@@ -102,9 +79,8 @@ func main() {
 			a.adopt(sh)
 			logger.Info("session shell started", "shell", a.shellPath, "pid", sh.pid, "addr", addr)
 		}
-	case workloadClaudeCode, workloadApprovalGated:
-		tools, err := agentToolSurface(workload)
-		if err != nil {
+	case workloadClaudeCode:
+		if err := validateClaudeProxyClientEnv(); err != nil {
 			logger.Error("unsafe agent credential configuration", "workload", workload, "err", err)
 			os.Exit(1)
 		}
@@ -122,19 +98,12 @@ func main() {
 			Logger:      logger,
 			Redact:      credentialLiteralsFromEnv(),
 			RunTimeout:  runTimeout,
-			Tools:       tools,
 		})
 		if err != nil {
 			logger.Error("failed to initialise agent workload", "workload", workload, "err", err)
 			os.Exit(1)
 		}
 		a.claude = claude
-		if workload == workloadApprovalGated {
-			// AC-F3's wait marker (session_mcp_notice_tail.go). Only this type
-			// has a gate to report on and a helper pod to ask.
-			tailer := newNoticeTailer(tools.SessionMCP, claude, logger)
-			go tailer.run(claude.ctx)
-		}
 		logger.Info("agent workload started", "workload", workload, "addr", addr,
 			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode)
 	case workloadMiniMaxCode:
@@ -146,30 +115,9 @@ func main() {
 		a.claude = claude
 		logger.Info("agent workload started", "workload", workload, "addr", addr,
 			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode)
-	case workloadSessionMCP:
-		// AC-F4's helper pod container; it serves its own routes rather than the
-		// workload agent's (session_mcp.go).
-		gateway, err := newApprovalGateway(
-			os.Getenv(approvalGatewayURLEnv),
-			os.Getenv(approvalGatewayAPIKeyEnv),
-			os.Getenv(approvalGatewayUserIDEnv),
-			os.Getenv(sessionIDEnv),
-		)
-		if err != nil {
-			logger.Warn("session MCP has no approval gate; it will offer no tools", "err", err)
-			gateway = nil
-		}
-		shared := env(sharedVolumeDirEnv, "")
-		handler = sessionMCPRoutes(logger, newSessionMCPConfig(gateway, shared))
-		logger.Info("session MCP started", "addr", addr, "gated", gateway != nil, "shared_dir", shared)
 	case workloadCredentialProxy:
-		placement, err := credentialProxyPlacementFromEnv()
-		if err != nil {
-			logger.Error("invalid credential-proxy placement", "err", err)
-			os.Exit(1)
-		}
-		if err := validateCredentialProxyBindAddr(addr, placement); err != nil {
-			logger.Error("invalid credential-proxy bind address", "placement", string(placement), "err", err)
+		if err := validateCredentialProxyBindAddr(addr); err != nil {
+			logger.Error("invalid credential-proxy bind address", "err", err)
 			os.Exit(1)
 		}
 		proxy, err := newCredentialProxy(
@@ -183,7 +131,7 @@ func main() {
 			os.Exit(1)
 		}
 		handler = proxy
-		logger.Info("credential proxy started", "addr", addr, "placement", string(placement))
+		logger.Info("credential proxy started", "addr", addr)
 	default:
 		logger.Error("unknown data plane workload", "workload", workload)
 		os.Exit(1)
@@ -607,26 +555,4 @@ func durationEnv(k string, def time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("%s must be a positive duration, got %q", k, value)
 	}
 	return duration, nil
-}
-
-// agentToolSurface validates the credential wiring of a one-shot agent workload
-// and reports the platform-managed tool surface it must run with. The two agent
-// types share an execution model and differ only here.
-func agentToolSurface(workload string) (toolSurface, error) {
-	switch workload {
-	case workloadClaudeCode:
-		if err := validateClaudeProxyClientEnv(); err != nil {
-			return toolSurface{}, err
-		}
-		return toolSurface{Plugin: true}, nil
-	case workloadApprovalGated:
-		mcpURL, err := validateApprovalGatedClientEnv()
-		if err != nil {
-			return toolSurface{}, err
-		}
-		// The same volume the MCP container spills into (AC-F5).
-		return toolSurface{SessionMCP: mcpURL, SharedDir: env(sharedVolumeDirEnv, "")}, nil
-	default:
-		return toolSurface{}, fmt.Errorf("workload %q has no agent tool surface", workload)
-	}
 }

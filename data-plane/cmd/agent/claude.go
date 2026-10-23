@@ -37,8 +37,7 @@ const (
 	claudeSettingsDir           = ".claude"
 	claudeSettingsFile          = "settings.json"
 	claudeSessionPlatformPlugin = "session-platform@dlddu-plugins"
-	// sessionMCPPermission names every tool of the session MCP server.
-	sessionMCPPermission       = "mcp__" + sessionMCPServerName
+
 	maxClaudePromptBytes       = 1 << 20
 	maxClaudeQueuedPrompts     = 64
 	maxClaudeQueuedBytes       = 8 << 20
@@ -137,37 +136,7 @@ type claudeConfig struct {
 	RunTimeout      time.Duration
 	RunOutputLimit  int
 	ScrollbackLimit int
-	// Tools is written into the session HOME on boot.
-	Tools toolSurface
-	CLI   agentCLI
-}
-
-// toolSurface is what the platform lets a session's agent reach beyond its own
-// filesystem tools. Exactly one form is sanctioned per workload type (AC-E6 for
-// claude-code, AC-F6's 2026-09-03 decision for approval-gated).
-type toolSurface struct {
-	// Plugin enables the managed session-platform marketplace plugin.
-	Plugin bool
-	// SessionMCP, when set, is the URL of this session's MCP server.
-	SessionMCP string
-	// SharedDir, when set, is the shared volume this session's MCP writes large
-	// approved responses into (AC-F5). It belongs to the tool surface because
-	// the agent's file tools are scoped to its own state tree by default, so
-	// without it the path the MCP hands back is one the agent may not open.
-	SharedDir string
-}
-
-// sessionMCPEndpoint is the URL a client has to POST to, which is not the
-// address the control plane injects.
-//
-// Getting this wrong is silent rather than loud: the pinned CLI answers a 404
-// at the MCP endpoint by reporting a server with no tools, not an address it
-// could not reach, so the session runs on and the model never reaches the gate.
-func (t toolSurface) sessionMCPEndpoint() string {
-	if t.SessionMCP == "" {
-		return ""
-	}
-	return t.SessionMCP + sessionMCPPath
+	CLI             agentCLI
 }
 
 type claudeRuntimeState struct {
@@ -190,12 +159,8 @@ type claudeWorkload struct {
 	runner   commandRunner
 	logger   *slog.Logger
 	redact   []string
-	tools    toolSurface
 	cli      agentCLI
 	out      scrollback
-
-	// approvals is what AC-F3's idle exception is decided from.
-	approvals approvalWaits
 
 	mu                      sync.Mutex
 	cond                    *sync.Cond
@@ -285,7 +250,6 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 		runner:          runner,
 		logger:          logger,
 		redact:          normaliseRedactionLiterals(cfg.Redact),
-		tools:           cfg.Tools,
 		cli:             cli,
 		runTimeout:      runTimeout,
 		runOutputLimit:  runOutputLimit,
@@ -321,7 +285,7 @@ func (c *claudeWorkload) ensureStateDirs() error {
 			return fmt.Errorf("create claude state directory %s: %w", dir, err)
 		}
 	}
-	return c.cli.ensureHome(c.homeDir, c.tools)
+	return c.cli.ensureHome(c.homeDir)
 }
 
 func (c *claudeWorkload) Close() {
@@ -358,21 +322,6 @@ func (c *claudeWorkload) enqueue(prompt string) error {
 	c.queuedBytes += len(prompt)
 	c.cond.Signal()
 	return nil
-}
-
-// appendPlatformNotice writes one platform-generated in-band marker into the
-// same append-only record the agent's own output goes to (AC-F3's approval
-// markers today), through the same bounded append as agent output (AC-E3).
-//
-// It deliberately does not consume the per-invocation output quota: that quota
-// is defined over assistant text and diagnostic stderr, and a platform notice
-// is neither. It also does not pass through the invocation's redaction sink,
-// because a notice is assembled here from a tool name and an external
-// identifier and never carries provider or gateway material (AC-F6).
-func (c *claudeWorkload) appendPlatformNotice(text string) {
-	if c.out.appendClaudeBoundedAt([]byte(text), c.scrollbackLimit, claudeOutputLimitMarker) {
-		c.logger.Warn("claude session output limit reached; rejecting new prompts")
-	}
 }
 
 func (c *claudeWorkload) runWorker() {
@@ -780,66 +729,28 @@ func decodeClaudeRuntimeState(f *os.File) (bool, error) {
 type claudeManagedSettings struct {
 	Permissions struct {
 		Allow []string `json:"allow"`
-		// AdditionalDirectories widens the agent's file tools past its own state
-		// tree. The platform sets exactly one entry, the shared volume, and only
-		// where there is one (AC-F5).
-		AdditionalDirectories []string `json:"additionalDirectories,omitempty"`
 	} `json:"permissions"`
 	EnabledPlugins map[string]bool `json:"enabledPlugins"`
-	// MCPServers is no longer written (claude_mcp_registration.go). The field
-	// stays so archives taken while it was still decode under
-	// DisallowUnknownFields; ensureClaudeManagedSettings then drops it.
-	MCPServers map[string]claudeMCPServer `json:"mcpServers,omitempty"`
 }
 
-// claudeMCPServer is one registered MCP server. The session MCP is reached over
-// the pod network, so it is an http server rather than a spawned process — the
-// agent never gets a command it could point somewhere else.
-type claudeMCPServer struct {
-	Type string `json:"type"`
-	URL  string `json:"url"`
-}
-
-// managedSettingsFor renders the settings a workload type must run with.
-func managedSettingsFor(tools toolSurface) claudeManagedSettings {
+// managedClaudeSettings renders the settings a claude-code session must run
+// with: AC-E2's file tools and the managed marketplace plugin (AC-E6).
+func managedClaudeSettings() claudeManagedSettings {
 	settings := claudeManagedSettings{}
 	settings.Permissions.Allow = append([]string(nil), claudeManagedTools...)
-	settings.EnabledPlugins = map[string]bool{}
-	if tools.Plugin {
-		settings.EnabledPlugins[claudeSessionPlatformPlugin] = true
-	}
-	if tools.SessionMCP != "" {
-		settings.Permissions.Allow = append(settings.Permissions.Allow, sessionMCPPermission)
-	}
-	if tools.SharedDir != "" {
-		settings.Permissions.AdditionalDirectories = []string{tools.SharedDir}
-	}
+	settings.EnabledPlugins = map[string]bool{claudeSessionPlatformPlugin: true}
 	return settings
 }
 
-// ensureClaudeManagedSettings installs this pod's tool surface into the session
-// HOME, or normalises the one an archive brought back. Normalising rather than
-// trusting the archive matters for approval-gated: the session MCP lives in a
-// helper pod whose address is new on every restore (AC-F4), so a restored HOME
-// always names the *previous* round's MCP.
-//
-// Both halves of the surface are written here (claude_mcp_registration.go):
-// writing one without the other yields a session whose tools are silently
-// absent.
-func ensureClaudeManagedSettings(homeDir string, tools toolSurface) error {
-	if err := ensureClaudeSettingsFile(homeDir, tools); err != nil {
-		return err
-	}
-	return ensureClaudeMCPRegistration(homeDir, tools)
-}
-
-func ensureClaudeSettingsFile(homeDir string, tools toolSurface) error {
+// ensureClaudeManagedSettings installs the managed settings into the session
+// HOME, or normalises the ones an archive brought back.
+func ensureClaudeManagedSettings(homeDir string) error {
 	settingsDir := filepath.Join(homeDir, claudeSettingsDir)
 	if err := os.MkdirAll(settingsDir, 0o700); err != nil {
 		return fmt.Errorf("create claude settings directory: %w", err)
 	}
 	settingsPath := filepath.Join(settingsDir, claudeSettingsFile)
-	want := managedSettingsFor(tools)
+	want := managedClaudeSettings()
 	if _, err := os.Lstat(settingsPath); err == nil {
 		settings, err := loadClaudeManagedSettings(homeDir)
 		if err != nil {
@@ -850,10 +761,8 @@ func ensureClaudeSettingsFile(homeDir string, tools toolSurface) error {
 		}
 		// Keep whatever permissions the archive carried — they are the session's
 		// — and re-assert only the platform-managed parts. Snapshots produced
-		// before the managed plugin (or before this type existed) land here too.
+		// before the managed plugin existed land here too.
 		settings.EnabledPlugins = want.EnabledPlugins
-		settings.MCPServers = want.MCPServers
-		settings.Permissions.AdditionalDirectories = want.Permissions.AdditionalDirectories
 		for _, allow := range want.Permissions.Allow {
 			if !containsString(settings.Permissions.Allow, allow) {
 				settings.Permissions.Allow = append(settings.Permissions.Allow, allow)
@@ -878,27 +787,8 @@ func managedSettingsMatch(settings, want claudeManagedSettings) bool {
 			return false
 		}
 	}
-	if len(settings.MCPServers) != len(want.MCPServers) {
-		return false
-	}
-	for name, server := range want.MCPServers {
-		if settings.MCPServers[name] != server {
-			return false
-		}
-	}
 	for _, allow := range want.Permissions.Allow {
 		if !containsString(settings.Permissions.Allow, allow) {
-			return false
-		}
-	}
-	// Equality, not containment: this list is wholly the platform's, and an
-	// entry the archive carried names a directory of a *previous* round that
-	// this pod may not even have (AC-F5).
-	if len(settings.Permissions.AdditionalDirectories) != len(want.Permissions.AdditionalDirectories) {
-		return false
-	}
-	for i, dir := range want.Permissions.AdditionalDirectories {
-		if settings.Permissions.AdditionalDirectories[i] != dir {
 			return false
 		}
 	}
@@ -942,59 +832,22 @@ func storeClaudeManagedSettings(settingsDir, settingsPath string, settings claud
 	return nil
 }
 
-// validateClaudeManagedSettings insists the session HOME declares exactly one of
-// the two sanctioned tool surfaces — the marketplace plugin (AC-E6) or a session
-// MCP (AC-F6). Archive validation runs it before the workload type of the pod
-// doing the restore is relevant, and the pod normalises to its own surface right
-// afterwards (ensureClaudeManagedSettings).
+// validateClaudeManagedSettings insists the session HOME enables exactly the
+// managed marketplace plugin (AC-E6), on top of loadClaudeManagedSettings'
+// shape checks.
 func validateClaudeManagedSettings(homeDir string) error {
 	settings, err := loadClaudeManagedSettings(homeDir)
 	if err != nil {
 		return err
 	}
-	registered, err := loadClaudeMCPRegistration(homeDir)
-	if err != nil {
-		return err
-	}
-	return validateClaudeToolSurface(settings, registered)
-}
-
-// validateClaudeToolSurface is the exactly-one rule over the two halves.
-func validateClaudeToolSurface(settings claudeManagedSettings, registered map[string]claudeMCPServer) error {
-	plugin := len(settings.EnabledPlugins) == 1 && settings.EnabledPlugins[claudeSessionPlatformPlugin]
-	// An archive taken while the registration was written into settings.json
-	// still names the surface there, so either location counts as registered —
-	// ensureClaudeMCPRegistration moves it on the boot right after this.
-	mcp := registersSessionMCP(registered) || registersSessionMCP(settings.MCPServers)
-	permitted := containsString(settings.Permissions.Allow, sessionMCPPermission)
-	switch {
-	case mcp && !permitted:
-		return errors.New("claude managed settings registers the session MCP without permitting it")
-	case permitted && !mcp:
-		return errors.New("claude managed settings permits the session MCP without registering it")
-	case plugin == mcp:
-		return fmt.Errorf(
-			"claude managed settings must declare exactly one platform tool surface: %s or the %s server",
-			claudeSessionPlatformPlugin, sessionMCPServerName)
-	case plugin && (len(settings.MCPServers) != 0 || len(registered) != 0):
-		return errors.New("claude managed settings must not mix the managed plugin with an MCP server")
-	case mcp && len(settings.EnabledPlugins) != 0:
-		return errors.New("claude managed settings must not mix a session MCP with an enabled plugin")
+	if len(settings.EnabledPlugins) != 1 || !settings.EnabledPlugins[claudeSessionPlatformPlugin] {
+		return fmt.Errorf("claude managed settings must enable only %s", claudeSessionPlatformPlugin)
 	}
 	return nil
 }
 
-// registersSessionMCP reports whether servers carry the platform's own entry.
-// Anything else a session registered is left alone: AC-F2's egress list means
-// the agent cannot reach it anyway, and failing the restore over it would cost
-// the session its state.
-func registersSessionMCP(servers map[string]claudeMCPServer) bool {
-	server, ok := servers[sessionMCPServerName]
-	return ok && server.Type == "http"
-}
-
 // loadClaudeManagedSettings reads and shape-checks the platform-owned settings
-// file. The tool surface it belongs to is decided by validateClaudeToolSurface.
+// file. Whether the plugin is enabled is decided by validateClaudeManagedSettings.
 func loadClaudeManagedSettings(homeDir string) (claudeManagedSettings, error) {
 	var settings claudeManagedSettings
 	settingsDir := filepath.Join(homeDir, claudeSettingsDir)
@@ -1048,26 +901,14 @@ func loadClaudeManagedSettings(homeDir string) (claudeManagedSettings, error) {
 			return settings, fmt.Errorf("claude managed settings is missing %s permission", tool)
 		}
 	}
-	permitted := len(claudeManagedTools)
-	if _, ok := allowed[sessionMCPPermission]; ok {
-		// The one sanctioned addition to AC-E2's list, and only for the type
-		// whose tool surface *is* that MCP server (AC-F6).
-		permitted++
-	}
-	if len(allowed) != permitted {
+	if len(allowed) != len(claudeManagedTools) {
 		return settings, errors.New("claude managed settings contains non-platform permissions")
 	}
-	// An archive carrying none of the managed parts — or the shape of a type
-	// this pod is not — is acceptable: the caller rewrites them right after.
-	// Something the platform never installs is not.
+	// An archive carrying no plugin entry is acceptable: the caller rewrites it
+	// right after. A plugin the platform never installs is not.
 	for name := range settings.EnabledPlugins {
 		if name != claudeSessionPlatformPlugin {
 			return settings, fmt.Errorf("claude managed settings enables unmanaged plugin %s", name)
-		}
-	}
-	for name := range settings.MCPServers {
-		if name != sessionMCPServerName {
-			return settings, fmt.Errorf("claude managed settings registers unmanaged MCP server %s", name)
 		}
 	}
 	return settings, nil
@@ -1083,12 +924,6 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 			status = "ok"
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": status, "workload": c.cli.workloadName()})
-	})
-
-	// AC-F3's idle exception, read side. It stays answerable while the workload
-	// is awaiting restore — an unready agent is simply not waiting on anyone.
-	mux.HandleFunc("GET "+approvalWaitPath, func(w http.ResponseWriter, _ *http.Request) {
-		serveApprovalWait(w, &c.approvals)
 	})
 
 	mux.HandleFunc("GET /attach", func(w http.ResponseWriter, r *http.Request) {

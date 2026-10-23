@@ -105,7 +105,7 @@ func (miniMaxCLI) newProjector(dst io.Writer) io.WriteCloser {
 
 // ensureHome writes the managed config. HOME itself needs nothing from the
 // platform: mcode creates its own data directory on first run.
-func (m miniMaxCLI) ensureHome(string, toolSurface) error {
+func (m miniMaxCLI) ensureHome(string) error {
 	content, err := m.renderConfig()
 	if err != nil {
 		return err
