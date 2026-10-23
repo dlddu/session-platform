@@ -62,10 +62,7 @@ func sessionNetworkPolicies(namespace, sessionID string, owner *corev1.Pod) []*n
 		LabelSessionID: sessionID,
 		LabelPodRole:   PodRoleHelper,
 	}}
-	helperPorts := []networkingv1.NetworkPolicyPort{
-		tcpPort(credentialProxyPort),
-		tcpPort(SessionMCPPort),
-	}
+	helperPorts := helperPolicyPorts(owner)
 	meta := func(name string) metav1.ObjectMeta {
 		return metav1.ObjectMeta{
 			Name:      name,

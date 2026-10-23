@@ -263,41 +263,55 @@ func splitEvery(s string, n int) []string {
 	return append(parts, s)
 }
 
-// AC-G3: the CLI container refuses to start holding any credential or without
-// the proxy wiring.
-func TestValidateMiniMaxProxyClientEnv(t *testing.T) {
+// AC-G3/AC-G6: the CLI container refuses to start holding any credential, or
+// pointed anywhere but its helper pod.
+func TestValidateMiniMaxClientEnv(t *testing.T) {
 	good := func(t *testing.T) {
-		t.Setenv("ANTHROPIC_BASE_URL", claudeProxyBaseURL)
+		t.Setenv("ANTHROPIC_BASE_URL", "http://10.1.2.3:8091")
 		t.Setenv("ANTHROPIC_AUTH_TOKEN", claudeProxyPlaceholderToken)
+		t.Setenv(sessionMCPURLEnv, "http://10.1.2.3:8092")
+		t.Setenv(k3sMCPProxyURLEnv, "http://10.1.2.3:8093")
 		for _, name := range miniMaxCredentialEnv {
 			t.Setenv(name, "")
 		}
 	}
-	t.Run("proxy wiring passes", func(t *testing.T) {
+	t.Run("helper wiring passes", func(t *testing.T) {
 		good(t)
-		if err := validateMiniMaxProxyClientEnv(); err != nil {
+		got, err := validateMiniMaxClientEnv()
+		if err != nil {
 			t.Fatalf("err = %v", err)
 		}
-	})
-	t.Run("direct upstream is refused", func(t *testing.T) {
-		good(t)
-		t.Setenv("ANTHROPIC_BASE_URL", "https://api.minimax.io/anthropic")
-		if err := validateMiniMaxProxyClientEnv(); err == nil {
-			t.Fatal("want an error")
+		want := miniMaxEndpoints{
+			provider:   "http://10.1.2.3:8091",
+			sessionMCP: "http://10.1.2.3:8092",
+			k3sProxy:   "http://10.1.2.3:8093",
+		}
+		if got != want {
+			t.Fatalf("endpoints = %+v, want %+v", got, want)
 		}
 	})
-	t.Run("real token is refused", func(t *testing.T) {
-		good(t)
-		t.Setenv("ANTHROPIC_AUTH_TOKEN", "sk-cp-real")
-		if err := validateMiniMaxProxyClientEnv(); err == nil {
-			t.Fatal("want an error")
-		}
-	})
+	for _, tc := range []struct{ name, env, value string }{
+		{"loopback provider proxy", "ANTHROPIC_BASE_URL", claudeProxyBaseURL},
+		{"direct upstream", "ANTHROPIC_BASE_URL", "https://api.minimax.io/anthropic"},
+		{"missing session MCP", sessionMCPURLEnv, ""},
+		{"session MCP on the wrong port", sessionMCPURLEnv, "http://10.1.2.3:8091"},
+		{"loopback K3s proxy", k3sMCPProxyURLEnv, "http://127.0.0.1:8093"},
+		{"missing K3s proxy", k3sMCPProxyURLEnv, ""},
+		{"real token", "ANTHROPIC_AUTH_TOKEN", "sk-cp-real"},
+	} {
+		t.Run(tc.name+" is refused", func(t *testing.T) {
+			good(t)
+			t.Setenv(tc.env, tc.value)
+			if _, err := validateMiniMaxClientEnv(); err == nil {
+				t.Fatal("want an error")
+			}
+		})
+	}
 	for _, name := range miniMaxCredentialEnv {
 		t.Run(name+" is refused", func(t *testing.T) {
 			good(t)
 			t.Setenv(name, "secret")
-			if err := validateMiniMaxProxyClientEnv(); err == nil || !strings.Contains(err.Error(), name) {
+			if _, err := validateMiniMaxClientEnv(); err == nil || !strings.Contains(err.Error(), name) {
 				t.Fatalf("err = %v, want one naming %s", err, name)
 			}
 		})

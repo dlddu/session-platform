@@ -384,7 +384,7 @@ func (o *ClientOrchestrator) startSet(ctx context.Context, sessionID, checkpoint
 
 	var auxiliary []PodRef
 	var helper helperEndpoints
-	if workloadType == session.WorkloadTypeApprovalGated {
+	if workloadType.HasApprovalGate() {
 		spec, err := o.helperPodSpec(sessionID, suffix, workloadType)
 		if err != nil {
 			return SessionPods{}, err
@@ -423,14 +423,16 @@ func (o *ClientOrchestrator) startSet(ctx context.Context, sessionID, checkpoint
 // injected into its workload pod (AC-F6). The zero value means the session has
 // no helper pod.
 type helperEndpoints struct {
-	ProxyURL string
-	MCPURL   string
+	ProxyURL  string
+	MCPURL    string
+	K3SMCPURL string
 }
 
 func endpointsFor(podIP string) helperEndpoints {
 	return helperEndpoints{
-		ProxyURL: "http://" + net.JoinHostPort(podIP, strconv.Itoa(credentialProxyPort)),
-		MCPURL:   "http://" + net.JoinHostPort(podIP, strconv.Itoa(SessionMCPPort)),
+		ProxyURL:  "http://" + net.JoinHostPort(podIP, strconv.Itoa(credentialProxyPort)),
+		MCPURL:    "http://" + net.JoinHostPort(podIP, strconv.Itoa(SessionMCPPort)),
+		K3SMCPURL: "http://" + net.JoinHostPort(podIP, strconv.Itoa(k3sMCPProxyPort)),
 	}
 }
 
@@ -622,7 +624,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		// No sidecar: moving the proxy out of this pod is the whole point of
 		// AC-F2's arrangement.
 	case session.WorkloadTypeMiniMaxCode:
-		sidecars, volumes = o.miniMaxCodePod(&container, image, model)
+		sidecars, volumes = o.miniMaxCodePod(&container, model, helper, helperPodNameFor(sessionID, suffix))
 	}
 	if o.checkpointPrivileged && workloadType == session.WorkloadTypeShell {
 		// See WithCheckpointPrivileged. This makes CRIU-enabled session shells
@@ -744,11 +746,8 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 		Spec: corev1.PodSpec{
 			RestartPolicy:                corev1.RestartPolicyAlways,
 			AutomountServiceAccountToken: &automountServiceAccountToken,
-			Containers: []corev1.Container{
-				mcp,
-				o.credentialProxyContainer(HelperCredentialProxyContainerName, image, helperProxyListenAddr, proxyPlacementHelper),
-			},
-			Volumes: helperVolumes,
+			Containers:                   append([]corev1.Container{mcp}, o.helperProxyContainers(workloadType, image)...),
+			Volumes:                      append(helperVolumes, helperProxyVolumes(workloadType)...),
 		},
 	}, nil
 }

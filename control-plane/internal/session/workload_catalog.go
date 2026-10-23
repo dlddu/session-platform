@@ -47,7 +47,7 @@ var workloadTypeCatalog = []WorkloadTypeInfo{
 	{
 		Type:        WorkloadTypeMiniMaxCode,
 		Label:       "MiniMax Code",
-		Description: "MiniMax Code CLI on the same prompt loop.",
+		Description: "MiniMax Code CLI behind the approval gate. K3s MCP tools use their own gate.",
 		TakesModel:  true,
 		Input:       InputModePrompt,
 	},
