@@ -979,7 +979,7 @@ func (s *Service) Terminate(ctx context.Context, id string) (retErr error) {
 // Its only caller is the reaper path (idleCutoff != nil) — which is why a
 // user-driven Snapshot still freezes a waiting session, as AC-F3 requires.
 func (s *Service) holdingForApproval(ctx context.Context, sess *session.Session) bool {
-	if sess.WorkloadType != session.WorkloadTypeApprovalGated || sess.Pod == "" {
+	if !sess.WorkloadType.HasApprovalGate() || sess.Pod == "" {
 		return false
 	}
 	reporter, ok := s.agent.(approvalWaitReporter)

@@ -185,8 +185,13 @@ func main() {
 		handler = proxy
 		logger.Info("credential proxy started", "addr", addr, "placement", string(placement))
 	case workloadK3SMCPProxy:
-		if err := validateCredentialProxyBindAddr(addr, proxyPlacementSidecar); err != nil {
-			logger.Error("invalid k3s-mcp-proxy bind address", "err", err)
+		placement, err := credentialProxyPlacementFromEnv()
+		if err != nil {
+			logger.Error("invalid k3s-mcp-proxy placement", "err", err)
+			os.Exit(1)
+		}
+		if err := validateCredentialProxyBindAddr(addr, placement); err != nil {
+			logger.Error("invalid k3s-mcp-proxy bind address", "placement", string(placement), "err", err)
 			os.Exit(1)
 		}
 		token := os.Getenv(k3sMCPTokenEnv)

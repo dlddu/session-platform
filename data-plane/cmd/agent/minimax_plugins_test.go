@@ -1,8 +1,13 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -112,23 +117,140 @@ func TestSyncMiniMaxPluginsRefusesALinkInTheSeed(t *testing.T) {
 	}
 }
 
-func TestMiniMaxEnsureHomeInstallsTheSeed(t *testing.T) {
-	stateDir, seed := t.TempDir(), t.TempDir()
-	writeSeedPlugin(t, seed, "mcp-servers", `{}`)
-	cli, err := newMiniMaxCLI(filepath.Join(stateDir, "state"), "", claudeProxyBaseURL, claudeProxyPlaceholderToken)
+// pluginServer reads the one MCP server an installed platform plugin declares.
+func pluginServer(t *testing.T, home, plugin string) (string, map[string]any) {
+	t.Helper()
+	var manifest struct {
+		MCPServers []string `json:"mcpServers"`
+	}
+	root := filepath.Join(miniMaxPluginsDir(home), plugin)
+	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(root, ".claude-plugin", "plugin.json"))), &manifest); err != nil {
+		t.Fatalf("plugin %s manifest: %v", plugin, err)
+	}
+	if len(manifest.MCPServers) != 1 {
+		t.Fatalf("plugin %s mcpServers = %v, want one file", plugin, manifest.MCPServers)
+	}
+	var servers struct {
+		MCPServers map[string]map[string]any `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(root, manifest.MCPServers[0]))), &servers); err != nil {
+		t.Fatalf("plugin %s servers: %v", plugin, err)
+	}
+	if len(servers.MCPServers) != 1 {
+		t.Fatalf("plugin %s servers = %v, want one", plugin, servers.MCPServers)
+	}
+	for name, server := range servers.MCPServers {
+		return name, server
+	}
+	return "", nil
+}
+
+func newTestMiniMaxHome(t *testing.T, configured bool, probeErr error) (miniMaxCLI, string, *int) {
+	t.Helper()
+	dir := t.TempDir()
+	cli, err := newMiniMaxCLI(filepath.Join(dir, "state"), "", "http://10.1.2.3:8091", claudeProxyPlaceholderToken)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cli.pluginSeedDir = seed
-	home := filepath.Join(stateDir, "state", "home")
+	probes := 0
+	cli.k3sProxyURL = "http://10.1.2.3:8093"
+	cli.k3sConfigured = func(baseURL string) (bool, error) {
+		probes++
+		if baseURL != cli.k3sProxyURL {
+			t.Errorf("probed %q, want the K3s proxy %q", baseURL, cli.k3sProxyURL)
+		}
+		return configured, probeErr
+	}
+	return cli, filepath.Join(dir, "state", "home"), &probes
+}
 
-	if err := cli.ensureHome(home, toolSurface{}); err != nil {
+var testMiniMaxTools = toolSurface{SessionMCP: "http://10.1.2.3:8092"}
+
+// AC-G5/AC-G6: both servers point at the helper pod, carry no auth of their
+// own, and use the names claude-code's tools already have.
+func TestMiniMaxEnsureHomeRegistersHelperServers(t *testing.T) {
+	cli, home, _ := newTestMiniMaxHome(t, true, nil)
+	if err := cli.ensureHome(home, testMiniMaxTools); err != nil {
 		t.Fatalf("ensureHome: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(miniMaxPluginsDir(home), "mcp-servers", ".claude-plugin", "plugin.json")); err != nil {
-		t.Errorf("ensureHome did not install the staged plugin: %v", err)
+	for _, tc := range []struct{ plugin, server, url string }{
+		{miniMaxSessionPluginName, sessionMCPServerName, "http://10.1.2.3:8092/mcp"},
+		{miniMaxK3SPluginName, "k3s", "http://10.1.2.3:8093/mcp"},
+	} {
+		name, server := pluginServer(t, home, tc.plugin)
+		if name != tc.server || server["type"] != "http" || server["url"] != tc.url || len(server) != 2 {
+			t.Errorf("plugin %s server %s = %v, want only type http and url %s", tc.plugin, name, server, tc.url)
+		}
+		if _, err := os.Stat(filepath.Join(miniMaxPluginsDir(home), tc.plugin, miniMaxManagedPluginMarker)); err != nil {
+			t.Errorf("plugin %s is not marked as the platform's: %v", tc.plugin, err)
+		}
 	}
 	if _, err := os.Stat(cli.configPath); err != nil {
 		t.Errorf("ensureHome did not write the managed config: %v", err)
+	}
+	if rel, err := filepath.Rel(filepath.Dir(home), filepath.Dir(cli.configPath)); err != nil || !strings.HasPrefix(rel, "..") {
+		t.Errorf("staging dir %s is inside the state tree", filepath.Dir(cli.configPath))
+	}
+}
+
+// AC-G5: a proxy without a token means no K3s server, and a restored HOME that
+// still lists one from an earlier pod loses it.
+func TestMiniMaxEnsureHomeOmitsAnUnconfiguredK3SProxy(t *testing.T) {
+	cli, home, _ := newTestMiniMaxHome(t, true, nil)
+	if err := cli.ensureHome(home, testMiniMaxTools); err != nil {
+		t.Fatalf("ensureHome: %v", err)
+	}
+	cli.k3sConfigured = func(string) (bool, error) { return false, nil }
+	if err := cli.ensureHome(home, testMiniMaxTools); err != nil {
+		t.Fatalf("ensureHome: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(miniMaxPluginsDir(home), miniMaxK3SPluginName)); !os.IsNotExist(err) {
+		t.Errorf("K3s plugin survived an unconfigured proxy: %v", err)
+	}
+	if name, _ := pluginServer(t, home, miniMaxSessionPluginName); name != sessionMCPServerName {
+		t.Errorf("session MCP server = %q, want %q", name, sessionMCPServerName)
+	}
+}
+
+// An unreachable proxy is a broken helper pod, not a missing key: the boot
+// fails rather than silently running without the tools.
+func TestMiniMaxEnsureHomeFailsOnAnUnreachableK3SProxy(t *testing.T) {
+	cli, home, _ := newTestMiniMaxHome(t, false, errors.New("connection refused"))
+	if err := cli.ensureHome(home, testMiniMaxTools); err == nil {
+		t.Fatal("ensureHome succeeded with an unreachable K3s proxy")
+	}
+}
+
+func TestMiniMaxEnsureHomeWithoutSessionMCPInstallsNothing(t *testing.T) {
+	cli, home, probes := newTestMiniMaxHome(t, true, nil)
+	writeSeedPlugin(t, miniMaxPluginsDir(home), "stale", `{}`)
+	if err := os.WriteFile(filepath.Join(miniMaxPluginsDir(home), "stale", miniMaxManagedPluginMarker), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.ensureHome(home, toolSurface{}); err != nil {
+		t.Fatalf("ensureHome: %v", err)
+	}
+	if entries, _ := os.ReadDir(miniMaxPluginsDir(home)); len(entries) != 0 {
+		t.Errorf("plugins = %v, want none", entries)
+	}
+	if *probes != 0 {
+		t.Errorf("probed the K3s proxy %d times without a session MCP", *probes)
+	}
+}
+
+func TestK3SProxyConfiguredReadsHealth(t *testing.T) {
+	for _, configured := range []bool{true, false} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != k3sMCPProxyHealthz {
+				http.NotFound(w, r)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "configured": configured})
+		}))
+		got, err := k3sProxyConfigured(srv.URL)
+		srv.Close()
+		if err != nil || got != configured {
+			t.Errorf("configured = %v, %v; want %v", got, err, configured)
+		}
 	}
 }

@@ -10,15 +10,16 @@ import (
 )
 
 // The minimax-code workload reaches the homelab K3s MCP the way it reaches its
-// model provider: through a loopback sidecar that holds the token (AC-G5). mcode
-// expands no environment variable in a plugin's MCP headers, so a token the CLI
-// could use would have to be written into HOME, which is archived. The sidecar
-// keeps that token out of the CLI container and out of every archive.
+// model provider: through a helper pod container that holds the token (AC-G5,
+// AC-G6). mcode expands no environment variable in a plugin's MCP headers, so a
+// token the CLI could use would have to be written into HOME, which is
+// archived. The proxy keeps that token out of the workload pod and out of every
+// archive. It is not behind the session's approval gate: the K3s MCP gates its
+// own writes, and a second gate would ask twice for the same action.
 const (
 	workloadK3SMCPProxy = "k3s-mcp-proxy"
 
-	// Keep in sync with control-plane/internal/adapter/k8s (K3SMCPProxyListenAddr)
-	// and entrypoint.sh (K3S_MCP_PROXY_URL default).
+	// Keep in sync with control-plane/internal/adapter/k8s (k3sMCPProxyPort).
 	k3sMCPProxyPort    = 8093
 	k3sMCPTokenEnv     = "K3S_MCP_TOKEN"
 	k3sMCPURLEnv       = "K3S_MCP_URL"
@@ -28,7 +29,7 @@ const (
 
 // k3sMCPProxyRequestHeaderAllowed is the MCP Streamable HTTP request surface.
 // Anything else — above all a caller-supplied Authorization — is dropped before
-// the sidecar installs its own bearer.
+// the proxy installs its own bearer.
 func k3sMCPProxyRequestHeaderAllowed(name string) bool {
 	switch http.CanonicalHeaderKey(name) {
 	case "Accept",
@@ -43,11 +44,11 @@ func k3sMCPProxyRequestHeaderAllowed(name string) bool {
 	}
 }
 
-// newK3SMCPProxy serves the K3s MCP origin on loopback. An empty token is not a
-// start failure: the Secret key is optional, and a deployment that has not set
-// it keeps minimax-code sessions working without the plugin. The health route
-// says which of the two it is, so the entrypoint can skip the bootstrap rather
-// than fail the pod.
+// newK3SMCPProxy serves the K3s MCP origin. An empty token is not a start
+// failure: the Secret key is optional, and a deployment that has not set it
+// keeps minimax-code sessions working without the K3s tools. The health route
+// says which of the two it is, so the workload agent can leave the K3s server
+// out rather than fail the pod.
 func newK3SMCPProxy(rawURL, token string, logger *slog.Logger) (http.Handler, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	// As for the provider proxy: no ambient HTTP(S)_PROXY may redirect the token.
@@ -97,7 +98,7 @@ func newK3SMCPProxyWithTransport(rawURL, token string, logger *slog.Logger, tran
 }
 
 // k3sMCPOrigin reduces the configured MCP URL to its origin. The client keeps
-// the path (the plugin's own URL, re-pointed at loopback), so forwarding to the
+// the path (the K3s MCP's own path, on the proxy's address), so forwarding to the
 // full URL would double it.
 func k3sMCPOrigin(raw string) (string, error) {
 	if strings.TrimSpace(raw) == "" {

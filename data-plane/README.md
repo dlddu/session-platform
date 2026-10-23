@@ -54,7 +54,8 @@ interactive shell and Claude Code workloads.
   reasoning, tool-call and lifecycle records are dropped, and a failed turn is
   reported through mcode's own stderr diagnostics. `CONFIG` is a platform-managed
   file written at startup *beside* the state tree (so it is never archived): it
-  declares one Anthropic-messages provider at `http://127.0.0.1:8091` with the
+  declares one Anthropic-messages provider at the helper pod's credential proxy
+  (`ANTHROPIC_BASE_URL`, `http://<helper-ip>:8091`) with the
   non-secret placeholder key and the session's model (with the effort levels
   mcode needs to accept `--effort`, and the 512k/128k token limits for
   `MiniMax-M3.1-Flash`), and turns data
@@ -64,24 +65,30 @@ interactive shell and Claude Code workloads.
   installation default to fall back to. The container gets no Claude bootstrap
   and refuses to start if any provider key (`ANTHROPIC_API_KEY`,
   `MINIMAX_API_KEY`, `MCODE_PROVIDER_API_KEY`, …) or `K3S_MCP_TOKEN` is set
-  (AC-G3). Its credential-proxy sidecar is the `claude-code` one pointed at the
-  `minimax-code-credentials` Secret, whose `base-url` is MiniMax's
-  Anthropic-compatible endpoint (for example `https://api.minimax.io/anthropic`)
-  and whose `auth-token` may be a Token Plan subscription key: MiniMax accepts
-  it as `Authorization: Bearer`, which is exactly what the proxy injects.
-  The homelab K3s MCP reaches this type through a second loopback sidecar,
-  `k3s-mcp-proxy` (AC-G5), because mcode neither expands `${VAR}` in plugin MCP
-  headers nor accepts OAuth fields, and HOME is archived. When that sidecar has
-  a token, the entrypoint asks it (never the K3s MCP directly) for a
-  `plugin-marketplace` read token, clones the marketplace with a URL-scoped
-  header, and stages the `mcp-servers` plugin outside the state tree with its
-  K3s MCP server re-pointed at `http://127.0.0.1:8093` and stripped of its own
-  auth. The agent copies that seed into `~/.minimax/plugins/` on every start and
-  restore and removes only plugins it marked as its own.
-- `k3s-mcp-proxy` is the `minimax-code` pod's K3s MCP sidecar: the
+  (AC-G3). Like `approval-gated`, the pod has no sidecar and its egress reaches
+  only its session's helper pod (AC-G6), so every address it gets is a helper
+  pod address that must not be loopback: the provider proxy (`:8091`), the
+  session MCP (`SESSION_MCP_URL`, `:8092`) and the K3s MCP proxy
+  (`K3S_MCP_PROXY_URL`, `:8093`). The helper's provider proxy is the
+  `approval-gated` one pointed at the `minimax-code-credentials` Secret, whose
+  `base-url` is MiniMax's Anthropic-compatible endpoint (for example
+  `https://api.minimax.io/anthropic`) and whose `auth-token` may be a Token Plan
+  subscription key: MiniMax accepts it as `Authorization: Bearer`, which is
+  exactly what the proxy injects. On every start and restore the agent stages
+  two Claude-format plugins beside the managed config and copies them into
+  `~/.minimax/plugins/`, removing only plugins it marked as its own:
+  `session-platform`, registering the session MCP as
+  `session-platform-session-mcp` (its external tools pass the approval gate and
+  the agent tails the MCP's notices into the output, AC-F3), and — only when the
+  K3s MCP proxy's `/healthz` reports `configured: true` — `mcp-servers`,
+  registering `k3s` at the proxy (AC-G5). Neither server carries auth of its own;
+  the K3s MCP tools are not behind the session gate because the K3s MCP gates
+  its own writes.
+- `k3s-mcp-proxy` is the `minimax-code` helper pod's K3s MCP proxy: the
   credential-proxy implementation with the MCP Streamable HTTP header allowlist
   (`Accept`, `Content-Type`, `Mcp-Session-Id`, `Mcp-Protocol-Version`,
-  `Last-Event-Id`, `User-Agent`), bound to `127.0.0.1:8093`, forwarding to the
+  `Last-Event-Id`, `User-Agent`), bound per `DATA_PLANE_PROXY_PLACEMENT` like
+  the provider proxy (`:8093` in the helper pod), forwarding to the
   origin of `K3S_MCP_URL` (default `https://homelab-k3s-mcp.llkm.nl`) with
   `K3S_MCP_TOKEN` as the bearer. Without a token it still starts, reports
   `configured: false` on `/healthz`, and answers everything else with 503.

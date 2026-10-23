@@ -1,12 +1,18 @@
 package session
 
 // WorkloadTypeMiniMaxCode selects the MiniMax Code CLI (`mcode`) workload
-// (docs/prd/minimax-code-workload.md, AC-G1~G4). It reuses the claude-code
-// execution model as is — one-shot prompts on a serial queue, offset-cursored
-// output, a filesystem archive for snapshots (AC-E2~E5) — and differs only in
-// the CLI it runs, how that CLI's stream is projected, and which platform Secret
-// its credential proxy holds (AC-G3).
+// (docs/prd/minimax-code-workload.md, AC-G1~G6). It runs on the claude-code
+// execution model (AC-E2~E5) behind approval-gated's network boundary and
+// helper pod (AC-G6).
 const WorkloadTypeMiniMaxCode WorkloadType = "minimax-code"
+
+// HasApprovalGate reports whether a session of this type runs behind a helper
+// pod that fronts the approval gate, with its workload egress confined to that
+// pod (AC-F2~F4, AC-G6). Every such type also holds its idle count while a
+// human decision is pending (AC-F3).
+func (w WorkloadType) HasApprovalGate() bool {
+	return w == WorkloadTypeApprovalGated || w == WorkloadTypeMiniMaxCode
+}
 
 // ArchivesThroughAgent reports whether the service snapshots this type through
 // the agent's generation-fenced filesystem archive and bounds its prompts before

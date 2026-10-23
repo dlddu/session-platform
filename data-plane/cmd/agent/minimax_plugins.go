@@ -9,17 +9,15 @@ import (
 	"path/filepath"
 )
 
-// The entrypoint stages the platform's MiniMax plugins outside the state tree
-// (AC-G5); ensureHome copies them into the place mcode scans, ~/.minimax/plugins.
+// ensureHome stages the platform's MiniMax plugins outside the state tree
+// (AC-G5, AC-G6) and copies them into the place mcode scans, ~/.minimax/plugins.
 // HOME is archived, so the copy is redone on every boot and restore: an archive
 // can never bring back a plugin the current pod did not stage.
-const (
-	miniMaxPluginSeedEnv = "MINIMAX_CODE_PLUGIN_SEED_DIR"
-	// miniMaxManagedPluginMarker tags a plugin directory the platform installed.
-	// Only tagged directories are ever removed, so a plugin the user installed
-	// by hand inside the session survives every sync.
-	miniMaxManagedPluginMarker = ".session-platform-managed"
-)
+//
+// miniMaxManagedPluginMarker tags a plugin directory the platform installed.
+// Only tagged directories are ever removed, so a plugin the user installed by
+// hand inside the session survives every sync.
+const miniMaxManagedPluginMarker = ".session-platform-managed"
 
 func miniMaxPluginsDir(homeDir string) string {
 	return filepath.Join(homeDir, ".minimax", "plugins")

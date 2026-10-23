@@ -12,10 +12,10 @@ import (
 	"strings"
 )
 
-// The minimax-code workload (docs/prd/minimax-code-workload.md, AC-G1~G4) runs
+// The minimax-code workload (docs/prd/minimax-code-workload.md, AC-G1~G6) runs
 // the MiniMax Code CLI, `mcode exec`, on the claude-code runner. Everything in
 // this file is the CLI-specific half; the queue, bounds, archive and resume
-// flag are claudeWorkload's.
+// flag are claudeWorkload's, and the helper pod wiring is minimax_tools.go's.
 const (
 	workloadMiniMaxCode = "minimax-code"
 
@@ -35,7 +35,8 @@ const (
 	// miniMaxPermission is pinned, not left to mcode's default. A run is
 	// unattended, so a mode that stops to ask (smart refuses most shell
 	// commands without a human) only fails the turn. What bounds the tools is
-	// the session pod, which never holds a real credential (AC-G3).
+	// the session pod, which holds no real credential (AC-G3) and reaches
+	// nothing but its helper pod (AC-G6).
 	miniMaxPermission = "full"
 	// miniMaxEffort is the reasoning effort every run asks for. mcode sends it
 	// as output_config.effort, and only for a model whose definition lists
@@ -50,17 +51,20 @@ const (
 )
 
 // miniMaxCLI is the agentCLI for `mcode`. The provider it talks to is fixed at
-// construction: the loopback credential proxy, with the non-secret placeholder
-// as its key (AC-G3). mcode never sees a real credential, so nothing it writes
-// into HOME — which it does freely — can carry one into an archive.
+// construction: the helper pod's credential proxy, with the non-secret
+// placeholder as its key (AC-G3, AC-G6). mcode never sees a real credential, so
+// nothing it writes into HOME — which it does freely — can carry one into an
+// archive.
 type miniMaxCLI struct {
 	configPath  string
 	baseURL     string
 	placeholder string
 	model       string
-	// pluginSeedDir is where the entrypoint staged the platform's plugins, or
-	// empty when it staged none (AC-G5).
-	pluginSeedDir string
+	// k3sProxyURL is the helper pod's K3s MCP proxy, or empty for none (AC-G5).
+	k3sProxyURL string
+	// k3sConfigured reports whether that proxy holds a token; a field so tests
+	// need no server.
+	k3sConfigured func(baseURL string) (bool, error)
 }
 
 func newMiniMaxCLI(stateDir, model, baseURL, placeholder string) (miniMaxCLI, error) {
@@ -113,9 +117,11 @@ func (miniMaxCLI) newProjector(dst io.Writer) io.WriteCloser {
 	return newMiniMaxStreamProjector(dst)
 }
 
-// ensureHome writes the managed config and installs the staged plugins. mcode
-// creates the rest of its data directory on first run.
-func (m miniMaxCLI) ensureHome(homeDir string, _ toolSurface) error {
+// ensureHome writes the managed config, stages the platform's plugins beside
+// it and installs them into HOME. Both are redone by every boot and restore
+// from this pod's own helper addresses, so an archive can never bring back a
+// previous pod's. mcode creates the rest of its data directory on first run.
+func (m miniMaxCLI) ensureHome(homeDir string, tools toolSurface) error {
 	content, err := m.renderConfig()
 	if err != nil {
 		return err
@@ -123,7 +129,35 @@ func (m miniMaxCLI) ensureHome(homeDir string, _ toolSurface) error {
 	if err := writeMiniMaxConfig(m.configPath, content); err != nil {
 		return err
 	}
-	return syncMiniMaxPlugins(homeDir, m.pluginSeedDir)
+	seedDir := ""
+	if tools.SessionMCP != "" {
+		k3sURL, err := m.k3sPluginURL()
+		if err != nil {
+			return err
+		}
+		seedDir = filepath.Join(filepath.Dir(m.configPath), "plugins")
+		if err := stageMiniMaxPlugins(seedDir, tools.sessionMCPEndpoint(), k3sURL); err != nil {
+			return err
+		}
+	}
+	return syncMiniMaxPlugins(homeDir, seedDir)
+}
+
+// k3sPluginURL is the K3s MCP server address mcode should register, or empty
+// when there is no proxy or it holds no token.
+func (m miniMaxCLI) k3sPluginURL() (string, error) {
+	if m.k3sProxyURL == "" {
+		return "", nil
+	}
+	probe := m.k3sConfigured
+	if probe == nil {
+		probe = k3sProxyConfigured
+	}
+	configured, err := probe(m.k3sProxyURL)
+	if err != nil || !configured {
+		return "", err
+	}
+	return k3sProxyMCPURL(m.k3sProxyURL)
 }
 
 // validateState is the type-neutral half of AC-E5's integrity check. There is
@@ -242,30 +276,12 @@ var miniMaxCredentialEnv = []string{
 // sets it on itself so every mcode run inherits it, whatever the pod spec says.
 const miniMaxDisableEvalCaptureEnv = "MCODE_DISABLE_EVAL_CAPTURE"
 
-// validateMiniMaxProxyClientEnv is the minimax-code counterpart of
-// validateClaudeProxyClientEnv (AC-G3): the CLI container must point at the
-// loopback proxy with the placeholder, and must hold no credential of any kind
-// — neither a provider key under any of the names mcode or Claude would read,
-// nor claude-code's plugin bootstrap token, which this type has no use for.
-func validateMiniMaxProxyClientEnv() error {
-	if os.Getenv("ANTHROPIC_BASE_URL") != claudeProxyBaseURL {
-		return errors.New("minimax-code must use the localhost credential proxy URL")
-	}
-	if os.Getenv("ANTHROPIC_AUTH_TOKEN") != claudeProxyPlaceholderToken {
-		return errors.New("minimax-code must use the non-secret credential proxy placeholder")
-	}
-	for _, name := range miniMaxCredentialEnv {
-		if os.Getenv(name) != "" {
-			return fmt.Errorf("minimax-code container must not receive %s", name)
-		}
-	}
-	return nil
-}
-
 // newMiniMaxWorkloadFromEnv builds the minimax-code agent from the pod
-// environment the control plane injects (AC-G3).
+// environment the control plane injects (AC-G3, AC-G6), and starts the tailer
+// that writes approval waits into the session output (AC-F3).
 func newMiniMaxWorkloadFromEnv(logger *slog.Logger, restoreMode bool) (*claudeWorkload, error) {
-	if err := validateMiniMaxProxyClientEnv(); err != nil {
+	endpoints, err := validateMiniMaxClientEnv()
+	if err != nil {
 		return nil, err
 	}
 	if err := os.Setenv(miniMaxDisableEvalCaptureEnv, "1"); err != nil {
@@ -277,12 +293,12 @@ func newMiniMaxWorkloadFromEnv(logger *slog.Logger, restoreMode bool) (*claudeWo
 	}
 	stateDir := env("CLAUDE_CODE_STATE_DIR", defaultClaudeStateDir)
 	model := env(miniMaxModelEnv, platformDefaultModel)
-	cli, err := newMiniMaxCLI(stateDir, model, claudeProxyBaseURL, claudeProxyPlaceholderToken)
+	cli, err := newMiniMaxCLI(stateDir, model, endpoints.provider, claudeProxyPlaceholderToken)
 	if err != nil {
 		return nil, err
 	}
-	cli.pluginSeedDir = os.Getenv(miniMaxPluginSeedEnv)
-	return newClaudeWorkload(claudeConfig{
+	cli.k3sProxyURL = endpoints.k3sProxy
+	claude, err := newClaudeWorkload(claudeConfig{
 		StateDir:    stateDir,
 		Model:       model,
 		Binary:      env(miniMaxBinaryEnv, defaultMiniMaxBinary),
@@ -292,7 +308,13 @@ func newMiniMaxWorkloadFromEnv(logger *slog.Logger, restoreMode bool) (*claudeWo
 		Redact:      miniMaxRedactionLiterals(),
 		RunTimeout:  runTimeout,
 		CLI:         cli,
+		Tools:       toolSurface{SessionMCP: endpoints.sessionMCP, SharedDir: env(sharedVolumeDirEnv, "")},
 	})
+	if err != nil {
+		return nil, err
+	}
+	go newNoticeTailer(endpoints.sessionMCP, claude, logger).run(claude.ctx)
+	return claude, nil
 }
 
 func miniMaxRedactionLiterals() []string {
