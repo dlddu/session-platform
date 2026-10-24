@@ -161,16 +161,6 @@ spec:
             # 이 항목도 env 목록 맨 끝에 둔다(위 minimax 항목과 같은 이유).
             - name: APPROVAL_GATEWAY_URL
               value: http://pocket-aide.pocket-aide.svc.cluster.local:8080
-            # AC-F5 공유 볼륨(세션 전용 RWX 클레임)의 opt-in 스위치. approval-gated·minimax-code
-            # 헬퍼 파드의 session-mcp 컨테이너와 워크로드 컨테이너가 /shared 로 함께 마운트하고,
-            # 세션 MCP 의 git_clone 과 큰 web_fetch_get 응답이 여기에 떨어진다. 비우면 클레임도
-            # 마운트도 서지 않아 git_clone 이 "no shared volume is configured" 로 실패한다.
-            # efs 는 이 클러스터의 유일한 StorageClass 이고 efs-ap 동적 프로비저닝으로 RWX 를
-            # 내준다(2026-10-24 실측: 다른 앱의 RWX 클레임 7개가 Bound). 클레임은 그 라운드
-            # 헬퍼 파드에 묶여 동결·삭제 때 함께 회수된다(reclaimPolicy Delete).
-            # 이 항목도 env 목록 맨 끝에 둔다(위 minimax 항목과 같은 이유).
-            - name: SESSION_SHARED_VOLUME_STORAGE_CLASS
-              value: efs
           readinessProbe:
             httpGet:
               path: /api/v1/healthz
