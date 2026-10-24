@@ -25,7 +25,9 @@ name: e2e
 #   - The SUT images are built with buildx + the gha layer cache instead of a
 #     cold `docker build` inside up.sh (SKIP_IMAGE_BUILD=1 tells it to only
 #     load them). Every entry reads the cache; only API shard 1 writes it, so
-#     five runners do not race to export the same layers.
+#     five runners do not race to export the same layers. Actions caches are
+#     branch-scoped, so ci.yml's e2e-image-cache job also exports the same
+#     scopes on every main push — that is what a new PR's first run reads.
 #   - The browser entry starts `playwright install --with-deps` in the
 #     background right after checkout. Its apt step regularly crawls on runner
 #     mirrors (25 MB at ~40 kB/s); overlapping it with the image build, kind
