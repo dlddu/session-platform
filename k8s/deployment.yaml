@@ -4,7 +4,7 @@
 # rbac.yaml) and provisions session pods in this same namespace, resolving the
 # namespace from the mounted service account (no SESSION_NAMESPACE env needed).
 #
-# 이미지는 .github/workflows/docker-build-push.yaml 이 커밋 SHA 태그로 발행하고,
+# 이미지는 .github/workflows/ci.yml 의 이미지 job 들이 커밋 SHA 태그로 발행하고,
 # 같은 워크플로의 `pin` job 이 main 푸시마다 아래 세 자리(컨테이너 image 1곳 +
 # DATA_PLANE_IMAGE / DATA_PLANE_CLAUDE_CODE_IMAGE env 2곳)를 그 커밋의 SHA 로 바꿔
 # main 에 되커밋한다. 그래서 이 파일이 곧 "운영이 지금 어느 커밋을 돌리는가"의 단일
@@ -38,7 +38,7 @@ spec:
       serviceAccountName: control-plane
       containers:
         - name: control-plane
-          # ⚙️ CI가 관리하는 줄입니다(docker-build-push.yaml 의 `pin` job).
+          # ⚙️ CI가 관리하는 줄입니다(ci.yml 의 `pin` job).
           image: ghcr.io/dlddu/session-platform:b7d9f93241fb393788bc4424d8224be461d9c107
           ports:
             - containerPort: 8080

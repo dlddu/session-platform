@@ -138,4 +138,4 @@
 4. `../index.html` 허브의 그 여정 행 링크를 `journeys/<journey-id>/` 로 바꾼다.
 5. 다른 여정 페이지가 이 여정을 `data-branch-pending` 으로 걸어 두었으면 실제 링크로 승급한다
    (하네스가 강제한다).
-6. CI 워크플로 `docs-journey-mockup` 이 초록인지 확인한다.
+6. CI 워크플로 `ci` 의 `journey-prototype` 잡(여정 ↔ 여정 mockup 1:1)이 초록인지 확인한다.

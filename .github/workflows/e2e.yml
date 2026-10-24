@@ -5,21 +5,22 @@ name: e2e
 # apply the manifests, then run the Go API suite and the Playwright browser
 # suite against the NodePort-exposed control-plane.
 #
-# Path-filtered to control-plane, data-plane, web, deploy/k8s manifests,
-# e2e scripts, Makefile, and this workflow (plus on-demand). Unrelated PRs do
-# not trigger it; the lint/unit/build jobs in ci.yml still run on every PR.
+# Reusable workflow — ci.yml is the only entry point and calls this for PRs
+# that touch control-plane, data-plane, web, deploy/k8s manifests, e2e scripts,
+# Makefile, or the workflows (and on workflow_dispatch). The file stays at this
+# path on purpose: scripts/check-fidelity-allowlist.py and the reconciler model
+# tbm_session-platform-e2e-mock-policy both scan `.github/workflows/e2e.yml`.
+#
+# Wall-clock notes (the suite itself is ~11 min of serial pod-per-test work):
+#   - The SUT images are built with buildx + the gha layer cache instead of a
+#     cold `docker build` inside up.sh (SKIP_IMAGE_BUILD=1 tells it to only
+#     load them), so unchanged stages (criu, Claude Code, gh, go mod) are reused.
+#   - `playwright install --with-deps` is started in the background right after
+#     checkout. Its apt step regularly crawls on runner mirrors (25 MB at
+#     ~40 kB/s, 10 min); overlapping it with the SUT bring-up and the API suite
+#     hides that instead of serialising it in front of the browser suite.
 on:
-  pull_request:
-    paths:
-      - "control-plane/**"
-      - "data-plane/**" # session pods run this multi-workload agent image
-      - "web/**"
-      - "deploy/**"
-      - "k8s/**" # deploy/ overlay builds on the k8s/ base
-      - "scripts/e2e/**"
-      - "Makefile"
-      - ".github/workflows/e2e.yml"
-  workflow_dispatch:
+  workflow_call:
 
 jobs:
   e2e:
@@ -30,11 +31,56 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+          cache-dependency-path: control-plane/go.sum
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
+
+      - name: install web deps
+        working-directory: web
+        run: npm ci
+
+      # Kick off the browser + system-deps install now and collect it right
+      # before the browser suite (see the header). The runner only reaps
+      # orphaned processes when the job ends, so it survives across steps.
+      - name: start Playwright browser install (background)
+        working-directory: web
+        run: |
+          nohup bash -c 'npx playwright install --with-deps chromium \
+              > "$RUNNER_TEMP/playwright-install.log" 2>&1
+            echo $? > "$RUNNER_TEMP/playwright-install.rc"' >/dev/null 2>&1 &
+
+      # Build both SUT images (linux/amd64, the runner's arch) into the local
+      # docker image store under the tags up.sh and the deploy/ overlay expect.
+      # Separate cache scopes from the arm64 GHCR images in ci.yml so the two
+      # architectures never evict each other's layers.
+      - uses: docker/setup-buildx-action@v3
+        id: buildx
+        with:
+          install: false
+          use: false
+      - name: build control-plane image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: control-plane/Dockerfile
+          load: true
+          tags: session-platform/control-plane:dev
+          cache-from: type=gha,scope=e2e-control-plane
+          cache-to: type=gha,mode=max,scope=e2e-control-plane
+      - name: build data-plane image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: data-plane/Dockerfile
+          load: true
+          tags: session-platform/data-plane:dev
+          cache-from: type=gha,scope=e2e-data-plane
+          cache-to: type=gha,mode=max,scope=e2e-data-plane
 
       # Creates a kind cluster from deploy/kind-config.yaml (installs kind +
       # kubectl on the runner). cluster_name matches the config so the
@@ -46,10 +92,12 @@ jobs:
           cluster_name: session-platform
           config: deploy/kind-config.yaml
 
-      # Build the combined image, load it into kind, apply deploy/, wait for the
+      # Load the prebuilt images into kind, apply deploy/, wait for the
       # rollouts, and poll the SUT at http://localhost:8080 (host :8080 -> node
       # :30080 via the extraPortMapping). No port-forward needed.
       - name: deploy SUT
+        env:
+          SKIP_IMAGE_BUILD: "1"
         run: make e2e-up
 
       # PROBE (informational, non-blocking): can the agent's in-pod CRIU actually
@@ -119,13 +167,19 @@ jobs:
         # runner. The job itself is still bounded by the workflow default.
         run: go test -tags=e2e -timeout=30m -v ./test/...
 
-      - name: install web deps
-        working-directory: web
-        run: npm ci
-
-      - name: install Playwright browser
-        working-directory: web
-        run: npx playwright install --with-deps chromium
+      - name: install Playwright browser (collect background install)
+        run: |
+          rc_file="$RUNNER_TEMP/playwright-install.rc"
+          for _ in $(seq 1 180); do
+            [ -f "$rc_file" ] && break
+            sleep 5
+          done
+          cat "$RUNNER_TEMP/playwright-install.log" || true
+          if [ -f "$rc_file" ] && [ "$(cat "$rc_file")" = 0 ]; then
+            exit 0
+          fi
+          echo "::warning::background Playwright install did not finish cleanly — retrying in the foreground"
+          cd web && npx playwright install --with-deps chromium
 
       - name: browser e2e (playwright)
         working-directory: web

@@ -240,7 +240,7 @@ mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="pane
 
 여정 하나 = `docs/journeys/<journey-id>/index.html` 하나. 페이지가 지켜야 할 마크업 규약은
 [`../journeys/README.md`](../journeys/README.md) 에 있고, 그 규약과 아래 표의 정합성은
-`tools/journey-prototype.test.mjs` 가 CI(`docs-journey-mockup`)에서 집행합니다.
+`tools/journey-prototype.test.mjs` 가 CI(`ci` 워크플로의 `journey-prototype` 잡)에서 집행합니다.
 **페이지가 없는 여정도 반드시 `⏳ 예정` 또는 `⚪ 예외 등재` 로 이 표에 선언돼 있어야 합니다** —
 선언되지 않은 여정이 있으면 CI가 실패합니다(침묵으로 누락을 감출 수 없습니다).
 
