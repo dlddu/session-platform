@@ -25,6 +25,10 @@ type fakeIdP struct {
 	clientID  string
 	challenge string
 	username  string
+	// basicAuth records whether the last token request authenticated with
+	// HTTP Basic, and formClient the client_id it sent in the form.
+	basicAuth  bool
+	formClient string
 }
 
 func newFakeIdP(t *testing.T, clientID string) *fakeIdP {
@@ -63,6 +67,8 @@ func newFakeIdP(t *testing.T, clientID string) *fakeIdP {
 	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
+		_, _, f.basicAuth = r.BasicAuth()
+		f.formClient = r.Form.Get("client_id")
 		sum := sha256.Sum256([]byte(r.Form.Get("code_verifier")))
 		if r.Form.Get("code") != "abc" || b64(sum[:]) != f.challenge {
 			http.Error(w, `{"error":"invalid_grant"}`, http.StatusBadRequest)
@@ -96,6 +102,10 @@ func (f *fakeIdP) idToken(t *testing.T) string {
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 func newServer(t *testing.T) (*httptest.Server, *fakeIdP) {
+	return newServerWithSecret(t, "s3cret")
+}
+
+func newServerWithSecret(t *testing.T, secret string) (*httptest.Server, *fakeIdP) {
 	t.Helper()
 	var app *httptest.Server
 	idp := newFakeIdP(t, "session-platform")
@@ -103,7 +113,7 @@ func newServer(t *testing.T) (*httptest.Server, *fakeIdP) {
 	app = httptest.NewServer(mux)
 	t.Cleanup(app.Close)
 	a, err := New(Config{
-		Issuer: idp.srv.URL, ClientID: "session-platform", ClientSecret: "s3cret",
+		Issuer: idp.srv.URL, ClientID: "session-platform", ClientSecret: secret,
 		RedirectURL: app.URL + "/api/v1/auth/callback", CookieKey: []byte(strings.Repeat("k", 32)),
 	})
 	if err != nil {
@@ -164,6 +174,21 @@ func TestSignInFlowSetsSessionAndRedirectsBack(t *testing.T) {
 	res.Body.Close()
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("after logout: %d, want 401", res.StatusCode)
+	}
+}
+
+func TestPublicClientSendsNoClientAuthentication(t *testing.T) {
+	app, idp := newServerWithSecret(t, "")
+	c := client(t)
+	res, err := c.Get(app.URL + "/api/v1/auth/login?return=/access")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := readAll(res); body != "landing" {
+		t.Fatalf("public client sign-in landed on %s: %d %q", res.Request.URL, res.StatusCode, body)
+	}
+	if idp.basicAuth || idp.formClient != "session-platform" {
+		t.Fatalf("token request: basic auth = %v, form client_id = %q; want none and the client id", idp.basicAuth, idp.formClient)
 	}
 }
 
@@ -228,6 +253,9 @@ func TestSafeReturn(t *testing.T) {
 func TestNewRejectsIncompleteConfig(t *testing.T) {
 	if _, err := New(Config{Issuer: "https://idp", ClientID: "c", ClientSecret: "s", RedirectURL: "https://x/cb", CookieKey: []byte("short")}); err == nil {
 		t.Fatal("short cookie key accepted")
+	}
+	if _, err := New(Config{Issuer: "https://idp", ClientID: "c", RedirectURL: "https://x/cb", CookieKey: make([]byte, 32)}); err != nil {
+		t.Fatalf("public client (no secret) refused: %v", err)
 	}
 	if _, err := New(Config{ClientID: "c", ClientSecret: "s", RedirectURL: "https://x/cb", CookieKey: make([]byte, 32)}); err == nil {
 		t.Fatal("missing issuer accepted")

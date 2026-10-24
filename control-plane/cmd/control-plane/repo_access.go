@@ -89,7 +89,7 @@ func openRepoAccess(ctx context.Context, cfg repoAccessConfig) (repoAccess, erro
 		return ra, nil
 	}
 	if ra.auth == nil {
-		return ra, errors.New("REPO_ACCESS_DB_PATH needs OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, OIDC_REDIRECT_URL and OIDC_COOKIE_KEY")
+		return ra, errors.New("REPO_ACCESS_DB_PATH needs OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_REDIRECT_URL and OIDC_COOKIE_KEY (OIDC_CLIENT_SECRET only for a confidential client)")
 	}
 	store, err := repoaccess.Open(ctx, cfg.dbPath)
 	if err != nil {

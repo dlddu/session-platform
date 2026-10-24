@@ -31,8 +31,10 @@ const (
 )
 
 type Config struct {
-	Issuer       string
-	ClientID     string
+	Issuer   string
+	ClientID string
+	// ClientSecret is empty for a public client (Authelia
+	// `token_endpoint_auth_method: none`); PKCE is what binds the code then.
 	ClientSecret string
 	// RedirectURL must be registered with the provider and point at
 	// /api/v1/auth/callback on the control plane's public origin.
@@ -61,7 +63,7 @@ type Auth struct {
 func New(cfg Config) (*Auth, error) {
 	var missing []string
 	for name, v := range map[string]string{
-		"issuer": cfg.Issuer, "client id": cfg.ClientID, "client secret": cfg.ClientSecret, "redirect URL": cfg.RedirectURL,
+		"issuer": cfg.Issuer, "client id": cfg.ClientID, "redirect URL": cfg.RedirectURL,
 	} {
 		if strings.TrimSpace(v) == "" {
 			missing = append(missing, name)
@@ -247,11 +249,17 @@ func (a *Auth) client(ctx context.Context) (*oauth2.Config, error) {
 		return nil, err
 	}
 	a.prov = prov
+	endpoint := prov.Endpoint()
+	if a.cfg.ClientSecret == "" {
+		// Auto-detection would try HTTP Basic with an empty password first,
+		// which a provider expecting no client authentication rejects.
+		endpoint.AuthStyle = oauth2.AuthStyleInParams
+	}
 	a.oauth = &oauth2.Config{
 		ClientID:     a.cfg.ClientID,
 		ClientSecret: a.cfg.ClientSecret,
 		RedirectURL:  a.cfg.RedirectURL,
-		Endpoint:     prov.Endpoint(),
+		Endpoint:     endpoint,
 		Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
 	}
 	return a.oauth, nil
