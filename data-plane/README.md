@@ -247,7 +247,7 @@ upstream responses.
 
 The control plane's client-go orchestrator
 (`control-plane/internal/adapter/k8s`) provisions each session pod from this
-image (`DATA_PLANE_IMAGE`; published by `.github/workflows/docker-build-push.yaml`
+image (`DATA_PLANE_IMAGE`; published by the image jobs in `.github/workflows/ci.yml`
 as `…-data-plane`) with no command override — and refuses to mark a session
 `active` until the attach stream opens. The in-code fallback image remains a
 generic `alpine:3.20`, which cannot pass the shell readiness probe: real

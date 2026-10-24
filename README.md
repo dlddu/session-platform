@@ -245,26 +245,36 @@ gitignored.
 
 ## CI
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs lint + unit (Go),
-typecheck + build (web), the in-process integration harness, the real-apiserver
-envtest conflict suite, and both runtime image builds on every PR.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) is the single CI entry
+point (push to `main`, every PR, `workflow_dispatch`). A `changes` job decides
+which path-scoped jobs apply; the rest always run:
 
-[`.github/workflows/e2e.yml`](.github/workflows/e2e.yml) runs the kind-based
-e2e suites (Go API + Playwright) on PRs touching `control-plane/`, `data-plane/`,
-`web/`, `deploy/`, `k8s/`, `scripts/e2e/`, `Makefile`, or that workflow itself,
-and on demand (`workflow_dispatch`);
-Playwright reports/traces upload as artifacts.
+- **every run** — the static docs ↔ code gates (e2e fidelity allowlist, render
+  fidelity, comment-policy ledger, scenario ↔ e2e mapping), lint + unit (Go),
+  typecheck + build (web), the in-process integration harness, the
+  real-apiserver envtest conflict suite, and the GHCR image publish (see
+  Deployment).
+- **e2e** — calls the reusable
+  [`.github/workflows/e2e.yml`](.github/workflows/e2e.yml) (kind SUT, Go API +
+  Playwright) on PRs touching `control-plane/`, `data-plane/`, `web/`,
+  `deploy/`, `k8s/`, `scripts/e2e/`, `Makefile`, or the workflows, and on
+  `workflow_dispatch`; Playwright reports/traces upload as artifacts.
+- **journey prototype** — the user-journey ↔ mockup gate (`tools/`), on changes
+  to `docs/journeys/`, `docs/user-journeys/`, `docs/mockups/README.md`,
+  `docs/index.html`, `docs/doc-structure-state.md`, `tools/`, or the workflow.
+
+Path-scoped jobs that do not apply show as *skipped* rather than missing.
 
 ## Deployment
 
 The cluster runs this via GitOps (Flux) from the `flux-cd-apps` repo.
 
-- [`.github/workflows/docker-build-push.yaml`](.github/workflows/docker-build-push.yaml)
-  publishes the combined control-plane image as
-  `ghcr.io/dlddu/session-platform:{latest,sha}` and the multi-workload agent as
-  `ghcr.io/dlddu/session-platform-data-plane:{latest,sha}` on pushes to `main`
-  (and builds/pushes for matching pull requests) that touch `control-plane/`,
-  `data-plane/`, `web/`, or the workflow itself.
+- The image jobs in [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+  publish the combined control-plane image as
+  `ghcr.io/dlddu/session-platform:<sha>` and the multi-workload agent as
+  `ghcr.io/dlddu/session-platform-data-plane:<sha>` for every PR (head SHA, used
+  by preview environments) and every push to `main`; on `main` the `pin` job
+  then commits that SHA into `k8s/deployment.yaml`. There is no `latest` tag.
 - [`k8s/`](k8s/) holds the cluster manifests Flux applies: the `control-plane`
   Deployment + Service (port 80 → 8080), control-plane RBAC (pods + configmaps
   + leases), and the data-plane ServiceAccount with a cluster-wide built-in

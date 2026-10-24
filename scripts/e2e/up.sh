@@ -5,7 +5,8 @@
 # Leases in the cluster, so there is no separate state-store deployment to wait
 # on.
 #
-#   scripts/e2e/up.sh        # create cluster (if needed) + build + load + deploy
+#   scripts/e2e/up.sh                     # create cluster (if needed) + build + load + deploy
+#   SKIP_IMAGE_BUILD=1 scripts/e2e/up.sh  # same, but images are already built locally
 #
 # Idempotent: if the cluster already exists (e.g. created by helm/kind-action in
 # CI) the create step is skipped and only build/load/deploy/wait run. Pair with
@@ -41,13 +42,26 @@ else
   kind create cluster --config deploy/kind-config.yaml
 fi
 
-echo "e2e: building image $IMAGE"
-make docker
+# SKIP_IMAGE_BUILD=1: both images are already in the local docker image store
+# (CI builds them with buildx and its layer cache, .github/workflows/e2e.yml),
+# so only check they exist and load them. Unset, this script builds them itself.
+SKIP_BUILD="${SKIP_IMAGE_BUILD:-0}"
+
+if [ "$SKIP_BUILD" = 1 ]; then
+  echo "e2e: SKIP_IMAGE_BUILD=1 — using prebuilt $IMAGE"
+  docker image inspect "$IMAGE" >/dev/null
+else
+  echo "e2e: building image $IMAGE"
+  make docker
+fi
 
 echo "e2e: loading image into kind cluster '$CLUSTER'"
 kind load docker-image "$IMAGE" --name "$CLUSTER"
 
-if [ "$DP_IMAGE" = "session-platform/data-plane:dev" ]; then
+if [ "$SKIP_BUILD" = 1 ]; then
+  echo "e2e: SKIP_IMAGE_BUILD=1 — using prebuilt $DP_IMAGE"
+  docker image inspect "$DP_IMAGE" >/dev/null
+elif [ "$DP_IMAGE" = "session-platform/data-plane:dev" ]; then
   echo "e2e: building data plane agent image $DP_IMAGE"
   make docker-data-plane
 else
