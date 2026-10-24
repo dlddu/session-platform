@@ -17,28 +17,12 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
-	"github.com/dlddu/session-platform/control-plane/internal/adminauth"
 	"github.com/dlddu/session-platform/control-plane/internal/api"
 	"github.com/dlddu/session-platform/control-plane/internal/helperauth"
 	"github.com/dlddu/session-platform/control-plane/internal/repoaccess"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
-
-// signedIn admits requests carrying X-Test-User, standing in for the OIDC
-// cookie that adminauth tests cover on their own.
-type signedIn struct{}
-
-func (signedIn) Require(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		name := r.Header.Get("X-Test-User")
-		if name == "" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		next(w, r.WithContext(adminauth.WithUser(r.Context(), adminauth.User{Name: name})))
-	}
-}
 
 // helpers maps bearer tokens to the session whose helper holds them.
 type helpers map[string]string
@@ -76,7 +60,7 @@ func newRepoAccessServer(t *testing.T, enabled bool) repoAccessFixture {
 	}
 	h := helpers{"tok-a": "sess-a"}
 	mux := http.NewServeMux()
-	api.NewRepoAccess(store, signedIn{}, h, mgr, nil).Routes(mux)
+	api.NewRepoAccess(store, h, mgr, nil).Routes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return repoAccessFixture{srv: srv, mgr: mgr, helpers: h}
@@ -94,7 +78,8 @@ func (f repoAccessFixture) do(t *testing.T, c call) (int, map[string]any) {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if c.user != "" {
-		req.Header.Set("X-Test-User", c.user)
+		// What Authelia's forward-auth hands upstream at the ingress.
+		req.Header.Set("Remote-User", c.user)
 	}
 	if c.bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+c.bearer)
@@ -125,20 +110,16 @@ func TestRepoAccessDisabledAnswers503(t *testing.T) {
 	}
 }
 
-func TestRepoAccessAdminRoutesNeedSignIn(t *testing.T) {
+// The management routes have no sign-in of their own (AC-H2): the ingress's
+// forward-auth is the door, and the forwarded user only labels the change.
+func TestRepoAccessAdminRoutesHaveNoSignIn(t *testing.T) {
 	f := newRepoAccessServer(t, true)
-	for _, c := range []call{
-		{method: "GET", path: "/api/v1/repo-access"},
-		{method: "POST", path: "/api/v1/repo-access/allowlist", body: `{"repo":"a/b"}`},
-		{method: "DELETE", path: "/api/v1/repo-access/allowlist?repo=a/b"},
-		{method: "POST", path: "/api/v1/repo-access/requests/rq_x/approve"},
-		{method: "POST", path: "/api/v1/repo-access/requests/rq_x/reject"},
-		// A helper token is no substitute for an operator.
-		{method: "POST", path: "/api/v1/repo-access/allowlist", body: `{"repo":"a/b"}`, bearer: "tok-a"},
-	} {
-		if code, _ := f.do(t, c); code != http.StatusUnauthorized {
-			t.Errorf("%s %s = %d, want 401", c.method, c.path, code)
-		}
+	if code, _ := f.do(t, call{method: "GET", path: "/api/v1/repo-access"}); code != http.StatusOK {
+		t.Fatalf("overview without a forwarded user = %d, want 200", code)
+	}
+	code, e := f.do(t, call{method: "POST", path: "/api/v1/repo-access/allowlist", body: `{"repo":"a/b"}`})
+	if code != http.StatusCreated || e["addedBy"] != "" {
+		t.Fatalf("add without a forwarded user = %d %v", code, e)
 	}
 }
 
@@ -147,7 +128,7 @@ func TestRepoAccessInternalRoutesNeedHelperToken(t *testing.T) {
 	for _, c := range []call{
 		{method: "GET", path: "/api/v1/internal/repo-access/check?repo=a/b"},
 		{method: "GET", path: "/api/v1/internal/repo-access/check?repo=a/b", bearer: "forged"},
-		// An operator cookie does not make a request on a session's behalf.
+		// An operator does not make a request on a session's behalf.
 		{method: "POST", path: "/api/v1/internal/repo-access/requests", body: `{"repo":"a/b","reason":"x"}`, user: "jd"},
 	} {
 		if code, _ := f.do(t, c); code != http.StatusUnauthorized {

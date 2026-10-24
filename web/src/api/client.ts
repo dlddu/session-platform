@@ -2,7 +2,6 @@
 // code works behind the Vite dev proxy and the embedded prod build.
 import type {
   AllowlistEntry,
-  AuthUser,
   CreateSessionRequest,
   PlatformConfig,
   ReadResult,
@@ -84,13 +83,6 @@ export const api = {
   /** Archive/checkpoint immediately and reclaim the workload pod. */
   archiveSession: (id: string) =>
     req<Session>(`/sessions/${id}/snapshot`, { method: "POST" }),
-
-  getMe: () => req<AuthUser>("/auth/me", { cache: "no-store" }),
-
-  loginUrl: (returnTo: string) =>
-    `${BASE}/auth/login?return=${encodeURIComponent(returnTo).replace(/%2F/g, "/")}`,
-
-  logout: () => req<void>("/auth/logout", { method: "POST" }),
 
   getRepoAccess: () =>
     req<RepoAccessState>("/repo-access", { cache: "no-store" }).then((r) => ({

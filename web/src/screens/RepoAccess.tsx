@@ -1,22 +1,21 @@
 // mockup: docs/mockups/repo-access.html
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { ApiError, api } from "../api/client";
-import type { AccessRequest, AllowlistEntry, AuthUser, RepoAccessState } from "../api/types";
-import { REPO_ACCESS_PATH, useRepoAccessBadge } from "../app/AppShell";
-import { LockIcon } from "../app/icons";
+import type { AccessRequest, AllowlistEntry, RepoAccessState } from "../api/types";
+import { useRepoAccessBadge } from "../app/AppShell";
 import { useToast } from "../app/Toast";
 import "./RepoAccess.css";
 
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const DISABLED_MESSAGE = "Repo access is not enabled on this deployment.";
-const SIGNIN_UNCONFIGURED_MESSAGE = "Sign-in is not configured on this deployment.";
 
+// No sign-in of its own: the deployment's ingress (Authelia forward-auth) is
+// this screen's door, as for every other screen (docs/prd/repo-access.md AC-H2).
 type Phase =
   | { kind: "loading" }
-  | { kind: "signed-out" }
   | { kind: "disabled"; message: string }
   | { kind: "error"; message: string }
-  | { kind: "ready"; user: AuthUser; data: RepoAccessState };
+  | { kind: "ready"; data: RepoAccessState };
 
 function statusOf(e: unknown): number | null {
   return e instanceof ApiError ? e.status : null;
@@ -133,7 +132,7 @@ function AllowedRow({
     <div className="t-row" data-testid="allowlist-entry">
       <span className="t-repo">{e.repo}</span>
       <span className="t-src">
-        {e.addedBy} ·{" "}
+        {e.addedBy ? <>{e.addedBy} · </> : null}
         {e.source === "request" ? (
           e.requestSessionId ? (
             <>
@@ -156,7 +155,7 @@ function AllowedRow({
   );
 }
 
-function Header({ user, busy, onSignOut }: { user?: AuthUser; busy?: boolean; onSignOut?: () => void }) {
+function Header() {
   return (
     <div className="h-top">
       <div>
@@ -167,14 +166,6 @@ function Header({ user, busy, onSignOut }: { user?: AuthUser; busy?: boolean; on
           read-only. Every clone still needs its own approval.
         </div>
       </div>
-      {user ? (
-        <div className="who">
-          Signed in as <b>{user.user}</b>
-          <button className="btn btn-ghost btn-sm" disabled={busy} onClick={onSignOut}>
-            Sign out
-          </button>
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -197,22 +188,11 @@ export function RepoAccess() {
   );
 
   const load = useCallback(async () => {
-    const [me, access] = await Promise.allSettled([api.getMe(), api.getRepoAccess()]);
-    if (access.status === "rejected" && statusOf(access.reason) === 503) {
-      show({ kind: "disabled", message: DISABLED_MESSAGE });
-    } else if (me.status === "rejected" && statusOf(me.reason) === 503) {
-      show({ kind: "disabled", message: SIGNIN_UNCONFIGURED_MESSAGE });
-    } else if (
-      (me.status === "rejected" && statusOf(me.reason) === 401) ||
-      (access.status === "rejected" && statusOf(access.reason) === 401)
-    ) {
-      show({ kind: "signed-out" });
-    } else if (me.status === "rejected") {
-      show({ kind: "error", message: errorText(me.reason) });
-    } else if (access.status === "rejected") {
-      show({ kind: "error", message: errorText(access.reason) });
-    } else {
-      show({ kind: "ready", user: me.value, data: access.value });
+    try {
+      show({ kind: "ready", data: await api.getRepoAccess() });
+    } catch (e) {
+      if (statusOf(e) === 503) show({ kind: "disabled", message: DISABLED_MESSAGE });
+      else show({ kind: "error", message: errorText(e) });
     }
   }, [show]);
 
@@ -224,70 +204,38 @@ export function RepoAccess() {
     };
   }, [load]);
 
-  const reloadAccess = useCallback(
-    async (user: AuthUser) => {
-      try {
-        show({ kind: "ready", user, data: await api.getRepoAccess() });
-      } catch (e) {
-        const status = statusOf(e);
-        if (status === 401) show({ kind: "signed-out" });
-        else if (status === 503) show({ kind: "disabled", message: DISABLED_MESSAGE });
-        else toast(errorText(e), "warm");
-      }
-    },
-    [show, toast],
-  );
+  const reloadAccess = useCallback(async () => {
+    try {
+      show({ kind: "ready", data: await api.getRepoAccess() });
+    } catch (e) {
+      if (statusOf(e) === 503) show({ kind: "disabled", message: DISABLED_MESSAGE });
+      else toast(errorText(e), "warm");
+    }
+  }, [show, toast]);
 
   const run = useCallback(
-    async (key: string, user: AuthUser, action: () => Promise<unknown>, okMsg: string) => {
+    async (key: string, action: () => Promise<unknown>, okMsg: string) => {
       setBusy(key);
       try {
         await action();
         toast(okMsg);
-        await reloadAccess(user);
+        await reloadAccess();
         return true;
       } catch (e) {
         toast(errorText(e), "warm");
-        const status = statusOf(e);
-        if (status === 401) show({ kind: "signed-out" });
-        else if (status === 404) await reloadAccess(user);
+        if (statusOf(e) === 404) await reloadAccess();
         return false;
       } finally {
         if (alive.current) setBusy(null);
       }
     },
-    [reloadAccess, show, toast],
+    [reloadAccess, toast],
   );
-
-  function signIn() {
-    window.location.assign(api.loginUrl(REPO_ACCESS_PATH));
-  }
 
   if (phase.kind === "loading") {
     return (
       <div className="pad access">
         <div className="empty">Loading…</div>
-      </div>
-    );
-  }
-
-  if (phase.kind === "signed-out") {
-    return (
-      <div className="pad access">
-        <section className="signin" aria-label="Sign in" data-testid="repo-access-signin">
-          <div className="lock">
-            <LockIcon size={24} />
-          </div>
-          <h2>Sign in to manage repo access</h2>
-          <p>
-            Allowing a repository lets sessions clone it with a token minted for that repository
-            alone. Only signed-in users can review requests or change the list.
-          </p>
-          <button className="btn btn-primary" onClick={signIn}>
-            Sign in with Authelia
-          </button>
-          <div className="fine">Sessions and their workspaces stay available without signing in.</div>
-        </section>
       </div>
     );
   }
@@ -314,20 +262,20 @@ export function RepoAccess() {
     );
   }
 
-  const { user, data } = phase;
+  const { data } = phase;
   const now = Date.now();
   const inFlight = busy !== null;
 
   function decide(r: AccessRequest, kind: "approve" | "reject") {
     if (kind === "approve") {
-      run("req:" + r.id, user, () => api.approveRequest(r.id), `${r.repo} allowed (read-only)`);
+      run("req:" + r.id, () => api.approveRequest(r.id), `${r.repo} allowed (read-only)`);
     } else {
-      run("req:" + r.id, user, () => api.rejectRequest(r.id), `Request for ${r.repo} rejected`);
+      run("req:" + r.id, () => api.rejectRequest(r.id), `Request for ${r.repo} rejected`);
     }
   }
 
   function remove(repo: string) {
-    run("rm:" + repo, user, () => api.removeAllowlist(repo), `${repo} removed — next clone will be refused`);
+    run("rm:" + repo, () => api.removeAllowlist(repo), `${repo} removed — next clone will be refused`);
   }
 
   async function add(ev: FormEvent) {
@@ -337,26 +285,14 @@ export function RepoAccess() {
       toast("Use owner/repo", "warm");
       return;
     }
-    if (await run("add", user, () => api.addAllowlist(repo), `${repo} allowed (read-only)`)) {
+    if (await run("add", () => api.addAllowlist(repo), `${repo} allowed (read-only)`)) {
       if (alive.current) setDraft("");
-    }
-  }
-
-  async function signOut() {
-    setBusy("logout");
-    try {
-      await api.logout();
-      show({ kind: "signed-out" });
-    } catch (e) {
-      toast(errorText(e), "warm");
-    } finally {
-      if (alive.current) setBusy(null);
     }
   }
 
   return (
     <div className="pad access">
-      <Header user={user} busy={inFlight} onSignOut={signOut} />
+      <Header />
 
       <div className="summary">
         <div className="chip">
