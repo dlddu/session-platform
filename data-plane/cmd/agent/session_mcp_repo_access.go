@@ -166,18 +166,20 @@ func truncateText(s string, limit int) string {
 // githubTokenMinter returns the token mint that goes through the helper pod's
 // K3s MCP proxy, or nil without one. The proxy holds the K3s MCP token and
 // injects it, so this side sends none.
-func githubTokenMinter(proxyMCPURL string) func(context.Context, string) (string, error) {
+// contents is githubContentsRead for git_clone and githubContentsWrite for
+// git_push — the token is always for that one repository.
+func githubTokenMinter(proxyMCPURL string) func(context.Context, string, string) (string, error) {
 	if strings.TrimSpace(proxyMCPURL) == "" {
 		return nil
 	}
 	client := &http.Client{Timeout: githubTokenTimeout}
-	return func(ctx context.Context, repository string) (string, error) {
-		return githubTokenFromProxy(ctx, client, proxyMCPURL, repository)
+	return func(ctx context.Context, repository, contents string) (string, error) {
+		return githubTokenFromProxy(ctx, client, proxyMCPURL, repository, contents)
 	}
 }
 
-func githubTokenFromProxy(ctx context.Context, client *http.Client, proxyMCPURL, repository string) (string, error) {
-	body, err := githubTokenCallBody([]string{repository})
+func githubTokenFromProxy(ctx context.Context, client *http.Client, proxyMCPURL, repository, contents string) (string, error) {
+	body, err := githubTokenCallBody([]string{repository}, contents)
 	if err != nil {
 		return "", err
 	}

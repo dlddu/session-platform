@@ -500,6 +500,7 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 | `repo-access.md#시나리오 3` | **기능이 kind e2e 에서 꺼져 있다.** AC-H1 의 SQLite 저장소는 replica 1개 배포에서만 켜고 SUT 의 control plane 은 replica 2개다. GitHub App 토큰 발급 대역도 SUT 에 없다. | 없음 | 이 모델 | SUT 에 이 기능을 켠 배포 변형(control plane replica 1개·`Recreate` + K3s MCP 토큰 발급 대역)이 서고 `web/e2e/` 최상위 전용 spec 이 착지하면 이 행을 같은 PR 에서 제거한다. | 단위: `control-plane/internal/helperauth`(audience·서비스 어카운트·파드 UID·역할 라벨), `control-plane/internal/api`(내부 경로 401·운영자 호출로 요청 불가). |
 | `repo-access.md#시나리오 4` | **기능이 kind e2e 에서 꺼져 있다.** AC-H1 의 SQLite 저장소는 replica 1개 배포에서만 켜고 SUT 의 control plane 은 replica 2개다. GitHub App 토큰 발급 대역도 SUT 에 없다. | 없음 | 이 모델 | SUT 에 이 기능을 켠 배포 변형(control plane replica 1개·`Recreate` + K3s MCP 토큰 발급 대역)이 서고 `web/e2e/` 최상위 전용 spec 이 착지하면 이 행을 같은 PR 에서 제거한다. | 단위: `control-plane/internal/api`(요청 중복 합치기·허락·거절·이미 허용됨), `data-plane/cmd/agent`(접근 요청 도구). |
 | `repo-access.md#시나리오 5` | **기능이 kind e2e 에서 꺼져 있다.** AC-H1 의 SQLite 저장소는 replica 1개 배포에서만 켜고 SUT 의 control plane 은 replica 2개다. GitHub App 토큰 발급 대역도 SUT 에 없다. | 없음 | 이 모델 | SUT 에 이 기능을 켠 배포 변형(control plane replica 1개·`Recreate` + K3s MCP 토큰 발급 대역)이 서고 `web/e2e/` 최상위 전용 spec 이 착지하면 이 행을 같은 PR 에서 제거한다. | 단위: `data-plane/cmd/agent`(허용 목록 조회 순서·토큰 범위·URL 범위 헤더·오류 구분). 통합: `control-plane/test/repo_access_orchestrator_test.go`(헬퍼 파드 모양·경계 포트). |
+| `repo-access.md#시나리오 6` | **기능이 kind e2e 에서 꺼져 있다.** AC-H1 의 SQLite 저장소는 replica 1개 배포에서만 켜고 SUT 의 control plane 은 replica 2개다. GitHub App 토큰 발급 대역도 SUT 에 없다. | 없음 | 이 모델 | SUT 에 이 기능을 켠 배포 변형(control plane replica 1개·`Recreate` + K3s MCP 토큰 발급 대역)이 서고 `web/e2e/` 최상위 전용 spec 이 착지하면 이 행을 같은 PR 에서 제거한다. | 단위: `data-plane/cmd/agent`(클론 경로·브랜치 검증, origin·허용 목록 순서, 쓰기 토큰 범위, 거부 구분), 실제 git 대 로컬 smart-HTTP 원격(임시 bare 저장소 경유 푸시·심은 훅 미실행·non-fast-forward 거부). |
 | `shell-workload.md#시나리오 1` | **Playwright 이관 미완료 — kube 관측 의존.** 이 시나리오의 기대 결과는 pod 파일시스템·프로세스 트리·`remotecommand` exec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**이며, 어느 쪽인지는 이 행을 집는 슬라이스가 판정한다. | `control-plane/test/e2e_d1_pty_shell_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_d1_pty_shell_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. 이관을 택하면 관측 경로를 최소 테스트 계측으로 내야 하고, 그것이 제품 동작을 바꾸면 경계를 넘은 것이라 예외로 간다. | `control-plane/test/e2e_d1_pty_shell_test.go` 가 지금 이 시나리오를 온전히 검증한다 — 이관·예외 어느 판정이 나도 그 단언 내용은 옮겨 적을 재료다. |
 | `shell-workload.md#시나리오 2` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_d2_shell_write_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_d2_shell_write_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. 승격 재료가 이미 있다 — `web/e2e/journeys/j5-shell-interaction.spec.ts` 가 이 시나리오의 화면을 훑는다(규칙 2 를 맞춰 시나리오 단위로 쪼개 최상위로 올린다). |
 | `shell-workload.md#시나리오 3` | **Playwright 이관 미완료.** 매칭 공간 축소로 Go 파일이 매칭 단위에서 빠졌다. 검증 자체는 그 파일에 그대로 있다. | `control-plane/test/e2e_d3_read_cursor_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_d3_read_cursor_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. | control-plane HTTP API 만 쓰므로 Playwright `request` 픽스처로 이관 가능하다. 승격 재료가 이미 있다 — `web/e2e/journeys/j5-shell-interaction.spec.ts` 가 이 시나리오의 화면을 훑는다(규칙 2 를 맞춰 시나리오 단위로 쪼개 최상위로 올린다). |
@@ -557,9 +558,9 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 ## 집계
 
 <!-- scenario-summary:begin -->
-- 시나리오 총계: 42
+- 시나리오 총계: 43
 - 예외: 3
-- 유예: 38
+- 유예: 39
 - 시나리오 매칭 파일: 1
 - 공백: 0
 <!-- scenario-summary:end -->

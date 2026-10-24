@@ -155,7 +155,7 @@ func (c sessionMCPConfig) cloneFromAllowList(ctx context.Context, logger *slog.L
 func (c sessionMCPConfig) cloneAllowed(ctx context.Context, logger *slog.Logger, repo githubRepo, target, branch, dest string) string {
 	mintErr := errors.New("this helper pod has no K3s MCP proxy")
 	if c.mintGitHubToken != nil {
-		token, err := c.mintGitHubToken(ctx, repo.name)
+		token, err := c.mintGitHubToken(ctx, repo.name, githubContentsRead)
 		if err == nil {
 			header, encoded := githubBasicAuthHeader(token)
 			if err := c.runClone(ctx, logger, target, branch, dest, scopedAuthEnv(repo.scope, header)); err != nil {
