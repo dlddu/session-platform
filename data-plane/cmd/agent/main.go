@@ -48,10 +48,9 @@ const (
 	sessionMCPURLEnv = "SESSION_MCP_URL"
 	// The MCP container's own environment (AC-F6). Keep in sync with
 	// control-plane/internal/adapter/k8s (ApprovalGateway*EnvVar, SessionIDEnvVar).
-	approvalGatewayURLEnv    = "APPROVAL_GATEWAY_URL"
-	approvalGatewayAPIKeyEnv = "APPROVAL_GATEWAY_API_KEY"
-	approvalGatewayUserIDEnv = "APPROVAL_GATEWAY_USER_ID"
-	sessionIDEnv             = "SESSION_ID"
+	approvalGatewayURLEnv       = "APPROVAL_GATEWAY_URL"
+	approvalGatewayTokenFileEnv = "APPROVAL_GATEWAY_TOKEN_FILE"
+	sessionIDEnv                = "SESSION_ID"
 	// sharedVolumeDirEnv is the session's shared volume (AC-F5), read by both
 	// halves of the pair: the MCP container spills large approved responses
 	// there and the workload container's agent reads them back. Keep in sync
@@ -152,8 +151,7 @@ func main() {
 		// workload agent's (session_mcp.go).
 		gateway, err := newApprovalGateway(
 			os.Getenv(approvalGatewayURLEnv),
-			os.Getenv(approvalGatewayAPIKeyEnv),
-			os.Getenv(approvalGatewayUserIDEnv),
+			os.Getenv(approvalGatewayTokenFileEnv),
 			os.Getenv(sessionIDEnv),
 		)
 		if err != nil {

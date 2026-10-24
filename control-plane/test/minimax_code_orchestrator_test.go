@@ -27,6 +27,7 @@ func newMiniMaxOrchestrator(t *testing.T, opts ...k8s.Option) (*k8s.ClientOrches
 		k8s.WithWorkloadImage(session.WorkloadTypeMiniMaxCode, miniMaxCodeImage),
 		k8s.WithClaudeCredentialsSecret("claude-provider"),
 		k8s.WithMiniMaxCredentialsSecret("minimax-provider"),
+		k8s.WithApprovalGatewayURL(approvalGatewayURL),
 	}
 	return newReadyOrchestrator(t, append(base, opts...)...)
 }
@@ -239,16 +240,22 @@ func TestMiniMaxCode_K3SMCPProxyHoldsTheToken(t *testing.T) {
 	}
 }
 
-// AC-G6: the session MCP is approval-gated's, gateway triple included.
+// AC-G6: the session MCP is approval-gated's, gateway address and caller token
+// included.
 func TestMiniMaxCode_SessionMCPHoldsTheGateway(t *testing.T) {
 	_, set := startMiniMax(t, "mm08")
 	mcp := container(t, set.helper, k8s.SessionMCPContainerName)
 	if got, _ := envValue(mcp, k8s.SessionIDEnvVar); got != "mm08" {
 		t.Errorf("session MCP session id = %q, want mm08", got)
 	}
-	for _, name := range []string{k8s.ApprovalGatewayURLEnvVar, k8s.ApprovalGatewayAPIKeyEnvVar, k8s.ApprovalGatewayUserIDEnvVar} {
-		if _, _, ok := secretKey(mcp, name); !ok {
-			t.Errorf("session MCP %s is not Secret-backed", name)
+	if set.helper.Spec.ServiceAccountName != k8s.SessionMCPServiceAccountName {
+		t.Errorf("helper service account = %q, want %q", set.helper.Spec.ServiceAccountName, k8s.SessionMCPServiceAccountName)
+	}
+	tokenFile, _ := envValue(mcp, k8s.ApprovalGatewayTokenFileEnvVar)
+	assertGatewayTokenOnlyInMCP(t, set.helper, tokenFile)
+	for _, name := range []string{k8s.ApprovalGatewayURLEnvVar, k8s.ApprovalGatewayTokenFileEnvVar} {
+		if v, ok := envValue(mcp, name); !ok || v == "" {
+			t.Errorf("session MCP %s is unset", name)
 		}
 		for _, pod := range []corev1.Pod{set.workload, set.helper} {
 			for _, c := range pod.Spec.Containers {

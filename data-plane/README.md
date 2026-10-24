@@ -105,13 +105,15 @@ interactive shell and Claude Code workloads.
   (AC-F4). It serves `/healthz` and a JSON-RPC endpoint at `/mcp` that answers
   `initialize`, `ping`, `tools/list` and `tools/call`. It offers one external
   tool, `web_fetch_get`, and every call to it passes the human approval gate
-  (AC-F3): the request is created on the approval gateway named by
+  (AC-F3): the request is created on PocketAide's external approval API at
   `APPROVAL_GATEWAY_URL` under the external identifier
-  `{SESSION_ID}:{requestID}`, and the outbound GET happens only after an
+  `{SESSION_ID}:{requestID}`, authenticated with the helper pod's
+  ServiceAccount token (audience `pocket-aide`) read from
+  `APPROVAL_GATEWAY_TOKEN_FILE`, and the outbound GET happens only after an
   APPROVED decision. A rejection, expiry, poll timeout or gateway outage comes
   back as an `isError` tool result, never as a transport error, so the agent
   reads the refusal and carries on with the session still `active`. **Without
-  the gateway environment the tool list is empty** — a container that cannot ask
+  the gateway URL or a readable token the tool list is empty** — a container that cannot ask
   a human offers nothing rather than reaching out ungated. It keeps no state —
   the helper pod is discarded on freeze and rebuilt on restore.
 - `credential-proxy` holds the provider credentials outside the tool-running

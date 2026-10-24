@@ -61,6 +61,7 @@ func main() {
 		"data_plane_claude_code_image", cfg.dataPlaneClaudeCodeImage,
 		"data_plane_approval_gated_image", cfg.dataPlaneApprovalGatedImage,
 		"data_plane_minimax_code_image", cfg.miniMax.image,
+		"approval_gateway_url", cfg.approvalGatewayURL,
 		"data_plane_shell", cfg.dataPlaneShell,
 		"claude_code_default_model", cfg.claudeCodeDefaultModel,
 		"claude_code_models", len(cfg.claudeCodeModels),
@@ -81,7 +82,7 @@ func main() {
 		k8s.WithWorkloadImage(session.WorkloadTypeMiniMaxCode, cfg.miniMax.image),
 		k8s.WithClaudeCredentialsSecret(cfg.claudeCredentialsSecret),
 		k8s.WithMiniMaxCredentialsSecret(cfg.miniMax.credentialsSecret),
-		k8s.WithApprovalGatewaySecret(cfg.approvalGatewaySecret),
+		k8s.WithApprovalGatewayURL(cfg.approvalGatewayURL),
 		k8s.WithSharedVolume(cfg.sharedVolumeStorageClass, cfg.sharedVolumeSize),
 		k8s.WithCheckpointPrivileged(cfg.criuEnabled))
 	store := configmap.NewStore(client, namespace)
@@ -194,9 +195,9 @@ type config struct {
 	// sessions and their helper pods (AC-F1/AC-F4). Unset means the type is not
 	// deployable here.
 	dataPlaneApprovalGatedImage string
-	// approvalGatewaySecret names the platform Secret whose url/api-key/user-id
-	// keys are projected into the helper pod's MCP container only (AC-F6).
-	approvalGatewaySecret string
+	// approvalGatewayURL is the PocketAide approval API the helper pod's MCP
+	// container asks (AC-F3). Unset leaves approval-gated sessions without tools.
+	approvalGatewayURL string
 	// sharedVolumeStorageClass and sharedVolumeSize size the ReadWriteMany claim
 	// an approval-gated session's two pods share (AC-F5; see WithSharedVolume).
 	// An empty class leaves the volume off: only a deployment that knows which
@@ -297,7 +298,7 @@ func loadConfig() (config, error) {
 		dataPlaneShell:              env("DATA_PLANE_SHELL", ""),
 		dataPlaneClaudeCodeImage:    env("DATA_PLANE_CLAUDE_CODE_IMAGE", ""),
 		dataPlaneApprovalGatedImage: env("DATA_PLANE_APPROVAL_GATED_IMAGE", ""),
-		approvalGatewaySecret:       env("APPROVAL_GATEWAY_SECRET", "approval-gateway-credentials"),
+		approvalGatewayURL:          env("APPROVAL_GATEWAY_URL", ""),
 		sharedVolumeStorageClass:    env("SESSION_SHARED_VOLUME_STORAGE_CLASS", ""),
 		sharedVolumeSize:            sharedVolumeSize,
 		claudeArchiveEnabled:        envBool("CLAUDE_CODE_ARCHIVE_ENABLED", false),

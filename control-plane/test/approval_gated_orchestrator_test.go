@@ -15,12 +15,16 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-const approvalGatedImage = "ghcr.io/dlddu/session-platform-data-plane:approval-gated"
+const (
+	approvalGatedImage = "ghcr.io/dlddu/session-platform-data-plane:approval-gated"
+	approvalGatewayURL = "http://pocket-aide.pocket-aide.svc.cluster.local:8080"
+)
 
 func newApprovalGatedOrchestrator(t *testing.T) (*k8s.ClientOrchestrator, podSet) {
 	t.Helper()
 	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))
+		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
+		k8s.WithApprovalGatewayURL(approvalGatewayURL))
 	started, err := orch.Start(context.Background(), "f1f2",
 		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated})
 	if err != nil {
@@ -135,13 +139,14 @@ func TestApprovalGated_ProvisionsWorkloadAndHelperPod(t *testing.T) {
 	if mcp.Image != approvalGatedImage || proxy.Image != approvalGatedImage {
 		t.Errorf("helper images = %q/%q, want the configured type image %q", mcp.Image, proxy.Image, approvalGatedImage)
 	}
-	// The helper pod calls no Kubernetes API, so it gets no cluster identity —
-	// unlike the workload pod (AC-A1's read-only view role).
-	if set.helper.Spec.ServiceAccountName != "" {
-		t.Errorf("helper service account = %q, want none", set.helper.Spec.ServiceAccountName)
+	// The helper pod calls no Kubernetes API: its identity is the gateway
+	// caller's, never the workload pod's view role, and no apiserver token is
+	// mounted.
+	if set.helper.Spec.ServiceAccountName != k8s.SessionMCPServiceAccountName {
+		t.Errorf("helper service account = %q, want %q", set.helper.Spec.ServiceAccountName, k8s.SessionMCPServiceAccountName)
 	}
 	if set.helper.Spec.AutomountServiceAccountToken == nil || *set.helper.Spec.AutomountServiceAccountToken {
-		t.Error("helper pod must not mount a service-account token")
+		t.Error("helper pod must not mount an apiserver service-account token")
 	}
 }
 
@@ -152,30 +157,22 @@ func TestApprovalGated_CredentialsAreSplitAcrossHelperContainers(t *testing.T) {
 	proxy := container(t, set.helper, k8s.HelperCredentialProxyContainerName)
 	workload := container(t, set.workload, k8s.ContainerName)
 
-	gateway := []struct{ env, key string }{
-		{k8s.ApprovalGatewayURLEnvVar, k8s.ApprovalGatewayURLSecretKey},
-		{k8s.ApprovalGatewayAPIKeyEnvVar, k8s.ApprovalGatewayAPIKeySecretKey},
-		{k8s.ApprovalGatewayUserIDEnvVar, k8s.ApprovalGatewayUserIDSecretKey},
+	if got, _ := envValue(mcp, k8s.ApprovalGatewayURLEnvVar); got != approvalGatewayURL {
+		t.Errorf("MCP container %s = %q, want the configured gateway %q", k8s.ApprovalGatewayURLEnvVar, got, approvalGatewayURL)
 	}
-	for _, g := range gateway {
-		secret, key, ok := secretKey(mcp, g.env)
-		if !ok {
-			t.Errorf("MCP container is missing Secret-backed %s (AC-F6)", g.env)
-			continue
+	tokenFile, ok := envValue(mcp, k8s.ApprovalGatewayTokenFileEnvVar)
+	if !ok || tokenFile == "" {
+		t.Fatalf("MCP container is missing %s (AC-F6)", k8s.ApprovalGatewayTokenFileEnvVar)
+	}
+	for _, name := range []string{k8s.ApprovalGatewayURLEnvVar, k8s.ApprovalGatewayTokenFileEnvVar} {
+		if _, ok := envValue(proxy, name); ok {
+			t.Errorf("%s is also in the proxy container (AC-F6)", name)
 		}
-		if key != g.key {
-			t.Errorf("%s reads Secret key %q, want %q", g.env, key, g.key)
-		}
-		if secret == "" {
-			t.Errorf("%s reads from an unnamed Secret", g.env)
-		}
-		if _, _, ok := secretKey(proxy, g.env); ok {
-			t.Errorf("%s is also projected into the proxy container; the gateway key must not be there (AC-F6)", g.env)
-		}
-		if _, ok := envValue(workload, g.env); ok {
-			t.Errorf("%s reached the workload pod; the agent must not be able to address the gateway (AC-F6)", g.env)
+		if _, ok := envValue(workload, name); ok {
+			t.Errorf("%s reached the workload pod; the agent must not be able to address the gateway (AC-F6)", name)
 		}
 	}
+	assertGatewayTokenOnlyInMCP(t, set.helper, tokenFile)
 
 	for _, provider := range []struct{ env, key string }{
 		{k8s.AnthropicBaseURLEnvVar, k8s.ClaudeCodeBaseURLSecretKey},
@@ -286,7 +283,8 @@ func TestApprovalGated_HelperPodIsReclaimedWhenTheWorkloadPodFails(t *testing.T)
 	// Now the workload pod fails *after* the helper pod is Ready: an invalid
 	// model is rejected when its spec is built.
 	orch, cs = newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))
+		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
+		k8s.WithApprovalGatewayURL(approvalGatewayURL))
 	_, err := orch.Start(context.Background(), "f5f5", k8s.WorkloadSpec{
 		Type:  session.WorkloadTypeApprovalGated,
 		Model: "not a valid model name",
@@ -302,7 +300,8 @@ func TestApprovalGated_HelperPodIsReclaimedWhenTheWorkloadPodFails(t *testing.T)
 // AC-B2 for this type, with AC-F4's helper pod.
 func TestApprovalGated_RestoreProvisionsAFreshPair(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))
+		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
+		k8s.WithApprovalGatewayURL(approvalGatewayURL))
 	restored, err := orch.RestoreInto(context.Background(), "f6f6", "s3://bucket/archive.tar",
 		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated})
 	if err != nil {
@@ -404,5 +403,50 @@ func TestApprovalGatedHelperContainersAreStartableUnderTheirOwnBoundary(t *testi
 	}
 	if got := strings.Join(mcp.ReadinessProbe.Exec.Command, " "); !strings.Contains(got, "8092") {
 		t.Errorf("session MCP probe = %q, want it to check the MCP port", got)
+	}
+}
+
+// The caller token is a projected ServiceAccount token for the gateway's
+// audience, mounted into the MCP container and nowhere else in the pod.
+func assertGatewayTokenOnlyInMCP(t *testing.T, helper corev1.Pod, tokenFile string) {
+	t.Helper()
+	volumeName := ""
+	for _, v := range helper.Spec.Volumes {
+		if v.Projected == nil {
+			continue
+		}
+		for _, src := range v.Projected.Sources {
+			if src.ServiceAccountToken == nil {
+				continue
+			}
+			volumeName = v.Name
+			if src.ServiceAccountToken.Audience != k8s.ApprovalGatewayTokenAudience {
+				t.Errorf("projected token audience = %q, want %q", src.ServiceAccountToken.Audience, k8s.ApprovalGatewayTokenAudience)
+			}
+			if !strings.HasSuffix(tokenFile, "/"+src.ServiceAccountToken.Path) {
+				t.Errorf("token file %q does not end in the projected path %q", tokenFile, src.ServiceAccountToken.Path)
+			}
+		}
+	}
+	if volumeName == "" {
+		t.Fatal("helper pod projects no service-account token for the gateway")
+	}
+	for _, c := range helper.Spec.Containers {
+		mounted := false
+		for _, m := range c.VolumeMounts {
+			if m.Name != volumeName {
+				continue
+			}
+			mounted = true
+			if !m.ReadOnly {
+				t.Errorf("%s mounts the gateway token read-write", c.Name)
+			}
+			if !strings.HasPrefix(tokenFile, m.MountPath+"/") {
+				t.Errorf("token file %q is outside the mount %q", tokenFile, m.MountPath)
+			}
+		}
+		if mounted != (c.Name == k8s.SessionMCPContainerName) {
+			t.Errorf("container %s: gateway token mounted = %v", c.Name, mounted)
+		}
 	}
 }

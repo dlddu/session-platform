@@ -3,9 +3,9 @@
 # 이것은 승인된 모킹 예외가 **아니다.** 정의의 EXT 배제 조항이 그대로 걸린다 — 정적 문서를 내는
 # 평문 http 원본은 클러스터에 실물로 세울 수 있고, 세울 수 있으면 EXT 를 쓸 수 없다. 같은 근거로
 # `deploy/minio.yaml`(S3 의 실물 구현)과 `deploy/plugin-marketplace-git.yaml`(진짜 git 원격)이
-# 허용목록 밖에 있다. 반대로 `e2e-anthropic-fake.yaml`·`e2e-approval-gateway-fake.yaml` 이 등재된
-# 것은 그쪽에는 세울 실물이 아예 없기 때문이다(그 서비스의 본체가 모델이고, 승인 API 서버는 PRD 가
-# 지목한 참조 구현에 없다). 여기서 대신하는 것은 **아무것도 없다**: 도구는 프로덕션 코드 그대로
+# 허용목록 밖에 있다(승인 게이트웨이 PocketAide 도 같은 이유로 실물이다 — `e2e-pocket-aide.yaml`).
+# 반대로 `e2e-anthropic-fake.yaml` 이 등재된 것은 그쪽에는 세울 실물이 아예 없기 때문이다(그
+# 서비스의 본체가 모델이다). 여기서 대신하는 것은 **아무것도 없다**: 도구는 프로덕션 코드 그대로
 # `http.DefaultClient` 로 GET 하고, 이 원본은 그 GET 을 프로덕션 서버가 하는 일 그대로 받는다.
 #
 # 왜 평문 http 인가: MCP 컨테이너의 fetch 는 시스템 루트만 신뢰하는 기본 클라이언트이고 그
@@ -13,7 +13,7 @@
 # 여기서는 할 수 없다 — helper pod spec 이 넣는 env 에 CA 자리가 없다). #129 로 `validateFetchTarget`
 # 이 `http` 와 `https` 를 함께 받게 되면서 그 고리가 끊겼다: 평문 http 원본에는 **검증할 인증서가
 # 애초에 없다.** 같은 `session-mcp` 컨테이너가 이미 평문 http 인클러스터 주소로 나가고 있다
-# (`$APPROVAL_GATEWAY_URL` = `http://approval-gateway-fake:8080`).
+# (`$APPROVAL_GATEWAY_URL` = `http://pocket-aide.pocket-aide.svc.cluster.local:8080`).
 #
 # 호출 관찰도 치환을 들이지 않는다 — **원본 자신의 액세스 로그**가 그 GET 을 센다. `/access-log`
 # 는 그 로그를 JSON 으로 읽는 창구일 뿐이고, 자기 자신과 `/healthz` 는 기록하지 않는다. 그래야

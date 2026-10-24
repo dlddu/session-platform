@@ -63,17 +63,21 @@ type f3OriginEntry struct {
 
 type f3Session struct {
 	typedSession
-	cs  kubernetes.Interface
-	cfg *rest.Config
-	ns  string
+	cs       kubernetes.Interface
+	cfg      *rest.Config
+	ns       string
+	approver *pocketAideApprover
 }
 
 func newF3Session(t *testing.T) f3Session {
 	t.Helper()
 	cs, cfg, ok := kubeClient(t)
 	if !ok {
-		t.Skip("no cluster access; the gate is driven through the helper pod")
+		t.Skip("no cluster access; the approver reaches PocketAide through a port-forward")
 	}
+	// Logged in and registered before the session exists, so the gate's first
+	// request is never refused for want of a caller.
+	approver := newPocketAideApprover(t, cs, cfg)
 	status, s := createTyped(t, map[string]any{
 		"name": uniqueName(t), "workloadType": "approval-gated",
 	})
@@ -85,38 +89,23 @@ func newF3Session(t *testing.T) f3Session {
 			t.Logf("cleanup delete %s: status=%d body=%s", s.ID, resp.StatusCode, raw)
 		}
 	})
-	return f3Session{typedSession: s, cs: cs, cfg: cfg, ns: sessionNamespace()}
+	return f3Session{typedSession: s, cs: cs, cfg: cfg, ns: sessionNamespace(), approver: approver}
 }
 
-func (f f3Session) operator(t *testing.T, method, route, body string) string {
+// The wait marker is written as the request is created, so the row can lag it
+// by one PocketAide round trip.
+func (f f3Session) eventuallyPending(t *testing.T, externalID string) pocketAideRequest {
 	t.Helper()
-	helpers := helperPodsFor(t, f.cs, f.ns, f.ID)
-	if len(helpers) != 1 {
-		t.Fatalf("approval-gated session %s has %d helper pods, want exactly 1", f.ID, len(helpers))
-	}
-	script := `curl -sS --fail-with-body --max-time 20 -X "$1" ` +
-		`-H 'Content-Type: application/json' --data "$3" "$APPROVAL_GATEWAY_URL$2"`
-	return f4Sh(t, f.cs, f.cfg, f.ns, helpers[0].Name, sessionMCPContainer, script, method, route, body)
-}
-
-// Absent is "" rather than a failure: until the CLI reaches the tool there is
-// legitimately no record, and that is not the same answer as "decided".
-func (f f3Session) gatewayStatus(t *testing.T, externalID string) string {
-	t.Helper()
-	raw := f.operator(t, http.MethodGet, "/operator/requests", "")
-	var records []struct {
-		ExternalID string `json:"externalId"`
-		Status     string `json:"status"`
-	}
-	if err := json.Unmarshal([]byte(raw), &records); err != nil {
-		t.Fatalf("decode the gateway stand-in's request list: %v raw=%s", err, raw)
-	}
-	for _, r := range records {
-		if r.ExternalID == externalID {
-			return r.Status
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if r, ok := f.approver.pendingByExternalID(t, externalID); ok {
+			return r
 		}
+		if time.Now().After(deadline) {
+			t.Fatalf("PocketAide shows no pending request %s to the approver within 30s", externalID)
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
-	return ""
 }
 
 // originHits is the origin's own access log, read from inside the very
@@ -155,7 +144,7 @@ func (f f3Session) eventuallyFetched(t *testing.T) []f3OriginEntry {
 			return hits
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("nothing reached %s%s within %s of the approval — the gateway "+
+			t.Fatalf("nothing reached %s%s within %s of the approval — PocketAide "+
 				"settled APPROVED, so what is missing is the outbound call itself",
 				f3OriginBase, f3DocPath(f.ID), f3FetchBudget)
 		}
@@ -183,10 +172,6 @@ func f3Marker(t *testing.T, buf, prefix string) (tool, externalID string) {
 
 func TestApprovalGatedApprovalPath_WriteReturnsBeforeTheGateAndTheWaitIsAnnounced(t *testing.T) {
 	f := newF3Session(t)
-
-	// One stand-in serves the whole cluster and defaultStatus is mutable state
-	// on it, so this is what makes the wait below independent of what ran before.
-	f.operator(t, http.MethodPost, "/operator/policy", `{"defaultStatus":"PENDING"}`)
 
 	// Opened before the write, not after: the stream has to be attached before
 	// the round trip starts or the bytes it misses are the ones compared below.
@@ -225,8 +210,17 @@ func TestApprovalGatedApprovalPath_WriteReturnsBeforeTheGateAndTheWaitIsAnnounce
 	}
 	t.Logf("write returned in %s; the gate was still waiting at %s", writeTook, time.Since(started))
 
-	if got := f.gatewayStatus(t, externalID); got != "PENDING" {
-		t.Fatalf("the gateway holds request %s as %q, want PENDING before anyone decides", externalID, got)
+	request := f.eventuallyPending(t, externalID)
+	if request.Status != "PENDING" {
+		t.Fatalf("PocketAide holds request %s as %q, want PENDING before anyone decides", externalID, request.Status)
+	}
+	// The row the approver sees is the one the helper pod's code built: named
+	// for this platform, and describing the very URL the agent asked for.
+	if request.RequesterName != "session-platform" {
+		t.Fatalf("the request names its requester %q, want session-platform", request.RequesterName)
+	}
+	if !strings.Contains(request.Context, f3OriginBase+f3DocPath(f.ID)) {
+		t.Fatalf("the approval context %q does not name the URL the tool would fetch", request.Context)
 	}
 
 	// The gate's whole point, from the upstream's side: while the request is
@@ -266,8 +260,7 @@ func TestApprovalGatedApprovalPath_WriteReturnsBeforeTheGateAndTheWaitIsAnnounce
 		}
 	}
 
-	f.operator(t, http.MethodPost, "/operator/decide",
-		`{"externalId":"`+externalID+`","status":"APPROVED"}`)
+	f.approver.approve(t, request.ID)
 
 	approved := f3EventuallyMarker(t, f.ID, f3ApprovedPrefix)
 	decidedTool, decidedID := f3Marker(t, approved.Payload, f3ApprovedPrefix)
@@ -285,8 +278,8 @@ func TestApprovalGatedApprovalPath_WriteReturnsBeforeTheGateAndTheWaitIsAnnounce
 	if n := strings.Count(approved.Payload, f3ApprovedPrefix); n != 1 {
 		t.Fatalf("the buffer carries %d approval decisions, want exactly 1", n)
 	}
-	if got := f.gatewayStatus(t, externalID); got != "APPROVED" {
-		t.Fatalf("the gateway holds request %s as %q after the decision, want APPROVED", externalID, got)
+	if got := f.approver.get(t, request.ID).Status; got != "APPROVED" {
+		t.Fatalf("PocketAide holds request %s as %q after the decision, want APPROVED", externalID, got)
 	}
 
 	// And now the other side of the gate: the approval is what lets the call
