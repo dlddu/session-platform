@@ -85,23 +85,15 @@ func (c sessionMCPConfig) callGitClone(ctx context.Context, logger *slog.Logger,
 	})
 	if outcome.Decision != approvalApproved {
 		logger.Info("approval refused", "tool", gitCloneTool, "decision", string(outcome.Decision))
-		return mcpToolError(fmt.Sprintf("git clone request %s", strings.ToLower(string(outcome.Decision)))), nil
+		return mcpToolError(fmt.Sprintf("clone refused at approval: git clone request %s", strings.ToLower(string(outcome.Decision)))), nil
 	}
 
 	logger.Info("approved, cloning", "tool", gitCloneTool, "path", dest)
 	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		return mcpToolError("prepare the shared volume directory: " + err.Error()), nil
 	}
-	clone := c.clone
-	if clone == nil {
-		clone = cloneRepository
-	}
-	if err := clone(ctx, target, branch, dest); err != nil {
-		// spillBody publishes only complete files for the same reason.
-		if rmErr := os.RemoveAll(dest); rmErr != nil {
-			logger.Error("could not remove the failed clone", "tool", gitCloneTool, "path", dest, "err", rmErr)
-		}
-		return mcpToolError("clone failed: " + err.Error()), nil
+	if failure := c.cloneApproved(ctx, logger, target, branch, dest); failure != "" {
+		return mcpToolError(failure), nil
 	}
 
 	payload, err := json.Marshal(map[string]any{
@@ -116,6 +108,69 @@ func (c sessionMCPConfig) callGitClone(ctx context.Context, logger *slog.Logger,
 	}
 	logger.Info("cloned onto the shared volume", "tool", gitCloneTool, "path", dest)
 	return mcpToolText(string(payload)), nil
+}
+
+func (c sessionMCPConfig) cloneApproved(ctx context.Context, logger *slog.Logger, target, branch, dest string) string {
+	repo, isGitHub := githubRepoOf(target)
+	if !isGitHub || c.repoAccess == nil {
+		if err := c.runClone(ctx, logger, target, branch, dest, nil); err != nil {
+			return "clone failed: " + err.Error()
+		}
+		return ""
+	}
+
+	allowed, checkErr := c.repoAccess.check(ctx, repo.fullName())
+	if checkErr != nil {
+		logger.Error("allow list check failed; trying an anonymous clone", "tool", gitCloneTool, "repo", repo.fullName(), "err", checkErr)
+	} else {
+		logger.Info("allow list checked", "tool", gitCloneTool, "repo", repo.fullName(), "allowed", allowed)
+	}
+
+	if checkErr == nil && allowed {
+		if c.mintGitHubToken == nil {
+			return fmt.Sprintf("token could not be issued for %s: this helper pod has no K3s MCP proxy", repo.fullName())
+		}
+		token, err := c.mintGitHubToken(ctx, repo.name)
+		if err != nil {
+			logger.Error("GitHub token could not be issued", "tool", gitCloneTool, "repo", repo.fullName(), "err", err)
+			return fmt.Sprintf("token could not be issued for %s: %s", repo.fullName(), err.Error())
+		}
+		header, encoded := githubBasicAuthHeader(token)
+		if err := c.runClone(ctx, logger, target, branch, dest, scopedAuthEnv(repo.scope, header)); err != nil {
+			reason := redactSecrets(err.Error(), header, encoded, token)
+			logger.Error("private clone failed", "tool", gitCloneTool, "repo", repo.fullName(), "err", reason)
+			return fmt.Sprintf("repository not found or no permission: %s is on the allow list, but the clone with its "+
+				"issued token failed: %s", repo.fullName(), reason)
+		}
+		return ""
+	}
+
+	err := c.runClone(ctx, logger, target, branch, dest, nil)
+	switch {
+	case err == nil:
+		return ""
+	case checkErr != nil:
+		return fmt.Sprintf("clone failed: %s (the allow list could not be checked: %s)", err.Error(), checkErr.Error())
+	default:
+		return fmt.Sprintf("repository %s is not on the allow list, and an anonymous clone failed: %s. "+
+			"If it is private, ask for access with %s.", repo.fullName(), err.Error(), requestRepoAccessTool)
+	}
+}
+
+// runClone leaves nothing at dest when it fails; spillBody publishes only
+// complete files for the same reason.
+func (c sessionMCPConfig) runClone(ctx context.Context, logger *slog.Logger, target, branch, dest string, env []string) error {
+	clone := c.clone
+	if clone == nil {
+		clone = cloneRepository
+	}
+	err := clone(ctx, target, branch, dest, env)
+	if err != nil {
+		if rmErr := os.RemoveAll(dest); rmErr != nil {
+			logger.Error("could not remove the failed clone", "tool", gitCloneTool, "path", dest, "err", rmErr)
+		}
+	}
+	return err
 }
 
 // clonePath is where this tool's artifacts go — no segment of it is the
@@ -188,7 +243,7 @@ func cloneArgs(target, branch, dest string) []string {
 
 // cloneRepository is the real clone, and the seam sessionMCPConfig.clone
 // replaces in tests — the same arrangement fetchURL has for web_fetch_get.
-func cloneRepository(ctx context.Context, target, branch, dest string) error {
+func cloneRepository(ctx context.Context, target, branch, dest string, env []string) error {
 	ctx, cancel := context.WithTimeout(ctx, cloneTimeout)
 	defer cancel()
 
@@ -198,6 +253,7 @@ func cloneRepository(ctx context.Context, target, branch, dest string) error {
 	// /etc/gitconfig cannot answer in place of the prompt.
 	cmd.Env = append(os.Environ(),
 		"GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "GCM_INTERACTIVE=never", "GIT_CONFIG_NOSYSTEM=1")
+	cmd.Env = append(cmd.Env, env...)
 	stderr := &boundedBuffer{limit: maxCloneErrorBytes}
 	cmd.Stdout = nil
 	cmd.Stderr = stderr

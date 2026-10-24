@@ -393,6 +393,305 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+  /auth/me:
+    get:
+      summary: The signed-in operator (docs/prd/repo-access.md, AC-H2)
+      operationId: getMe
+      tags: [repo-access]
+      security: [{ adminCookie: [] }]
+      responses:
+        "200":
+          description: Signed in
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthUser" }
+        "401":
+          description: Not signed in
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Repo access (or sign-in) is not enabled on this deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /auth/login:
+    get:
+      summary: Start OIDC sign-in (authorization code + PKCE)
+      operationId: login
+      tags: [repo-access]
+      parameters:
+        - name: return
+          in: query
+          required: false
+          description: Same-origin path to land on afterwards; anything else becomes `/`.
+          schema: { type: string, example: /access }
+      responses:
+        "302":
+          description: Redirect to the identity provider
+        "502":
+          description: Identity provider unreachable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Repo access (or sign-in) is not enabled on this deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /auth/callback:
+    get:
+      summary: OIDC redirect target; sets the operator cookie and returns to the saved path
+      operationId: loginCallback
+      tags: [repo-access]
+      responses:
+        "302":
+          description: Signed in; redirect to the `return` path
+        "400":
+          description: Sign-in was not started here, expired, or its state does not match
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          description: Not signed in
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /auth/logout:
+    post:
+      summary: Clear the operator cookie
+      operationId: logout
+      tags: [repo-access]
+      responses:
+        "204":
+          description: Signed out
+  /repo-access:
+    get:
+      summary: Allow list and pending requests (AC-H1/AC-H4)
+      operationId: getRepoAccess
+      tags: [repo-access]
+      security: [{ adminCookie: [] }]
+      responses:
+        "200":
+          description: Current state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RepoAccessState" }
+        "401":
+          description: Not signed in
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Repo access (or sign-in) is not enabled on this deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /repo-access/allowlist:
+    post:
+      summary: Add a repository to the allow list
+      operationId: addAllowlist
+      tags: [repo-access]
+      security: [{ adminCookie: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RepoRef" }
+      responses:
+        "201":
+          description: Added
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AllowlistEntry" }
+        "200":
+          description: Already on the list; the existing entry is unchanged
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AllowlistEntry" }
+        "400":
+          description: Not an `owner/repo`, or a malformed body
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          description: Not signed in
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Repo access (or sign-in) is not enabled on this deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      summary: Remove a repository from the allow list (idempotent)
+      operationId: removeAllowlist
+      tags: [repo-access]
+      security: [{ adminCookie: [] }]
+      parameters:
+        - name: repo
+          in: query
+          required: true
+          schema: { type: string, example: dlddu/infrastructure }
+      responses:
+        "204":
+          description: Not on the list any more
+        "400":
+          description: Not an `owner/repo`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          description: Not signed in
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Repo access (or sign-in) is not enabled on this deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /repo-access/requests/{requestId}/approve:
+    post:
+      summary: Approve a session's request; adds the repository and clears every request for it
+      operationId: approveRequest
+      tags: [repo-access]
+      security: [{ adminCookie: [] }]
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: The allow list entry (the existing one if already allowed)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AllowlistEntry" }
+        "404":
+          description: No such pending request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          description: Not signed in
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Repo access (or sign-in) is not enabled on this deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /repo-access/requests/{requestId}/reject:
+    post:
+      summary: Reject a session's request
+      operationId: rejectRequest
+      tags: [repo-access]
+      security: [{ adminCookie: [] }]
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "204":
+          description: Rejected; the request is gone
+        "404":
+          description: No such pending request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          description: Not signed in
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Repo access (or sign-in) is not enabled on this deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /internal/repo-access/check:
+    get:
+      summary: Whether a repository is allowed (helper pods only, AC-H3)
+      operationId: checkRepoAccess
+      tags: [repo-access-internal]
+      security: [{ helperToken: [] }]
+      parameters:
+        - name: repo
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Verdict for the normalized repository
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [repo, allowed]
+                properties:
+                  repo: { type: string }
+                  allowed: { type: boolean }
+        "400":
+          description: Not an `owner/repo`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          description: Not a helper pod's token for this audience
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Repo access (or sign-in) is not enabled on this deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /internal/repo-access/requests:
+    post:
+      summary: File a request on behalf of the calling helper's session (AC-H4)
+      operationId: requestRepoAccess
+      tags: [repo-access-internal]
+      security: [{ helperToken: [] }]
+      description: >
+        Deduplicated per session and repository: asking again returns the same
+        pending request. An already-allowed repository answers `allowed`
+        without filing anything.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [repo, reason]
+              properties:
+                repo: { type: string }
+                reason: { type: string, maxLength: 500 }
+      responses:
+        "200":
+          description: Request state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [repo, status]
+                properties:
+                  repo: { type: string }
+                  status: { type: string, enum: [pending, allowed] }
+                  requestId: { type: string, description: Set when pending }
+        "400":
+          description: Not an `owner/repo`, or an empty or overlong reason
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          description: Not a helper pod's token for this audience
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Repo access (or sign-in) is not enabled on this deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 components:
   responses:
     RequestEntityTooLarge:
@@ -400,7 +699,24 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
+  securitySchemes:
+    adminCookie:
+      type: apiKey
+      in: cookie
+      name: sp_admin
+      description: Signed session cookie set by /auth/callback after OIDC sign-in.
+    helperToken:
+      type: http
+      scheme: bearer
+      description: >
+        Projected service-account token of a session's helper pod, audience
+        `session-platform`, verified with TokenReview.
   parameters:
+    RequestId:
+      name: requestId
+      in: path
+      required: true
+      schema: { type: string, example: rq_0123456789abcdef }
     SessionId:
       name: id
       in: path
@@ -658,3 +974,49 @@ components:
       type: object
       properties:
         error: { type: string }
+    AuthUser:
+      type: object
+      required: [user]
+      properties:
+        user: { type: string, description: preferred_username, else email, else subject }
+        email: { type: string }
+    RepoRef:
+      type: object
+      additionalProperties: false
+      required: [repo]
+      properties:
+        repo:
+          type: string
+          description: "`owner/repo`; case and a trailing `.git` are normalized away"
+          example: dlddu/infrastructure
+    AllowlistEntry:
+      type: object
+      required: [repo, addedBy, source, addedAt]
+      properties:
+        repo: { type: string }
+        addedBy: { type: string }
+        source: { type: string, enum: [manual, request] }
+        requestSessionId: { type: string, description: Set when source is request }
+        addedAt: { type: string, format: date-time }
+    AccessRequest:
+      type: object
+      required: [id, repo, sessionId, reason, requestedAt, alreadyAllowed]
+      properties:
+        id: { type: string }
+        repo: { type: string }
+        sessionId: { type: string }
+        sessionName: { type: string, description: Absent once the session is gone }
+        workloadType: { $ref: "#/components/schemas/WorkloadType" }
+        reason: { type: string }
+        requestedAt: { type: string, format: date-time }
+        alreadyAllowed: { type: boolean }
+    RepoAccessState:
+      type: object
+      required: [allowlist, requests]
+      properties:
+        allowlist:
+          type: array
+          items: { $ref: "#/components/schemas/AllowlistEntry" }
+        requests:
+          type: array
+          items: { $ref: "#/components/schemas/AccessRequest" }

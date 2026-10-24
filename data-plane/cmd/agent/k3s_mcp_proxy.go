@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 )
 
@@ -56,8 +57,11 @@ func newK3SMCPProxy(rawURL, token string, logger *slog.Logger) (*k3sMCPProxy, er
 	return newK3SMCPProxyWithTransport(rawURL, token, logger, transport)
 }
 
-// k3sMCPProxy is the proxy's handler plus, when it holds a token, the
-// marketplace bootstrap the caller starts (minimax_marketplace.go).
+// k3sMCPProxy is the proxy's handler plus, when it holds a token and a
+// marketplace directory, the marketplace bootstrap the caller starts
+// (minimax_marketplace.go). Only minimax-code sets the directory; an
+// approval-gated helper pod runs this proxy for the session MCP's token mint
+// alone (AC-H5).
 type k3sMCPProxy struct {
 	http.Handler
 	seeder *miniMaxMarketplaceSeeder
@@ -99,7 +103,7 @@ func newK3SMCPProxyWithTransport(rawURL, token string, logger *slog.Logger, tran
 		_, _ = w.Write(health)
 	})
 	result := &k3sMCPProxy{Handler: mux}
-	if upstream != nil {
+	if upstream != nil && strings.TrimSpace(os.Getenv(miniMaxMarketplaceDirEnv)) != "" {
 		result.seeder = newMiniMaxMarketplaceSeeder(upstream, mcpPath, logger)
 		mux.HandleFunc(miniMaxPluginSeedPath, result.seeder.serveSeed)
 	} else {

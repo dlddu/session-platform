@@ -76,3 +76,34 @@ export interface WriteResult {
   session: Session;
   path: string;
 }
+
+export interface AuthUser {
+  user: string;
+  email?: string;
+}
+
+export type AllowlistSource = "manual" | "request";
+
+export interface AllowlistEntry {
+  repo: string;
+  addedBy: string;
+  source: AllowlistSource;
+  requestSessionId?: string;
+  addedAt: string;
+}
+
+export interface AccessRequest {
+  id: string;
+  repo: string;
+  sessionId: string;
+  sessionName?: string;
+  workloadType?: string;
+  reason: string;
+  requestedAt: string;
+  alreadyAllowed: boolean;
+}
+
+export interface RepoAccessState {
+  allowlist: AllowlistEntry[];
+  requests: AccessRequest[];
+}

@@ -1,6 +1,8 @@
 // The session MCP's tool surface (AC-F3): `web_fetch_get` and `git_clone`
-// behind the approval gate, and `ping`, which answers without one because it
-// reaches nothing.
+// behind the approval gate, `ping`, which answers without one because it
+// reaches nothing, and `request_repo_access`, which answers without one because
+// a person in the control plane decides what it asks for (AC-H4,
+// session_mcp_repo_access.go).
 //
 // `web_fetch_get`'s name, arguments and response shape are the reference
 // implementation's (dlddu/pure-agent, mcp-server/src/tools/web-fetch-get.ts),
@@ -53,7 +55,11 @@ type sessionMCPConfig struct {
 	// fetch performs the approved outbound call.
 	fetch func(ctx context.Context, target string) (*http.Response, error)
 	// clone performs the approved clone (session_mcp_git.go).
-	clone func(ctx context.Context, target, branch, dest string) error
+	clone func(ctx context.Context, target, branch, dest string, env []string) error
+	// repoAccess is nil where the deployment has no allow list (AC-H1).
+	repoAccess *repoAccessClient
+	// mintGitHubToken is nil without a K3s MCP proxy.
+	mintGitHubToken func(ctx context.Context, repository string) (string, error)
 	// notices carries the wait and its decision to whoever is tailing, which in
 	// a real session is the workload pod's agent (session_mcp_notice_tail.go).
 	notices *noticeFeed
@@ -64,13 +70,15 @@ type sessionMCPConfig struct {
 	sharedDir string
 }
 
-func newSessionMCPConfig(gateway *approvalGateway, sharedDir string) sessionMCPConfig {
+func newSessionMCPConfig(gateway *approvalGateway, sharedDir string, repoAccess *repoAccessClient, k3sProxyMCPURL string) sessionMCPConfig {
 	return sessionMCPConfig{
-		gateway:   gateway,
-		fetch:     fetchURL,
-		clone:     cloneRepository,
-		notices:   newNoticeFeed(),
-		sharedDir: strings.TrimSpace(sharedDir),
+		gateway:         gateway,
+		fetch:           fetchURL,
+		clone:           cloneRepository,
+		repoAccess:      repoAccess,
+		mintGitHubToken: githubTokenMinter(k3sProxyMCPURL),
+		notices:         newNoticeFeed(),
+		sharedDir:       strings.TrimSpace(sharedDir),
 	}
 }
 
@@ -83,7 +91,20 @@ func (c sessionMCPConfig) toolDefinitions() []any {
 	if !c.gated() {
 		return []any{}
 	}
-	return []any{
+	cloneDescription := "Clone a public git repository into this session's shared volume. Every call needs " +
+		"human approval before it leaves the session, and the clone happens only if the request was " +
+		"approved. The destination directory is chosen by this server and returned in the result."
+	cloneURLDescription := "The http or https URL of a public git repository."
+	if c.repoAccess != nil {
+		cloneDescription = "Clone a git repository into this session's shared volume: any public repository, " +
+			"and a private GitHub repository (https://github.com/owner/repo) that a person has put on the allow " +
+			"list — use " + requestRepoAccessTool + " to ask for one. Every call still needs human approval " +
+			"before it leaves the session, and the clone happens only if the request was approved. The " +
+			"destination directory is chosen by this server and returned in the result."
+		cloneURLDescription = "The http or https URL of a public git repository, or https://github.com/owner/repo " +
+			"for a private repository on the allow list."
+	}
+	tools := []any{
 		map[string]any{
 			"name": webFetchGetTool,
 			"description": "Fetch a URL with GET. Every call needs human approval before " +
@@ -101,16 +122,14 @@ func (c sessionMCPConfig) toolDefinitions() []any {
 			},
 		},
 		map[string]any{
-			"name": gitCloneTool,
-			"description": "Clone a public git repository into this session's shared volume. Every call needs " +
-				"human approval before it leaves the session, and the clone happens only if the request was " +
-				"approved. The destination directory is chosen by this server and returned in the result.",
+			"name":        gitCloneTool,
+			"description": cloneDescription,
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"url": map[string]any{
 						"type":        "string",
-						"description": "The http or https URL of a public git repository.",
+						"description": cloneURLDescription,
 					},
 					"branch": map[string]any{
 						"type":        "string",
@@ -132,6 +151,30 @@ func (c sessionMCPConfig) toolDefinitions() []any {
 			},
 		},
 	}
+	if c.repoAccess != nil {
+		tools = append(tools, map[string]any{
+			"name": requestRepoAccessTool,
+			"description": "Ask for a private GitHub repository to be put on the allow list, so that " + gitCloneTool +
+				" can clone it. It records a request and returns at once; a person decides it in the control " +
+				"plane's Repo access screen, and nothing opens until then. Needs no approval.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"repo": map[string]any{
+						"type":        "string",
+						"description": "The repository as owner/repo.",
+					},
+					"reason": map[string]any{
+						"type":        "string",
+						"description": fmt.Sprintf("Why this session needs it, for the person deciding (at most %d characters).", maxRepoAccessReasonChars),
+					},
+				},
+				"required":             []any{"repo", "reason"},
+				"additionalProperties": false,
+			},
+		})
+	}
+	return tools
 }
 
 // callTool runs one tools/call. The returned value is normally an MCP tool
@@ -149,7 +192,7 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 		}
 	}
 	switch call.Name {
-	case webFetchGetTool, gitCloneTool, pingTool:
+	case webFetchGetTool, gitCloneTool, pingTool, requestRepoAccessTool:
 	default:
 		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: fmt.Sprintf("no tool named %q", call.Name)}
 	}
@@ -162,6 +205,9 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 	}
 	if call.Name == gitCloneTool {
 		return c.callGitClone(ctx, logger, call.Arguments)
+	}
+	if call.Name == requestRepoAccessTool {
+		return c.callRequestRepoAccess(ctx, logger, call.Arguments)
 	}
 
 	var args struct {

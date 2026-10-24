@@ -27,6 +27,7 @@
 | [`agent-workspace.html`](./agent-workspace.html) | Agent session workspace (활성 `claude-code` 세션 작업) | **`STP-prompt-submit`, `STP-response-watch`, `STP-conversation-carry`, `STP-agent-freeze-resume`, `STP-freeze-now`** | V8, V3, V2 (보조 V1) | 미연결 — 인라인 임의 토큰 |
 | [`gated-workspace.html`](./gated-workspace.html) | Gated agent session workspace (활성 `approval-gated` 세션 작업 · 워크로드 파드 + 헬퍼 파드) | **`STP-gated-prompt-submit`, `STP-approval-wait`, `STP-gated-result`, `STP-freeze-now`** | V8, V3, V2 (보조 V1) | 미연결 — 인라인 임의 토큰 |
 | [`restore.html`](./restore.html) | Resume from checkpoint (`shell` CRIU 복원) | **`STP-restore-resume`(`shell`)** (보조: `STP-auto-freeze`) | V3, V2 | 미연결 — 인라인 임의 토큰 |
+| [`repo-access.html`](./repo-access.html) | Repo access — control plane (비공개 레포 허용 목록 · 접근 요청 승인 · 로그인 안내) | **`STP-access-review`, `STP-access-decide`** | V8, V1 | 미연결 — 인라인 임의 토큰 |
 
 > **타입별 작업 화면이 셋으로 갈립니다 (2026-08-08 → 2026-09-03)**: `workspace.html`은 `shell` 타입,
 > `agent-workspace.html`은 `claude-code` 타입, `gated-workspace.html`은 `approval-gated` 타입 전용입니다.
@@ -37,18 +38,18 @@
 > 참고: `workspace.html`의 session shell 콘솔은 2026-07-01 쉘 명령 기준으로 갱신됨(옛 key/value write 예시 → `$ ls` / `$ npm run build` 등 쉘 입력·출력, 복원 시 env·cwd 보존 시연). `JRN-shell-interaction`과 정합.
 > `restore.html` 콘솔도 2026-08-08 같은 기준으로 갱신됨(옛 key/value read/write 예시 제거 — 이전 판의 🟡 위험 해소).
 
-> 6개 mockup 모두 인라인 CSS 변수를 사용 → 전부 **임의 스타일 mockup(🟢)**.
+> 7개 mockup 모두 인라인 CSS 변수를 사용 → 전부 **임의 스타일 mockup(🟢)**.
 > `agent-workspace.html`은 `workspace.html`의, `gated-workspace.html`은 `agent-workspace.html`의 인라인 토큰을
 > 복사해 만들었으므로 겉보기 일관성은 있으나, **시스템에 연결된 것은 아닙니다.**
 >
 > **2026-08-08 (4) 갱신 — 디자인 시스템 정본이 생겼습니다**: [`web/src/design/`](../../web/src/design/README.md)
 > (토큰·프리미티브 `tokens.css`, 컴포넌트·패턴 `web/src/app/shell.css`). 코드가 정본이고 문서는 색인입니다.
-> 다만 mockup 6개는 여전히 그 정본을 참조하지 않고 같은 값을 각자 인라인으로 갖고 있습니다 —
+> 다만 mockup 7개는 여전히 그 정본을 참조하지 않고 같은 값을 각자 인라인으로 갖고 있습니다 —
 > 값은 일치하지만 **연결은 아니므로 "미연결" 상태는 유지**됩니다.
-> 토큰 하나를 바꾸려면 최소 **7**곳 · 최대 **16**곳을 고쳐야 하며, 이 중복이 남은 🟢 위험의 실체입니다.
+> 토큰 하나를 바꾸려면 최소 **7**곳 · 최대 **18**곳을 고쳐야 하며, 이 중복이 남은 🟢 위험의 실체입니다.
 > **하나의 숫자가 아닙니다** — 고칠 곳의 수는 *어느 토큰이냐*에 따라 다릅니다. mockup만 쓰는
 > 토큰(`--rail`·`--idle`·`--resume` 등)은 7곳이고, 문서 포털 허브(`docs/index.html`)와 여정
-> 페이지(`docs/journeys/*/index.html`)까지 복제한 토큰(`--ink`·`--line`·`--text` 등)은 16곳입니다.
+> 페이지(`docs/journeys/*/index.html`)까지 복제한 토큰(`--ink`·`--line`·`--text` 등)은 18곳입니다.
 > **복제는 mockup 밖에도 있습니다** — 전체 목록과 처분은
 > [디자인 시스템 README의 「토큰 복제 원장」](../../web/src/design/README.md#토큰-복제-원장)이
 > 정본이고, 이 두 숫자는 `scripts/check-render-fidelity.py`(R10)가 레포 전수 실측으로 대조합니다.
@@ -64,7 +65,7 @@
 > `scripts/check-render-fidelity.py`(CI `render-fidelity` 잡)가 아래 표를 코드와
 > **양방향 집합 동등성**으로 강제합니다 — 표에 없는 구현 파일도, 코드에 없는 표 행도 실패합니다.
 
-매핑된 구현 파일 = **11**
+매핑된 구현 파일 = **13**
 
 | 구현 파일 | 종류 | 대응 mockup | 근거 | 상태 |
 |-----------|------|-------------|------|------|
@@ -72,10 +73,12 @@
 | `web/src/screens/NewSession.tsx` | screen | `docs/mockups/new-session.html` | 생성 모달 · 워크로드 타입 카드 · 프로비저닝 단계 뷰 | ✅ 매핑 |
 | `web/src/screens/Workspace.tsx` | screen | `docs/mockups/workspace.html`, `docs/mockups/agent-workspace.html`, `docs/mockups/gated-workspace.html` | 한 화면이 `workloadType`에 따라 셋으로 갈린다(`shell` / `claude-code` / `approval-gated`). 뒤의 둘은 실행 모델이 같아 같은 SSE 루프를 쓰고, 갈리는 것은 카피와 `Egress` 패널뿐이다 | ✅ 매핑 (1:N) |
 | `web/src/screens/Restore.tsx` | screen | `docs/mockups/restore.html` | 체크포인트 복원 화면 | ✅ 매핑 |
-| `web/src/app/AppShell.tsx` | component | `docs/mockups/index.html` | 뷰포트 + 64px 하단 레일. 6개 mockup이 공유하는 셸이라 정본 출처를 `index.html`로 고정 | ✅ 매핑 |
+| `web/src/screens/RepoAccess.tsx` | screen | `docs/mockups/repo-access.html` | 레포 접근 화면(`/access`, AC-H2). 대기 요청 카드 · 허용 목록 표 · 추가 입력 · 로그인 안내. mockup에 없는 비활성(`503`) 상태는 한 줄 안내로 그린다 | ✅ 매핑 |
+| `web/src/screens/RepoAccess.css` | style | `docs/mockups/repo-access.html` | 이 화면 전용 CSS. 공용 셸과 섞이지 않게 `.access` 아래로 범위를 묶었다 | ✅ 매핑 |
+| `web/src/app/AppShell.tsx` | component | `docs/mockups/index.html` | 뷰포트 + 64px 하단 레일. 7개 mockup이 공유하는 셸이라 정본 출처를 `index.html`로 고정 | ✅ 매핑 |
 | `web/src/app/SessionCard.tsx` | component | `docs/mockups/index.html` | 세션 카드(vitals · freeze ring · snapshot body) | ✅ 매핑 |
 | `web/src/app/StateBadge.tsx` | component | `docs/mockups/index.html` | `session.State` 배지 | ✅ 매핑 |
-| `web/src/app/Toast.tsx` | component | `docs/mockups/index.html` | `toast-wrap` / `toast`. 6개 mockup 공통이라 `index.html`로 고정 | ✅ 매핑 |
+| `web/src/app/Toast.tsx` | component | `docs/mockups/index.html` | `toast-wrap` / `toast`. 7개 mockup 공통이라 `index.html`로 고정 | ✅ 매핑 |
 | `web/src/app/icons.tsx` | component | `docs/mockups/index.html` | 인라인 SVG 아이콘 1:1 이식(이 파일의 기존 주석이 이 규약의 선례) | ✅ 매핑 |
 | `web/src/app/shell.css` | style | `docs/mockups/index.html` | 셸·공용 컴포넌트 CSS. `tokens.css`·`icons.tsx`와 같은 규약으로 `index.html`을 정본 출처로 고정하고, 화면별 패널 대조는 아래 「패널 구조 차집합」이 담당 | ✅ 매핑 |
 | `web/src/app/DeleteSessionDialog.tsx` | component | — | 삭제 확인 대화상자. **SPA에만 있고 대응 mockup이 없다**(위 「미시각화 단계 메모」의 `STP-delete-confirm` ❌와 같은 사실) | ❌ 대응 mockup 없음 |
@@ -97,10 +100,11 @@
 | mockup | 구현 신호 (`git grep -F`) | 비고 |
 |--------|---------------------------|------|
 
-**현재 비어 있습니다.** `gated-workspace.html`이 마지막 항목이었고, SPA가 `approval-gated`를
-구현하면서 위 매핑 표의 `Workspace.tsx` 행으로 옮겨갔습니다 — 게이트가 구현 신호
-`approval-gated`의 hit을 잡아 이 이동을 강제했습니다. 표를 지우지 않고 비워 두는 것은
-다음 미구현 mockup이 같은 자리에 등재되게 하기 위해서입니다.
+**현재 비어 있습니다.** `repo-access.html`이 마지막 항목이었고, SPA가 레포 접근 화면을 구현하면서
+위 매핑 표의 `RepoAccess.tsx`·`RepoAccess.css` 행으로 옮겨갔습니다 — 게이트가 구현 신호
+`RepoAccess`의 hit을 잡아 이 이동을 강제했습니다(그 전 항목 `gated-workspace.html`도 구현 신호
+`approval-gated`로 같은 길을 밟았습니다). 표를 지우지 않고 비워 두는 것은 다음 미구현 mockup이
+같은 자리에 등재되게 하기 위해서입니다.
 
 ---
 
@@ -227,13 +231,22 @@ mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="pane
 | `STP-delete-confirm` 삭제 확인 | ❌ | 삭제 확인 대화상자 mockup 없음 (SPA `DeleteSessionDialog`만 존재) |
 | `STP-delete-settled` 삭제 완료 확인 | ❌ | 전용 화면 없음 |
 
-요약: ✅ 18 · ⚠️ 5 · ❌ 7 · ⚪ 3 (총 33단계 / 9여정)
+### `JRN-repo-access` (2026-10-24 신설)
+
+| 단계 | 시각화 | mockup · 근거 |
+|------|:---:|------|
+| `STP-access-request` 에이전트가 레포 접근을 요청 | ⚠️ | `gated-workspace.html` 콘솔이 같은 자리지만 **허용 목록 거부와 접근 요청 마커는 그려져 있지 않다** — 여정 페이지(`journeys/JRN-repo-access/`)가 콘솔 장면으로 먼저 그렸다 |
+| `STP-access-review` 대기 요청 검토 | ✅ | `repo-access.html` Pending requests 카드(레포·요청 세션·이유·시각) + Allowed repositories 표 + 로그인 안내 화면 |
+| `STP-access-decide` 허락·거절 | ✅ | `repo-access.html` 요청 카드의 Allow/Reject, 허용 목록의 Add 입력과 Remove |
+| `STP-private-clone` 허락한 레포를 받아 이어감 | ⚠️ | `gated-workspace.html` 콘솔의 awaiting/approved 마커와 공유 볼륨 행으로 암시 — 비공개 레포라는 표시는 없다 |
+
+요약: ✅ 20 · ⚠️ 7 · ❌ 7 · ⚪ 3 (총 37단계 / 10여정)
 
 ---
 
 ## 여정 → 여정 mockup 페이지 매핑 (`docs/journeys/`)
 
-> ⚠️ **위의 "여정 단계별 시각화 커버리지"(✅ 18 · ⚠️ 5 · ❌ 7 · ⚪ 3)와 다른 지표입니다.**
+> ⚠️ **위의 "여정 단계별 시각화 커버리지"(✅ 20 · ⚠️ 7 · ❌ 7 · ⚪ 3)와 다른 지표입니다.**
 > 저 표의 ✅ 는 *어떤 화면 단위 mockup이 그 단계를 담고 있다* 는 뜻이고,
 > 이 표의 ✅ 는 *그 여정 전용 페이지가 존재한다* 는 뜻입니다. 두 숫자를 섞어 세면
 > 커버리지를 실제보다 높게 읽게 됩니다. 완료 기준으로는 **이 표**를 씁니다.
@@ -255,8 +268,9 @@ mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="pane
 | `JRN-manual-freeze` | `STP-freeze-decision` · `STP-freeze-now` · `STP-freeze-confirm` | [`journeys/JRN-manual-freeze/`](../journeys/JRN-manual-freeze/index.html) | ✅ 페이지 있음 |
 | `JRN-session-deletion` | `STP-delete-intent` · `STP-delete-confirm` · `STP-delete-settled` | [`journeys/JRN-session-deletion/`](../journeys/JRN-session-deletion/index.html) | ✅ 페이지 있음 |
 | `JRN-approval-gated-work` | `STP-gated-prompt-submit` · `STP-approval-wait` · `STP-approval-decide` · `STP-gated-result` | [`journeys/JRN-approval-gated-work/`](../journeys/JRN-approval-gated-work/index.html) | ✅ 페이지 있음 |
+| `JRN-repo-access` | `STP-access-request` · `STP-access-review` · `STP-access-decide` · `STP-private-clone` | [`journeys/JRN-repo-access/`](../journeys/JRN-repo-access/index.html) | ✅ 페이지 있음 |
 
-현재 **8 / 8**(예외 1건 제외한 판정 대상 8개 전부). `⏳ 예정` 은 0건이고,
+현재 **9 / 9**(예외 1건 제외한 판정 대상 9개 전부). `⏳ 예정` 은 0건이고,
 `⚪` 1건은 [`../doc-structure-state.md`](../doc-structure-state.md) 의 "수용된 위험" 등재분입니다.
 
 **여정 간 분기의 미승급 링크**: `⏳ 예정` 여정을 대상으로 하는 분기는 기존 페이지에서
@@ -324,6 +338,8 @@ mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="pane
 
 ## 마지막 갱신
 
+- **2026-10-24 (2)** — **레포 접근 화면 SPA 구현**: `web/src/screens/RepoAccess.tsx`(+ `RepoAccess.css`)가 `repo-access.html`을 `/access` 경로로 구현해, 이 mockup을 「구현이 없는 mockup」에서 화면 ↔ mockup 매핑 표로 옮겼다(매핑된 구현 파일 11→13). mockup 수·여정 커버리지는 변하지 않았다.
+- **2026-10-24** — **`JRN-repo-access` 신설에 따른 mockup·여정 페이지 추가**: 비공개 레포 허용 목록과 접근 요청(PRD `repo-access`, AC-H1~H5)을 위해 화면 단위 mockup `repo-access.html`(대기 요청 카드·허용 목록 표·추가 입력·로그인 안내)과 여정 페이지 `journeys/JRN-repo-access/`(세션 콘솔 → 레포 접근 화면 → 허락 → 비공개 클론)를 신설했다. SPA 구현이 아직 없어 `repo-access.html`은 「구현이 없는 mockup」에 구현 신호 `RepoAccess`로 등재했다. 여정 9→10, 단계 33→37, mockup 6→7, 요약 ✅18→20 / ⚠️5→7, 여정 페이지 8/8→9/9. 두 신설 파일을 토큰 복제 원장에 `DUP`로 등재했고 유지비 문구를 게이트 계산값 7~18곳으로 갱신했다.
 - **2026-09-03 (11)** — **여정 mockup lifecycle 클러스터 3종 신설**: `JRN-idle-resume`(4단계) · `JRN-manual-freeze`(3단계) · `JRN-session-deletion`(3단계) 페이지를 신설해 여정 mockup 커버리지가 **2 / 8 → 5 / 8** 이 되었다. 세 여정은 분기표가 서로를 가리켜 한 슬라이스로 묶어야 재작업이 없다. 파일럿 2종이 걸어둔 미승급 링크 6건 중 5건을 실링크로 승급했고(남은 1건은 `JRN-multi-session-switch` 대상), 하네스에 **승급 링크의 페이지 간 딥링크 검증**과 **예외 등재 여정 갈래(`data-branch-excepted`) 검사**를 더했다. **화면 단위 mockup 6종과 위의 커버리지 표는 건드리지 않았다** — 두 층위는 별개 지표다.
 - **2026-09-03 (10)** — **여정 mockup 층위 신설**: 이 문서에 `docs/journeys/` 여정→페이지 매핑 표를 더하고, 여정 페이지 2종(`JRN-session-creation`·`JRN-shell-interaction`)과 마크업 규약(`../journeys/README.md`), 집행 하네스 `tools/journey-prototype.test.mjs` + CI `docs-journey-mockup` 을 신설했다. **화면 단위 mockup 6종과 위의 커버리지 표는 건드리지 않았다** — 두 층위는 별개 지표다.
 - **2026-09-03 (9)** — **보조 파드를 헬퍼 파드 하나로 통합**: 상류에서 MCP와 credential-proxy를 별개 파드가 아니라 **한 헬퍼 파드의 컨테이너 둘**로 확정하여(AC-F4) Egress 패널을 헬퍼 파드 한 항목 + 컨테이너 두 줄로 접고, 자격 증명 행을 "mcp container / proxy container"로, 파드 표기를 둘로 줄였다. **mockup 수·커버리지·요약은 변하지 않는다.** 새 토큰 없이 기존 인라인 클래스만 재사용했다.

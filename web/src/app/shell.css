@@ -55,6 +55,22 @@
   border-radius: 2px;
   background: var(--active);
 }
+.rail-btn .count {
+  position: absolute;
+  top: 4px;
+  right: 3px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--active);
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+}
 .rail-spacer {
   flex: 1;
 }

@@ -98,13 +98,22 @@ func (o *ClientOrchestrator) miniMaxCodePod(container *corev1.Container, model s
 // MCP. approval-gated has one, the provider proxy reading the claude-code
 // Secret (AC-F4). minimax-code has that proxy re-pointed at its own Secret and
 // the K3s MCP proxy (AC-G5, AC-G6).
+//
+// With repo access on (docs/prd/repo-access.md, AC-H5) approval-gated gets a
+// K3s MCP proxy too, on the claude-code Secret's token and without the
+// marketplace: its only caller is the session MCP beside it, which mints
+// per-repository clone tokens through it. helperPolicyPorts keeps its port
+// closed to the workload pod.
 func (o *ClientOrchestrator) helperProxyContainers(workloadType session.WorkloadType, image string) []corev1.Container {
 	provider := o.credentialProxyContainer(HelperCredentialProxyContainerName, image, helperProxyListenAddr, proxyPlacementHelper)
 	if workloadType != session.WorkloadTypeMiniMaxCode {
+		if o.repoAccessEnabled() {
+			return []corev1.Container{provider, o.k3sMCPProxy(image, o.claudeCredentialsSecret, false)}
+		}
 		return []corev1.Container{provider}
 	}
 	o.repointToMiniMaxSecret(&provider)
-	return []corev1.Container{provider, o.miniMaxK3SMCPProxy(image)}
+	return []corev1.Container{provider, o.k3sMCPProxy(image, o.miniMaxCredentialsSecret, true)}
 }
 
 // repointToMiniMaxSecret moves every Secret reference of a credential proxy
@@ -118,21 +127,25 @@ func (o *ClientOrchestrator) repointToMiniMaxSecret(proxy *corev1.Container) {
 	}
 }
 
-// miniMaxK3SMCPProxy is the helper pod container in front of the K3s MCP
-// (AC-G5). It reuses the provider proxy's hardening, helper placement and
-// in-container probe; its workload, port, the one Secret key it reads and the
-// scratch volume its marketplace clone needs differ.
-func (o *ClientOrchestrator) miniMaxK3SMCPProxy(image string) corev1.Container {
+// k3sMCPProxy is the helper pod container in front of the K3s MCP (AC-G5). It
+// reuses the provider proxy's hardening, helper placement and in-container
+// probe; its workload, port, the one Secret key it reads and — for the type
+// whose CLI loads plugins — the scratch volume its marketplace clone needs
+// differ.
+func (o *ClientOrchestrator) k3sMCPProxy(image, secret string, marketplace bool) corev1.Container {
 	port := strconv.Itoa(k3sMCPProxyPort)
 	proxy := o.credentialProxyContainer(MiniMaxK3SMCPProxyContainerName, image, ":"+port, proxyPlacementHelper)
 	proxy.Env = []corev1.EnvVar{
 		{Name: workloadEnvVar, Value: k3sMCPProxyWorkload},
 		{Name: agentAddrEnvVar, Value: ":" + port},
 		{Name: CredentialProxyPlacementEnvVar, Value: proxyPlacementHelper},
-		{Name: MiniMaxMarketplaceDirEnvVar, Value: miniMaxMarketplacePath},
-		optionalSecretEnv(K3SMCPTokenEnvVar, o.miniMaxCredentialsSecret, MiniMaxK3SMCPTokenSecretKey),
 	}
-	proxy.VolumeMounts = []corev1.VolumeMount{{Name: miniMaxMarketplaceVolume, MountPath: miniMaxMarketplacePath}}
+	proxy.VolumeMounts = nil
+	if marketplace {
+		proxy.Env = append(proxy.Env, corev1.EnvVar{Name: MiniMaxMarketplaceDirEnvVar, Value: miniMaxMarketplacePath})
+		proxy.VolumeMounts = []corev1.VolumeMount{{Name: miniMaxMarketplaceVolume, MountPath: miniMaxMarketplacePath}}
+	}
+	proxy.Env = append(proxy.Env, optionalSecretEnv(K3SMCPTokenEnvVar, secret, MiniMaxK3SMCPTokenSecretKey))
 	proxy.ReadinessProbe.Exec.Command = []string{"/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/" + port}
 	return proxy
 }

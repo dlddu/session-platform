@@ -38,7 +38,6 @@ const (
 
 	defaultMiniMaxMarketplaceURL = "https://github.com/dlddu/plugin-marketplace.git"
 	defaultMiniMaxPlugins        = "mcp-servers"
-	defaultMiniMaxMarketplaceDir = "/tmp/session-platform-marketplace"
 
 	miniMaxSeedStateBootstrapping = "bootstrapping"
 	miniMaxSeedStateReady         = "ready"
@@ -99,7 +98,7 @@ func newMiniMaxMarketplaceSeeder(upstream http.Handler, mcpPath string, logger *
 	s := &miniMaxMarketplaceSeeder{
 		marketplaceURL: env(miniMaxMarketplaceURLEnv, defaultMiniMaxMarketplaceURL),
 		plugins:        splitPluginList(env(miniMaxPluginsEnv, defaultMiniMaxPlugins)),
-		workDir:        env(miniMaxMarketplaceDirEnv, defaultMiniMaxMarketplaceDir),
+		workDir:        os.Getenv(miniMaxMarketplaceDirEnv),
 		logger:         logger,
 		clone:          gitCloneMarketplace,
 		backoff:        miniMaxBootstrapBackoff,
@@ -188,8 +187,9 @@ func (s *miniMaxMarketplaceSeeder) serveSeed(w http.ResponseWriter, r *http.Requ
 	_ = json.NewEncoder(w).Encode(bundle)
 }
 
-// serveUnconfiguredSeed answers the route for a proxy without a token: there
-// is no marketplace to read, which is a state, not an outage.
+// serveUnconfiguredSeed answers the route for a proxy without a token or
+// without a marketplace directory: there is no marketplace to read, which is a
+// state, not an outage.
 func serveUnconfiguredSeed(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -204,8 +204,11 @@ func serveUnconfiguredSeed(w http.ResponseWriter, r *http.Request) {
 // handles the K3s MCP token; the proxy injects it exactly as it does for the
 // workload's calls.
 func githubTokenThroughProxy(ctx context.Context, upstream http.Handler, mcpPath string) (string, error) {
-	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"github_app_installation_token","arguments":{"repositories":["plugin-marketplace"],"permissions":{"contents":"read"}}}}`
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, mcpPath, strings.NewReader(body))
+	body, err := githubTokenCallBody([]string{"plugin-marketplace"})
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, mcpPath, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
@@ -216,6 +219,25 @@ func githubTokenThroughProxy(ctx context.Context, upstream http.Handler, mcpPath
 	if rec.status != http.StatusOK {
 		return "", fmt.Errorf("K3s MCP GitHub token request returned status %d", rec.status)
 	}
+	return parseGitHubTokenResponse(rec.body.Bytes())
+}
+
+const githubTokenTool = "github_app_installation_token"
+
+func githubTokenCallBody(repositories []string) ([]byte, error) {
+	return json.Marshal(map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{
+			"name": githubTokenTool,
+			"arguments": map[string]any{
+				"repositories": repositories,
+				"permissions":  map[string]string{"contents": "read"},
+			},
+		},
+	})
+}
+
+func parseGitHubTokenResponse(body []byte) (string, error) {
 	var resp struct {
 		Error  json.RawMessage `json:"error"`
 		Result struct {
@@ -228,7 +250,7 @@ func githubTokenThroughProxy(ctx context.Context, upstream http.Handler, mcpPath
 			} `json:"content"`
 		} `json:"result"`
 	}
-	if err := json.Unmarshal(rec.body.Bytes(), &resp); err != nil {
+	if err := json.Unmarshal(body, &resp); err != nil {
 		return "", errors.New("K3s MCP GitHub token response is not JSON")
 	}
 	if len(resp.Error) > 0 && string(resp.Error) != "null" {

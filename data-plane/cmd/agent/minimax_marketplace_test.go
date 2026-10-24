@@ -234,6 +234,23 @@ func TestK3SMCPProxySeedRoute(t *testing.T) {
 		t.Errorf("unconfigured seed = %d %s", rec.Code, rec.Body.String())
 	}
 
+	// The approval-gated helper pod: a token for the session MCP's token mint,
+	// and no marketplace to stage.
+	t.Setenv(miniMaxMarketplaceDirEnv, "")
+	tokenOnly, err := newK3SMCPProxyWithTransport("", "k3s-token", nil, http.DefaultTransport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokenOnly.seeder != nil {
+		t.Error("a proxy without a marketplace directory has a marketplace bootstrap")
+	}
+	rec = httptest.NewRecorder()
+	tokenOnly.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, miniMaxPluginSeedPath, nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), miniMaxSeedStateUnconfigured) {
+		t.Errorf("seed without a marketplace directory = %d %s", rec.Code, rec.Body.String())
+	}
+
+	t.Setenv(miniMaxMarketplaceDirEnv, t.TempDir())
 	configured, err := newK3SMCPProxyWithTransport("", "k3s-token", nil, http.DefaultTransport)
 	if err != nil {
 		t.Fatal(err)

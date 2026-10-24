@@ -25,7 +25,7 @@
 여정에는 "사용자가 무엇을 하고 무엇을 보고 무엇을 느끼는가"만 적습니다. 이 규칙이 없으면 여정 문서가 PRD 요약본이 되어
 PRD가 바뀔 때마다 조용히 낡습니다.
 
-**4. 구조는 9개 문서가 동일하다.**
+**4. 구조는 10개 문서가 동일하다.**
 섹션 순서·제목을 바꾸지 않습니다. 해당 없는 항목은 지우지 말고 "해당 없음" 또는 `TBD`로 남깁니다.
 
 ### 구 식별자 매핑 (2026-08-30 전환)
@@ -44,6 +44,7 @@ PRD가 바뀔 때마다 조용히 낡습니다.
 | — | `JRN-manual-freeze` | 신설 (2026-08-30) |
 | — | `JRN-session-deletion` | 신설 (2026-08-30) |
 | — | `JRN-approval-gated-work` | 신설 (2026-09-03) |
+| — | `JRN-repo-access` | 신설 (2026-10-24) |
 
 ---
 
@@ -60,8 +61,9 @@ PRD가 바뀔 때마다 조용히 낡습니다.
 | `JRN-manual-freeze` | 다 쓴 세션을 직접 접어두기 | P1 | V2, V3 | 3 | [문서](./JRN-manual-freeze.md) |
 | `JRN-session-deletion` | 끝난 세션을 정리하기 | P1 | V2 (부분) | 3 | [문서](./JRN-session-deletion.md) |
 | `JRN-approval-gated-work` | 밖으로 나가는 일마다 내가 승인하고 맡긴다 | P1 | V8, V3 | 4 | [문서](./JRN-approval-gated-work.md) |
+| `JRN-repo-access` | 에이전트가 비공개 레포를 쓰도록 내가 허락한다 | P1 | V8, V1 | 4 | [문서](./JRN-repo-access.md) |
 
-**총 9개 여정 · 33개 단계.**
+**총 10개 여정 · 37개 단계.**
 
 여정 사이 관계는 두 축으로 읽습니다.
 
@@ -69,6 +71,8 @@ PRD가 바뀔 때마다 조용히 낡습니다.
   `JRN-approval-gated-work`(`approval-gated`)는 같은 자리의 타입별 세 갈래입니다.
   타입을 고르는 순간은 (타입이 셋으로 늘어난 뒤에도) `STP-workload-choice` 하나가 담고, 그것이 V8입니다.
   세 여정은 "무엇을 맡기고 무엇을 보는가"만 다르고, 생성·동결·복원·전환·삭제 경험은 공유합니다.
+  `JRN-repo-access`는 `approval-gated`(와 같은 경계의 `minimax-code`) 갈래에 붙는 곁가지로, 호출 승인 위에
+  "어느 비공개 레포를 열어 줄지"라는 레포 단위의 오래 남는 허락을 더합니다.
 - **수명 축**: 생성(`JRN-session-creation`) → 사용(위 세 여정) → 접기(`JRN-idle-resume` 자동 · `JRN-manual-freeze` 수동)
   → 되살리기(`STP-restore-resume`) → 정리(`JRN-session-deletion`).
 
@@ -77,7 +81,7 @@ PRD가 바뀔 때마다 조용히 낡습니다.
 ## 페르소나
 
 > ⚠️ **검증 필요 (미해결)**: 아래 두 페르소나는 실제 사용자 인터뷰가 아니라 가치 문서·PRD에서 **역으로 추론**한 것입니다.
-> 2026-06-18 최초 작성 이후 실사용자로 검증된 적이 없고, 그 사이 여정이 9개까지 늘었습니다.
+> 2026-06-18 최초 작성 이후 실사용자로 검증된 적이 없고, 그 사이 여정이 10개까지 늘었습니다.
 > 구체 서술에는 `(가정)`을 붙였습니다 — 팀이 먼저 확인해야 할 지점입니다.
 
 ### P1: 멀티세션 작업자
@@ -103,12 +107,12 @@ PRD가 바뀔 때마다 조용히 낡습니다.
 
 | 가치 | 달성하는 여정 | 상태 |
 |---|---|---|
-| V1 세션 격리 | `JRN-session-creation` | ✅ |
+| V1 세션 격리 | `JRN-session-creation`, `JRN-repo-access` | ✅ |
 | V2 유휴 자원 회수 | `JRN-idle-resume`, `JRN-manual-freeze`, `JRN-session-deletion`(부분) | ✅ |
 | V3 끊김 없는 세션 연속성 | `JRN-idle-resume`, `JRN-multi-session-switch`, `JRN-concurrent-access`, `JRN-shell-interaction`, `JRN-agent-prompt-loop`, `JRN-manual-freeze`, `JRN-approval-gated-work` | ✅ |
 | V4 자유로운 멀티세션 전환 | `JRN-multi-session-switch` | ✅ |
 | V5 일관된 세션 상태 | `JRN-session-creation`, `JRN-concurrent-access` | ✅ |
-| V8 목적에 맞는 작업 환경 선택 | `JRN-agent-prompt-loop`, `JRN-approval-gated-work` | ✅ |
+| V8 목적에 맞는 작업 환경 선택 | `JRN-agent-prompt-loop`, `JRN-approval-gated-work`, `JRN-repo-access` | ✅ |
 
 **고아 여정 없음 · 여정 없는 가치 없음.** 단, `JRN-session-deletion`의 가치 연결은 부분적입니다(아래 미해결 항목).
 
@@ -124,7 +128,7 @@ PRD가 바뀔 때마다 조용히 낡습니다.
 ### 🔴 오래 밀려 있는 항목
 
 - **페르소나 미검증**: 위 경고 참고. 실사용자 1~2명 인터뷰로 P1을 확정하거나 폐기해야 합니다.
-  현재 여정 9개·단계 33개가 전부 검증되지 않은 P1 위에 서 있습니다.
+  현재 여정 10개·단계 37개가 전부 검증되지 않은 P1 위에 서 있습니다.
 - **제품명·소유자 미지정**: "Session Pod Platform"은 임시 작업명이고 소유자가 없어 가치 전부가 고아 상태입니다
   (`../values.md` · `../doc-tracker/`).
 
@@ -149,7 +153,7 @@ PRD가 바뀔 때마다 조용히 낡습니다.
   별도 정책(더 짧은 유휴 한계 등)이 필요한지 미결 (`../doc-tracker/`).
 - **동결 트리거 세부 정책**: 60분 한계는 확정(AC-B1·AC-D5)이나 grace period·per-session override,
   장시간 포그라운드 작업 중인 쉘의 동결 여부는 미결 (`../doc-tracker/`).
-- **지표 목표치 전부 `TBD`**: 9개 문서의 지표는 정의(분자/분모)만 확정했고 목표 수치가 없습니다.
+- **지표 목표치 전부 `TBD`**: 10개 문서의 지표는 정의(분자/분모)만 확정했고 목표 수치가 없습니다.
   관측 파이프라인이 붙는 시점에 함께 정해야 합니다.
 
 ### ✅ 해소된 항목 (기록 보존)
