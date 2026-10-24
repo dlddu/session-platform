@@ -37,7 +37,9 @@ const (
 	noBranch = "default"
 )
 
-// callGitClone runs one approved clone. Its ordering is R3's.
+// callGitClone runs one clone. Where the deployment keeps an allow list the
+// list is the gate and no approval is asked (AC-H5); elsewhere every call is
+// approved first. Either way validation comes before anything leaves (R3).
 func (c sessionMCPConfig) callGitClone(ctx context.Context, logger *slog.Logger, arguments json.RawMessage) (any, *jsonRPCError) {
 	var args struct {
 		URL    string `json:"url"`
@@ -58,6 +60,9 @@ func (c sessionMCPConfig) callGitClone(ctx context.Context, logger *slog.Logger,
 	}
 	if c.sharedDir == "" {
 		return mcpToolError("no shared volume is configured for this session, so there is nowhere to clone into"), nil
+	}
+	if c.repoAccess != nil {
+		return c.cloneFromAllowList(ctx, logger, target, branch)
 	}
 
 	requestID, err := newApprovalRequestID()
@@ -92,10 +97,13 @@ func (c sessionMCPConfig) callGitClone(ctx context.Context, logger *slog.Logger,
 	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		return mcpToolError("prepare the shared volume directory: " + err.Error()), nil
 	}
-	if failure := c.cloneApproved(ctx, logger, target, branch, dest); failure != "" {
-		return mcpToolError(failure), nil
+	if err := c.runClone(ctx, logger, target, branch, dest, nil); err != nil {
+		return mcpToolError("clone failed: " + err.Error()), nil
 	}
+	return cloneResult(logger, dest, target, branch)
+}
 
+func cloneResult(logger *slog.Logger, dest, target, branch string) (any, *jsonRPCError) {
 	payload, err := json.Marshal(map[string]any{
 		"success": true,
 		"message": "Repository cloned successfully",
@@ -110,51 +118,62 @@ func (c sessionMCPConfig) callGitClone(ctx context.Context, logger *slog.Logger,
 	return mcpToolText(string(payload)), nil
 }
 
-func (c sessionMCPConfig) cloneApproved(ctx context.Context, logger *slog.Logger, target, branch, dest string) string {
-	repo, isGitHub := githubRepoOf(target)
-	if !isGitHub || c.repoAccess == nil {
-		if err := c.runClone(ctx, logger, target, branch, dest, nil); err != nil {
-			return "clone failed: " + err.Error()
-		}
-		return ""
+func (c sessionMCPConfig) cloneFromAllowList(ctx context.Context, logger *slog.Logger, target, branch string) (any, *jsonRPCError) {
+	repo, ok := githubRepoOf(target)
+	if !ok {
+		return mcpToolError("only https://github.com/<owner>/<repo> repositories on the allow list can be cloned here"), nil
+	}
+	allowed, err := c.repoAccess.check(ctx, repo.fullName())
+	if err != nil {
+		logger.Error("allow list check failed", "tool", gitCloneTool, "repo", repo.fullName(), "err", err)
+		return mcpToolError("the allow list could not be checked, so nothing was cloned: " + err.Error()), nil
+	}
+	if !allowed {
+		logger.Info("not on the allow list", "tool", gitCloneTool, "repo", repo.fullName())
+		return mcpToolError(fmt.Sprintf("repository %s is not on the allow list. Ask for it with %s; a person "+
+			"decides in the control plane, and nothing is cloned until then.", repo.fullName(), requestRepoAccessTool)), nil
 	}
 
-	allowed, checkErr := c.repoAccess.check(ctx, repo.fullName())
-	if checkErr != nil {
-		logger.Error("allow list check failed; trying an anonymous clone", "tool", gitCloneTool, "repo", repo.fullName(), "err", checkErr)
-	} else {
-		logger.Info("allow list checked", "tool", gitCloneTool, "repo", repo.fullName(), "allowed", allowed)
+	requestID, err := newApprovalRequestID()
+	if err != nil {
+		return nil, &jsonRPCError{Code: jsonRPCInternalError, Message: "could not generate a request id"}
 	}
+	dest := c.clonePath(requestID)
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		return mcpToolError("prepare the shared volume directory: " + err.Error()), nil
+	}
+	logger.Info("on the allow list, cloning", "tool", gitCloneTool, "repo", repo.fullName(), "path", dest)
+	if failure := c.cloneAllowed(ctx, logger, repo, target, branch, dest); failure != "" {
+		return mcpToolError(failure), nil
+	}
+	return cloneResult(logger, dest, target, branch)
+}
 
-	if checkErr == nil && allowed {
-		if c.mintGitHubToken == nil {
-			return fmt.Sprintf("token could not be issued for %s: this helper pod has no K3s MCP proxy", repo.fullName())
-		}
+// cloneAllowed falls back to an anonymous clone when no token can be issued:
+// a public repository on the list may sit outside the GitHub App's
+// installation, and the list already said yes to it.
+func (c sessionMCPConfig) cloneAllowed(ctx context.Context, logger *slog.Logger, repo githubRepo, target, branch, dest string) string {
+	mintErr := errors.New("this helper pod has no K3s MCP proxy")
+	if c.mintGitHubToken != nil {
 		token, err := c.mintGitHubToken(ctx, repo.name)
-		if err != nil {
-			logger.Error("GitHub token could not be issued", "tool", gitCloneTool, "repo", repo.fullName(), "err", err)
-			return fmt.Sprintf("token could not be issued for %s: %s", repo.fullName(), err.Error())
+		if err == nil {
+			header, encoded := githubBasicAuthHeader(token)
+			if err := c.runClone(ctx, logger, target, branch, dest, scopedAuthEnv(repo.scope, header)); err != nil {
+				reason := redactSecrets(err.Error(), header, encoded, token)
+				logger.Error("clone with an issued token failed", "tool", gitCloneTool, "repo", repo.fullName(), "err", reason)
+				return fmt.Sprintf("repository not found or no permission: %s is on the allow list, but the clone with its "+
+					"issued token failed: %s", repo.fullName(), reason)
+			}
+			return ""
 		}
-		header, encoded := githubBasicAuthHeader(token)
-		if err := c.runClone(ctx, logger, target, branch, dest, scopedAuthEnv(repo.scope, header)); err != nil {
-			reason := redactSecrets(err.Error(), header, encoded, token)
-			logger.Error("private clone failed", "tool", gitCloneTool, "repo", repo.fullName(), "err", reason)
-			return fmt.Sprintf("repository not found or no permission: %s is on the allow list, but the clone with its "+
-				"issued token failed: %s", repo.fullName(), reason)
-		}
-		return ""
+		mintErr = err
 	}
-
-	err := c.runClone(ctx, logger, target, branch, dest, nil)
-	switch {
-	case err == nil:
-		return ""
-	case checkErr != nil:
-		return fmt.Sprintf("clone failed: %s (the allow list could not be checked: %s)", err.Error(), checkErr.Error())
-	default:
-		return fmt.Sprintf("repository %s is not on the allow list, and an anonymous clone failed: %s. "+
-			"If it is private, ask for access with %s.", repo.fullName(), err.Error(), requestRepoAccessTool)
+	logger.Info("no token issued; trying an anonymous clone", "tool", gitCloneTool, "repo", repo.fullName(), "err", mintErr)
+	if err := c.runClone(ctx, logger, target, branch, dest, nil); err != nil {
+		return fmt.Sprintf("token could not be issued for %s (%s), and an anonymous clone failed: %s",
+			repo.fullName(), mintErr.Error(), err.Error())
 	}
+	return ""
 }
 
 // runClone leaves nothing at dest when it fails; spillBody publishes only

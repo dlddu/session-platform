@@ -134,9 +134,6 @@
       <div class="proto-bar">
         <span class="cap">다른 갈래:</span>
         <button id="btn-already" data-branch-row="3" data-branch-target="STP-private-clone">이미 허용된 레포를 요청함</button>
-        <a href="../JRN-approval-gated-work/index.html#STP-gated-result"
-           data-branch-row="7"
-           data-branch-target="JRN-approval-gated-work#STP-gated-result">공개 레포라 허용 목록 없이 받음</a>
       </div>
     </div>
     <details class="step-meta">
@@ -242,8 +239,6 @@
       <p class="sub">minimax-code · 밖으로 나가는 호출은 모두 승인을 받는다</p>
       <div class="console mono" id="clone-console">
         <div class="dim">git_clone https://github.com/dlddu/reconciler</div>
-        <div class="mark">[session-platform: awaiting approval — git_clone · 761fdbd2:req-4be1c09a]</div>
-        <div class="mark">[session-platform: approval approved — git_clone · 761fdbd2:req-4be1c09a]</div>
         <div class="ok">✓ cloned dlddu/reconciler → /shared/git_clone/req-4be1c09a</div>
         <div>to-be-models.json 에서 활성 모델 27개를 읽었습니다. 감지를 시작합니다.</div>
       </div>
@@ -252,22 +247,26 @@
         <div class="err">✕ dlddu/reconciler 는 비공개 레포이고 허용 목록에 없습니다 — 클론하지 않았습니다.</div>
         <div>허락되지 않았습니다. 이 레포 없이 할 수 있는 일을 정리하겠습니다.</div>
       </div>
+      <div class="console mono" id="clone-down" hidden>
+        <div class="dim">git_clone https://github.com/dlddu/reconciler</div>
+        <div class="err">✕ 허용 목록을 확인할 수 없어 클론하지 않았습니다 — control plane 이 응답하지 않습니다.</div>
+        <div>잠시 뒤 다시 시도하겠습니다.</div>
+      </div>
       <div class="row" style="margin-top:16px" data-journey-end>
         <span class="pill on">완료 — 허락한 레포 위에서 작업이 이어짐</span>
       </div>
       <p class="state-note" data-state-note hidden></p>
       <div class="proto-bar">
         <span class="cap">다른 갈래:</span>
-        <a href="../JRN-approval-gated-work/index.html#STP-gated-result"
-           data-branch-row="6"
-           data-branch-target="JRN-approval-gated-work#STP-gated-result">레포는 허락했지만 호출 승인을 거절함</a>
+        <button id="btn-check-down" data-branch-row="6" data-branch-target="STP-private-clone">허용 목록을 확인할 수 없음</button>
+        <button id="btn-public" data-branch-row="7" data-branch-target="STP-access-request">목록에 없는 공개 레포를 받으려 함</button>
       </div>
     </div>
     <details class="step-meta">
       <summary>이 화면이 담는 여정 단계</summary>
       <dl>
         <dt>단계</dt><dd><code>STP-private-clone</code> 허락한 레포를 받아 이어간다</dd>
-        <dt>터치포인트</dt><dd>승인 게이트 워크스페이스의 출력 콘솔과 공유 작업물 패널 · 외부 승인 게이트웨이</dd>
+        <dt>터치포인트</dt><dd>승인 게이트 워크스페이스의 출력 콘솔과 공유 작업물 패널</dd>
         <dt>관련 AC</dt><dd>AC-H5 (상위 AC-F3·F5)</dd>
       </dl>
     </details>
@@ -320,16 +319,29 @@
     $('who').textContent = v ? 'operator@dlddu · signed in' : 'operator@dlddu';
   }
 
-  function cloneResult(allowed) {
-    $('clone-console').hidden = !allowed;
-    $('clone-refused').hidden = allowed;
+  function cloneResult(state) {
+    $('clone-console').hidden = state !== 'allowed';
+    $('clone-refused').hidden = state !== 'refused';
+    $('clone-down').hidden = state !== 'down';
   }
 
   /* ---------- STP-access-request ---------- */
   $('btn-already').addEventListener('click', function () {
-    cloneResult(true);
+    cloneResult('allowed');
     show('STP-private-clone');
-    noteIn($('clone-console'), '이미 허용된 레포라 요청을 새로 만들지 않았습니다 — 평소의 호출 승인만 거쳐 받았습니다.');
+    noteIn($('clone-console'), '이미 허용된 레포라 요청을 새로 만들지 않았습니다 — 승인 없이 바로 받았습니다.');
+  });
+
+  /* ---------- STP-private-clone ---------- */
+  $('btn-check-down').addEventListener('click', function () {
+    cloneResult('down');
+    show('STP-private-clone');
+    noteIn($('clone-down'), '허용 목록이 유일한 문이라, 확인할 수 없으면 공개 레포라도 클론하지 않습니다.');
+  });
+
+  $('btn-public').addEventListener('click', function () {
+    show('STP-access-request');
+    noteIn($('request-console'), '공개 레포도 허용 목록에 있어야 받습니다 — 없으면 이렇게 요청을 남기고 결정을 기다립니다.');
   });
 
   /* ---------- STP-access-review ---------- */
@@ -352,7 +364,7 @@
 
   /* ---------- STP-access-decide ---------- */
   $('btn-reject').addEventListener('click', function () {
-    cloneResult(false);
+    cloneResult('refused');
     show('STP-private-clone');
     noteIn($('clone-refused'), '요청을 거절했습니다 — 허용 목록은 그대로이고, 에이전트의 다음 클론도 같은 사유로 실패합니다.');
   });
@@ -382,7 +394,7 @@
   Array.prototype.forEach.call(document.querySelectorAll('[data-advance-to]'), function (btn) {
     btn.addEventListener('click', function () {
       if (btn.id === 'btn-open-access') setSignedIn(true);
-      if (btn.id === 'btn-allow') cloneResult(true);
+      if (btn.id === 'btn-allow') cloneResult('allowed');
       show(btn.getAttribute('data-advance-to'));
     });
   });

@@ -96,13 +96,11 @@ func (c sessionMCPConfig) toolDefinitions() []any {
 		"approved. The destination directory is chosen by this server and returned in the result."
 	cloneURLDescription := "The http or https URL of a public git repository."
 	if c.repoAccess != nil {
-		cloneDescription = "Clone a git repository into this session's shared volume: any public repository, " +
-			"and a private GitHub repository (https://github.com/owner/repo) that a person has put on the allow " +
-			"list — use " + requestRepoAccessTool + " to ask for one. Every call still needs human approval " +
-			"before it leaves the session, and the clone happens only if the request was approved. The " +
+		cloneDescription = "Clone a GitHub repository (https://github.com/owner/repo) that a person has put on " +
+			"the allow list into this session's shared volume, public or private. Needs no approval: a " +
+			"repository off the list is refused — use " + requestRepoAccessTool + " to ask for it. The " +
 			"destination directory is chosen by this server and returned in the result."
-		cloneURLDescription = "The http or https URL of a public git repository, or https://github.com/owner/repo " +
-			"for a private repository on the allow list."
+		cloneURLDescription = "https://github.com/owner/repo of a repository on the allow list."
 	}
 	tools := []any{
 		map[string]any{
