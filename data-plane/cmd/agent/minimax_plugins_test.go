@@ -213,8 +213,11 @@ func TestMiniMaxEnsureHomeInstallsMarketplacePlugins(t *testing.T) {
 	plugins := miniMaxPluginsDir(home)
 
 	name, server := pluginServer(t, home, miniMaxSessionPluginName)
-	if name != sessionMCPServerName || server["url"] != "http://10.1.2.3:8092/mcp" || len(server) != 2 {
-		t.Errorf("session MCP server %s = %v, want only type http and the helper MCP URL", name, server)
+	if name != sessionMCPServerName || server["url"] != "http://10.1.2.3:8092/mcp" || len(server) != 3 {
+		t.Errorf("session MCP server %s = %v, want only type http, the helper MCP URL and a timeout", name, server)
+	}
+	if got, _ := server["timeout"].(float64); got < float64((defaultApprovalTimeout + cloneTimeout).Milliseconds()) {
+		t.Errorf("session MCP server timeout = %v, want at least the approval wait plus the slowest gated call", server["timeout"])
 	}
 
 	servers := readServers(t, filepath.Join(plugins, "mcp-servers", "mcp", "k3s.json"))
