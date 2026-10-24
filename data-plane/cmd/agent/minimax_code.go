@@ -119,9 +119,10 @@ func (miniMaxCLI) newProjector(dst io.Writer) io.WriteCloser {
 }
 
 // ensureHome writes the managed config, stages the platform's plugins beside
-// it and installs them into HOME. Both are redone by every boot and restore
-// from this pod's own helper addresses, so an archive can never bring back a
-// previous pod's. mcode creates the rest of its data directory on first run.
+// it, installs them into HOME and registers the MCP servers. All of it is
+// redone by every boot and restore from this pod's own helper addresses, so an
+// archive can never bring back a previous pod's. mcode creates the rest of its
+// data directory on first run.
 func (m miniMaxCLI) ensureHome(homeDir string, tools toolSurface) error {
 	content, err := m.renderConfig()
 	if err != nil {
@@ -131,17 +132,22 @@ func (m miniMaxCLI) ensureHome(homeDir string, tools toolSurface) error {
 		return err
 	}
 	seedDir := ""
+	var servers map[string]map[string]any
 	if tools.SessionMCP != "" {
 		plugins, err := m.marketplacePlugins()
 		if err != nil {
 			return err
 		}
 		seedDir = filepath.Join(filepath.Dir(m.configPath), "plugins")
-		if err := stageMiniMaxPlugins(seedDir, tools.sessionMCPEndpoint(), m.k3sProxyURL, plugins, m.log()); err != nil {
+		servers, err = stageMiniMaxPlugins(seedDir, tools.sessionMCPEndpoint(), m.k3sProxyURL, plugins, m.log())
+		if err != nil {
 			return err
 		}
 	}
-	return syncMiniMaxPlugins(homeDir, seedDir)
+	if err := syncMiniMaxPlugins(homeDir, seedDir); err != nil {
+		return err
+	}
+	return ensureMiniMaxMCPRegistration(homeDir, servers)
 }
 
 // marketplacePlugins is the proxy's bundle when it has one ready, and nothing
