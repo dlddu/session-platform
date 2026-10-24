@@ -393,97 +393,24 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-  /auth/me:
-    get:
-      summary: The signed-in operator (docs/prd/repo-access.md, AC-H2)
-      operationId: getMe
-      tags: [repo-access]
-      security: [{ adminCookie: [] }]
-      responses:
-        "200":
-          description: Signed in
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/AuthUser" }
-        "401":
-          description: Not signed in
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "503":
-          description: Repo access (or sign-in) is not enabled on this deployment
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-  /auth/login:
-    get:
-      summary: Start OIDC sign-in (authorization code + PKCE)
-      operationId: login
-      tags: [repo-access]
-      parameters:
-        - name: return
-          in: query
-          required: false
-          description: Same-origin path to land on afterwards; anything else becomes `/`.
-          schema: { type: string, example: /access }
-      responses:
-        "302":
-          description: Redirect to the identity provider
-        "502":
-          description: Identity provider unreachable
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "503":
-          description: Repo access (or sign-in) is not enabled on this deployment
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-  /auth/callback:
-    get:
-      summary: OIDC redirect target; sets the operator cookie and returns to the saved path
-      operationId: loginCallback
-      tags: [repo-access]
-      responses:
-        "302":
-          description: Signed in; redirect to the `return` path
-        "400":
-          description: Sign-in was not started here, expired, or its state does not match
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-        "401":
-          description: Not signed in
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
-  /auth/logout:
-    post:
-      summary: Clear the operator cookie
-      operationId: logout
-      tags: [repo-access]
-      responses:
-        "204":
-          description: Signed out
   /repo-access:
     get:
       summary: Allow list and pending requests (AC-H1/AC-H4)
+      description: >
+        The management routes (this and the other `/repo-access` paths) have no
+        sign-in of their own. Like the session APIs, they sit behind the
+        deployment's ingress, whose Authelia forward-auth is the only door
+        (AC-H2).
       operationId: getRepoAccess
       tags: [repo-access]
-      security: [{ adminCookie: [] }]
       responses:
         "200":
           description: Current state
           content:
             application/json:
               schema: { $ref: "#/components/schemas/RepoAccessState" }
-        "401":
-          description: Not signed in
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
         "503":
-          description: Repo access (or sign-in) is not enabled on this deployment
+          description: Repo access is not enabled on this deployment
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -492,7 +419,6 @@ paths:
       summary: Add a repository to the allow list
       operationId: addAllowlist
       tags: [repo-access]
-      security: [{ adminCookie: [] }]
       requestBody:
         required: true
         content:
@@ -514,13 +440,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-        "401":
-          description: Not signed in
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
         "503":
-          description: Repo access (or sign-in) is not enabled on this deployment
+          description: Repo access is not enabled on this deployment
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -528,7 +449,6 @@ paths:
       summary: Remove a repository from the allow list (idempotent)
       operationId: removeAllowlist
       tags: [repo-access]
-      security: [{ adminCookie: [] }]
       parameters:
         - name: repo
           in: query
@@ -542,13 +462,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-        "401":
-          description: Not signed in
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
         "503":
-          description: Repo access (or sign-in) is not enabled on this deployment
+          description: Repo access is not enabled on this deployment
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -557,7 +472,6 @@ paths:
       summary: Approve a session's request; adds the repository and clears every request for it
       operationId: approveRequest
       tags: [repo-access]
-      security: [{ adminCookie: [] }]
       parameters:
         - $ref: "#/components/parameters/RequestId"
       responses:
@@ -571,13 +485,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-        "401":
-          description: Not signed in
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
         "503":
-          description: Repo access (or sign-in) is not enabled on this deployment
+          description: Repo access is not enabled on this deployment
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -586,7 +495,6 @@ paths:
       summary: Reject a session's request
       operationId: rejectRequest
       tags: [repo-access]
-      security: [{ adminCookie: [] }]
       parameters:
         - $ref: "#/components/parameters/RequestId"
       responses:
@@ -597,13 +505,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
-        "401":
-          description: Not signed in
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
         "503":
-          description: Repo access (or sign-in) is not enabled on this deployment
+          description: Repo access is not enabled on this deployment
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -640,7 +543,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "503":
-          description: Repo access (or sign-in) is not enabled on this deployment
+          description: Repo access is not enabled on this deployment
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -688,7 +591,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "503":
-          description: Repo access (or sign-in) is not enabled on this deployment
+          description: Repo access is not enabled on this deployment
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -700,11 +603,6 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
   securitySchemes:
-    adminCookie:
-      type: apiKey
-      in: cookie
-      name: sp_admin
-      description: Signed session cookie set by /auth/callback after OIDC sign-in.
     helperToken:
       type: http
       scheme: bearer
@@ -974,12 +872,6 @@ components:
       type: object
       properties:
         error: { type: string }
-    AuthUser:
-      type: object
-      required: [user]
-      properties:
-        user: { type: string, description: preferred_username, else email, else subject }
-        email: { type: string }
     RepoRef:
       type: object
       additionalProperties: false
@@ -991,10 +883,9 @@ components:
           example: dlddu/infrastructure
     AllowlistEntry:
       type: object
-      required: [repo, addedBy, source, addedAt]
+      required: [repo, source, addedAt]
       properties:
         repo: { type: string }
-        addedBy: { type: string }
         source: { type: string, enum: [manual, request] }
         requestSessionId: { type: string, description: Set when source is request }
         addedAt: { type: string, format: date-time }

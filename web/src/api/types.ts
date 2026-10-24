@@ -77,16 +77,10 @@ export interface WriteResult {
   path: string;
 }
 
-export interface AuthUser {
-  user: string;
-  email?: string;
-}
-
 export type AllowlistSource = "manual" | "request";
 
 export interface AllowlistEntry {
   repo: string;
-  addedBy: string;
   source: AllowlistSource;
   requestSessionId?: string;
   addedAt: string;

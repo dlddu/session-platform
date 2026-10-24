@@ -66,7 +66,6 @@ func main() {
 		"claude_code_default_model", cfg.claudeCodeDefaultModel,
 		"claude_code_models", len(cfg.claudeCodeModels),
 		"repo_access_enabled", cfg.repoAccess.enabled,
-		"oidc_issuer", cfg.repoAccess.oidc.issuer,
 	)
 	if cfg.dataPlaneImage == "" {
 		// The in-code fallback image has no session agent, so session pods will

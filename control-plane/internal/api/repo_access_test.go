@@ -17,28 +17,12 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
-	"github.com/dlddu/session-platform/control-plane/internal/adminauth"
 	"github.com/dlddu/session-platform/control-plane/internal/api"
 	"github.com/dlddu/session-platform/control-plane/internal/helperauth"
 	"github.com/dlddu/session-platform/control-plane/internal/repoaccess"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
-
-// signedIn admits requests carrying X-Test-User, standing in for the OIDC
-// cookie that adminauth tests cover on their own.
-type signedIn struct{}
-
-func (signedIn) Require(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		name := r.Header.Get("X-Test-User")
-		if name == "" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		next(w, r.WithContext(adminauth.WithUser(r.Context(), adminauth.User{Name: name})))
-	}
-}
 
 // helpers maps bearer tokens to the session whose helper holds them.
 type helpers map[string]string
@@ -76,7 +60,7 @@ func newRepoAccessServer(t *testing.T, enabled bool) repoAccessFixture {
 	}
 	h := helpers{"tok-a": "sess-a"}
 	mux := http.NewServeMux()
-	api.NewRepoAccess(store, signedIn{}, h, mgr, nil).Routes(mux)
+	api.NewRepoAccess(store, h, mgr, nil).Routes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return repoAccessFixture{srv: srv, mgr: mgr, helpers: h}
@@ -84,7 +68,7 @@ func newRepoAccessServer(t *testing.T, enabled bool) repoAccessFixture {
 
 type call struct {
 	method, path, body string
-	user, bearer       string
+	bearer             string
 }
 
 func (f repoAccessFixture) do(t *testing.T, c call) (int, map[string]any) {
@@ -92,9 +76,6 @@ func (f repoAccessFixture) do(t *testing.T, c call) (int, map[string]any) {
 	req, _ := http.NewRequest(c.method, f.srv.URL+c.path, strings.NewReader(c.body))
 	if c.body != "" {
 		req.Header.Set("Content-Type", "application/json")
-	}
-	if c.user != "" {
-		req.Header.Set("X-Test-User", c.user)
 	}
 	if c.bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+c.bearer)
@@ -114,8 +95,8 @@ func (f repoAccessFixture) do(t *testing.T, c call) (int, map[string]any) {
 func TestRepoAccessDisabledAnswers503(t *testing.T) {
 	f := newRepoAccessServer(t, false)
 	for _, c := range []call{
-		{method: "GET", path: "/api/v1/repo-access", user: "jd"},
-		{method: "POST", path: "/api/v1/repo-access/allowlist", body: `{"repo":"a/b"}`, user: "jd"},
+		{method: "GET", path: "/api/v1/repo-access"},
+		{method: "POST", path: "/api/v1/repo-access/allowlist", body: `{"repo":"a/b"}`},
 		{method: "GET", path: "/api/v1/internal/repo-access/check?repo=a/b", bearer: "tok-a"},
 		{method: "POST", path: "/api/v1/internal/repo-access/requests", body: `{"repo":"a/b","reason":"x"}`, bearer: "tok-a"},
 	} {
@@ -125,20 +106,19 @@ func TestRepoAccessDisabledAnswers503(t *testing.T) {
 	}
 }
 
-func TestRepoAccessAdminRoutesNeedSignIn(t *testing.T) {
+// The management routes have no sign-in of their own (AC-H2): the ingress's
+// forward-auth is the door.
+func TestRepoAccessAdminRoutesHaveNoSignIn(t *testing.T) {
 	f := newRepoAccessServer(t, true)
-	for _, c := range []call{
-		{method: "GET", path: "/api/v1/repo-access"},
-		{method: "POST", path: "/api/v1/repo-access/allowlist", body: `{"repo":"a/b"}`},
-		{method: "DELETE", path: "/api/v1/repo-access/allowlist?repo=a/b"},
-		{method: "POST", path: "/api/v1/repo-access/requests/rq_x/approve"},
-		{method: "POST", path: "/api/v1/repo-access/requests/rq_x/reject"},
-		// A helper token is no substitute for an operator.
-		{method: "POST", path: "/api/v1/repo-access/allowlist", body: `{"repo":"a/b"}`, bearer: "tok-a"},
-	} {
-		if code, _ := f.do(t, c); code != http.StatusUnauthorized {
-			t.Errorf("%s %s = %d, want 401", c.method, c.path, code)
-		}
+	if code, _ := f.do(t, call{method: "GET", path: "/api/v1/repo-access"}); code != http.StatusOK {
+		t.Fatalf("overview = %d, want 200", code)
+	}
+	code, e := f.do(t, call{method: "POST", path: "/api/v1/repo-access/allowlist", body: `{"repo":"a/b"}`})
+	if code != http.StatusCreated {
+		t.Fatalf("add = %d %v", code, e)
+	}
+	if _, has := e["addedBy"]; has {
+		t.Fatalf("entry still records who added it: %v", e)
 	}
 }
 
@@ -147,8 +127,8 @@ func TestRepoAccessInternalRoutesNeedHelperToken(t *testing.T) {
 	for _, c := range []call{
 		{method: "GET", path: "/api/v1/internal/repo-access/check?repo=a/b"},
 		{method: "GET", path: "/api/v1/internal/repo-access/check?repo=a/b", bearer: "forged"},
-		// An operator cookie does not make a request on a session's behalf.
-		{method: "POST", path: "/api/v1/internal/repo-access/requests", body: `{"repo":"a/b","reason":"x"}`, user: "jd"},
+		// Filing a request needs a helper token too.
+		{method: "POST", path: "/api/v1/internal/repo-access/requests", body: `{"repo":"a/b","reason":"x"}`},
 	} {
 		if code, _ := f.do(t, c); code != http.StatusUnauthorized {
 			t.Errorf("%s %s = %d, want 401", c.method, c.path, code)
@@ -158,24 +138,24 @@ func TestRepoAccessInternalRoutesNeedHelperToken(t *testing.T) {
 
 func TestRepoAccessManualAllowList(t *testing.T) {
 	f := newRepoAccessServer(t, true)
-	code, e := f.do(t, call{method: "POST", path: "/api/v1/repo-access/allowlist", body: `{"repo":"DLDDU/Infra.git"}`, user: "jd"})
-	if code != http.StatusCreated || e["repo"] != "dlddu/infra" || e["addedBy"] != "jd" || e["source"] != "manual" {
+	code, e := f.do(t, call{method: "POST", path: "/api/v1/repo-access/allowlist", body: `{"repo":"DLDDU/Infra.git"}`})
+	if code != http.StatusCreated || e["repo"] != "dlddu/infra" || e["source"] != "manual" {
 		t.Fatalf("add = %d %v", code, e)
 	}
-	if code, _ := f.do(t, call{method: "POST", path: "/api/v1/repo-access/allowlist", body: `{"repo":"dlddu/infra"}`, user: "kim"}); code != http.StatusOK {
+	if code, _ := f.do(t, call{method: "POST", path: "/api/v1/repo-access/allowlist", body: `{"repo":"dlddu/infra"}`}); code != http.StatusOK {
 		t.Fatalf("re-add = %d, want 200", code)
 	}
-	if code, _ := f.do(t, call{method: "POST", path: "/api/v1/repo-access/allowlist", body: `{"repo":"not a repo"}`, user: "jd"}); code != http.StatusBadRequest {
+	if code, _ := f.do(t, call{method: "POST", path: "/api/v1/repo-access/allowlist", body: `{"repo":"not a repo"}`}); code != http.StatusBadRequest {
 		t.Fatalf("bad repo = %d, want 400", code)
 	}
-	if code, _ := f.do(t, call{method: "POST", path: "/api/v1/repo-access/allowlist", body: `{"repo":"a/b","extra":1}`, user: "jd"}); code != http.StatusBadRequest {
+	if code, _ := f.do(t, call{method: "POST", path: "/api/v1/repo-access/allowlist", body: `{"repo":"a/b","extra":1}`}); code != http.StatusBadRequest {
 		t.Fatalf("unknown field = %d, want 400", code)
 	}
 	_, check := f.do(t, call{method: "GET", path: "/api/v1/internal/repo-access/check?repo=dlddu/INFRA", bearer: "tok-a"})
 	if check["allowed"] != true || check["repo"] != "dlddu/infra" {
 		t.Fatalf("check = %v", check)
 	}
-	if code, _ := f.do(t, call{method: "DELETE", path: "/api/v1/repo-access/allowlist?repo=dlddu/infra", user: "jd"}); code != http.StatusNoContent {
+	if code, _ := f.do(t, call{method: "DELETE", path: "/api/v1/repo-access/allowlist?repo=dlddu/infra"}); code != http.StatusNoContent {
 		t.Fatalf("delete = %d", code)
 	}
 	_, check = f.do(t, call{method: "GET", path: "/api/v1/internal/repo-access/check?repo=dlddu/infra", bearer: "tok-a"})
@@ -207,7 +187,7 @@ func TestRepoAccessRequestApproveFlow(t *testing.T) {
 		t.Fatalf("empty reason = %d, want 400", code)
 	}
 
-	_, ov := f.do(t, call{method: "GET", path: "/api/v1/repo-access", user: "jd"})
+	_, ov := f.do(t, call{method: "GET", path: "/api/v1/repo-access"})
 	reqs := ov["requests"].([]any)
 	if len(reqs) != 1 || len(ov["allowlist"].([]any)) != 0 {
 		t.Fatalf("overview = %v", ov)
@@ -217,11 +197,11 @@ func TestRepoAccessRequestApproveFlow(t *testing.T) {
 		t.Fatalf("request view = %v", r0)
 	}
 
-	if code, _ := f.do(t, call{method: "POST", path: "/api/v1/repo-access/requests/rq_missing/approve", user: "jd"}); code != http.StatusNotFound {
+	if code, _ := f.do(t, call{method: "POST", path: "/api/v1/repo-access/requests/rq_missing/approve"}); code != http.StatusNotFound {
 		t.Fatalf("approve missing = %d, want 404", code)
 	}
-	code, e := f.do(t, call{method: "POST", path: "/api/v1/repo-access/requests/" + rq["requestId"].(string) + "/approve", user: "jd"})
-	if code != http.StatusOK || e["source"] != "request" || e["requestSessionId"] != sess.ID || e["addedBy"] != "jd" {
+	code, e := f.do(t, call{method: "POST", path: "/api/v1/repo-access/requests/" + rq["requestId"].(string) + "/approve"})
+	if code != http.StatusOK || e["source"] != "request" || e["requestSessionId"] != sess.ID {
 		t.Fatalf("approve = %d %v", code, e)
 	}
 	_, after := f.do(t, call{method: "POST", path: "/api/v1/internal/repo-access/requests", body: `{"repo":"dlddu/infra","reason":"x"}`, bearer: "tok-a"})
@@ -237,13 +217,13 @@ func TestRepoAccessReject(t *testing.T) {
 	f := newRepoAccessServer(t, true)
 	_, rq := f.do(t, call{method: "POST", path: "/api/v1/internal/repo-access/requests", body: `{"repo":"a/b","reason":"x"}`, bearer: "tok-a"})
 	id := rq["requestId"].(string)
-	if code, _ := f.do(t, call{method: "POST", path: "/api/v1/repo-access/requests/" + id + "/reject", user: "jd"}); code != http.StatusNoContent {
+	if code, _ := f.do(t, call{method: "POST", path: "/api/v1/repo-access/requests/" + id + "/reject"}); code != http.StatusNoContent {
 		t.Fatalf("reject = %d", code)
 	}
-	if code, _ := f.do(t, call{method: "POST", path: "/api/v1/repo-access/requests/" + id + "/reject", user: "jd"}); code != http.StatusNotFound {
+	if code, _ := f.do(t, call{method: "POST", path: "/api/v1/repo-access/requests/" + id + "/reject"}); code != http.StatusNotFound {
 		t.Fatalf("reject twice = %d, want 404", code)
 	}
-	_, ov := f.do(t, call{method: "GET", path: "/api/v1/repo-access", user: "jd"})
+	_, ov := f.do(t, call{method: "GET", path: "/api/v1/repo-access"})
 	if len(ov["requests"].([]any)) != 0 || len(ov["allowlist"].([]any)) != 0 {
 		t.Fatalf("overview after reject = %v", ov)
 	}

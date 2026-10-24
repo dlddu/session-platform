@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/dlddu/session-platform/control-plane/internal/adminauth"
 	"github.com/dlddu/session-platform/control-plane/internal/helperauth"
 	"github.com/dlddu/session-platform/control-plane/internal/repoaccess"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
@@ -17,40 +16,35 @@ import (
 type RepoAccessStore interface {
 	List(ctx context.Context) ([]repoaccess.Entry, error)
 	Allowed(ctx context.Context, repo string) (bool, error)
-	Add(ctx context.Context, repo, by string) (repoaccess.Entry, bool, error)
+	Add(ctx context.Context, repo string) (repoaccess.Entry, bool, error)
 	Remove(ctx context.Context, repo string) (bool, error)
 	Requests(ctx context.Context) ([]repoaccess.Request, error)
 	Request(ctx context.Context, repo, sessionID, reason string) (repoaccess.Request, string, error)
-	Approve(ctx context.Context, id, by string) (repoaccess.Entry, error)
+	Approve(ctx context.Context, id string) (repoaccess.Entry, error)
 	Reject(ctx context.Context, id string) error
-}
-
-// AdminGuard admits signed-in operators; *adminauth.Auth is the production
-// one, and a nil *adminauth.Auth answers 503.
-type AdminGuard interface {
-	Require(next http.HandlerFunc) http.HandlerFunc
 }
 
 type HelperVerifier interface {
 	SessionID(r *http.Request) (string, error)
 }
 
-// RepoAccess serves docs/prd/repo-access.md: the management routes (AC-H2,
-// behind sign-in) and the helper-pod routes (AC-H3, behind TokenReview). A
-// nil store means the feature is off (AC-H1) and every route answers 503.
+// RepoAccess serves docs/prd/repo-access.md: the management routes (AC-H2)
+// and the helper-pod routes (AC-H3, behind TokenReview). The management routes
+// carry no sign-in of their own — like the session APIs, they sit behind the
+// deployment's Authelia forward-auth at the ingress. A nil store means the
+// feature is off (AC-H1) and every route answers 503.
 type RepoAccess struct {
 	store    RepoAccessStore
-	auth     AdminGuard
 	helpers  HelperVerifier
 	sessions session.Manager
 	logger   *slog.Logger
 }
 
-func NewRepoAccess(store RepoAccessStore, auth AdminGuard, helpers HelperVerifier, sessions session.Manager, logger *slog.Logger) *RepoAccess {
+func NewRepoAccess(store RepoAccessStore, helpers HelperVerifier, sessions session.Manager, logger *slog.Logger) *RepoAccess {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &RepoAccess{store: store, auth: auth, helpers: helpers, sessions: sessions, logger: logger}
+	return &RepoAccess{store: store, helpers: helpers, sessions: sessions, logger: logger}
 }
 
 func (ra *RepoAccess) Routes(mux *http.ServeMux) {
@@ -66,17 +60,12 @@ func (ra *RepoAccess) Routes(mux *http.ServeMux) {
 var errRepoAccessDisabled = errors.New("repo access is not enabled on this deployment")
 
 func (ra *RepoAccess) admin(h http.HandlerFunc) http.HandlerFunc {
-	guard := ra.auth
-	if guard == nil {
-		guard = (*adminauth.Auth)(nil)
-	}
-	guarded := guard.Require(h)
 	return func(w http.ResponseWriter, r *http.Request) {
 		if ra.store == nil {
 			writeJSON(w, http.StatusServiceUnavailable, errResp{Error: errRepoAccessDisabled.Error()})
 			return
 		}
-		guarded(w, r)
+		h(w, r)
 	}
 }
 
@@ -164,8 +153,7 @@ func (ra *RepoAccess) add(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	u, _ := adminauth.UserFrom(r.Context())
-	e, created, err := ra.store.Add(r.Context(), body.Repo, u.Name)
+	e, created, err := ra.store.Add(r.Context(), body.Repo)
 	if errors.Is(err, repoaccess.ErrInvalidRepo) {
 		writeJSON(w, http.StatusBadRequest, errResp{Error: err.Error()})
 		return
@@ -177,13 +165,12 @@ func (ra *RepoAccess) add(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusOK
 	if created {
 		status = http.StatusCreated
-		ra.logger.Info("repo access: added", "repo", e.Repo, "by", u.Name)
+		ra.logger.Info("repo access: added", "repo", e.Repo)
 	}
 	writeJSON(w, status, e)
 }
 
 func (ra *RepoAccess) remove(w http.ResponseWriter, r *http.Request) {
-	u, _ := adminauth.UserFrom(r.Context())
 	removed, err := ra.store.Remove(r.Context(), r.URL.Query().Get("repo"))
 	if errors.Is(err, repoaccess.ErrInvalidRepo) {
 		writeJSON(w, http.StatusBadRequest, errResp{Error: err.Error()})
@@ -194,14 +181,13 @@ func (ra *RepoAccess) remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if removed {
-		ra.logger.Info("repo access: removed", "repo", r.URL.Query().Get("repo"), "by", u.Name)
+		ra.logger.Info("repo access: removed", "repo", r.URL.Query().Get("repo"))
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (ra *RepoAccess) approve(w http.ResponseWriter, r *http.Request) {
-	u, _ := adminauth.UserFrom(r.Context())
-	e, err := ra.store.Approve(r.Context(), r.PathValue("id"), u.Name)
+	e, err := ra.store.Approve(r.Context(), r.PathValue("id"))
 	if errors.Is(err, repoaccess.ErrNotFound) {
 		writeJSON(w, http.StatusNotFound, errResp{Error: "request not found"})
 		return
@@ -210,12 +196,11 @@ func (ra *RepoAccess) approve(w http.ResponseWriter, r *http.Request) {
 		ra.internal(w, "approve", err)
 		return
 	}
-	ra.logger.Info("repo access: request approved", "repo", e.Repo, "by", u.Name)
+	ra.logger.Info("repo access: request approved", "repo", e.Repo)
 	writeJSON(w, http.StatusOK, e)
 }
 
 func (ra *RepoAccess) reject(w http.ResponseWriter, r *http.Request) {
-	u, _ := adminauth.UserFrom(r.Context())
 	err := ra.store.Reject(r.Context(), r.PathValue("id"))
 	if errors.Is(err, repoaccess.ErrNotFound) {
 		writeJSON(w, http.StatusNotFound, errResp{Error: "request not found"})
@@ -225,7 +210,7 @@ func (ra *RepoAccess) reject(w http.ResponseWriter, r *http.Request) {
 		ra.internal(w, "reject", err)
 		return
 	}
-	ra.logger.Info("repo access: request rejected", "id", r.PathValue("id"), "by", u.Name)
+	ra.logger.Info("repo access: request rejected", "id", r.PathValue("id"))
 	w.WriteHeader(http.StatusNoContent)
 }
 

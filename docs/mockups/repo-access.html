@@ -81,8 +81,6 @@
   .btn-danger:hover{background:rgba(242,97,107,.08)}
   .btn svg{width:15px;height:15px}
 
-  .who{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--text-dim)}
-  .who b{color:var(--text);font-weight:600}
 
   /* summary strip */
   .summary{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:28px}
@@ -139,18 +137,6 @@
 
   .empty{padding:22px 18px;color:var(--text-faint);font-size:13px;text-align:center}
 
-  /* signed-out screen */
-  .signin{max-width:460px;margin:12vh auto 0;text-align:center;background:var(--surface);border:1px solid var(--line);
-    border-radius:18px;padding:34px 30px}
-  .signin .lock{width:52px;height:52px;margin:0 auto 14px;border-radius:14px;display:grid;place-items:center;
-    background:var(--frozen-soft);color:var(--frozen)}
-  .signin p{color:var(--text-dim);font-size:13.5px;margin:10px 0 22px}
-  .signin .fine{font-size:11.5px;color:var(--text-faint);margin-top:16px}
-
-  .state-switch{position:fixed;top:14px;right:16px;z-index:40;display:flex;gap:6px;font-size:11px}
-  .state-switch button{padding:5px 9px;border-radius:7px;border:1px solid var(--line);background:var(--surface);color:var(--text-dim)}
-  .state-switch button.on{border-color:var(--active);color:var(--active)}
-
   /* toast (same as index.html) */
   .toast-wrap{position:fixed;bottom:calc(var(--rail) + 24px);left:50%;transform:translateX(-50%);z-index:60;
     display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
@@ -163,8 +149,7 @@
     .pad{padding:22px 16px 48px}
     .chip.scope{margin-left:0}
     .sec-head{flex-direction:column;gap:4px}
-    .state-switch{top:auto;bottom:calc(var(--rail) + 12px)}
-    .req{grid-template-columns:1fr}
+      .req{grid-template-columns:1fr}
     .req-actions{align-items:stretch}
     .t-row{grid-template-columns:1fr auto}
     .t-src,.t-when{display:none}
@@ -195,8 +180,9 @@
   </nav>
 
   <div class="viewport">
-    <!-- signed in: pending requests + allow list -->
-    <section class="screen show" id="screen-signed-in" aria-label="Repo access">
+    <!-- pending requests + allow list. No sign-in screen: the deployment's ingress
+         (Authelia forward-auth) is this screen's door, as for every other screen. -->
+    <section class="screen show" id="screen-main" aria-label="Repo access">
       <div class="pad">
         <div class="h-top">
           <div>
@@ -204,7 +190,6 @@
             <h1>Repo access</h1>
             <div class="sub">Private repositories the session MCP may clone. Each entry opens exactly one repository, read-only. Every clone still needs its own approval.</div>
           </div>
-          <div class="who">Signed in as <b>jd</b> <button class="btn btn-ghost btn-sm" onclick="showState('signed-out')">Sign out</button></div>
         </div>
 
         <div class="summary">
@@ -259,11 +244,11 @@
         <section class="block" aria-label="Allowed repositories">
           <div class="sec-head"><h2>Allowed repositories</h2><span class="hint">Removing an entry takes effect on the next clone.</span></div>
           <div class="table" id="allow-table">
-            <div class="t-row t-head"><span>Repository</span><span>Added by</span><span>Added</span><span></span></div>
-            <div class="t-row"><span class="t-repo">dlddu/session-platform</span><span class="t-src">jd · <span class="mono">manual</span></span><span class="t-when">2026-10-24</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
-            <div class="t-row"><span class="t-repo">dlddu/flux-cd-apps</span><span class="t-src">jd · request from <span class="mono">a91f03c2</span></span><span class="t-when">2026-10-23</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
-            <div class="t-row"><span class="t-repo">dlddu/pocket-aide</span><span class="t-src">jd · <span class="mono">manual</span></span><span class="t-when">2026-10-21</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
-            <div class="t-row"><span class="t-repo">dlddu/plugin-marketplace</span><span class="t-src">jd · request from <span class="mono">0e44b7d1</span></span><span class="t-when">2026-10-20</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
+            <div class="t-row t-head"><span>Repository</span><span>Source</span><span>Added</span><span></span></div>
+            <div class="t-row"><span class="t-repo">dlddu/session-platform</span><span class="t-src"><span class="mono">manual</span></span><span class="t-when">2026-10-24</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
+            <div class="t-row"><span class="t-repo">dlddu/flux-cd-apps</span><span class="t-src">request from <span class="mono">a91f03c2</span></span><span class="t-when">2026-10-23</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
+            <div class="t-row"><span class="t-repo">dlddu/pocket-aide</span><span class="t-src"><span class="mono">manual</span></span><span class="t-when">2026-10-21</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
+            <div class="t-row"><span class="t-repo">dlddu/plugin-marketplace</span><span class="t-src">request from <span class="mono">0e44b7d1</span></span><span class="t-when">2026-10-20</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
             <form class="add" onsubmit="addRepo(event)">
               <label class="field"><span class="pre">github.com/</span><input id="add-input" placeholder="owner/repo" autocomplete="off" aria-label="Repository (owner/repo)"></label>
               <span class="scope-note">read-only · one repository</span>
@@ -274,34 +259,12 @@
       </div>
     </section>
 
-    <!-- signed out -->
-    <section class="screen" id="screen-signed-out" aria-label="Sign in">
-      <div class="pad">
-        <div class="signin">
-          <div class="lock"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
-          <h2>Sign in to manage repo access</h2>
-          <p>Allowing a repository lets sessions clone it with a token minted for that repository alone. Only signed-in users can review requests or change the list.</p>
-          <button class="btn btn-primary" onclick="showState('signed-in')">Sign in with Authelia</button>
-          <div class="fine">Sessions and their workspaces stay available without signing in.</div>
-        </div>
-      </div>
-    </section>
   </div>
 </div>
 
-<div class="state-switch" aria-label="Mockup state">
-  <button class="on" id="sw-in" onclick="showState('signed-in')">Signed in</button>
-  <button id="sw-out" onclick="showState('signed-out')">Signed out</button>
-</div>
 <div class="toast-wrap" id="toasts"></div>
 
 <script>
-  function showState(s){
-    document.getElementById('screen-signed-in').classList.toggle('show', s==='signed-in');
-    document.getElementById('screen-signed-out').classList.toggle('show', s==='signed-out');
-    document.getElementById('sw-in').classList.toggle('on', s==='signed-in');
-    document.getElementById('sw-out').classList.toggle('on', s==='signed-out');
-  }
   function toast(msg){
     var t=document.createElement('div'); t.className='toast'; t.textContent=msg;
     document.getElementById('toasts').appendChild(t);
@@ -326,7 +289,7 @@
   }
   function decide(btn, kind){
     var card=btn.closest('.req'), repo=card.dataset.repo;
-    if(kind==='allow'){ appendAllowed(repo,'jd · request'); toast(repo+' allowed (read-only)'); }
+    if(kind==='allow'){ appendAllowed(repo,'request'); toast(repo+' allowed (read-only)'); }
     else { toast('Request for '+repo+' rejected'); }
     card.remove(); counts();
   }
@@ -338,7 +301,7 @@
     e.preventDefault();
     var input=document.getElementById('add-input'), v=input.value.trim();
     if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(v)){ toast('Use owner/repo'); return; }
-    appendAllowed(v,'jd · manual'); input.value=''; counts(); toast(v+' allowed (read-only)');
+    appendAllowed(v,'manual'); input.value=''; counts(); toast(v+' allowed (read-only)');
   }
 </script>
 </body>
