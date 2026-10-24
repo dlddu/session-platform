@@ -23,7 +23,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 )
+
+// sessionMCPToolTimeout outlasts the longest gated call: the approval wait plus
+// the slowest approved operation, with a minute for the round trips around them.
+const sessionMCPToolTimeout = defaultApprovalTimeout + cloneTimeout + time.Minute
 
 const (
 	claudeCLIConfigFile  = ".claude.json"
@@ -54,7 +59,11 @@ func ensureClaudeMCPRegistration(homeDir string, tools toolSurface) error {
 		}
 		delete(servers, sessionMCPServerName)
 	} else {
-		want, err := json.Marshal(claudeMCPServer{Type: "http", URL: tools.sessionMCPEndpoint()})
+		want, err := json.Marshal(claudeMCPServer{
+			Type:    "http",
+			URL:     tools.sessionMCPEndpoint(),
+			Timeout: sessionMCPToolTimeout.Milliseconds(),
+		})
 		if err != nil {
 			return err
 		}

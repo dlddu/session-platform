@@ -798,6 +798,11 @@ type claudeManagedSettings struct {
 type claudeMCPServer struct {
 	Type string `json:"type"`
 	URL  string `json:"url"`
+	// Timeout is the CLI's per-server tool-call limit in milliseconds. The
+	// pinned CLI (2.1.220) carries an undocumented 60 s request default for
+	// http servers, and on the cluster (2026-10-24) a gated call was cancelled
+	// at exactly 60 s while a human was still deciding (sessionMCPToolTimeout).
+	Timeout int64 `json:"timeout,omitempty"`
 }
 
 // managedSettingsFor renders the settings a workload type must run with.
