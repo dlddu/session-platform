@@ -474,21 +474,20 @@ func TestGitHubRepoOfRecognisesOnlyGitHubRepositoryURLs(t *testing.T) {
 	}
 }
 
-// AC-H5 end to end inside the helper pod: approval, then the allow list, then a
-// token for that one repository, carried to git only as a URL-scoped header.
+// AC-H5 end to end inside the helper pod: the allow list, then a token for
+// that one repository, carried to git only as a URL-scoped header. No approval
+// is asked — the list is the gate.
 func TestGitCloneClonesAnAllowedPrivateRepositoryWithAScopedToken(t *testing.T) {
 	m := newRepoAccessMCP(t, repoAccessOptions{}, "APPROVED")
 	m.cp.allowed = true
-	var createdAtCheck, pollsAtCheck int32
-	m.cp.onCheck = func() { createdAtCheck, pollsAtCheck = m.gateway.created.Load(), m.gateway.polls.Load() }
 	const target = "https://github.com/dlddu/private-repo.git"
 
 	isError, text := m.call(t, gitCloneTool, map[string]any{"url": target})
 	if isError {
 		t.Fatalf("private clone failed: %s", text)
 	}
-	if createdAtCheck != 1 || pollsAtCheck < 1 {
-		t.Errorf("the allow list was asked with %d approval requests and %d polls behind it, want it after the decision", createdAtCheck, pollsAtCheck)
+	if got := m.gateway.created.Load(); got != 0 {
+		t.Errorf("approval requests = %d, want none where the allow list is the gate", got)
 	}
 	m.cp.mu.Lock()
 	checked := append([]string(nil), m.cp.checkedRepos...)
@@ -535,7 +534,7 @@ func TestGitCloneClonesAnAllowedPrivateRepositoryWithAScopedToken(t *testing.T) 
 		}
 	}
 	if m.calls[0].target != target {
-		t.Errorf("cloned %q, want the approved URL unchanged", m.calls[0].target)
+		t.Errorf("cloned %q, want the requested URL unchanged", m.calls[0].target)
 	}
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(text), &payload); err != nil || payload["success"] != true || payload["url"] != target {
@@ -563,118 +562,94 @@ func TestGitClonePrivateFailureIsRedactedAndNamed(t *testing.T) {
 	m.assertNoSecret(t, text)
 }
 
+// Off the list nothing is cloned — public or not — and the result points at
+// the request tool.
 func TestGitCloneOfARepositoryOffTheAllowList(t *testing.T) {
-	t.Run("anonymous clone fails", func(t *testing.T) {
+	for _, target := range []string{"https://github.com/dlddu/private-repo.git", "https://github.com/dlddu/pure-agent"} {
 		m := newRepoAccessMCP(t, repoAccessOptions{}, "APPROVED")
-		m.cloneErr = func([]string) error { return errors.New("exit status 128: fatal: could not read Username") }
-		isError, text := m.call(t, gitCloneTool, map[string]any{"url": "https://github.com/dlddu/private-repo.git"})
+		isError, text := m.call(t, gitCloneTool, map[string]any{"url": target})
 		if !isError || !strings.Contains(text, "not on the allow list") || !strings.Contains(text, requestRepoAccessTool) {
-			t.Fatalf("result = %v %q, want the allow-list failure pointing at %s", isError, text, requestRepoAccessTool)
+			t.Fatalf("%s: result = %v %q, want the allow-list refusal pointing at %s", target, isError, text, requestRepoAccessTool)
 		}
-		if !strings.Contains(text, "could not read Username") {
-			t.Errorf("failure text = %q, want git's own reason too", text)
+		if m.clones.Load() != 0 || m.proxy.calls.Load() != 0 || m.gateway.created.Load() != 0 {
+			t.Errorf("%s: clones = %d, tokens = %d, approvals = %d; want all zero", target,
+				m.clones.Load(), m.proxy.calls.Load(), m.gateway.created.Load())
 		}
-		if got := m.proxy.calls.Load(); got != 0 {
-			t.Errorf("proxy got %d token requests for a repository off the list, want 0", got)
-		}
-		if m.clones.Load() != 1 || m.calls[0].env != nil {
-			t.Errorf("clones = %d with env %v, want one anonymous attempt", m.clones.Load(), m.calls)
-		}
-	})
-	t.Run("a public repository still clones", func(t *testing.T) {
-		m := newRepoAccessMCP(t, repoAccessOptions{}, "APPROVED")
-		isError, text := m.call(t, gitCloneTool, map[string]any{"url": "https://github.com/dlddu/pure-agent.git"})
-		if isError {
-			t.Fatalf("public clone failed: %s", text)
-		}
-		if m.calls[0].env != nil || m.proxy.calls.Load() != 0 {
-			t.Errorf("a public clone carried env %v / asked for %d tokens", m.calls[0].env, m.proxy.calls.Load())
-		}
-	})
+	}
 }
 
-func TestGitCloneWithoutAnIssuedTokenDoesNotClone(t *testing.T) {
-	t.Run("the tool refuses", func(t *testing.T) {
-		m := newRepoAccessMCP(t, repoAccessOptions{}, "APPROVED")
+// An allowed repository the GitHub App cannot issue a token for (a public one
+// outside its installation) still clones anonymously; only when that fails too
+// is the token failure reported.
+func TestGitCloneOfAnAllowedRepositoryWithoutAToken(t *testing.T) {
+	for _, opts := range []repoAccessOptions{{}, {noProxy: true}} {
+		m := newRepoAccessMCP(t, opts, "APPROVED")
 		m.cp.allowed = true
 		m.proxy.response = `{"jsonrpc":"2.0","id":1,"result":{"isError":true,"content":[{"type":"text","text":"no installation"}]}}`
-		isError, text := m.call(t, gitCloneTool, map[string]any{"url": "https://github.com/dlddu/private-repo"})
-		if !isError || !strings.Contains(text, "token could not be issued") {
-			t.Fatalf("result = %v %q, want the token failure", isError, text)
+		if isError, text := m.call(t, gitCloneTool, map[string]any{"url": "https://github.com/dlddu/pure-agent"}); isError {
+			t.Fatalf("noProxy=%v: anonymous fallback failed: %s", opts.noProxy, text)
 		}
-		if got := m.clones.Load(); got != 0 {
-			t.Errorf("git ran %d times without a token, want 0", got)
+		if m.clones.Load() != 1 || m.calls[0].env != nil {
+			t.Errorf("noProxy=%v: want one anonymous clone, got %+v", opts.noProxy, m.calls)
 		}
-	})
-	t.Run("no proxy in the helper pod", func(t *testing.T) {
-		m := newRepoAccessMCP(t, repoAccessOptions{noProxy: true}, "APPROVED")
-		m.cp.allowed = true
-		isError, text := m.call(t, gitCloneTool, map[string]any{"url": "https://github.com/dlddu/private-repo"})
-		if !isError || !strings.Contains(text, "token could not be issued") {
-			t.Fatalf("result = %v %q, want the token failure", isError, text)
-		}
-		if got := m.clones.Load(); got != 0 {
-			t.Errorf("git ran %d times without a token, want 0", got)
-		}
-	})
-}
 
-// Only a github.com repository is a question for the allow list, and only on a
-// deployment that has one.
-func TestGitCloneAsksTheAllowListOnlyForGitHubRepositories(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		opts repoAccessOptions
-		url  string
-	}{
-		{"another host", repoAccessOptions{}, "https://gitlab.com/dlddu/private-repo.git"},
-		{"plain http to github", repoAccessOptions{}, "http://github.com/dlddu/private-repo.git"},
-		{"no allow list", repoAccessOptions{noRepoAccess: true}, "https://github.com/dlddu/private-repo.git"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			m := newRepoAccessMCP(t, tc.opts, "APPROVED")
-			m.cp.allowed = true
-			isError, text := m.call(t, gitCloneTool, map[string]any{"url": tc.url})
-			if isError {
-				t.Fatalf("clone failed: %s", text)
-			}
-			if m.cp.checks.Load() != 0 || m.proxy.calls.Load() != 0 {
-				t.Errorf("checks = %d, token requests = %d; want neither", m.cp.checks.Load(), m.proxy.calls.Load())
-			}
-			if m.clones.Load() != 1 || m.calls[0].env != nil {
-				t.Errorf("want one anonymous clone, got %+v", m.calls)
-			}
-		})
+		m.cloneErr = func([]string) error { return errors.New("fatal: could not read Username") }
+		isError, text := m.call(t, gitCloneTool, map[string]any{"url": "https://github.com/dlddu/private-repo"})
+		if !isError || !strings.Contains(text, "token could not be issued") || !strings.Contains(text, "could not read Username") {
+			t.Fatalf("noProxy=%v: result = %v %q, want the token failure with git's reason", opts.noProxy, isError, text)
+		}
+		m.assertNoSecret(t, text)
 	}
 }
 
-// A refused call stops before the allow list is consulted at all.
-func TestGitCloneRefusalNeverAsksTheAllowList(t *testing.T) {
+// With an allow list only github.com repositories can be cloned at all; without
+// one the tool keeps asking for approval and clones anonymously.
+func TestGitCloneTargetsDependOnTheAllowList(t *testing.T) {
+	for _, target := range []string{"https://gitlab.com/dlddu/private-repo.git", "http://github.com/dlddu/private-repo.git"} {
+		m := newRepoAccessMCP(t, repoAccessOptions{}, "APPROVED")
+		m.cp.allowed = true
+		isError, text := m.call(t, gitCloneTool, map[string]any{"url": target})
+		if !isError || !strings.Contains(text, "github.com") {
+			t.Fatalf("%s: result = %v %q, want the github.com-only refusal", target, isError, text)
+		}
+		if m.cp.checks.Load() != 0 || m.clones.Load() != 0 {
+			t.Errorf("%s: checks = %d, clones = %d; want neither", target, m.cp.checks.Load(), m.clones.Load())
+		}
+	}
+
+	m := newRepoAccessMCP(t, repoAccessOptions{noRepoAccess: true}, "APPROVED")
+	if isError, text := m.call(t, gitCloneTool, map[string]any{"url": "https://gitlab.com/dlddu/anything.git"}); isError {
+		t.Fatalf("clone without an allow list failed: %s", text)
+	}
+	if m.gateway.created.Load() != 1 || m.clones.Load() != 1 || m.calls[0].env != nil {
+		t.Errorf("approvals = %d, clones = %+v; want one approval and one anonymous clone", m.gateway.created.Load(), m.calls)
+	}
+}
+
+// The allow list replaces the gate rather than adding to it: a gateway that
+// would refuse is never asked.
+func TestGitCloneWithAnAllowListNeverAsksForApproval(t *testing.T) {
 	m := newRepoAccessMCP(t, repoAccessOptions{}, "REJECTED")
 	m.cp.allowed = true
-	isError, text := m.call(t, gitCloneTool, map[string]any{"url": "https://github.com/dlddu/private-repo"})
-	if !isError || !strings.Contains(text, "refused at approval") {
-		t.Fatalf("result = %v %q, want the approval refusal", isError, text)
+	if isError, text := m.call(t, gitCloneTool, map[string]any{"url": "https://github.com/dlddu/private-repo"}); isError {
+		t.Fatalf("allowed clone failed: %s", text)
 	}
-	if m.cp.checks.Load() != 0 || m.proxy.calls.Load() != 0 || m.clones.Load() != 0 {
-		t.Errorf("checks = %d, tokens = %d, clones = %d; want all zero", m.cp.checks.Load(), m.proxy.calls.Load(), m.clones.Load())
+	if got := m.gateway.created.Load(); got != 0 {
+		t.Errorf("approval requests = %d, want 0", got)
 	}
 }
 
-// An allow list that cannot be asked does not cost a public clone.
-func TestGitCloneFallsBackToAnonymousWhenTheCheckFails(t *testing.T) {
+// An allow list that cannot be asked clones nothing: the list is the gate, so
+// it fails closed.
+func TestGitCloneRefusesWhenTheCheckFails(t *testing.T) {
 	m := newRepoAccessMCP(t, repoAccessOptions{}, "APPROVED")
 	m.cp.statusCode = http.StatusServiceUnavailable
-	if isError, text := m.call(t, gitCloneTool, map[string]any{"url": "https://github.com/dlddu/pure-agent"}); isError {
-		t.Fatalf("public clone failed while the check was down: %s", text)
-	}
-	m.cloneErr = func([]string) error { return errors.New("fatal: could not read Username") }
-	isError, text := m.call(t, gitCloneTool, map[string]any{"url": "https://github.com/dlddu/private-repo"})
+	isError, text := m.call(t, gitCloneTool, map[string]any{"url": "https://github.com/dlddu/pure-agent"})
 	if !isError || !strings.Contains(text, "allow list could not be checked") || !strings.Contains(text, "503") {
-		t.Fatalf("result = %v %q, want the clone failure with the check's reason", isError, text)
+		t.Fatalf("result = %v %q, want the check failure", isError, text)
 	}
-	if m.proxy.calls.Load() != 0 {
-		t.Errorf("a token was requested without an allow list answer")
+	if m.clones.Load() != 0 || m.proxy.calls.Load() != 0 {
+		t.Errorf("clones = %d, tokens = %d; want neither", m.clones.Load(), m.proxy.calls.Load())
 	}
 	m.assertNoSecret(t, text)
 }
