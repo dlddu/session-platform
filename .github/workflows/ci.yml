@@ -9,6 +9,7 @@ name: ci
 #             ├─ e2e                (PR 에서 SUT 경로가 바뀔 때만 — reusable e2e.yml)
 #             └─ journey-prototype  (여정 문서·mockup·하네스가 바뀔 때만)
 #   build-and-push · build-and-push-data-plane ─ pin (main 푸시만)
+#   e2e-image-cache    (main 푸시만 — 새 PR 의 e2e 가 따뜻한 이미지 캐시로 시작하게)
 #
 # 경로 필터는 워크플로 트리거가 아니라 `changes` 잡이 판정하므로, 해당 없는 잡은 "실행
 # 안 됨"이 아니라 skipped 로 남는다(필수 체크로 걸어도 PR 이 영원히 대기하지 않는다).
@@ -232,6 +233,41 @@ jobs:
     needs: changes
     if: needs.changes.outputs.e2e == 'true'
     uses: ./.github/workflows/e2e.yml
+
+  e2e-image-cache:
+    name: warm e2e image cache (main only)
+    # e2e 는 PR 에서만 돌지만 GitHub Actions 캐시는 브랜치 단위다: PR 이 쓴 캐시는 그 PR
+    # 안에서만 보이고, 새 PR 이 읽을 수 있는 것은 base(main) 에 저장된 캐시뿐이다. 이 잡이
+    # 없으면 e2e 스코프 캐시가 main 에 영영 쌓이지 않아, 모든 새 PR 의 첫 e2e 가 SUT 이미지를
+    # 캐시 없이 빌드한다(+5~6분). 그래서 main 푸시마다 e2e.yml 과 **같은 Dockerfile·플랫폼·
+    # 스코프**로 빌드만 해서 캐시를 내보낸다. 이미지는 어디에도 싣지 않는다(cacheonly).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest # e2e 러너와 같은 linux/amd64 — 아키텍처가 다르면 캐시가 안 맞는다
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+        id: buildx
+        with:
+          install: false
+          use: false
+      - name: build control-plane image (cache only)
+        uses: docker/build-push-action@v6
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: control-plane/Dockerfile
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=e2e-control-plane
+          cache-to: type=gha,mode=max,scope=e2e-control-plane
+      - name: build data-plane image (cache only)
+        uses: docker/build-push-action@v6
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: data-plane/Dockerfile
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=e2e-data-plane
+          cache-to: type=gha,mode=max,scope=e2e-data-plane
 
   journey-prototype:
     name: 여정 ↔ 여정 mockup 1:1 (프로토타입 충실도 포함)
