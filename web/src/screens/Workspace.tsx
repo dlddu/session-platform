@@ -467,7 +467,6 @@ export function Workspace() {
     }
 
     if (isAgent) {
-      setTerm((current) => appendLine(current, `▸ ${command}`));
       setPendingSubmissions((count) => count + 1);
 
       // Serialize acceptance requests as well as the server-side executions so

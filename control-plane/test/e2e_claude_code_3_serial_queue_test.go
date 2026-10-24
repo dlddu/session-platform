@@ -19,17 +19,21 @@ import (
 // change on either side fails here instead of quietly agreeing with itself.
 const (
 	cc3SlowPrompt  = "e2e-reply:ccthree-slow:4000:64:150"
-	cc3SlowPrefix  = "ccthree-slow:"
+	cc3SlowEcho    = "▸ " + cc3SlowPrompt + "\n"
+	cc3SlowEchoLen = 4 + 34 + 1
+	cc3SlowPrefix  = "ccthree-slow:가"
 	cc3SlowRunes   = 4000
 	cc3SlowDeltas  = 64
 	cc3SlowDelayMs = 150
 	cc3SlowFloorMs = cc3SlowDeltas * cc3SlowDelayMs
 	cc3SlowBytes   = 13 + 3*cc3SlowRunes
 
-	cc3FastPrompt = "e2e-reply:ccthree-fast:40:1"
-	cc3FastPrefix = "ccthree-fast:"
-	cc3FastRunes  = 40
-	cc3FastBytes  = 13 + 3*cc3FastRunes
+	cc3FastPrompt  = "e2e-reply:ccthree-fast:40:1"
+	cc3FastEcho    = "▸ " + cc3FastPrompt + "\n"
+	cc3FastEchoLen = 4 + 27 + 1
+	cc3FastPrefix  = "ccthree-fast:가"
+	cc3FastRunes   = 40
+	cc3FastBytes   = 13 + 3*cc3FastRunes
 )
 
 // One per invocation; data-plane/cmd/agent/claude_stream.go finishMessage owns the rule.
@@ -46,7 +50,7 @@ func cc3IssueOverlapped(t *testing.T, id string) readResp {
 	writePromptOK(t, id, cc3FastPrompt)
 	mid := readShellAt(t, id, 0)
 
-	if mid.NextOffset >= cc3SlowBytes {
+	if mid.NextOffset >= cc3SlowEchoLen+cc3SlowBytes {
 		t.Fatalf("the first reply (%d bytes) had already fully landed (%d bytes buffered) by the time "+
 			"the second write returned — the two writes never overlapped, so nothing below would be "+
 			"measuring serialisation. The stand-in was asked to spend at least %dms on it, so either "+
@@ -54,7 +58,7 @@ func cc3IssueOverlapped(t *testing.T, id string) readResp {
 			"cc3SlowDelayMs (MAX_DELAY_MS in deploy/e2e-anthropic-fake.yaml is the ceiling). Note "+
 			"that raising the *size* does not help — 600013 bytes was measured landing inside one "+
 			"write's round trip, which is why the gap exists.",
-			cc3SlowBytes, mid.NextOffset, cc3SlowFloorMs)
+			cc3SlowBytes, mid.NextOffset-cc3SlowEchoLen, cc3SlowFloorMs)
 	}
 	if strings.Contains(mid.Payload, cc3FastPrefix) {
 		t.Fatalf("the second reply was already in the buffer when its own write returned (%d bytes "+
@@ -71,7 +75,7 @@ func cc3IssueOverlapped(t *testing.T, id string) readResp {
 func cc3Settled(t *testing.T, id string) readResp {
 	t.Helper()
 	r := eventuallyClaudeOutput(t, id, 5*time.Minute, func(p string) bool {
-		return len(p) >= cc3SlowBytes+cc3FastBytes
+		return len(p) >= cc3SlowEchoLen+cc3SlowBytes+cc3FastEchoLen+cc3FastBytes
 	})
 	deadline := time.Now().Add(time.Minute)
 	for {
@@ -98,15 +102,17 @@ func TestClaudeSerialQueue_ReadZeroAccumulatesInWriteOrder(t *testing.T) {
 	if slow < 0 || fast < 0 {
 		t.Fatalf("read(0) is missing a reply (slow=%d fast=%d) in %d bytes", slow, fast, full.NextOffset)
 	}
-	if slow != 0 {
-		t.Fatalf("the first reply starts at byte %d, want 0 — the buffer was empty before the writes, "+
-			"so nothing may precede it", slow)
+	if !strings.HasPrefix(full.Payload, cc3SlowEcho) || slow != cc3SlowEchoLen {
+		t.Fatalf("the first reply starts at byte %d, want %d right after its own prompt echo %q — the "+
+			"buffer was empty before the writes, so nothing else may precede it (AC-E3)",
+			slow, cc3SlowEchoLen, cc3SlowEcho)
 	}
 	// Position rather than relative order: interleaved replies would still satisfy
 	// a naive `slow < fast`, and interleaving is what a concurrent queue produces.
-	if fast < cc3SlowBytes {
-		t.Fatalf("the second reply starts at byte %d, inside the first reply's %d bytes — a session "+
-			"runs its prompts one at a time and appends in write order (AC-E2)", fast, cc3SlowBytes)
+	if echo := strings.Index(full.Payload, cc3FastEcho); echo < cc3SlowEchoLen+cc3SlowBytes || fast != echo+cc3FastEchoLen {
+		t.Fatalf("the second prompt echo is at byte %d and its reply at %d, want both after the first "+
+			"reply's %d bytes and the reply right behind its echo — a session runs its prompts one at "+
+			"a time and appends in write order (AC-E2/E3)", echo, fast, cc3SlowEchoLen+cc3SlowBytes)
 	}
 	// A drain that reordered *and* replayed a prompt could still pass the position
 	// checks above; the counts and the total length are what rule that out.
@@ -118,12 +124,12 @@ func TestClaudeSerialQueue_ReadZeroAccumulatesInWriteOrder(t *testing.T) {
 		t.Fatalf("the second reply's label appears %d times, want exactly 1 — one accepted write is "+
 			"one run (AC-E2)", got)
 	}
-	if want := int64(cc3SlowBytes + cc3FastBytes); full.NextOffset < want || full.NextOffset > want+cc3Terminators {
+	if want := int64(cc3SlowEchoLen + cc3SlowBytes + cc3FastEchoLen + cc3FastBytes); full.NextOffset < want || full.NextOffset > want+cc3Terminators {
 		t.Fatalf("buffer is %d bytes, want %d plus at most %d terminating byte(s)",
 			full.NextOffset, want, cc3Terminators)
 	}
-	t.Logf("slow reply at [0,%d), fast reply at [%d,%d), buffer settled at %d bytes",
-		cc3SlowBytes, fast, fast+cc3FastBytes, full.NextOffset)
+	t.Logf("slow reply at [%d,%d), fast reply at [%d,%d), buffer settled at %d bytes",
+		slow, slow+cc3SlowBytes, fast, fast+cc3FastBytes, full.NextOffset)
 }
 
 func TestClaudeSerialQueue_InvocationsNeverRunConcurrently(t *testing.T) {
