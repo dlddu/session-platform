@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/dlddu/session-platform/control-plane/internal/helperauth"
@@ -17,11 +16,11 @@ import (
 type RepoAccessStore interface {
 	List(ctx context.Context) ([]repoaccess.Entry, error)
 	Allowed(ctx context.Context, repo string) (bool, error)
-	Add(ctx context.Context, repo, by string) (repoaccess.Entry, bool, error)
+	Add(ctx context.Context, repo string) (repoaccess.Entry, bool, error)
 	Remove(ctx context.Context, repo string) (bool, error)
 	Requests(ctx context.Context) ([]repoaccess.Request, error)
 	Request(ctx context.Context, repo, sessionID, reason string) (repoaccess.Request, string, error)
-	Approve(ctx context.Context, id, by string) (repoaccess.Entry, error)
+	Approve(ctx context.Context, id string) (repoaccess.Entry, error)
 	Reject(ctx context.Context, id string) error
 }
 
@@ -68,15 +67,6 @@ func (ra *RepoAccess) admin(h http.HandlerFunc) http.HandlerFunc {
 		}
 		h(w, r)
 	}
-}
-
-// operatorHeader is the user name Authelia's forward-auth hands upstream when
-// the ingress middleware forwards it. It only labels who changed the list —
-// it is never a gate, since anything inside the cluster can set it.
-const operatorHeader = "Remote-User"
-
-func operator(r *http.Request) string {
-	return strings.TrimSpace(r.Header.Get(operatorHeader))
 }
 
 type helperCtxKey struct{}
@@ -163,8 +153,7 @@ func (ra *RepoAccess) add(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	by := operator(r)
-	e, created, err := ra.store.Add(r.Context(), body.Repo, by)
+	e, created, err := ra.store.Add(r.Context(), body.Repo)
 	if errors.Is(err, repoaccess.ErrInvalidRepo) {
 		writeJSON(w, http.StatusBadRequest, errResp{Error: err.Error()})
 		return
@@ -176,7 +165,7 @@ func (ra *RepoAccess) add(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusOK
 	if created {
 		status = http.StatusCreated
-		ra.logger.Info("repo access: added", "repo", e.Repo, "by", by)
+		ra.logger.Info("repo access: added", "repo", e.Repo)
 	}
 	writeJSON(w, status, e)
 }
@@ -192,14 +181,13 @@ func (ra *RepoAccess) remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if removed {
-		ra.logger.Info("repo access: removed", "repo", r.URL.Query().Get("repo"), "by", operator(r))
+		ra.logger.Info("repo access: removed", "repo", r.URL.Query().Get("repo"))
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (ra *RepoAccess) approve(w http.ResponseWriter, r *http.Request) {
-	by := operator(r)
-	e, err := ra.store.Approve(r.Context(), r.PathValue("id"), by)
+	e, err := ra.store.Approve(r.Context(), r.PathValue("id"))
 	if errors.Is(err, repoaccess.ErrNotFound) {
 		writeJSON(w, http.StatusNotFound, errResp{Error: "request not found"})
 		return
@@ -208,7 +196,7 @@ func (ra *RepoAccess) approve(w http.ResponseWriter, r *http.Request) {
 		ra.internal(w, "approve", err)
 		return
 	}
-	ra.logger.Info("repo access: request approved", "repo", e.Repo, "by", by)
+	ra.logger.Info("repo access: request approved", "repo", e.Repo)
 	writeJSON(w, http.StatusOK, e)
 }
 
@@ -222,7 +210,7 @@ func (ra *RepoAccess) reject(w http.ResponseWriter, r *http.Request) {
 		ra.internal(w, "reject", err)
 		return
 	}
-	ra.logger.Info("repo access: request rejected", "id", r.PathValue("id"), "by", operator(r))
+	ra.logger.Info("repo access: request rejected", "id", r.PathValue("id"))
 	w.WriteHeader(http.StatusNoContent)
 }
 

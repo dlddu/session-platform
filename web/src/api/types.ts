@@ -81,7 +81,6 @@ export type AllowlistSource = "manual" | "request";
 
 export interface AllowlistEntry {
   repo: string;
-  addedBy: string;
   source: AllowlistSource;
   requestSessionId?: string;
   addedAt: string;

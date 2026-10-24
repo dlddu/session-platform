@@ -132,7 +132,6 @@ function AllowedRow({
     <div className="t-row" data-testid="allowlist-entry">
       <span className="t-repo">{e.repo}</span>
       <span className="t-src">
-        {e.addedBy ? <>{e.addedBy} · </> : null}
         {e.source === "request" ? (
           e.requestSessionId ? (
             <>
@@ -332,7 +331,7 @@ export function RepoAccess() {
         <div className="table">
           <div className="t-row t-head">
             <span>Repository</span>
-            <span>Added by</span>
+            <span>Source</span>
             <span>Added</span>
             <span />
           </div>

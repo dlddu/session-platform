@@ -22,8 +22,8 @@
 
 ### 시나리오 2: 관리 API는 세션 API와 같은 문(인그레스 forward-auth) 하나 뒤에
 - **사전 조건**: 기능이 켜진 배포. control plane 인그레스에 Authelia forward-auth 미들웨어가 걸려 있다
-- **실행 단계**: (a) Authelia 세션 없이 공개 주소로 화면 `/access`와 관리 API를 연다 → (b) Authelia로 로그인한 뒤 화면 `/access`를 열고 레포 하나를 추가 → (c) 같은 Authelia 세션으로 세션 API(`GET /sessions`)를 호출 → (d) `/api/v1/auth/*`를 호출 → (e) 클러스터 안에서 `Remote-User` 없이 control plane Service로 관리 API를 호출해 레포 하나를 추가
-- **기대 결과**: (a) forward-auth가 Authelia 로그인으로 돌려보내고 control plane에 닿지 않는다. (b) 화면이 control plane 자체의 로그인 안내 없이 곧바로 목록을 보이고, 추가가 성공한다. 인그레스가 `Remote-User`를 넘겨주면 그 항목의 `addedBy`가 그 사용자다. (c) 세션 API도 같은 문으로 지금처럼 동작한다. (d) 그런 경로가 없다(앱 자체 로그인 없음). (e) 추가가 성공하고 `addedBy`는 빈 값이다 — 인그레스를 지나지 않는 호출자는 세션 API와 같은 범위로 닿는다
+- **실행 단계**: (a) Authelia 세션 없이 공개 주소로 화면 `/access`와 관리 API를 연다 → (b) Authelia로 로그인한 뒤 화면 `/access`를 열고 레포 하나를 추가 → (c) 같은 Authelia 세션으로 세션 API(`GET /sessions`)를 호출 → (d) `/api/v1/auth/*`를 호출 → (e) 클러스터 안에서 control plane Service로 관리 API를 호출해 레포 하나를 추가
+- **기대 결과**: (a) forward-auth가 Authelia 로그인으로 돌려보내고 control plane에 닿지 않는다. (b) 화면이 control plane 자체의 로그인 안내 없이 곧바로 목록을 보이고, 추가가 성공한다. (c) 세션 API도 같은 문으로 지금처럼 동작한다. (d) 그런 경로가 없다(앱 자체 로그인 없음). (e) 추가가 성공한다 — 인그레스 지나지 않는 호출자는 세션 API와 같은 범위로 닿는다
 - **검증 AC**: AC-H2
 
 ### 시나리오 3: 헬퍼 파드 신원 확인

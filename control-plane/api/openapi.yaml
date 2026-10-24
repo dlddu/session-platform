@@ -883,14 +883,9 @@ components:
           example: dlddu/infrastructure
     AllowlistEntry:
       type: object
-      required: [repo, addedBy, source, addedAt]
+      required: [repo, source, addedAt]
       properties:
         repo: { type: string }
-        addedBy:
-          type: string
-          description: >
-            The `Remote-User` the ingress's forward-auth passed along, or empty
-            when none was. A label only — never checked.
         source: { type: string, enum: [manual, request] }
         requestSessionId: { type: string, description: Set when source is request }
         addedAt: { type: string, format: date-time }

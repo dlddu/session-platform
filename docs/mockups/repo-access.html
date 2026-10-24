@@ -244,11 +244,11 @@
         <section class="block" aria-label="Allowed repositories">
           <div class="sec-head"><h2>Allowed repositories</h2><span class="hint">Removing an entry takes effect on the next clone.</span></div>
           <div class="table" id="allow-table">
-            <div class="t-row t-head"><span>Repository</span><span>Added by</span><span>Added</span><span></span></div>
-            <div class="t-row"><span class="t-repo">dlddu/session-platform</span><span class="t-src">jd · <span class="mono">manual</span></span><span class="t-when">2026-10-24</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
-            <div class="t-row"><span class="t-repo">dlddu/flux-cd-apps</span><span class="t-src">jd · request from <span class="mono">a91f03c2</span></span><span class="t-when">2026-10-23</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
-            <div class="t-row"><span class="t-repo">dlddu/pocket-aide</span><span class="t-src">jd · <span class="mono">manual</span></span><span class="t-when">2026-10-21</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
-            <div class="t-row"><span class="t-repo">dlddu/plugin-marketplace</span><span class="t-src">jd · request from <span class="mono">0e44b7d1</span></span><span class="t-when">2026-10-20</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
+            <div class="t-row t-head"><span>Repository</span><span>Source</span><span>Added</span><span></span></div>
+            <div class="t-row"><span class="t-repo">dlddu/session-platform</span><span class="t-src"><span class="mono">manual</span></span><span class="t-when">2026-10-24</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
+            <div class="t-row"><span class="t-repo">dlddu/flux-cd-apps</span><span class="t-src">request from <span class="mono">a91f03c2</span></span><span class="t-when">2026-10-23</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
+            <div class="t-row"><span class="t-repo">dlddu/pocket-aide</span><span class="t-src"><span class="mono">manual</span></span><span class="t-when">2026-10-21</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
+            <div class="t-row"><span class="t-repo">dlddu/plugin-marketplace</span><span class="t-src">request from <span class="mono">0e44b7d1</span></span><span class="t-when">2026-10-20</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
             <form class="add" onsubmit="addRepo(event)">
               <label class="field"><span class="pre">github.com/</span><input id="add-input" placeholder="owner/repo" autocomplete="off" aria-label="Repository (owner/repo)"></label>
               <span class="scope-note">read-only · one repository</span>
@@ -289,7 +289,7 @@
   }
   function decide(btn, kind){
     var card=btn.closest('.req'), repo=card.dataset.repo;
-    if(kind==='allow'){ appendAllowed(repo,'jd · request'); toast(repo+' allowed (read-only)'); }
+    if(kind==='allow'){ appendAllowed(repo,'request'); toast(repo+' allowed (read-only)'); }
     else { toast('Request for '+repo+' rejected'); }
     card.remove(); counts();
   }
@@ -301,7 +301,7 @@
     e.preventDefault();
     var input=document.getElementById('add-input'), v=input.value.trim();
     if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(v)){ toast('Use owner/repo'); return; }
-    appendAllowed(v,'jd · manual'); input.value=''; counts(); toast(v+' allowed (read-only)');
+    appendAllowed(v,'manual'); input.value=''; counts(); toast(v+' allowed (read-only)');
   }
 </script>
 </body>

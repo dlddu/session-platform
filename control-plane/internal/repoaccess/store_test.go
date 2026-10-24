@@ -40,10 +40,10 @@ func TestNormalizeRepo(t *testing.T) {
 func TestAddIsCaseInsensitiveAndSurvivesReopen(t *testing.T) {
 	ctx := context.Background()
 	s, path := openTemp(t)
-	if _, created, err := s.Add(ctx, "dlddu/Reconciler", "jd"); err != nil || !created {
+	if _, created, err := s.Add(ctx, "dlddu/Reconciler"); err != nil || !created {
 		t.Fatalf("first add: created=%v err=%v", created, err)
 	}
-	if _, created, err := s.Add(ctx, "DLDDU/reconciler", "other"); err != nil || created {
+	if _, created, err := s.Add(ctx, "DLDDU/reconciler"); err != nil || created {
 		t.Fatalf("second add: created=%v err=%v; want existing entry", created, err)
 	}
 	_ = s.Close()
@@ -57,7 +57,7 @@ func TestAddIsCaseInsensitiveAndSurvivesReopen(t *testing.T) {
 	if err != nil || len(list) != 1 {
 		t.Fatalf("list after reopen = %v, %v; want one entry", list, err)
 	}
-	if e := list[0]; e.Repo != "dlddu/reconciler" || e.AddedBy != "jd" || e.Source != SourceManual {
+	if e := list[0]; e.Repo != "dlddu/reconciler" || e.Source != SourceManual {
 		t.Fatalf("entry = %+v", e)
 	}
 	ok, err := s2.Allowed(ctx, "Dlddu/Reconciler")
@@ -69,7 +69,7 @@ func TestAddIsCaseInsensitiveAndSurvivesReopen(t *testing.T) {
 func TestRemove(t *testing.T) {
 	ctx := context.Background()
 	s, _ := openTemp(t)
-	_, _, _ = s.Add(ctx, "dlddu/a", "jd")
+	_, _, _ = s.Add(ctx, "dlddu/a")
 	if removed, err := s.Remove(ctx, "dlddu/A"); err != nil || !removed {
 		t.Fatalf("remove = %v, %v", removed, err)
 	}
@@ -100,7 +100,7 @@ func TestRequestDedupesAndReportsAllowed(t *testing.T) {
 		t.Fatalf("pending = %v, %v; want 2", reqs, err)
 	}
 
-	_, _, _ = s.Add(ctx, "dlddu/open", "jd")
+	_, _, _ = s.Add(ctx, "dlddu/open")
 	r, status, err := s.Request(ctx, "dlddu/open", "sess-1", "x")
 	if err != nil || status != StatusAllowed || r.ID != "" {
 		t.Fatalf("request for allowed repo = %+v %q %v; want allowed, nothing recorded", r, status, err)
@@ -135,18 +135,18 @@ func TestApproveAddsAndClearsAllRequestsForRepo(t *testing.T) {
 	_, _, _ = s.Request(ctx, "dlddu/reconciler", "sess-2", "b")
 	_, _, _ = s.Request(ctx, "dlddu/other", "sess-1", "c")
 
-	e, err := s.Approve(ctx, r1.ID, "jd")
+	e, err := s.Approve(ctx, r1.ID)
 	if err != nil {
 		t.Fatalf("approve: %v", err)
 	}
-	if e.Repo != "dlddu/reconciler" || e.Source != SourceRequest || e.RequestSessionID != "sess-1" || e.AddedBy != "jd" {
+	if e.Repo != "dlddu/reconciler" || e.Source != SourceRequest || e.RequestSessionID != "sess-1" {
 		t.Fatalf("entry = %+v", e)
 	}
 	reqs, _ := s.Requests(ctx)
 	if len(reqs) != 1 || reqs[0].Repo != "dlddu/other" {
 		t.Fatalf("pending after approve = %+v; want only dlddu/other", reqs)
 	}
-	if _, err := s.Approve(ctx, r1.ID, "jd"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Approve(ctx, r1.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("approve twice err = %v; want ErrNotFound", err)
 	}
 }
@@ -155,13 +155,13 @@ func TestApproveOfAlreadyAllowedRepoKeepsOriginalEntry(t *testing.T) {
 	ctx := context.Background()
 	s, _ := openTemp(t)
 	r, _, _ := s.Request(ctx, "dlddu/x", "sess-1", "a")
-	_, _, _ = s.Add(ctx, "dlddu/x", "jd")
+	_, _, _ = s.Add(ctx, "dlddu/x")
 	reqs, _ := s.Requests(ctx)
 	if len(reqs) != 1 || !reqs[0].AlreadyAllowed {
 		t.Fatalf("request should be flagged already allowed: %+v", reqs)
 	}
-	e, err := s.Approve(ctx, r.ID, "someone")
-	if err != nil || e.Source != SourceManual || e.AddedBy != "jd" {
+	e, err := s.Approve(ctx, r.ID)
+	if err != nil || e.Source != SourceManual {
 		t.Fatalf("approve = %+v, %v; want the original manual entry", e, err)
 	}
 	if list, _ := s.List(ctx); len(list) != 1 {

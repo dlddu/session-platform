@@ -38,7 +38,6 @@ var (
 
 type Entry struct {
 	Repo             string    `json:"repo"`
-	AddedBy          string    `json:"addedBy"`
 	Source           string    `json:"source"`
 	RequestSessionID string    `json:"requestSessionId,omitempty"`
 	AddedAt          time.Time `json:"addedAt"`
@@ -99,6 +98,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS allowlist (
   repo               TEXT PRIMARY KEY,
+  -- Unused: who added an entry is no longer recorded. Kept, always '', so
+  -- files written before that open unchanged.
   added_by           TEXT NOT NULL,
   source             TEXT NOT NULL,
   request_session_id TEXT NOT NULL DEFAULT '',
@@ -120,7 +121,7 @@ CREATE TABLE IF NOT EXISTS access_requests (
 
 func (s *Store) List(ctx context.Context) ([]Entry, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT repo, added_by, source, request_session_id, added_at FROM allowlist ORDER BY added_at DESC, repo`)
+		`SELECT repo, source, request_session_id, added_at FROM allowlist ORDER BY added_at DESC, repo`)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +152,7 @@ func (s *Store) Allowed(ctx context.Context, rawRepo string) (bool, error) {
 
 // Add puts repo on the list directly. created is false when it was already
 // there; the existing entry is returned unchanged.
-func (s *Store) Add(ctx context.Context, rawRepo, by string) (Entry, bool, error) {
+func (s *Store) Add(ctx context.Context, rawRepo string) (Entry, bool, error) {
 	repo, err := NormalizeRepo(rawRepo)
 	if err != nil {
 		return Entry{}, false, err
@@ -161,7 +162,7 @@ func (s *Store) Add(ctx context.Context, rawRepo, by string) (Entry, bool, error
 		return Entry{}, false, err
 	}
 	defer tx.Rollback()
-	e, created, err := s.addTx(ctx, tx, repo, by, SourceManual, "")
+	e, created, err := s.addTx(ctx, tx, repo, SourceManual, "")
 	if err != nil {
 		return Entry{}, false, err
 	}
@@ -258,7 +259,7 @@ func (s *Store) Request(ctx context.Context, rawRepo, sessionID, reason string) 
 
 // Approve puts the request's repo on the list and clears every pending request
 // for that repo — they all asked for the same thing.
-func (s *Store) Approve(ctx context.Context, id, by string) (Entry, error) {
+func (s *Store) Approve(ctx context.Context, id string) (Entry, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Entry{}, err
@@ -268,7 +269,7 @@ func (s *Store) Approve(ctx context.Context, id, by string) (Entry, error) {
 	if err != nil {
 		return Entry{}, err
 	}
-	e, _, err := s.addTx(ctx, tx, r.Repo, by, SourceRequest, r.SessionID)
+	e, _, err := s.addTx(ctx, tx, r.Repo, SourceRequest, r.SessionID)
 	if err != nil {
 		return Entry{}, err
 	}
@@ -293,18 +294,18 @@ func (s *Store) Reject(ctx context.Context, id string) error {
 	return nil
 }
 
-func (s *Store) addTx(ctx context.Context, tx *sql.Tx, repo, by, source, sessionID string) (Entry, bool, error) {
+func (s *Store) addTx(ctx context.Context, tx *sql.Tx, repo, source, sessionID string) (Entry, bool, error) {
 	row := tx.QueryRowContext(ctx,
-		`SELECT repo, added_by, source, request_session_id, added_at FROM allowlist WHERE repo = ?`, repo)
+		`SELECT repo, source, request_session_id, added_at FROM allowlist WHERE repo = ?`, repo)
 	if e, err := scanEntry(row); err == nil {
 		return e, false, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return Entry{}, false, err
 	}
-	e := Entry{Repo: repo, AddedBy: by, Source: source, RequestSessionID: sessionID, AddedAt: s.now()}
+	e := Entry{Repo: repo, Source: source, RequestSessionID: sessionID, AddedAt: s.now()}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO allowlist (repo, added_by, source, request_session_id, added_at) VALUES (?, ?, ?, ?, ?)`,
-		e.Repo, e.AddedBy, e.Source, e.RequestSessionID, e.AddedAt.Format(time.RFC3339Nano)); err != nil {
+		`INSERT INTO allowlist (repo, added_by, source, request_session_id, added_at) VALUES (?, '', ?, ?, ?)`,
+		e.Repo, e.Source, e.RequestSessionID, e.AddedAt.Format(time.RFC3339Nano)); err != nil {
 		return Entry{}, false, err
 	}
 	return e, true, nil
@@ -315,7 +316,7 @@ type scanner interface{ Scan(dest ...any) error }
 func scanEntry(row scanner) (Entry, error) {
 	var e Entry
 	var at string
-	if err := row.Scan(&e.Repo, &e.AddedBy, &e.Source, &e.RequestSessionID, &at); err != nil {
+	if err := row.Scan(&e.Repo, &e.Source, &e.RequestSessionID, &at); err != nil {
 		return Entry{}, err
 	}
 	t, err := time.Parse(time.RFC3339Nano, at)

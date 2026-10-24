@@ -338,7 +338,7 @@ mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="pane
 
 ## 마지막 갱신
 
-- **2026-10-24 (3)** — **레포 접근 화면의 앱 자체 로그인 제거**: control plane 전체가 배포의 Authelia forward-auth 뒤로 옮겨 가 화면의 OIDC 로그인이 중복이 됐으므로, `repo-access.html`에서 로그인 안내 화면·상태 전환·「Signed in as」 줄을 지우고 `RepoAccess.tsx`도 같이 맞췄다. mockup 수·매핑·여정 커버리지는 변하지 않았다.
+- **2026-10-24 (3)** — **레포 접근 화면의 앱 자체 로그인 제거**: control plane 전체가 배포의 Authelia forward-auth 뒤로 옮겨 가 화면의 OIDC 로그인이 중복이 됐으므로, `repo-access.html`에서 로그인 안내 화면·상태 전환·「Signed in as」 줄을 지우고, 허용 목록 표의 「Added by」 열을 「Source」(직접 추가 / 요청 허락)로 바꾼 뒤 `RepoAccess.tsx`도 같이 맞췄다. mockup 수·매핑·여정 커버리지는 변하지 않았다.
 - **2026-10-24 (2)** — **레포 접근 화면 SPA 구현**: `web/src/screens/RepoAccess.tsx`(+ `RepoAccess.css`)가 `repo-access.html`을 `/access` 경로로 구현해, 이 mockup을 「구현이 없는 mockup」에서 화면 ↔ mockup 매핑 표로 옮겼다(매핑된 구현 파일 11→13). mockup 수·여정 커버리지는 변하지 않았다.
 - **2026-10-24** — **`JRN-repo-access` 신설에 따른 mockup·여정 페이지 추가**: 비공개 레포 허용 목록과 접근 요청(PRD `repo-access`, AC-H1~H5)을 위해 화면 단위 mockup `repo-access.html`(대기 요청 카드·허용 목록 표·추가 입력·로그인 안내)과 여정 페이지 `journeys/JRN-repo-access/`(세션 콘솔 → 레포 접근 화면 → 허락 → 비공개 클론)를 신설했다. SPA 구현이 아직 없어 `repo-access.html`은 「구현이 없는 mockup」에 구현 신호 `RepoAccess`로 등재했다. 여정 9→10, 단계 33→37, mockup 6→7, 요약 ✅18→20 / ⚠️5→7, 여정 페이지 8/8→9/9. 두 신설 파일을 토큰 복제 원장에 `DUP`로 등재했고 유지비 문구를 게이트 계산값 7~18곳으로 갱신했다.
 - **2026-09-03 (11)** — **여정 mockup lifecycle 클러스터 3종 신설**: `JRN-idle-resume`(4단계) · `JRN-manual-freeze`(3단계) · `JRN-session-deletion`(3단계) 페이지를 신설해 여정 mockup 커버리지가 **2 / 8 → 5 / 8** 이 되었다. 세 여정은 분기표가 서로를 가리켜 한 슬라이스로 묶어야 재작업이 없다. 파일럿 2종이 걸어둔 미승급 링크 6건 중 5건을 실링크로 승급했고(남은 1건은 `JRN-multi-session-switch` 대상), 하네스에 **승급 링크의 페이지 간 딥링크 검증**과 **예외 등재 여정 갈래(`data-branch-excepted`) 검사**를 더했다. **화면 단위 mockup 6종과 위의 커버리지 표는 건드리지 않았다** — 두 층위는 별개 지표다.
