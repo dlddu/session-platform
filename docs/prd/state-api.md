@@ -21,7 +21,7 @@
   - `snapshot`: workload별 복원(`shell`=CRIU, `claude-code`·`approval-gated`=filesystem archive)으로 `active` 전이(AC-B2) 후 읽기
   - 이는 switch(AC-C4)·snapshot 접근(AC-B2)과 동일한 "접근 시 active화" 원칙을 read에 적용한 것이다.
 - **달성 가치**: V3, V4
-- **구체화**: read가 반환하는 것은 워크로드 타입별로 다르다 — `shell`은 누적된 쉘 stdout/stderr → AC-D3 (`shell-workload.md`), `claude-code`는 투영된 assistant text delta와 diagnostic stderr → AC-E3 (`claude-code-workload.md`), `approval-gated`는 거기에 승인 대기·결정 in-band 마커가 섞인 같은 바이트열 → AC-F3 (`approval-gated-workload.md`). **append-only byte offset 커서 규약(비파괴·`offset=0`=전체)은 세 타입이 동일**하다.
+- **구체화**: read가 반환하는 것은 워크로드 타입별로 다르다 — `shell`은 누적된 쉘 stdout/stderr → AC-D3 (`shell-workload.md`), `claude-code`는 실행마다 `▸ <프롬프트>` 입력 기록 뒤에 투영된 assistant text delta와 diagnostic stderr → AC-E3 (`claude-code-workload.md`), `approval-gated`는 거기에 승인 대기·결정 in-band 마커가 섞인 같은 바이트열 → AC-F3 (`approval-gated-workload.md`). **append-only byte offset 커서 규약(비파괴·`offset=0`=전체)은 세 타입이 동일**하다.
 - **검증 방법**: active/idle/snapshot 세션에 각각 read를 호출하여, 각 경로(active 직접 / idle 승격 후 / snapshot 복원 후)로 처리되고 호출 후 최종 상태가 `active`이며 올바른 결과를 반환함을 확인한다.
 
 > 📌 **Passive live output stream**: `GET /sessions/{id}/stream`은 AC-E3의 실시간 관찰 경로이며 위 Read API처럼 “active 보장 후 처리”하지 않는다. 현재 session을 `Get`한 뒤 active 또는 pod를 보유한 idle 상태에서만 기존 pod의 같은 append-only output을 SSE로 전달한다. 상태를 승격하거나 snapshot을 복원하거나 `lastAccess`를 touch하지 않으며 snapshot에는 invalid-state 오류를 반환한다. output event id는 `nextOffset`, data는 `{offset,payloadBase64,nextOffset}`이고 decoded byte 길이는 `nextOffset-offset`이어야 한다. Base64는 정확한 byte 범위와 overlap을 보존하며, Claude의 모든 서버 발급 cursor/event 경계는 UTF-8 code-point 경계다.

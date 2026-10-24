@@ -221,7 +221,8 @@ func TestClaudeArchiveRestoreRoundTripPreservesStateCursorAndResume(t *testing.T
 }
 
 func TestClaudeFullOutputDrainsAcceptedQueueAndSurvivesArchiveRestore(t *testing.T) {
-	limit := len(claudeOutputLimitMarker) + 6
+	firstEcho := claudePromptEchoPrefix + "fills output\n"
+	limit := len(firstEcho) + len(claudeOutputLimitMarker) + 6
 	runner := newFakeClaudeRunner()
 	runner.release = make(chan struct{})
 	runner.output = func(_ int, opts runnerOptions) {
@@ -241,7 +242,7 @@ func TestClaudeFullOutputDrainsAcceptedQueueAndSurvivesArchiveRestore(t *testing
 	waitClaudeIdle(t, c1)
 
 	full, cursor := readViaHTTP(t, srv1, 0)
-	if got, want := full, "abcdef"+claudeOutputLimitMarker; got != want {
+	if got, want := full, firstEcho+"abcdef"+claudeOutputLimitMarker; got != want {
 		t.Fatalf("full bounded output = %q, want %q", got, want)
 	}
 	if cursor != limit {

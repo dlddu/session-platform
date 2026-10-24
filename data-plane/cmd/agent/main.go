@@ -365,6 +365,12 @@ func (b *scrollback) claudeFullAtLocked(limit, markerBytes int) bool {
 	return len(b.buf) > dataLimit
 }
 
+func (b *scrollback) endsWithNewline() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.buf) == 0 || b.buf[len(b.buf)-1] == '\n'
+}
+
 // Since returns a copy of the output accumulated after offset, plus the cursor
 // for the next delta read (the current accumulated length).
 func (b *scrollback) Since(offset int) ([]byte, int) {

@@ -51,6 +51,8 @@ const (
 	claudeCheckpointIDHeader   = "X-Session-Checkpoint-ID"
 	claudeRunOutputLimitMarker = "\n[session-platform: invocation output truncated at 16 MiB]\n"
 	claudeOutputLimitMarker    = "\n[session-platform: session output limit reached; further prompts are disabled]\n"
+	claudePromptEchoPrefix     = "▸ "
+	claudePromptEchoIndent     = "  "
 
 	claudeProcessGroupDrainTimeout      = 5 * time.Second
 	defaultClaudeRunTimeout             = 30 * time.Minute
@@ -375,6 +377,22 @@ func (c *claudeWorkload) appendPlatformNotice(text string) {
 	}
 }
 
+// appendPromptEcho records the prompt about to run in the same output record,
+// the way a PTY echoes shell input (AC-E3). Like a platform notice it is outside
+// the per-invocation output quota.
+func (c *claudeWorkload) appendPromptEcho(prompt string) {
+	text := strings.TrimRight(strings.ToValidUTF8(prompt, "\uFFFD"), "\r\n")
+	text = claudePromptEchoPrefix + strings.ReplaceAll(text, "\n", "\n"+claudePromptEchoIndent) + "\n"
+	if !c.out.endsWithNewline() {
+		text = "\n" + text
+	}
+	redactor := newStreamingRedactor(c.redact)
+	echo := append(redactor.Push([]byte(text)), redactor.Finish()...)
+	if c.out.appendClaudeBoundedAt(echo, c.scrollbackLimit, claudeOutputLimitMarker) {
+		c.logger.Warn("claude session output limit reached; rejecting new prompts")
+	}
+}
+
 func (c *claudeWorkload) runWorker() {
 	defer close(c.workerDone)
 	for {
@@ -394,6 +412,7 @@ func (c *claudeWorkload) runWorker() {
 		c.active = true
 		c.mu.Unlock()
 
+		c.appendPromptEcho(job.prompt)
 		output := newClaudeOutputSink(
 			&c.out,
 			c.redact,

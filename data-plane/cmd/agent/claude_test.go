@@ -533,6 +533,37 @@ func TestClaudeReadCursorAndCredentialRedaction(t *testing.T) {
 	waitClaudeIdle(t, c)
 }
 
+// AC-E3: each prompt is echoed into the output record right before its own
+// invocation's output, redacted and as valid UTF-8 like the rest of the record.
+func TestClaudePromptEchoPrecedesInvocationOutput(t *testing.T) {
+	const secret = "token-super-secret"
+	runner := newFakeClaudeRunner()
+	runner.output = func(index int, opts runnerOptions) {
+		if index == 0 {
+			_, _ = io.WriteString(opts.Stderr, "diagnostic without newline")
+			return
+		}
+		_, _ = io.WriteString(opts.Stdout, "answer\n")
+	}
+	c, srv := newClaudeTestServer(t, runner, platformDefaultModel, false, []string{secret})
+
+	writeViaHTTP(t, srv, "first "+secret+"\n", http.StatusOK)
+	_ = receiveClaudeRun(t, runner.started)
+	waitClaudeIdle(t, c)
+	writeViaHTTP(t, srv, "line one\nline two \xff", http.StatusOK)
+	_ = receiveClaudeRun(t, runner.started)
+	waitClaudeIdle(t, c)
+
+	got, _ := readViaHTTP(t, srv, 0)
+	want := claudePromptEchoPrefix + "first " + redactedLiteral + "\n" +
+		"diagnostic without newline" +
+		"\n" + claudePromptEchoPrefix + "line one\n" + claudePromptEchoIndent + "line two \uFFFD\n" +
+		"answer\n"
+	if got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
 func TestClaudeHealthAndAttachEndpoints(t *testing.T) {
 	runner := newFakeClaudeRunner()
 	_, srv := newClaudeTestServer(t, runner, platformDefaultModel, false, nil)
