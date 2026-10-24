@@ -94,12 +94,21 @@ RUN gh_arch="$(dpkg --print-architecture)" \
 # runtime libraries are installed here. criu is invoked only when CRIU_ENABLED
 # is on.
 FROM debian:trixie
+# safe.directory '/shared/*': the AC-F5 shared volume is EFS in production, and
+# its access point forces every file to uid/gid 50000, so a repository the
+# session MCP cloned there is owned by someone other than the workload's user
+# and git refuses it ("detected dubious ownership"). System scope because git
+# reads safe.directory only from system/global/command scope and the workload's
+# HOME is its archived state tree. The trailing '/*' prefix form needs git
+# 2.46+; the version gate fails the build if the base image ever ships older.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
       curl git jq kubectl \
       libbsd0 libcap2 libnet1 libnl-3-200 libnl-route-3-200 libprotobuf-c1 libuuid1 \
  && git --version \
+ && git config --system --add safe.directory '/shared/*' \
+ && dpkg --compare-versions "$(git --version | cut -d' ' -f3)" ge 2.46 \
  && curl --version \
  && jq --version \
  && kubectl version --client \
