@@ -98,8 +98,7 @@ interactive shell and Claude Code workloads.
   `attach`/`port_forward`/`proxy`, `opensearch_*`, `session_*`,
   `dear_baby_reset_user`, `github_commit_status_create`) is answered with an
   `isError` tool result and never forwarded, because `mcode` runs with
-  `--permission full` and has no deny rules of its own. The Claude types get
-  the same list as `permissions.deny` in their managed `settings.json`.
+  `--permission full` and has no deny rules of its own.
   With a token it also bootstraps the plugin marketplace for the workload pod,
   which cannot reach GitHub: it asks the K3s MCP for a `plugin-marketplace` read
   token through its own handler in process, clones

@@ -9,9 +9,9 @@ import (
 	"strings"
 )
 
-// k3sMCPDeniedTools are the K3s MCP tools no session may call: the list
-// dlddu/reconciler-local denies in its Claude settings, kept identical on
-// purpose. A trailing `*` matches a prefix, as it does in a Claude permission
+// k3sMCPDeniedTools are the K3s MCP tools a minimax-code session may not call:
+// the list dlddu/reconciler-local denies in its Claude settings, kept identical
+// on purpose. A trailing `*` matches a prefix, as it does in a Claude permission
 // rule. Every other K3s MCP tool — the reads, token mints and the AWS config
 // fetch — stays callable.
 var k3sMCPDeniedTools = []string{
@@ -28,28 +28,6 @@ var k3sMCPDeniedTools = []string{
 	"session_*",
 	"dear_baby_reset_user",
 	"github_commit_status_create",
-}
-
-// k3sMCPClaudeToolPrefixes are the names under which the K3s MCP can reach a
-// Claude session: a server registered as `k3s`, the claude.ai connector, and
-// the marketplace's `mcp-servers` plugin, which the CLI namespaces by plugin.
-var k3sMCPClaudeToolPrefixes = []string{
-	"mcp__k3s__",
-	"mcp__claude_ai_k3s__",
-	"mcp__plugin_mcp-servers_k3s__",
-}
-
-// claudeDeniedK3SMCPTools is k3sMCPDeniedTools as Claude permission rules.
-// The claude-code type installs no K3s MCP server today, so these rules are
-// what keeps a later plugin change from silently granting the tools.
-func claudeDeniedK3SMCPTools() []string {
-	out := make([]string, 0, len(k3sMCPClaudeToolPrefixes)*len(k3sMCPDeniedTools))
-	for _, prefix := range k3sMCPClaudeToolPrefixes {
-		for _, tool := range k3sMCPDeniedTools {
-			out = append(out, prefix+tool)
-		}
-	}
-	return out
 }
 
 func k3sMCPToolDenied(name string) bool {

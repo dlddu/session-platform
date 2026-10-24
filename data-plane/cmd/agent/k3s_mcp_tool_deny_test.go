@@ -6,8 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -121,55 +119,5 @@ func TestK3SMCPProxyRefusesWhatItCannotInspect(t *testing.T) {
 	}
 	if len(*forwarded) != 0 {
 		t.Fatalf("upstream received %d requests the filter could not clear", len(*forwarded))
-	}
-}
-
-func TestClaudeManagedSettingsDenyK3SMCPTools(t *testing.T) {
-	for _, tools := range []toolSurface{{Plugin: true}, {SessionMCP: "http://10.0.0.9:8092"}} {
-		settings := managedSettingsFor(tools)
-		for _, rule := range []string{
-			"mcp__k3s__resource_delete", "mcp__k3s__session_*",
-			"mcp__claude_ai_k3s__opensearch_*", "mcp__plugin_mcp-servers_k3s__resource_exec",
-		} {
-			if !containsString(settings.Permissions.Deny, rule) {
-				t.Errorf("managedSettingsFor(%+v) deny = %v, missing %s", tools, settings.Permissions.Deny, rule)
-			}
-		}
-		if containsString(settings.Permissions.Deny, "mcp__k3s__resource_get") {
-			t.Errorf("managedSettingsFor(%+v) denies a read tool", tools)
-		}
-	}
-}
-
-// An archive taken before the deny rules existed must come back with them:
-// restore is the path every long-lived session takes.
-func TestClaudeManagedSettingsRestoreAddsK3SMCPDenyRules(t *testing.T) {
-	homeDir := t.TempDir()
-	settingsDir := filepath.Join(homeDir, claudeSettingsDir)
-	if err := os.MkdirAll(settingsDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	archived := claudeManagedSettings{EnabledPlugins: map[string]bool{claudeSessionPlatformPlugin: true}}
-	archived.Permissions.Allow = append([]string(nil), claudeManagedTools...)
-	archived.Permissions.Deny = []string{"Bash(rm -rf /)"}
-	settingsPath := filepath.Join(settingsDir, claudeSettingsFile)
-	if err := storeClaudeManagedSettings(settingsDir, settingsPath, archived); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugin: true}); err != nil {
-		t.Fatalf("ensure managed settings: %v", err)
-	}
-	restored, err := loadClaudeManagedSettings(homeDir)
-	if err != nil {
-		t.Fatalf("load restored settings: %v", err)
-	}
-	for _, rule := range append(claudeDeniedK3SMCPTools(), "Bash(rm -rf /)") {
-		if !containsString(restored.Permissions.Deny, rule) {
-			t.Fatalf("restored deny = %v, missing %s", restored.Permissions.Deny, rule)
-		}
-	}
-	if err := validateClaudeManagedSettings(homeDir); err != nil {
-		t.Fatalf("restored settings are invalid: %v", err)
 	}
 }
