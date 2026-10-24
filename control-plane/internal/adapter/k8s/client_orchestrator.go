@@ -205,6 +205,7 @@ type ClientOrchestrator struct {
 	image                    string
 	claudeCredentialsSecret  string // platform Secret referenced by claude-code pods
 	approvalGatewayURL       string // PocketAide base URL handed to approval-gated helper pods
+	repoAccessURL            string // control plane URL for the helper's repo access calls (repo_access.go)
 	miniMaxCredentialsSecret string
 	// AC-F5's per-session shared claim — see shared_volume.go.
 	sharedVolumeStorageClass string
@@ -739,6 +740,7 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 		mcp.Env = append(mcp.Env, corev1.EnvVar{Name: SharedVolumeDirEnvVar, Value: SharedVolumeMountPath})
 		helperVolumes = append(helperVolumes, sharedVolume(sharedClaimName(name)))
 	}
+	helperVolumes = o.addRepoAccess(&mcp, helperVolumes)
 
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{

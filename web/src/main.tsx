@@ -1,11 +1,12 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
-import { AppShell } from "./app/AppShell";
+import { AppShell, REPO_ACCESS_PATH } from "./app/AppShell";
 import { Sessions } from "./screens/Sessions";
 import { NewSession } from "./screens/NewSession";
 import { Workspace } from "./screens/Workspace";
 import { Restore } from "./screens/Restore";
+import { RepoAccess } from "./screens/RepoAccess";
 import "./design/tokens.css";
 
 // /new 는 Sessions 위에 얹히는 모달이라 두 엘리먼트를 함께 렌더한다.
@@ -27,6 +28,7 @@ const router = createBrowserRouter([
       { path: "/agent/:id", element: <Workspace /> },
       { path: "/gated/:id", element: <Workspace /> },
       { path: "/restore/:id", element: <Restore /> },
+      { path: REPO_ACCESS_PATH, element: <RepoAccess /> },
     ],
   },
 ]);

@@ -65,6 +65,8 @@ func main() {
 		"data_plane_shell", cfg.dataPlaneShell,
 		"claude_code_default_model", cfg.claudeCodeDefaultModel,
 		"claude_code_models", len(cfg.claudeCodeModels),
+		"repo_access_enabled", cfg.repoAccess.dbPath != "",
+		"oidc_issuer", cfg.repoAccess.oidc.issuer,
 	)
 	if cfg.dataPlaneImage == "" {
 		// The in-code fallback image has no session agent, so session pods will
@@ -84,6 +86,7 @@ func main() {
 		k8s.WithMiniMaxCredentialsSecret(cfg.miniMax.credentialsSecret),
 		k8s.WithApprovalGatewayURL(cfg.approvalGatewayURL),
 		k8s.WithSharedVolume(cfg.sharedVolumeStorageClass, cfg.sharedVolumeSize),
+		k8s.WithRepoAccess(cfg.repoAccess.helperURL(namespace)),
 		k8s.WithCheckpointPrivileged(cfg.criuEnabled))
 	store := configmap.NewStore(client, namespace)
 	// Shell I/O (write→stdin, read→scrollback delta) AND checkpoint/restore ride
@@ -149,6 +152,13 @@ func main() {
 		api.WithWorkloadModelConfig(session.WorkloadTypeApprovalGated, cfg.claudeCodeDefaultModel, cfg.claudeCodeModels),
 		api.WithOfferedWorkloadTypes(cfg.offeredWorkloadTypes()...),
 	).Routes(mux)
+	repoAccess, err := openRepoAccess(context.Background(), cfg.repoAccess)
+	if err != nil {
+		logger.Error("repo access misconfigured", "err", err)
+		os.Exit(1)
+	}
+	defer repoAccess.close()
+	repoAccess.routes(mux, client, namespace, mgr, logger)
 	mux.Handle("/", static.Handler())
 
 	srv := &http.Server{
@@ -230,6 +240,7 @@ type config struct {
 	checkpointS3SessionName string
 	checkpointS3Endpoint    string
 	miniMax                 miniMaxConfig
+	repoAccess              repoAccessConfig
 }
 
 // GET /config lists only these, so clients never offer a type whose create would fail.
@@ -314,6 +325,7 @@ func loadConfig() (config, error) {
 		checkpointS3Prefix:          env("CHECKPOINT_S3_PREFIX", "checkpoints"),
 		checkpointS3SessionName:     env("CHECKPOINT_S3_SESSION_NAME", ""),
 		miniMax:                     loadMiniMaxConfig(),
+		repoAccess:                  loadRepoAccessConfig(),
 	}, nil
 }
 

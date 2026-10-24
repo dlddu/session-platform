@@ -31,6 +31,7 @@ type cloneCall struct {
 	target string
 	branch string
 	dest   string
+	env    []string
 }
 
 func newClonedMCP(t *testing.T, sharedDir string, statuses ...string) *clonedMCP {
@@ -41,9 +42,9 @@ func newClonedMCP(t *testing.T, sharedDir string, statuses ...string) *clonedMCP
 	c.server = newSessionMCPServerWith(t, sessionMCPConfig{
 		gateway:   gate,
 		sharedDir: sharedDir,
-		clone: func(_ context.Context, target, branch, dest string) error {
+		clone: func(_ context.Context, target, branch, dest string, env []string) error {
 			c.clones.Add(1)
-			c.calls = append(c.calls, cloneCall{target: target, branch: branch, dest: dest})
+			c.calls = append(c.calls, cloneCall{target: target, branch: branch, dest: dest, env: env})
 			if c.cloneErr != nil {
 				return c.cloneErr
 			}

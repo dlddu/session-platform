@@ -159,8 +159,19 @@ func main() {
 			gateway = nil
 		}
 		shared := env(sharedVolumeDirEnv, "")
-		handler = sessionMCPRoutes(logger, newSessionMCPConfig(gateway, shared))
-		logger.Info("session MCP started", "addr", addr, "gated", gateway != nil, "shared_dir", shared)
+		repoAccess := newRepoAccessClient(os.Getenv(repoAccessURLEnv), os.Getenv(repoAccessTokenFileEnv))
+		var k3sProxyMCP string
+		if proxyBase := os.Getenv(k3sMCPProxyURLEnv); proxyBase != "" {
+			mcpURL, err := k3sProxyMCPURL(proxyBase)
+			if err != nil {
+				logger.Warn("session MCP ignores an invalid K3s MCP proxy URL; private clones cannot be issued a token", "err", err)
+			} else {
+				k3sProxyMCP = mcpURL
+			}
+		}
+		handler = sessionMCPRoutes(logger, newSessionMCPConfig(gateway, shared, repoAccess, k3sProxyMCP))
+		logger.Info("session MCP started", "addr", addr, "gated", gateway != nil, "shared_dir", shared,
+			"repo_access", repoAccess != nil, "k3s_mcp_proxy", k3sProxyMCP != "")
 	case workloadCredentialProxy:
 		placement, err := credentialProxyPlacementFromEnv()
 		if err != nil {

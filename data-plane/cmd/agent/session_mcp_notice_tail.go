@@ -133,6 +133,11 @@ func renderApprovalNotice(n approvalNotice) string {
 			strings.ToLower(n.Decision), n.Tool, n.ExternalID)
 	case noticeUnavailable:
 		return fmt.Sprintf("\n[session-platform: approval unavailable — %s · %s]\n", n.Tool, n.ExternalID)
+	case noticeAccessRequested:
+		if !repoAccessRepoPattern.MatchString(n.Repo) {
+			return ""
+		}
+		return fmt.Sprintf("\n[session-platform: access requested — %s · decide in the control plane's Repo access screen]\n", n.Repo)
 	default:
 		return ""
 	}

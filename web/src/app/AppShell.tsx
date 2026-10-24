@@ -1,14 +1,50 @@
 // mockup: docs/mockups/index.html
-import { NavLink, Outlet } from "react-router-dom";
+import { createContext, useContext, useEffect, useState } from "react";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { api } from "../api/client";
+import { LockIcon } from "./icons";
 import { ToastProvider } from "./Toast";
 import "./shell.css";
 
+export const REPO_ACCESS_PATH = "/access";
+
+type SetRepoAccessBadge = (pending: number | null) => void;
+
+const RepoAccessBadgeContext = createContext<SetRepoAccessBadge | null>(null);
+
+export function useRepoAccessBadge(): SetRepoAccessBadge {
+  const set = useContext(RepoAccessBadgeContext);
+  if (!set) throw new Error("useRepoAccessBadge must be used within <AppShell>");
+  return set;
+}
+
 export function AppShell() {
+  const { pathname } = useLocation();
+  const [pending, setPending] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (pathname === REPO_ACCESS_PATH) return;
+    let cancelled = false;
+    api
+      .getRepoAccess()
+      .then((state) => {
+        if (!cancelled) setPending(state.requests.length);
+      })
+      .catch(() => {
+        if (!cancelled) setPending(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname]);
+
   return (
     <div className="app">
       <div className="viewport">
         <ToastProvider>
-          <Outlet />
+          <RepoAccessBadgeContext.Provider value={setPending}>
+            <Outlet />
+          </RepoAccessBadgeContext.Provider>
         </ToastProvider>
       </div>
       <nav className="rail" aria-label="Primary">
@@ -32,6 +68,20 @@ export function AppShell() {
             <rect x="3" y="14" width="7" height="7" rx="1.5" />
             <rect x="14" y="14" width="7" height="7" rx="1.5" />
           </svg>
+        </NavLink>
+        <NavLink
+          to={REPO_ACCESS_PATH}
+          className={({ isActive }) => "rail-btn" + (isActive ? " on" : "")}
+          title="Repo access"
+          aria-label={pending ? `Repo access, ${pending} pending` : "Repo access"}
+          data-testid="rail-repo-access"
+        >
+          <LockIcon />
+          {pending ? (
+            <span className="count" data-testid="repo-access-pending-count">
+              {pending}
+            </span>
+          ) : null}
         </NavLink>
         <div className="rail-spacer" />
         <div className="rail-me" title="You">

@@ -53,7 +53,5 @@
 - **화면은 mockup 먼저** — `docs/mockups/repo-access.html`과 여정 `JRN-repo-access`를 먼저 세우고 구현은 그 뒤에 한다.
 
 ## 남은 일
-- 테스트 문서 `docs/test/repo-access.md`와 e2e 매핑(대부분 유예 — 이 기능은 kind e2e에서 꺼져 있다)
-- `docs/session-mcp-tool-surface.md`: 도구 목록에 접근 요청 도구 추가, R1 예외 조항, `git_clone`의 「공개 레포 한정」 문단 개정
-- AC-F6(자격 증명 배치)에 `approval-gated` 헬퍼 파드의 K3s MCP 프록시를 반영
-- 배포 레포(flux-cd-apps): Authelia OIDC 클라이언트 등록, SQLite 영속 볼륨, control plane replica·전략·env
+- 배포 레포(flux-cd-apps): Authelia OIDC 클라이언트 등록, 클라이언트 시크릿·쿠키 키, SQLite 영속 볼륨, control plane replica 1·`Recreate`·env, TokenReview 바인딩(`system:auth-delegator` — 클러스터 범위라 base `k8s/`에 두지 않는다)
+- 운영 확인: `docs/test/repo-access.md`의 다섯 시나리오(kind e2e에서는 유예 — `docs/test/e2e.md`)

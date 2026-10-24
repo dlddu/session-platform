@@ -1,14 +1,28 @@
 // Thin client over the control plane REST API. Paths are relative so the same
 // code works behind the Vite dev proxy and the embedded prod build.
 import type {
+  AllowlistEntry,
+  AuthUser,
   CreateSessionRequest,
   PlatformConfig,
   ReadResult,
+  RepoAccessState,
   Session,
   WriteResult,
 } from "./types";
 
 const BASE = "/api/v1";
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly detail: string;
+
+  constructor(status: number, detail: string) {
+    super(`${status} ${detail}`);
+    this.status = status;
+    this.detail = detail;
+  }
+}
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, {
@@ -23,7 +37,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* ignore non-JSON error bodies */
     }
-    throw new Error(`${res.status} ${detail}`);
+    throw new ApiError(res.status, detail);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -70,4 +84,38 @@ export const api = {
   /** Archive/checkpoint immediately and reclaim the workload pod. */
   archiveSession: (id: string) =>
     req<Session>(`/sessions/${id}/snapshot`, { method: "POST" }),
+
+  getMe: () => req<AuthUser>("/auth/me", { cache: "no-store" }),
+
+  loginUrl: (returnTo: string) =>
+    `${BASE}/auth/login?return=${encodeURIComponent(returnTo).replace(/%2F/g, "/")}`,
+
+  logout: () => req<void>("/auth/logout", { method: "POST" }),
+
+  getRepoAccess: () =>
+    req<RepoAccessState>("/repo-access", { cache: "no-store" }).then((r) => ({
+      allowlist: r.allowlist ?? [],
+      requests: r.requests ?? [],
+    })),
+
+  addAllowlist: (repo: string) =>
+    req<AllowlistEntry>("/repo-access/allowlist", {
+      method: "POST",
+      body: JSON.stringify({ repo }),
+    }),
+
+  removeAllowlist: (repo: string) =>
+    req<void>(`/repo-access/allowlist?repo=${encodeURIComponent(repo)}`, {
+      method: "DELETE",
+    }),
+
+  approveRequest: (id: string) =>
+    req<AllowlistEntry>(`/repo-access/requests/${encodeURIComponent(id)}/approve`, {
+      method: "POST",
+    }),
+
+  rejectRequest: (id: string) =>
+    req<void>(`/repo-access/requests/${encodeURIComponent(id)}/reject`, {
+      method: "POST",
+    }),
 };
