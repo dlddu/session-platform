@@ -101,12 +101,18 @@ FROM debian:trixie
 # reads safe.directory only from system/global/command scope and the workload's
 # HOME is its archived state tree. The trailing '/*' prefix form needs git
 # 2.46+; the version gate fails the build if the base image ever ships older.
+# python3 + python3-jsonschema: agent workloads (claude-code, minimax-code) run
+# skills whose bundled helpers are Python scripts that validate records against
+# draft 2020-12 JSON schemas (e.g. reconciler_tool.py). Installed from the distro
+# rather than pip so the image keeps one package manager and needs no PyPI.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
       curl git jq kubectl \
+      python3 python3-jsonschema \
       libbsd0 libcap2 libnet1 libnl-3-200 libnl-route-3-200 libprotobuf-c1 libuuid1 \
  && git --version \
+ && python3 -c 'import sys, importlib.metadata as m; from jsonschema import Draft202012Validator; print(sys.version.split()[0], m.version("jsonschema"))' \
  && git config --system --add safe.directory '/shared/*' \
  && dpkg --compare-versions "$(git --version | cut -d' ' -f3)" ge 2.46 \
  && curl --version \
