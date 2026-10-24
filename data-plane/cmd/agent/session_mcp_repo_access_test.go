@@ -151,6 +151,11 @@ type repoAccessMCP struct {
 	calls   []cloneCall
 	// cloneErr, when set, is what the clone seam fails with.
 	cloneErr func(env []string) error
+	// sharedDir is the session's shared volume (git_push reads clones there).
+	sharedDir string
+	pushes    []pushRequest
+	// pushErr, when set, is what the push seam fails with.
+	pushErr func(req pushRequest) error
 }
 
 type repoAccessOptions struct {
@@ -170,10 +175,20 @@ func newRepoAccessMCP(t *testing.T, opts repoAccessOptions, statuses ...string) 
 	}
 	gate := m.gateway.gate(t)
 	gate.sleep = func(context.Context, time.Duration) error { return nil }
+	m.sharedDir = t.TempDir()
 	config := sessionMCPConfig{
 		gateway:   gate,
-		sharedDir: t.TempDir(),
+		sharedDir: m.sharedDir,
 		notices:   m.notices,
+		push: func(_ context.Context, req pushRequest) (pushOutcome, error) {
+			m.pushes = append(m.pushes, req)
+			if m.pushErr != nil {
+				if err := m.pushErr(req); err != nil {
+					return pushOutcome{}, err
+				}
+			}
+			return pushOutcome{commit: testPushedCommit}, nil
+		},
 		clone: func(_ context.Context, target, branch, dest string, env []string) error {
 			m.clones.Add(1)
 			m.calls = append(m.calls, cloneCall{target: target, branch: branch, dest: dest, env: env})
@@ -266,12 +281,12 @@ func envEntry(env []string, key string) (string, bool) {
 // allow list do.
 func TestRequestRepoAccessIsListedOnlyWithTheGateAndTheAllowList(t *testing.T) {
 	with := newRepoAccessMCP(t, repoAccessOptions{}, "APPROVED")
-	if names := with.toolNames(t); !names[requestRepoAccessTool] || len(names) != 4 {
-		t.Fatalf("tools = %v, want the three tools plus %s", names, requestRepoAccessTool)
+	if names := with.toolNames(t); !names[requestRepoAccessTool] || !names[gitPushTool] || len(names) != 5 {
+		t.Fatalf("tools = %v, want the three tools plus %s and %s", names, requestRepoAccessTool, gitPushTool)
 	}
 	without := newRepoAccessMCP(t, repoAccessOptions{noRepoAccess: true}, "APPROVED")
-	if names := without.toolNames(t); names[requestRepoAccessTool] || len(names) != 3 {
-		t.Fatalf("tools = %v, want no %s without an allow list", names, requestRepoAccessTool)
+	if names := without.toolNames(t); names[requestRepoAccessTool] || names[gitPushTool] || len(names) != 3 {
+		t.Fatalf("tools = %v, want no %s or %s without an allow list", names, requestRepoAccessTool, gitPushTool)
 	}
 	if isError, text := without.call(t, requestRepoAccessTool, map[string]any{"repo": "a/b", "reason": "x"}); !isError {
 		t.Fatalf("an unlisted request tool answered: %s", text)
