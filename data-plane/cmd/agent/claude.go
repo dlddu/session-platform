@@ -377,9 +377,7 @@ func (c *claudeWorkload) appendPlatformNotice(text string) {
 	}
 }
 
-// appendPromptEcho records the prompt about to run in the same output record,
-// the way a PTY echoes shell input (AC-E3). Like a platform notice it is outside
-// the per-invocation output quota.
+// Format and quota exemption: docs/prd/claude-code-workload.md AC-E3.
 func (c *claudeWorkload) appendPromptEcho(prompt string) {
 	text := strings.TrimRight(strings.ToValidUTF8(prompt, "\uFFFD"), "\r\n")
 	text = claudePromptEchoPrefix + strings.ReplaceAll(text, "\n", "\n"+claudePromptEchoIndent) + "\n"

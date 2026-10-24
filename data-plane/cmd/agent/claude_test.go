@@ -533,8 +533,6 @@ func TestClaudeReadCursorAndCredentialRedaction(t *testing.T) {
 	waitClaudeIdle(t, c)
 }
 
-// AC-E3: each prompt is echoed into the output record right before its own
-// invocation's output, redacted and as valid UTF-8 like the rest of the record.
 func TestClaudePromptEchoPrecedesInvocationOutput(t *testing.T) {
 	const secret = "token-super-secret"
 	runner := newFakeClaudeRunner()
