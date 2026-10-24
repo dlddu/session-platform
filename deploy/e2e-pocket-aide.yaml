@@ -1,0 +1,197 @@
+# kind e2e: the real approval gateway — PocketAide (dlddu/pocket-aide) — and the
+# IdP its users log in through.
+#
+# 승인 게이트 상대는 대역이 아니라 실물이다. 헬퍼 파드의 MCP 컨테이너가 프로덕션 코드 그대로
+# 서비스 어카운트 토큰으로 승인 요청을 만들고(POST /api/external/approvals), PocketAide 가
+# 그 토큰을 TokenReview 로 검증해 등록된 호출자로 매핑한다. 결정을 내리는 사람 자리도 앱이
+# 쓰는 사용자 API(/api/approvals/{id}/approve) 그대로다 — e2e 하네스
+# (control-plane/test/harness_pocket_aide_test.go)가 그 사용자로 로그인해 누른다.
+#
+# 이미지는 발행 이미지가 아니라 scripts/e2e/up.sh 가 POCKET_AIDE_SHA 커밋의 backend/cmd/server
+# 와 backend/cmd/oidcmock 을 빌드한 `pocket-aide:e2e`·`oidc-mock:e2e` 다. 발행 이미지에는
+# IdP 가 없어서 서버와 IdP 를 같은 커밋에서 맞추려면 둘 다 소스에서 빌드해야 한다.
+#
+# 치환은 IdP 하나다 — oidc-mock 은 test-only IdP 다(아래 Namespace 의 mock-exception). PocketAide
+# 의 실 IdP 는 운영자의 외부 OIDC 공급자(실 계정·브라우저 동의)라 kind 안에서 로그인을 구동할 수 없다.
+# SQS_QUEUE_URL 을 두지 않으므로 PR 모니터와 APNs 발송은 꺼진 채 뜬다 — 승인 요청 생성 뒤의
+# 푸시는 이 하네스가 보지 않는다.
+apiVersion: v1
+kind: Namespace
+metadata:
+  # mock-exception: POCKET-AIDE-IDP — PocketAide 의 실 상류 IdP 는 운영자의 외부 OIDC 공급자(실 계정·브라우저 동의)라 kind 안에서 로그인을 구동할 수 없다.
+  name: oidc-mock
+---
+# issuer 는 PocketAide 의 OIDC_ISSUER 와 글자까지 같아야 한다 — PocketAide 는 기동할 때
+# discovery 문서의 issuer 를 대조하고, 어긋나면 log.Fatalf 로 죽는다. 서명 키는 프로세스
+# 기동 때마다 새로 만들므로 테스트 도중에 이 Deployment 를 다시 굴리면 그 전 토큰이 모두
+# 무효가 된다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oidc-mock
+  namespace: oidc-mock
+  labels:
+    app: oidc-mock
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oidc-mock
+  template:
+    metadata:
+      labels:
+        app: oidc-mock
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+      containers:
+        - name: oidc-mock
+          image: oidc-mock:e2e
+          imagePullPolicy: IfNotPresent
+          command:
+            - /usr/local/bin/oidcmock
+            - -addr
+            - ":5556"
+            - -issuer
+            - http://oidc-mock.oidc-mock.svc.cluster.local:5556
+            - -client-id
+            - session-platform-e2e
+            - -audience
+            - pocket-aide-e2e
+          ports:
+            - name: http
+              containerPort: 5556
+          readinessProbe:
+            httpGet:
+              path: /.well-known/openid-configuration
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oidc-mock
+  namespace: oidc-mock
+spec:
+  selector:
+    app: oidc-mock
+  ports:
+    - name: http
+      port: 5556
+      targetPort: http
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pocket-aide
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pocket-aide
+  namespace: pocket-aide
+---
+# PocketAide 는 호출자 토큰을 TokenReview 로 검증한다. 이 바인딩이 없으면 외부 호출 전부가
+# 503(「검증 불가」)이고, 헬퍼 파드 쪽에서는 거부가 아니라 게이트웨이 오류로 보인다.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pocket-aide-e2e:auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: pocket-aide
+    namespace: pocket-aide
+---
+# pocket-aide 레포 k8s/deployment.yaml 의 kind 판본. 복제 1 은 그 파일이 SQLite 단일 쓰기
+# 불변식 때문에 고정해 둔 것이다. 저장소는 emptyDir 다 — SUT 를 올릴 때마다 빈 DB 에서
+# 시작하고, 파드가 재시작하면 호출자 등록도 사라진다(하네스가 매 실행 다시 등록한다).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pocket-aide
+  namespace: pocket-aide
+  labels:
+    app: pocket-aide
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: pocket-aide
+  template:
+    metadata:
+      labels:
+        app: pocket-aide
+    spec:
+      serviceAccountName: pocket-aide
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: pocket-aide
+          image: pocket-aide:e2e
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/pocket-aide"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: DATABASE_PATH
+              value: /data/pocket-aide.db
+            # 셋 다 위 oidc-mock 의 플래그와 같아야 한다(issuer · audience · client id).
+            - name: OIDC_ISSUER
+              value: http://oidc-mock.oidc-mock.svc.cluster.local:5556
+            - name: OIDC_AUDIENCE
+              value: pocket-aide-e2e
+            - name: OIDC_CLIENT_ID
+              value: session-platform-e2e
+            - name: OIDC_REDIRECT_URI
+              value: http://127.0.0.1/e2e-callback
+            # audience 는 control plane 이 헬퍼 파드에 projected 토큰을 만들 때 쓰는 값
+            # (client_orchestrator.go ApprovalGatewayTokenAudience)과 같아야 한다.
+            - name: K8S_CALLER_AUTH
+              value: "true"
+            - name: K8S_TOKEN_AUDIENCE
+              value: pocket-aide
+            - name: K8S_TOKEN_ISSUER
+              value: https://kubernetes.default.svc.cluster.local
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+# 프로덕션 주소(http://pocket-aide.pocket-aide.svc.cluster.local:8080)와 같은 이름·포트라
+# control plane 의 APPROVAL_GATEWAY_URL 은 base 값을 그대로 쓴다.
+apiVersion: v1
+kind: Service
+metadata:
+  name: pocket-aide
+  namespace: pocket-aide
+spec:
+  selector:
+    app: pocket-aide
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

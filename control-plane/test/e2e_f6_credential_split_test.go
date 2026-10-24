@@ -8,8 +8,9 @@
 // this file's row of § "시나리오 ↔ e2e 파일 매핑" and its four rows of
 // § "남은 미검증 분기 (공백은 아님)".
 //
-// Every secret value compared below is read from the cluster Secret rather than
-// written here, so this file holds no copy of a credential.
+// Every secret value compared below is read from the cluster — a Secret, or the
+// gateway token file inside the MCP container — rather than written here, so
+// this file holds no copy of a credential.
 package e2e_test
 
 import (
@@ -27,15 +28,8 @@ import (
 )
 
 const (
-	approvalGatewaySecretName = "approval-gateway-credentials"
-
-	gatewayURLEnvVar    = "APPROVAL_GATEWAY_URL"
-	gatewayAPIKeyEnvVar = "APPROVAL_GATEWAY_API_KEY"
-	gatewayUserIDEnvVar = "APPROVAL_GATEWAY_USER_ID"
-
-	gatewayURLKey    = "url"
-	gatewayAPIKeyKey = "api-key"
-	gatewayUserIDKey = "user-id"
+	gatewayURLEnvVar       = "APPROVAL_GATEWAY_URL"
+	gatewayTokenFileEnvVar = "APPROVAL_GATEWAY_TOKEN_FILE"
 
 	sessionMCPURLEnv   = "SESSION_MCP_URL"
 	proxyPlacementEnv  = "DATA_PLANE_PROXY_PLACEMENT"
@@ -153,6 +147,59 @@ func (f f6Session) secret(t *testing.T, name string) map[string]string {
 	return values
 }
 
+// callerToken is the gateway-audience token as the MCP container reads it. Its
+// claims are checked here so every caller compares against the right token:
+// issued for PocketAide, to the helper pod's own ServiceAccount.
+func (f f6Session) callerToken(t *testing.T) string {
+	t.Helper()
+	token := strings.TrimSpace(f.sh(t, f.helper.Name, sessionMCPContainer, `cat "$APPROVAL_GATEWAY_TOKEN_FILE"`))
+	if token == "" {
+		t.Fatal("the MCP container's gateway token file is empty")
+	}
+	claims := jwtClaims(t, token)
+	audienceOK := false
+	switch aud := claims["aud"].(type) {
+	case string:
+		audienceOK = aud == approvalGatewayAudience
+	case []any:
+		for _, a := range aud {
+			audienceOK = audienceOK || a == approvalGatewayAudience
+		}
+	}
+	if !audienceOK {
+		t.Fatalf("gateway token audience = %v, want %q — an apiserver-audience token could be replayed as this pod", claims["aud"], approvalGatewayAudience)
+	}
+	if want := "system:serviceaccount:" + f.ns + ":" + sessionMCPServiceAccount; claims["sub"] != want {
+		t.Fatalf("gateway token subject = %v, want %q", claims["sub"], want)
+	}
+	return token
+}
+
+func f6GatewayTokenVolume(t *testing.T, pod *corev1.Pod) string {
+	t.Helper()
+	for _, v := range pod.Spec.Volumes {
+		if v.Projected == nil {
+			continue
+		}
+		for _, src := range v.Projected.Sources {
+			if src.ServiceAccountToken != nil && src.ServiceAccountToken.Audience == approvalGatewayAudience {
+				return v.Name
+			}
+		}
+	}
+	t.Fatalf("pod %s projects no ServiceAccount token for audience %q", pod.Name, approvalGatewayAudience)
+	return ""
+}
+
+func f6Mounts(c corev1.Container, volume string) bool {
+	for _, m := range c.VolumeMounts {
+		if m.Name == volume {
+			return true
+		}
+	}
+	return false
+}
+
 // Fails when the entry is absent: the callers below go on to look at its value,
 // and a missing entry would otherwise read as an empty one.
 func mustEnv(t *testing.T, c corev1.Container, name string) corev1.EnvVar {
@@ -250,14 +297,29 @@ func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
 	}
 	mcp, proxy, work := f.mcp(t), f.proxy(t), f.workload(t)
 
-	t.Run("GatewayTripleOnlyInTheMCPContainer", func(t *testing.T) {
-		f6RequireSecretRef(t, mcp, approvalGatewaySecretName, gatewayURLEnvVar, gatewayURLKey, false)
-		f6RequireSecretRef(t, mcp, approvalGatewaySecretName, gatewayAPIKeyEnvVar, gatewayAPIKeyKey, false)
-		f6RequireSecretRef(t, mcp, approvalGatewaySecretName, gatewayUserIDEnvVar, gatewayUserIDKey, false)
-
+	t.Run("GatewayAddressAndCallerTokenOnlyInTheMCPContainer", func(t *testing.T) {
+		if v := mustEnv(t, mcp, gatewayURLEnvVar).Value; v == "" {
+			t.Fatalf("MCP container %s is empty; the gate could not be built", gatewayURLEnvVar)
+		}
+		e6RequireLiteral(t, mcp, gatewayTokenFileEnvVar, approvalGatewayTokenFile)
 		for _, c := range []corev1.Container{proxy, work} {
-			e6RequireAbsent(t, c, gatewayURLEnvVar, gatewayAPIKeyEnvVar, gatewayUserIDEnvVar)
-			f6NoSecretRefTo(t, c, approvalGatewaySecretName, gatewayURLKey, gatewayAPIKeyKey, gatewayUserIDKey)
+			e6RequireAbsent(t, c, gatewayURLEnvVar, gatewayTokenFileEnvVar)
+		}
+
+		if got := f.helper.Spec.ServiceAccountName; got != sessionMCPServiceAccount {
+			t.Fatalf("helper pod runs as %q, want %q — the account PocketAide knows this platform by", got, sessionMCPServiceAccount)
+		}
+		if got := f.work.Spec.ServiceAccountName; got != dataPlaneServiceAccount {
+			t.Fatalf("workload pod runs as %q, want %q — it must not share the gateway caller's identity", got, dataPlaneServiceAccount)
+		}
+		if a := f.helper.Spec.AutomountServiceAccountToken; a == nil || *a {
+			t.Fatal("helper pod automounts an apiserver token; only the gateway-audience token belongs here")
+		}
+		volume := f6GatewayTokenVolume(t, &f.helper)
+		for _, c := range f.helper.Spec.Containers {
+			if mounted := f6Mounts(c, volume); mounted != (c.Name == sessionMCPContainer) {
+				t.Fatalf("helper container %q mounts the gateway token = %v (AC-F6)", c.Name, mounted)
+			}
 		}
 	})
 
@@ -293,32 +355,39 @@ func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
 	})
 
 	t.Run("NeitherSecretIsResolvedInTheWorkloadContainer", func(t *testing.T) {
-		gateway := f.secret(t, approvalGatewaySecretName)
+		callerToken := f.callerToken(t)
 		provider := f.secret(t, credentialsSecretName)
-		apiKey, token := gateway[gatewayAPIKeyKey], provider["auth-token"]
-		if apiKey == "" || token == "" {
-			t.Fatal("a platform Secret has no value for the key under test; the split is untestable against this deployment")
+		token := provider["auth-token"]
+		if token == "" {
+			t.Fatal("the provider Secret has no auth-token; the split is untestable against this deployment")
 		}
-		if apiKey == token {
-			t.Fatal("the gateway key and the provider token are the same string; the probes below could not tell the containers apart")
+		if callerToken == token {
+			t.Fatal("the gateway caller token and the provider token are the same string; the probes below could not tell the containers apart")
 		}
 
-		// Each holder resolved its own secret: without this the "not found"
-		// results below would prove nothing — an empty variable is absent from
-		// every environment.
-		if got := strings.TrimSpace(f.sh(t, f.helper.Name, sessionMCPContainer,
-			`printf %s "$APPROVAL_GATEWAY_API_KEY"`)); got != apiKey {
-			t.Fatalf("the MCP container did not resolve the gateway key from the Secret (got %d bytes, want %d)",
-				len(got), len(apiKey))
-		}
+		// The holder resolved its own secret: without this the "not found"
+		// results below would prove nothing.
 		if got := strings.TrimSpace(f.sh(t, f.helper.Name, helperCredProxyContainer,
 			`printf %s "$ANTHROPIC_AUTH_TOKEN"`)); got != token {
 			t.Fatalf("the proxy container did not resolve the provider token from the Secret (got %d bytes, want %d)",
 				len(got), len(token))
 		}
 
+		// The caller token is a file, so the neighbours are asked for the file
+		// as well as for the value in their process environments.
+		for _, at := range []struct{ pod, container string }{
+			{f.helper.Name, helperCredProxyContainer},
+			{f.work.Name, workloadContainer},
+		} {
+			if got := strings.TrimSpace(f.sh(t, at.pod, at.container,
+				`if [ -e "$1" ]; then echo present; else echo absent; fi`, approvalGatewayTokenFile)); got != "absent" {
+				t.Fatalf("%s/%s can see %s (%s) — the caller token belongs to the MCP container only (AC-F6)",
+					at.pod, at.container, approvalGatewayTokenFile, got)
+			}
+		}
+
 		for _, tc := range []struct{ what, value string }{
-			{"the approval gateway key", apiKey},
+			{"the gateway caller token", callerToken},
 			{"the provider token", token},
 		} {
 			probe := e6ProbeFields(t, f.sh(t, f.work.Name, workloadContainer, f6ReachProbe, proxyPlaceholderToken, tc.value))
@@ -349,7 +418,7 @@ func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
 	})
 
 	t.Run("NoTokenReachesTheSessionAPIOrTheControlPlaneLog", func(t *testing.T) {
-		gateway := f.secret(t, approvalGatewaySecretName)
+		callerToken := f.callerToken(t)
 		provider := f.secret(t, credentialsSecretName)
 
 		lookupResp, lookup := do(t, http.MethodGet, "/api/v1/sessions/"+f.session.ID, nil)
@@ -399,9 +468,7 @@ func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
 		}
 
 		secrets := []struct{ what, value string }{
-			{"the gateway api key", gateway[gatewayAPIKeyKey]},
-			{"the gateway url", gateway[gatewayURLKey]},
-			{"the notification userId", gateway[gatewayUserIDKey]},
+			{"the gateway caller token", callerToken},
 			{"the provider token", provider["auth-token"]},
 		}
 		for _, sec := range secrets {

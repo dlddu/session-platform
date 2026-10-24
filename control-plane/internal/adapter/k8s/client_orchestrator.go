@@ -126,7 +126,9 @@ const (
 	agentAddrEnvVar                 = "DATA_PLANE_AGENT_ADDR"
 
 	// Approval-gated runtime configuration (AC-F4/AC-F6).
-	defaultApprovalGatewaySecret = "approval-gateway-credentials"
+	// SessionMCPServiceAccountName is the helper pod's identity — see
+	// k8s/session-mcp-serviceaccount.yaml for why it exists.
+	SessionMCPServiceAccountName = "session-mcp"
 	// SessionMCPContainerName is the helper pod container that exposes the
 	// session's external tools behind the approval gate (AC-F3).
 	SessionMCPContainerName = "session-mcp"
@@ -153,13 +155,19 @@ const (
 	CredentialProxyPlacementEnvVar = "DATA_PLANE_PROXY_PLACEMENT"
 	proxyPlacementSidecar          = "sidecar"
 	proxyPlacementHelper           = "helper"
-	// The gateway triple (AC-F6) — see helperPodSpec for where it is projected.
+	// The gateway address and caller token (AC-F6) — see helperPodSpec for
+	// where they are projected. Keep in sync with data-plane/cmd/agent
+	// (approvalGatewayURLEnv, approvalGatewayTokenFileEnv).
 	ApprovalGatewayURLEnvVar       = "APPROVAL_GATEWAY_URL"
-	ApprovalGatewayAPIKeyEnvVar    = "APPROVAL_GATEWAY_API_KEY"
-	ApprovalGatewayUserIDEnvVar    = "APPROVAL_GATEWAY_USER_ID"
-	ApprovalGatewayURLSecretKey    = "url"
-	ApprovalGatewayAPIKeySecretKey = "api-key"
-	ApprovalGatewayUserIDSecretKey = "user-id"
+	ApprovalGatewayTokenFileEnvVar = "APPROVAL_GATEWAY_TOKEN_FILE"
+	// ApprovalGatewayTokenAudience must equal PocketAide's K8S_TOKEN_AUDIENCE.
+	// A token for the default (apiserver) audience is never sent instead: the
+	// receiver could replay it against the apiserver as this pod.
+	ApprovalGatewayTokenAudience  = "pocket-aide"
+	approvalGatewayTokenVolume    = "approval-gateway-token"
+	approvalGatewayTokenDir       = "/var/run/secrets/pocket-aide"
+	approvalGatewayTokenPath      = "token"
+	approvalGatewayTokenExpirySec = int64(3600)
 	// SessionIDEnvVar tells the MCP container which session it serves — the
 	// session half of AC-F3's external identifier.
 	// Keep in sync with data-plane/cmd/agent (sessionIDEnv).
@@ -196,7 +204,7 @@ type ClientOrchestrator struct {
 	namespace                string
 	image                    string
 	claudeCredentialsSecret  string // platform Secret referenced by claude-code pods
-	approvalGatewaySecret    string // platform Secret referenced by approval-gated helper pods
+	approvalGatewayURL       string // PocketAide base URL handed to approval-gated helper pods
 	miniMaxCredentialsSecret string
 	// AC-F5's per-session shared claim — see shared_volume.go.
 	sharedVolumeStorageClass string
@@ -247,13 +255,12 @@ func WithClaudeCredentialsSecret(name string) Option {
 	}
 }
 
-// WithApprovalGatewaySecret selects the platform-managed Secret the session MCP
-// container projects the gateway triple from (AC-F6).
-func WithApprovalGatewaySecret(name string) Option {
+// WithApprovalGatewayURL sets the approval gateway the session MCP container
+// asks (AC-F3). Left empty, helper pods start without a gate and the session
+// MCP offers no tools.
+func WithApprovalGatewayURL(url string) Option {
 	return func(o *ClientOrchestrator) {
-		if strings.TrimSpace(name) != "" {
-			o.approvalGatewaySecret = strings.TrimSpace(name)
-		}
+		o.approvalGatewayURL = strings.TrimSpace(url)
 	}
 }
 
@@ -307,7 +314,6 @@ func NewClientOrchestrator(client kubernetes.Interface, namespace string, opts .
 		image:                    defaultDataPlaneImage,
 		agentPort:                AgentPort,
 		claudeCredentialsSecret:  defaultClaudeCredentialsSecret,
-		approvalGatewaySecret:    defaultApprovalGatewaySecret,
 		miniMaxCredentialsSecret: defaultMiniMaxCredentialsSecret,
 		sharedVolumeSize:         resource.MustParse(defaultSharedVolumeSize),
 		pollInterval:             defaultPollInterval,
@@ -679,7 +685,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 // MCP that fronts the approval gate (AC-F3) and the provider credential proxy
 // AC-F2 moved out of the workload pod (AC-F4/AC-F6).
 //
-// Unlike the workload pod it gets no Kubernetes identity — nothing in it needs
+// Unlike the workload pod it gets no apiserver credential — nothing in it needs
 // the API server, and the pod holds both of the platform's external secrets.
 func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadType session.WorkloadType) (*corev1.Pod, error) {
 	image, err := o.imageFor(workloadType)
@@ -702,12 +708,14 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 			{Name: workloadEnvVar, Value: sessionMCPWorkload},
 			{Name: agentAddrEnvVar, Value: ":" + strconv.Itoa(SessionMCPPort)},
 			{Name: SessionIDEnvVar, Value: sessionID},
-			// AC-F6: the gateway triple lives here and nowhere else. The
-			// notification target is a platform-wide value, never per session.
-			secretEnv(ApprovalGatewayURLEnvVar, o.approvalGatewaySecret, ApprovalGatewayURLSecretKey),
-			secretEnv(ApprovalGatewayAPIKeyEnvVar, o.approvalGatewaySecret, ApprovalGatewayAPIKeySecretKey),
-			secretEnv(ApprovalGatewayUserIDEnvVar, o.approvalGatewaySecret, ApprovalGatewayUserIDSecretKey),
+			// AC-F6: the gateway address and caller token live here and nowhere
+			// else.
+			{Name: ApprovalGatewayURLEnvVar, Value: o.approvalGatewayURL},
+			{Name: ApprovalGatewayTokenFileEnvVar, Value: approvalGatewayTokenDir + "/" + approvalGatewayTokenPath},
 		},
+		VolumeMounts: []corev1.VolumeMount{{
+			Name: approvalGatewayTokenVolume, MountPath: approvalGatewayTokenDir, ReadOnly: true,
+		}},
 		// An exec probe for the same reason the proxy container uses one, plus
 		// one specific to this pod: an HTTP probe originates at the kubelet, not
 		// at a pod, and AC-F2's ingress policy admits only this session's
@@ -725,11 +733,11 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 	}
 	// AC-F5's shared claim, when configured. Its absence from the proxy container
 	// built below is the decision, not an omission.
-	var helperVolumes []corev1.Volume
+	helperVolumes := []corev1.Volume{approvalGatewayTokenVolumeSource()}
 	if o.sharedVolumeEnabled() {
-		mcp.VolumeMounts = []corev1.VolumeMount{sharedVolumeMount()}
+		mcp.VolumeMounts = append(mcp.VolumeMounts, sharedVolumeMount())
 		mcp.Env = append(mcp.Env, corev1.EnvVar{Name: SharedVolumeDirEnvVar, Value: SharedVolumeMountPath})
-		helperVolumes = []corev1.Volume{sharedVolume(sharedClaimName(name))}
+		helperVolumes = append(helperVolumes, sharedVolume(sharedClaimName(name)))
 	}
 
 	return &corev1.Pod{
@@ -745,11 +753,30 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 		},
 		Spec: corev1.PodSpec{
 			RestartPolicy:                corev1.RestartPolicyAlways,
+			ServiceAccountName:           SessionMCPServiceAccountName,
 			AutomountServiceAccountToken: &automountServiceAccountToken,
 			Containers:                   append([]corev1.Container{mcp}, o.helperProxyContainers(workloadType, image)...),
 			Volumes:                      append(helperVolumes, helperProxyVolumes(workloadType)...),
 		},
 	}, nil
+}
+
+// approvalGatewayTokenVolumeSource is the only token in the helper pod: the
+// pod-wide automount stays off, so no container holds an apiserver token.
+func approvalGatewayTokenVolumeSource() corev1.Volume {
+	expiry := approvalGatewayTokenExpirySec
+	return corev1.Volume{
+		Name: approvalGatewayTokenVolume,
+		VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{
+			Sources: []corev1.VolumeProjection{{
+				ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+					Audience:          ApprovalGatewayTokenAudience,
+					ExpirationSeconds: &expiry,
+					Path:              approvalGatewayTokenPath,
+				},
+			}},
+		}},
+	}
 }
 
 // claudeCredentialProxy holds provider credentials outside the tool-running
