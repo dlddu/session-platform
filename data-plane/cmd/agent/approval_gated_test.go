@@ -165,6 +165,11 @@ func TestApprovalGatedManagedSettingsRegisterOnlyTheSessionMCP(t *testing.T) {
 	if server := registeredSessionMCP(t, homeDir); server.URL != mcpURL+sessionMCPPath || server.Type != "http" {
 		t.Fatalf("registered session MCP = %+v, want the helper address' MCP endpoint over http", server)
 	}
+	// Without a per-server timeout the CLI gives up on a tool call at 60 s, and
+	// a human approval routinely takes longer than that.
+	if got := registeredSessionMCP(t, homeDir).Timeout; got < (defaultApprovalTimeout + cloneTimeout).Milliseconds() {
+		t.Fatalf("registered session MCP timeout = %d ms, want at least the approval wait plus the slowest gated call", got)
+	}
 	settings := readManagedSettings(t, homeDir)
 	if len(settings.MCPServers) != 0 {
 		t.Fatalf("settings.json carries mcpServers = %v; the CLI never reads it there", settings.MCPServers)

@@ -264,7 +264,8 @@ func writeMiniMaxPlugin(seedDir, name, description, server, serverURL string) er
 	}
 	servers := map[string]any{
 		"mcpServers": map[string]any{
-			server: map[string]any{"type": "http", "url": serverURL},
+			// mcode's own MCP tool-call default is 120 s, shorter than an approval.
+			server: map[string]any{"type": "http", "url": serverURL, "timeout": sessionMCPToolTimeout.Milliseconds()},
 		},
 	}
 	for rel, doc := range map[string]any{
