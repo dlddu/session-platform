@@ -349,11 +349,14 @@ Flux는 `k8s/`를 그대로 적용한다.
 CI 진입점은 `.github/workflows/ci.yml` 하나다. e2e는 그 안의 `e2e` 잡이 재사용 워크플로
 `.github/workflows/e2e.yml`을 호출하는 형태로, `changes` 잡이 `control-plane/**`·`data-plane/**`·
 `web/**`·`deploy/**`·`k8s/**`·`scripts/e2e/**`·`Makefile`·워크플로(`e2e.yml`·`ci.yml`) 변경을
-감지한 PR과 `workflow_dispatch`에서만 돈다(무관 PR에서는 skipped). 흐름:
-SUT 이미지 둘을 buildx gha 캐시로 빌드 → kind 생성(`helm/kind-action`) →
-`SKIP_IMAGE_BUILD=1 make e2e-up`(빌드 없이 로드·배포) → `go test -tags=e2e` → Playwright.
-Playwright 브라우저·시스템 의존성 설치는 체크아웃 직후 백그라운드로 시작해 SUT 기동·API
-스위트와 겹친다. 실패 시 Playwright 리포트/trace를 아티팩트로 올린다. ci.yml의
+감지한 PR과 `workflow_dispatch`에서만 돈다(무관 PR에서는 skipped). e2e.yml은 매트릭스 잡 하나로,
+**항목마다 자기 러너·자기 kind SUT**를 띄운다 — API 샤드 4개(`go test -list`로 얻은 최상위 테스트
+이름을 정렬해 라운드로빈 분배, 표 관리 없음)와 브라우저 스위트 1개. 같은 SUT를 동시에 쓰지 않으므로
+테스트 간 공유 상태가 생기지 않는다. 각 항목의 흐름: SUT 이미지 둘을 buildx gha 캐시로 빌드 → kind
+생성(`helm/kind-action`) → `SKIP_IMAGE_BUILD=1 make e2e-up`(빌드 없이 로드·배포) → 자기 몫의
+`go test -tags=e2e -run …` 또는 Playwright. 브라우저 항목은 Playwright 브라우저·시스템 의존성 설치를
+체크아웃 직후 백그라운드로 시작해 SUT 기동과 겹친다. CRIU 프로브는 API 샤드 1에서만 돈다. 실패 시
+Playwright 리포트/trace를 아티팩트로 올린다. ci.yml의
 lint/unit/build/integration 잡은 종전대로 모든 PR에서 돌고, **envtest 잡**이 실
 kube-apiserver로 CAS/Lease 단일-승자(AC-C1)를 검증한다.
 
