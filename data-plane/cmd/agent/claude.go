@@ -780,6 +780,7 @@ func decodeClaudeRuntimeState(f *os.File) (bool, error) {
 type claudeManagedSettings struct {
 	Permissions struct {
 		Allow []string `json:"allow"`
+		Deny  []string `json:"deny,omitempty"`
 		// AdditionalDirectories widens the agent's file tools past its own state
 		// tree. The platform sets exactly one entry, the shared volume, and only
 		// where there is one (AC-F5).
@@ -809,6 +810,7 @@ type claudeMCPServer struct {
 func managedSettingsFor(tools toolSurface) claudeManagedSettings {
 	settings := claudeManagedSettings{}
 	settings.Permissions.Allow = append([]string(nil), claudeManagedTools...)
+	settings.Permissions.Deny = claudeDeniedK3SMCPTools()
 	settings.EnabledPlugins = map[string]bool{}
 	if tools.Plugin {
 		settings.EnabledPlugins[claudeSessionPlatformPlugin] = true
@@ -864,6 +866,11 @@ func ensureClaudeSettingsFile(homeDir string, tools toolSurface) error {
 				settings.Permissions.Allow = append(settings.Permissions.Allow, allow)
 			}
 		}
+		for _, deny := range want.Permissions.Deny {
+			if !containsString(settings.Permissions.Deny, deny) {
+				settings.Permissions.Deny = append(settings.Permissions.Deny, deny)
+			}
+		}
 		return storeClaudeManagedSettings(settingsDir, settingsPath, settings)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -893,6 +900,11 @@ func managedSettingsMatch(settings, want claudeManagedSettings) bool {
 	}
 	for _, allow := range want.Permissions.Allow {
 		if !containsString(settings.Permissions.Allow, allow) {
+			return false
+		}
+	}
+	for _, deny := range want.Permissions.Deny {
+		if !containsString(settings.Permissions.Deny, deny) {
 			return false
 		}
 	}

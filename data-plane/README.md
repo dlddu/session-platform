@@ -93,6 +93,13 @@ interactive shell and Claude Code workloads.
   origin of `K3S_MCP_URL` (default `https://homelab-k3s-mcp.llkm.nl`) with
   `K3S_MCP_TOKEN` as the bearer. Without a token it still starts, reports
   `configured: false` on `/healthz`, and answers everything else with 503.
+  Session traffic passes a deny filter first: a `tools/call` for any tool in
+  `k3sMCPDeniedTools` (`k3s_mcp_tool_deny.go` — the writes, `resource_exec`/
+  `attach`/`port_forward`/`proxy`, `opensearch_*`, `session_*`,
+  `dear_baby_reset_user`, `github_commit_status_create`) is answered with an
+  `isError` tool result and never forwarded, because `mcode` runs with
+  `--permission full` and has no deny rules of its own. The Claude types get
+  the same list as `permissions.deny` in their managed `settings.json`.
   With a token it also bootstraps the plugin marketplace for the workload pod,
   which cannot reach GitHub: it asks the K3s MCP for a `plugin-marketplace` read
   token through its own handler in process, clones

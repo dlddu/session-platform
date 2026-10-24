@@ -109,12 +109,18 @@ func newK3SMCPProxyWithTransport(rawURL, token string, logger *slog.Logger, tran
 	} else {
 		mux.HandleFunc(miniMaxPluginSeedPath, serveUnconfiguredSeed)
 	}
+	var sessionFacing http.Handler
+	if upstream != nil {
+		// Only what sessions send passes the deny filter; the seeder above
+		// calls the upstream directly for its marketplace token.
+		sessionFacing = denyK3SMCPTools(upstream)
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if upstream == nil {
+		if sessionFacing == nil {
 			http.Error(w, "k3s mcp proxy has no token configured", http.StatusServiceUnavailable)
 			return
 		}
-		upstream.ServeHTTP(w, r)
+		sessionFacing.ServeHTTP(w, r)
 	})
 	return result, nil
 }
