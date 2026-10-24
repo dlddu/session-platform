@@ -204,7 +204,7 @@ func serveUnconfiguredSeed(w http.ResponseWriter, r *http.Request) {
 // handles the K3s MCP token; the proxy injects it exactly as it does for the
 // workload's calls.
 func githubTokenThroughProxy(ctx context.Context, upstream http.Handler, mcpPath string) (string, error) {
-	body, err := githubTokenCallBody([]string{"plugin-marketplace"})
+	body, err := githubTokenCallBody([]string{"plugin-marketplace"}, githubContentsRead)
 	if err != nil {
 		return "", err
 	}
@@ -224,14 +224,24 @@ func githubTokenThroughProxy(ctx context.Context, upstream http.Handler, mcpPath
 
 const githubTokenTool = "github_app_installation_token"
 
-func githubTokenCallBody(repositories []string) ([]byte, error) {
+// The two `contents` levels a token is ever asked for. Write exists for
+// `git_push` alone (session_mcp_git_push.go); every other caller reads.
+const (
+	githubContentsRead  = "read"
+	githubContentsWrite = "write"
+)
+
+func githubTokenCallBody(repositories []string, contents string) ([]byte, error) {
+	if contents != githubContentsRead && contents != githubContentsWrite {
+		return nil, fmt.Errorf("unsupported contents permission %q", contents)
+	}
 	return json.Marshal(map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
 		"params": map[string]any{
 			"name": githubTokenTool,
 			"arguments": map[string]any{
 				"repositories": repositories,
-				"permissions":  map[string]string{"contents": "read"},
+				"permissions":  map[string]string{"contents": contents},
 			},
 		},
 	})
