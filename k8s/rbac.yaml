@@ -77,5 +77,5 @@ roleRef:
 # a cluster-scoped grant (ClusterRoleBinding to system:auth-delegator). It is
 # deliberately not in this base: the binding's name is cluster-wide, so every
 # consumer of the base (production and each PR preview) would fight over one
-# object. The deployment that opts in with REPO_ACCESS_DB_PATH adds its own —
+# object. The deployment that opts in with REPO_ACCESS_ENABLED adds its own —
 # production's is in flux-cd-apps next to that env.

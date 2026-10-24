@@ -15,7 +15,7 @@
 ## 테스트 시나리오
 
 ### 시나리오 1: 저장소 opt-in과 영속
-- **사전 조건**: control plane 두 벌 — `REPO_ACCESS_DB_PATH`가 없는 배포(A), 영속 볼륨 위 경로가 있는 replica 1개·`Recreate` 배포(B)
+- **사전 조건**: control plane 두 벌 — `REPO_ACCESS_ENABLED`가 없는 배포(A), 그것을 켜고 고정 경로에 영속 볼륨을 마운트한 replica 1개·`Recreate` 배포(B)
 - **실행 단계**: (a) A에서 관리 API·내부 API를 호출 → (b) A에서 `approval-gated` 세션을 만들고 헬퍼 파드를 확인 → (c) B에서 로그인 후 `DLDDU/Repo.git`과 `dlddu/repo`를 차례로 추가 → (d) B의 control plane 파드를 재시작한 뒤 목록 조회
 - **기대 결과**: (a) 모두 `503`. (b) 헬퍼 파드에 control plane audience 토큰·`REPO_ACCESS_URL`이 없고, `approval-gated` 헬퍼 파드에 K3s MCP 프록시가 없다(이 기능 이전의 모양 그대로). 세션 MCP 도구 목록에 접근 요청 도구가 없다. (c) 첫 추가는 `201`, 두 번째는 `200`이며 항목은 `dlddu/repo` 하나다. (d) 항목이 그대로 남아 있다
 - **검증 AC**: AC-H1

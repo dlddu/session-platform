@@ -19,7 +19,7 @@
 ## Acceptance Criteria
 
 ### AC-H1: 허용 목록 저장 — control plane의 SQLite, 단일 replica opt-in
-- **설명**: 허용 목록과 대기 중인 접근 요청은 control plane이 SQLite 파일 하나에 보관한다. 항목은 GitHub 레포 하나(`owner/repo`, 대소문자 무시 비교)이고 누가·언제·어떤 경로(직접 추가 / 요청 허락)로 추가했는지를 함께 남긴다. 저장소는 **opt-in**이다 — 파일 경로 설정(`REPO_ACCESS_DB_PATH`)이 있을 때만 켜지고, 없으면 이 PRD의 API는 전부 `503`을 돌려주며 세션 MCP는 비공개 클론과 접근 요청을 하지 않는다(공개 클론은 그대로). SQLite는 control plane 파드 안의 파일이라 **replica 사이에 공유되지 않으므로**, 이 기능을 켠 배포는 control plane을 replica 1개·`Recreate` 전략으로 운영한다. 이것은 AC-C1의 "상태는 다중 replica가 공유한다"에 대한 **이 기능 한정 예외**이며, 세션 상태(AC-C1)는 영향을 받지 않는다. 파일은 영속 볼륨에 두어 control plane 재시작·재배포를 건너 보존된다.
+- **설명**: 허용 목록과 대기 중인 접근 요청은 control plane이 SQLite 파일 하나에 보관한다. 항목은 GitHub 레포 하나(`owner/repo`, 대소문자 무시 비교)이고 누가·언제·어떤 경로(직접 추가 / 요청 허락)로 추가했는지를 함께 남긴다. 저장소는 **opt-in**이다 — `REPO_ACCESS_ENABLED=true`일 때만 켜지고, 없으면 이 PRD의 API는 전부 `503`을 돌려주며 세션 MCP는 비공개 클론과 접근 요청을 하지 않는다(공개 클론은 그대로). SQLite는 control plane 파드 안의 파일이라 **replica 사이에 공유되지 않으므로**, 이 기능을 켠 배포는 control plane을 replica 1개·`Recreate` 전략으로 운영한다. 이것은 AC-C1의 "상태는 다중 replica가 공유한다"에 대한 **이 기능 한정 예외**이며, 세션 상태(AC-C1)는 영향을 받지 않는다. 파일 위치는 설정이 아니라 코드에 고정된 경로(`/var/lib/session-platform/repo-access/`)이고, 켜는 배포는 그 디렉터리에 영속 볼륨을 마운트해 control plane 재시작·재배포를 건너 보존한다 — 마운트 없이 켜면 기동이 실패한다(파드 파일시스템에 조용히 만들어 재시작 때 잃지 않게).
 - **달성 가치**: V1 (AC-H2·H5의 기반)
 - **검증 방법**: 허용 목록에 항목을 추가하고 control plane을 재시작한 뒤에도 항목이 남아 있음을 확인한다. 경로 설정 없이 기동하면 관리·내부 API가 `503`이고 세션 MCP가 비공개 클론을 시도하지 않음을 확인한다. 같은 레포를 대소문자만 바꿔 두 번 추가하면 한 항목으로 수렴함을 확인한다.
 

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
+	"path/filepath"
 
 	"k8s.io/client-go/kubernetes"
 
@@ -18,9 +18,17 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// repoAccessConfig is docs/prd/repo-access.md's opt-in (AC-H1/AC-H2). An empty
-// dbPath leaves the feature off; sign-in may still be configured on its own.
+// repoAccessDBPath is where the allow list lives. It is not configurable: the
+// deployment that turns the feature on mounts a persistent volume at its
+// directory, and a missing mount fails startup instead of silently keeping the
+// list on the container's filesystem.
+const repoAccessDBPath = "/var/lib/session-platform/repo-access/repo-access.db"
+
+// repoAccessConfig is docs/prd/repo-access.md's opt-in (AC-H1/AC-H2). Off
+// unless REPO_ACCESS_ENABLED; sign-in may still be configured on its own.
 type repoAccessConfig struct {
+	enabled bool
+	// dbPath is repoAccessDBPath outside tests.
 	dbPath string
 	// internalURL is how helper pods reach this control plane (AC-H3).
 	internalURL string
@@ -38,7 +46,8 @@ func (c oidcConfig) configured() bool {
 
 func loadRepoAccessConfig() repoAccessConfig {
 	return repoAccessConfig{
-		dbPath:      strings.TrimSpace(env("REPO_ACCESS_DB_PATH", "")),
+		enabled:     envBool("REPO_ACCESS_ENABLED", false),
+		dbPath:      repoAccessDBPath,
 		internalURL: env("REPO_ACCESS_INTERNAL_URL", ""),
 		oidc: oidcConfig{
 			issuer:         env("OIDC_ISSUER", ""),
@@ -53,7 +62,7 @@ func loadRepoAccessConfig() repoAccessConfig {
 
 // helperURL defaults to this namespace's control-plane Service (k8s/service.yaml).
 func (c repoAccessConfig) helperURL(namespace string) string {
-	if c.dbPath == "" {
+	if !c.enabled {
 		return ""
 	}
 	if c.internalURL != "" {
@@ -85,15 +94,15 @@ func openRepoAccess(ctx context.Context, cfg repoAccessConfig) (repoAccess, erro
 		}
 		ra.auth = a
 	}
-	if cfg.dbPath == "" {
+	if !cfg.enabled {
 		return ra, nil
 	}
 	if ra.auth == nil {
-		return ra, errors.New("REPO_ACCESS_DB_PATH needs OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_REDIRECT_URL and OIDC_COOKIE_KEY (OIDC_CLIENT_SECRET only for a confidential client)")
+		return ra, errors.New("REPO_ACCESS_ENABLED needs OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_REDIRECT_URL and OIDC_COOKIE_KEY (OIDC_CLIENT_SECRET only for a confidential client)")
 	}
 	store, err := repoaccess.Open(ctx, cfg.dbPath)
 	if err != nil {
-		return ra, fmt.Errorf("open %s: %w", cfg.dbPath, err)
+		return ra, fmt.Errorf("open %s (is a persistent volume mounted at %s?): %w", cfg.dbPath, filepath.Dir(cfg.dbPath), err)
 	}
 	ra.store = store
 	return ra, nil

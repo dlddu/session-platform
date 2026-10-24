@@ -22,7 +22,7 @@ func TestOpenRepoAccess(t *testing.T) {
 		t.Fatalf("helper URL with the feature off = %q", got)
 	}
 
-	if _, err := openRepoAccess(ctx, repoAccessConfig{dbPath: filepath.Join(t.TempDir(), "a.db")}); err == nil {
+	if _, err := openRepoAccess(ctx, repoAccessConfig{enabled: true, dbPath: filepath.Join(t.TempDir(), "a.db")}); err == nil {
 		t.Fatal("allow list without sign-in was accepted")
 	}
 	half := full
@@ -31,12 +31,25 @@ func TestOpenRepoAccess(t *testing.T) {
 		t.Fatal("short cookie key was accepted")
 	}
 
+	// The fixed path is not mounted here: enabling without the volume must
+	// fail rather than create the list somewhere that does not persist.
+	if _, err := openRepoAccess(ctx, repoAccessConfig{enabled: true, dbPath: filepath.Join(t.TempDir(), "missing", "a.db"), oidc: full}); err == nil {
+		t.Fatal("enabled without its directory was accepted")
+	}
+	if got := loadRepoAccessConfig(); got.enabled || got.dbPath != repoAccessDBPath {
+		t.Errorf("default config = %+v, want off at the fixed path", got)
+	}
+	t.Setenv("REPO_ACCESS_ENABLED", "true")
+	if got := loadRepoAccessConfig(); !got.enabled {
+		t.Error("REPO_ACCESS_ENABLED=true did not turn the feature on")
+	}
+
 	signInOnly, err := openRepoAccess(ctx, repoAccessConfig{oidc: full})
 	if err != nil || signInOnly.auth == nil || signInOnly.store != nil {
 		t.Fatalf("sign-in only = %+v, %v", signInOnly, err)
 	}
 
-	cfg := repoAccessConfig{dbPath: filepath.Join(t.TempDir(), "a.db"), oidc: full}
+	cfg := repoAccessConfig{enabled: true, dbPath: filepath.Join(t.TempDir(), "a.db"), oidc: full}
 	on, err := openRepoAccess(ctx, cfg)
 	if err != nil || on.auth == nil || on.store == nil {
 		t.Fatalf("on = %+v, %v", on, err)
