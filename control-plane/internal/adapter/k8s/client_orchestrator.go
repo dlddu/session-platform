@@ -168,6 +168,9 @@ const (
 	approvalGatewayTokenDir       = "/var/run/secrets/pocket-aide"
 	approvalGatewayTokenPath      = "token"
 	approvalGatewayTokenExpirySec = int64(3600)
+	// SessionMCPScratchDir is the session MCP container's own writable path; see helperPodSpec.
+	SessionMCPScratchDir    = "/tmp"
+	sessionMCPScratchVolume = "session-mcp-tmp"
 	// SessionIDEnvVar tells the MCP container which session it serves — the
 	// session half of AC-F3's external identifier.
 	// Keep in sync with data-plane/cmd/agent (sessionIDEnv).
@@ -714,9 +717,13 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 			{Name: ApprovalGatewayURLEnvVar, Value: o.approvalGatewayURL},
 			{Name: ApprovalGatewayTokenFileEnvVar, Value: approvalGatewayTokenDir + "/" + approvalGatewayTokenPath},
 		},
-		VolumeMounts: []corev1.VolumeMount{{
-			Name: approvalGatewayTokenVolume, MountPath: approvalGatewayTokenDir, ReadOnly: true,
-		}},
+		// The root filesystem is read-only, and git_push's scratch repository
+		// must live somewhere this container owns — not the shared volume, which
+		// the workload pod writes (AC-H6).
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: approvalGatewayTokenVolume, MountPath: approvalGatewayTokenDir, ReadOnly: true},
+			{Name: sessionMCPScratchVolume, MountPath: SessionMCPScratchDir},
+		},
 		// An exec probe for the same reason the proxy container uses one, plus
 		// one specific to this pod: an HTTP probe originates at the kubelet, not
 		// at a pod, and AC-F2's ingress policy admits only this session's
@@ -734,7 +741,10 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 	}
 	// AC-F5's shared claim, when configured. Its absence from the proxy container
 	// built below is the decision, not an omission.
-	helperVolumes := []corev1.Volume{approvalGatewayTokenVolumeSource()}
+	helperVolumes := []corev1.Volume{
+		approvalGatewayTokenVolumeSource(),
+		{Name: sessionMCPScratchVolume, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+	}
 	if o.sharedVolumeEnabled() {
 		mcp.VolumeMounts = append(mcp.VolumeMounts, sharedVolumeMount())
 		mcp.Env = append(mcp.Env, corev1.EnvVar{Name: SharedVolumeDirEnvVar, Value: SharedVolumeMountPath})
