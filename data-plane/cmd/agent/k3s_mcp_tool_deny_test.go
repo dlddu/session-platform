@@ -42,7 +42,7 @@ func newDenyTestProxy(t *testing.T) (http.Handler, *[]string) {
 		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
 	}))
 	t.Cleanup(upstream.Close)
-	handler, err := newK3SMCPProxyWithTransport(upstream.URL+"/mcp", "k3s-token",
+	handler, err := newK3SMCPProxyWithTransport(upstream.URL+"/mcp", "k3s-token", "",
 		slog.New(slog.NewTextHandler(io.Discard, nil)), upstream.Client().Transport)
 	if err != nil {
 		t.Fatalf("newK3SMCPProxyWithTransport: %v", err)

@@ -395,3 +395,33 @@ func TestMiniMaxCode_RestoreTargetUsesArchiveAnnotation(t *testing.T) {
 		t.Errorf("restore %s = %q, want MiniMax-M3", k8s.MiniMaxCodeModelEnvVar, got)
 	}
 }
+
+// AC-G5: the K3s MCP proxy names the session it serves on every upstream call,
+// so the control plane hands it the id as a plain value — on a fresh set and on
+// a restore's fresh helper pod alike.
+func TestMiniMaxCode_K3SMCPProxyKnowsItsSession(t *testing.T) {
+	_, set := startMiniMax(t, "mm09")
+	proxy := container(t, set.helper, k8s.MiniMaxK3SMCPProxyContainerName)
+	if got, ok := envValue(proxy, k8s.SessionIDEnvVar); !ok || got != "mm09" {
+		t.Errorf("k3s mcp proxy %s = %q (present=%v), want mm09", k8s.SessionIDEnvVar, got, ok)
+	}
+	if _, _, ok := secretKey(proxy, k8s.SessionIDEnvVar); ok {
+		t.Errorf("%s is projected from a Secret; the session id is not a credential", k8s.SessionIDEnvVar)
+	}
+	if _, ok := envValue(container(t, set.helper, k8s.HelperCredentialProxyContainerName), k8s.SessionIDEnvVar); ok {
+		t.Errorf("%s reached the provider proxy, which never names the session", k8s.SessionIDEnvVar)
+	}
+
+	orch, cs := newMiniMaxOrchestrator(t)
+	restored, err := orch.RestoreInto(context.Background(), "mm10", "s3://bucket/mm10.tar", k8s.WorkloadSpec{
+		Type: session.WorkloadTypeMiniMaxCode,
+	})
+	if err != nil {
+		t.Fatalf("restore into: %v", err)
+	}
+	pods := newPodSet(t, listPods(t, cs), restored)
+	proxy = container(t, pods.helper, k8s.MiniMaxK3SMCPProxyContainerName)
+	if got, _ := envValue(proxy, k8s.SessionIDEnvVar); got != "mm10" {
+		t.Errorf("restore helper %s k3s mcp proxy %s = %q, want mm10", pods.helper.Name, k8s.SessionIDEnvVar, got)
+	}
+}
