@@ -68,6 +68,7 @@ test("a prompt sent from the workspace runs on the deployed SUT and its reply la
 
   await expect(log).toContainText("▸ j6 prompt one");
   await expect(log).toContainText(PROVIDER_REPLY, { timeout: 180_000 });
+  await expect(log).not.toContainText("session-platform input");
 
   // 위 출력은 클릭 없이 왔다 — 아래 read 는 복구 경로이지 정상 경로가 아니다(AC-D3 비파괴).
   await page.getByTestId("ws-refresh-output").click();

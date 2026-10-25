@@ -8,6 +8,7 @@ import type {
   OutputStreamState,
   Session,
 } from "../api/types";
+import { renderAgentTranscript } from "../app/agentTranscript";
 import { DeleteSessionDialog } from "../app/DeleteSessionDialog";
 import { StateBadge } from "../app/StateBadge";
 import { useToast } from "../app/Toast";
@@ -673,6 +674,8 @@ export function Workspace() {
                     ? "// ready — agent responses stream here automatically"
                     : "// attached — the shell's output since session start appears here"}
               </span>
+            ) : isAgent ? (
+              renderAgentTranscript(term)
             ) : (
               term
             )}

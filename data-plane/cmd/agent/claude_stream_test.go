@@ -127,7 +127,7 @@ func TestClaudeStreamsPartialOutputBeforeExitAndReconnects(t *testing.T) {
 	})
 	c, srv := newClaudeTestServer(t, runner, platformDefaultModel, false, nil)
 
-	echo := claudePromptEchoPrefix + "stream this\n"
+	echo := turnOpen(1, "stream this")
 	writeViaHTTP(t, srv, "stream this", http.StatusOK)
 	select {
 	case <-started:
@@ -167,14 +167,15 @@ func TestClaudeStreamsPartialOutputBeforeExitAndReconnects(t *testing.T) {
 	defer cancel()
 	defer response.Body.Close()
 	second, payload := decodeOutputEvent(t, readSSEEvent(t, reader))
-	if got, want := string(payload), "\n"; got != want {
-		t.Fatalf("reconnected SSE payload = %q, want %q", got, want)
+	tail := "\n" + turnClose(1, "ok")
+	if got := string(payload); got != tail {
+		t.Fatalf("reconnected SSE payload = %q, want %q", got, tail)
 	}
-	if second.Offset != first.NextOffset || second.NextOffset != first.NextOffset+1 {
-		t.Fatalf("reconnected SSE cursors = (%d,%d), want (%d,%d)", second.Offset, second.NextOffset, first.NextOffset, first.NextOffset+1)
+	if second.Offset != first.NextOffset || second.NextOffset != first.NextOffset+len(tail) {
+		t.Fatalf("reconnected SSE cursors = (%d,%d), want (%d,%d)", second.Offset, second.NextOffset, first.NextOffset, first.NextOffset+len(tail))
 	}
-	if got, cursor := readViaHTTP(t, srv, 0); got != echo+"partial\n" || cursor != second.NextOffset {
-		t.Fatalf("final /read = (%q,%d), want (%q,%d)", got, cursor, echo+"partial\n", second.NextOffset)
+	if got, cursor := readViaHTTP(t, srv, 0); got != echo+"partial"+tail || cursor != second.NextOffset {
+		t.Fatalf("final /read = (%q,%d), want (%q,%d)", got, cursor, echo+"partial"+tail, second.NextOffset)
 	}
 }
 

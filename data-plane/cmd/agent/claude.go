@@ -51,8 +51,8 @@ const (
 	claudeCheckpointIDHeader   = "X-Session-Checkpoint-ID"
 	claudeRunOutputLimitMarker = "\n[session-platform: invocation output truncated at 16 MiB]\n"
 	claudeOutputLimitMarker    = "\n[session-platform: session output limit reached; further prompts are disabled]\n"
-	claudePromptEchoPrefix     = "▸ "
-	claudePromptEchoIndent     = "  "
+	claudeTurnMarkerLead       = "\x1esession-platform "
+	claudeTurnSentinel         = '\x1e'
 
 	claudeProcessGroupDrainTimeout      = 5 * time.Second
 	defaultClaudeRunTimeout             = 30 * time.Minute
@@ -212,11 +212,13 @@ type claudeWorkload struct {
 	restoring               bool
 	active                  bool
 	hasRun                  bool
+	turns                   int
 	stopping                bool
 	runTimeout              time.Duration
 	runOutputLimit          int
 	scrollbackLimit         int
 
+	now        func() time.Time
 	ctx        context.Context
 	cancel     context.CancelFunc
 	workerDone chan struct{}
@@ -293,6 +295,7 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 		runOutputLimit:  runOutputLimit,
 		scrollbackLimit: scrollbackLimit,
 		queue:           list.New(),
+		now:             time.Now,
 		ctx:             ctx,
 		cancel:          cancel,
 		workerDone:      make(chan struct{}),
@@ -372,22 +375,58 @@ func (c *claudeWorkload) enqueue(prompt string) error {
 // because a notice is assembled here from a tool name and an external
 // identifier and never carries provider or gateway material (AC-F6).
 func (c *claudeWorkload) appendPlatformNotice(text string) {
-	if c.out.appendClaudeBoundedAt([]byte(text), c.scrollbackLimit, claudeOutputLimitMarker) {
+	if c.out.appendClaudeBoundedAt(withoutTurnSentinel([]byte(text)), c.scrollbackLimit, claudeOutputLimitMarker) {
 		c.logger.Warn("claude session output limit reached; rejecting new prompts")
 	}
 }
 
-// Format and quota exemption: docs/prd/claude-code-workload.md AC-E3.
-func (c *claudeWorkload) appendPromptEcho(prompt string) {
-	text := strings.TrimRight(strings.ToValidUTF8(prompt, "\uFFFD"), "\r\n")
-	text = claudePromptEchoPrefix + strings.ReplaceAll(text, "\n", "\n"+claudePromptEchoIndent) + "\n"
-	if !c.out.endsWithNewline() {
-		text = "\n" + text
-	}
+// Marker grammar and quota exemption: docs/prd/claude-code-workload.md AC-E3.
+func (c *claudeWorkload) beginTurn(seq int, prompt string) {
+	body := strings.TrimRight(strings.ToValidUTF8(prompt, "\uFFFD"), "\r\n") + "\n"
 	redactor := newStreamingRedactor(c.redact)
-	echo := append(redactor.Push([]byte(text)), redactor.Finish()...)
-	if c.out.appendClaudeBoundedAt(echo, c.scrollbackLimit, claudeOutputLimitMarker) {
+	redacted := append(redactor.Push(withoutTurnSentinel([]byte(body))), redactor.Finish()...)
+	block := claudeTurnMarker("input", seq, "at="+c.timestamp()) + string(redacted) + claudeTurnMarker("output", seq)
+	c.appendTurnBlock(block)
+}
+
+func (c *claudeWorkload) endTurn(seq int, status string) {
+	c.appendTurnBlock(claudeTurnMarker("end", seq, "status="+status, "at="+c.timestamp()))
+}
+
+func (c *claudeWorkload) appendTurnBlock(block string) {
+	if !c.out.endsWithNewline() {
+		block = "\n" + block
+	}
+	if c.out.appendClaudeBoundedAt([]byte(block), c.scrollbackLimit, claudeOutputLimitMarker) {
 		c.logger.Warn("claude session output limit reached; rejecting new prompts")
+	}
+}
+
+func (c *claudeWorkload) timestamp() string {
+	return c.now().UTC().Format(time.RFC3339)
+}
+
+func claudeTurnMarker(kind string, seq int, fields ...string) string {
+	return claudeTurnMarkerLead + kind + " seq=" + strconv.Itoa(seq) + strings.Join(append([]string{""}, fields...), " ") + "\n"
+}
+
+func withoutTurnSentinel(p []byte) []byte {
+	if bytes.IndexByte(p, claudeTurnSentinel) < 0 {
+		return p
+	}
+	return bytes.ReplaceAll(p, []byte{claudeTurnSentinel}, nil)
+}
+
+func claudeTurnStatus(err error, timedOut bool) string {
+	switch {
+	case err == nil || errors.Is(err, exec.ErrWaitDelay):
+		return "ok"
+	case timedOut:
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	default:
+		return "error"
 	}
 }
 
@@ -408,9 +447,11 @@ func (c *claudeWorkload) runWorker() {
 		c.queuedBytes -= len(job.prompt)
 		resume := c.hasRun
 		c.active = true
+		c.turns++
+		seq := c.turns
 		c.mu.Unlock()
 
-		c.appendPromptEcho(job.prompt)
+		c.beginTurn(seq, job.prompt)
 		output := newClaudeOutputSink(
 			&c.out,
 			c.redact,
@@ -428,6 +469,7 @@ func (c *claudeWorkload) runWorker() {
 			Stdout: stdout,
 			Stderr: stderr,
 		})
+		timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
 		cancelRun()
 		// Flush projector/newline, per-fd UTF-8 tails, redaction tail and the
 		// invocation-limit tail before active becomes false. A checkpoint waiting
@@ -436,6 +478,7 @@ func (c *claudeWorkload) runWorker() {
 		err = errors.Join(err, stdoutUTF8.Close())
 		err = errors.Join(err, stderr.Close())
 		err = errors.Join(err, output.Close())
+		c.endTurn(seq, claudeTurnStatus(err, timedOut))
 
 		// Resume state follows AC-E4. Persist before reporting idle, so a
 		// checkpoint cannot archive a stale flag.
@@ -644,6 +687,7 @@ func (c *claudeWorkload) restore(r io.Reader) error {
 
 	c.out.restore(scrollbackBytes)
 	c.mu.Lock()
+	c.turns = bytes.Count(scrollbackBytes, []byte(claudeTurnMarkerLead+"input "))
 	c.hasRun = hasRun
 	c.ready = true
 	c.accepting = true

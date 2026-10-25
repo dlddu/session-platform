@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -109,12 +110,23 @@ func newClaudeTestServerAt(t *testing.T, runner commandRunner, model string, res
 	if err != nil {
 		t.Fatalf("new claude workload: %v", err)
 	}
+	c.now = func() time.Time { return testTurnTime }
 	srv := httptest.NewServer(routes(testLogger(), &agent{claude: c}))
 	t.Cleanup(func() {
 		srv.Close()
 		c.Close()
 	})
 	return c, srv
+}
+
+var testTurnTime = time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)
+
+func turnOpen(seq int, prompt string) string {
+	return claudeTurnMarker("input", seq, "at=2026-10-25T00:00:00Z") + prompt + "\n" + claudeTurnMarker("output", seq)
+}
+
+func turnClose(seq int, status string) string {
+	return claudeTurnMarker("end", seq, "status="+status, "at=2026-10-25T00:00:00Z")
 }
 
 func waitClaudeIdle(t *testing.T, c *claudeWorkload) {
@@ -503,9 +515,11 @@ func TestClaudeReadCursorAndCredentialRedaction(t *testing.T) {
 	c, srv := newClaudeTestServer(t, runner, platformDefaultModel, false, []string{secret})
 
 	writeViaHTTP(t, srv, "one", http.StatusOK)
-	first, cursor := eventuallyRead(t, srv, 0, func(payload string) bool {
+	_, _ = eventuallyRead(t, srv, 0, func(payload string) bool {
 		return strings.Contains(payload, "stderr-1")
 	})
+	waitClaudeIdle(t, c)
+	first, cursor := readViaHTTP(t, srv, 0)
 	if strings.Contains(first, secret) {
 		t.Fatalf("read leaked credential literal: %q", first)
 	}
@@ -533,32 +547,55 @@ func TestClaudeReadCursorAndCredentialRedaction(t *testing.T) {
 	waitClaudeIdle(t, c)
 }
 
-func TestClaudePromptEchoPrecedesInvocationOutput(t *testing.T) {
+func TestClaudeTurnMarkersFrameEachInvocation(t *testing.T) {
 	const secret = "token-super-secret"
 	runner := newFakeClaudeRunner()
 	runner.output = func(index int, opts runnerOptions) {
-		if index == 0 {
-			_, _ = io.WriteString(opts.Stderr, "diagnostic without newline")
-			return
+		switch index {
+		case 0:
+			_, _ = io.WriteString(opts.Stderr, "diagnostic \x1ewithout newline")
+		case 1:
+			_, _ = io.WriteString(opts.Stdout, "answer\n")
 		}
-		_, _ = io.WriteString(opts.Stdout, "answer\n")
+	}
+	runner.runErr = func(index int) error {
+		if index == 0 {
+			return fmt.Errorf("binary failed")
+		}
+		return nil
 	}
 	c, srv := newClaudeTestServer(t, runner, platformDefaultModel, false, []string{secret})
 
 	writeViaHTTP(t, srv, "first "+secret+"\n", http.StatusOK)
 	_ = receiveClaudeRun(t, runner.started)
 	waitClaudeIdle(t, c)
-	writeViaHTTP(t, srv, "line one\nline two \xff", http.StatusOK)
+	writeViaHTTP(t, srv, "line one\n\x1eline two \xff", http.StatusOK)
 	_ = receiveClaudeRun(t, runner.started)
 	waitClaudeIdle(t, c)
 
 	got, _ := readViaHTTP(t, srv, 0)
-	want := claudePromptEchoPrefix + "first " + redactedLiteral + "\n" +
-		"diagnostic without newline" +
-		"\n" + claudePromptEchoPrefix + "line one\n" + claudePromptEchoIndent + "line two \uFFFD\n" +
-		"answer\n"
+	want := turnOpen(1, "first "+redactedLiteral) + "diagnostic without newline\n" + turnClose(1, "error") +
+		turnOpen(2, "line one\nline two \uFFFD") + "answer\n" + turnClose(2, "ok")
 	if got != want {
 		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+func TestClaudeTurnStatusDistinguishesTimeoutAndCancel(t *testing.T) {
+	for _, tc := range []struct {
+		err      error
+		timedOut bool
+		want     string
+	}{
+		{nil, false, "ok"},
+		{exec.ErrWaitDelay, false, "ok"},
+		{context.DeadlineExceeded, true, "timeout"},
+		{context.Canceled, false, "canceled"},
+		{fmt.Errorf("exit status 1"), false, "error"},
+	} {
+		if got := claudeTurnStatus(tc.err, tc.timedOut); got != tc.want {
+			t.Errorf("claudeTurnStatus(%v, %v) = %q, want %q", tc.err, tc.timedOut, got, tc.want)
+		}
 	}
 }
 

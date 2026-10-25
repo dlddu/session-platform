@@ -19,7 +19,7 @@ import (
 // fails here instead of quietly agreeing with itself.
 const (
 	cc4AlphaPrompt  = "e2e-reply:alpha:25000:12"
-	cc4AlphaEchoLen = 4 + 24 + 1
+	cc4AlphaOpenLen = agentTurnInputMarkerLen + 24 + 1 + agentTurnOutputMarkerLen
 	cc4AlphaPrefix  = "alpha:가"
 	cc4AlphaRunes   = 25000
 	cc4AlphaBytes   = 6 + 3*cc4AlphaRunes
@@ -29,12 +29,12 @@ const (
 	cc4SmallRunes = 40
 
 	cc4BetaPrompt  = "e2e-reply:beta:40:4"
-	cc4BetaEchoLen = 4 + 19 + 1
+	cc4BetaOpenLen = agentTurnInputMarkerLen + 19 + 1 + agentTurnOutputMarkerLen
 	cc4BetaPrefix  = "beta:가"
 	cc4BetaBytes   = 5 + 3*cc4SmallRunes
 
 	cc4GammaPrompt  = "e2e-reply:gamma:40:4"
-	cc4GammaEchoLen = 4 + 20 + 1
+	cc4GammaOpenLen = agentTurnInputMarkerLen + 20 + 1 + agentTurnOutputMarkerLen
 	cc4GammaPrefix  = "gamma:가"
 	cc4GammaBytes   = 6 + 3*cc4SmallRunes
 
@@ -83,25 +83,27 @@ func cc4Settled(t *testing.T, id, prompt string, atLeast int) readResp {
 func TestClaudeStream_ChunkCutsBackOffToACodePointBoundary(t *testing.T) {
 	s := claudeSession(t)
 
-	full := cc4Settled(t, s.ID, cc4AlphaPrompt, cc4AlphaEchoLen+cc4AlphaBytes)
+	full := cc4Settled(t, s.ID, cc4AlphaPrompt, cc4AlphaOpenLen+cc4AlphaBytes)
 	buf := []byte(full.Payload)
 
-	if echo := "▸ " + cc4AlphaPrompt + "\n"; !bytes.HasPrefix(buf, []byte(echo)) {
-		t.Fatalf("the buffer does not open with the prompt echo %q (got prefix %q) (AC-E3)",
-			echo, string(buf[:min(64, len(buf))]))
+	if !bytes.HasPrefix(buf, []byte(agentTurnInput(1))) ||
+		string(buf[agentTurnInputMarkerLen:agentTurnInputMarkerLen+len(cc4AlphaPrompt)+1]) != cc4AlphaPrompt+"\n" {
+		t.Fatalf("the buffer does not open with turn 1's input block carrying %q (got prefix %q) (AC-E3)",
+			cc4AlphaPrompt, string(buf[:min(96, len(buf))]))
 	}
 	// Bytes, not a substring search: that is what rules out a re-encoded body upstream.
-	if want := cc4AlphaReply(); !bytes.Equal(buf[cc4AlphaEchoLen:cc4AlphaEchoLen+cc4AlphaBytes], want) {
-		t.Fatalf("the %d bytes after the prompt echo are not the alpha reply (got prefix %q)",
-			cc4AlphaBytes, string(buf[cc4AlphaEchoLen:min(cc4AlphaEchoLen+64, len(buf))]))
+	if want := cc4AlphaReply(); !bytes.Equal(buf[cc4AlphaOpenLen:cc4AlphaOpenLen+cc4AlphaBytes], want) {
+		t.Fatalf("the %d bytes after the input block are not the alpha reply (got prefix %q)",
+			cc4AlphaBytes, string(buf[cc4AlphaOpenLen:min(cc4AlphaOpenLen+64, len(buf))]))
 	}
 	if got := strings.Count(full.Payload, cc4AlphaPrefix); got != 1 {
 		t.Fatalf("alpha reply projected %d times, want exactly 1 — a result record must not "+
 			"replay text already emitted as partial deltas", got)
 	}
-	if extra := int(full.NextOffset) - cc4AlphaEchoLen - cc4AlphaBytes; extra < 0 || extra > cc4MessageTerminator {
-		t.Fatalf("buffer is %d bytes, want %d plus at most %d terminating byte",
-			full.NextOffset, cc4AlphaEchoLen+cc4AlphaBytes, cc4MessageTerminator)
+	if want := cc4AlphaOpenLen + cc4AlphaBytes + cc4MessageTerminator + agentTurnEndOKMarkerLen; int(full.NextOffset) != want ||
+		!bytes.HasPrefix(buf[want-agentTurnEndOKMarkerLen:], []byte(agentTurnEndOK(1))) {
+		t.Fatalf("buffer is %d bytes, want exactly %d closed by turn 1's ok end marker",
+			full.NextOffset, want)
 	}
 
 	if buf[cc4FirstChunkEnd]&0xC0 == 0x80 {
@@ -146,7 +148,7 @@ func TestClaudeStream_ChunkCutsBackOffToACodePointBoundary(t *testing.T) {
 
 func TestClaudeStream_LastEventIDBeatsQueryAndResumesWithoutReplay(t *testing.T) {
 	s := claudeSession(t)
-	cc4Settled(t, s.ID, cc4AlphaPrompt, cc4AlphaEchoLen+cc4AlphaBytes)
+	cc4Settled(t, s.ID, cc4AlphaPrompt, cc4AlphaOpenLen+cc4AlphaBytes)
 
 	opening := s6Open(t, s.ID, "?offset=0", "", time.Minute)
 	first, _ := opening.nextEvent(t)
@@ -192,7 +194,7 @@ func mustPayload(t *testing.T, f s6Frame) []byte {
 
 func TestClaudeStream_PastEndResetsWithoutTouchingLastAccess(t *testing.T) {
 	s := claudeSession(t)
-	full := cc4Settled(t, s.ID, cc4GammaPrompt, cc4GammaEchoLen+cc4GammaBytes)
+	full := cc4Settled(t, s.ID, cc4GammaPrompt, cc4GammaOpenLen+cc4GammaBytes)
 
 	before := getSession(t, s.ID)
 	st := s6Open(t, s.ID, "?offset="+strconv.FormatInt(full.NextOffset+1000, 10), "", time.Minute)
@@ -216,8 +218,8 @@ func TestClaudeStream_PastEndResetsWithoutTouchingLastAccess(t *testing.T) {
 
 func TestClaudeStream_ReadZeroReturnsFullHistoryAndLastCursorIsEmpty(t *testing.T) {
 	s := claudeSession(t)
-	cc4Settled(t, s.ID, cc4GammaPrompt, cc4GammaEchoLen+cc4GammaBytes)
-	full := cc4Settled(t, s.ID, cc4BetaPrompt, cc4GammaEchoLen+cc4GammaBytes+cc4BetaEchoLen+cc4BetaBytes)
+	cc4Settled(t, s.ID, cc4GammaPrompt, cc4GammaOpenLen+cc4GammaBytes)
+	full := cc4Settled(t, s.ID, cc4BetaPrompt, cc4GammaOpenLen+cc4GammaBytes+cc4MessageTerminator+agentTurnEndOKMarkerLen+cc4BetaOpenLen+cc4BetaBytes)
 
 	gamma := strings.Index(full.Payload, cc4GammaPrefix)
 	beta := strings.Index(full.Payload, cc4BetaPrefix)
