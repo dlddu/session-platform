@@ -150,3 +150,41 @@ func TestRepoAccess_ApprovalGatedBoundaryIsUnchanged(t *testing.T) {
 	assertPorts(t, "workload egress to helper", egress.Spec.Egress[1].Ports, 8091, 8092)
 	assertPorts(t, "helper ingress", policies[set.helper.Name+"-helper-ingress"].Spec.Ingress[0].Ports, 8091, 8092)
 }
+
+// AC-H6: git_push builds its scratch repository under the session MCP's temp
+// directory, which a read-only root filesystem would otherwise refuse.
+func TestRepoAccess_SessionMCPHasAPrivateWritableTmp(t *testing.T) {
+	for _, wt := range []session.WorkloadType{session.WorkloadTypeApprovalGated, session.WorkloadTypeMiniMaxCode} {
+		set := startWithRepoAccess(t, "ra4"+string(wt[0]), wt, true)
+		mcp := container(t, set.helper, k8s.SessionMCPContainerName)
+		volume := ""
+		for _, m := range mcp.VolumeMounts {
+			if m.MountPath == k8s.SessionMCPScratchDir {
+				if m.ReadOnly {
+					t.Errorf("%s: %s is mounted read-only", wt, k8s.SessionMCPScratchDir)
+				}
+				volume = m.Name
+			}
+		}
+		if volume == "" {
+			t.Fatalf("%s: session MCP mounts nothing at %s (mounts %+v)", wt, k8s.SessionMCPScratchDir, mcp.VolumeMounts)
+		}
+		for _, v := range set.helper.Spec.Volumes {
+			if v.Name == volume && v.EmptyDir == nil {
+				t.Errorf("%s: %s is backed by %+v, want an emptyDir", wt, k8s.SessionMCPScratchDir, v.VolumeSource)
+			}
+		}
+		for _, pod := range []corev1.Pod{set.workload, set.helper} {
+			for _, c := range pod.Spec.Containers {
+				if pod.Name == set.helper.Name && c.Name == k8s.SessionMCPContainerName {
+					continue
+				}
+				for _, m := range c.VolumeMounts {
+					if pod.Name == set.helper.Name && m.Name == volume {
+						t.Errorf("%s: container %s also mounts the session MCP scratch", wt, c.Name)
+					}
+				}
+			}
+		}
+	}
+}
