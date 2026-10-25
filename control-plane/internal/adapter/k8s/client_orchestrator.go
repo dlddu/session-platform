@@ -767,7 +767,7 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 			RestartPolicy:                corev1.RestartPolicyAlways,
 			ServiceAccountName:           SessionMCPServiceAccountName,
 			AutomountServiceAccountToken: &automountServiceAccountToken,
-			Containers:                   append([]corev1.Container{mcp}, o.helperProxyContainers(workloadType, image)...),
+			Containers:                   append([]corev1.Container{mcp}, o.helperProxyContainers(sessionID, workloadType, image)...),
 			Volumes:                      append(helperVolumes, helperProxyVolumes(workloadType)...),
 		},
 	}, nil

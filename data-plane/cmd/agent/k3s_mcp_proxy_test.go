@@ -32,7 +32,7 @@ func TestK3SMCPOriginKeepsOnlySchemeAndHost(t *testing.T) {
 // reports itself unconfigured, so the pod runs and the entrypoint skips the
 // plugin instead of failing.
 func TestK3SMCPProxyWithoutTokenReportsUnconfigured(t *testing.T) {
-	handler, err := newK3SMCPProxy("", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	handler, err := newK3SMCPProxy("", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("newK3SMCPProxy: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestK3SMCPProxyInjectsBearerAndKeepsTheMCPSurface(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	handler, err := newK3SMCPProxyWithTransport(upstream.URL+"/ignored-path", token,
+	handler, err := newK3SMCPProxyWithTransport(upstream.URL+"/ignored-path", token, "",
 		slog.New(slog.NewTextHandler(io.Discard, nil)), upstream.Client().Transport)
 	if err != nil {
 		t.Fatalf("newK3SMCPProxyWithTransport: %v", err)
@@ -109,5 +109,60 @@ func TestK3SMCPProxyInjectsBearerAndKeepsTheMCPSurface(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), token) {
 		t.Error("the token reached the client in the response body")
+	}
+}
+
+// AC-G5: the proxy, not the workload, names the session on every upstream call.
+// A caller-supplied copy never survives, and an unset id sends no header at all.
+func TestK3SMCPProxySetsTheSessionIDHeader(t *testing.T) {
+	for _, tc := range []struct {
+		name, sessionID, spoofed, want string
+	}{
+		{name: "configured", sessionID: "0123abcd", want: "0123abcd"},
+		{name: "spoofed by the caller", sessionID: "0123abcd", spoofed: "someone-else", want: "0123abcd"},
+		{name: "unconfigured", sessionID: "", want: ""},
+		{name: "unconfigured and spoofed", sessionID: "  ", spoofed: "someone-else", want: ""},
+		{name: "malformed id", sessionID: "bad id", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			var auth string
+			upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = r.Header.Values(k3sMCPSessionIDHeader)
+				auth = r.Header.Get("Authorization")
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+			}))
+			defer upstream.Close()
+
+			handler, err := newK3SMCPProxyWithTransport(upstream.URL+"/mcp", "k3s-token", tc.sessionID,
+				slog.New(slog.NewTextHandler(io.Discard, nil)), upstream.Client().Transport)
+			if err != nil {
+				t.Fatalf("newK3SMCPProxyWithTransport: %v", err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+			request.Header.Set("Content-Type", "application/json")
+			if tc.spoofed != "" {
+				request.Header.Add(k3sMCPSessionIDHeader, tc.spoofed)
+				request.Header.Add("x-session-platform-session-id", tc.spoofed)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d body %q", response.Code, response.Body.String())
+			}
+			if auth != "Bearer k3s-token" {
+				t.Errorf("upstream Authorization = %q, want the proxy's bearer", auth)
+			}
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Errorf("upstream %s = %q, want no header", k3sMCPSessionIDHeader, got)
+				}
+				return
+			}
+			if len(got) != 1 || got[0] != tc.want {
+				t.Errorf("upstream %s = %q, want exactly [%q]", k3sMCPSessionIDHeader, got, tc.want)
+			}
+		})
 	}
 }

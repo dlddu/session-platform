@@ -118,6 +118,9 @@ func TestRepoAccess_ApprovalGatedHelperRunsAK3SMCPProxy(t *testing.T) {
 	if !ok || secret != "claude-provider" || key != "k3s-mcp-token" {
 		t.Errorf("token selector = %s/%s (%v), want claude-provider/k3s-mcp-token", secret, key, ok)
 	}
+	if got, _ := envValue(proxy, k8s.SessionIDEnvVar); got != "ra2" {
+		t.Errorf("k3s mcp proxy %s = %q, want ra2", k8s.SessionIDEnvVar, got)
+	}
 	if _, ok := envValue(proxy, k8s.MiniMaxMarketplaceDirEnvVar); ok || len(proxy.VolumeMounts) != 0 {
 		t.Errorf("approval-gated k3s proxy got a marketplace: mounts %+v", proxy.VolumeMounts)
 	}

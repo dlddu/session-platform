@@ -26,6 +26,11 @@ const (
 	k3sMCPURLEnv       = "K3S_MCP_URL"
 	defaultK3SMCPURL   = "https://homelab-k3s-mcp.llkm.nl/mcp"
 	k3sMCPProxyHealthz = "/healthz"
+
+	// k3sMCPSessionIDHeader tells the K3s MCP which session-platform session a
+	// call comes from, for display on its approval screen only (see
+	// docs/prd/minimax-code-workload.md AC-G5).
+	k3sMCPSessionIDHeader = "X-Session-Platform-Session-Id"
 )
 
 // k3sMCPProxyRequestHeaderAllowed is the MCP Streamable HTTP request surface.
@@ -50,11 +55,21 @@ func k3sMCPProxyRequestHeaderAllowed(name string) bool {
 // keeps minimax-code sessions working without the K3s tools. The health route
 // says which of the two it is, so the workload agent can leave the K3s server
 // out rather than fail the pod.
-func newK3SMCPProxy(rawURL, token string, logger *slog.Logger) (*k3sMCPProxy, error) {
+func newK3SMCPProxy(rawURL, token, sessionID string, logger *slog.Logger) (*k3sMCPProxy, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	// As for the provider proxy: no ambient HTTP(S)_PROXY may redirect the token.
 	transport.Proxy = nil
-	return newK3SMCPProxyWithTransport(rawURL, token, logger, transport)
+	return newK3SMCPProxyWithTransport(rawURL, token, sessionID, logger, transport)
+}
+
+// k3sMCPFixedHeaders are the headers the proxy itself sets on every upstream
+// request (docs/prd/minimax-code-workload.md AC-G5).
+func k3sMCPFixedHeaders(sessionID string) map[string]string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || strings.ContainsFunc(sessionID, func(r rune) bool { return r < 0x21 || r == 0x7f }) {
+		return nil
+	}
+	return map[string]string{k3sMCPSessionIDHeader: sessionID}
 }
 
 // k3sMCPProxy is the proxy's handler plus, when it holds a token and a
@@ -67,7 +82,7 @@ type k3sMCPProxy struct {
 	seeder *miniMaxMarketplaceSeeder
 }
 
-func newK3SMCPProxyWithTransport(rawURL, token string, logger *slog.Logger, transport http.RoundTripper) (*k3sMCPProxy, error) {
+func newK3SMCPProxyWithTransport(rawURL, token, sessionID string, logger *slog.Logger, transport http.RoundTripper) (*k3sMCPProxy, error) {
 	origin, err := k3sMCPOrigin(rawURL)
 	if err != nil {
 		return nil, err
@@ -79,7 +94,7 @@ func newK3SMCPProxyWithTransport(rawURL, token string, logger *slog.Logger, tran
 	configured := token != ""
 	var upstream http.Handler
 	if configured {
-		proxy, err := newHeaderScopedProxy(origin, token, logger, transport, k3sMCPProxyRequestHeaderAllowed)
+		proxy, err := newHeaderScopedProxy(origin, token, logger, transport, k3sMCPProxyRequestHeaderAllowed, k3sMCPFixedHeaders(sessionID))
 		if err != nil {
 			return nil, err
 		}

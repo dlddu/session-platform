@@ -221,7 +221,7 @@ func TestGithubTokenThroughProxy(t *testing.T) {
 }
 
 func TestK3SMCPProxySeedRoute(t *testing.T) {
-	unconfigured, err := newK3SMCPProxyWithTransport("", "", nil, http.DefaultTransport)
+	unconfigured, err := newK3SMCPProxyWithTransport("", "", "", nil, http.DefaultTransport)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestK3SMCPProxySeedRoute(t *testing.T) {
 	// The approval-gated helper pod: a token for the session MCP's token mint,
 	// and no marketplace to stage.
 	t.Setenv(miniMaxMarketplaceDirEnv, "")
-	tokenOnly, err := newK3SMCPProxyWithTransport("", "k3s-token", nil, http.DefaultTransport)
+	tokenOnly, err := newK3SMCPProxyWithTransport("", "k3s-token", "", nil, http.DefaultTransport)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestK3SMCPProxySeedRoute(t *testing.T) {
 	}
 
 	t.Setenv(miniMaxMarketplaceDirEnv, t.TempDir())
-	configured, err := newK3SMCPProxyWithTransport("", "k3s-token", nil, http.DefaultTransport)
+	configured, err := newK3SMCPProxyWithTransport("", "k3s-token", "", nil, http.DefaultTransport)
 	if err != nil {
 		t.Fatal(err)
 	}

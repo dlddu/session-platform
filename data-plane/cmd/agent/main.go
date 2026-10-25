@@ -205,7 +205,7 @@ func main() {
 			os.Exit(1)
 		}
 		token := os.Getenv(k3sMCPTokenEnv)
-		proxy, err := newK3SMCPProxy(os.Getenv(k3sMCPURLEnv), token, logger)
+		proxy, err := newK3SMCPProxy(os.Getenv(k3sMCPURLEnv), token, os.Getenv(sessionIDEnv), logger)
 		if err != nil {
 			logger.Error("failed to initialise k3s mcp proxy", "err", err)
 			os.Exit(1)
@@ -214,7 +214,8 @@ func main() {
 		if proxy.seeder != nil {
 			go proxy.seeder.run(context.Background())
 		}
-		logger.Info("k3s mcp proxy started", "addr", addr, "configured", token != "")
+		logger.Info("k3s mcp proxy started", "addr", addr, "configured", token != "",
+			"session_id_header", k3sMCPFixedHeaders(os.Getenv(sessionIDEnv)) != nil)
 	default:
 		logger.Error("unknown data plane workload", "workload", workload)
 		os.Exit(1)

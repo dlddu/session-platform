@@ -113,7 +113,7 @@ func newCredentialProxyWithTransport(
 	logger *slog.Logger,
 	transport http.RoundTripper,
 ) (*credentialProxy, error) {
-	return newHeaderScopedProxy(rawUpstream, token, logger, transport, credentialProxyRequestHeaderAllowed)
+	return newHeaderScopedProxy(rawUpstream, token, logger, transport, credentialProxyRequestHeaderAllowed, nil)
 }
 
 func newHeaderScopedProxy(
@@ -122,6 +122,7 @@ func newHeaderScopedProxy(
 	logger *slog.Logger,
 	transport http.RoundTripper,
 	headerAllowed func(string) bool,
+	fixedHeaders map[string]string,
 ) (*credentialProxy, error) {
 	upstream, err := parseCredentialProxyUpstream(rawUpstream)
 	if err != nil {
@@ -132,6 +133,11 @@ func newHeaderScopedProxy(
 	}
 	if strings.ContainsAny(token, "\r\n") {
 		return nil, errors.New("credential proxy auth token contains invalid characters")
+	}
+	for name, value := range fixedHeaders {
+		if strings.ContainsAny(name+value, "\r\n") {
+			return nil, errors.New("credential proxy fixed header contains invalid characters")
+		}
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -158,6 +164,9 @@ func newHeaderScopedProxy(
 		// a caller smuggle a denied routing or authentication field in a trailer.
 		request.Trailer = nil
 		request.Header.Set("Authorization", "Bearer "+token)
+		for name, value := range fixedHeaders {
+			request.Header.Set(name, value)
+		}
 		// Make literal response redaction possible even if the caller requested
 		// compression. The fixed gateway is expected to honor identity encoding.
 		request.Header.Set("Accept-Encoding", "identity")
