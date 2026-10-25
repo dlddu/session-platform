@@ -44,7 +44,7 @@ func TestClaudeLiveEndpointsRedactCredentialSplitAcrossRunnerWrites(t *testing.T
 	})
 	c, srv := newClaudeTestServer(t, runner, platformDefaultModel, false, []string{secret})
 
-	echo := claudePromptEchoPrefix + "redact live output\n"
+	echo := turnOpen(1, "redact live output")
 	writeViaHTTP(t, srv, "redact live output", http.StatusOK)
 	select {
 	case <-firstWritten:

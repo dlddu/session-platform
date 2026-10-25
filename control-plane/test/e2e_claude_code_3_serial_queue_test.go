@@ -19,8 +19,7 @@ import (
 // change on either side fails here instead of quietly agreeing with itself.
 const (
 	cc3SlowPrompt  = "e2e-reply:ccthree-slow:4000:64:150"
-	cc3SlowEcho    = "▸ " + cc3SlowPrompt + "\n"
-	cc3SlowEchoLen = 4 + 34 + 1
+	cc3SlowOpenLen = agentTurnInputMarkerLen + 34 + 1 + agentTurnOutputMarkerLen
 	cc3SlowPrefix  = "ccthree-slow:가"
 	cc3SlowRunes   = 4000
 	cc3SlowDeltas  = 64
@@ -29,15 +28,27 @@ const (
 	cc3SlowBytes   = 13 + 3*cc3SlowRunes
 
 	cc3FastPrompt  = "e2e-reply:ccthree-fast:40:1"
-	cc3FastEcho    = "▸ " + cc3FastPrompt + "\n"
-	cc3FastEchoLen = 4 + 27 + 1
+	cc3FastOpenLen = agentTurnInputMarkerLen + 27 + 1 + agentTurnOutputMarkerLen
 	cc3FastPrefix  = "ccthree-fast:가"
 	cc3FastRunes   = 40
 	cc3FastBytes   = 13 + 3*cc3FastRunes
 )
 
 // One per invocation; data-plane/cmd/agent/claude_stream.go finishMessage owns the rule.
-const cc3Terminators = 2
+const cc3Terminator = 1
+
+const (
+	agentTurnLead            = "\x1esession-platform "
+	agentTurnInputMarkerLen  = 18 + 15 + 20 + 1
+	agentTurnOutputMarkerLen = 18 + 12 + 1
+	agentTurnEndOKMarkerLen  = 18 + 23 + 20 + 1
+)
+
+func agentTurnInput(seq int) string { return agentTurnLead + "input seq=" + strconv.Itoa(seq) + " at=" }
+
+func agentTurnEndOK(seq int) string {
+	return agentTurnLead + "end seq=" + strconv.Itoa(seq) + " status=ok at="
+}
 
 func cc3IssueOverlapped(t *testing.T, id string) readResp {
 	t.Helper()
@@ -50,7 +61,7 @@ func cc3IssueOverlapped(t *testing.T, id string) readResp {
 	writePromptOK(t, id, cc3FastPrompt)
 	mid := readShellAt(t, id, 0)
 
-	if mid.NextOffset >= cc3SlowEchoLen+cc3SlowBytes {
+	if mid.NextOffset >= cc3SlowOpenLen+cc3SlowBytes {
 		t.Fatalf("the first reply (%d bytes) had already fully landed (%d bytes buffered) by the time "+
 			"the second write returned — the two writes never overlapped, so nothing below would be "+
 			"measuring serialisation. The stand-in was asked to spend at least %dms on it, so either "+
@@ -58,7 +69,7 @@ func cc3IssueOverlapped(t *testing.T, id string) readResp {
 			"cc3SlowDelayMs (MAX_DELAY_MS in deploy/e2e-anthropic-fake.yaml is the ceiling). Note "+
 			"that raising the *size* does not help — 600013 bytes was measured landing inside one "+
 			"write's round trip, which is why the gap exists.",
-			cc3SlowBytes, mid.NextOffset-cc3SlowEchoLen, cc3SlowFloorMs)
+			cc3SlowBytes, mid.NextOffset-cc3SlowOpenLen, cc3SlowFloorMs)
 	}
 	if strings.Contains(mid.Payload, cc3FastPrefix) {
 		t.Fatalf("the second reply was already in the buffer when its own write returned (%d bytes "+
@@ -75,7 +86,7 @@ func cc3IssueOverlapped(t *testing.T, id string) readResp {
 func cc3Settled(t *testing.T, id string) readResp {
 	t.Helper()
 	r := eventuallyClaudeOutput(t, id, 5*time.Minute, func(p string) bool {
-		return len(p) >= cc3SlowEchoLen+cc3SlowBytes+cc3FastEchoLen+cc3FastBytes
+		return len(p) >= cc3SlowOpenLen+cc3SlowBytes+cc3FastOpenLen+cc3FastBytes
 	})
 	deadline := time.Now().Add(time.Minute)
 	for {
@@ -102,17 +113,22 @@ func TestClaudeSerialQueue_ReadZeroAccumulatesInWriteOrder(t *testing.T) {
 	if slow < 0 || fast < 0 {
 		t.Fatalf("read(0) is missing a reply (slow=%d fast=%d) in %d bytes", slow, fast, full.NextOffset)
 	}
-	if !strings.HasPrefix(full.Payload, cc3SlowEcho) || slow != cc3SlowEchoLen {
-		t.Fatalf("the first reply starts at byte %d, want %d right after its own prompt echo %q — the "+
-			"buffer was empty before the writes, so nothing else may precede it (AC-E3)",
-			slow, cc3SlowEchoLen, cc3SlowEcho)
+	if !strings.HasPrefix(full.Payload, agentTurnInput(1)) || slow != cc3SlowOpenLen ||
+		full.Payload[agentTurnInputMarkerLen:agentTurnInputMarkerLen+len(cc3SlowPrompt)+1] != cc3SlowPrompt+"\n" {
+		t.Fatalf("the first reply starts at byte %d, want %d right after turn 1's input block carrying %q — "+
+			"the buffer was empty before the writes, so nothing else may precede it (AC-E3)",
+			slow, cc3SlowOpenLen, cc3SlowPrompt)
 	}
 	// Position rather than relative order: interleaved replies would still satisfy
 	// a naive `slow < fast`, and interleaving is what a concurrent queue produces.
-	if echo := strings.Index(full.Payload, cc3FastEcho); echo < cc3SlowEchoLen+cc3SlowBytes || fast != echo+cc3FastEchoLen {
-		t.Fatalf("the second prompt echo is at byte %d and its reply at %d, want both after the first "+
-			"reply's %d bytes and the reply right behind its echo — a session runs its prompts one at "+
-			"a time and appends in write order (AC-E2/E3)", echo, fast, cc3SlowEchoLen+cc3SlowBytes)
+	end1 := strings.Index(full.Payload, agentTurnEndOK(1))
+	open2 := strings.Index(full.Payload, agentTurnInput(2))
+	if end1 != cc3SlowOpenLen+cc3SlowBytes+cc3Terminator || open2 != end1+agentTurnEndOKMarkerLen || fast != open2+cc3FastOpenLen {
+		t.Fatalf("turn 1 ends at byte %d, turn 2 opens at %d and its reply starts at %d, want %d, %d and %d — "+
+			"a session runs its prompts one at a time, closes each turn before the next opens, and appends "+
+			"in write order (AC-E2/E3)", end1, open2, fast, cc3SlowOpenLen+cc3SlowBytes+cc3Terminator,
+			cc3SlowOpenLen+cc3SlowBytes+cc3Terminator+agentTurnEndOKMarkerLen,
+			cc3SlowOpenLen+cc3SlowBytes+cc3Terminator+agentTurnEndOKMarkerLen+cc3FastOpenLen)
 	}
 	// A drain that reordered *and* replayed a prompt could still pass the position
 	// checks above; the counts and the total length are what rule that out.
@@ -124,9 +140,10 @@ func TestClaudeSerialQueue_ReadZeroAccumulatesInWriteOrder(t *testing.T) {
 		t.Fatalf("the second reply's label appears %d times, want exactly 1 — one accepted write is "+
 			"one run (AC-E2)", got)
 	}
-	if want := int64(cc3SlowEchoLen + cc3SlowBytes + cc3FastEchoLen + cc3FastBytes); full.NextOffset < want || full.NextOffset > want+cc3Terminators {
-		t.Fatalf("buffer is %d bytes, want %d plus at most %d terminating byte(s)",
-			full.NextOffset, want, cc3Terminators)
+	if want := int64(cc3SlowOpenLen + cc3SlowBytes + cc3FastOpenLen + cc3FastBytes + 2*(cc3Terminator+agentTurnEndOKMarkerLen)); full.NextOffset != want ||
+		strings.LastIndex(full.Payload, agentTurnEndOK(2)) != len(full.Payload)-agentTurnEndOKMarkerLen {
+		t.Fatalf("buffer is %d bytes, want exactly %d ending with turn 2's ok end marker",
+			full.NextOffset, want)
 	}
 	t.Logf("slow reply at [%d,%d), fast reply at [%d,%d), buffer settled at %d bytes",
 		slow, slow+cc3SlowBytes, fast, fast+cc3FastBytes, full.NextOffset)
