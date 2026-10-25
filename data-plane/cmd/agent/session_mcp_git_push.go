@@ -262,19 +262,23 @@ func pushRepository(ctx context.Context, req pushRequest) (pushOutcome, error) {
 	if _, err := run(plain, "init", "--bare", "-q", scratch); err != nil {
 		return pushOutcome{}, fmt.Errorf("prepare a scratch repository: %w", err)
 	}
-	// safe.directory: the clone was written by another container, likely as
-	// another uid. Only upload-pack runs there, which is safe on a foreign repo.
+	ownScratch := "safe.directory=" + scratch
+	// The clone is owned by another uid (EFS forces 50000), so upload-pack in it
+	// needs safe.directory — trusting the agent's repo there is an accepted risk
+	// (docs/prd/repo-access.md, 2026-10-25). It rides on --upload-pack because
+	// git drops -c (GIT_CONFIG_PARAMETERS) when it spawns a local transport.
 	if _, err := run(plain, "-C", scratch,
-		"-c", "safe.directory=*", "-c", "protocol.file.allow=always", "-c", "credential.helper=",
-		"fetch", "--no-tags", "-q", "--", filepath.Join(req.source, ".git"), ref+":"+ref); err != nil {
+		"-c", ownScratch, "-c", "protocol.file.allow=always", "-c", "credential.helper=",
+		"fetch", "--no-tags", "-q", "--upload-pack="+gitBin+" -c safe.directory='*' upload-pack",
+		"--", filepath.Join(req.source, ".git"), ref+":"+ref); err != nil {
 		return pushOutcome{}, fmt.Errorf("branch %s could not be read from the clone: %w", req.branch, err)
 	}
-	commit, err := run(plain, "-C", scratch, "rev-parse", "--verify", "-q", ref+"^{commit}")
+	commit, err := run(plain, "-C", scratch, "-c", ownScratch, "rev-parse", "--verify", "-q", ref+"^{commit}")
 	if err != nil {
 		return pushOutcome{}, fmt.Errorf("branch %s has no commit in the clone", req.branch)
 	}
 	// No leading '+' on the refspec: a non-fast-forward is refused, never forced.
-	out, err := run(pushGitEnv(req.env...), "-C", scratch,
+	out, err := run(pushGitEnv(req.env...), "-C", scratch, "-c", ownScratch,
 		"-c", "credential.helper=", "-c", "core.hooksPath="+os.DevNull,
 		"push", "--no-verify", "--porcelain", "--", req.remote, ref+":"+ref)
 	if err != nil {

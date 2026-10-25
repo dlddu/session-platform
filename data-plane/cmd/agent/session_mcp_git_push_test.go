@@ -407,6 +407,62 @@ func TestPushRepositoryPushesThroughAScratchRepository(t *testing.T) {
 	}
 }
 
+// In production the clone sits on EFS, whose access point owns every file as
+// uid 50000, never the session MCP's uid. GIT_TEST_ASSUME_DIFFERENT_OWNER makes
+// git see every repository that way; the remote is out of its reach because the
+// CGI backend does not inherit the test's environment.
+func TestPushRepositoryReadsACloneOwnedBySomeoneElse(t *testing.T) {
+	backend := filepath.Join("/usr/lib/git-core", "git-http-backend")
+	if out, err := exec.Command("git", "--exec-path").Output(); err == nil {
+		backend = filepath.Join(strings.TrimSpace(string(out)), "git-http-backend")
+	}
+	if _, err := os.Stat(backend); err != nil {
+		t.Skip("git-http-backend not installed")
+	}
+	gitRun := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "safe.directory=*"}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	root := t.TempDir()
+	seed := filepath.Join(t.TempDir(), "seed")
+	gitRun("init", "-q", "-b", "main", seed)
+	gitRun("-C", seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init")
+	remoteDir := filepath.Join(root, "reconciler.git")
+	gitRun("clone", "-q", "--bare", seed, remoteDir)
+	gitRun("-C", remoteDir, "config", "http.receivepack", "true")
+	srv := httptest.NewServer(&cgi.Handler{Path: backend, Env: []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1"}})
+	defer srv.Close()
+	remote := srv.URL + "/reconciler.git"
+
+	clone := filepath.Join(t.TempDir(), "req-0a1b2c3d")
+	gitRun("clone", "-q", remoteDir, clone)
+	gitRun("-C", clone, "checkout", "-q", "-b", "feature")
+	gitRun("-C", clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "change")
+	want := gitRun("-C", clone, "rev-parse", "HEAD")
+
+	t.Setenv("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1")
+	header, _ := githubBasicAuthHeader(testGitHubToken)
+	outcome, err := pushRepository(context.Background(), pushRequest{
+		source: clone, branch: "feature", remote: remote, env: scopedAuthEnv(remote, header),
+	})
+	if err != nil {
+		t.Fatalf("push from a foreign-owned clone: %v", err)
+	}
+	if outcome.commit != want {
+		t.Errorf("pushed commit = %s, want %s", outcome.commit, want)
+	}
+	if got := gitRun("-C", remoteDir, "rev-parse", "refs/heads/feature"); got != want {
+		t.Errorf("remote feature = %s, want %s", got, want)
+	}
+}
+
 func TestGitHubTokenCallBodyAcceptsOnlyReadOrWrite(t *testing.T) {
 	for _, contents := range []string{githubContentsRead, githubContentsWrite} {
 		if _, err := githubTokenCallBody([]string{"r"}, contents); err != nil {
