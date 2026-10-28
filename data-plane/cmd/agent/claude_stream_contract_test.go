@@ -44,21 +44,22 @@ func TestClaudeLiveEndpointsRedactCredentialSplitAcrossRunnerWrites(t *testing.T
 	})
 	c, srv := newClaudeTestServer(t, runner, platformDefaultModel, false, []string{secret})
 
-	cancel, response, reader := openOutputStream(t, srv, 0)
-	defer cancel()
-	defer response.Body.Close()
+	echo := turnOpen(1, "redact live output")
 	writeViaHTTP(t, srv, "redact live output", http.StatusOK)
 	select {
 	case <-firstWritten:
 	case <-time.After(5 * time.Second):
 		t.Fatal("first split credential record was not written")
 	}
+	cancel, response, reader := openOutputStream(t, srv, len(echo))
+	defer cancel()
+	defer response.Body.Close()
 	first, payload := decodeOutputEvent(t, readSSEEvent(t, reader))
 	if got, want := string(payload), "prefix "; got != want {
 		t.Fatalf("first safe SSE payload = %q, want %q", got, want)
 	}
-	if got, cursor := readViaHTTP(t, srv, 0); got != "prefix " || cursor != first.NextOffset {
-		t.Fatalf("first safe /read = (%q,%d), want (%q,%d)", got, cursor, "prefix ", first.NextOffset)
+	if got, cursor := readViaHTTP(t, srv, 0); got != echo+"prefix " || cursor != first.NextOffset {
+		t.Fatalf("first safe /read = (%q,%d), want (%q,%d)", got, cursor, echo+"prefix ", first.NextOffset)
 	}
 
 	close(allowSecond)
@@ -72,7 +73,7 @@ func TestClaudeLiveEndpointsRedactCredentialSplitAcrossRunnerWrites(t *testing.T
 		t.Fatalf("completed redacted SSE payload = %q, want %q", got, want)
 	}
 	full, cursor := readViaHTTP(t, srv, 0)
-	if want := "prefix " + redactedLiteral + " suffix"; full != want || cursor != second.NextOffset || strings.Contains(full, secret) {
+	if want := echo + "prefix " + redactedLiteral + " suffix"; full != want || cursor != second.NextOffset || strings.Contains(full, secret) {
 		t.Fatalf("completed redacted /read = (%q,%d), want (%q,%d)", full, cursor, want, second.NextOffset)
 	}
 	select {

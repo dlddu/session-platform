@@ -33,7 +33,7 @@
 ### 시나리오 3: 연속 write는 직렬 실행
 - **사전 조건**: active 상태의 `claude-code` 세션 1개
 - **실행 단계**: 첫 write의 실행이 끝나기 전에 두 번째 write 호출 → 두 실행의 시작·종료 시각과 read 출력 순서 확인
-- **기대 결과**: 두 `claude` 실행 구간이 겹치지 않음(직렬). read(`offset=0`) 출력이 write를 보낸 순서대로 누적
+- **기대 결과**: 두 `claude` 실행 구간이 겹치지 않음(직렬). read(`offset=0`) 출력이 write를 보낸 순서대로 누적되고, 각 turn이 `input seq=n` 블록(그 실행의 프롬프트) → `output seq=n` → 응답 → `end seq=n status=ok` 순서로 닫힌 뒤 다음 turn이 열린다
 - **검증 AC**: AC-E2
 
 ### 시나리오 4: live stream·재접속·read reconcile

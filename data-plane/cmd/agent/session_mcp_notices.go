@@ -39,11 +39,15 @@ const (
 	noticeUnavailable = "unavailable"
 )
 
-// approvalNotice is one entry. It carries the tool and the external identifier
-// AC-F3 puts in the marker and nothing else — no gateway URL, no API key, no
-// approval context (AC-F6). The URL a human approved is already in the
-// agent's own output; repeating it here would only widen what crosses the pod
-// boundary.
+// noticeAccessRequested is not a wait: nothing blocks on it, so it carries no
+// external identifier and the wait set never sees it (approval_wait.go).
+const noticeAccessRequested = "access-requested"
+
+// approvalNotice is one entry. It carries what its marker shows — the tool and
+// AC-F3's external identifier, or the repository of an access request (AC-H4)
+// — and nothing else: no gateway URL, no API key, no approval context (AC-F6).
+// The URL a human approved is already in the agent's own output; repeating it
+// here would only widen what crosses the pod boundary.
 type approvalNotice struct {
 	Seq        int    `json:"seq"`
 	Kind       string `json:"kind"`
@@ -51,6 +55,7 @@ type approvalNotice struct {
 	ExternalID string `json:"externalId"`
 	// Decision is set on a decided notice (approvalDecision).
 	Decision string `json:"decision,omitempty"`
+	Repo     string `json:"repo,omitempty"`
 }
 
 // noticeFeedResponse is one long poll's answer. Dropped is how many notices

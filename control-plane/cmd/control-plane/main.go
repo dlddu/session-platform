@@ -37,6 +37,9 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	cfg, err := loadConfig()
+	if err == nil {
+		err = validateMiniMaxSecret(cfg.miniMax, cfg.claudeCredentialsSecret)
+	}
 	if err != nil {
 		logger.Error("invalid runtime configuration", "err", err)
 		os.Exit(1)
@@ -57,9 +60,12 @@ func main() {
 		"data_plane_image", cfg.dataPlaneImage,
 		"data_plane_claude_code_image", cfg.dataPlaneClaudeCodeImage,
 		"data_plane_approval_gated_image", cfg.dataPlaneApprovalGatedImage,
+		"data_plane_minimax_code_image", cfg.miniMax.image,
+		"approval_gateway_url", cfg.approvalGatewayURL,
 		"data_plane_shell", cfg.dataPlaneShell,
 		"claude_code_default_model", cfg.claudeCodeDefaultModel,
 		"claude_code_models", len(cfg.claudeCodeModels),
+		"repo_access_enabled", cfg.repoAccess.enabled,
 	)
 	if cfg.dataPlaneImage == "" {
 		// The in-code fallback image has no session agent, so session pods will
@@ -74,9 +80,12 @@ func main() {
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, cfg.dataPlaneClaudeCodeImage),
 		// Same for approval-gated (AC-F1).
 		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, cfg.dataPlaneApprovalGatedImage),
+		k8s.WithWorkloadImage(session.WorkloadTypeMiniMaxCode, cfg.miniMax.image),
 		k8s.WithClaudeCredentialsSecret(cfg.claudeCredentialsSecret),
-		k8s.WithApprovalGatewaySecret(cfg.approvalGatewaySecret),
+		k8s.WithMiniMaxCredentialsSecret(cfg.miniMax.credentialsSecret),
+		k8s.WithApprovalGatewayURL(cfg.approvalGatewayURL),
 		k8s.WithSharedVolume(cfg.sharedVolumeStorageClass, cfg.sharedVolumeSize),
+		k8s.WithRepoAccess(cfg.repoAccess.helperURL(namespace)),
 		k8s.WithCheckpointPrivileged(cfg.criuEnabled))
 	store := configmap.NewStore(client, namespace)
 	// Shell I/O (write→stdin, read→scrollback delta) AND checkpoint/restore ride
@@ -89,7 +98,7 @@ func main() {
 	// gate, one per type: CRIU_ENABLED for shell, CLAUDE_CODE_ARCHIVE_ENABLED
 	// for claude-code, SESSION_APPROVAL_GATED_ARCHIVE_ENABLED for approval-gated.
 	var cstore criu.CheckpointStore
-	if cfg.criuEnabled || cfg.claudeArchiveEnabled || cfg.approvalGatedArchiveEnabled {
+	if cfg.criuEnabled || cfg.claudeArchiveEnabled || cfg.approvalGatedArchiveEnabled || cfg.miniMax.archiveEnabled {
 		cstore, err = buildCheckpointStore(cfg)
 		if err != nil {
 			logger.Error("checkpoint store misconfigured", "err", err)
@@ -133,8 +142,17 @@ func main() {
 		))
 		logger.Info("approval-gated filesystem archive enabled", "store", cfg.checkpointStoreDesc())
 	}
+	miniMaxArchive, err := miniMaxArchiveOption(cfg.miniMax, agentClient, cstore)
+	if err != nil {
+		logger.Error("minimax-code archive misconfigured", "err", err)
+		os.Exit(1)
+	}
+	if miniMaxArchive != nil {
+		serviceOpts = append(serviceOpts, miniMaxArchive)
+		logger.Info("minimax-code filesystem archive enabled", "store", cfg.checkpointStoreDesc())
+	}
 	mgr := service.New(orch, store, shellCkpt, agentClient, serviceOpts...)
-	snapshotEnabled := shellCkpt.Enabled() || cfg.claudeArchiveEnabled || cfg.approvalGatedArchiveEnabled
+	snapshotEnabled := shellCkpt.Enabled() || cfg.claudeArchiveEnabled || cfg.approvalGatedArchiveEnabled || cfg.miniMax.archiveEnabled
 
 	// AC-B1: the operational idle->snapshot trigger. Manual snapshots reach the
 	// same manager operation through the product API, without the idle wait.
@@ -143,7 +161,17 @@ func main() {
 	mux := http.NewServeMux()
 	api.New(mgr,
 		api.WithClaudeCodeModelConfig(cfg.claudeCodeDefaultModel, cfg.claudeCodeModels),
+		// approval-gated reads the same Secret's model keys (AC-F6 → AC-E6).
+		api.WithWorkloadModelConfig(session.WorkloadTypeApprovalGated, cfg.claudeCodeDefaultModel, cfg.claudeCodeModels),
+		api.WithOfferedWorkloadTypes(cfg.offeredWorkloadTypes()...),
 	).Routes(mux)
+	repoAccess, err := openRepoAccess(context.Background(), cfg.repoAccess)
+	if err != nil {
+		logger.Error("repo access misconfigured", "err", err)
+		os.Exit(1)
+	}
+	defer repoAccess.close()
+	repoAccess.routes(mux, client, namespace, mgr, logger)
 	mux.Handle("/", static.Handler())
 
 	srv := &http.Server{
@@ -190,9 +218,9 @@ type config struct {
 	// sessions and their helper pods (AC-F1/AC-F4). Unset means the type is not
 	// deployable here.
 	dataPlaneApprovalGatedImage string
-	// approvalGatewaySecret names the platform Secret whose url/api-key/user-id
-	// keys are projected into the helper pod's MCP container only (AC-F6).
-	approvalGatewaySecret string
+	// approvalGatewayURL is the PocketAide approval API the helper pod's MCP
+	// container asks (AC-F3). Unset leaves approval-gated sessions without tools.
+	approvalGatewayURL string
 	// sharedVolumeStorageClass and sharedVolumeSize size the ReadWriteMany claim
 	// an approval-gated session's two pods share (AC-F5; see WithSharedVolume).
 	// An empty class leaves the volume off: only a deployment that knows which
@@ -228,6 +256,23 @@ type config struct {
 	checkpointS3Prefix      string
 	checkpointS3SessionName string
 	checkpointS3Endpoint    string
+	miniMax                 miniMaxConfig
+	repoAccess              repoAccessConfig
+}
+
+// GET /config lists only these, so clients never offer a type whose create would fail.
+func (c config) offeredWorkloadTypes() []session.WorkloadType {
+	types := []session.WorkloadType{session.WorkloadTypeShell}
+	for w, image := range map[session.WorkloadType]string{
+		session.WorkloadTypeClaudeCode:    c.dataPlaneClaudeCodeImage,
+		session.WorkloadTypeApprovalGated: c.dataPlaneApprovalGatedImage,
+		session.WorkloadTypeMiniMaxCode:   c.miniMax.image,
+	} {
+		if image != "" {
+			types = append(types, w)
+		}
+	}
+	return types
 }
 
 // buildCheckpointStore builds the checkpoint archive backend.
@@ -282,7 +327,7 @@ func loadConfig() (config, error) {
 		dataPlaneShell:              env("DATA_PLANE_SHELL", ""),
 		dataPlaneClaudeCodeImage:    env("DATA_PLANE_CLAUDE_CODE_IMAGE", ""),
 		dataPlaneApprovalGatedImage: env("DATA_PLANE_APPROVAL_GATED_IMAGE", ""),
-		approvalGatewaySecret:       env("APPROVAL_GATEWAY_SECRET", "approval-gateway-credentials"),
+		approvalGatewayURL:          env("APPROVAL_GATEWAY_URL", ""),
 		sharedVolumeStorageClass:    env("SESSION_SHARED_VOLUME_STORAGE_CLASS", ""),
 		sharedVolumeSize:            sharedVolumeSize,
 		claudeArchiveEnabled:        claudeArchiveEnabled,
@@ -298,6 +343,8 @@ func loadConfig() (config, error) {
 		checkpointS3Region:          env("CHECKPOINT_S3_REGION", env("AWS_REGION", "")),
 		checkpointS3Prefix:          env("CHECKPOINT_S3_PREFIX", "checkpoints"),
 		checkpointS3SessionName:     env("CHECKPOINT_S3_SESSION_NAME", ""),
+		miniMax:                     loadMiniMaxConfig(),
+		repoAccess:                  loadRepoAccessConfig(),
 	}, nil
 }
 

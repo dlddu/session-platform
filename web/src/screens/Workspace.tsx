@@ -8,6 +8,7 @@ import type {
   OutputStreamState,
   Session,
 } from "../api/types";
+import { renderAgentTranscript } from "../app/agentTranscript";
 import { DeleteSessionDialog } from "../app/DeleteSessionDialog";
 import { StateBadge } from "../app/StateBadge";
 import { useToast } from "../app/Toast";
@@ -467,7 +468,6 @@ export function Workspace() {
     }
 
     if (isAgent) {
-      setTerm((current) => appendLine(current, `▸ ${command}`));
       setPendingSubmissions((count) => count + 1);
 
       // Serialize acceptance requests as well as the server-side executions so
@@ -612,7 +612,7 @@ export function Workspace() {
               {gated
                 ? "approval-gated session"
                 : isAgent
-                  ? "claude-code session"
+                  ? `${sess.workloadType} session`
                   : "session shell"}
             </span>
             <span data-testid="ws-console-pod">
@@ -674,6 +674,8 @@ export function Workspace() {
                     ? "// ready — agent responses stream here automatically"
                     : "// attached — the shell's output since session start appears here"}
               </span>
+            ) : isAgent ? (
+              renderAgentTranscript(term)
             ) : (
               term
             )}
@@ -696,7 +698,9 @@ export function Workspace() {
                 gated
                   ? "send a prompt — outbound calls wait for your approval"
                   : isAgent
-                    ? "send a prompt — runs claude -p once in the session pod"
+                    ? sess.workloadType === "minimax-code"
+                      ? "send a prompt — runs mcode exec once in the session pod"
+                      : "send a prompt — runs claude -p once in the session pod"
                     : "run a command — executes in the session shell (bash)"
               }
               spellCheck={isAgent}

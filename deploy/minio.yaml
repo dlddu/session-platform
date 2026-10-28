@@ -28,20 +28,37 @@ spec:
       labels:
         app: minio
     spec:
+      # The MinIO image below runs as uid/gid 65532 and has no shell or
+      # coreutils. Running the whole pod as that identity lets the init
+      # container (which does have mkdir) create a bucket directory the server
+      # can write into.
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
       # MinIO does not create buckets on demand, and a top-level directory in
       # the data dir IS a bucket — so create it before the server starts. This
       # avoids racing a separate bucket-creation Job against the first snapshot.
       initContainers:
         - name: create-bucket
-          image: quay.io/minio/minio:latest
+          # Any image with mkdir does; the data plane image is already loaded
+          # into kind by scripts/e2e/up.sh, so this pulls nothing.
+          image: session-platform/data-plane:dev
           command: ["mkdir", "-p", "/data/session-checkpoints"]
           volumeMounts:
             - name: data
               mountPath: /data
       containers:
         - name: minio
-          # quay.io rather than Docker Hub: no anonymous pull rate limit on CI.
-          image: quay.io/minio/minio:latest
+          # MinIO stopped publishing community images in October 2025: every
+          # tag under quay.io/minio/minio and docker.io/minio/minio now refuses
+          # anonymous pulls, which left this Deployment in ImagePullBackOff.
+          # Chainguard rebuilds the same upstream MinIO server from source
+          # (same CLI, MINIO_ROOT_* env, /minio/health/ready and
+          # directory-is-a-bucket layout), multi-arch and without an anonymous
+          # pull rate limit. Its free tier publishes only `latest`, which is what
+          # this used before as well.
+          image: cgr.dev/chainguard/minio:latest
           args: ["server", "/data"]
           env:
             - name: MINIO_ROOT_USER

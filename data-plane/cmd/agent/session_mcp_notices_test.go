@@ -161,7 +161,7 @@ func TestSessionMCPNoticeFeedReportsWhatItEvicted(t *testing.T) {
 }
 
 // AC-F6: the notice crosses the pod boundary, so nothing secret may ride on it.
-// The gateway key and URL live in this container and stay here.
+// The gateway token and URL live in this container and stay here.
 func TestSessionMCPNoticesCarryNoSecrets(t *testing.T) {
 	g := newGatedMCP(t, "APPROVED")
 	g.call(t, "https://rates.vendor.example/v1/latest")
@@ -174,7 +174,7 @@ func TestSessionMCPNoticesCarryNoSecrets(t *testing.T) {
 	raw := make([]byte, 64<<10)
 	n, _ := resp.Body.Read(raw)
 	body := string(raw[:n])
-	for _, secret := range []string{"gateway-key", g.gateway.server.URL, "user-1"} {
+	for _, secret := range []string{"sa-token-1", g.gateway.server.URL} {
 		if strings.Contains(body, secret) {
 			t.Errorf("notice feed leaked %q", secret)
 		}

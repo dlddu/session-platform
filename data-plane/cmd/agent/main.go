@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,10 +48,9 @@ const (
 	sessionMCPURLEnv = "SESSION_MCP_URL"
 	// The MCP container's own environment (AC-F6). Keep in sync with
 	// control-plane/internal/adapter/k8s (ApprovalGateway*EnvVar, SessionIDEnvVar).
-	approvalGatewayURLEnv    = "APPROVAL_GATEWAY_URL"
-	approvalGatewayAPIKeyEnv = "APPROVAL_GATEWAY_API_KEY"
-	approvalGatewayUserIDEnv = "APPROVAL_GATEWAY_USER_ID"
-	sessionIDEnv             = "SESSION_ID"
+	approvalGatewayURLEnv       = "APPROVAL_GATEWAY_URL"
+	approvalGatewayTokenFileEnv = "APPROVAL_GATEWAY_TOKEN_FILE"
+	sessionIDEnv                = "SESSION_ID"
 	// sharedVolumeDirEnv is the session's shared volume (AC-F5), read by both
 	// halves of the pair: the MCP container spills large approved responses
 	// there and the workload container's agent reads them back. Keep in sync
@@ -137,13 +137,21 @@ func main() {
 		}
 		logger.Info("agent workload started", "workload", workload, "addr", addr,
 			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode)
+	case workloadMiniMaxCode:
+		claude, err := newMiniMaxWorkloadFromEnv(logger, restoreMode)
+		if err != nil {
+			logger.Error("failed to initialise agent workload", "workload", workload, "err", err)
+			os.Exit(1)
+		}
+		a.claude = claude
+		logger.Info("agent workload started", "workload", workload, "addr", addr,
+			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode)
 	case workloadSessionMCP:
 		// AC-F4's helper pod container; it serves its own routes rather than the
 		// workload agent's (session_mcp.go).
 		gateway, err := newApprovalGateway(
 			os.Getenv(approvalGatewayURLEnv),
-			os.Getenv(approvalGatewayAPIKeyEnv),
-			os.Getenv(approvalGatewayUserIDEnv),
+			os.Getenv(approvalGatewayTokenFileEnv),
 			os.Getenv(sessionIDEnv),
 		)
 		if err != nil {
@@ -151,8 +159,19 @@ func main() {
 			gateway = nil
 		}
 		shared := env(sharedVolumeDirEnv, "")
-		handler = sessionMCPRoutes(logger, newSessionMCPConfig(gateway, shared))
-		logger.Info("session MCP started", "addr", addr, "gated", gateway != nil, "shared_dir", shared)
+		repoAccess := newRepoAccessClient(os.Getenv(repoAccessURLEnv), os.Getenv(repoAccessTokenFileEnv))
+		var k3sProxyMCP string
+		if proxyBase := os.Getenv(k3sMCPProxyURLEnv); proxyBase != "" {
+			mcpURL, err := k3sProxyMCPURL(proxyBase)
+			if err != nil {
+				logger.Warn("session MCP ignores an invalid K3s MCP proxy URL; private clones cannot be issued a token", "err", err)
+			} else {
+				k3sProxyMCP = mcpURL
+			}
+		}
+		handler = sessionMCPRoutes(logger, newSessionMCPConfig(gateway, shared, repoAccess, k3sProxyMCP))
+		logger.Info("session MCP started", "addr", addr, "gated", gateway != nil, "shared_dir", shared,
+			"repo_access", repoAccess != nil, "k3s_mcp_proxy", k3sProxyMCP != "")
 	case workloadCredentialProxy:
 		placement, err := credentialProxyPlacementFromEnv()
 		if err != nil {
@@ -175,6 +194,28 @@ func main() {
 		}
 		handler = proxy
 		logger.Info("credential proxy started", "addr", addr, "placement", string(placement))
+	case workloadK3SMCPProxy:
+		placement, err := credentialProxyPlacementFromEnv()
+		if err != nil {
+			logger.Error("invalid k3s-mcp-proxy placement", "err", err)
+			os.Exit(1)
+		}
+		if err := validateCredentialProxyBindAddr(addr, placement); err != nil {
+			logger.Error("invalid k3s-mcp-proxy bind address", "placement", string(placement), "err", err)
+			os.Exit(1)
+		}
+		token := os.Getenv(k3sMCPTokenEnv)
+		proxy, err := newK3SMCPProxy(os.Getenv(k3sMCPURLEnv), token, os.Getenv(sessionIDEnv), logger)
+		if err != nil {
+			logger.Error("failed to initialise k3s mcp proxy", "err", err)
+			os.Exit(1)
+		}
+		handler = proxy
+		if proxy.seeder != nil {
+			go proxy.seeder.run(context.Background())
+		}
+		logger.Info("k3s mcp proxy started", "addr", addr, "configured", token != "",
+			"session_id_header", k3sMCPFixedHeaders(os.Getenv(sessionIDEnv)) != nil)
 	default:
 		logger.Error("unknown data plane workload", "workload", workload)
 		os.Exit(1)
@@ -323,6 +364,12 @@ func (b *scrollback) claudeFullAtLocked(limit, markerBytes int) bool {
 		dataLimit = 0
 	}
 	return len(b.buf) > dataLimit
+}
+
+func (b *scrollback) endsWithNewline() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.buf) == 0 || b.buf[len(b.buf)-1] == '\n'
 }
 
 // Since returns a copy of the output accumulated after offset, plus the cursor

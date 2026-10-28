@@ -6,7 +6,7 @@
 - AC-F3: 승인 게이트 — 외부 도구는 사람이 승인해야 실행된다 (PRD: 세션 워크로드 — 승인 게이트)
 - AC-F4: 보조 파드 = 세션 전용 헬퍼 파드(MCP·credential-proxy 컨테이너), 수명은 세션과 일치 (PRD: 세션 워크로드 — 승인 게이트)
 - AC-F5: 파일 교환 = 세션 전용 RWX 공유 볼륨, 아카이브에 포함 (PRD: 세션 워크로드 — 승인 게이트)
-- AC-F6: 자격 증명 분리 — 게이트웨이 키는 MCP 컨테이너에, 공급자 자격 증명은 프록시 컨테이너에 (PRD: 세션 워크로드 — 승인 게이트)
+- AC-F6: 자격 증명 분리 — 게이트웨이 호출자 토큰은 MCP 컨테이너에, 공급자 자격 증명은 프록시 컨테이너에 (PRD: 세션 워크로드 — 승인 게이트)
 
 > 📌 **재사용 범위**: 이 타입의 원샷 실행·직렬 큐·1 MiB prompt·offset 커서·SSE 재연결·아카이브 왕복은
 > `claude-code`와 같은 계약이므로 `claude-code-workload.md`의 시나리오 2·3·4·6·8이 그대로 적용된다.
@@ -14,7 +14,7 @@
 
 > ⚠️ **검증 수단 주의**: AC-F2(egress 차단)와 AC-F4(헬퍼 파드 동반 회수)는 참조 구현(`dlddu/pure-agent`)이
 > 클러스터에 배선된 적 없는 미검증 전제 위에 있다. 두 AC는 **코드 단언이 아니라 실클러스터 확인**으로
-> 검증한다(kind overlay 또는 실 클러스터). `../doc-tracker.md`의 미검증 전제 항목 참고.
+> 검증한다(kind overlay 또는 실 클러스터). `../doc-tracker/`의 미검증 전제 항목 참고.
 
 ## 테스트 시나리오
 
@@ -67,9 +67,9 @@
 - **검증 AC**: AC-F4 (AC-A2/A3·B1/B2 구체화)
 
 ### 시나리오 8: 자격 증명의 컨테이너별 분리와 프록시 계약의 배치 무관성
-- **사전 조건**: 플랫폼 Secret에 게이트웨이 URL·API key·`userId`와 AC-E6의 기존 키(`base-url`·`auth-token`·optional `model`/`models`)를 준비
-- **실행 단계**: (a) `approval-gated` 세션의 pod 스펙에서 워크로드 파드와 헬퍼 파드 두 컨테이너의 환경 변수를 각각 확인 → (b) 생성 요청 본문에 게이트웨이 URL·API key·`userId`·공급자 자격 증명을 넣어 생성 시도 → (c) 승인 요청을 하나 만든 뒤 게이트웨이에 실제로 전달된 컨텍스트를 확인 → (d) 게이트웨이 키·`userId`·공급자 토큰 문자열로 read/SSE 출력·control-plane 로그를 검색 → (e) AC-E6의 프록시 검증 항목(고정 HTTPS upstream·평문 HTTP 시작 거부, 헤더 제거와 토큰 단일 주입, CONNECT/Upgrade 거부, 1xx 포함 redaction, upstream EOF 전 safe SSE chunk 전달, response-read 경계 split-token redaction, raw 64 MiB 상한)을 **파드 IP 바인딩 상태에서** 재실행 → (f) 다른 세션의 워크로드 파드에서 이 헬퍼 파드로 연결 시도 → (g) model 계약(concrete/`platform-default`/invalid) 재확인 → (h) 워크로드 파드의 entrypoint 로그와 에이전트 도구 목록을 확인 → (i) 헬퍼 파드의 MCP 컨테이너에서 프록시 컨테이너의 환경 변수·`/proc` 항목 읽기를 시도
-- **기대 결과**: (a) 게이트웨이 URL·API key·`userId`는 헬퍼 파드의 **MCP 컨테이너에만**, 공급자 `base-url`·`auth-token`은 같은 파드의 **프록시 컨테이너에만** 있고, **워크로드 파드에는 둘 다 없이** 헬퍼 파드 주소와 비밀 아닌 placeholder만 있다. `k3s-mcp-token`은 이 타입의 워크로드 파드에 주입되지 않고 런타임 marketplace 등록·plugin 설치도 일어나지 않으며(AC-F6 확정), 대신 세션 HOME의 관리 설정이 그 세션 MCP를 서버로 등록한다. (b) 모두 unknown field로 400 거부. (c) 승인 컨텍스트에 자격 증명·API key가 실리지 않는다. (d) 어떤 경로에도 문자열이 노출되지 않는다. (e) 프록시 계약이 사이드카일 때와 **동일하게** 성립한다 — 계약은 AC-E6 하나이고 배치만 다름을 확인. (f) ingress 제한으로 차단된다. (g) `claude-code`와 동일하게 성립한다. (h) entrypoint가 K3s MCP 호출·marketplace 설치를 **시도조차 하지 않고**, 에이전트의 파드 밖 도구 표면이 그 세션 MCP 하나뿐임을 확인한다. (i) PID·파일시스템 네임스페이스가 분리되어 **읽히지 않는다** — 같은 파드라도 컨테이너 경계가 Secret을 갈라 둔다
+- **사전 조건**: control plane 에 게이트웨이 URL(`APPROVAL_GATEWAY_URL`)을 주고, 헬퍼 파드의 서비스 어카운트(`session-mcp`)를 게이트웨이(PocketAide)에 호출자로 등록하고, 플랫폼 Secret에 AC-E6의 기존 키(`base-url`·`auth-token`·optional `model`/`models`)를 준비
+- **실행 단계**: (a) `approval-gated` 세션의 pod 스펙에서 워크로드 파드와 헬퍼 파드 두 컨테이너의 환경 변수·볼륨 마운트·서비스 어카운트를 각각 확인 → (b) 생성 요청 본문에 게이트웨이 URL·API key·`userId`·공급자 자격 증명을 넣어 생성 시도 → (c) 승인 요청을 하나 만든 뒤 게이트웨이에 실제로 전달된 컨텍스트를 확인 → (d) 게이트웨이 호출자 토큰·공급자 토큰 문자열로 read/SSE 출력·control-plane 로그를 검색 → (e) AC-E6의 프록시 검증 항목(고정 HTTPS upstream·평문 HTTP 시작 거부, 헤더 제거와 토큰 단일 주입, CONNECT/Upgrade 거부, 1xx 포함 redaction, upstream EOF 전 safe SSE chunk 전달, response-read 경계 split-token redaction, raw 64 MiB 상한)을 **파드 IP 바인딩 상태에서** 재실행 → (f) 다른 세션의 워크로드 파드에서 이 헬퍼 파드로 연결 시도 → (g) model 계약(concrete/`platform-default`/invalid) 재확인 → (h) 워크로드 파드의 entrypoint 로그와 에이전트 도구 목록을 확인 → (i) 헬퍼 파드의 MCP 컨테이너에서 프록시 컨테이너의 환경 변수·`/proc` 항목 읽기를 시도
+- **기대 결과**: (a) 게이트웨이 URL과 호출자 토큰(audience `pocket-aide` 의 projected 서비스 어카운트 토큰 파일)은 헬퍼 파드의 **MCP 컨테이너에만** 있고 헬퍼 파드는 apiserver 용 토큰을 마운트하지 않으며, 공급자 `base-url`·`auth-token`은 같은 파드의 **프록시 컨테이너에만** 있고, **워크로드 파드에는 둘 다 없이** 헬퍼 파드 주소와 비밀 아닌 placeholder만 있다. `k3s-mcp-token`은 이 타입의 워크로드 파드에 주입되지 않고 런타임 marketplace 등록·plugin 설치도 일어나지 않으며(AC-F6 확정), 대신 세션 HOME의 관리 설정이 그 세션 MCP를 서버로 등록한다. (b) 모두 unknown field로 400 거부. (c) 승인 컨텍스트에 자격 증명·호출자 토큰이 실리지 않는다. (d) 어떤 경로에도 문자열이 노출되지 않는다. (e) 프록시 계약이 사이드카일 때와 **동일하게** 성립한다 — 계약은 AC-E6 하나이고 배치만 다름을 확인. (f) ingress 제한으로 차단된다. (g) `claude-code`와 동일하게 성립한다. (h) entrypoint가 K3s MCP 호출·marketplace 설치를 **시도조차 하지 않고**, 에이전트의 파드 밖 도구 표면이 그 세션 MCP 하나뿐임을 확인한다. (i) PID·파일시스템 네임스페이스가 분리되어 **읽히지 않는다** — 같은 파드라도 컨테이너 경계가 Secret을 갈라 둔다
 - **검증 AC**: AC-F6, AC-F2
 
 > 비고: 승인 대기 중 수동 동결·삭제로 invocation이 취소되는 경로(AC-F3 마지막 항)는 시나리오 4·7의

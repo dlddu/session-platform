@@ -1,9 +1,14 @@
-// The session MCP's tool surface (AC-F3): `web_fetch_get` behind the approval
-// gate, and `ping`, which answers without one because it reaches nothing.
+// The session MCP's tool surface (AC-F3): `web_fetch_get` and `git_clone`
+// behind the approval gate, `ping`, which answers without one because it
+// reaches nothing, and `request_repo_access`, which answers without one because
+// a person in the control plane decides what it asks for (AC-H4,
+// session_mcp_repo_access.go). Where the allow list exists, `git_clone` and
+// `git_push` (AC-H6, session_mcp_git_push.go) have the list as their gate.
 //
 // `web_fetch_get`'s name, arguments and response shape are the reference
 // implementation's (dlddu/pure-agent, mcp-server/src/tools/web-fetch-get.ts),
-// which is also what docs/mockups/gated-workspace.html draws.
+// which is also what docs/mockups/gated-workspace.html draws. `git_clone` lives
+// in session_mcp_git.go.
 package main
 
 import (
@@ -21,8 +26,9 @@ import (
 )
 
 const (
-	// webFetchGetTool is the one external tool an approval-gated session has.
-	// Adding a second one means adding a second gated handler, never a bypass.
+	// webFetchGetTool was the first external tool an approval-gated session had.
+	// The second one (gitCloneTool) arrived as a second gated handler, which is
+	// the only way another one ever arrives — never as a bypass.
 	webFetchGetTool = "web_fetch_get"
 	// pingTool is ungated (R1 does not reach a tool that leaves nothing) but is
 	// still listed only when the gate is — docs/session-mcp-tool-surface.md R2.
@@ -49,6 +55,14 @@ type sessionMCPConfig struct {
 	gateway *approvalGateway
 	// fetch performs the approved outbound call.
 	fetch func(ctx context.Context, target string) (*http.Response, error)
+	// clone performs the approved clone (session_mcp_git.go).
+	clone func(ctx context.Context, target, branch, dest string, env []string) error
+	// repoAccess is nil where the deployment has no allow list (AC-H1).
+	repoAccess *repoAccessClient
+	// push performs an allowed push (session_mcp_git_push.go).
+	push func(ctx context.Context, req pushRequest) (pushOutcome, error)
+	// mintGitHubToken is nil without a K3s MCP proxy.
+	mintGitHubToken func(ctx context.Context, repository, contents string) (string, error)
 	// notices carries the wait and its decision to whoever is tailing, which in
 	// a real session is the workload pod's agent (session_mcp_notice_tail.go).
 	notices *noticeFeed
@@ -59,12 +73,16 @@ type sessionMCPConfig struct {
 	sharedDir string
 }
 
-func newSessionMCPConfig(gateway *approvalGateway, sharedDir string) sessionMCPConfig {
+func newSessionMCPConfig(gateway *approvalGateway, sharedDir string, repoAccess *repoAccessClient, k3sProxyMCPURL string) sessionMCPConfig {
 	return sessionMCPConfig{
-		gateway:   gateway,
-		fetch:     fetchURL,
-		notices:   newNoticeFeed(),
-		sharedDir: strings.TrimSpace(sharedDir),
+		gateway:         gateway,
+		fetch:           fetchURL,
+		clone:           cloneRepository,
+		push:            pushRepository,
+		repoAccess:      repoAccess,
+		mintGitHubToken: githubTokenMinter(k3sProxyMCPURL),
+		notices:         newNoticeFeed(),
+		sharedDir:       strings.TrimSpace(sharedDir),
 	}
 }
 
@@ -77,7 +95,18 @@ func (c sessionMCPConfig) toolDefinitions() []any {
 	if !c.gated() {
 		return []any{}
 	}
-	return []any{
+	cloneDescription := "Clone a public git repository into this session's shared volume. Every call needs " +
+		"human approval before it leaves the session, and the clone happens only if the request was " +
+		"approved. The destination directory is chosen by this server and returned in the result."
+	cloneURLDescription := "The http or https URL of a public git repository."
+	if c.repoAccess != nil {
+		cloneDescription = "Clone a GitHub repository (https://github.com/owner/repo) that a person has put on " +
+			"the allow list into this session's shared volume, public or private. Needs no approval: a " +
+			"repository off the list is refused — use " + requestRepoAccessTool + " to ask for it. The " +
+			"destination directory is chosen by this server and returned in the result."
+		cloneURLDescription = "https://github.com/owner/repo of a repository on the allow list."
+	}
+	tools := []any{
 		map[string]any{
 			"name": webFetchGetTool,
 			"description": "Fetch a URL with GET. Every call needs human approval before " +
@@ -95,6 +124,25 @@ func (c sessionMCPConfig) toolDefinitions() []any {
 			},
 		},
 		map[string]any{
+			"name":        gitCloneTool,
+			"description": cloneDescription,
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"url": map[string]any{
+						"type":        "string",
+						"description": cloneURLDescription,
+					},
+					"branch": map[string]any{
+						"type":        "string",
+						"description": "Branch to check out after cloning. Omit for the repository's default branch.",
+					},
+				},
+				"required":             []any{"url"},
+				"additionalProperties": false,
+			},
+		},
+		map[string]any{
 			"name": pingTool,
 			"description": "Answer immediately. Takes no arguments, makes no outbound call and " +
 				"needs no approval; calling it shows that this tool surface is reachable and callable.",
@@ -105,6 +153,52 @@ func (c sessionMCPConfig) toolDefinitions() []any {
 			},
 		},
 	}
+	if c.repoAccess != nil {
+		tools = append(tools, map[string]any{
+			"name": requestRepoAccessTool,
+			"description": "Ask for a private GitHub repository to be put on the allow list, so that " + gitCloneTool +
+				" can clone it. It records a request and returns at once; a person decides it in the control " +
+				"plane's Repo access screen, and nothing opens until then. Needs no approval.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"repo": map[string]any{
+						"type":        "string",
+						"description": "The repository as owner/repo.",
+					},
+					"reason": map[string]any{
+						"type":        "string",
+						"description": fmt.Sprintf("Why this session needs it, for the person deciding (at most %d characters).", maxRepoAccessReasonChars),
+					},
+				},
+				"required":             []any{"repo", "reason"},
+				"additionalProperties": false,
+			},
+		}, map[string]any{
+			"name": gitPushTool,
+			"description": "Push one branch of a clone that " + gitCloneTool + " made back to its GitHub repository " +
+				"(the clone's origin). The repository must be on the allow list, exactly as for " + gitCloneTool +
+				"; needs no approval. Only a fast-forward of that one branch is pushed — no force, no delete, " +
+				"no tags. When the remote has moved on, the push is rejected: clone again, re-apply the change " +
+				"and push from the new clone.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{
+						"type":        "string",
+						"description": "The clone's path exactly as " + gitCloneTool + " returned it.",
+					},
+					"branch": map[string]any{
+						"type":        "string",
+						"description": "The local branch to push; it is pushed to the branch of the same name.",
+					},
+				},
+				"required":             []any{"path", "branch"},
+				"additionalProperties": false,
+			},
+		})
+	}
+	return tools
 }
 
 // callTool runs one tools/call. The returned value is normally an MCP tool
@@ -122,7 +216,7 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 		}
 	}
 	switch call.Name {
-	case webFetchGetTool, pingTool:
+	case webFetchGetTool, gitCloneTool, pingTool, requestRepoAccessTool, gitPushTool:
 	default:
 		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: fmt.Sprintf("no tool named %q", call.Name)}
 	}
@@ -132,6 +226,15 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 	}
 	if call.Name == pingTool {
 		return mcpToolText(pingReply), nil
+	}
+	if call.Name == gitCloneTool {
+		return c.callGitClone(ctx, logger, call.Arguments)
+	}
+	if call.Name == requestRepoAccessTool {
+		return c.callRequestRepoAccess(ctx, logger, call.Arguments)
+	}
+	if call.Name == gitPushTool {
+		return c.callGitPush(ctx, logger, call.Arguments)
 	}
 
 	var args struct {

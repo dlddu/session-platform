@@ -5,7 +5,7 @@ export type State = "active" | "idle" | "snapshot";
 /**
  * AC-E1/AC-F1. 화면은 리터럴이 아니라 계열로 갈린다 — `app/workloadKind.ts`.
  */
-export type WorkloadType = "shell" | "claude-code" | "approval-gated";
+export type WorkloadType = "shell" | "claude-code" | "approval-gated" | "minimax-code";
 
 export interface PlatformConfig {
   claudeCode: {
@@ -75,4 +75,29 @@ export type OutputStreamState =
 export interface WriteResult {
   session: Session;
   path: string;
+}
+
+export type AllowlistSource = "manual" | "request";
+
+export interface AllowlistEntry {
+  repo: string;
+  source: AllowlistSource;
+  requestSessionId?: string;
+  addedAt: string;
+}
+
+export interface AccessRequest {
+  id: string;
+  repo: string;
+  sessionId: string;
+  sessionName?: string;
+  workloadType?: string;
+  reason: string;
+  requestedAt: string;
+  alreadyAllowed: boolean;
+}
+
+export interface RepoAccessState {
+  allowlist: AllowlistEntry[];
+  requests: AccessRequest[];
 }

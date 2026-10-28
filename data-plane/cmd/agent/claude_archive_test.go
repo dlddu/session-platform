@@ -150,10 +150,11 @@ func TestClaudeArchiveRestoreRoundTripPreservesStateCursorAndResume(t *testing.T
 		t.Fatal(err)
 	}
 	writeViaHTTP(t, srv1, "remember this", http.StatusOK)
-	before, cursorBefore := eventuallyRead(t, srv1, 0, func(payload string) bool {
+	_, _ = eventuallyRead(t, srv1, 0, func(payload string) bool {
 		return strings.Contains(payload, "before-snapshot")
 	})
 	waitClaudeIdle(t, c1)
+	before, cursorBefore := readViaHTTP(t, srv1, 0)
 
 	resp, err := http.Post(srv1.URL+"/checkpoint", "", nil)
 	if err != nil {
@@ -221,10 +222,15 @@ func TestClaudeArchiveRestoreRoundTripPreservesStateCursorAndResume(t *testing.T
 	if strings.Contains(after, "before-snapshot") {
 		t.Fatalf("post-restore delta replayed old output: %q", after)
 	}
+	waitClaudeIdle(t, c2)
+	if delta, _ := readViaHTTP(t, srv2, cursorBefore); delta != turnOpen(2, "continue")+"after-restore\n"+turnClose(2, "ok") {
+		t.Fatalf("post-restore turn = %q, want seq 2 continuing the restored history", delta)
+	}
 }
 
 func TestClaudeFullOutputDrainsAcceptedQueueAndSurvivesArchiveRestore(t *testing.T) {
-	limit := len(claudeOutputLimitMarker) + 6
+	firstOpen := turnOpen(1, "fills output")
+	limit := len(firstOpen) + len(claudeOutputLimitMarker) + 6
 	runner := newFakeClaudeRunner()
 	runner.release = make(chan struct{})
 	runner.output = func(_ int, opts runnerOptions) {
@@ -244,7 +250,7 @@ func TestClaudeFullOutputDrainsAcceptedQueueAndSurvivesArchiveRestore(t *testing
 	waitClaudeIdle(t, c1)
 
 	full, cursor := readViaHTTP(t, srv1, 0)
-	if got, want := full, "abcdef"+claudeOutputLimitMarker; got != want {
+	if got, want := full, firstOpen+"abcdef"+claudeOutputLimitMarker; got != want {
 		t.Fatalf("full bounded output = %q, want %q", got, want)
 	}
 	if cursor != limit {

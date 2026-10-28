@@ -8,12 +8,13 @@ info:
     session-scoped auxiliary pods that serve it (AC-A2). Non-active access is
     uniform "ensure active then serve": read, write and switch promote
     idle->active (AC-C1) or restore snapshot->active (AC-B2) before serving.
-    A session picks a workload type at creation (AC-E1): `shell` (the default)
-    or `claude-code`. The type is immutable for the session's lifetime — no
+    A session picks a workload type at creation (AC-E1): `shell` (the default),
+    `claude-code`, `approval-gated` or `minimax-code`. The type is immutable for the session's lifetime — no
     endpoint changes it, and a restore keeps it — so switching workloads means
     creating a new session. For `shell`, write injects the payload into the PTY
-    stdin (AC-D2); for `claude-code`, write asynchronously queues one prompt
-    execution (AC-E2). Both read paths return workload output after an offset
+    stdin (AC-D2); for `claude-code` (and the agent types that reuse its
+    execution model), write asynchronously queues one prompt execution
+    (AC-E2, AC-G2). Both read paths return workload output after an offset
     cursor, with offset=0 returning the full history (AC-D3/E3). A passive
     `GET /sessions/{id}/stream` exposes the same append-only bytes as
     cursor-resumable SSE without restoring snapshots or refreshing idle
@@ -59,7 +60,9 @@ paths:
       summary: Get non-sensitive runtime configuration
       operationId: getRuntimeConfig
       description: >
-        Returns the Claude Code model picker configuration captured when this
+        Returns the workload types this deployment offers (with each type's
+        input style and model picker configuration) and, for existing clients,
+        the Claude Code model picker configuration, all captured when this
         control-plane process started. `defaultModel` is the effective concrete
         model projected from the Secret, or the stable `platform-default`
         session alias when that value is missing or empty. `models` is an
@@ -84,6 +87,21 @@ paths:
                 claudeCode:
                   defaultModel: "~anthropic/claude-opus-latest"
                   models: [sonnet, opus]
+                workloadTypes:
+                  - type: shell
+                    label: Shell
+                    description: Interactive bash. You type the commands.
+                    takesModel: false
+                    input: terminal
+                    defaultModel: null
+                    models: []
+                  - type: claude-code
+                    label: Claude Code
+                    description: Agent CLI. You send prompts, it does the work.
+                    takesModel: true
+                    input: prompt
+                    defaultModel: "~anthropic/claude-opus-latest"
+                    models: [sonnet, opus]
   /sessions:
     get:
       summary: List sessions
@@ -334,7 +352,8 @@ paths:
       operationId: snapshotSession
       description: >
         Immediately captures the workload using its configured strategy
-        (CRIU checkpoint for shell, filesystem archive for claude-code), moves
+        (CRIU checkpoint for shell, filesystem archive for claude-code and
+        minimax-code), moves
         the session to snapshot state, and reclaims its pod. Calling this for
         an already-snapshotted session is idempotent.
       parameters:
@@ -374,6 +393,208 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+  /repo-access:
+    get:
+      summary: Allow list and pending requests (AC-H1/AC-H4)
+      description: >
+        The management routes (this and the other `/repo-access` paths) have no
+        sign-in of their own. Like the session APIs, they sit behind the
+        deployment's ingress, whose Authelia forward-auth is the only door
+        (AC-H2).
+      operationId: getRepoAccess
+      tags: [repo-access]
+      responses:
+        "200":
+          description: Current state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RepoAccessState" }
+        "503":
+          description: Repo access is not enabled on this deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /repo-access/allowlist:
+    post:
+      summary: Add a repository to the allow list
+      operationId: addAllowlist
+      tags: [repo-access]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RepoRef" }
+      responses:
+        "201":
+          description: Added
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AllowlistEntry" }
+        "200":
+          description: Already on the list; the existing entry is unchanged
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AllowlistEntry" }
+        "400":
+          description: Not an `owner/repo`, or a malformed body
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Repo access is not enabled on this deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      summary: Remove a repository from the allow list (idempotent)
+      operationId: removeAllowlist
+      tags: [repo-access]
+      parameters:
+        - name: repo
+          in: query
+          required: true
+          schema: { type: string, example: dlddu/infrastructure }
+      responses:
+        "204":
+          description: Not on the list any more
+        "400":
+          description: Not an `owner/repo`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Repo access is not enabled on this deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /repo-access/requests/{requestId}/approve:
+    post:
+      summary: Approve a session's request; adds the repository and clears every request for it
+      operationId: approveRequest
+      tags: [repo-access]
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: The allow list entry (the existing one if already allowed)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AllowlistEntry" }
+        "404":
+          description: No such pending request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Repo access is not enabled on this deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /repo-access/requests/{requestId}/reject:
+    post:
+      summary: Reject a session's request
+      operationId: rejectRequest
+      tags: [repo-access]
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "204":
+          description: Rejected; the request is gone
+        "404":
+          description: No such pending request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Repo access is not enabled on this deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /internal/repo-access/check:
+    get:
+      summary: Whether a repository is allowed (helper pods only, AC-H3)
+      operationId: checkRepoAccess
+      tags: [repo-access-internal]
+      security: [{ helperToken: [] }]
+      parameters:
+        - name: repo
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Verdict for the normalized repository
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [repo, allowed]
+                properties:
+                  repo: { type: string }
+                  allowed: { type: boolean }
+        "400":
+          description: Not an `owner/repo`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          description: Not a helper pod's token for this audience
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Repo access is not enabled on this deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /internal/repo-access/requests:
+    post:
+      summary: File a request on behalf of the calling helper's session (AC-H4)
+      operationId: requestRepoAccess
+      tags: [repo-access-internal]
+      security: [{ helperToken: [] }]
+      description: >
+        Deduplicated per session and repository: asking again returns the same
+        pending request. An already-allowed repository answers `allowed`
+        without filing anything.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [repo, reason]
+              properties:
+                repo: { type: string }
+                reason: { type: string, maxLength: 500 }
+      responses:
+        "200":
+          description: Request state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [repo, status]
+                properties:
+                  repo: { type: string }
+                  status: { type: string, enum: [pending, allowed] }
+                  requestId: { type: string, description: Set when pending }
+        "400":
+          description: Not an `owner/repo`, or an empty or overlong reason
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          description: Not a helper pod's token for this audience
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: Repo access is not enabled on this deployment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 components:
   responses:
     RequestEntityTooLarge:
@@ -381,7 +602,19 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
+  securitySchemes:
+    helperToken:
+      type: http
+      scheme: bearer
+      description: >
+        Projected service-account token of a session's helper pod, audience
+        `session-platform`, verified with TokenReview.
   parameters:
+    RequestId:
+      name: requestId
+      in: path
+      required: true
+      schema: { type: string, example: rq_0123456789abcdef }
     SessionId:
       name: id
       in: path
@@ -416,10 +649,59 @@ components:
     RuntimeConfig:
       type: object
       additionalProperties: false
-      required: [claudeCode]
+      required: [claudeCode, workloadTypes]
       properties:
         claudeCode:
           $ref: "#/components/schemas/ClaudeCodeConfig"
+        workloadTypes:
+          type: array
+          description: >
+            Workload types this deployment can create, in display order (shell
+            first). A non-default type is listed only when its data plane image
+            is configured, so a client that builds its picker and create-request
+            validation from this list needs no release when a type is added.
+            `claudeCode` predates this list and repeats its `claude-code` entry
+            for existing clients.
+          items:
+            $ref: "#/components/schemas/WorkloadTypeConfig"
+    WorkloadTypeConfig:
+      type: object
+      additionalProperties: false
+      required: [type, label, description, takesModel, input, defaultModel, models]
+      properties:
+        type:
+          type: string
+          description: Value for the create request's `workloadType`. Clients should ignore types they do not know.
+        label:
+          type: string
+          description: Short human-readable name for a picker.
+        description:
+          type: string
+          description: One-line explanation for a picker.
+        takesModel:
+          type: boolean
+          description: Whether a create request for this type may carry `model`. A model on a type where this is false is rejected with 400.
+        input:
+          type: string
+          enum: [prompt, terminal]
+          description: >
+            How the session is driven. `terminal` writes keystrokes to a PTY and
+            reads a terminal screen; `prompt` writes whole prompts to a serial
+            agent queue and reads its text stream.
+        defaultModel:
+          type: string
+          nullable: true
+          maxLength: 128
+          description: >
+            Same meaning as `ClaudeCodeConfig.defaultModel` for this type: the
+            concrete Secret-backed default, or `platform-default`. `null`
+            exactly when `takesModel` is false.
+        models:
+          type: array
+          uniqueItems: true
+          description: Same meaning as `ClaudeCodeConfig.models` for this type. Always empty when `takesModel` is false.
+          items:
+            type: string
     ClaudeCodeConfig:
       type: object
       additionalProperties: false
@@ -450,7 +732,7 @@ components:
       enum: [active, idle, snapshot]
     WorkloadType:
       type: string
-      enum: [shell, claude-code, approval-gated]
+      enum: [shell, claude-code, approval-gated, minimax-code]
       default: shell
       description: >
         Which data plane workload the session runs (AC-E1/AC-F1). Fixed at
@@ -458,7 +740,9 @@ components:
         (AC-D1~D5); `claude-code` is the Claude Code CLI workload (AC-E2~E6);
         `approval-gated` is the same agent execution model behind a human
         approval gate, provisioned as a workload pod plus a session-scoped
-        helper pod (AC-F1~F6). Each non-default type requires the control plane
+        helper pod (AC-F1~F6); `minimax-code` is the MiniMax Code CLI
+        (`mcode`) on that same execution model, with its own provider Secret
+        behind the same credential proxy (AC-G1~G4). Each non-default type requires the control plane
         to have an image configured for it, and creating a session of a type
         with no configured image fails rather than falling back to a shell.
     Checkpoint:
@@ -480,8 +764,8 @@ components:
           type: string
           description: >
             Immutable model identifier for the agent workload types. Present
-            for `claude-code` and `approval-gated`, which share this contract
-            (AC-E6, reused by AC-F1); omitted at creation resolves to
+            for `claude-code`, `approval-gated` and `minimax-code`, which share
+            this contract (AC-E6, reused by AC-F1 and AC-G1); omitted at creation resolves to
             `platform-default`.
             Whenever the primary container starts, including a restart, that
             alias resolves through the optional Secret model and then the CLI
@@ -498,8 +782,8 @@ components:
             Session-scoped pods that serve the workload pod without running the
             workload themselves (AC-A2's auxiliary-pod clause). They share the
             workload pod's lifetime and are reclaimed with it, so this is absent
-            exactly when `pod` is. `shell` and `claude-code` sessions provision
-            none; an `approval-gated` session lists its one helper pod here
+            exactly when `pod` is. `shell`, `claude-code` and `minimax-code`
+            sessions provision none; an `approval-gated` session lists its one helper pod here
             (AC-F4).
         createdAt: { type: string, format: date-time }
         lastAccess: { type: string, format: date-time }
@@ -525,8 +809,8 @@ components:
           type: string
           pattern: '^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$'
           description: >
-            Model for this session. Valid when workloadType is `claude-code` or
-            `approval-gated`; omitted resolves to `platform-default`. A concrete
+            Model for this session. Valid when workloadType is `claude-code`,
+            `approval-gated` or `minimax-code`; omitted resolves to `platform-default`. A concrete
             value is passed literally and takes precedence over the platform
             Secret default. The catalog returned by GET /config is advisory,
             not an allowlist. Credentials are never accepted in this request.
@@ -588,3 +872,42 @@ components:
       type: object
       properties:
         error: { type: string }
+    RepoRef:
+      type: object
+      additionalProperties: false
+      required: [repo]
+      properties:
+        repo:
+          type: string
+          description: "`owner/repo`; case and a trailing `.git` are normalized away"
+          example: dlddu/infrastructure
+    AllowlistEntry:
+      type: object
+      required: [repo, source, addedAt]
+      properties:
+        repo: { type: string }
+        source: { type: string, enum: [manual, request] }
+        requestSessionId: { type: string, description: Set when source is request }
+        addedAt: { type: string, format: date-time }
+    AccessRequest:
+      type: object
+      required: [id, repo, sessionId, reason, requestedAt, alreadyAllowed]
+      properties:
+        id: { type: string }
+        repo: { type: string }
+        sessionId: { type: string }
+        sessionName: { type: string, description: Absent once the session is gone }
+        workloadType: { $ref: "#/components/schemas/WorkloadType" }
+        reason: { type: string }
+        requestedAt: { type: string, format: date-time }
+        alreadyAllowed: { type: boolean }
+    RepoAccessState:
+      type: object
+      required: [allowlist, requests]
+      properties:
+        allowlist:
+          type: array
+          items: { $ref: "#/components/schemas/AllowlistEntry" }
+        requests:
+          type: array
+          items: { $ref: "#/components/schemas/AccessRequest" }

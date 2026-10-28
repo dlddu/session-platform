@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<!--
+  docs/journeys/JRN-repo-access/index.html — 여정 프로토타입
+
+  여정 문서: ../../user-journeys/JRN-repo-access.md
+  페이지 규약: ../README.md   (하네스: tools/journey-prototype.test.mjs)
+
+  레포 접근 화면은 ../../mockups/repo-access.html 의 마크업을 여정 층위로 옮겨 그렸고,
+  세션 콘솔 장면은 ../../mockups/gated-workspace.html 의 콘솔을 줄여 옮긴 것이다.
+-->
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JRN-repo-access — 에이전트가 비공개 레포를 쓰도록 허락하기</title>
+<style>
+  :root{
+    --ink:#0B1116; --surface:#131D24; --surface-2:#18242C; --surface-3:#1E2C35;
+    --line:#26333D; --line-2:#324250;
+    --text:#E8EFF4; --text-dim:#9DACB7; --text-faint:#5E6E79;
+    --active:#FFB43A; --active-soft:#3A2B12;
+    --frozen:#7FCDEA; --frozen-soft:#13313D; --ok:#5FD08A; --danger:#F2616B; --danger-soft:#33171A;
+    --r:14px; --r-sm:9px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%}
+  body{
+    background:var(--ink); color:var(--text);
+    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Noto Sans KR",Roboto,sans-serif;
+  }
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+  a{color:var(--frozen)}
+  :focus-visible{outline:2px solid var(--frozen);outline-offset:2px;border-radius:6px}
+  [hidden]{display:none !important}
+
+  .app{max-width:960px;margin:0 auto;padding:0 20px 72px}
+  .topbar{display:flex;align-items:center;gap:12px;padding:16px 0;border-bottom:1px solid var(--line);margin-bottom:24px}
+  .brand{font-weight:600;letter-spacing:.01em}
+  .crumb{color:var(--text-faint);font-size:12.5px}
+  .spacer{flex:1 1 auto}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;
+    border:1px solid var(--line-2);font-size:12px;color:var(--text-dim)}
+  .pill.on{color:var(--active);border-color:var(--active-soft);background:var(--active-soft)}
+
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:22px;margin-bottom:16px}
+  h1{font-size:20px;margin:0 0 4px}
+  h2{font-size:15px;margin:0 0 10px}
+  .sub{color:var(--text-dim);margin:0 0 18px;font-size:13px}
+
+  .btn{padding:9px 16px;border-radius:var(--r-sm);border:1px solid var(--line-2);background:var(--surface-3)}
+  .btn.primary{background:var(--active);color:#1c1404;border-color:var(--active);font-weight:600}
+  .btn.danger{background:none;color:var(--danger);border-color:rgba(242,97,107,.4)}
+  .btn.small{font-size:12px;padding:4px 11px;border-radius:999px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+
+  /* console */
+  .console{background:#0E151B;border:1px solid var(--line);border-radius:var(--r-sm);padding:14px 16px;
+    font-size:12.5px;line-height:1.7;overflow-x:auto}
+  .console .p{color:var(--active)}
+  .console .dim{color:var(--text-faint)}
+  .console .err{color:var(--danger)}
+  .console .ok{color:var(--ok)}
+  .console .mark{color:var(--frozen)}
+  .gate-flag{display:inline-flex;gap:6px;align-items:center;font-size:11.5px;color:var(--frozen);
+    border:1px solid var(--frozen-soft);background:var(--frozen-soft);border-radius:999px;padding:2px 10px;margin-bottom:12px}
+
+  /* repo access */
+  .req{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center;background:var(--surface-2);
+    border:1px solid var(--line-2);border-radius:var(--r-sm);padding:14px 16px;margin-bottom:10px}
+  .req .repo{font-weight:600}
+  .req .meta{font-size:12px;color:var(--text-faint);margin-top:4px}
+  .req .reason{font-size:12.5px;color:var(--text-dim);margin-top:8px}
+  .req .note{font-size:11px;color:var(--text-faint);text-align:right;margin-top:6px}
+  table.allow{width:100%;border-collapse:collapse;font-size:13px}
+  table.allow th{text-align:left;color:var(--text-faint);font-weight:500;font-size:11.5px;padding:8px 10px;border-bottom:1px solid var(--line)}
+  table.allow td{padding:9px 10px;border-bottom:1px solid var(--line)}
+  table.allow td.r{text-align:right}
+  .add{display:flex;gap:8px;align-items:center;margin-top:12px}
+  .add input{flex:1;padding:9px 12px;border-radius:var(--r-sm);background:var(--surface-2);border:1px solid var(--line-2);
+    color:var(--text);font:inherit}
+  .signin{text-align:center;padding:30px 20px}
+  .signin p{color:var(--text-dim);font-size:13px;margin:8px 0 18px}
+
+  .proto-bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:18px;padding-top:14px;
+    border-top:1px dashed var(--line-2)}
+  .proto-bar .cap{font-size:11.5px;color:var(--text-faint);margin-right:2px}
+  .proto-bar button,.proto-bar a[data-branch-target]{font-size:12px;padding:5px 10px;border-radius:999px;text-decoration:none;
+    border:1px solid var(--line-2);color:var(--text-dim);background:var(--surface-2)}
+  .proto-bar a[data-branch-target]{color:var(--frozen)}
+
+  .state-note{margin:14px 0 0;padding:10px 12px;border-radius:var(--r-sm);font-size:12.5px;
+    background:var(--surface-3);border:1px solid var(--line-2);color:var(--text-dim)}
+
+  details.step-meta{margin-top:22px;border-top:1px solid var(--line);padding-top:12px}
+  details.step-meta summary{cursor:pointer;color:var(--text-faint);font-size:12px}
+  details.step-meta dl{margin:12px 0 0;font-size:12.5px;color:var(--text-dim)}
+  details.step-meta dt{color:var(--text-faint);margin-top:8px}
+  details.step-meta dd{margin:2px 0 0}
+
+  footer{margin-top:28px;color:var(--text-faint);font-size:12px}
+</style>
+</head>
+<body>
+<div class="app">
+
+<header class="topbar">
+  <span class="brand">Session Pod Platform</span>
+  <span class="crumb" id="crumb">/ sessions / minimax 정합성 감지 스킬</span>
+  <span class="spacer"></span>
+  <span class="pill" id="who">operator@dlddu</span>
+</header>
+
+<main data-journey="JRN-repo-access" data-step-active="STP-access-request">
+
+  <!-- ───────────────────────── STP-access-request ─────────────────────── -->
+  <section class="step" data-step="STP-access-request" id="STP-access-request">
+    <div class="card">
+      <h1>minimax 정합성 감지 스킬</h1>
+      <p class="sub">minimax-code · 밖으로 나가는 호출은 모두 승인을 받는다</p>
+      <span class="gate-flag">● 외부 접근은 승인 필요</span>
+      <div class="console mono" id="request-console">
+        <div><span class="p">›</span> reconciler 레포의 모델 목록을 읽고 감지를 시작해줘</div>
+        <div class="dim">git_clone https://github.com/dlddu/reconciler</div>
+        <div class="err">✕ dlddu/reconciler 는 비공개 레포이고 허용 목록에 없습니다 — 클론하지 않았습니다.</div>
+        <div class="dim">request_repo_access dlddu/reconciler — "감지에 필요한 data/to-be-models.json 과 task 기록을 읽기 위해"</div>
+        <div class="mark">[session-platform: access requested — dlddu/reconciler · control plane 의 Repo access 에서 결정합니다]</div>
+        <div>요청을 남겼습니다. 허락되면 다시 클론을 시도하겠습니다.</div>
+      </div>
+      <div class="row" style="margin-top:16px">
+        <button class="btn primary" id="btn-open-access" data-advance-to="STP-access-review">Repo access 열기</button>
+      </div>
+      <p class="state-note" data-state-note hidden></p>
+      <div class="proto-bar">
+        <span class="cap">다른 갈래:</span>
+        <button id="btn-already" data-branch-row="3" data-branch-target="STP-private-clone">이미 허용된 레포를 요청함</button>
+      </div>
+    </div>
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-access-request</code> 에이전트가 레포 접근을 요청한다</dd>
+        <dt>터치포인트</dt><dd>승인 게이트 워크스페이스의 출력 콘솔 · 세션 MCP의 접근 요청 도구</dd>
+        <dt>관련 AC</dt><dd>AC-H4 (보조 AC-H5)</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ───────────────────────── STP-access-review ─────────────────────── -->
+  <section class="step" data-step="STP-access-review" id="STP-access-review" hidden>
+    <div class="card" id="review-signed-out" hidden>
+      <div class="signin">
+        <h1>Authelia</h1>
+        <p>인그레스가 control plane에 닿기 전에 Authelia 로그인으로 돌려보냅니다. 다른 화면과 같은 문이고, 로그인하면 레포 접근 화면으로 돌아옵니다 — 화면에 따로 로그인은 없습니다.</p>
+        <button class="btn primary" id="btn-signin">Authelia에 로그인</button>
+      </div>
+    </div>
+    <div class="card" id="review-signed-in">
+      <h1>Repo access</h1>
+      <p class="sub">대기 중인 요청 1 · 허용된 레포 2 — 항목 하나가 레포 하나를 읽기 전용으로 엽니다</p>
+      <h2>Pending requests</h2>
+      <div class="req">
+        <div>
+          <div class="repo mono">dlddu/reconciler</div>
+          <div class="meta">from minimax 정합성 감지 스킬 <span class="mono">761fdbd2</span> · minimax-code · 2분 전</div>
+          <div class="reason">감지에 필요한 data/to-be-models.json 과 task 기록을 읽기 위해</div>
+        </div>
+        <div><button class="btn primary small" id="btn-review" data-advance-to="STP-access-decide">검토하기</button></div>
+      </div>
+      <h2 style="margin-top:18px">Allowed repositories</h2>
+      <table class="allow">
+        <tr><th>Repository</th><th>Source</th><th>Added</th></tr>
+        <tr><td class="mono">dlddu/session-platform</td><td>manual</td><td class="mono">2026-10-24</td></tr>
+        <tr><td class="mono">dlddu/flux-cd-apps</td><td>request</td><td class="mono">2026-10-23</td></tr>
+      </table>
+      <div class="proto-bar">
+        <span class="cap">다른 갈래:</span>
+        <button id="btn-preadd" data-branch-row="4" data-branch-target="STP-access-decide">요청 없이 미리 열어 두기</button>
+        <button id="btn-no-login" data-branch-row="2" data-branch-target="STP-access-review">Authelia에 로그인하지 않은 채 화면을 엶</button>
+      </div>
+    </div>
+    <p class="state-note" data-state-note hidden></p>
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-access-review</code> 대기 중인 요청을 검토한다</dd>
+        <dt>터치포인트</dt><dd>control plane 레포 접근 화면의 대기 요청 목록 · 허용 목록 (mockup <code>repo-access.html</code>)</dd>
+        <dt>관련 AC</dt><dd>AC-H2 (보조 AC-H4)</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ───────────────────────── STP-access-decide ─────────────────────── -->
+  <section class="step" data-step="STP-access-decide" id="STP-access-decide" hidden>
+    <div class="card">
+      <h1>Repo access</h1>
+      <p class="sub">허락은 레포 하나 · 읽기 전용 · 언제든 지울 수 있음</p>
+      <div class="req" id="decide-card">
+        <div>
+          <div class="repo mono">dlddu/reconciler</div>
+          <div class="meta">from minimax 정합성 감지 스킬 <span class="mono">761fdbd2</span> · minimax-code</div>
+          <div class="reason">감지에 필요한 data/to-be-models.json 과 task 기록을 읽기 위해</div>
+        </div>
+        <div>
+          <div class="row">
+            <button class="btn small" id="btn-reject" data-branch-row="1" data-branch-target="STP-private-clone">Reject</button>
+            <button class="btn primary small" id="btn-allow" data-advance-to="STP-private-clone">Allow</button>
+          </div>
+          <div class="note">이 레포 하나만, 읽기 전용</div>
+        </div>
+      </div>
+      <h2 style="margin-top:18px">Allowed repositories</h2>
+      <table class="allow" id="allow-table">
+        <tr><th>Repository</th><th>Source</th><th></th></tr>
+        <tr><td class="mono">dlddu/session-platform</td><td>manual</td>
+          <td class="r"><button class="btn danger small" id="btn-remove" data-branch-row="5" data-branch-target="STP-access-request">Remove</button></td></tr>
+        <tr><td class="mono">dlddu/flux-cd-apps</td><td>request</td><td class="r"></td></tr>
+      </table>
+      <form class="add" id="add-form">
+        <input type="text" id="add-repo" placeholder="owner/repo" autocomplete="off" aria-label="추가할 레포 (owner/repo)" data-required-input>
+        <button class="btn small" type="submit">Add</button>
+      </form>
+      <p class="state-note" data-state-note hidden></p>
+    </div>
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-access-decide</code> 허락하거나 거절한다</dd>
+        <dt>터치포인트</dt><dd>레포 접근 화면의 요청 카드 허락·거절 버튼, 허용 목록의 추가 입력과 삭제 버튼 (mockup <code>repo-access.html</code>)</dd>
+        <dt>관련 AC</dt><dd>AC-H2, AC-H1</dd>
+      </dl>
+    </details>
+  </section>
+
+  <!-- ───────────────────────── STP-private-clone ─────────────────────── -->
+  <section class="step" data-step="STP-private-clone" id="STP-private-clone" hidden>
+    <div class="card">
+      <h1>minimax 정합성 감지 스킬</h1>
+      <p class="sub">minimax-code · 밖으로 나가는 호출은 모두 승인을 받는다</p>
+      <div class="console mono" id="clone-console">
+        <div class="dim">git_clone https://github.com/dlddu/reconciler</div>
+        <div class="ok">✓ cloned dlddu/reconciler → /shared/git_clone/req-4be1c09a</div>
+        <div>to-be-models.json 에서 활성 모델 27개를 읽었습니다. 감지를 시작합니다.</div>
+      </div>
+      <div class="console mono" id="clone-refused" hidden>
+        <div class="dim">git_clone https://github.com/dlddu/reconciler</div>
+        <div class="err">✕ dlddu/reconciler 는 비공개 레포이고 허용 목록에 없습니다 — 클론하지 않았습니다.</div>
+        <div>허락되지 않았습니다. 이 레포 없이 할 수 있는 일을 정리하겠습니다.</div>
+      </div>
+      <div class="console mono" id="clone-down" hidden>
+        <div class="dim">git_clone https://github.com/dlddu/reconciler</div>
+        <div class="err">✕ 허용 목록을 확인할 수 없어 클론하지 않았습니다 — control plane 이 응답하지 않습니다.</div>
+        <div>잠시 뒤 다시 시도하겠습니다.</div>
+      </div>
+      <div class="row" style="margin-top:16px" data-journey-end>
+        <span class="pill on">완료 — 허락한 레포 위에서 작업이 이어짐</span>
+      </div>
+      <p class="state-note" data-state-note hidden></p>
+      <div class="proto-bar">
+        <span class="cap">다른 갈래:</span>
+        <button id="btn-check-down" data-branch-row="6" data-branch-target="STP-private-clone">허용 목록을 확인할 수 없음</button>
+        <button id="btn-public" data-branch-row="7" data-branch-target="STP-access-request">목록에 없는 공개 레포를 받으려 함</button>
+      </div>
+    </div>
+    <details class="step-meta">
+      <summary>이 화면이 담는 여정 단계</summary>
+      <dl>
+        <dt>단계</dt><dd><code>STP-private-clone</code> 허락한 레포를 받아 이어간다</dd>
+        <dt>터치포인트</dt><dd>승인 게이트 워크스페이스의 출력 콘솔과 공유 작업물 패널</dd>
+        <dt>관련 AC</dt><dd>AC-H5 (상위 AC-F3·F5)</dd>
+      </dl>
+    </details>
+  </section>
+
+</main>
+
+<footer>
+  여정 문서 <a href="../../user-journeys/JRN-repo-access.md"><code>JRN-repo-access.md</code></a> ·
+  페이지 규약 <a href="../README.md"><code>docs/journeys/README.md</code></a> ·
+  매핑 <a href="../../mockups/README.md"><code>docs/mockups/README.md</code></a>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var main = document.querySelector('[data-journey]');
+  var steps = Array.prototype.slice.call(document.querySelectorAll('[data-step]'));
+  var $ = function (id) { return document.getElementById(id); };
+  var signedIn = false;
+
+  function show(id) {
+    var found = steps.some(function (s) { return s.getAttribute('data-step') === id; });
+    if (!found) return false;
+    steps.forEach(function (s) { s.hidden = s.getAttribute('data-step') !== id; });
+    main.setAttribute('data-step-active', id);
+    var inSession = id === 'STP-access-request' || id === 'STP-private-clone';
+    $('crumb').textContent = inSession ? '/ sessions / minimax 정합성 감지 스킬' : '/ repo access';
+    if (location.hash !== '#' + id) {
+      try { history.replaceState(null, '', '#' + id); } catch (e) { /* file:// 제약 */ }
+    }
+    return true;
+  }
+
+  function noteIn(el, text) {
+    var step = el.closest('[data-step]');
+    var n = step && step.querySelector('[data-state-note]');
+    if (!n) return;
+    n.textContent = text;
+    n.hidden = false;
+  }
+
+  function setSignedIn(v) {
+    signedIn = v;
+    $('review-signed-out').hidden = v;
+    $('review-signed-in').hidden = !v;
+    $('who').textContent = v ? 'operator@dlddu · signed in' : 'operator@dlddu';
+  }
+
+  function cloneResult(state) {
+    $('clone-console').hidden = state !== 'allowed';
+    $('clone-refused').hidden = state !== 'refused';
+    $('clone-down').hidden = state !== 'down';
+  }
+
+  /* ---------- STP-access-request ---------- */
+  $('btn-already').addEventListener('click', function () {
+    cloneResult('allowed');
+    show('STP-private-clone');
+    noteIn($('clone-console'), '이미 허용된 레포라 요청을 새로 만들지 않았습니다 — 승인 없이 바로 받았습니다.');
+  });
+
+  /* ---------- STP-private-clone ---------- */
+  $('btn-check-down').addEventListener('click', function () {
+    cloneResult('down');
+    show('STP-private-clone');
+    noteIn($('clone-down'), '허용 목록이 유일한 문이라, 확인할 수 없으면 공개 레포라도 클론하지 않습니다.');
+  });
+
+  $('btn-public').addEventListener('click', function () {
+    show('STP-access-request');
+    noteIn($('request-console'), '공개 레포도 허용 목록에 있어야 받습니다 — 없으면 이렇게 요청을 남기고 결정을 기다립니다.');
+  });
+
+  /* ---------- STP-access-review ---------- */
+  $('btn-signin').addEventListener('click', function () {
+    setSignedIn(true);
+    noteIn(this, 'Authelia에 로그인해 돌아왔습니다 — 레포 접근 화면이 곧바로 대기 중인 요청과 허용 목록을 보입니다.');
+  });
+
+  $('btn-no-login').addEventListener('click', function () {
+    setSignedIn(false);
+    show('STP-access-review');
+    noteIn(this, 'Authelia 세션이 없으면 인그레스가 화면에 닿기 전에 Authelia 로그인으로 돌려보냅니다.');
+  });
+
+  $('btn-preadd').addEventListener('click', function () {
+    show('STP-access-decide');
+    noteIn($('add-repo'), '요청 없이도 아래 입력으로 레포를 미리 열어 둘 수 있습니다.');
+    $('add-repo').focus();
+  });
+
+  /* ---------- STP-access-decide ---------- */
+  $('btn-reject').addEventListener('click', function () {
+    cloneResult('refused');
+    show('STP-private-clone');
+    noteIn($('clone-refused'), '요청을 거절했습니다 — 허용 목록은 그대로이고, 에이전트의 다음 클론도 같은 사유로 실패합니다.');
+  });
+
+  $('btn-remove').addEventListener('click', function () {
+    show('STP-access-request');
+    noteIn($('request-console'), 'dlddu/session-platform 을 목록에서 지웠습니다. 다음 클론은 허용 목록에 없음으로 실패하고, ' +
+      '에이전트는 다시 요청을 남깁니다.');
+  });
+
+  $('add-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var v = $('add-repo').value.trim();
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(v)) {
+      noteIn($('add-repo'), 'owner/repo 형식으로 적어 주세요.');
+      return;
+    }
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td class="mono"></td><td>manual</td><td class="r"></td>';
+    tr.firstChild.textContent = v;
+    $('allow-table').appendChild(tr);
+    $('add-repo').value = '';
+    noteIn($('add-repo'), v + ' 을(를) 허용 목록에 추가했습니다 — 이 레포 하나만, 읽기 전용입니다.');
+  });
+
+  /* ---------- 전진 ---------- */
+  Array.prototype.forEach.call(document.querySelectorAll('[data-advance-to]'), function (btn) {
+    btn.addEventListener('click', function () {
+      if (btn.id === 'btn-open-access') setSignedIn(true);
+      if (btn.id === 'btn-allow') cloneResult('allowed');
+      show(btn.getAttribute('data-advance-to'));
+    });
+  });
+
+  /* ---------- 딥링크 ---------- */
+  function fromHash() {
+    var id = (location.hash || '').replace(/^#/, '');
+    setSignedIn(true);
+    if (!id || !show(id)) show('STP-access-request');
+  }
+  window.addEventListener('hashchange', fromHash);
+  fromHash();
+})();
+</script>
+</body>
+</html>

@@ -478,6 +478,13 @@
             <span class="t-n">claude-code</span>
             <span class="t-d">Agent CLI. You send prompts, it does the work.</span>
           </button>
+          <button class="type wide" data-type="minimax-code" onclick="pickType('minimax-code')">
+            <span class="t-ic">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3.2"/></svg>
+            </span>
+            <span class="t-n">minimax-code</span>
+            <span class="t-d">MiniMax Code CLI on the same prompt loop. Runs the platform's default MiniMax model.</span>
+          </button>
           <button class="type wide" data-type="approval-gated" onclick="pickType('approval-gated')">
             <span class="t-ic">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 21 6v6c0 5-3.8 8.9-9 10-5.2-1.1-9-5-9-10V6l9-4Z"/><path d="M9 12l2 2 4-4"/></svg>
@@ -553,7 +560,7 @@ let sessions = [
   {id:'c83d', name:'doc-migration', type:'claude-code', model:'platform default', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'18m ago', checkpoint:'38 MB archive', reclaim:'1 vCPU · 2 GB'}
 ];
 // workloadType은 세션 수명 동안 불변 (AC-E1/AC-F1) · 링크 대상이 타입에 따라 갈린다
-const WS_PAGE = {'claude-code':'agent-workspace.html', 'approval-gated':'gated-workspace.html', 'shell':'workspace.html'};
+const WS_PAGE = {'claude-code':'agent-workspace.html', 'minimax-code':'agent-workspace.html', 'approval-gated':'gated-workspace.html', 'shell':'workspace.html'};
 function wsHref(s){
   if(s.state==='snapshot') return `restore.html?id=${s.id}`;
   return `${WS_PAGE[s.type]||'workspace.html'}?id=${s.id}`;
@@ -657,13 +664,15 @@ function startGridTick(){
 let provBusy=false;
 let draft = { type:'shell', model:'platform-default' };
 
-// 에이전트 계열 타입(claude-code · approval-gated)만 model을 고른다 (AC-E6 · AC-F1)
-const AGENT_TYPES = ['claude-code','approval-gated'];
+// 에이전트 계열 타입(claude-code · approval-gated · minimax-code) (AC-E6 · AC-F1 · AC-G1)
+const AGENT_TYPES = ['claude-code','approval-gated','minimax-code'];
+// minimax-code는 model을 고르지 않는다 — 항상 플랫폼 기본 MiniMax 모델 (AC-G1)
+const MODEL_CHOICE_TYPES = ['claude-code','approval-gated'];
 function pickType(t){
   if(provBusy) return;
   draft.type = t;
   document.querySelectorAll('.type').forEach(b=>b.classList.toggle('sel', b.dataset.type===t));
-  document.getElementById('model-field').classList.toggle('on', AGENT_TYPES.includes(t));
+  document.getElementById('model-field').classList.toggle('on', MODEL_CHOICE_TYPES.includes(t));
 }
 function pickModel(m){
   if(provBusy) return;
@@ -688,7 +697,7 @@ function startProvision(){
   document.getElementById('phase-config').classList.remove('on');
   document.getElementById('phase-prov').classList.add('on');
   document.getElementById('prov-type').textContent =
-    isAgent ? `workloadType=${draft.type} · model=${MODEL_LABEL[draft.model]}` : 'workloadType=shell';
+    isAgent ? `workloadType=${draft.type} · model=${MODEL_CHOICE_TYPES.includes(draft.type) ? MODEL_LABEL[draft.model] : 'platform default'}` : 'workloadType=shell';
   // control plane은 타입에 따라 서로 다른 워크로드로 pod를 프로비저닝한다 (AC-E1/AC-F1)
   // approval-gated는 워크로드 파드와 함께 세션 전용 MCP 보조 파드를 세운다 (AC-F4)
   document.getElementById('prov-step-2').textContent =

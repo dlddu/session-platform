@@ -5,7 +5,8 @@
 # Leases in the cluster, so there is no separate state-store deployment to wait
 # on.
 #
-#   scripts/e2e/up.sh        # create cluster (if needed) + build + load + deploy
+#   scripts/e2e/up.sh                     # create cluster (if needed) + build + load + deploy
+#   SKIP_IMAGE_BUILD=1 scripts/e2e/up.sh  # same, but images are already built locally
 #
 # Idempotent: if the cluster already exists (e.g. created by helm/kind-action in
 # CI) the create step is skipped and only build/load/deploy/wait run. Pair with
@@ -41,13 +42,26 @@ else
   kind create cluster --config deploy/kind-config.yaml
 fi
 
-echo "e2e: building image $IMAGE"
-make docker
+# SKIP_IMAGE_BUILD=1: both images are already in the local docker image store
+# (CI builds them with buildx and its layer cache, .github/workflows/e2e.yml),
+# so only check they exist and load them. Unset, this script builds them itself.
+SKIP_BUILD="${SKIP_IMAGE_BUILD:-0}"
+
+if [ "$SKIP_BUILD" = 1 ]; then
+  echo "e2e: SKIP_IMAGE_BUILD=1 — using prebuilt $IMAGE"
+  docker image inspect "$IMAGE" >/dev/null
+else
+  echo "e2e: building image $IMAGE"
+  make docker
+fi
 
 echo "e2e: loading image into kind cluster '$CLUSTER'"
 kind load docker-image "$IMAGE" --name "$CLUSTER"
 
-if [ "$DP_IMAGE" = "session-platform/data-plane:dev" ]; then
+if [ "$SKIP_BUILD" = 1 ]; then
+  echo "e2e: SKIP_IMAGE_BUILD=1 — using prebuilt $DP_IMAGE"
+  docker image inspect "$DP_IMAGE" >/dev/null
+elif [ "$DP_IMAGE" = "session-platform/data-plane:dev" ]; then
   echo "e2e: building data plane agent image $DP_IMAGE"
   make docker-data-plane
 else
@@ -57,6 +71,33 @@ fi
 
 echo "e2e: loading data plane image into kind cluster '$CLUSTER'"
 kind load docker-image "$DP_IMAGE" --name "$CLUSTER"
+
+# The approval gateway is the real PocketAide (deploy/e2e-pocket-aide.yaml).
+# Its published image carries the server only, not the IdP the harness logs in
+# through, so both are built here from one commit. POCKET_AIDE_SHA is the only
+# pin of that dependency: move it when PocketAide's external approval API or
+# its user API changes.
+POCKET_AIDE_SHA="${POCKET_AIDE_SHA:-f50b2463aca6904ec861bd91adf3be304824e832}"
+require go
+require git
+PA_SRC="$(mktemp -d)"
+PA_CTX="$(mktemp -d)"
+trap 'rm -rf "$PA_SRC" "$PA_CTX"' EXIT
+echo "e2e: building PocketAide server + oidcmock at $POCKET_AIDE_SHA"
+git init -q "$PA_SRC"
+git -C "$PA_SRC" fetch -q --depth 1 https://github.com/dlddu/pocket-aide "$POCKET_AIDE_SHA"
+git -C "$PA_SRC" checkout -q FETCH_HEAD
+test "$(git -C "$PA_SRC" rev-parse HEAD)" = "$POCKET_AIDE_SHA"
+(
+  cd "$PA_SRC/backend"
+  CGO_ENABLED=0 go build -ldflags="-s -w" -o "$PA_CTX/pocket-aide" ./cmd/server
+  CGO_ENABLED=0 go build -ldflags="-s -w" -o "$PA_CTX/oidcmock" ./cmd/oidcmock
+)
+docker build -q -f scripts/e2e/pocket-aide.Dockerfile --build-arg BINARY=pocket-aide \
+  -t pocket-aide:e2e "$PA_CTX" >/dev/null
+docker build -q -f scripts/e2e/pocket-aide.Dockerfile --build-arg BINARY=oidcmock \
+  -t oidc-mock:e2e "$PA_CTX" >/dev/null
+kind load docker-image pocket-aide:e2e oidc-mock:e2e --name "$CLUSTER"
 
 echo "e2e: applying deploy/ overlay (kustomize: base k8s/ + kind patches)"
 kubectl apply -k deploy/
@@ -82,11 +123,17 @@ kubectl rollout status deploy/plugin-marketplace-git --timeout=180s
 # The provider stand-in a claude-code session talks to once it is running. Same
 # reason again: the first prompt must not race its TLS listener coming up.
 kubectl rollout status deploy/anthropic-fake --timeout=120s
-# The gateway stand-in an approval-gated session's helper pod calls before every
+# The approval gateway an approval-gated session's helper pod calls before every
 # external tool call. Same reason once more: the first gated call must not race
-# its listener. The Secret it authenticates against is applied above with the
-# rest of the overlay, so nothing else has to be ordered here.
-kubectl rollout status deploy/approval-gateway-fake --timeout=120s
+# its listener. The IdP first — PocketAide fetches its discovery document at
+# start and exits if it cannot, so it may restart once before going Ready.
+kubectl -n oidc-mock rollout status deploy/oidc-mock --timeout=120s
+kubectl -n pocket-aide rollout status deploy/pocket-aide --timeout=180s
+# The origin an approved external tool call fetches (deploy/fetch-origin.yaml).
+# Same reason once more: the approval round trip ends in a real GET, and the
+# first one must not race this listener — a refused connection there would look
+# like the tool failing rather than the origin still starting.
+kubectl rollout status deploy/fetch-origin --timeout=120s
 # The ReadWriteMany provisioner behind AC-F5's session-shared volume
 # (deploy/shared-volume-provisioner.yaml). Same reason as the fixtures above:
 # the first approval-gated session must not race it. Without the class its

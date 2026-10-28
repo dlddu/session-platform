@@ -8,9 +8,9 @@ needs (AC-A2). The control plane provisions and reclaims these pods via the
 The runtime image includes `git`, `gh`, `curl`, `jq`, and `kubectl` for use by
 interactive shell and Claude Code workloads.
 
-## Status: shell, claude-code, approval-gated, mcp, and credential-proxy agents built
+## Status: shell, claude-code, approval-gated, minimax-code, mcp, credential-proxy, and k3s-mcp-proxy agents built
 
-`DATA_PLANE_WORKLOAD` selects one of five modes across a session's pods:
+`DATA_PLANE_WORKLOAD` selects one of six modes across a session's pods:
 
 - `shell` (default) launches one PTY-attached interactive shell
   (`DATA_PLANE_SHELL`, default `/bin/bash`). Write is shell stdin, read is
@@ -44,17 +44,82 @@ interactive shell and Claude Code workloads.
   pod is rebuilt with a new address on every restore, the registered MCP URL is
   rewritten from the environment at startup rather than trusted from the
   archive.
+- `minimax-code` runs the MiniMax Code CLI on the same one-shot runner as
+  `claude-code` — queue, bounds, cursor, resume flag and archive are shared
+  (AC-G2/G4). Each job executes
+  `mcode exec --config CONFIG --model custom_provider:session-platform/MODEL
+  --permission full --effort xhigh --output-format stream-json [--continue] --
+  PROMPT`, and
+  the agent projects only the `contentDelta` text of `agent_message` items;
+  reasoning, tool-call and lifecycle records are dropped, and a failed turn is
+  reported through mcode's own stderr diagnostics. `CONFIG` is a platform-managed
+  file written at startup *beside* the state tree (so it is never archived): it
+  declares one Anthropic-messages provider at the helper pod's credential proxy
+  (`ANTHROPIC_BASE_URL`, `http://<helper-ip>:8091`) with the
+  non-secret placeholder key and the session's model (with the effort levels
+  mcode needs to accept `--effort`, and the 512k/128k token limits for
+  `MiniMax-M3.1-Flash`), and turns data
+  contribution and self-update off; the agent also sets
+  `MCODE_DISABLE_EVAL_CAPTURE=1` so no run uploads step reports. `MINIMAX_CODE_MODEL` selects the model; `platform-default`
+  or empty runs `MiniMax-M3.1-Flash`, because mcode, unlike Claude Code, has no
+  installation default to fall back to. The container gets no Claude bootstrap
+  and refuses to start if any provider key (`ANTHROPIC_API_KEY`,
+  `MINIMAX_API_KEY`, `MCODE_PROVIDER_API_KEY`, …) or `K3S_MCP_TOKEN` is set
+  (AC-G3). Like `approval-gated`, the pod has no sidecar and its egress reaches
+  only its session's helper pod (AC-G6), so every address it gets is a helper
+  pod address that must not be loopback: the provider proxy (`:8091`), the
+  session MCP (`SESSION_MCP_URL`, `:8092`) and the K3s MCP proxy
+  (`K3S_MCP_PROXY_URL`, `:8093`). The helper's provider proxy is the
+  `approval-gated` one pointed at the `minimax-code-credentials` Secret, whose
+  `base-url` is MiniMax's Anthropic-compatible endpoint (for example
+  `https://api.minimax.io/anthropic`) and whose `auth-token` may be a Token Plan
+  subscription key: MiniMax accepts it as `Authorization: Bearer`, which is
+  exactly what the proxy injects. On every start and restore the agent stages
+  Claude-format plugins beside the managed config and copies them into
+  `~/.minimax/plugins/`, removing only plugins it marked as its own: its own
+  `session-platform-session-mcp`, registering the session MCP (its external
+  tools pass the approval gate and the agent tails the MCP's notices into the
+  output, AC-F3), plus every plugin of the K3s MCP proxy's `/plugin-seed` bundle.
+  In that bundle only MCP servers change: the one whose URL is `K3S_MCP_URL` is
+  re-pointed at the proxy with its OAuth field and `Authorization` header
+  removed, and any other server is dropped with a warning, since the pod cannot
+  reach it. The K3s MCP tools are not behind the session gate because the K3s
+  MCP gates its own writes.
+- `k3s-mcp-proxy` is the `minimax-code` helper pod's K3s MCP proxy: the
+  credential-proxy implementation with the MCP Streamable HTTP header allowlist
+  (`Accept`, `Content-Type`, `Mcp-Session-Id`, `Mcp-Protocol-Version`,
+  `Last-Event-Id`, `User-Agent`), bound per `DATA_PLANE_PROXY_PLACEMENT` like
+  the provider proxy (`:8093` in the helper pod), forwarding to the
+  origin of `K3S_MCP_URL` (default `https://homelab-k3s-mcp.llkm.nl`) with
+  `K3S_MCP_TOKEN` as the bearer. Without a token it still starts, reports
+  `configured: false` on `/healthz`, and answers everything else with 503.
+  Session traffic passes a deny filter first: a `tools/call` for any tool in
+  `k3sMCPDeniedTools` (`k3s_mcp_tool_deny.go` — the writes, `resource_exec`/
+  `attach`/`port_forward`/`proxy`, `opensearch_*`, `session_*`,
+  `dear_baby_reset_user`, `github_commit_status_create`) is answered with an
+  `isError` tool result and never forwarded, because `mcode` runs with
+  `--permission full` and has no deny rules of its own.
+  With a token it also bootstraps the plugin marketplace for the workload pod,
+  which cannot reach GitHub: it asks the K3s MCP for a `plugin-marketplace` read
+  token through its own handler in process, clones
+  `MINIMAX_CODE_PLUGIN_MARKETPLACE_URL` into `MINIMAX_CODE_MARKETPLACE_DIR` with a
+  URL-scoped header, and serves the plugins named in `MINIMAX_CODE_PLUGINS`
+  (default `mcp-servers`) — manifest plus the files its `skills`, `commands`,
+  `agents` and `mcpServers` fields name, never hooks — at `GET /plugin-seed`
+  (503 while bootstrapping, then `ready`, `failed` or `unconfigured`).
 - `mcp` is the session MCP that runs in the helper pod's other container
   (AC-F4). It serves `/healthz` and a JSON-RPC endpoint at `/mcp` that answers
   `initialize`, `ping`, `tools/list` and `tools/call`. It offers one external
   tool, `web_fetch_get`, and every call to it passes the human approval gate
-  (AC-F3): the request is created on the approval gateway named by
+  (AC-F3): the request is created on PocketAide's external approval API at
   `APPROVAL_GATEWAY_URL` under the external identifier
-  `{SESSION_ID}:{requestID}`, and the outbound GET happens only after an
+  `{SESSION_ID}:{requestID}`, authenticated with the helper pod's
+  ServiceAccount token (audience `pocket-aide`) read from
+  `APPROVAL_GATEWAY_TOKEN_FILE`, and the outbound GET happens only after an
   APPROVED decision. A rejection, expiry, poll timeout or gateway outage comes
   back as an `isError` tool result, never as a transport error, so the agent
   reads the refusal and carries on with the session still `active`. **Without
-  the gateway environment the tool list is empty** — a container that cannot ask
+  the gateway URL or a readable token the tool list is empty** — a container that cannot ask
   a human offers nothing rather than reaching out ungated. It keeps no state —
   the helper pod is discarded on freeze and rebuilt on restore.
 - `credential-proxy` holds the provider credentials outside the tool-running
@@ -190,7 +255,7 @@ upstream responses.
 
 The control plane's client-go orchestrator
 (`control-plane/internal/adapter/k8s`) provisions each session pod from this
-image (`DATA_PLANE_IMAGE`; published by `.github/workflows/docker-build-push.yaml`
+image (`DATA_PLANE_IMAGE`; published by the image jobs in `.github/workflows/ci.yml`
 as `…-data-plane`) with no command override — and refuses to mark a session
 `active` until the attach stream opens. The in-code fallback image remains a
 generic `alpine:3.20`, which cannot pass the shell readiness probe: real

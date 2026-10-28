@@ -206,6 +206,12 @@
     <span class="links"><a href="reader.html?doc=prd/approval-gated-workload.md">PRD</a> <a href="reader.html?doc=test/approval-gated-workload.md">테스트</a></span>
   </div>
   <div class="row">
+    <span class="name">PRD 세션 워크로드 — MiniMax Code CLI</span>
+    <span class="meta">PRD · <code>minimax-code</code> 타입 (테스트 문서는 후속)</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=prd/minimax-code-workload.md">PRD</a></span>
+  </div>
+  <div class="row">
     <span class="name">kind 기반 풀스택 e2e</span>
     <span class="meta">하네스 · 시나리오 맵</span>
     <span class="spacer"></span>
@@ -213,7 +219,7 @@
   </div>
   <div class="row">
     <span class="name">세션 MCP 도구 표면</span>
-    <span class="meta">도구 추가 규칙 12 · 다음 구현 대상 3 · <code>approval-gated</code> 타입</span>
+    <span class="meta">도구 추가 규칙 12 · 다음 구현 대상 2 · <code>approval-gated</code> 타입</span>
     <span class="spacer"></span>
     <span class="links"><a href="reader.html?doc=session-mcp-tool-surface.md">읽기</a></span>
   </div>
@@ -233,11 +239,11 @@
     <span class="name">문서 체계 상태 추적</span>
     <span class="meta">백엔드 사슬 집계 · 디자인 문서 구조 상태</span>
     <span class="spacer"></span>
-    <span class="links"><a href="reader.html?doc=doc-tracker.md">문서 체계</a> <a href="reader.html?doc=doc-structure-state.md">구조 상태</a></span>
+    <span class="links"><a href="reader.html?doc=doc-tracker/index.md">문서 체계</a> <a href="reader.html?doc=doc-structure-state.md">구조 상태</a></span>
   </div>
 
   <h2>사용자 여정</h2>
-  <p class="hint">여정 하나 = 문서 하나 + 여정 mockup 페이지 하나(<code>journeys/&lt;journey-id&gt;/</code>). 판정 대상 8개가 모두 채워졌다 — 남은 1개(<code>JRN-concurrent-access</code>)는 그리지 않기로 예외 등재된 여정이다 — 매핑은 <a href="reader.html?doc=mockups/README.md">mockup 인덱스</a>, 페이지 규약은 <a href="reader.html?doc=journeys/README.md">여정 mockup 규약</a> 이 갖는다. 식별자는 2026-08-30 부터 슬러그(<code>JRN-…</code> / <code>STP-…</code>) 를 쓴다.</p>
+  <p class="hint">여정 하나 = 문서 하나 + 여정 mockup 페이지 하나(<code>journeys/&lt;journey-id&gt;/</code>). 판정 대상 9개가 모두 채워졌다 — 남은 1개(<code>JRN-concurrent-access</code>)는 그리지 않기로 예외 등재된 여정이다 — 매핑은 <a href="reader.html?doc=mockups/README.md">mockup 인덱스</a>, 페이지 규약은 <a href="reader.html?doc=journeys/README.md">여정 mockup 규약</a> 이 갖는다. 식별자는 2026-08-30 부터 슬러그(<code>JRN-…</code> / <code>STP-…</code>) 를 쓴다.</p>
 
   <div class="row">
     <span class="name">여정 인덱스</span>
@@ -299,6 +305,12 @@
     <span class="spacer"></span>
     <span class="links"><a href="reader.html?doc=user-journeys/JRN-approval-gated-work.md">문서 읽기</a> <a class="primary" href="journeys/JRN-approval-gated-work/">여정 mockup</a></span>
   </div>
+  <div class="row">
+    <span class="name">에이전트가 비공개 레포를 쓰도록 내가 허락한다</span> <span class="badge live"><span class="led"></span>체험 가능</span>
+    <span class="meta"><code>JRN-repo-access</code> · 달성 가치 <code>V8, V1</code> · 4단계</span>
+    <span class="spacer"></span>
+    <span class="links"><a href="reader.html?doc=user-journeys/JRN-repo-access.md">문서 읽기</a> <a class="primary" href="journeys/JRN-repo-access/">여정 mockup</a></span>
+  </div>
 
   <h2>디자인 시스템</h2>
   <p class="hint">mockup 이 따르는 시각 언어.</p>
@@ -311,19 +323,19 @@
   </div>
 
   <h2>mockup (화면 단위)</h2>
-  <p class="hint">여정 단위로 전환되기 전의 화면 단위 산출물 6개. Pages 는 <code>docs/</code> 전체를 배포하므로 이 폴더도 그대로 열린다.
+  <p class="hint">여정 단위로 전환되기 전의 화면 단위 산출물 7개. Pages 는 <code>docs/</code> 전체를 배포하므로 이 폴더도 그대로 열린다.
     갤러리 페이지는 따로 없다 — 세션 목록 화면에서 카드를 눌러 나머지 화면으로 넘어간다. 목록·매핑은 mockup 인덱스가 갖는다.</p>
 
   <div class="row">
-    <span class="name">화면 단위 mockup 6개</span>
-    <span class="meta"><code>index</code>(세션 목록) · <code>new-session</code> · <code>workspace</code> · <code>agent-workspace</code> · <code>gated-workspace</code> · <code>restore</code></span>
+    <span class="name">화면 단위 mockup 7개</span>
+    <span class="meta"><code>index</code>(세션 목록) · <code>new-session</code> · <code>workspace</code> · <code>agent-workspace</code> · <code>gated-workspace</code> · <code>restore</code> · <code>repo-access</code></span>
     <span class="spacer"></span>
     <span class="links"><a href="mockups/index.html">세션 목록 화면부터 열기 →</a> <a href="reader.html?doc=mockups/README.md">mockup 인덱스</a></span>
   </div>
 
   <footer>
     이 페이지는 손으로 갱신한다. 여정·mockup·문서가 늘거나 줄면 같은 커밋에서 이 파일도 고친다.<br>
-    여정 mockup 링크가 실제 페이지 집합과 어긋나면 CI <code>docs-journey-mockup</code> 이 실패한다.<br>
+    여정 mockup 링크가 실제 페이지 집합과 어긋나면 CI(<code>ci</code> 워크플로의 <code>journey-prototype</code> 잡)가 실패한다.<br>
     구조 점검은 <code>design-doc-structure-validator</code> 스킬로 한다.
   </footer>
 

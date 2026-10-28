@@ -51,6 +51,8 @@ const (
 	claudeCheckpointIDHeader   = "X-Session-Checkpoint-ID"
 	claudeRunOutputLimitMarker = "\n[session-platform: invocation output truncated at 16 MiB]\n"
 	claudeOutputLimitMarker    = "\n[session-platform: session output limit reached; further prompts are disabled]\n"
+	claudeTurnMarkerLead       = "\x1esession-platform "
+	claudeTurnSentinel         = '\x1e'
 
 	claudeProcessGroupDrainTimeout      = 5 * time.Second
 	defaultClaudeRunTimeout             = 30 * time.Minute
@@ -139,6 +141,7 @@ type claudeConfig struct {
 	ScrollbackLimit int
 	// Tools is written into the session HOME on boot.
 	Tools toolSurface
+	CLI   agentCLI
 }
 
 // toolSurface is what the platform lets a session's agent reach beyond its own
@@ -190,6 +193,7 @@ type claudeWorkload struct {
 	logger   *slog.Logger
 	redact   []string
 	tools    toolSurface
+	cli      agentCLI
 	out      scrollback
 
 	// approvals is what AC-F3's idle exception is decided from.
@@ -208,11 +212,13 @@ type claudeWorkload struct {
 	restoring               bool
 	active                  bool
 	hasRun                  bool
+	turns                   int
 	stopping                bool
 	runTimeout              time.Duration
 	runOutputLimit          int
 	scrollbackLimit         int
 
+	now        func() time.Time
 	ctx        context.Context
 	cancel     context.CancelFunc
 	workerDone chan struct{}
@@ -268,6 +274,10 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 	if int64(scrollbackLimit) > maxClaudeScrollbackBytes {
 		return nil, errors.New("claude scrollback limit exceeds archive maximum")
 	}
+	cli := cfg.CLI
+	if cli == nil {
+		cli = claudeCLI{}
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &claudeWorkload{
@@ -280,10 +290,12 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 		logger:          logger,
 		redact:          normaliseRedactionLiterals(cfg.Redact),
 		tools:           cfg.Tools,
+		cli:             cli,
 		runTimeout:      runTimeout,
 		runOutputLimit:  runOutputLimit,
 		scrollbackLimit: scrollbackLimit,
 		queue:           list.New(),
+		now:             time.Now,
 		ctx:             ctx,
 		cancel:          cancel,
 		workerDone:      make(chan struct{}),
@@ -314,7 +326,7 @@ func (c *claudeWorkload) ensureStateDirs() error {
 			return fmt.Errorf("create claude state directory %s: %w", dir, err)
 		}
 	}
-	return ensureClaudeManagedSettings(c.homeDir, c.tools)
+	return c.cli.ensureHome(c.homeDir, c.tools)
 }
 
 func (c *claudeWorkload) Close() {
@@ -363,8 +375,58 @@ func (c *claudeWorkload) enqueue(prompt string) error {
 // because a notice is assembled here from a tool name and an external
 // identifier and never carries provider or gateway material (AC-F6).
 func (c *claudeWorkload) appendPlatformNotice(text string) {
-	if c.out.appendClaudeBoundedAt([]byte(text), c.scrollbackLimit, claudeOutputLimitMarker) {
+	if c.out.appendClaudeBoundedAt(withoutTurnSentinel([]byte(text)), c.scrollbackLimit, claudeOutputLimitMarker) {
 		c.logger.Warn("claude session output limit reached; rejecting new prompts")
+	}
+}
+
+// Marker grammar and quota exemption: docs/prd/claude-code-workload.md AC-E3.
+func (c *claudeWorkload) beginTurn(seq int, prompt string) {
+	body := strings.TrimRight(strings.ToValidUTF8(prompt, "\uFFFD"), "\r\n") + "\n"
+	redactor := newStreamingRedactor(c.redact)
+	redacted := append(redactor.Push(withoutTurnSentinel([]byte(body))), redactor.Finish()...)
+	block := claudeTurnMarker("input", seq, "at="+c.timestamp()) + string(redacted) + claudeTurnMarker("output", seq)
+	c.appendTurnBlock(block)
+}
+
+func (c *claudeWorkload) endTurn(seq int, status string) {
+	c.appendTurnBlock(claudeTurnMarker("end", seq, "status="+status, "at="+c.timestamp()))
+}
+
+func (c *claudeWorkload) appendTurnBlock(block string) {
+	if !c.out.endsWithNewline() {
+		block = "\n" + block
+	}
+	if c.out.appendClaudeBoundedAt([]byte(block), c.scrollbackLimit, claudeOutputLimitMarker) {
+		c.logger.Warn("claude session output limit reached; rejecting new prompts")
+	}
+}
+
+func (c *claudeWorkload) timestamp() string {
+	return c.now().UTC().Format(time.RFC3339)
+}
+
+func claudeTurnMarker(kind string, seq int, fields ...string) string {
+	return claudeTurnMarkerLead + kind + " seq=" + strconv.Itoa(seq) + strings.Join(append([]string{""}, fields...), " ") + "\n"
+}
+
+func withoutTurnSentinel(p []byte) []byte {
+	if bytes.IndexByte(p, claudeTurnSentinel) < 0 {
+		return p
+	}
+	return bytes.ReplaceAll(p, []byte{claudeTurnSentinel}, nil)
+}
+
+func claudeTurnStatus(err error, timedOut bool) string {
+	switch {
+	case err == nil || errors.Is(err, exec.ErrWaitDelay):
+		return "ok"
+	case timedOut:
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	default:
+		return "error"
 	}
 }
 
@@ -385,8 +447,11 @@ func (c *claudeWorkload) runWorker() {
 		c.queuedBytes -= len(job.prompt)
 		resume := c.hasRun
 		c.active = true
+		c.turns++
+		seq := c.turns
 		c.mu.Unlock()
 
+		c.beginTurn(seq, job.prompt)
 		output := newClaudeOutputSink(
 			&c.out,
 			c.redact,
@@ -395,7 +460,7 @@ func (c *claudeWorkload) runWorker() {
 			func() { c.logger.Warn("claude session output limit reached; rejecting new prompts") },
 		)
 		stdoutUTF8 := newUTF8NormalizingWriter(output)
-		stdout := newClaudeStreamProjector(stdoutUTF8)
+		stdout := c.cli.newProjector(stdoutUTF8)
 		stderr := newUTF8NormalizingWriter(output)
 		runCtx, cancelRun := context.WithTimeout(c.ctx, c.runTimeout)
 		err := c.runner.Run(runCtx, c.argv(job.prompt, resume), runnerOptions{
@@ -404,6 +469,7 @@ func (c *claudeWorkload) runWorker() {
 			Stdout: stdout,
 			Stderr: stderr,
 		})
+		timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
 		cancelRun()
 		// Flush projector/newline, per-fd UTF-8 tails, redaction tail and the
 		// invocation-limit tail before active becomes false. A checkpoint waiting
@@ -412,6 +478,7 @@ func (c *claudeWorkload) runWorker() {
 		err = errors.Join(err, stdoutUTF8.Close())
 		err = errors.Join(err, stderr.Close())
 		err = errors.Join(err, output.Close())
+		c.endTurn(seq, claudeTurnStatus(err, timedOut))
 
 		// Resume state follows AC-E4. Persist before reporting idle, so a
 		// checkpoint cannot archive a stale flag.
@@ -433,12 +500,16 @@ func (c *claudeWorkload) runWorker() {
 }
 
 func (c *claudeWorkload) argv(prompt string, resume bool) []string {
-	argv := []string{c.binary}
+	return c.cli.argv(c.binary, c.model, prompt, resume)
+}
+
+func claudeArgv(binary, model, prompt string, resume bool) []string {
+	argv := []string{binary}
 	if resume {
 		argv = append(argv, "--continue")
 	}
-	if c.model != "" && c.model != platformDefaultModel {
-		argv = append(argv, "--model", c.model)
+	if model != "" && model != platformDefaultModel {
+		argv = append(argv, "--model", model)
 	}
 	// The option delimiter prevents a prompt beginning with "--" from changing
 	// any platform-controlled flag.
@@ -498,7 +569,7 @@ func (c *claudeWorkload) beginCheckpoint(ctx context.Context, requestedID string
 		c.abortCheckpoint()
 		return nil, "", err
 	}
-	if err := validateRestoredClaudeState(c.stateDir); err != nil {
+	if err := c.cli.validateState(c.stateDir); err != nil {
 		c.abortCheckpoint()
 		return nil, "", fmt.Errorf("validate live claude state: %w", err)
 	}
@@ -599,7 +670,7 @@ func (c *claudeWorkload) restore(r io.Reader) error {
 	c.restoring = true
 	c.mu.Unlock()
 
-	scrollbackBytes, err := restoreClaudeArchive(r, c.stateDir, c.tools.SharedDir)
+	scrollbackBytes, err := restoreClaudeArchive(r, c.stateDir, c.tools.SharedDir, c.cli.validateState)
 	if err != nil {
 		c.finishFailedRestore()
 		return err
@@ -616,6 +687,7 @@ func (c *claudeWorkload) restore(r io.Reader) error {
 
 	c.out.restore(scrollbackBytes)
 	c.mu.Lock()
+	c.turns = bytes.Count(scrollbackBytes, []byte(claudeTurnMarkerLead+"input "))
 	c.hasRun = hasRun
 	c.ready = true
 	c.accepting = true
@@ -787,6 +859,11 @@ type claudeManagedSettings struct {
 type claudeMCPServer struct {
 	Type string `json:"type"`
 	URL  string `json:"url"`
+	// Timeout is the CLI's per-server tool-call limit in milliseconds. The
+	// pinned CLI (2.1.220) carries an undocumented 60 s request default for
+	// http servers, and on the cluster (2026-10-24) a gated call was cancelled
+	// at exactly 60 s while a human was still deciding (sessionMCPToolTimeout).
+	Timeout int64 `json:"timeout,omitempty"`
 }
 
 // managedSettingsFor renders the settings a workload type must run with.
@@ -1067,11 +1144,11 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		status := "awaiting restore"
 		if c.isReady() {
-			_, _ = w.Write([]byte(`{"status":"ok","workload":"claude-code"}`))
-			return
+			status = "ok"
 		}
-		_, _ = w.Write([]byte(`{"status":"awaiting restore","workload":"claude-code"}`))
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": status, "workload": c.cli.workloadName()})
 	})
 
 	// AC-F3's idle exception, read side. It stays answerable while the workload

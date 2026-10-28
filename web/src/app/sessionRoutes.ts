@@ -12,6 +12,7 @@ export function liveSessionPath(
 ): string {
   switch (session.workloadType) {
     case "claude-code":
+    case "minimax-code":
       return `/agent/${session.id}`;
     case "approval-gated":
       return `/gated/${session.id}`;

@@ -127,23 +127,24 @@ func TestClaudeStreamsPartialOutputBeforeExitAndReconnects(t *testing.T) {
 	})
 	c, srv := newClaudeTestServer(t, runner, platformDefaultModel, false, nil)
 
-	cancel, response, reader := openOutputStream(t, srv, 0)
+	echo := turnOpen(1, "stream this")
 	writeViaHTTP(t, srv, "stream this", http.StatusOK)
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Claude invocation did not start")
 	}
+	cancel, response, reader := openOutputStream(t, srv, len(echo))
 
 	first, payload := decodeOutputEvent(t, readSSEEvent(t, reader))
 	if got, want := string(payload), "partial"; got != want {
 		t.Fatalf("live SSE payload = %q, want %q", got, want)
 	}
-	if first.Offset != 0 || first.NextOffset != len("partial") {
-		t.Fatalf("live SSE cursors = (%d,%d), want (0,%d)", first.Offset, first.NextOffset, len("partial"))
+	if first.Offset != len(echo) || first.NextOffset != len(echo)+len("partial") {
+		t.Fatalf("live SSE cursors = (%d,%d), want (%d,%d)", first.Offset, first.NextOffset, len(echo), len(echo)+len("partial"))
 	}
-	if got, cursor := readViaHTTP(t, srv, 0); got != "partial" || cursor != first.NextOffset {
-		t.Fatalf("pre-exit /read = (%q,%d), want (%q,%d)", got, cursor, "partial", first.NextOffset)
+	if got, cursor := readViaHTTP(t, srv, 0); got != echo+"partial" || cursor != first.NextOffset {
+		t.Fatalf("pre-exit /read = (%q,%d), want (%q,%d)", got, cursor, echo+"partial", first.NextOffset)
 	}
 
 	cancel()
@@ -166,14 +167,15 @@ func TestClaudeStreamsPartialOutputBeforeExitAndReconnects(t *testing.T) {
 	defer cancel()
 	defer response.Body.Close()
 	second, payload := decodeOutputEvent(t, readSSEEvent(t, reader))
-	if got, want := string(payload), "\n"; got != want {
-		t.Fatalf("reconnected SSE payload = %q, want %q", got, want)
+	tail := "\n" + turnClose(1, "ok")
+	if got := string(payload); got != tail {
+		t.Fatalf("reconnected SSE payload = %q, want %q", got, tail)
 	}
-	if second.Offset != first.NextOffset || second.NextOffset != first.NextOffset+1 {
-		t.Fatalf("reconnected SSE cursors = (%d,%d), want (%d,%d)", second.Offset, second.NextOffset, first.NextOffset, first.NextOffset+1)
+	if second.Offset != first.NextOffset || second.NextOffset != first.NextOffset+len(tail) {
+		t.Fatalf("reconnected SSE cursors = (%d,%d), want (%d,%d)", second.Offset, second.NextOffset, first.NextOffset, first.NextOffset+len(tail))
 	}
-	if got, cursor := readViaHTTP(t, srv, 0); got != "partial\n" || cursor != second.NextOffset {
-		t.Fatalf("final /read = (%q,%d), want (%q,%d)", got, cursor, "partial\n", second.NextOffset)
+	if got, cursor := readViaHTTP(t, srv, 0); got != echo+"partial"+tail || cursor != second.NextOffset {
+		t.Fatalf("final /read = (%q,%d), want (%q,%d)", got, cursor, echo+"partial"+tail, second.NextOffset)
 	}
 }
 

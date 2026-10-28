@@ -1,0 +1,266 @@
+/* mockup: docs/mockups/repo-access.html */
+
+.access h2 {
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+.access .sub {
+  max-width: 60ch;
+}
+.access .btn-sm {
+  height: 34px;
+  padding: 0 13px;
+  font-size: 13px;
+  border-radius: 9px;
+}
+
+.access .summary {
+  margin-bottom: 28px;
+}
+.access .chip .dot.pending {
+  background: var(--active);
+}
+.access .chip .dot.allowed {
+  background: var(--ok);
+}
+.access .chip.scope {
+  margin-left: auto;
+  border-style: dashed;
+  border-color: var(--line-2);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.access .sec-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 12px;
+}
+.access .sec-head .hint {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.access .block {
+  margin-bottom: 34px;
+}
+
+.access .req-list {
+  display: grid;
+  gap: 12px;
+}
+.access .req {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 16px;
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 16px 18px;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--active) 6%, transparent),
+    0 18px 40px -30px color-mix(in srgb, var(--active) 35%, transparent);
+}
+.access .req-repo {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 16px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.access .req-repo .owner {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+.access .req-meta {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.access .req-meta b {
+  color: var(--text-dim);
+  font-weight: 500;
+}
+.access .tag {
+  display: inline-flex;
+  align-items: center;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--line-2);
+  color: var(--text-dim);
+}
+.access .req-reason {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--ink-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 9px 12px;
+  overflow-wrap: anywhere;
+}
+.access .req-reason::before {
+  content: "Reason · ";
+  color: var(--text-faint);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+}
+.access .req-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+.access .req-actions .row {
+  display: flex;
+  gap: 8px;
+}
+.access .req-actions .note {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.access .req.already {
+  box-shadow: none;
+  border-style: dashed;
+}
+.access .req.already .note {
+  color: var(--ok);
+}
+
+.access .table {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+.access .t-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) minmax(200px, 1.2fr) 150px 96px;
+  gap: 14px;
+  align-items: center;
+  padding: 13px 18px;
+  border-top: 1px solid var(--line);
+}
+.access .t-row:first-child {
+  border-top: 0;
+}
+.access .t-head {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  background: var(--ink-2);
+}
+.access .t-repo {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+.access .t-src {
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.access .t-src .mono {
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+.access .t-when {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.access .t-act {
+  text-align: right;
+}
+
+.access .add {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 14px 18px;
+  border-top: 1px solid var(--line);
+  background: var(--ink-2);
+}
+.access .add-field {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.access .add-field:focus-within {
+  border-color: var(--frozen);
+}
+.access .add-field .pre {
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+.access .add-field input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: inherit;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 13.5px;
+}
+.access .add .scope-note {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.access .empty {
+  padding: 22px 18px;
+  color: var(--text-faint);
+  font-size: 13px;
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .access.pad {
+    padding: 22px 16px 48px;
+  }
+  .access .chip.scope {
+    margin-left: 0;
+  }
+  .access .sec-head {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .access .req {
+    grid-template-columns: 1fr;
+  }
+  .access .req-actions {
+    align-items: stretch;
+  }
+  .access .t-row {
+    grid-template-columns: 1fr auto;
+  }
+  .access .t-src,
+  .access .t-when,
+  .access .t-head {
+    display: none;
+  }
+  .access .add {
+    flex-wrap: wrap;
+  }
+}

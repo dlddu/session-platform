@@ -69,12 +69,28 @@
 
   정상 UI 경로는 `GET /sessions/{id}/stream?offset=N`의 workspace 수명 SSE다. 실행이 끝날 때까지 기다리지 않고 안전하게 확정된 새 bytes마다 `event: output`을 보낸다. event id는 서버가 발급한 `nextOffset`이고 data는 `{offset,payloadBase64,nextOffset}`이다. base64는 정확한 byte 범위·길이·overlap 검증을 보존하기 위한 wire encoding이며 UTF-8 rune 중간 cursor를 허용하기 위한 것이 아니다. 증분 redaction을 마친 Claude 저장 출력은 valid UTF-8이고 모든 서버 발급 cursor와 event 경계는 code-point 경계다. 재연결 요청에 `Last-Event-ID`가 있으면 query `offset`보다 우선한다. 연결은 한 invocation 완료로 닫히지 않으며 run/queue 상태 event도 만들지 않는다. comment keepalive는 연결만 유지하고 output cursor나 `lastAccess`를 바꾸지 않는다. stream은 passive 관찰 경로라 active/idle의 기존 pod만 읽고 상태를 승격하거나 snapshot을 복원하지 않으며 `lastAccess`도 touch하지 않는다.
 
-  누적 대상은 stdout stream-json에서 순서대로 투영한 assistant `text_delta`와 diagnostic stderr다. raw JSONL과 delta를 중복하는 최종 result는 누적하지 않는다. credential literal과 불완전 UTF-8 suffix는 다음 runner write까지 보류할 수 있으며, 한 번 cursor로 노출한 bytes는 이후 절대 다시 쓰지 않는다. 요청 cursor가 현재 보존 길이보다 크면 stream은 출력 대신 `event: reset`, `id=currentLength`, `{"nextOffset":currentLength}`를 보낸다. 브라우저는 미완성 decoder state를 버리고 `POST /read`의 `offset=0` 전체 이력으로 콘솔을 교체한 뒤 그 read의 `nextOffset`에서 stream을 다시 연다. SSE reset 신호 자체는 passive지만 이 `POST /read` 복구는 일반 Read API이므로 idle을 active로 승격하고 `lastAccess`를 갱신할 수 있다. 전송 오류에서는 native 자동 재접속을 먼저 닫고 세션 상태를 확인한다. active/idle이면 마지막 cursor로 backoff 재연결하고, snapshot이면 자동 stream/read로 복원하지 않고 Restore 화면으로 이동한다. 즉 워크로드 타입이 달라도 **보존·커서 계약은 동일**하고, 그 안에 담기는 내용만 쉘 출력과 에이전트 출력으로 갈린다.
+  누적 대상은 stdout stream-json에서 순서대로 투영한 assistant `text_delta`와 diagnostic stderr다. raw JSONL과 delta를 중복하는 최종 result는 누적하지 않는다. 각 invocation은 **turn 마커**로 감싸여, 클라이언트가 바이트열만으로 write마다 입력과 출력을 갈라 볼 수 있다 — 쉘에서 PTY echo가 입력을 출력에 남기는 것에 해당하는 입력 기록이다. 마커는 RS(`0x1E`)로 시작해 개행으로 끝나는 한 줄이고, 한 turn은 다음 순서로 기록된다.
+
+  ```
+  0x1E "session-platform input seq=<n> at=<RFC3339 UTC 초>" LF   <프롬프트> LF
+  0x1E "session-platform output seq=<n>" LF                      <assistant text·stderr·platform notice>
+  0x1E "session-platform end seq=<n> status=<ok|error|timeout|canceled> at=<RFC3339 UTC 초>" LF
+  ```
+
+  - **RS는 마커만 쓴다** — 프롬프트·투영된 출력·platform notice에서 RS를 제거하고 저장하므로, 바이트열의 RS는 언제나 마커의 시작이다. 마커 줄은 한 번의 append로 기록되어 read 응답이 마커 한가운데서 끊기지 않는다(SSE chunk 경계는 끊을 수 있어 클라이언트는 개행 전의 RS 조각을 보류한다).
+  - **input 블록**: 큐에서 꺼내 실행을 시작하는 시점에 input 마커·프롬프트·output 마커를 한 번에 기록한다. 그래서 아직 대기 중인 프롬프트는 보이지 않는다. 프롬프트는 끝 개행을 걷고 개행 하나로 닫으며, 출력과 같은 credential redaction·UTF-8 정규화를 거친다.
+  - **end 마커**: 출력 sink를 모두 flush한 뒤 기록한다. `status`는 성공(`ok`, wait-delay 종료 포함)·실행 시간 초과(`timeout`)·agent 종료로 인한 취소(`canceled`)·그 밖의 실패(`error`)다. 출력이 개행으로 끝나지 않았으면 마커 앞에 개행을 붙인다(input 마커 앞도 같다).
+  - **seq**는 세션 안에서 1부터 늘어나는 turn 번호다. 복원 시 보존된 출력의 input 마커 수에서 이어 센다.
+  - 마커는 세션 256 MiB 한도에는 포함되지만 실행당 16 MiB 출력 quota에는 포함되지 않는다. 한도가 차면 마커도 더 기록되지 않으므로 마지막 turn에 end가 없을 수 있다.
+
+  credential literal과 불완전 UTF-8 suffix는 다음 runner write까지 보류할 수 있으며, 한 번 cursor로 노출한 bytes는 이후 절대 다시 쓰지 않는다. 요청 cursor가 현재 보존 길이보다 크면 stream은 출력 대신 `event: reset`, `id=currentLength`, `{"nextOffset":currentLength}`를 보낸다. 브라우저는 미완성 decoder state를 버리고 `POST /read`의 `offset=0` 전체 이력으로 콘솔을 교체한 뒤 그 read의 `nextOffset`에서 stream을 다시 연다. SSE reset 신호 자체는 passive지만 이 `POST /read` 복구는 일반 Read API이므로 idle을 active로 승격하고 `lastAccess`를 갱신할 수 있다. 전송 오류에서는 native 자동 재접속을 먼저 닫고 세션 상태를 확인한다. active/idle이면 마지막 cursor로 backoff 재연결하고, snapshot이면 자동 stream/read로 복원하지 않고 Restore 화면으로 이동한다. 즉 워크로드 타입이 달라도 **보존·커서 계약은 동일**하고, 그 안에 담기는 내용만 쉘 출력과 에이전트 출력으로 갈린다.
 
   Claude 누적 scrollback은 terminal marker를 포함해 **256 MiB**로 제한한다. 다음 출력이 이 경계를 넘기려는 순간 기존 bytes를 다시 쓰지 않고 남은 prefix와 `[session-platform: session output limit reached; further prompts are disabled]`를 append해 닫는다. 따라서 이미 발급한 byte offset은 그대로 유효하다. 이 전에 수락된 queued prompt는 끝까지 실행하되 이후 출력은 버리고, terminal marker 뒤의 새 write는 `507 Insufficient Storage`로 거부한다.
 - **달성 가치**: V3, V4
 - **구체화 대상**: AC-C2의 JSON read와 같은 보존 cursor를 사용하는 `claude-code` live output 구체화
-- **검증 방법**: write 후 process가 종료되기 전에 둘 이상의 SSE output delta가 순서대로 도착하고, event id/data cursor와 decoded byte 수가 일치하며 모든 cursor가 UTF-8 code-point 경계임을 확인한다. 중간에 연결을 끊은 뒤 `Last-Event-ID`로 재접속해 누락·중복 없이 이어 받고, 동일 cursor의 POST read가 같은 저장 bytes를 valid UTF-8로 반환하며 `offset=0`은 전체 이력을 반환함을 확인한다. current length보다 큰 cursor에는 reset이 발급되고 SPA가 decoder state 폐기→read(0) 화면 교체→새 cursor stream 순으로 복구해야 한다. runner write가 UTF-8 rune이나 credential 중간에서 갈려도 잘못된 문자나 secret이 한 번도 노출되지 않아야 한다. 축소한 결정적 limit로 기존 커서를 발급한 뒤 256 MiB와 같은 경계 로직을 넘겨 live terminal marker·커서 불변·accepted queue drain·후속 507을 검증한다.
+- **검증 방법**: write 후 process가 종료되기 전에 둘 이상의 SSE output delta가 순서대로 도착하고, event id/data cursor와 decoded byte 수가 일치하며 모든 cursor가 UTF-8 code-point 경계임을 확인한다. 중간에 연결을 끊은 뒤 `Last-Event-ID`로 재접속해 누락·중복 없이 이어 받고, 동일 cursor의 POST read가 같은 저장 bytes를 valid UTF-8로 반환하며 `offset=0`은 전체 이력을 반환함을 확인한다. current length보다 큰 cursor에는 reset이 발급되고 SPA가 decoder state 폐기→read(0) 화면 교체→새 cursor stream 순으로 복구해야 한다. runner write가 UTF-8 rune이나 credential 중간에서 갈려도 잘못된 문자나 secret이 한 번도 노출되지 않아야 한다. 각 실행이 input·output·end 마커로 실행 순서대로 감싸이고 seq가 1부터 늘며 복원 후 이어지고, 프롬프트에 든 credential literal도 치환되며, 프롬프트·출력에 섞인 RS가 제거되고, 실패한 실행의 end가 `status=error`, 개행 없이 끝난 출력 뒤에 개행이 붙음을 확인한다. 축소한 결정적 limit로 기존 커서를 발급한 뒤 256 MiB와 같은 경계 로직을 넘겨 live terminal marker·커서 불변·accepted queue drain·후속 507을 검증한다.
+
+> ✅ **구현 결정 (turn 마커, 2026-10-25 — 같은 날 앞선 `▸` echo를 대체)**: 입력 기록은 CLI가 HOME에 남기는 대화 기록 파일을 읽어 오지 않고 agent가 같은 scrollback에 직접 append한다. 대화 기록 파일은 CLI마다 형식이 다르고 문서화되지 않았으며, offset 공간이 출력과 달라 순서를 맞추려면 별도 병합이 필요하다. 같은 scrollback에 두면 커서·SSE·`offset=0` replay·256 MiB 한도·아카이브가 그대로 적용되고 `claude-code`·`approval-gated`·`minimax-code`가 같은 worker 경로로 함께 얻는다. 처음 넣은 `▸ <프롬프트>` 줄은 사람이 읽기엔 충분했지만 입력과 출력의 경계를 기계가 가를 수 없어(프롬프트·응답이 같은 모양의 줄을 담을 수 있다), PocketAide가 write마다 입력/출력을 접어 보이려면 경계가 필요했다. 그래서 출력에 나오지 않는 RS 센티널을 쓰는 마커로 바꿨다. 사람이 읽는 표현은 클라이언트가 만든다 — SPA는 마커를 `▸ <프롬프트>`로 바꿔 그리고 실패한 turn에 `◆ turn ended: <status>`를 덧붙인다.
 
 ### AC-E4: 대화 연속성 = pod에 지속되는 대화 기록
 - **설명**: 같은 세션에 대한 연속된 write는 **하나의 이어지는 대화**로 처리된다. 각 실행은 원샷이지만, 클로드 코드 CLI가 pod 파일시스템에 남기는 대화 기록을 다음 실행이 이어받으므로, N번째 프롬프트는 앞서 **성공한** 프롬프트·응답을 문맥으로 갖는다. 성공한 첫 실행까지는 새 대화 모드이고 그 이후 write부터 재개(resume) 모드다(첫 실행 실패·timeout은 resume 상태를 만들지 않는다). 세션의 작업 디렉터리도 실행 간 유지되어, 이전 실행이 만든 파일을 다음 실행이 그대로 본다.
@@ -113,5 +129,7 @@
 > ✅ **구현 결정 (모델 정책, 2026-08-08; 2026-08-09 개정)**: model은 workload type과 함께 생성 시 확정되어 불변이다. `platform-default`는 특정 공급자 모델 버전을 API에 하드코딩하지 않는 세션 메타데이터 별칭이다. 이 별칭의 유효 모델은 credentials Secret의 optional `model` 키로 운영자가 선택하며, 키가 없거나 비면 설치된 Claude Code CLI의 기본 선택에 위임한다. 구체 세션 model은 literal 값으로 이 플랫폼 기본값보다 우선한다.
 
 > ✅ **구현 결정 (모델 카탈로그, 2026-08-09)**: optional `model`과 `models`는 control-plane rollout 단위의 UI default와 soft catalog다. `GET /api/v1/config`가 concrete default 또는 fallback alias와 catalog를 공개하되 Create Session API의 allowlist로 사용하지 않으며, 빈 catalog는 기존 free-text 입력을 보존한다.
+
+> ✅ **구현 결정 (워크로드 타입 목록, 2026-10-23)**: `GET /api/v1/config`가 `workloadTypes` 배열로 이 배포가 생성할 수 있는 타입(셸은 항상, 나머지는 이미지가 설정된 것만)을 표시 순서대로 공개한다. 각 항목은 `type`·`label`·`description`·`takesModel`·`input`(`prompt`|`terminal`)·`defaultModel`·`models`이고, `defaultModel`·`models`의 의미는 위 모델 카탈로그 결정과 같다(`takesModel=false`면 `defaultModel`은 `null`, `models`는 빈 배열). approval-gated는 claude-code Secret의 `model`/`models`를 그대로 보이고, minimax-code는 control plane이 그 Secret을 읽지 않으므로 `platform-default`와 빈 catalog다. 외부 클라이언트는 이 목록으로 타입 선택과 생성 요청 검증을 하므로 타입 추가에 클라이언트 배포가 필요 없다. 기존 `claudeCode` 필드는 하위 호환을 위해 유지한다. 목록은 표시용이며 Create Session API의 검증 범위를 바꾸지 않는다.
 
 > ✅ **구현 결정 (이미지/모드, 2026-08-08)**: 하나의 data-plane 이미지에 PTY shell, CRIU, Claude Code CLI를 포함하고 `DATA_PLANE_WORKLOAD`로 시작 모드를 분기한다. Kubernetes pod label/env와 control-plane의 immutable workload spec이 선택한 모드를 끝까지 전달한다.

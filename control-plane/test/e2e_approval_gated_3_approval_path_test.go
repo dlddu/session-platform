@@ -3,9 +3,9 @@
 // 검증 시나리오: approval-gated-workload.md#시나리오 3
 //
 // AC-F3 (docs/prd/approval-gated-workload.md), asserted on the deployed SUT.
-// What this file buys — and the two branches it deliberately leaves unbought,
-// both held by the blocker `FETCH-ORIGIN` — is docs/test/e2e.md: the mapping row
-// the line above names, and its §「남은 미검증 분기」.
+// What this file buys — and the one branch it still leaves unbought — is
+// docs/test/e2e.md: the mapping row the line above names, and its
+// §「남은 미검증 분기」.
 package e2e_test
 
 import (
@@ -25,29 +25,59 @@ const (
 	// written out rather than imported for the reason e2e_f1 gives.
 	f3AwaitingPrefix = "[session-platform: awaiting approval — "
 	f3ApprovedPrefix = "[session-platform: approval approved — "
-	// The directive grammar is deploy/e2e-anthropic-fake.yaml's.
-	f3Prompt         = "e2e-tool:" + providerToolName + `:{"url":"https://example.test/doc"}`
+	// The origin deploy/fetch-origin.yaml stands, addressed by its Service name.
+	// Its header owns why that address is plain http.
+	f3OriginBase     = "http://fetch-origin:8080"
 	f3MarkerToolName = "web_fetch_get"
 	// data-plane/cmd/agent/session_mcp_tools.go requestIDPrefix, same reason.
 	f3RequestIDPrefix = "req-"
 	// 60s is the CLI's ceiling on one MCP tool call — it cancels there rather
 	// than waiting longer, and that number lives only in its behaviour.
 	f3MarkerBudget = 90 * time.Second
+	// The decision notice is published *before* the outbound call is made, so
+	// the approval marker is not evidence that the GET already happened. This
+	// is how long the call itself is given after that marker.
+	f3FetchBudget = 60 * time.Second
+	// How long "exactly one" is held open after the first arrival, so a second
+	// call would have somewhere to show up.
+	f3FetchSettle = 5 * time.Second
 )
+
+// f3DocPath keys the fetch to this session: one origin serves the whole
+// cluster, so "exactly once" is only meaningful scoped to a caller. A path
+// segment rather than a query string — the URL travels through a prompt, and a
+// 32-hex session id carries nothing that anything on that trip would expand.
+func f3DocPath(sessionID string) string { return "/doc/" + sessionID }
+
+// The directive grammar is deploy/e2e-anthropic-fake.yaml's.
+func f3PromptFor(sessionID string) string {
+	return "e2e-tool:" + providerToolName +
+		`:{"url":"` + f3OriginBase + f3DocPath(sessionID) + `"}`
+}
+
+// f3OriginEntry is one line of the origin's own access log.
+type f3OriginEntry struct {
+	Method string `json:"method"`
+	URL    string `json:"url"`
+}
 
 type f3Session struct {
 	typedSession
-	cs  kubernetes.Interface
-	cfg *rest.Config
-	ns  string
+	cs       kubernetes.Interface
+	cfg      *rest.Config
+	ns       string
+	approver *pocketAideApprover
 }
 
 func newF3Session(t *testing.T) f3Session {
 	t.Helper()
 	cs, cfg, ok := kubeClient(t)
 	if !ok {
-		t.Skip("no cluster access; the gate is driven through the helper pod")
+		t.Skip("no cluster access; the approver reaches PocketAide through a port-forward")
 	}
+	// Logged in and registered before the session exists, so the gate's first
+	// request is never refused for want of a caller.
+	approver := newPocketAideApprover(t, cs, cfg)
 	status, s := createTyped(t, map[string]any{
 		"name": uniqueName(t), "workloadType": "approval-gated",
 	})
@@ -59,38 +89,67 @@ func newF3Session(t *testing.T) f3Session {
 			t.Logf("cleanup delete %s: status=%d body=%s", s.ID, resp.StatusCode, raw)
 		}
 	})
-	return f3Session{typedSession: s, cs: cs, cfg: cfg, ns: sessionNamespace()}
+	return f3Session{typedSession: s, cs: cs, cfg: cfg, ns: sessionNamespace(), approver: approver}
 }
 
-func (f f3Session) operator(t *testing.T, method, route, body string) string {
+// The wait marker is written as the request is created, so the row can lag it
+// by one PocketAide round trip.
+func (f f3Session) eventuallyPending(t *testing.T, externalID string) pocketAideRequest {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if r, ok := f.approver.pendingByExternalID(t, externalID); ok {
+			return r
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("PocketAide shows no pending request %s to the approver within 30s", externalID)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// originHits is the origin's own access log, read from inside the very
+// container that makes the fetch. Nothing is substituted to observe the call —
+// the origin counts its own visitors, and /access-log is a window onto that
+// count that does not log itself, so reading it cannot manufacture the arrival
+// it reports.
+func (f f3Session) originHits(t *testing.T) []f3OriginEntry {
 	t.Helper()
 	helpers := helperPodsFor(t, f.cs, f.ns, f.ID)
 	if len(helpers) != 1 {
 		t.Fatalf("approval-gated session %s has %d helper pods, want exactly 1", f.ID, len(helpers))
 	}
-	script := `curl -sS --fail-with-body --max-time 20 -X "$1" ` +
-		`-H 'Content-Type: application/json' --data "$3" "$APPROVAL_GATEWAY_URL$2"`
-	return f4Sh(t, f.cs, f.cfg, f.ns, helpers[0].Name, sessionMCPContainer, script, method, route, body)
-}
-
-// Absent is "" rather than a failure: until the CLI reaches the tool there is
-// legitimately no record, and that is not the same answer as "decided".
-func (f f3Session) gatewayStatus(t *testing.T, externalID string) string {
-	t.Helper()
-	raw := f.operator(t, http.MethodGet, "/operator/requests", "")
-	var records []struct {
-		ExternalID string `json:"externalId"`
-		Status     string `json:"status"`
+	script := `curl -sS --fail-with-body --max-time 20 "$1"`
+	raw := f4Sh(t, f.cs, f.cfg, f.ns, helpers[0].Name, sessionMCPContainer, script, f3OriginBase+"/access-log")
+	var entries []f3OriginEntry
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		t.Fatalf("decode the origin's access log: %v raw=%s", err, raw)
 	}
-	if err := json.Unmarshal([]byte(raw), &records); err != nil {
-		t.Fatalf("decode the gateway stand-in's request list: %v raw=%s", err, raw)
-	}
-	for _, r := range records {
-		if r.ExternalID == externalID {
-			return r.Status
+	var mine []f3OriginEntry
+	for _, e := range entries {
+		if e.URL == f3DocPath(f.ID) {
+			mine = append(mine, e)
 		}
 	}
-	return ""
+	return mine
+}
+
+// The approved call is waited for rather than slept on: it rides a CLI round
+// trip and a gateway poll interval, neither of which has a fixed duration.
+func (f f3Session) eventuallyFetched(t *testing.T) []f3OriginEntry {
+	t.Helper()
+	deadline := time.Now().Add(f3FetchBudget)
+	for {
+		if hits := f.originHits(t); len(hits) > 0 {
+			return hits
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("nothing reached %s%s within %s of the approval — PocketAide "+
+				"settled APPROVED, so what is missing is the outbound call itself",
+				f3OriginBase, f3DocPath(f.ID), f3FetchBudget)
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 func f3Marker(t *testing.T, buf, prefix string) (tool, externalID string) {
@@ -114,16 +173,12 @@ func f3Marker(t *testing.T, buf, prefix string) (tool, externalID string) {
 func TestApprovalGatedApprovalPath_WriteReturnsBeforeTheGateAndTheWaitIsAnnounced(t *testing.T) {
 	f := newF3Session(t)
 
-	// One stand-in serves the whole cluster and defaultStatus is mutable state
-	// on it, so this is what makes the wait below independent of what ran before.
-	f.operator(t, http.MethodPost, "/operator/policy", `{"defaultStatus":"PENDING"}`)
-
 	// Opened before the write, not after: the stream has to be attached before
 	// the round trip starts or the bytes it misses are the ones compared below.
 	stream := s6Open(t, f.ID, "?offset=0", "", f3MarkerBudget+30*time.Second)
 
 	started := time.Now()
-	writeShell(t, f.ID, f3Prompt)
+	writeShell(t, f.ID, f3PromptFor(f.ID))
 	writeTook := time.Since(started)
 
 	waiting := f3EventuallyMarker(t, f.ID, f3AwaitingPrefix)
@@ -155,8 +210,26 @@ func TestApprovalGatedApprovalPath_WriteReturnsBeforeTheGateAndTheWaitIsAnnounce
 	}
 	t.Logf("write returned in %s; the gate was still waiting at %s", writeTook, time.Since(started))
 
-	if got := f.gatewayStatus(t, externalID); got != "PENDING" {
-		t.Fatalf("the gateway holds request %s as %q, want PENDING before anyone decides", externalID, got)
+	request := f.eventuallyPending(t, externalID)
+	if request.Status != "PENDING" {
+		t.Fatalf("PocketAide holds request %s as %q, want PENDING before anyone decides", externalID, request.Status)
+	}
+	// The row the approver sees is the one the helper pod's code built: named
+	// for this platform, and describing the very URL the agent asked for.
+	if request.RequesterName != "session-platform" {
+		t.Fatalf("the request names its requester %q, want session-platform", request.RequesterName)
+	}
+	if !strings.Contains(request.Context, f3OriginBase+f3DocPath(f.ID)) {
+		t.Fatalf("the approval context %q does not name the URL the tool would fetch", request.Context)
+	}
+
+	// The gate's whole point, from the upstream's side: while the request is
+	// held, the origin has seen nothing. This is not vacuous — the origin is
+	// reachable from this container, and the same assertion at the end of this
+	// test observes the arrival that proves it.
+	if hits := f.originHits(t); len(hits) != 0 {
+		t.Fatalf("the origin was already visited %d time(s) while the request was still "+
+			"PENDING, want 0 before a decision: %+v", len(hits), hits)
 	}
 
 	streamed, bounds := f3DrainUntil(t, stream, f3AwaitingPrefix)
@@ -187,8 +260,7 @@ func TestApprovalGatedApprovalPath_WriteReturnsBeforeTheGateAndTheWaitIsAnnounce
 		}
 	}
 
-	f.operator(t, http.MethodPost, "/operator/decide",
-		`{"externalId":"`+externalID+`","status":"APPROVED"}`)
+	f.approver.approve(t, request.ID)
 
 	approved := f3EventuallyMarker(t, f.ID, f3ApprovedPrefix)
 	decidedTool, decidedID := f3Marker(t, approved.Payload, f3ApprovedPrefix)
@@ -206,8 +278,28 @@ func TestApprovalGatedApprovalPath_WriteReturnsBeforeTheGateAndTheWaitIsAnnounce
 	if n := strings.Count(approved.Payload, f3ApprovedPrefix); n != 1 {
 		t.Fatalf("the buffer carries %d approval decisions, want exactly 1", n)
 	}
-	if got := f.gatewayStatus(t, externalID); got != "APPROVED" {
-		t.Fatalf("the gateway holds request %s as %q after the decision, want APPROVED", externalID, got)
+	if got := f.approver.get(t, request.ID).Status; got != "APPROVED" {
+		t.Fatalf("PocketAide holds request %s as %q after the decision, want APPROVED", externalID, got)
+	}
+
+	// And now the other side of the gate: the approval is what lets the call
+	// out, and it lets exactly one out. The marker above cannot stand in for
+	// this — it is published before the call is made.
+	hits := f.eventuallyFetched(t)
+	if len(hits) != 1 {
+		t.Fatalf("the origin recorded %d visits for this session, want exactly 1 for one "+
+			"approved call: %+v", len(hits), hits)
+	}
+	if hits[0].Method != http.MethodGet {
+		t.Fatalf("the origin recorded a %s, want the GET the tool approves", hits[0].Method)
+	}
+	// A second call would arrive after the first, so the count is re-read once
+	// the session has had time to produce one: "exactly one" has to outlive the
+	// moment the first arrived.
+	time.Sleep(f3FetchSettle)
+	if again := f.originHits(t); len(again) != 1 {
+		t.Fatalf("the origin recorded %d visits %s after the first, want the approved call "+
+			"to be the only one: %+v", len(again), f3FetchSettle, again)
 	}
 }
 

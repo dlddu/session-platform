@@ -1,40 +1,113 @@
 name: e2e
 
-# Full-stack e2e against a kind-deployed SUT (deploy/): build the combined
+# Full-stack e2e against kind-deployed SUTs (deploy/): build the combined
 # control-plane image and the data plane agent image, load them into kind,
 # apply the manifests, then run the Go API suite and the Playwright browser
 # suite against the NodePort-exposed control-plane.
 #
-# Path-filtered to control-plane, data-plane, web, deploy/k8s manifests,
-# e2e scripts, Makefile, and this workflow (plus on-demand). Unrelated PRs do
-# not trigger it; the lint/unit/build jobs in ci.yml still run on every PR.
+# Reusable workflow — ci.yml is the only entry point and calls this for PRs
+# that touch control-plane, data-plane, web, deploy/k8s manifests, e2e scripts,
+# Makefile, or the workflows (and on workflow_dispatch). The file stays at this
+# path on purpose: scripts/check-fidelity-allowlist.py and the reconciler model
+# tbm_session-platform-e2e-mock-policy both scan `.github/workflows/e2e.yml`.
+#
+# Layout: one matrix job, every entry on its **own runner with its own kind
+# SUT** — four API shards and the browser suite. The API suite is ~10 min of
+# serial pod-per-test waiting (no t.Parallel, and it should not get any on a
+# shared SUT: several tests assert cluster-wide invariants such as one pod per
+# session or nothing scheduled beside the control plane, and the serial-queue
+# tests measure timing). Separate SUTs give the speed-up without any test
+# sharing state with another. Shards are a round-robin over the sorted
+# top-level test names (`go test -list`), so new tests are picked up with no
+# table to maintain; with the current durations that balances to within ~10%.
+#
+# Other wall-clock notes:
+#   - The SUT images are built with buildx + the gha layer cache instead of a
+#     cold `docker build` inside up.sh (SKIP_IMAGE_BUILD=1 tells it to only
+#     load them). Every entry reads the cache; only API shard 1 writes it, so
+#     five runners do not race to export the same layers. Actions caches are
+#     branch-scoped, so ci.yml's e2e-image-cache job also exports the same
+#     scopes on every main push — that is what a new PR's first run reads.
+#   - The browser entry starts `playwright install --with-deps` in the
+#     background right after checkout. Its apt step regularly crawls on runner
+#     mirrors (25 MB at ~40 kB/s); overlapping it with the image build, kind
+#     and the SUT rollout hides most of that.
 on:
-  pull_request:
-    paths:
-      - "control-plane/**"
-      - "data-plane/**" # session pods run this multi-workload agent image
-      - "web/**"
-      - "deploy/**"
-      - "k8s/**" # deploy/ overlay builds on the k8s/ base
-      - "scripts/e2e/**"
-      - "Makefile"
-      - ".github/workflows/e2e.yml"
-  workflow_dispatch:
+  workflow_call:
 
 jobs:
   e2e:
-    name: e2e (kind + API + browser)
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      # Let every shard finish: one red shard should not hide another's result.
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "API e2e (shard 1/4)", suite: api, shard: 0, shards: 4, cache-writer: true }
+          - { name: "API e2e (shard 2/4)", suite: api, shard: 1, shards: 4 }
+          - { name: "API e2e (shard 3/4)", suite: api, shard: 2, shards: 4 }
+          - { name: "API e2e (shard 4/4)", suite: api, shard: 3, shards: 4 }
+          - { name: "browser e2e (playwright)", suite: browser }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
+        if: matrix.suite == 'api'
         with:
           go-version: "1.24"
+          cache-dependency-path: control-plane/go.sum
       - uses: actions/setup-node@v4
+        if: matrix.suite == 'browser'
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
+
+      - name: install web deps
+        if: matrix.suite == 'browser'
+        working-directory: web
+        run: npm ci
+
+      # Kick off the browser + system-deps install now and collect it right
+      # before the browser suite (see the header). The runner only reaps
+      # orphaned processes when the job ends, so it survives across steps.
+      - name: start Playwright browser install (background)
+        if: matrix.suite == 'browser'
+        working-directory: web
+        run: |
+          nohup bash -c 'npx playwright install --with-deps chromium \
+              > "$RUNNER_TEMP/playwright-install.log" 2>&1
+            echo $? > "$RUNNER_TEMP/playwright-install.rc"' >/dev/null 2>&1 &
+
+      # Build both SUT images (linux/amd64, the runner's arch) into the local
+      # docker image store under the tags up.sh and the deploy/ overlay expect.
+      # Separate cache scopes from the arm64 GHCR images in ci.yml so the two
+      # architectures never evict each other's layers.
+      - uses: docker/setup-buildx-action@v3
+        id: buildx
+        with:
+          install: false
+          use: false
+      - name: build control-plane image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: control-plane/Dockerfile
+          load: true
+          tags: session-platform/control-plane:dev
+          cache-from: type=gha,scope=e2e-control-plane
+          cache-to: ${{ matrix.cache-writer && 'type=gha,mode=max,scope=e2e-control-plane' || '' }}
+      - name: build data-plane image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: data-plane/Dockerfile
+          load: true
+          tags: session-platform/data-plane:dev
+          cache-from: type=gha,scope=e2e-data-plane
+          cache-to: ${{ matrix.cache-writer && 'type=gha,mode=max,scope=e2e-data-plane' || '' }}
 
       # Creates a kind cluster from deploy/kind-config.yaml (installs kind +
       # kubectl on the runner). cluster_name matches the config so the
@@ -46,10 +119,12 @@ jobs:
           cluster_name: session-platform
           config: deploy/kind-config.yaml
 
-      # Build the combined image, load it into kind, apply deploy/, wait for the
+      # Load the prebuilt images into kind, apply deploy/, wait for the
       # rollouts, and poll the SUT at http://localhost:8080 (host :8080 -> node
       # :30080 via the extraPortMapping). No port-forward needed.
       - name: deploy SUT
+        env:
+          SKIP_IMAGE_BUILD: "1"
         run: make e2e-up
 
       # PROBE (informational, non-blocking): can the agent's in-pod CRIU actually
@@ -64,6 +139,7 @@ jobs:
       # assertions. continue-on-error keeps this duplicate diagnostic from hiding
       # that API-test verdict.
       - name: CRIU probe (in-pod criu viability on this runner)
+        if: matrix.suite == 'api' && matrix.shard == 0
         continue-on-error: true
         run: |
           set -o pipefail
@@ -109,32 +185,53 @@ jobs:
           [ "$phase" = "Succeeded" ]
 
       - name: API e2e (go, -tags=e2e)
+        if: matrix.suite == 'api'
         working-directory: control-plane
         env:
           E2E_BASE_URL: http://localhost:8080
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_TOTAL: ${{ matrix.shards }}
         # -timeout is explicit because go's default is 10 minutes *per package*
         # and this one package provisions a pod per test. The claude-code tests
         # add cold CLI invocations on top of that, so the default stopped being
         # a safe bound; 30m fails a genuinely stuck suite without failing a slow
         # runner. The job itself is still bounded by the workflow default.
-        run: go test -tags=e2e -timeout=30m -v ./test/...
+        run: |
+          set -euo pipefail
+          all=$(go test -tags=e2e -list '^Test' ./test/... | grep -E '^Test' | sort)
+          mine=$(awk -v n="$SHARD_TOTAL" -v i="$SHARD_INDEX" '(NR-1) % n == i' <<<"$all")
+          if [ -z "$mine" ]; then
+            echo "::error::shard $((SHARD_INDEX + 1))/$SHARD_TOTAL selected no tests"
+            exit 1
+          fi
+          echo "shard $((SHARD_INDEX + 1))/$SHARD_TOTAL runs $(wc -l <<<"$mine") of $(wc -l <<<"$all") tests:"
+          echo "$mine"
+          go test -tags=e2e -timeout=30m -v -run "^($(paste -sd'|' <<<"$mine"))\$" ./test/...
 
-      - name: install web deps
-        working-directory: web
-        run: npm ci
-
-      - name: install Playwright browser
-        working-directory: web
-        run: npx playwright install --with-deps chromium
+      - name: install Playwright browser (collect background install)
+        if: matrix.suite == 'browser'
+        run: |
+          rc_file="$RUNNER_TEMP/playwright-install.rc"
+          for _ in $(seq 1 180); do
+            [ -f "$rc_file" ] && break
+            sleep 5
+          done
+          cat "$RUNNER_TEMP/playwright-install.log" || true
+          if [ -f "$rc_file" ] && [ "$(cat "$rc_file")" = 0 ]; then
+            exit 0
+          fi
+          echo "::warning::background Playwright install did not finish cleanly — retrying in the foreground"
+          cd web && npx playwright install --with-deps chromium
 
       - name: browser e2e (playwright)
+        if: matrix.suite == 'browser'
         working-directory: web
         env:
           E2E_BASE_URL: http://localhost:8080
         run: npx playwright test
 
       - name: upload Playwright report
-        if: ${{ !cancelled() }}
+        if: ${{ matrix.suite == 'browser' && !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
@@ -142,7 +239,7 @@ jobs:
           retention-days: 7
 
       - name: upload Playwright traces
-        if: failure()
+        if: ${{ matrix.suite == 'browser' && failure() }}
         uses: actions/upload-artifact@v4
         with:
           name: playwright-traces

@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
 func TestParseClaudeCodeDefaultModel(t *testing.T) {
@@ -169,5 +171,34 @@ func TestLoadConfigApprovalGatedArchiveGate(t *testing.T) {
 				t.Errorf("approvalGatedArchiveEnabled = %v, want %v", cfg.approvalGatedArchiveEnabled, tt.wantApprovalAG)
 			}
 		})
+	}
+}
+
+func TestOfferedWorkloadTypesFollowConfiguredImages(t *testing.T) {
+	offered := func(cfg config) map[session.WorkloadType]bool {
+		got := map[session.WorkloadType]bool{}
+		for _, w := range cfg.offeredWorkloadTypes() {
+			got[w] = true
+		}
+		return got
+	}
+	if got := offered(config{}); len(got) != 1 || !got[session.WorkloadTypeShell] {
+		t.Fatalf("no images: offered = %v, want shell only", got)
+	}
+	got := offered(config{
+		dataPlaneClaudeCodeImage:    "img",
+		dataPlaneApprovalGatedImage: "img",
+		miniMax:                     miniMaxConfig{image: "img"},
+	})
+	for _, w := range []session.WorkloadType{
+		session.WorkloadTypeShell, session.WorkloadTypeClaudeCode,
+		session.WorkloadTypeApprovalGated, session.WorkloadTypeMiniMaxCode,
+	} {
+		if !got[w] {
+			t.Errorf("all images set: %q not offered", w)
+		}
+	}
+	if got := offered(config{miniMax: miniMaxConfig{image: "img"}}); len(got) != 2 || !got[session.WorkloadTypeMiniMaxCode] {
+		t.Fatalf("minimax image only: offered = %v, want shell + minimax-code", got)
 	}
 }

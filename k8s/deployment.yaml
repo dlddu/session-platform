@@ -4,7 +4,7 @@
 # rbac.yaml) and provisions session pods in this same namespace, resolving the
 # namespace from the mounted service account (no SESSION_NAMESPACE env needed).
 #
-# 이미지는 .github/workflows/docker-build-push.yaml 이 커밋 SHA 태그로 발행하고,
+# 이미지는 .github/workflows/ci.yml 의 이미지 job 들이 커밋 SHA 태그로 발행하고,
 # 같은 워크플로의 `pin` job 이 main 푸시마다 아래 세 자리(컨테이너 image 1곳 +
 # DATA_PLANE_IMAGE / DATA_PLANE_CLAUDE_CODE_IMAGE env 2곳)를 그 커밋의 SHA 로 바꿔
 # main 에 되커밋한다. 그래서 이 파일이 곧 "운영이 지금 어느 커밋을 돌리는가"의 단일
@@ -38,8 +38,8 @@ spec:
       serviceAccountName: control-plane
       containers:
         - name: control-plane
-          # ⚙️ CI가 관리하는 줄입니다(docker-build-push.yaml 의 `pin` job).
-          image: ghcr.io/dlddu/session-platform:e70d6e407d970b7f5d33273135334350fba04e0f
+          # ⚙️ CI가 관리하는 줄입니다(ci.yml 의 `pin` job).
+          image: ghcr.io/dlddu/session-platform:13d3f7fa2fbd5b518bea644ca14fc71d967d841c
           ports:
             - containerPort: 8080
           env:
@@ -50,7 +50,7 @@ spec:
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다(env value 라 kustomize 의
             # images 변환이 닿지 않는 자리다).
             - name: DATA_PLANE_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:e70d6e407d970b7f5d33273135334350fba04e0f"
+              value: "ghcr.io/dlddu/session-platform-data-plane:13d3f7fa2fbd5b518bea644ca14fc71d967d841c"
             # mock-exception: CRIU-GATE — 검증된 런타임이 설 때까지 off가 프로덕션의 의도된
             # 동작이다(그 경로에서 쉘 동결/복원은 no-op 스텁). e2e 오버레이(deploy/)만 on으로
             # 올려 실 경로를 탄다. 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
@@ -60,20 +60,15 @@ spec:
               value: "false"
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다.
             - name: DATA_PLANE_CLAUDE_CODE_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:e70d6e407d970b7f5d33273135334350fba04e0f"
+              value: "ghcr.io/dlddu/session-platform-data-plane:13d3f7fa2fbd5b518bea644ca14fc71d967d841c"
             # approval-gated 워크로드 파드와 그 세션 전용 헬퍼 파드(MCP·credential-proxy
             # 컨테이너)가 쓰는 이미지다(AC-F1/AC-F4). 같은 data plane 에이전트 바이너리가
             # DATA_PLANE_WORKLOAD 로 `approval-gated`·`mcp` 경로를 모두 태우므로
             # claude-code 와 같은 이미지를 가리킨다. 비어 있으면 이 타입의 세션 생성이
             # 실패한다(main.go 의 기본값이 빈 문자열) — 그래서 여기서 명시적으로 켠다.
-            #
-            # 게이트웨이 자격 증명 Secret 이름은 코드 기본값 `approval-gateway-credentials`
-            # 를 그대로 쓰므로 APPROVAL_GATEWAY_SECRET env 는 두지 않는다. 그 Secret 은
-            # flux-cd-apps 의 apps/session-platform/approval-gateway-credentials-external-secret.yaml
-            # 이 SSM 에서 동기화한다(AC-F6 — 값은 헬퍼 pod 의 MCP 컨테이너만 받는다).
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다.
             - name: DATA_PLANE_APPROVAL_GATED_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:e70d6e407d970b7f5d33273135334350fba04e0f"
+              value: "ghcr.io/dlddu/session-platform-data-plane:13d3f7fa2fbd5b518bea644ca14fc71d967d841c"
             # The required base-url/auth-token keys are referenced only by the
             # localhost credential-proxy sidecar. The required k3s-mcp-token is
             # referenced only by the Claude tool-running container. A
@@ -136,6 +131,36 @@ spec:
                 secretKeyRef:
                   name: checkpoint-s3
                   key: prefix
+            # minimax-code 워크로드(AC-G1~G4). 이 세 항목은 env 목록 **맨 끝**에 둔다 —
+            # deploy/ 오버레이가 env 를 인덱스로 잡고 있어서, 앞에 끼워 넣으면 그쪽 패치가
+            # 엉뚱한 항목을 덮어쓴다.
+            #
+            # 이미지는 같은 멀티 워크로드 data plane 이미지다(DATA_PLANE_WORKLOAD 로 분기).
+            # 문자열이 위 이미지와 같아서 CI `pin` job 의 sed 가 이 자리도 함께 SHA 로 고정한다.
+            - name: DATA_PLANE_MINIMAX_CODE_IMAGE
+              value: "ghcr.io/dlddu/session-platform-data-plane:13d3f7fa2fbd5b518bea644ca14fc71d967d841c"
+            # base-url/auth-token(필수)과 model/ca-cert(선택)을 이 타입의 credential-proxy
+            # 사이드카(와 platform-default 세션의 model)만 읽는다 — claude-code Secret 과
+            # 섞이지 않는다. k8s/minimax-code-credentials-secret.example.yaml 참고.
+            # Secret 이 없으면 이 타입의 세션 생성만 실패하고 다른 타입은 영향이 없다.
+            - name: MINIMAX_CODE_CREDENTIALS_SECRET
+              value: "minimax-code-credentials"
+            # 이 타입 전용 데이터 전송 게이트(AC-G4). on 이면 minimax-code 세션의 작업
+            # 디렉터리·대화 기록·출력 아카이브가 위 CHECKPOINT_S3_* 로 간다.
+            # ⚠️ PR 프리뷰 오버레이(flux-cd-apps apps/session-platform-preview)는 S3 를
+            # 주입하지 않으므로 이 이름을 false 로 덮어써야 한다 — 안 그러면 프리뷰의
+            # control plane 이 체크포인트 저장소 없이 기동하다 종료한다. 그 오버레이 변경이
+            # 이 값보다 먼저 들어가 있어야 한다.
+            - name: MINIMAX_CODE_ARCHIVE_ENABLED
+              value: "true"
+            # 승인 게이트(AC-F3)는 PocketAide 다. 이 주소는 approval-gated·minimax-code
+            # 헬퍼 파드의 MCP 컨테이너에만 평문 env 로 전달된다(비밀이 아니다). 인증은
+            # session-mcp 서비스 어카운트의 projected 토큰이고, 그 어카운트가 PocketAide 에
+            # 호출자로 등록돼 있어야 한다 — session-mcp-serviceaccount.yaml 참고.
+            # 비우면 헬퍼 파드는 게이트 없이 떠서 세션 MCP 가 도구를 하나도 내놓지 않는다.
+            # 이 항목도 env 목록 맨 끝에 둔다(위 minimax 항목과 같은 이유).
+            - name: APPROVAL_GATEWAY_URL
+              value: http://pocket-aide.pocket-aide.svc.cluster.local:8080
           readinessProbe:
             httpGet:
               path: /api/v1/healthz

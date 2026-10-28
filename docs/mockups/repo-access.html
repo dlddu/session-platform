@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Repo access — control plane</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0B1116; --ink-2:#0E151B; --surface:#131D24; --surface-2:#18242C; --surface-3:#1E2C35;
+    --line:#26333D; --line-2:#324250;
+    --text:#E8EFF4; --text-dim:#9DACB7; --text-faint:#5E6E79;
+    --active:#FFB43A; --active-soft:#3A2B12;
+    --frozen:#7FCDEA; --frozen-soft:#13313D;
+    --ok:#5FD08A; --danger:#F2616B;
+    --rail:64px; --maxw:1240px;
+    --r:14px; --r-sm:9px;
+    --ease:cubic-bezier(.22,.61,.36,1);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--ink); color:var(--text);
+    font-family:"IBM Plex Sans",system-ui,sans-serif;
+    font-size:14px; line-height:1.5; letter-spacing:.005em;
+    -webkit-font-smoothing:antialiased;
+    overflow:hidden;
+  }
+  .mono{font-family:"IBM Plex Mono",ui-monospace,monospace}
+  button{font-family:inherit;color:inherit;cursor:pointer;border:0;background:none}
+  input{font-family:inherit;color:inherit}
+  :focus-visible{outline:2px solid var(--frozen);outline-offset:2px;border-radius:6px}
+
+  /* ---------- shell (same as index.html) ---------- */
+  .app{display:flex;flex-direction:column;height:100vh}
+  .rail{
+    order:2;height:var(--rail);flex:0 0 var(--rail);background:var(--ink-2);
+    border-top:1px solid var(--line);
+    display:flex;flex-direction:row;align-items:center;
+    padding:0 16px;gap:6px;z-index:30;
+  }
+  .mark{width:34px;height:34px;display:grid;place-items:center;margin-right:14px}
+  .rail-btn{
+    width:40px;height:40px;border-radius:10px;display:grid;place-items:center;
+    color:var(--text-faint);transition:.18s var(--ease);position:relative;
+  }
+  .rail-btn:hover{color:var(--text-dim);background:var(--surface)}
+  .rail-btn.on{color:var(--active);background:var(--surface)}
+  .rail-btn.on::before{content:"";position:absolute;left:9px;right:9px;top:-10px;height:3px;border-radius:2px;background:var(--active)}
+  .rail-btn .count{position:absolute;top:4px;right:3px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;
+    background:var(--active);color:#1c1404;font-size:10px;font-weight:700;display:grid;place-items:center}
+  .rail-spacer{flex:1}
+  .rail-me{width:30px;height:30px;border-radius:50%;background:linear-gradient(140deg,#2b6c7e,#163b46);
+    display:grid;place-items:center;font-size:12px;font-weight:600;color:#cdeaf3;border:1px solid var(--line-2)}
+
+  .viewport{order:1;flex:1;min-width:0;min-height:0;position:relative;overflow:hidden}
+  .screen{position:absolute;inset:0;overflow:auto;opacity:0;visibility:hidden;
+    transform:translateY(8px) scale(.995);transition:opacity .32s var(--ease),transform .32s var(--ease),visibility .32s}
+  .screen.show{opacity:1;visibility:visible;transform:none}
+  .pad{max-width:var(--maxw);margin:0 auto;padding:30px 36px 64px}
+
+  .eyebrow{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--text-faint)}
+  .h-top{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:22px;flex-wrap:wrap}
+  h1{font-family:"Space Grotesk",sans-serif;font-weight:600;font-size:30px;letter-spacing:-.02em;margin:6px 0 0}
+  h2{font-family:"Space Grotesk",sans-serif;font-weight:600;font-size:18px;letter-spacing:-.01em;margin:0}
+  .sub{color:var(--text-dim);font-size:13.5px;margin-top:4px;max-width:60ch}
+
+  .btn{
+    display:inline-flex;align-items:center;gap:9px;padding:0 16px;height:40px;border-radius:11px;
+    font-weight:600;font-size:13.5px;transition:.18s var(--ease);white-space:nowrap;
+  }
+  .btn-sm{height:34px;padding:0 13px;font-size:13px;border-radius:9px}
+  .btn-primary{background:var(--active);color:#1c1404;box-shadow:0 6px 22px -8px rgba(255,180,58,.6)}
+  .btn-primary:hover{filter:brightness(1.06);transform:translateY(-1px)}
+  .btn-ghost{background:var(--surface);border:1px solid var(--line);color:var(--text-dim)}
+  .btn-ghost:hover{border-color:var(--line-2);color:var(--text)}
+  .btn-danger{background:transparent;border:1px solid rgba(242,97,107,.35);color:var(--danger)}
+  .btn-danger:hover{background:rgba(242,97,107,.08)}
+  .btn svg{width:15px;height:15px}
+
+
+  /* summary strip */
+  .summary{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:28px}
+  .chip{display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--line);
+    border-radius:11px;padding:11px 15px}
+  .chip .dot{width:9px;height:9px;border-radius:50%;flex:0 0 9px}
+  .chip b{font-family:"IBM Plex Mono",monospace;font-weight:600;font-size:16px}
+  .chip span{color:var(--text-faint);font-size:11px;letter-spacing:.04em;text-transform:uppercase}
+  .chip.scope{margin-left:auto;border-style:dashed;border-color:var(--line-2);background:transparent;color:var(--text-dim);font-size:12px}
+
+  .sec-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin:0 0 12px}
+  .sec-head .hint{font-size:12px;color:var(--text-faint)}
+  section.block{margin-bottom:34px}
+
+  /* pending request cards */
+  .req-list{display:grid;gap:12px}
+  .req{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center;
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px 18px;
+    box-shadow:0 0 0 1px rgba(255,180,58,.06),0 18px 40px -30px rgba(255,180,58,.35)}
+  .req-repo{font-family:"IBM Plex Mono",monospace;font-size:16px;font-weight:600}
+  .req-repo .owner{color:var(--text-dim);font-weight:500}
+  .req-meta{display:flex;gap:16px;flex-wrap:wrap;margin-top:6px;font-size:12px;color:var(--text-faint)}
+  .req-meta b{color:var(--text-dim);font-weight:500}
+  .tag{display:inline-flex;align-items:center;font-family:"IBM Plex Mono",monospace;font-size:10.5px;
+    letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:6px;border:1px solid var(--line-2);color:var(--text-dim)}
+  .req-reason{margin-top:10px;font-size:13px;color:var(--text);background:var(--ink-2);border:1px solid var(--line);
+    border-radius:var(--r-sm);padding:9px 12px}
+  .req-reason::before{content:"Reason · ";color:var(--text-faint);font-family:"IBM Plex Mono",monospace;font-size:11px}
+  .req-actions{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+  .req-actions .row{display:flex;gap:8px}
+  .req-actions .note{font-size:11px;color:var(--text-faint)}
+  .req.already{box-shadow:none;border-style:dashed}
+  .req.already .note{color:var(--ok)}
+
+  /* allow list table */
+  .table{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+  .t-row{display:grid;grid-template-columns:minmax(220px,1.4fr) minmax(200px,1.2fr) 150px 96px;gap:14px;
+    align-items:center;padding:13px 18px;border-top:1px solid var(--line)}
+  .t-row:first-child{border-top:0}
+  .t-head{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint);background:var(--ink-2)}
+  .t-repo{font-family:"IBM Plex Mono",monospace;font-size:13.5px}
+  .t-src{font-size:12.5px;color:var(--text-dim)}
+  .t-src .mono{color:var(--text-faint);font-size:11.5px}
+  .t-when{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--text-faint)}
+  .t-act{text-align:right}
+
+  .add{display:flex;gap:10px;align-items:center;padding:14px 18px;border-top:1px solid var(--line);background:var(--ink-2)}
+  .field{flex:1;display:flex;align-items:center;gap:8px;height:38px;padding:0 12px;border-radius:10px;
+    background:var(--surface);border:1px solid var(--line)}
+  .field:focus-within{border-color:var(--frozen)}
+  .field .pre{font-family:"IBM Plex Mono",monospace;color:var(--text-faint);font-size:12.5px}
+  .field input{flex:1;background:transparent;border:0;outline:0;font-family:"IBM Plex Mono",monospace;font-size:13.5px}
+  .add .scope-note{font-size:11.5px;color:var(--text-faint);white-space:nowrap}
+
+  .empty{padding:22px 18px;color:var(--text-faint);font-size:13px;text-align:center}
+
+  /* toast (same as index.html) */
+  .toast-wrap{position:fixed;bottom:calc(var(--rail) + 24px);left:50%;transform:translateX(-50%);z-index:60;
+    display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
+  .toast{display:flex;align-items:center;gap:10px;background:var(--surface-2);border:1px solid var(--line-2);
+    padding:11px 16px;border-radius:12px;font-size:13px;box-shadow:0 18px 40px -16px rgba(0,0,0,.6);
+    transform:translateY(10px);opacity:0;transition:.28s var(--ease)}
+  .toast.in{transform:none;opacity:1}
+
+  @media (max-width:760px){
+    .pad{padding:22px 16px 48px}
+    .chip.scope{margin-left:0}
+    .sec-head{flex-direction:column;gap:4px}
+      .req{grid-template-columns:1fr}
+    .req-actions{align-items:stretch}
+    .t-row{grid-template-columns:1fr auto}
+    .t-src,.t-when{display:none}
+    .t-head{display:none}
+    .add{flex-wrap:wrap}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="rail" aria-label="Primary">
+    <div class="mark" title="Session Pods">
+      <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
+        <path d="M15 2.5 26 9v12L15 27.5 4 21V9L15 2.5Z" fill="#FFB43A"/>
+        <path d="M15 9.5 20.5 12.7v5.6L15 21.5 9.5 18.3v-5.6L15 9.5Z" fill="#1c1404"/>
+        <circle cx="15" cy="15.5" r="2.1" fill="#FFB43A"/>
+      </svg>
+    </div>
+    <button class="rail-btn" title="Sessions" aria-label="Sessions" onclick="location.href='index.html'">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+    </button>
+    <button class="rail-btn on" title="Repo access" aria-label="Repo access">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+      <span class="count" id="rail-count">2</span>
+    </button>
+    <div class="rail-spacer"></div>
+    <div class="rail-me" title="You">JD</div>
+  </nav>
+
+  <div class="viewport">
+    <!-- pending requests + allow list. No sign-in screen: the deployment's ingress
+         (Authelia forward-auth) is this screen's door, as for every other screen. -->
+    <section class="screen show" id="screen-main" aria-label="Repo access">
+      <div class="pad">
+        <div class="h-top">
+          <div>
+            <div class="eyebrow">Control plane · Repo access</div>
+            <h1>Repo access</h1>
+            <div class="sub">Private repositories the session MCP may clone. Each entry opens exactly one repository, read-only. Every clone still needs its own approval.</div>
+          </div>
+        </div>
+
+        <div class="summary">
+          <div class="chip"><span class="dot" style="background:var(--active)"></span><b id="pending-count">2</b><span>Pending</span></div>
+          <div class="chip"><span class="dot" style="background:var(--ok)"></span><b id="allowed-count">4</b><span>Allowed</span></div>
+          <div class="chip scope">owner/repo · contents: read · token minted per clone</div>
+        </div>
+
+        <section class="block" aria-label="Pending requests">
+          <div class="sec-head"><h2>Pending requests</h2><span class="hint">Sessions asked to clone these. Nothing opens until you allow it.</span></div>
+          <div class="req-list" id="req-list">
+            <article class="req" data-repo="dlddu/reconciler">
+              <div>
+                <div class="req-repo"><span class="owner">dlddu/</span>reconciler</div>
+                <div class="req-meta">
+                  <span>from <b>minimax 정합성 감지 스킬</b> <span class="mono">761fdbd2</span></span>
+                  <span class="tag">minimax-code</span>
+                  <span>requested <b>2 min ago</b></span>
+                </div>
+                <div class="req-reason">To read data/to-be-models.json and the task records for drift detection.</div>
+              </div>
+              <div class="req-actions">
+                <div class="row">
+                  <button class="btn btn-ghost btn-sm" onclick="decide(this,'reject')">Reject</button>
+                  <button class="btn btn-primary btn-sm" onclick="decide(this,'allow')">Allow</button>
+                </div>
+                <span class="note">Adds this one repository, read-only</span>
+              </div>
+            </article>
+            <article class="req" data-repo="dlddu/feature-doc">
+              <div>
+                <div class="req-repo"><span class="owner">dlddu/</span>feature-doc</div>
+                <div class="req-meta">
+                  <span>from <b>docs review</b> <span class="mono">3c2b0177</span></span>
+                  <span class="tag">approval-gated</span>
+                  <span>requested <b>14 min ago</b></span>
+                </div>
+                <div class="req-reason">Compare docs/prd against backend/ for the AC audit you asked for.</div>
+              </div>
+              <div class="req-actions">
+                <div class="row">
+                  <button class="btn btn-ghost btn-sm" onclick="decide(this,'reject')">Reject</button>
+                  <button class="btn btn-primary btn-sm" onclick="decide(this,'allow')">Allow</button>
+                </div>
+                <span class="note">Adds this one repository, read-only</span>
+              </div>
+            </article>
+          </div>
+          <div class="empty" id="req-empty" hidden>No pending requests.</div>
+        </section>
+
+        <section class="block" aria-label="Allowed repositories">
+          <div class="sec-head"><h2>Allowed repositories</h2><span class="hint">Removing an entry takes effect on the next clone.</span></div>
+          <div class="table" id="allow-table">
+            <div class="t-row t-head"><span>Repository</span><span>Source</span><span>Added</span><span></span></div>
+            <div class="t-row"><span class="t-repo">dlddu/session-platform</span><span class="t-src"><span class="mono">manual</span></span><span class="t-when">2026-10-24</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
+            <div class="t-row"><span class="t-repo">dlddu/flux-cd-apps</span><span class="t-src">request from <span class="mono">a91f03c2</span></span><span class="t-when">2026-10-23</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
+            <div class="t-row"><span class="t-repo">dlddu/pocket-aide</span><span class="t-src"><span class="mono">manual</span></span><span class="t-when">2026-10-21</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
+            <div class="t-row"><span class="t-repo">dlddu/plugin-marketplace</span><span class="t-src">request from <span class="mono">0e44b7d1</span></span><span class="t-when">2026-10-20</span><span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span></div>
+            <form class="add" onsubmit="addRepo(event)">
+              <label class="field"><span class="pre">github.com/</span><input id="add-input" placeholder="owner/repo" autocomplete="off" aria-label="Repository (owner/repo)"></label>
+              <span class="scope-note">read-only · one repository</span>
+              <button class="btn btn-ghost btn-sm" type="submit">Add</button>
+            </form>
+          </div>
+        </section>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<div class="toast-wrap" id="toasts"></div>
+
+<script>
+  function toast(msg){
+    var t=document.createElement('div'); t.className='toast'; t.textContent=msg;
+    document.getElementById('toasts').appendChild(t);
+    requestAnimationFrame(function(){t.classList.add('in')});
+    setTimeout(function(){t.classList.remove('in'); setTimeout(function(){t.remove()},300)},2600);
+  }
+  function counts(){
+    var p=document.querySelectorAll('#req-list .req').length;
+    var a=document.querySelectorAll('#allow-table .t-row:not(.t-head)').length;
+    document.getElementById('pending-count').textContent=p;
+    document.getElementById('allowed-count').textContent=a;
+    var rc=document.getElementById('rail-count'); rc.textContent=p; rc.hidden=p===0;
+    document.getElementById('req-empty').hidden=p!==0;
+  }
+  function appendAllowed(repo, src){
+    var row=document.createElement('div'); row.className='t-row';
+    row.innerHTML='<span class="t-repo"></span><span class="t-src"></span><span class="t-when">2026-10-24</span>'+
+      '<span class="t-act"><button class="btn btn-danger btn-sm" onclick="removeRow(this)">Remove</button></span>';
+    row.querySelector('.t-repo').textContent=repo; row.querySelector('.t-src').textContent=src;
+    var table=document.getElementById('allow-table');
+    table.insertBefore(row, table.querySelector('.t-row:not(.t-head)'));
+  }
+  function decide(btn, kind){
+    var card=btn.closest('.req'), repo=card.dataset.repo;
+    if(kind==='allow'){ appendAllowed(repo,'request'); toast(repo+' allowed (read-only)'); }
+    else { toast('Request for '+repo+' rejected'); }
+    card.remove(); counts();
+  }
+  function removeRow(btn){
+    var row=btn.closest('.t-row'); var repo=row.querySelector('.t-repo').textContent;
+    row.remove(); counts(); toast(repo+' removed — next clone will be refused');
+  }
+  function addRepo(e){
+    e.preventDefault();
+    var input=document.getElementById('add-input'), v=input.value.trim();
+    if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(v)){ toast('Use owner/repo'); return; }
+    appendAllowed(v,'manual'); input.value=''; counts(); toast(v+' allowed (read-only)');
+  }
+</script>
+</body>
+</html>

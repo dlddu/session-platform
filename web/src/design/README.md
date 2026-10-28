@@ -54,10 +54,10 @@
 그리고 복제는 mockup에만 있지 않습니다 — 문서 포털 허브(`docs/index.html`)와 여정 페이지
 (`docs/journeys/*/index.html`)도 같은 값을 자기 `:root`에 갖고 있습니다.
 
-결과적으로 지금 토큰 하나를 바꾸려면 최소 **7**곳 · 최대 **16**곳을 고쳐야 합니다.
+결과적으로 지금 토큰 하나를 바꾸려면 최소 **7**곳 · 최대 **18**곳을 고쳐야 합니다.
 **하나의 숫자가 아닌 것이 핵심입니다** — 복제한 파일마다 갖고 있는 토큰이 달라서, 몇 곳을
 고쳐야 하는지는 *어느 토큰을 바꾸느냐*에 달려 있습니다. `--rail`·`--idle`·`--resume`처럼 mockup만
-쓰는 토큰은 7곳이고, `--ink`·`--line`·`--text`처럼 허브·여정 페이지까지 쓰는 토큰은 16곳입니다.
+쓰는 토큰은 7곳이고, `--ink`·`--line`·`--text`처럼 허브·여정 페이지까지 쓰는 토큰은 18곳입니다.
 상한이 10에서 16으로 오른 것은 2026-09-03 (#56)과 (#59)가 여정 페이지를 각각 3개씩 신설했기 때문입니다.
 이 중복은 알려진 미해소 항목이며 `docs/doc-structure-state.md`의 🟢 위험으로 추적됩니다.
 
@@ -93,6 +93,7 @@ R10이 레포 전수 실측과 이 표를 **양방향으로** 대조합니다 �
 | `docs/journeys/JRN-idle-resume/index.html` | 17 | 0 | DUP | 여정 페이지. 2026-09-03 (#56) lifecycle 클러스터로 신설. `--frozen-soft`까지 복제해 공유 토큰이 하나 더 많다. |
 | `docs/journeys/JRN-manual-freeze/index.html` | 17 | 0 | DUP | 여정 페이지. 위와 같다. |
 | `docs/journeys/JRN-multi-session-switch/index.html` | 17 | 0 | DUP | 여정 페이지. 2026-09-03 (#59) agent 클러스터로 신설. 위와 같다. |
+| `docs/journeys/JRN-repo-access/index.html` | 17 | 0 | DUP | 여정 페이지. 2026-10-24 신설 시 `JRN-session-deletion` 페이지의 인라인 토큰을 복사했다. |
 | `docs/journeys/JRN-session-creation/index.html` | 16 | 0 | DUP | 여정 페이지. 2026-09-03 (#50) 신설 시 허브의 인라인 토큰을 복사했다. |
 | `docs/journeys/JRN-session-deletion/index.html` | 17 | 0 | DUP | 여정 페이지. 위와 같다. |
 | `docs/journeys/JRN-shell-interaction/index.html` | 16 | 0 | DUP | 여정 페이지. 2026-09-03 (#50) 신설 시 허브의 인라인 토큰을 복사했다. |
@@ -100,6 +101,7 @@ R10이 레포 전수 실측과 이 표를 **양방향으로** 대조합니다 �
 | `docs/mockups/gated-workspace.html` | 24 | 0 | DUP | mockup. `agent-workspace.html`의 인라인 토큰을 복사해 만들었다. |
 | `docs/mockups/index.html` | 24 | 0 | DUP | mockup(세션 목록). 정본 `tokens.css`의 이식 원본이다. |
 | `docs/mockups/new-session.html` | 24 | 0 | DUP | mockup. |
+| `docs/mockups/repo-access.html` | 21 | 0 | DUP | mockup(레포 접근). 2026-10-24 `index.html`의 인라인 토큰에서 이 화면이 쓰는 21개만 복사했다. |
 | `docs/mockups/restore.html` | 24 | 0 | DUP | mockup. |
 | `docs/mockups/workspace.html` | 24 | 0 | DUP | mockup. |
 | `docs/reader.html` | 2 | 2 | IND | 마크다운 리더 전용 페이지. 이 시스템과 무관한 자기 팔레트(`--bg`·`--fg`·`--accent`…)를 쓰며 `--line`(`#30363d`)·`--maxw`(`860px`)만 이름이 겹친다. 정본을 따라갈 이유가 없으므로 유지비에서 뺀다. |

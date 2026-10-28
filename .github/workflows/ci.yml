@@ -1,72 +1,138 @@
 name: ci
 
+# 이 레포의 **유일한** CI 진입점. 예전에는 ci.yml · e2e.yml · docs-journey-mockup.yml ·
+# docker-build-push.yaml 네 워크플로가 같은 이벤트에 따로 떠서, 이미지를 세 번 빌드하고
+# (ci 검증용 amd64 · GHCR 발행용 arm64 · e2e 의 kind 로드용) 경로 필터가 걸린 워크플로는
+# 아예 체크가 생기지 않았다. 이제 한 실행 안에서:
+#
+#   changes ──┬─ static-gates · control-plane · data-plane · web · integration · envtest
+#             ├─ e2e                (PR 에서 SUT 경로가 바뀔 때만 — reusable e2e.yml)
+#             └─ journey-prototype  (여정 문서·mockup·하네스가 바뀔 때만)
+#   build-and-push · build-and-push-data-plane ─ pin (main 푸시만)
+#   e2e-image-cache    (main 푸시만 — 새 PR 의 e2e 가 따뜻한 이미지 캐시로 시작하게)
+#
+# 경로 필터는 워크플로 트리거가 아니라 `changes` 잡이 판정하므로, 해당 없는 잡은 "실행
+# 안 됨"이 아니라 skipped 로 남는다(필수 체크로 걸어도 PR 이 영원히 대기하지 않는다).
+#
+# e2e 를 인라인하지 않고 `.github/workflows/e2e.yml` 로 남겨 호출하는 이유: 그 경로는
+# scripts/check-fidelity-allowlist.py 의 스캔 스코프이자 정합성 모델
+# `tbm_session-platform-e2e-mock-policy` as-is 스크립트의 스코프다. 파일을 옮기면 두 곳을
+# 함께 고쳐야 하고, 하나만 고치면 CI 게이트와 감지 루프가 서로 다른 것을 센다.
+
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# 같은 ref 의 이전 실행은 취소한다. main 에서도 취소하는 것은 의도다 — `pin` 이 늦게 끝난
+# 이전 실행이 더 새 SHA 를 덮어써 운영을 되돌리는 경합을 막는다(예전 이미지 워크플로와 동일).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  fidelity:
-    name: e2e fidelity allowlist (docs <-> code seams)
+  changes:
+    name: changes (path filter)
     runs-on: ubuntu-latest
-    # Enforces docs/test/e2e.md's fidelity allowlist against the code: every
-    # fidelity seam in the e2e SUT path must be registered (or accounted for as
-    # a non-seam / an open violation), every registration must exist in code,
-    # and the open-violation count must stay at or below its declared budget so
-    # unapproved web network intercepts can only shrink. Needs no toolchain —
-    # the checker is python3 stdlib only — so it stays the cheapest job here.
+    permissions:
+      contents: read
+      pull-requests: read # paths-filter 가 PR 변경 파일을 API 로 읽는다
+    outputs:
+      # e2e 는 예전처럼 PR(과 수동 실행)에서만 돈다. main 푸시는 이미 PR 에서 검증됐다.
+      e2e: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && steps.filter.outputs.e2e == 'true') }}
+      journey: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.journey == 'true' }}
+      playwright: ${{ steps.pw.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - name: fidelity allowlist check
+      - id: filter
+        if: github.event_name != 'workflow_dispatch'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            e2e:
+              - "control-plane/**"
+              - "data-plane/**"
+              - "web/**"
+              - "deploy/**"
+              - "k8s/**"
+              - "scripts/e2e/**"
+              - "Makefile"
+              - ".github/workflows/e2e.yml"
+              - ".github/workflows/ci.yml"
+            journey:
+              - "docs/journeys/**"
+              - "docs/user-journeys/**"
+              - "docs/mockups/README.md"
+              - "docs/index.html"
+              - "docs/doc-structure-state.md"
+              - "tools/**"
+              - ".github/workflows/ci.yml"
+      # journey 잡의 Playwright 컨테이너 태그를 하네스 락파일에서 읽는다. 태그를 손으로
+      # 박아 두면 의존성 갱신 때 브라우저 빌드와 라이브러리 버전이 조용히 어긋난다.
+      - id: pw
+        run: |
+          v=$(node -p "require('./tools/package-lock.json').packages['node_modules/@playwright/test'].version")
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tools/package-lock.json 에서 @playwright/test 버전을 못 읽음: '$v'"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  static-gates:
+    name: static gates (docs <-> code)
+    runs-on: ubuntu-latest
+    # 툴체인 없이 python3 표준 라이브러리 / sh 만으로 도는 문서↔코드 게이트 넷을 한 잡에
+    # 모았다. 각각 수 초짜리라 잡 넷을 띄우는 러너 기동 비용이 본 작업보다 컸다. 한 게이트가
+    # 실패해도 나머지가 모두 판정을 내도록 뒤 스텝은 `!cancelled()` 로 돈다.
+    steps:
+      - uses: actions/checkout@v4
+
+      # docs/test/e2e.md 의 충실도 허용목록 ↔ e2e SUT 경로의 seam: 모든 seam 이 등재(또는
+      # 비-seam / 미해소 위반으로 회계)되고, 모든 등재가 코드에 있으며, 미해소 위반 수가
+      # 선언된 상한 이하여야 한다 — 승인되지 않은 web 네트워크 인터셉트는 줄어들 수만 있다.
+      - name: e2e fidelity allowlist (docs <-> code seams)
         run: python3 scripts/check-fidelity-allowlist.py
 
-  render-fidelity:
-    name: render fidelity (mockups <-> SPA screens)
-    runs-on: ubuntu-latest
-    # Enforces the mockup <-> implementation seam: every implemented screen and
-    # shell component must declare its mockup (and be registered in
-    # docs/mockups/README.md, both directions), every deviation from the design
-    # system canon must be in the ledger in web/src/design/README.md with a
-    # disposition, and the panel-level structural diff must match what the
-    # checker recomputes -- with budgets that can only shrink. Sibling gate to
-    # `fidelity` above: that one owns *e2e* fidelity (what tests substitute),
-    # this one owns *render* fidelity (whether screens match the mockups). Also
-    # python3 stdlib only, so it needs no toolchain.
-    steps:
-      - uses: actions/checkout@v4
-      - name: render fidelity check
+      # mockup ↔ 구현 seam: 구현된 화면·셸 컴포넌트마다 mockup 선언(docs/mockups/README.md
+      # 양방향 등재), 디자인 시스템 정본 이탈은 web/src/design/README.md 원장에 처분과 함께,
+      # 패널 단위 구조 diff 는 검사기 재계산과 일치 — 상한은 줄어들 수만 있다. 위 게이트가
+      # e2e 충실도(테스트가 무엇을 치환하나)라면 이쪽은 렌더 충실도(화면이 mockup 과 맞나).
+      - name: render fidelity (mockups <-> SPA screens)
+        if: ${{ !cancelled() }}
         run: python3 scripts/check-render-fidelity.py
 
-  comment-policy:
-    name: comment policy ledger (docs <-> comments)
-    runs-on: ubuntu-latest
-    # Enforces docs/comment-policy/ledger.md's judgement ledger against the comments it
-    # claims to have judged: every registered range exists in the policy's scan
-    # scope, its line count and fingerprint still match a re-measurement using
-    # the same extraction the drift model uses, no file is registered twice, and
-    # the total mirrors the rows. Without it the ledger is prose that goes stale
-    # silently -- a PR adding comments to an already-judged range would leave
-    # that increment unjudged forever. Sibling to the two fidelity gates above
-    # and, like them, python3 stdlib only.
-    steps:
-      - uses: actions/checkout@v4
-      - name: comment policy ledger check
+      # docs/comment-policy/ledger.md 의 판정 원장 ↔ 실제 주석: 등재 범위가 스캔 범위에
+      # 있고, 줄 수·지문이 드리프트 모델과 같은 추출로 재측정해도 일치하며, 중복 등재가 없고
+      # 합계가 행과 맞아야 한다. 이게 없으면 이미 판정된 범위에 주석을 더한 PR 의 증분이
+      # 영원히 판정되지 않은 채 남는다.
+      - name: comment policy ledger (docs <-> comments)
+        if: ${{ !cancelled() }}
         run: python3 scripts/check_comment_policy.py
+
+      # 테스트 시나리오 ↔ e2e 파일 1:1: 시나리오마다 선언 파일이 정확히 하나(또는 등재된
+      # 예외/유예 행), 매칭 단위 파일마다 실재 시나리오 하나, docs/test/e2e.md 의 등재·집계가
+      # 실제와 일치. 클러스터 없이 수 초.
+      - name: 시나리오 ↔ e2e 1:1 mapping
+        if: ${{ !cancelled() }}
+        run: ./scripts/e2e/check-scenario-mapping.sh
 
   control-plane:
     name: control-plane (lint + unit)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # 모듈이 레포 루트가 아니라 하위 디렉터리에 있어서, cache-dependency-path 를 주지 않으면
+      # setup-go 가 go.sum 을 못 찾아 모듈·빌드 캐시를 통째로 건너뛴다(vet 이 매번 ~60s).
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+          cache-dependency-path: control-plane/go.sum
       - name: go vet
         working-directory: control-plane
         run: go vet ./...
       # The e2e suite is behind the `e2e` build tag, so the vet above never
-      # compiles it and only the (cluster-bound) e2e workflow would catch a
+      # compiles it and only the (cluster-bound) e2e job would catch a
       # broken test file. Vet it here so every PR type-checks it.
       - name: go vet (e2e build tag)
         working-directory: control-plane
@@ -78,19 +144,6 @@ jobs:
         working-directory: control-plane
         run: go test ./...
 
-  scenario-mapping:
-    name: 시나리오 ↔ e2e 1:1 mapping
-    runs-on: ubuntu-latest
-    # Static check of the test-scenario ↔ e2e file mapping: every scenario has
-    # exactly one declaring file (or a registered exception / pending row), every
-    # matching-unit file declares exactly one existing scenario, and
-    # docs/test/e2e.md's registry and totals match reality. No cluster, no
-    # toolchain — seconds, on every PR.
-    steps:
-      - uses: actions/checkout@v4
-      - name: check scenario <-> e2e mapping
-        run: ./scripts/e2e/check-scenario-mapping.sh
-
   data-plane:
     name: data-plane (lint + unit)
     runs-on: ubuntu-latest
@@ -99,6 +152,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+          cache-dependency-path: data-plane/go.sum
       - name: go vet
         working-directory: data-plane
         run: go vet ./...
@@ -117,33 +171,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - name: install
         working-directory: web
-        run: npm install
+        run: npm ci
       - name: typecheck
         working-directory: web
         run: npm run lint
       - name: build
         working-directory: web
         run: npm run build
-
-  image:
-    name: docker image (combined API + SPA)
-    runs-on: ubuntu-latest
-    needs: [control-plane, web]
-    steps:
-      - uses: actions/checkout@v4
-      - name: build image
-        run: docker build -f control-plane/Dockerfile -t session-platform/control-plane:ci .
-
-  data-plane-image:
-    name: docker image (data plane agent)
-    runs-on: ubuntu-latest
-    needs: [data-plane]
-    steps:
-      - uses: actions/checkout@v4
-      - name: build image
-        run: docker build -f data-plane/Dockerfile -t session-platform/data-plane:ci .
 
   integration:
     name: integration (happy path)
@@ -158,6 +196,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+          cache-dependency-path: control-plane/go.sum
       - name: integration harness
         working-directory: control-plane
         run: go test -tags=integration ./...
@@ -174,5 +213,234 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+          cache-dependency-path: control-plane/internal/adapter/configmap/envtest/go.sum
+      # setup-envtest 가 받는 kube-apiserver/etcd 바이너리는 ENVTEST_K8S_VERSION 으로 고정되므로
+      # 그 값을 키로 캐시한다. 히트하면 `setup-envtest use` 가 다운로드 없이 경로만 돌려준다.
+      - id: envtest-version
+        run: |
+          v=$(sed -nE 's/^ENVTEST_K8S_VERSION[[:space:]]*\?=[[:space:]]*([^[:space:]]+).*/\1/p' Makefile)
+          [ -n "$v" ] || { echo "::error::Makefile 에서 ENVTEST_K8S_VERSION 을 못 읽음"; exit 1; }
+          echo "k8s=$v" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/kubebuilder-envtest
+          key: envtest-bins-${{ runner.os }}-${{ steps.envtest-version.outputs.k8s }}
       - name: real-apiserver conflict tests
         run: make test-envtest
+
+  e2e:
+    name: e2e
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
+    uses: ./.github/workflows/e2e.yml
+
+  e2e-image-cache:
+    name: warm e2e image cache (main only)
+    # e2e 는 PR 에서만 돌지만 GitHub Actions 캐시는 브랜치 단위다: PR 이 쓴 캐시는 그 PR
+    # 안에서만 보이고, 새 PR 이 읽을 수 있는 것은 base(main) 에 저장된 캐시뿐이다. 이 잡이
+    # 없으면 e2e 스코프 캐시가 main 에 영영 쌓이지 않아, 모든 새 PR 의 첫 e2e 가 SUT 이미지를
+    # 캐시 없이 빌드한다(+5~6분). 그래서 main 푸시마다 e2e.yml 과 **같은 Dockerfile·플랫폼·
+    # 스코프**로 빌드만 해서 캐시를 내보낸다. 이미지는 어디에도 싣지 않는다(cacheonly).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest # e2e 러너와 같은 linux/amd64 — 아키텍처가 다르면 캐시가 안 맞는다
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+        id: buildx
+        with:
+          install: false
+          use: false
+      - name: build control-plane image (cache only)
+        uses: docker/build-push-action@v6
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: control-plane/Dockerfile
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=e2e-control-plane
+          cache-to: type=gha,mode=max,scope=e2e-control-plane
+      - name: build data-plane image (cache only)
+        uses: docker/build-push-action@v6
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          file: data-plane/Dockerfile
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=e2e-data-plane
+          cache-to: type=gha,mode=max,scope=e2e-data-plane
+
+  journey-prototype:
+    name: 여정 ↔ 여정 mockup 1:1 (프로토타입 충실도 포함)
+    needs: changes
+    if: needs.changes.outputs.journey == 'true'
+    runs-on: ubuntu-latest
+    # 사용자 여정 문서 ↔ 여정 mockup(docs/journeys/) 의 1:1 정합성 게이트.
+    #
+    # 여정↔페이지·단계 집합·분기 배선 같은 구조는 파일을 읽어 셀 수 있지만,
+    # "버튼이 실제로 다음 단계로 데려가는가" · "입력이 진짜 입력인가" ·
+    # "정상 경로 밖 상태에 도달하는가" 는 DOM 을 굴려야만 알 수 있다. 그래서 이 잡은
+    # Playwright chromium 으로 각 페이지를 file:// 로 열어 실제로 클릭한다.
+    # 판정 기준만 있고 집행이 없으면 그 기준은 조용히 썩는다.
+    #
+    # 공식 Playwright 이미지 안에서 돈다. 러너에서 `playwright install --with-deps` 를 하면
+    # apt 미러가 25MB 를 42kB/s 로 내려 10분씩 걸리는 일이 잦았다(브라우저·시스템 의존성이
+    # 이미지에 들어 있다). 태그는 `changes` 잡이 tools/package-lock.json 에서 읽은 버전이다.
+    container:
+      image: mcr.microsoft.com/playwright:v${{ needs.changes.outputs.playwright }}-noble
+    steps:
+      - uses: actions/checkout@v4
+      # tools/ 는 제품 코드가 아니라 문서 게이트 전용 하네스라 web/ 과 의존성을 나눈다.
+      # 락파일을 커밋해 두었으므로 ci 로 고정 설치한다.
+      - name: install harness deps
+        working-directory: tools
+        run: npm ci
+      # node:test 러너. 실패 시 어느 규칙의 어느 단계인지 메시지에 나온다.
+      - name: journey prototype fidelity
+        working-directory: tools
+        run: node --test journey-prototype.test.mjs
+
+  # ---- 이미지 발행 (GHCR) -------------------------------------------------------------
+  #
+  # 두 런타임 이미지를 GitHub Container Registry 에 **커밋 SHA 태그 하나로만** 발행하고,
+  # main 푸시에서는 그 SHA 를 k8s/deployment.yaml 에 되커밋해 운영이 가리키는 이미지를
+  # 고정한다(`pin` job).
+  #
+  #   - control-plane (Go API + 내장 React SPA, control-plane/Dockerfile)
+  #       ghcr.io/dlddu/session-platform:<sha>
+  #   - data plane agent (PTY shell · Claude runner/archive · credential proxy,
+  #     data-plane/Dockerfile)
+  #       ghcr.io/dlddu/session-platform-data-plane:<sha>
+  #
+  # `latest` 는 더 이상 만들지 않는다. 운영이 어느 커밋을 돌리는지는 k8s/deployment.yaml
+  # 한 곳만 보면 되고, PR 프리뷰 환경(flux-cd-apps 의 apps/session-platform-preview)은
+  # 같은 규칙으로 PR head SHA 태그를 그대로 가져다 쓴다. 태그가 불변이므로
+  # imagePullPolicy 도 기본값(IfNotPresent)이 그대로 옳다.
+  #
+  # 경로 필터를 두지 않는 것은 의도적이다: 프리뷰는 PR head SHA 태그를 참조하므로,
+  # 문서만 고친 PR 에 `deploy/preview` 라벨이 붙어도 그 SHA 에 이미지가 있어야 환경이 뜬다.
+  # 소스가 그대로면 buildx 의 gha 캐시가 통째로 히트하니 비용은 크지 않다. 같은 이유로
+  # Dockerfile 이 깨지면 매 PR 이 여기서 잡으므로, 예전 ci.yml 의 "빌드만 하는" amd64 이미지
+  # 잡 둘은 중복이라 없앴다(e2e 는 amd64 이미지를 따로 캐시 빌드해 kind 에 싣는다).
+
+  build-and-push:
+    name: build & push control-plane image
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # PR 에서는 기본값이 refs/pull/N/merge(임시 머지 커밋)라 이미지 내용이
+      # 태그(head SHA)와 어긋난다. 태그가 가리키는 커밋을 그대로 빌드한다.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: control-plane/Dockerfile
+          push: true
+          tags: ghcr.io/dlddu/session-platform:${{ github.event.pull_request.head.sha || github.sha }}
+          cache-from: type=gha,scope=control-plane
+          cache-to: type=gha,mode=max,scope=control-plane
+
+  build-and-push-data-plane:
+    name: build & push data-plane image
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: data-plane/Dockerfile
+          push: true
+          tags: ghcr.io/dlddu/session-platform-data-plane:${{ github.event.pull_request.head.sha || github.sha }}
+          cache-from: type=gha,scope=data-plane
+          cache-to: type=gha,mode=max,scope=data-plane
+
+  pin:
+    name: pin deployment images (main only)
+    needs: [build-and-push, build-and-push-data-plane]
+    # main 푸시에서만. PR 빌드는 이미지를 <head sha> 로 올려두기만 하고
+    # (프리뷰 환경이 그 태그를 쓴다) 운영 매니페스트는 건드리지 않는다.
+    # 테스트 잡을 기다리지 않는 것은 예전 이미지 워크플로와 같은 동작을 유지한 것이다.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    permissions:
+      # 이 job 만 main 에 커밋한다. 워크플로 전체 기본값은 contents: read 유지.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Pin k8s/deployment.yaml images to ${{ github.sha }}
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          f=k8s/deployment.yaml
+
+          # 고쳐야 할 자리는 셋이고 형태가 둘이다:
+          #   1) 컨테이너의 image: 줄 (control-plane, 1곳)
+          #   2) DATA_PLANE_*_IMAGE 의 env value (DATA_PLANE_IMAGE · CLAUDE_CODE ·
+          #      APPROVAL_GATED · MINIMAX_CODE — 이미지 문자열이 같아 아래 sed 하나가 모두 잡는다)
+          # env value 는 kustomize 의 images 변환이 건드리지 못하는 자리라(문자열일
+          # 뿐 image 필드가 아니다) 여기서 함께 다뤄야 한다.
+          #
+          # control-plane 패턴은 이름 바로 뒤에 콜론을 요구하므로
+          # `session-platform-data-plane:` 을 잡지 않는다(뒤 문자가 `-`).
+          sed -i -E "s#(ghcr\.io/dlddu/session-platform-data-plane):[A-Za-z0-9._-]+#\1:${SHA}#g" "$f"
+          sed -i -E "s#(ghcr\.io/dlddu/session-platform):[A-Za-z0-9._-]+#\1:${SHA}#g" "$f"
+
+          # sed 가 조용히 빗나가지 않았는지 확인한다. 개수를 못박는 대신 "고정되지 않은
+          # 참조가 하나도 남지 않았다"를 본다 — 네 번째 참조가 생겨도 이 검사가 잡는다.
+          leftover=$(grep -oE "ghcr\.io/dlddu/session-platform[a-z-]*:[A-Za-z0-9._-]+" "$f" \
+                       | grep -v ":${SHA}\$" || true)
+          if [ -n "$leftover" ]; then
+            echo "::error::$f: 고정되지 않은 이미지 참조가 남았습니다:"
+            echo "$leftover"
+            exit 1
+          fi
+          # 최소 한 곳은 실제로 고정되어 있어야 한다(파일이 통째로 바뀐 경우 방어).
+          n=$(grep -cE "ghcr\.io/dlddu/session-platform[a-z-]*:${SHA}" "$f" || true)
+          [ "$n" -ge 3 ] || { echo "::error::$f: 고정된 참조가 ${n}개뿐입니다(3개 이상 기대)"; exit 1; }
+
+          if git diff --quiet; then
+            echo "이미 ${SHA} 로 고정되어 있음 — 커밋할 것 없음(재실행)."
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -am "chore(deploy): session-platform 이미지를 ${SHA} 로 고정 [skip ci]"
+
+          # 이 push 는 기본 GITHUB_TOKEN 으로 나가므로 새 워크플로 실행을 트리거하지
+          # 않는다(GitHub 문서화된 동작). 나중에 PAT/App 토큰으로 바꾸더라도 커밋
+          # 메시지의 [skip ci] 가 재귀를 한 번 더 막는다.
+          # 머지가 연달아 들어와 main 이 앞서 있으면 rebase 후 재시도.
+          for i in 1 2 3; do
+            git push origin HEAD:main && exit 0
+            git pull --rebase origin main
+          done
+          exit 1

@@ -298,7 +298,7 @@ func (s *claudeOutputSink) Write(p []byte) (int, error) {
 	if originalLen == 0 || s.closed || s.truncated || s.sessionFull {
 		return originalLen, nil
 	}
-	s.appendBoundedLocked(s.redactor.Push(p))
+	s.appendBoundedLocked(s.redactor.Push(withoutTurnSentinel(p)))
 	return originalLen, nil
 }
 
