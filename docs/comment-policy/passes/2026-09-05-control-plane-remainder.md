@@ -95,3 +95,13 @@ R2는 *등재된 파일 목록만* 재측정하므로, 등재하지 않으면 �
 그리고 **R5**가 그것을 기계로 강제한다. R1~R4 중 어느 것도 좌표를 재측정하지 않아 이 축은
 **영원히 초록**이었다 — 지문과 합계는 기계가 지키는데 좌표만 사람이 지켰다. R5는 이 문서 안의
 `파일:줄` 형태를 금지한다. 순수 경로 포인터(`docs/test/e2e.md`)는 권장 형태라 걸리지 않는다.
+
+## 2026-09-13 증분 재판정 — 게이트 분리 (`main_test.go`)
+
+`TestLoadConfigApprovalGatedArchiveGate` 의 테이블 doc. **4줄 판정, 제거 0 · 유지 4**(86 → 90).
+
+케이스 이름 넷(`unset inherits the enabled/disabled claude-code gate` · `explicit false is the kill
+switch` · `explicit true stands on its own`)은 **조합을 적을 뿐 그 귀결을 적지 않는다.** 남긴 doc 이
+말하는 것은 **왜 상속 절반만으로는 부족한가**다 — 상속을 단언하지 않으면 나중에 누가 기본값을
+`false` 로 뒤집어도 아무것도 빨개지지 않고, 그 침묵이 이 게이트를 이름 짓지 않은 **모든** 배포에서
+이 타입을 조용히 끈다(`k8s/`·`deploy/` 에 그 이름은 0건이므로 그것이 전부다).

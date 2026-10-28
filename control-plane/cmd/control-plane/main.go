@@ -95,9 +95,10 @@ func main() {
 
 	// Snapshot archives may contain workspace and conversation data. They are
 	// sent to the configured durable store only behind an explicit mechanism
-	// gate: CRIU_ENABLED for shell, CLAUDE_CODE_ARCHIVE_ENABLED for claude-code.
+	// gate, one per type: CRIU_ENABLED for shell, CLAUDE_CODE_ARCHIVE_ENABLED
+	// for claude-code, SESSION_APPROVAL_GATED_ARCHIVE_ENABLED for approval-gated.
 	var cstore criu.CheckpointStore
-	if cfg.criuEnabled || cfg.claudeArchiveEnabled || cfg.miniMax.archiveEnabled {
+	if cfg.criuEnabled || cfg.claudeArchiveEnabled || cfg.approvalGatedArchiveEnabled || cfg.miniMax.archiveEnabled {
 		cstore, err = buildCheckpointStore(cfg)
 		if err != nil {
 			logger.Error("checkpoint store misconfigured", "err", err)
@@ -128,6 +129,19 @@ func main() {
 		))
 		logger.Info("claude-code filesystem archive enabled", "store", cfg.checkpointStoreDesc())
 	}
+	// Its own gate, not claude-code's: reverting this archive format is only
+	// conditionally possible (a stored archive holding `shared` is refused by the
+	// reverted binary), so dropping the flag is the cheapest mitigation — and it
+	// must not take claude-code's archives or the idle reaper down with it.
+	if cfg.approvalGatedArchiveEnabled {
+		// No image check to match claude-code's above: a type left unconfigured
+		// cannot produce a session to snapshot in the first place (AC-F5).
+		serviceOpts = append(serviceOpts, service.WithWorkloadCheckpointer(
+			session.WorkloadTypeApprovalGated,
+			criu.NewAgentArchiveCheckpointer(agentClient, cstore),
+		))
+		logger.Info("approval-gated filesystem archive enabled", "store", cfg.checkpointStoreDesc())
+	}
 	miniMaxArchive, err := miniMaxArchiveOption(cfg.miniMax, agentClient, cstore)
 	if err != nil {
 		logger.Error("minimax-code archive misconfigured", "err", err)
@@ -138,7 +152,7 @@ func main() {
 		logger.Info("minimax-code filesystem archive enabled", "store", cfg.checkpointStoreDesc())
 	}
 	mgr := service.New(orch, store, shellCkpt, agentClient, serviceOpts...)
-	snapshotEnabled := shellCkpt.Enabled() || cfg.claudeArchiveEnabled || cfg.miniMax.archiveEnabled
+	snapshotEnabled := shellCkpt.Enabled() || cfg.claudeArchiveEnabled || cfg.approvalGatedArchiveEnabled || cfg.miniMax.archiveEnabled
 
 	// AC-B1: the operational idle->snapshot trigger. Manual snapshots reach the
 	// same manager operation through the product API, without the idle wait.
@@ -215,8 +229,12 @@ type config struct {
 	sharedVolumeSize         resource.Quantity
 	// claudeArchiveEnabled explicitly permits workspace/conversation/output
 	// archives to be written to CHECKPOINT_S3_* (default false).
-	claudeArchiveEnabled    bool
-	claudeCredentialsSecret string
+	claudeArchiveEnabled bool
+	// approvalGatedArchiveEnabled is the same permission for approval-gated
+	// sessions, whose archive additionally carries the shared volume. Its
+	// inherited default is what keeps this gate out of every manifest.
+	approvalGatedArchiveEnabled bool
+	claudeCredentialsSecret     string
 	// claudeCodeDefaultModel is the effective, public default shown by the SPA.
 	// It is a concrete Secret-backed model when configured, otherwise the
 	// stable platform-default alias.
@@ -300,6 +318,7 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("SESSION_SHARED_VOLUME_SIZE: %w", err)
 	}
+	claudeArchiveEnabled := envBool("CLAUDE_CODE_ARCHIVE_ENABLED", false)
 	return config{
 		addr:           env("CP_ADDR", ":8080"),
 		dataPlaneImage: env("DATA_PLANE_IMAGE", ""),
@@ -311,7 +330,8 @@ func loadConfig() (config, error) {
 		approvalGatewayURL:          env("APPROVAL_GATEWAY_URL", ""),
 		sharedVolumeStorageClass:    env("SESSION_SHARED_VOLUME_STORAGE_CLASS", ""),
 		sharedVolumeSize:            sharedVolumeSize,
-		claudeArchiveEnabled:        envBool("CLAUDE_CODE_ARCHIVE_ENABLED", false),
+		claudeArchiveEnabled:        claudeArchiveEnabled,
+		approvalGatedArchiveEnabled: envBool("SESSION_APPROVAL_GATED_ARCHIVE_ENABLED", claudeArchiveEnabled),
 		claudeCredentialsSecret:     env("CLAUDE_CODE_CREDENTIALS_SECRET", "claude-code-credentials"),
 		claudeCodeDefaultModel:      claudeCodeDefaultModel,
 		claudeCodeModels:            claudeCodeModels,

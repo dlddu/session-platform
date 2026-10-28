@@ -260,3 +260,91 @@ func TestSharedVolume_BothContainersAreToldWhereItIs(t *testing.T) {
 			got, workloadDir, marker)
 	}
 }
+
+// The half AC-F5 states in the present tense — "동결·복원을 건너서도 이전 실행이
+// 만든 파일이 남아 있고" — and the only one no pod spec can be read for. The
+// claim is owned by the round's helper pod, so the freeze garbage collects it:
+// nothing in the cluster survives to be re-read, and the bytes can only come
+// back through the filesystem archive.
+func TestSharedVolume_SurvivesFreezeAndRestore(t *testing.T) {
+	cs, cfg, ok := kubeClient(t)
+	if !ok {
+		t.Skip("no cluster: what a freeze carries is a claim about deployed pods")
+	}
+	ns := sessionNamespace()
+
+	s := f4Create(t)
+	helper := f4TheHelperPod(t, cs, ns, s)
+	workload := getPodEventually(t, cs, ns, s.Pod)
+	claim := sharedClaimFor(t, cs, ns, s.ID)
+	mountPath := mountsOfClaim(workload, claim.Name)[workloadContainer]
+	if mountPath == "" {
+		t.Fatalf("workload pod %s does not mount claim %s; there is no volume to carry (AC-F5)", workload.Name, claim.Name)
+	}
+
+	// Written through the MCP container, which is the container that actually
+	// spills approved results, and read back before the freeze so a match after
+	// it is a positive result rather than two failures agreeing.
+	marker := fmt.Sprintf("f5-roundtrip-%s", s.ID)
+	f4Sh(t, cs, cfg, ns, helper.Name, sessionMCPContainer,
+		`set -eu; mkdir -p "$1/web_fetch_get"; printf '%s' "$2" > "$1/web_fetch_get/approved.body"`,
+		mountsOfClaim(&helper, claim.Name)[sessionMCPContainer], marker)
+	if got := strings.TrimSpace(f4Sh(t, cs, cfg, ns, workload.Name, workloadContainer,
+		`set -eu; cat "$1/web_fetch_get/approved.body"`, mountPath)); got != marker {
+		t.Fatalf("workload read %q before the freeze, want %q — the probe does not work, so surviving one would prove nothing",
+			got, marker)
+	}
+
+	if _, found := snapshotSession(t, s.ID); !found {
+		t.Fatal("snapshot endpoint reported the session missing")
+	}
+	// The old claim goes with the old helper, which is exactly why the archive
+	// has to be carrying these bytes.
+	awaitClaimGone(t, cs, ns, claim.Name)
+
+	restored := f4Switch(t, s.ID)
+	newHelper := f4TheHelperPod(t, cs, ns, restored)
+	newWorkload := getPodEventually(t, cs, ns, restored.Pod)
+	newClaim := sharedClaimFor(t, cs, ns, restored.ID)
+	if newClaim.Name == claim.Name {
+		t.Fatalf("restored onto claim %q, the one the freeze reclaimed — the round would be reusing a deleted volume (AC-F5)", claim.Name)
+	}
+	newPath := mountsOfClaim(newWorkload, newClaim.Name)[workloadContainer]
+	if newPath == "" {
+		t.Fatalf("restored workload pod %s does not mount claim %s (AC-F5)", newWorkload.Name, newClaim.Name)
+	}
+	if got := mountsOfClaim(&newHelper, newClaim.Name)[sessionMCPContainer]; got != newPath {
+		t.Fatalf("the restored pair mounts claim %s at different paths — workload %q, helper %q (AC-F5)",
+			newClaim.Name, newPath, got)
+	}
+
+	got := strings.TrimSpace(f4Sh(t, cs, cfg, ns, newWorkload.Name, workloadContainer,
+		`set -eu; cat "$1/web_fetch_get/approved.body"`, newPath))
+	if got != marker {
+		t.Fatalf("after a freeze and restore the workload reads %q at %s, want %q — the approved result did not cross (AC-F5)",
+			got, newPath, marker)
+	}
+}
+
+// awaitClaimGone waits out the garbage collection the owner reference drives,
+// which is asynchronous rather than part of the delete the freeze issues.
+func awaitClaimGone(t *testing.T, cs kubernetes.Interface, ns, name string) {
+	t.Helper()
+	deadline := time.Now().Add(90 * time.Second)
+	for {
+		claim, err := cs.CoreV1().PersistentVolumeClaims(ns).Get(context.Background(), name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("get claim %s/%s: %v", ns, name, err)
+		}
+		if claim.DeletionTimestamp != nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("claim %s is still present after the freeze — it outlives the helper pod that owns it (AC-F5)", name)
+		}
+		time.Sleep(time.Second)
+	}
+}

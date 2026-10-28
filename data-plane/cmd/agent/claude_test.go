@@ -97,6 +97,11 @@ func newClaudeTestServer(t *testing.T, runner commandRunner, model string, resto
 
 func newClaudeTestServerAt(t *testing.T, runner commandRunner, model string, restoreMode bool, redact []string, stateDir string) (*claudeWorkload, *httptest.Server) {
 	t.Helper()
+	return newClaudeTestServerWithTools(t, runner, model, restoreMode, redact, stateDir, toolSurface{Plugin: true})
+}
+
+func newClaudeTestServerWithTools(t *testing.T, runner commandRunner, model string, restoreMode bool, redact []string, stateDir string, tools toolSurface) (*claudeWorkload, *httptest.Server) {
+	t.Helper()
 	c, err := newClaudeWorkload(claudeConfig{
 		StateDir:    stateDir,
 		Model:       model,
@@ -105,7 +110,7 @@ func newClaudeTestServerAt(t *testing.T, runner commandRunner, model string, res
 		Runner:      runner,
 		Logger:      testLogger(),
 		Redact:      redact,
-		Tools:       toolSurface{Plugin: true},
+		Tools:       tools,
 	})
 	if err != nil {
 		t.Fatalf("new claude workload: %v", err)
