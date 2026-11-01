@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -157,8 +158,9 @@ func archiveTree(tw *tar.Writer, dir, prefix string, entryCount *int) error {
 }
 
 type restoredDirMode struct {
-	name string
-	mode fs.FileMode
+	name    string
+	mode    fs.FileMode
+	modTime time.Time
 }
 
 // restoreStateArchive validates and extracts into a fresh sibling directory,
@@ -278,6 +280,9 @@ func restoreStateArchive(r io.Reader, stateDir, sharedDir string, validate func(
 		if err := os.Chmod(item.name, item.mode.Perm()); err != nil {
 			return nil, fmt.Errorf("restore directory mode %s: %w", item.name, err)
 		}
+		if err := restoreModTime(item.name, item.modTime); err != nil {
+			return nil, fmt.Errorf("restore directory mtime %s: %w", item.name, err)
+		}
 	}
 	if sawShared {
 		// The shared volume is a mount point on another filesystem, so it is
@@ -329,7 +334,7 @@ func copyRestoredTree(staged, target string) error {
 			case !existing.IsDir():
 				return fmt.Errorf("shared directory collides with non-directory %s", rel)
 			}
-			dirModes = append(dirModes, restoredDirMode{name: dst, mode: info.Mode()})
+			dirModes = append(dirModes, restoredDirMode{name: dst, mode: info.Mode(), modTime: info.ModTime()})
 			return nil
 		case info.Mode()&os.ModeSymlink != 0:
 			link, err := os.Readlink(name)
@@ -361,7 +366,10 @@ func copyRestoredTree(staged, target string) error {
 			if closeErr != nil {
 				return closeErr
 			}
-			return os.Chmod(dst, info.Mode().Perm())
+			if err := os.Chmod(dst, info.Mode().Perm()); err != nil {
+				return err
+			}
+			return restoreModTime(dst, info.ModTime())
 		default:
 			return fmt.Errorf("unsupported shared entry %s (%s)", rel, info.Mode())
 		}
@@ -376,6 +384,9 @@ func copyRestoredTree(staged, target string) error {
 	for _, item := range dirModes {
 		if err := os.Chmod(item.name, item.mode.Perm()); err != nil {
 			return fmt.Errorf("restore directory mode %s: %w", item.name, err)
+		}
+		if err := restoreModTime(item.name, item.modTime); err != nil {
+			return fmt.Errorf("restore directory mtime %s: %w", item.name, err)
 		}
 	}
 	return nil
@@ -446,7 +457,7 @@ func extractClaudeStateEntry(tr *tar.Reader, header *tar.Header, root, rel strin
 		} else if err := os.Mkdir(dst, 0o700); err != nil {
 			return err
 		}
-		*dirModes = append(*dirModes, restoredDirMode{name: dst, mode: mode})
+		*dirModes = append(*dirModes, restoredDirMode{name: dst, mode: mode, modTime: header.ModTime})
 		return nil
 	case tar.TypeReg, tar.TypeRegA:
 		f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -464,7 +475,7 @@ func extractClaudeStateEntry(tr *tar.Reader, header *tar.Header, root, rel strin
 		if err := os.Chmod(dst, mode.Perm()); err != nil {
 			return err
 		}
-		return nil
+		return restoreModTime(dst, header.ModTime)
 	case tar.TypeSymlink:
 		if err := validateClaudeSymlink(rel, header.Linkname); err != nil {
 			return err
