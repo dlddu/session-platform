@@ -746,6 +746,7 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 > 없고, 승인 컨텍스트는 승인 왕복(AC-F3)이 선행이라 진입 자체가 없으며, 뒤의 둘은 **이 SUT에서
 > 그 표면이 비어 있다** — one-shot 타입이라 프롬프트 전엔 scrollback이 없고, 요청 로거가 `Debug`인데
 > 핸들러가 기본 `Info`라 세션 수명 동안 로그가 한 줄도 나오지 않는다.
+> *(2026-11-01 정정 — 이 전제는 거짓이었다: kind v0.24.0 부터 kindnet 이 kube-network-policies 로 NetworkPolicy 를 **집행한다**. CI 실측: #176 의 정적 정책 `control-plane-ingress` 가 호스트 → NodePort 헬스체크를 떨어뜨려 deploy SUT 가 멈췄고, `deploy/` 오버레이에서 그 정책을 지우자 통과했다.)* 차단 둘의 「관측 대상 자체가 없다」는 그래서 더 이상 성립하지 않는다.
 >
 > 뒤의 둘은 **추측이 아니라 CI가 알려 준 것**이다 — 이 파일의 첫 실행에서 「로그가 비어 있으면
 > 침묵은 아무것도 증명하지 않는다」는 **자기 대조군이 발화해 빨개졌다**. 규범이 금지하는 것은
@@ -770,7 +771,8 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 > 검증할 수 없다** — `deploy/kind-config.yaml`이 `disableDefaultCNI`를 켜지 않아 클러스터가 기본
 > kindnet으로 뜨고, kindnet은 **NetworkPolicy를 집행하지 않는다**. 따라서 정책 오브젝트의 존재·셀렉터·
 > 동반 삭제까지는 Go e2e로 단언할 수 있어도 "실제로 막히는가"는 정책 집행 CNI가 있는 오버레이나 실
-> 클러스터가 선결이다(`approval-gated-workload.md` 시나리오 2의 사전 조건이 같은 말을 한다). F4는
+> 클러스터가 선결이다(`approval-gated-workload.md` 시나리오 2의 사전 조건이 같은 말을 한다).
+> *(2026-11-01 정정 — 이 전제는 거짓이었다: kind v0.24.0 부터 kindnet 이 kube-network-policies 로 NetworkPolicy 를 **집행한다**. CI 실측: #176 의 정적 정책 `control-plane-ingress` 가 호스트 → NodePort 헬스체크를 떨어뜨려 deploy SUT 가 멈췄고, `deploy/` 오버레이에서 그 정책을 지우자 통과했다.)* 따라서 F2 의 「실제로 막히는가」는 이 SUT 에서 관측 가능하고, 남은 것은 그 단언의 저작이다. F4는
 > 두 파드의 동반 회수라 `e2e_a3_pod_reclaim_test.go`와 같은 모양으로 자동화 가능하므로, **예외가 아니라
 > 전용 파일**이 기본값이고 실클러스터 항목(PID 네임스페이스 분리 등)만 남으면 그때 갈라 등재한다.
 
@@ -803,7 +805,7 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 상태에 도달할 방법이 없다(AC-B1의 트리거 정책과 함께 풀린다), (2) `approval-gated` 타입에
 스냅샷 전략이 등록돼 있지 않다(AC-F5의 아카이브 전략과 함께 풀린다 — *2026-11-01 풀려 해당 두 행은 표에서 나갔다*), (3) SUT의 CNI가
 NetworkPolicy를 **집행하지 않아** 차단 갈래에 관측 대상 자체가 없다(kindnet — `deploy/`에
-`disableDefaultCNI` 0파일), (4) **표면이 이 SUT에서 비어 있다** — 찾을 텍스트가 없으므로 음성
+`disableDefaultCNI` 0파일), *(2026-11-01 정정 — 이 전제는 거짓이었다: kind v0.24.0 부터 kindnet 이 kube-network-policies 로 NetworkPolicy 를 **집행한다**. CI 실측: #176 의 정적 정책 `control-plane-ingress` 가 호스트 → NodePort 헬스체크를 떨어뜨려 deploy SUT 가 멈췄고, `deploy/` 오버레이에서 그 정책을 지우자 통과했다.)* (3) 에 걸린 두 행은 막힌 이유가 사라졌고 저작만 남았다, (4) **표면이 이 SUT에서 비어 있다** — 찾을 텍스트가 없으므로 음성
 단언이 vacuous하다. (4)는 실측으로만 알 수 있고 실제로 CI가 먼저 알려 줬다: AC-F6 파일의 첫
 실행이 자기 대조군에 걸려 빨개졌다. (5) **대역이 그 산출물을 만들 수 없다** — 공급자 대역의 응답은
 프롬프트와 무관한 상수 한 줄이라 「이어진 대화」를 가리키는 문장도, 다중바이트 경계도 나오지 않는다
@@ -816,7 +818,7 @@ in-flight 위상은 전이와 경주해야 보이고, 운으로 이긴 관측은
 | write `idle->active->write` | `e2e_c3_write_branches_test.go` | 〃 |
 | switch의 idle 대상 승격 | `e2e_c4_session_switch_test.go` | 〃 |
 | stream의 `idle` 갈래(「active/idle은 기존 pod에서만 stream한다」의 idle 절반) | `e2e_state_api_6_stream_contract_test.go` | 〃 — 위 세 행과 같은 선행이다. active 절반은 소유 파일이 사고, 「상태 승격이 없다」도 active 세션에서 산다(왕복 전후로 상태·pod·`lastAccess`가 불변). idle에서만 갈리는 것은 「승격시키지 않는다」의 대상이 idle이라는 것 하나이고, 그 진입 트리거가 없다 |
-| 워크로드 파드 → 게이트웨이 주소·공급자 origin **직접 연결 차단** | `e2e_f6_credential_split_test.go` | SUT의 kindnet이 NetworkPolicy를 집행하지 않아 **거부가 일어나지 않는다** — 여기서 성공하는 연결은 제품 결함이 아니고 실패해도 경계를 산 것이 아니므로 단언이 vacuous하다. 선행은 정책 집행 CNI(`deploy/kind-config.yaml`의 `disableDefaultCNI` + CNI 설치)이고 소관은 **AC-F2**다. 배치 쪽(자격 증명이 어느 컨테이너에 있는가)은 소유 파일이 전부 산다 |
+| 워크로드 파드 → 게이트웨이 주소·공급자 origin **직접 연결 차단** | `e2e_f6_credential_split_test.go` | **2026-11-01: 막힌 이유가 거짓으로 판명 — kindnet 은 정책을 집행한다(위 (3) 정정). 남은 것은 저작이다.** 옛 사유: SUT의 kindnet이 NetworkPolicy를 집행하지 않아 **거부가 일어나지 않는다** — 여기서 성공하는 연결은 제품 결함이 아니고 실패해도 경계를 산 것이 아니므로 단언이 vacuous하다. 선행은 정책 집행 CNI(`deploy/kind-config.yaml`의 `disableDefaultCNI` + CNI 설치)이고 소관은 **AC-F2**다. 배치 쪽(자격 증명이 어느 컨테이너에 있는가)은 소유 파일이 전부 산다 |
 | 다른 세션의 워크로드 파드 → 이 헬퍼 파드 **ingress 차단** | 〃 | 〃 (같은 선행) |
 | 승인 컨텍스트에 자격 증명·게이트웨이 키가 실리지 않음 | 〃 | **선행은 2026-09-12 에 풀렸다** — 「승인 왕복 자체가 아직 없다」가 이 행의 막힌 이유였는데, `e2e_approval_gated_3_approval_path_test.go` 가 그 왕복을 세워 게이트웨이에 실제 요청 레코드가 생기고, 2026-10-24 부터는 그 레코드의 `context` 를 실물 PocketAide 의 사용자 API(`/api/approvals`)로 승인자가 보는 그대로 읽을 수 있다(하네스 `harness_pocket_aide_test.go`). 남은 것은 **저작**이며 소유 파일은 그대로 f6 이다(승인 컨텍스트는 자격 증명 배치의 조항이지 승인 경로의 조항이 아니다 — 두 파일에 담으면 규칙 1 의 중복이 된다). 토큰이 **조회 응답·목록 응답·`read` 응답·control-plane 로그**에 나타나지 않는 것은 소유 파일이 이미 산다 |
 | `read`·SSE **출력 본문(scrollback)** 에 토큰 부재 | 〃 | `approval-gated`는 `claude-code`와 같은 one-shot 실행 모델이라 상주 셸이 없다 — 프롬프트를 한 번 돌리기 전까지 scrollback이 **비어 있어** 「토큰이 출력에 없다」가 vacuous하다. 소유 파일이 사는 것은 read **응답(엔벨로프)** 이고, 그 응답이 자기 세션 id를 담는다는 대조군을 먼저 통과시킨다. 선행은 이 타입의 프롬프트 왕복(공급자 대역 + 세션 MCP)을 e2e가 구동하는 것이고 그 구동 기구는 **AC-E2·E3**의 것이다. ⚠️ 같은 반쪽이 `e2e_e6_credential_placement_test.go`의 `NeitherTokenIsEchoedByThePublicAPI`에도 있다(`claude-code`도 one-shot이라 그 `session output` 표면이 빈 문자열이다) — 그쪽은 대조군이 없어 조용히 통과하므로, 다음 감지가 함께 볼 것 |
