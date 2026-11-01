@@ -96,8 +96,6 @@ RUN groupadd --gid 1000 session \
  && useradd --uid 1000 --gid 1000 --no-create-home \
       --home-dir /session/state/home --shell /bin/bash session \
  && test "$(id -u session)" = 1000
-COPY --chmod=0644 data-plane/kubeconfig-in-cluster.yaml /etc/session-platform/kubeconfig
-ENV KUBECONFIG=/etc/session-platform/kubeconfig
 # The same image serves both workload modes. Copy the official Node 22 runtime,
 # npm installation metadata, and the pinned Claude Code package together.
 COPY --from=claude-build /usr/local/ /usr/local/
