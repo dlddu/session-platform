@@ -74,8 +74,7 @@ SCOPE_PATHSPECS = [
 
 # 대안은 긴 것부터 — POSIX grep -E(leftmost-longest)와 같은 결과를 내게 한다.
 TOKEN_RE = re.compile(
-    r"CRIU_ENABLED"
-    r"|E2E_[A-Z0-9_]+"
+    r"E2E_[A-Z0-9_]+"
     r"|NewStub[A-Za-z0-9]*"
     r"|WithTestEndpoints"
     r"|routeFromHAR"
