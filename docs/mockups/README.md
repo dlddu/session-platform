@@ -26,7 +26,7 @@
 | [`workspace.html`](./workspace.html) | Session workspace (활성 `shell` 세션 작업) | **`STP-isolated-work`, `STP-shell-attach`, `STP-command-input`, `STP-output-read`, `STP-shell-state-carry`, `STP-freeze-now`** | V1, V3, V2 | 미연결 — 인라인 임의 토큰 |
 | [`agent-workspace.html`](./agent-workspace.html) | Agent session workspace (활성 `claude-code` 세션 작업) | **`STP-prompt-submit`, `STP-response-watch`, `STP-conversation-carry`, `STP-agent-freeze-resume`, `STP-freeze-now`** | V8, V3, V2 (보조 V1) | 미연결 — 인라인 임의 토큰 |
 | [`gated-workspace.html`](./gated-workspace.html) | Gated agent session workspace (활성 `approval-gated` 세션 작업 · 워크로드 파드 + 헬퍼 파드) | **`STP-gated-prompt-submit`, `STP-approval-wait`, `STP-gated-result`, `STP-freeze-now`** | V8, V3, V2 (보조 V1) | 미연결 — 인라인 임의 토큰 |
-| [`restore.html`](./restore.html) | Resume from checkpoint (`shell` CRIU 복원) | **`STP-restore-resume`(`shell`)** (보조: `STP-auto-freeze`) | V3, V2 | 미연결 — 인라인 임의 토큰 |
+| [`restore.html`](./restore.html) | Resume from session archive (`shell` 아카이브 복원 — 2026-11-01 이전 CRIU) | **`STP-restore-resume`(`shell`)** (보조: `STP-auto-freeze`) | V3, V2 | 미연결 — 인라인 임의 토큰 |
 | [`repo-access.html`](./repo-access.html) | Repo access — control plane (비공개 레포 허용 목록 · 접근 요청 승인) | **`STP-access-review`, `STP-access-decide`** | V8, V1 | 미연결 — 인라인 임의 토큰 |
 
 > **타입별 작업 화면이 셋으로 갈립니다 (2026-08-08 → 2026-09-03)**: `workspace.html`은 `shell` 타입,
@@ -142,7 +142,7 @@ mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="pane
 > 필요합니다. `Vitals`·`Conversation`·`Lifecycle`은 세 쌍 모두에서 빠져 있는 기존 항목입니다.
 
 > **이 표가 세는 것은 패널 층위까지입니다.** 패널 **내부**의 카피·수치(예: `Idle timer` ·
-> `Auto-freeze at` · `Pod uptime` · `process tree` · `Resuming from checkpoint` · `Session workspace`,
+> `Auto-freeze at` · `Pod uptime` · `Resuming from session archive` · `Session workspace`,
 > 역방향으로 `Delete session` · `Switch (AC-C4)`)는 아직 대조하지 않습니다 — 후속 작업이며,
 > `Vitals`(CPU/메모리)·`Pod uptime`처럼 **실데이터 소스가 API에 있는지**부터 확인해야 방향
 > (구현을 늘릴지 · mockup을 줄일지)이 정해지는 항목이 섞여 있습니다.
@@ -168,7 +168,7 @@ mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="pane
 | `STP-step-away` 자리 비움 | ⚠️ | `index.html` 목록의 idle 상태 · `workspace.html` lifecycle (전용 화면 없음) |
 | `STP-auto-freeze` 자동 동결 | ⚠️ | `restore.html` lifecycle "auto-freeze 60min" (동결 진행 전용 화면 없음) |
 | `STP-reaccess` 재접근 | ❌ | 전용 화면 없음 (복원의 트리거) |
-| `STP-restore-resume` 복원 후 재개 | ✅ | `restore.html`(`shell` CRIU) + `agent-workspace.html`(`claude-code` archive) |
+| `STP-restore-resume` 복원 후 재개 | ✅ | `restore.html`(`shell` archive — 홈 디렉터리 파일·출력을 가진 새 쉘) + `agent-workspace.html`(`claude-code` archive) |
 
 ### `JRN-multi-session-switch`
 
@@ -338,6 +338,7 @@ mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="pane
 
 ## 마지막 갱신
 
+- **2026-11-01** — **CRIU 퇴역 반영 (AC-D4 개정)**: 모든 타입의 동결이 파일시스템 아카이브로 통일되고 쉘 복원이 「홈 디렉터리 파일·출력 이력을 가진 새 쉘」로 바뀐 것을 화면 카피에 맞췄다. `restore.html`·`workspace.html`의 복원 오버레이·콘솔·Shell state 패널에서 CRIU·프로세스 트리 보존 서술을 걷고 보존되는 것/되지 않는 것을 나눠 적었으며, `index.html`·`new-session.html` 카드의 `checkpoint` 라벨을 `archive`로, `agent-workspace.html`·`gated-workspace.html`의 「no CRIU」 문구를 걷었다. 같은 변경에서 SPA(`Restore.tsx`·`SessionCard.tsx`)도 같은 어휘로 갱신했다. 패널 구조·mockup 수·매핑·여정 커버리지는 변하지 않았다.
 - **2026-10-24 (3)** — **레포 접근 화면의 앱 자체 로그인 제거**: control plane 전체가 배포의 Authelia forward-auth 뒤로 옮겨 가 화면의 OIDC 로그인이 중복이 됐으므로, `repo-access.html`에서 로그인 안내 화면·상태 전환·「Signed in as」 줄을 지우고, 허용 목록 표의 「Added by」 열을 「Source」(직접 추가 / 요청 허락)로 바꾼 뒤 `RepoAccess.tsx`도 같이 맞췄다. mockup 수·매핑·여정 커버리지는 변하지 않았다.
 - **2026-10-24 (2)** — **레포 접근 화면 SPA 구현**: `web/src/screens/RepoAccess.tsx`(+ `RepoAccess.css`)가 `repo-access.html`을 `/access` 경로로 구현해, 이 mockup을 「구현이 없는 mockup」에서 화면 ↔ mockup 매핑 표로 옮겼다(매핑된 구현 파일 11→13). mockup 수·여정 커버리지는 변하지 않았다.
 - **2026-10-24** — **`JRN-repo-access` 신설에 따른 mockup·여정 페이지 추가**: 비공개 레포 허용 목록과 접근 요청(PRD `repo-access`, AC-H1~H5)을 위해 화면 단위 mockup `repo-access.html`(대기 요청 카드·허용 목록 표·추가 입력·로그인 안내)과 여정 페이지 `journeys/JRN-repo-access/`(세션 콘솔 → 레포 접근 화면 → 허락 → 비공개 클론)를 신설했다. SPA 구현이 아직 없어 `repo-access.html`은 「구현이 없는 mockup」에 구현 신호 `RepoAccess`로 등재했다. 여정 9→10, 단계 33→37, mockup 6→7, 요약 ✅18→20 / ⚠️5→7, 여정 페이지 8/8→9/9. 두 신설 파일을 토큰 복제 원장에 `DUP`로 등재했고 유지비 문구를 게이트 계산값 7~18곳으로 갱신했다.

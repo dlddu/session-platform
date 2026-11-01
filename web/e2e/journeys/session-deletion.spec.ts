@@ -91,7 +91,7 @@ test("delete a snapshot from Restore and retry after a conflict", async ({
   page,
   request,
 }) => {
-  // 실 CRIU 동결과 MinIO 업로드가 선행하므로 기본 타임아웃으로는 모자란다.
+  // 실 쉘 아카이브 동결과 MinIO 업로드가 선행하므로 기본 타임아웃으로는 모자란다.
   test.setTimeout(180_000);
 
   const name = "delete-snapshot-" + Date.now();

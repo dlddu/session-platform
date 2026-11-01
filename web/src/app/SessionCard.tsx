@@ -7,7 +7,7 @@ import { ClockIcon, CrystalIcon, PodIcon } from "./icons";
 import { sessionEntryPath } from "./sessionRoutes";
 import { isAgentWorkload, isGatedWorkload } from "./workloadKind";
 
-// 동결 어휘는 타입별로 갈린다 — 아카이브(AC-E5) vs CRIU 체크포인트(AC-D4).
+// 동결 어휘는 모든 타입이 아카이브다(AC-B1 · AC-D4 · AC-E5). 타입별로 다른 것은 복원 후 무엇이 이어지는가다.
 const WORKLOAD_TAG: Record<string, string> = {
   shell: "$ shell",
   "claude-code": "◇ claude-code",
@@ -91,9 +91,7 @@ function SnapshotBody({ s, now }: { s: Session; now: number }) {
         </div>
         <div className="snap-meta">
           <div className="row">
-            <span className="k">
-              {isAgentWorkload(s.workloadType) ? "archive" : "checkpoint"}
-            </span>
+            <span className="k">archive</span>
             <span className="v">{cp ? fmtBytes(cp.sizeBytes) : "—"}</span>
           </div>
           <div className="row">
@@ -112,7 +110,7 @@ function SnapshotBody({ s, now }: { s: Session; now: number }) {
           ? "open to restore the archive — the gate is re-armed on resume"
           : isAgentWorkload(s.workloadType)
             ? "open to restore the archive and continue the conversation"
-            : "open to thaw and resume exactly where it froze"}
+            : "open to restore the archive — a fresh shell with your home files and output history"}
       </div>
     </>
   );

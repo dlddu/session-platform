@@ -1,7 +1,7 @@
 // 검증 시나리오: lifecycle.md#시나리오 2
 //
-// docs/prd/lifecycle.md, docs/test/lifecycle.md 시나리오 2. 복원이 타는 CRIU 왕복
-// 자체는 docs/criu-verification.md.
+// docs/prd/lifecycle.md, docs/test/lifecycle.md 시나리오 2. 복원이 타는 쉘 아카이브 왕복의
+// 보존 대상은 docs/prd/shell-workload.md AC-D4.
 //
 // 이 파일은 2026-09-12 축 개정(#132) 이후 **처음 서는 매칭 단위**다. 그 전까지 이 시나리오를
 // 검증하던 것은 `control-plane/test/e2e_b2_snapshot_restore_test.go` 였고, 축 개정으로 Go 가
@@ -15,7 +15,7 @@
 // 판정에 섞여 들어올 뿐 더 사는 것이 없다.
 import { expect, test } from "@playwright/test";
 
-// 생성과 복원은 실 pod 프로비저닝(스케줄링·이미지·CRIU restore)에 블록되므로 기본 타임아웃으로는
+// 생성과 복원은 실 pod 프로비저닝(스케줄링·이미지·아카이브 전개)에 블록되므로 기본 타임아웃으로는
 // 모자란다. 90초는 옮겨 오기 전 Go 하네스가 쓰던 것과 같은 예산이다
 // (control-plane/test/harness_shared_test.go 의 http.Client Timeout).
 const POD_BOUND = 90_000;
@@ -42,7 +42,7 @@ test("accessing a snapshot session restores it into a new pod", async ({ request
   expect(created.pod).not.toBe("");
 
   // 옮겨 오기 전 Go 파일은 여기서 404 를 만나면 skip 했다(제품 snapshot endpoint 이전의 SUT 를
-  // 가리킬 수 있어서다). 배포 SUT 는 그 endpoint 를 항상 갖고 deploy/ 오버레이가 CRIU 게이트를
+  // 가리킬 수 있어서다). 배포 SUT 는 그 endpoint 를 항상 갖고 deploy/ 오버레이가 쉘 아카이브 게이트(SHELL_ARCHIVE_ENABLED)를
   // 켜므로, 이관하면서 그 분기를 **단언으로 바꾼다** — skip 은 초록으로 보이지만 아무것도 사지
   // 않는다.
   const snapshotResponse = await request.post(

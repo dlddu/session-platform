@@ -3,6 +3,7 @@ import type { WorkloadType } from "../api/types";
 // One place to answer "which interaction model does this type get?", so a
 // fourth type cannot be added by editing two of the five screens.
 // 실행 모델 계약은 AC-F1 이 AC-E2~E6 을 재사용하므로, 그 계약에서 파생된 것은 둘 다 받아야 한다.
+// 동결 방식은 이 판정과 무관하다 — 모든 타입이 파일시스템 아카이브로 동결된다(AC-B1).
 export function isAgentWorkload(workloadType: WorkloadType): boolean {
   return workloadType === "claude-code" || workloadType === "approval-gated" || workloadType === "minimax-code";
 }

@@ -1,4 +1,33 @@
-# CRIU 체크포인트/복원 — 현재 구현 및 검증
+# CRIU 체크포인트/복원 — 구현 및 검증 기록 (2026-11-01 퇴역)
+
+> 🛑 **퇴역 (2026-11-01) — 이 문서는 역사 기록이다.** 2026-11-01부로 CRIU는 **모든 워크로드에서
+> 퇴역**했고, 동결·복원은 에이전트가 세션 상태 디렉터리와 누적 출력(scrollback)을 묶어 내는
+> **파일시스템 아카이브** 하나로 통일됐다. 아래 본문은 CRIU 경로를 설계·검증하던 당시의 기록이며
+> **현재 동작을 설명하지 않는다** — 현재 계약의 정본은 PRD다.
+>
+> **무엇이 무엇으로 바뀌었나**
+> - **`shell` 동결**: CRIU 프로세스 트리 dump/restore → 홈 디렉터리(`/session/state/home`) 파일 +
+>   scrollback의 아카이브. 복원된 쉘은 그 홈에서 시작하는 **새 쉘**이며 실행 중이던 프로세스·환경
+>   변수·cwd·쉘 변수/함수/alias·열린 FD는 보존되지 않는다(사용자 결정, `prd/shell-workload.md` AC-D4 개정).
+>   체크포인트 중에는 쉘 프로세스 트리를 SIGSTOP으로 멈추고 write를 거부하며, 중단 시 SIGCONT로 되살린다.
+> - **트랜잭션**: shell 전용 post-dump 복구 프로토콜이 없던 공백은 사라졌다 — 모든 타입이 `claude-code`가
+>   쓰던 generation 펜스(prepare → committing → 회수, 실패 시 abort)를 공유한다(`prd/claude-code-workload.md` AC-E5).
+> - **게이트**: `CRIU_ENABLED` → `SHELL_ARCHIVE_ENABLED`(프로덕션 base `"false"`, kind e2e 오버레이 `"true"`).
+>   `approval-gated`에는 새 게이트 `APPROVAL_GATED_ARCHIVE_ENABLED`가 생겨 처음으로 동결할 수 있게 됐고,
+>   그 아카이브는 세션 공유 볼륨(`/shared`) 내용까지 담는다(`prd/approval-gated-workload.md` AC-F5).
+> - **결정 ③(durable S3 저장소)은 그대로 쓰인다** — 아래 ③ 절의 업로드 경로·권한(인스턴스 프로파일/IRSA +
+>   STS AssumeRole)·env(`CHECKPOINT_S3_*`)는 이제 모든 타입의 아카이브가 공유한다.
+> - **결정 ⑤(에이전트 주도 in-pod CRIU)는 퇴역했다.** "에이전트가 `/checkpoint`·`/restore`로 아카이브를
+>   만들고 control plane이 S3로 중계한다"는 **골격은 남았지만** 그 안의 criu dump/restore는 사라졌다.
+>   함께 제거된 것: data-plane 이미지의 criu 바이너리·소스 빌드, privileged 세션 파드, `ns_last_pid` PID
+>   하한(`CRIU_PID_FLOOR`)·`CRIU_BIN`, 미배선이던 kubelet ContainerCheckpoint 어댑터, e2e 워크플로의 CRIU
+>   프로브. control-plane 패키지 `internal/adapter/criu`는 `internal/adapter/archive`로 이름이 바뀌었고,
+>   복원 대상 pod 주석은 모든 타입에서 `session-platform.dev/restore-archive`다(`restore-checkpoint` 폐지).
+> - 결정 ①·②·④는 CRIU 전제 위의 판단이라 함께 효력을 잃었다(④의 마커 왕복은 개정된 AC-D4의 검증 방법 —
+>   홈 디렉터리 파일 보존·환경 변수/cwd 비보존 — 으로 대체됐다).
+>
+> **파일 이름은 유지한다** — 이전 doc-tracker 월 파일·주석 판정 기록 등 고치지 않는 역사 문서가 이
+> 경로를 링크한다. 퇴역 경위는 [`doc-tracker/2026-11.md`](./doc-tracker/2026-11.md)에 있다.
 
 > 상태: **agent-driven in-pod CRIU 구현 + kind 배포 e2e 왕복 검증** — *2026-08-08 갱신*.
 > `shell` snapshot은 pod 에이전트가 CRIU dump/restore를 실행하고 control plane이 archive를

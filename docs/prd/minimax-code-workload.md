@@ -52,11 +52,11 @@
 - **구체화 대상**: AC-A1/A2의 세션 격리 — AC-E6의 동작 계약을 AC-F6의 배치로, 다른 공급자 Secret에 재사용
 - **검증 방법**: 제출된 pod spec에서 주 컨테이너의 Secret 참조가 이 타입 Secret의 선택 `model`뿐이고, 헬퍼 파드 credential-proxy 컨테이너의 `base-url`·`auth-token`(필수)·`ca-cert`(선택)이 이 타입 Secret을 가리키며, 두 파드의 어느 컨테이너도 `claude-code` Secret을 참조하지 않음을 확인한다. 주 컨테이너에 직접 자격 증명이나 loopback 프록시 주소를 넣으면 agent가 기동을 거부함을 확인한다.
 
-### AC-G4: CRIU 비대상 — 파일시스템 아카이브, 전용 게이트
-- **설명**: 동결·복원은 AC-E5의 파일시스템 아카이브를 그대로 쓴다 — 입장 차단과 큐 소진, 작업 디렉터리·HOME(`mcode`의 대화 기록이 있는 `~/.minimax` 포함)·누적 출력 버퍼의 아카이브, generation 펜스, 복원 후 커서 연속성. 아카이브 무결성 검사는 상태 트리의 형태(작업 디렉터리·HOME·런타임 상태)만 본다 — 이 타입의 HOME에는 플랫폼 소유 파일이 없으므로 Claude 관리형 설정을 요구하지 않는다. 외부 스토리지로의 전송은 **이 타입 전용 명시적 게이트** `MINIMAX_CODE_ARCHIVE_ENABLED`(기본 off) 뒤에 있다. 게이트가 꺼져 있으면 동결 요청은 셸 체크포인터로 넘어가지 않고 `ErrCheckpointDisabled`로 거부되며 파드는 유지된다. 동결은 헬퍼 파드도 함께 회수하고(AC-F4), 복원은 새 헬퍼 파드와 새 워크로드 파드를 함께 세운다. **헬퍼 파드와 공유하는 볼륨(AC-F5)의 내용은 이 아카이브에 들어가지 않는다** — `approval-gated`의 AC-F5가 요구하는 공유 볼륨 아카이브는 아직 어느 타입에도 구현되지 않았고, 이 타입도 같은 미구현을 공유한다(아래 남은 일).
+### AC-G4: 파일시스템 아카이브, 전용 게이트
+- **설명**: 동결·복원은 AC-E5의 파일시스템 아카이브를 그대로 쓴다 — 입장 차단과 큐 소진, 작업 디렉터리·HOME(`mcode`의 대화 기록이 있는 `~/.minimax` 포함)·누적 출력 버퍼의 아카이브, generation 펜스, 복원 후 커서 연속성. 아카이브 무결성 검사는 상태 트리의 형태(작업 디렉터리·HOME·런타임 상태)만 본다 — 이 타입의 HOME에는 플랫폼 소유 파일이 없으므로 Claude 관리형 설정을 요구하지 않는다. 외부 스토리지로의 전송은 **이 타입 전용 명시적 게이트** `MINIMAX_CODE_ARCHIVE_ENABLED`(기본 off) 뒤에 있다. 게이트가 꺼져 있으면 동결 요청은 다른 타입의 체크포인터로 넘어가지 않고 `ErrCheckpointDisabled`로 거부되며 파드는 유지된다. 동결은 헬퍼 파드도 함께 회수하고(AC-F4), 복원은 새 헬퍼 파드와 새 워크로드 파드를 함께 세운다. **헬퍼 파드와 공유하는 볼륨(AC-F5)이 있으면 그 내용도 이 아카이브에 들어간다** — *2026-11-01 갱신*: `approval-gated`의 AC-F5 공유 볼륨 아카이브가 구현되면서 같은 아카이브 경로를 쓰는 이 타입도 공유 디렉터리(`SESSION_SHARED_DIR`)가 있으면 그 내용을 함께 담고, 복원 시 그 라운드의 새 공유 볼륨에 전개한다. 공유 볼륨 opt-in(`SESSION_SHARED_VOLUME_STORAGE_CLASS`)이 꺼진 배포에는 담을 내용이 없다.
 - **달성 가치**: V2, V3
 - **구체화 대상**: AC-B1(동결)·AC-B2(복원)·AC-B3(무결성) — `claude-code`와 같은 메커니즘
-- **검증 방법**: 게이트 on에서 동결→복원 후 타입·모델이 유지되고, 작업 디렉터리·`~/.minimax`·출력·커서가 보존되며, 복원 후 첫 write에 `--continue`가 붙음을 확인한다. 게이트 off에서는 동결이 거부되고 파드가 남음을 확인한다. 복원 대상 파드가 CRIU가 아닌 아카이브 주석을 가짐을 확인한다.
+- **검증 방법**: 게이트 on에서 동결→복원 후 타입·모델이 유지되고, 작업 디렉터리·`~/.minimax`·출력·커서가 보존되며, 복원 후 첫 write에 `--continue`가 붙음을 확인한다. 게이트 off에서는 동결이 거부되고 파드가 남음을 확인한다. 복원 대상 파드가 아카이브 주석(`session-platform.dev/restore-archive`)을 가짐을 확인한다. 공유 볼륨이 있는 배포에서는 동결 전 그 볼륨에 둔 파일이 복원 후 새 볼륨에 같은 내용으로 남음을 확인한다.
 
 ### AC-G5: K3s MCP 도구 — 토큰은 헬퍼 파드의 K3s MCP 프록시에만
 - **설명**: `minimax-code` 세션도 `claude-code`처럼 홈랩 K3s MCP 도구를 쓴다. 토큰 배치가 다르다. `mcode`는 플러그인 MCP 설정의 헤더에서 `${VAR}`를 치환하지 않고 OAuth 필드(`oauthClientId` 등)가 있으면 서버를 거부하므로, 토큰을 CLI가 직접 쓰게 하려면 HOME 아래 파일에 평문으로 적어야 하고 HOME은 아카이브된다(AC-G4). 그래서 토큰은 **헬퍼 파드의 세 번째 컨테이너 `k3s-mcp-proxy`** 에만 둔다. 이 컨테이너는 AC-E6 credential-proxy와 같은 구현(고정 HTTPS origin, 허용 목록 헤더만 전달, 호출자 `Authorization` 제거 후 `Bearer` 주입, 응답 토큰 redaction, 같은 하드닝·컨테이너 내부 readiness probe)과 AC-F6의 헬퍼 배치(파드 IP 바인드, loopback 바인드 거부)를 쓰되, 허용 목록은 MCP Streamable HTTP 표면(`Accept`·`Content-Type`·`Mcp-Session-Id`·`Mcp-Protocol-Version`·`Last-Event-Id`·`User-Agent`)이고 포트는 `8093`, 상류는 K3s MCP의 origin(`https://homelab-k3s-mcp.llkm.nl`)이다. 토큰은 **이 타입 Secret의 선택 키 `k3s-mcp-token`** 에서 이 컨테이너에만 주입된다(AC-G3의 Secret 분리 그대로 — `claude-code` Secret은 여전히 참조하지 않는다). 키가 없거나 비면 프록시는 기동하되 `/healthz`가 `configured:false`를 알리고 그 밖의 요청에 503을 돌려준다 — 키 없는 배포는 실패가 아니라 K3s 도구 없는 세션이다.
@@ -97,7 +97,7 @@
 - **검증 방법**: 제출된 오브젝트에서 헬퍼 파드가 세션 라벨·`minimax-code` 타입 라벨을 갖고 컨테이너 셋(세션 MCP·credential-proxy·k3s-mcp-proxy)을 가지며 서비스 어카운트 토큰을 마운트하지 않음, 워크로드 파드에 사이드카가 없고 세 헬퍼 주소(`:8091`·`:8092`·`:8093`)를 env로 받음, 워크로드 egress·헬퍼 ingress 정책이 헬퍼 포트 셋을 정확히 허용하고 `approval-gated`의 정책은 두 포트 그대로임, 게이트웨이 3종이 세션 MCP 컨테이너에만 있음, 공유 볼륨 클래스가 있으면 워크로드 파드와 세션 MCP가 같은 claim을 같은 경로에 마운트함을 확인한다. 승인 대기를 보고하는 agent에 대해 유휴 회수가 세션을 동결하지 않고 `lastAccess`를 갱신하며, 대기가 끝나면 갱신이 멈춤을 확인한다. AC-F2의 실클러스터 egress 실측(외부 목적지 차단, K3s MCP 프록시 경유만 성립)은 `approval-gated`와 같은 미검증 상태를 공유한다.
 
 ## 남은 일
-- **공유 볼륨 아카이브** — AC-F5가 요구하는 「공유 볼륨 내용의 아카이브 포함」이 이 타입에도 없다(AC-G4). 승인된 `git_clone`·큰 `web_fetch_get` 결과물은 동결 뒤 사라진다.
+- ~~**공유 볼륨 아카이브**~~ — *2026-11-01 해소*: AC-F5의 「공유 볼륨 내용의 아카이브 포함」이 구현되어 이 타입의 아카이브도 공유 디렉터리를 담는다(AC-G4). 승인된 `git_clone`·큰 `web_fetch_get` 결과물이 동결을 건너 남는다.
 - **웹 화면** — SPA의 게이트 전용 표면(`isGatedWorkload`)과 새 세션 카드 설명은 아직 `approval-gated`만 게이트로 그린다. 승인 대기 마커는 출력 스트림에 그대로 보인다.
 - **marketplace 스킬 로드 실측** — 핀된 `mcode`가 MCP 서버를 뺀 marketplace 플러그인의 스킬을 읽는지는 운영 반영 뒤 세션에서 확인한다.
 - **K3s MCP 조회 2초 한도** — `mcp.json`의 http 서버는 turn마다 `initialize`·`tools/list`가 2초 안에 끝나야 그 turn에 실린다(`mcode`에 조정 수단 없음). K3s MCP는 헬퍼 파드 프록시를 거쳐 외부 origin까지 가므로, 상류가 느린 turn에는 K3s 도구만 빠질 수 있다(세션 MCP는 별개로 조회된다).

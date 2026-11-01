@@ -10,15 +10,17 @@ import { useToast } from "../app/Toast";
 
 const AGENT_RESTORE_COPY =
   "A fresh agent pod will restore the conversation history, working directory, " +
-  "and accumulated output. No CRIU checkpoint is used.";
+  "and accumulated output from the session archive.";
 const SHELL_RESTORE_COPY =
-  "The checkpoint will thaw into a fresh pod and resume the shell exactly where it froze.";
+  "A fresh pod will unpack the session archive and start a new shell in its home " +
+  "directory, with the home directory's files and the output history intact. " +
+  "Running processes, environment variables and the working directory are not kept.";
 const GATED_RESTORE_COPY =
   "A fresh workload pod and a fresh helper pod will restore the conversation " +
   "history, working directory, shared volume, and accumulated output. The " +
   "approval gate is re-armed; nothing that was pending survives the freeze.";
 
-// 복원 메커니즘의 타입별 분기는 AC-B2 · AC-D4 · AC-E5 · AC-F4/F5 가 정본이다.
+// 모든 타입이 파일시스템 아카이브로 복원된다(AC-B2). 무엇이 돌아오는지는 AC-D4 · AC-E5 · AC-F4/F5 가 정본이다.
 export function Restore() {
   const { id = "" } = useParams();
   const [sess, setSess] = useState<Session | null>(null);
@@ -70,13 +72,7 @@ export function Restore() {
     : isAgent
       ? AGENT_RESTORE_COPY
       : SHELL_RESTORE_COPY;
-  const resumeLabel = busy
-    ? isAgent
-      ? "Restoring…"
-      : "Thawing…"
-    : isAgent
-      ? "Restore & resume"
-      : "Thaw & resume";
+  const resumeLabel = busy ? "Restoring…" : "Restore & resume";
 
   return (
     <div className="pad">
@@ -97,7 +93,7 @@ export function Restore() {
           <div>
             <div className="c-name">{sess.name}</div>
             <div className="c-id">
-              session/{sess.id} · {isAgent ? "archived" : "frozen"}
+              session/{sess.id} · archived
             </div>
           </div>
           <span className="badge snapshot">
@@ -106,7 +102,7 @@ export function Restore() {
           </span>
         </div>
         <h2 className="restore-title">
-          {isAgent ? "Resume from session archive" : "Resume from checkpoint"}
+          Resume from session archive
         </h2>
         <p className="restore-copy">
           {restoreCopy}
@@ -114,12 +110,12 @@ export function Restore() {
         <div className="restore-meta">
           {sess.checkpoint ? (
             <>
-              {isAgent ? "archive" : "checkpoint"} {sess.checkpoint.ref} ·{" "}
+              archive {sess.checkpoint.ref} ·{" "}
               {sess.checkpoint.sizeBytes} bytes
               {sess.checkpoint.reclaimed ? ` · reclaimed ${sess.checkpoint.reclaimed}` : ""}
             </>
           ) : (
-            "checkpoint metadata unavailable"
+            "archive metadata unavailable"
           )}
         </div>
         <div className="modal-actions restore-actions">

@@ -269,8 +269,8 @@ $ npm run build
   <section class="step" data-step="STP-shell-state-carry" id="STP-shell-state-carry" hidden>
     <div class="card">
       <div class="row"><h1>session shell</h1><span class="spacer"></span>
-        <span class="crumb">이 상태가 곧 세션의 보존 대상입니다</span></div>
-      <p class="sub">앞선 명령이 만든 상태 위에서 다음 명령이 실행됩니다. 동결·복원을 거쳐도 유지됩니다.</p>
+        <span class="crumb">동결을 건너 남는 것은 홈 디렉터리의 파일과 출력뿐입니다</span></div>
+      <p class="sub">앞선 명령이 만든 상태 위에서 다음 명령이 실행됩니다. 세션이 살아 있는 동안 이어지고, 동결·복원 뒤에는 홈 디렉터리에서 새 쉘이 시작됩니다.</p>
 
       <div class="banner info" id="sc-restart" hidden>
         컨테이너가 재시작되었습니다 — <strong>복원이 아닙니다.</strong> 새 쉘로 시작하므로 이전 상태는 이어지지 않습니다.
@@ -311,7 +311,8 @@ stg in /work/billing</span>
           <div class="kv"><span class="k">env</span><span class="v mono" id="st-env">DEPLOY_ENV=stg</span></div>
           <div class="kv"><span class="k">shell var</span><span class="v mono">RETRIES=3</span></div>
           <div class="kv"><span class="k">background job</span><span class="v mono" id="st-job">없음</span></div>
-          <div class="kv"><span class="k">동결 시 보존</span><span class="v" style="color:var(--ok)">위 전부</span></div>
+          <div class="kv"><span class="k">동결 시 보존</span><span class="v" style="color:var(--ok)">홈 디렉터리 파일 · 출력 이력</span></div>
+          <div class="kv"><span class="k">동결 시 사라짐</span><span class="v">위 cwd · env · shell var · job</span></div>
         </aside>
       </div>
 
@@ -443,7 +444,7 @@ stg in /work/billing</span>
     append($('ci-term'), '$ npm run watch\n[watch] 포그라운드에서 실행 중… (Ctrl-C 로 중단)');
     $('st-job').textContent = 'npm run watch (foreground)';
     $('btn-longjob-state').hidden = false;
-    noteIn(this, '이 상태가 동결 대상이 되는지는 아직 미결입니다 — user-journeys/README.md 의 열린 결정 참고.');
+    noteIn(this, '이 상태가 동결 대상이 되는지는 아직 미결입니다 — 동결되면 이 작업은 중단되고 복원되지 않습니다. user-journeys/README.md 의 열린 결정 참고.');
   });
 
   $('btn-longjob-state').addEventListener('click', function () {
@@ -490,7 +491,7 @@ stg in /work/billing</span>
     shell.env = v;
     append($('sc-term'), '$ export ' + v);
     syncStatePanel();
-    noteIn(this, '환경 변수가 이 쉘에 남았습니다 — 다음 명령과 동결·복원을 건너 이어집니다.');
+    noteIn(this, '환경 변수가 이 쉘에 남았습니다 — 다음 명령으로는 이어지지만 동결·복원 뒤의 새 쉘에는 남지 않습니다. 오래 둘 설정은 ~/.bashrc 같은 홈 디렉터리 파일에 적으세요.');
   });
 
   $('btn-run-stateful').addEventListener('click', function () {

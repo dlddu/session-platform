@@ -223,7 +223,7 @@
 
       <ul class="prov" id="freeze-steps">
         <li class="done"><span class="dot"></span>진행 중인 read/write 마감</li>
-        <li class="done"><span class="dot"></span>쉘 상태 저장 (cwd · 환경 변수 · 히스토리)</li>
+        <li class="done"><span class="dot"></span>쉘 일시정지 · 홈 디렉터리 파일과 출력 이력 아카이브</li>
         <li class="done" id="freeze-last"><span class="dot"></span><span id="freeze-last-text"><span class="mono">snapshot</span> 전이 · pod 회수</span></li>
       </ul>
 
@@ -288,7 +288,8 @@
       </ul>
 
       <dl class="kv">
-        <dt>보관된 것</dt><dd>cwd · 환경 변수 · 쉘 히스토리 · 받아둔 출력 커서</dd>
+        <dt>보관된 것</dt><dd>홈 디렉터리의 파일 · 출력 이력 · 받아둔 출력 커서</dd>
+        <dt>보관되지 않는 것</dt><dd>실행 중인 프로세스 · cwd · 환경 변수 — 다시 열면 홈 디렉터리에서 새 쉘이 시작됩니다</dd>
         <dt>회수된 것</dt><dd>워크로드 파드 · 점유 CPU·메모리</dd>
         <dt>메모</dt><dd id="confirm-memo">—</dd>
       </dl>
