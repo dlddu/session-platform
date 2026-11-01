@@ -178,3 +178,20 @@ patches:
             secretKeyRef:
               name: checkpoint-s3
               key: secret-key
+  # The base's two static NetworkPolicies (k8s/network-policy.yaml) are a
+  # production boundary and do not fit this SUT: the suites reach the control
+  # plane from the host through the NodePort (no traefik here), and shell
+  # sessions use in-cluster MinIO for CRIU checkpoints. kind's kindnet does
+  # enforce NetworkPolicy, so keeping them would drop the NodePort health check.
+  - patch: |-
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: control-plane-ingress
+  - patch: |-
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: shell-workload-egress

@@ -1,0 +1,87 @@
+# 네임스페이스 정적 NetworkPolicy 두 개. 세션마다 control plane 이 만드는 AC-F2 정책
+# (network_policy.go)과 별개로, 세션 수명과 상관없이 항상 서 있는 경계다.
+#
+# 1) control-plane-ingress — control plane API 에는 인증이 없다(외부 경계는 인그레스의
+#    Authelia forward-auth). 그래서 클러스터 안에서 Service 로 직접 닿는 호출을 traefik 과
+#    헬퍼 파드로만 좁힌다. 운영의 내부 호출자(pocket-aide, homelab-k3s-mcp, 헬퍼의
+#    repo-access)는 전부 control-plane-gateway(→ traefik)를 거치고, 헬퍼 직결은
+#    REPO_ACCESS_INTERNAL_URL 미설정 시의 기본 경로다. 워크로드 파드는 여기 없다.
+#
+# 2) shell-workload-egress — shell 세션은 사용자 코드를 root 로 돌리는 파드라, 클러스터
+#    내부(파드·서비스·노드 대역)와 클라우드 메타데이터에 닿지 못하게 한다. 허용하는 것은
+#    kube-dns, API 서버(6443 — data-plane SA 의 view 권한을 쓰는 경로), 그리고 사설·
+#    링크로컬 대역을 뺀 인터넷이다. traefik 게이트웨이도 파드/노드 IP 로만 닿으므로 이
+#    정책이 shell → 게이트웨이 → control plane 우회로를 함께 막는다.
+#
+# 집행은 CNI 의 몫이다. 운영 k3s 는 내장 kube-router 가 집행한다(노드 자신이 출발지인
+# kubelet 프로브는 허용). e2e 오버레이(deploy/)는 둘 다 지운다 — kind 의 kindnet 도
+# 집행하는데, 그 SUT 는 호스트에서 NodePort 로 control plane 에 닿고 shell 이 클러스터
+# 안 MinIO 를 쓴다.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: control-plane-ingress
+  labels:
+    app: control-plane
+spec:
+  podSelector:
+    matchLabels:
+      app: control-plane
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+        - podSelector:
+            matchLabels:
+              session-platform.dev/pod-role: helper
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: shell-workload-egress
+  labels:
+    app: data-plane
+spec:
+  podSelector:
+    matchLabels:
+      session-platform.dev/workload-type: shell
+      session-platform.dev/pod-role: workload
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+        - ipBlock:
+            cidr: 172.16.0.0/12
+        - ipBlock:
+            cidr: 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 6443
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
