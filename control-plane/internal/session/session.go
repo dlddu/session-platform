@@ -137,8 +137,8 @@ func NormalizeModel(workload WorkloadType, model string) (string, error) {
 // (AC-D5) — remains a deferred product decision.
 const MaxIdle = 60 * time.Minute
 
-// Checkpoint captures metadata for a workload snapshot. Shell sessions store
-// CRIU images plus scrollback; filesystem workloads store a durable archive.
+// Checkpoint captures metadata for a workload snapshot: the durable filesystem
+// archive every workload type freezes into.
 type Checkpoint struct {
 	Ref       string    `json:"ref"`                 // opaque checkpoint identifier
 	SizeBytes int64     `json:"sizeBytes"`           // checkpoint image size

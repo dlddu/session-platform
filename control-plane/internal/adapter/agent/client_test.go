@@ -279,35 +279,19 @@ func TestStubClientCursorSemantics(t *testing.T) {
 	}
 }
 
-func TestCheckpointReturnsArchiveStream(t *testing.T) {
-	c, fa := harness(t, "sess-cp")
-	fa.checkpointBody = []byte("CRIU-ARCHIVE-TAR-BYTES")
-	fa.checkpointID = "generation-1"
-
-	rc, checkpointID, err := c.Checkpoint(context.Background(), "sess-cp")
-	if err != nil {
-		t.Fatalf("checkpoint: %v", err)
-	}
-	defer rc.Close()
-	if checkpointID != "generation-1" {
-		t.Fatalf("checkpoint ID = %q, want generation-1", checkpointID)
-	}
-	got, _ := io.ReadAll(rc)
-	if string(got) != "CRIU-ARCHIVE-TAR-BYTES" {
-		t.Fatalf("checkpoint archive = %q, want the agent body verbatim", got)
-	}
-}
-
 func TestCheckpointWithGenerationSendsDurableID(t *testing.T) {
 	const generation = "0123456789abcdef0123456789abcdef"
 	c, fa := harness(t, "sess-cp")
-	fa.checkpointBody = []byte("archive")
+	fa.checkpointBody = []byte("FILESYSTEM-ARCHIVE-TAR-BYTES")
 
 	rc, gotID, err := c.CheckpointWithGeneration(context.Background(), "sess-cp", generation)
 	if err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
 	defer rc.Close()
+	if got, _ := io.ReadAll(rc); string(got) != "FILESYSTEM-ARCHIVE-TAR-BYTES" {
+		t.Fatalf("checkpoint archive = %q, want the agent body verbatim", got)
+	}
 	if fa.checkpointRequestID != generation {
 		t.Fatalf("request generation = %q, want %q", fa.checkpointRequestID, generation)
 	}
@@ -321,7 +305,7 @@ func TestCheckpointWithGenerationSendsDurableID(t *testing.T) {
 func TestCheckpointSurfacesAgentError(t *testing.T) {
 	c, fa := harness(t, "sess-cp")
 	fa.checkpointStatus = http.StatusServiceUnavailable
-	if _, _, err := c.Checkpoint(context.Background(), "sess-cp"); err == nil {
+	if _, _, err := c.CheckpointWithGeneration(context.Background(), "sess-cp", "0123456789abcdef0123456789abcdef"); err == nil {
 		t.Fatal("checkpoint succeeded despite agent 503; want error")
 	}
 }

@@ -364,8 +364,8 @@ func TestMiniMaxCode_UnconfiguredImageIsRefused(t *testing.T) {
 }
 
 // AC-G4/AC-G6: a restore builds a fresh pod pair. The workload half is shaped
-// like claude-code's restore target — the filesystem archive annotation, never
-// the CRIU one — and keeps the type and model.
+// like claude-code's restore target — the filesystem archive annotation and
+// nothing else — and keeps the type and model.
 func TestMiniMaxCode_RestoreTargetUsesArchiveAnnotation(t *testing.T) {
 	orch, cs := newMiniMaxOrchestrator(t)
 	set, err := orch.RestoreInto(context.Background(), "mm06", "s3://bucket/mm06.tar", k8s.WorkloadSpec{
@@ -385,8 +385,8 @@ func TestMiniMaxCode_RestoreTargetUsesArchiveAnnotation(t *testing.T) {
 	if _, ok := restored.Annotations[k8s.AnnotationRestoreArchive]; !ok {
 		t.Errorf("restore pod is missing %s", k8s.AnnotationRestoreArchive)
 	}
-	if _, ok := restored.Annotations[k8s.AnnotationRestoreCheckpoint]; ok {
-		t.Errorf("restore pod unexpectedly carries CRIU annotation %s", k8s.AnnotationRestoreCheckpoint)
+	if len(restored.Annotations) != 1 {
+		t.Errorf("restore pod annotations = %v, want only %s", restored.Annotations, k8s.AnnotationRestoreArchive)
 	}
 	if got := restored.Labels[k8s.LabelWorkloadType]; got != string(session.WorkloadTypeMiniMaxCode) {
 		t.Errorf("%s label = %q, want %q", k8s.LabelWorkloadType, got, session.WorkloadTypeMiniMaxCode)

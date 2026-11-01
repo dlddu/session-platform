@@ -14,11 +14,10 @@ func (w WorkloadType) HasApprovalGate() bool {
 	return w == WorkloadTypeApprovalGated || w == WorkloadTypeMiniMaxCode
 }
 
-// ArchivesThroughAgent reports whether the service snapshots this type through
-// the agent's generation-fenced filesystem archive and bounds its prompts before
-// activation. claude-code and minimax-code share that path (AC-E5, AC-G4).
-// approval-gated is left out on purpose: its archive wiring has not landed in
-// the service, and widening this check would change what it does today.
-func (w WorkloadType) ArchivesThroughAgent() bool {
-	return w == WorkloadTypeClaudeCode || w == WorkloadTypeMiniMaxCode
+// QueuesPrompts reports whether a session of this type takes prompts that its
+// agent queues for a CLI run, rather than raw shell stdin. The service bounds
+// those prompts before activation so an oversized one never restores a
+// snapshot only to be rejected by the agent (AC-E2, AC-F1, AC-G1).
+func (w WorkloadType) QueuesPrompts() bool {
+	return w == WorkloadTypeClaudeCode || w == WorkloadTypeApprovalGated || w == WorkloadTypeMiniMaxCode
 }

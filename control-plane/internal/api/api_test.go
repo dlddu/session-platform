@@ -13,8 +13,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/archive"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
 	"github.com/dlddu/session-platform/control-plane/internal/api"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
@@ -30,7 +30,7 @@ func newServerWithOrchestrator(
 	opts ...api.Option,
 ) (*httptest.Server, *k8s.StubOrchestrator, *configmap.Store) {
 	orch := k8s.NewStubOrchestrator("sessions")
-	ckpt := criu.NewStubCheckpointer(true)
+	ckpt := archive.NewStubCheckpointer(true)
 	stateStore := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
 	mgr := service.New(
 		orch,

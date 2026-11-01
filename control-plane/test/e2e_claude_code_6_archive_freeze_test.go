@@ -57,7 +57,7 @@ func deleteSessionOnCleanup(t *testing.T, id string) {
 	})
 }
 
-func TestClaudeCodeFreeze_ArchivedTypeNeverCarriesTheCRIUPrivilege(t *testing.T) {
+func TestClaudeCodeFreeze_ArchivedPodsAreUnprivilegedWithAStateVolume(t *testing.T) {
 	cs, _, ok := kubeClient(t)
 	if !ok {
 		t.Skip("no kube API access (kubeconfig/in-cluster) — the pod-level assertion needs the deployed cluster")
@@ -66,34 +66,31 @@ func TestClaudeCodeFreeze_ArchivedTypeNeverCarriesTheCRIUPrivilege(t *testing.T)
 
 	shell := createSession(t, uniqueName(t))
 	deleteSessionOnCleanup(t, shell.ID)
-	shellPod := getPodEventually(t, cs, ns, shell.Pod)
-	if !containerIsPrivileged(containerSpec(shellPod, workloadContainer)) {
-		t.Skip("this SUT runs with the CRIU gate off, so a shell pod is unprivileged too and " +
-			"'not privileged' would discriminate nothing — the deploy/ overlay turns the gate on")
-	}
-
 	s := claudeSession(t)
-	pod := getPodEventually(t, cs, ns, s.Pod)
-	c := containerSpec(pod, workloadContainer)
-	if c == nil {
-		t.Fatalf("claude-code pod %s has no %q container; containers=%v", pod.Name, workloadContainer, pod.Spec.Containers)
-	}
-	if containerIsPrivileged(c) {
-		t.Fatalf("the claude-code workload container is privileged — this type freezes into a filesystem "+
-			"archive and must never be given the in-pod CRIU privilege (AC-E5); securityContext=%+v",
-			c.SecurityContext)
-	}
-
-	var mounted bool
-	for _, m := range c.VolumeMounts {
-		if m.MountPath == e5StateVolumePath {
-			mounted = true
-			break
+	for _, target := range []struct{ kind, pod string }{
+		{kind: "shell", pod: shell.Pod},
+		{kind: "claude-code", pod: s.Pod},
+	} {
+		pod := getPodEventually(t, cs, ns, target.pod)
+		c := containerSpec(pod, workloadContainer)
+		if c == nil {
+			t.Fatalf("%s pod %s has no %q container; containers=%v", target.kind, pod.Name, workloadContainer, pod.Spec.Containers)
 		}
-	}
-	if !mounted {
-		t.Fatalf("claude-code workload container has no volume mounted at %s — the filesystem archive has "+
-			"nothing to capture (AC-E5); mounts=%+v", e5StateVolumePath, c.VolumeMounts)
+		if containerIsPrivileged(c) {
+			t.Fatalf("the %s workload container is privileged — every type freezes into a filesystem "+
+				"archive, which needs no privilege (AC-E5); securityContext=%+v", target.kind, c.SecurityContext)
+		}
+		var mounted bool
+		for _, m := range c.VolumeMounts {
+			if m.MountPath == e5StateVolumePath {
+				mounted = true
+				break
+			}
+		}
+		if !mounted {
+			t.Fatalf("%s workload container has no volume mounted at %s — the filesystem archive has "+
+				"nothing to capture (AC-E5); mounts=%+v", target.kind, e5StateVolumePath, c.VolumeMounts)
+		}
 	}
 }
 

@@ -83,20 +83,11 @@ func NewHTTPClient(client kubernetes.Interface, namespace string, opts ...HTTPOp
 	return c
 }
 
-// Checkpoint drives the agent's /checkpoint, returning the archive stream it
-// produces (criu images + scrollback). See criu.AgentCheckpointClient.
-func (c *HTTPClient) Checkpoint(ctx context.Context, pod string) (io.ReadCloser, string, error) {
-	return c.checkpoint(ctx, pod, "")
-}
-
 // CheckpointWithGeneration starts an archive checkpoint under a control-plane
 // owned generation. Persisting that generation before this call lets a restarted
 // control plane abort the exact admission barrier without trusting a stale ID.
+// See archive.AgentCheckpointClient.
 func (c *HTTPClient) CheckpointWithGeneration(ctx context.Context, pod, generation string) (io.ReadCloser, string, error) {
-	return c.checkpoint(ctx, pod, generation)
-}
-
-func (c *HTTPClient) checkpoint(ctx context.Context, pod, generation string) (io.ReadCloser, string, error) {
 	ip, err := c.resolve(ctx, pod)
 	if err != nil {
 		return nil, "", err
@@ -105,9 +96,7 @@ func (c *HTTPClient) checkpoint(ctx context.Context, pod, generation string) (io
 	if err != nil {
 		return nil, "", err
 	}
-	if generation != "" {
-		req.Header.Set(checkpointIDHeader, generation)
-	}
+	req.Header.Set(checkpointIDHeader, generation)
 	resp, err := c.stream.Do(req)
 	if err != nil {
 		return nil, "", fmt.Errorf("checkpoint session pod %s: %w", pod, err)
@@ -120,8 +109,8 @@ func (c *HTTPClient) checkpoint(ctx context.Context, pod, generation string) (io
 	return resp.Body, resp.Header.Get(checkpointIDHeader), nil
 }
 
-// AbortCheckpoint reopens a claude-code agent after its archive was streamed
-// but durable storage or pod reclamation failed. The data plane endpoint is
+// AbortCheckpoint reopens a session agent after its archive was streamed but
+// durable storage or pod reclamation failed. The data plane endpoint is
 // idempotent.
 func (c *HTTPClient) AbortCheckpoint(ctx context.Context, pod, checkpointID string) error {
 	ip, err := c.resolve(ctx, pod)
@@ -148,8 +137,8 @@ func (c *HTTPClient) AbortCheckpoint(ctx context.Context, pod, checkpointID stri
 	return nil
 }
 
-// Restore streams a workload archive to a restore-target pod. The agent either
-// CRIU-restores a shell or unpacks Claude filesystem state.
+// Restore streams a workload archive to a restore-target pod, whose agent
+// unpacks the filesystem state for its workload type.
 func (c *HTTPClient) Restore(ctx context.Context, pod string, archive io.Reader) error {
 	ip, err := c.resolve(ctx, pod)
 	if err != nil {

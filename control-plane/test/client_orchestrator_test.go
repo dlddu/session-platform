@@ -229,7 +229,7 @@ func TestClientOrchestrator_PodSpecPropagatesShellOverride(t *testing.T) {
 // pod-Ready still means "restored shell alive".
 func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t)
-	const ref = "/var/lib/kubelet/checkpoints/checkpoint-sess-r1a2_sessions-session-1.tar"
+	const ref = "s3://checkpoints/sess-r1a2/0123456789abcdef0123456789abcdef/checkpoint.tar"
 
 	restoredPods, err := orch.RestoreInto(context.Background(), "r1a2", ref, k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
 	if err != nil {
@@ -250,14 +250,14 @@ func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 		t.Fatalf("restore pod service account/token = %q/%v, want %q/mounted",
 			p.Spec.ServiceAccountName, p.Spec.AutomountServiceAccountToken, k8s.DataPlaneServiceAccountName)
 	}
-	if got := p.Annotations[k8s.AnnotationRestoreCheckpoint]; got != ref {
-		t.Fatalf("restore pod annotation %s=%q want %q (restore target, not fresh shell)", k8s.AnnotationRestoreCheckpoint, got, ref)
+	if got := p.Annotations[k8s.AnnotationRestoreArchive]; got != ref {
+		t.Fatalf("restore pod annotation %s=%q want %q (restore target, not fresh shell)", k8s.AnnotationRestoreArchive, got, ref)
 	}
 	if got := p.Labels[k8s.LabelSessionID]; got != "r1a2" {
 		t.Fatalf("%s label=%q want r1a2", k8s.LabelSessionID, got)
 	}
 	if c := p.Spec.Containers[0]; len(c.Command) != 0 || len(c.Args) != 0 {
-		t.Fatalf("restore pod overrides the entrypoint (command=%v args=%v); the runtime must resume the checkpoint", c.Command, c.Args)
+		t.Fatalf("restore pod overrides the entrypoint (command=%v args=%v); the agent must await the archive", c.Command, c.Args)
 	}
 	// Restore mode: the agent starts without a shell and awaits POST /restore, so
 	// the pod can become Ready before the control plane pushes the archive.
@@ -297,33 +297,55 @@ func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 		if fp.Labels[k8s.LabelSessionID] != "f9b8" {
 			continue
 		}
-		if _, marked := fp.Annotations[k8s.AnnotationRestoreCheckpoint]; marked {
-			t.Fatalf("fresh Start pod carries the restore marker %s; only RestoreInto should", k8s.AnnotationRestoreCheckpoint)
+		if _, marked := fp.Annotations[k8s.AnnotationRestoreArchive]; marked {
+			t.Fatalf("fresh Start pod carries the restore marker %s; only RestoreInto should", k8s.AnnotationRestoreArchive)
 		}
 	}
 }
 
-// CRIU privilege (in-pod agent-driven checkpoint): WithCheckpointPrivileged runs
-// session pods privileged when the gate is on — the on-cluster-verified config
-// where `criu check` fully passes (capability sets alone are defeated by the
-// runtime's AppArmor and read-only /proc/sys, 2026-07-23). Gate-off pods stay
-// unprivileged (no securityContext).
-func TestClientOrchestrator_CheckpointPrivilegeGated(t *testing.T) {
-	orchOn, cs := newReadyOrchestrator(t, k8s.WithCheckpointPrivileged(true))
-	if _, err := orchOn.Start(context.Background(), "capon", k8s.WorkloadSpec{Type: session.WorkloadTypeShell}); err != nil {
+// A shell's archived state lives under SHELL_STATE_DIR on an EmptyDir mounted
+// one level above it: restore renames the state root into place, which Linux
+// refuses for a mount point. The pod needs no privilege for that, so it
+// carries no securityContext at all.
+func TestClientOrchestrator_ShellPodMountsArchivableStateRoot(t *testing.T) {
+	orch, cs := newReadyOrchestrator(t)
+	if _, err := orch.Start(context.Background(), "shst", k8s.WorkloadSpec{Type: session.WorkloadTypeShell}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	sc := listPods(t, cs)[0].Spec.Containers[0].SecurityContext
-	if sc == nil || sc.Privileged == nil || !*sc.Privileged {
-		t.Fatalf("gate on: securityContext=%+v, want privileged (in-pod CRIU)", sc)
+	pod := listPods(t, cs)[0]
+	c := pod.Spec.Containers[0]
+	var stateDir string
+	for _, e := range c.Env {
+		if e.Name == "SHELL_STATE_DIR" {
+			stateDir = e.Value
+		}
 	}
-
-	orchOff, csOff := newReadyOrchestrator(t)
-	if _, err := orchOff.Start(context.Background(), "capoff", k8s.WorkloadSpec{Type: session.WorkloadTypeShell}); err != nil {
-		t.Fatalf("start: %v", err)
+	if stateDir != "/session/state" {
+		t.Fatalf("SHELL_STATE_DIR=%q, want /session/state", stateDir)
 	}
-	if sc := listPods(t, csOff)[0].Spec.Containers[0].SecurityContext; sc != nil {
-		t.Fatalf("gate off: unexpected securityContext %+v (pods should stay unprivileged)", sc)
+	var mountVolume string
+	for _, m := range c.VolumeMounts {
+		if m.MountPath == "/session" {
+			mountVolume = m.Name
+		}
+	}
+	if mountVolume == "" {
+		t.Fatalf("no volume mounted at /session (mounts=%+v)", c.VolumeMounts)
+	}
+	if !strings.HasPrefix(stateDir, "/session/") {
+		t.Fatalf("state root %q is not a child of the /session mount", stateDir)
+	}
+	var emptyDir bool
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == mountVolume && v.EmptyDir != nil {
+			emptyDir = true
+		}
+	}
+	if !emptyDir {
+		t.Fatalf("volume %q mounted at /session is not an EmptyDir (volumes=%+v)", mountVolume, pod.Spec.Volumes)
+	}
+	if c.SecurityContext != nil {
+		t.Fatalf("shell container securityContext=%+v, want none (archive needs no privilege)", c.SecurityContext)
 	}
 }
 

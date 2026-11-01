@@ -23,7 +23,7 @@ func TestRestoreIntegrity_HistoryAndCursorSurviveTheFreeze(t *testing.T) {
 	}
 
 	if _, ok := snapshotSession(t, s.ID); !ok {
-		t.Skip("SUT predates the product snapshot endpoint — the CRIU round trip is not exercisable here; see docs/criu-verification.md")
+		t.Skip("SUT predates the product snapshot endpoint — the archive round trip is not exercisable here")
 	}
 
 	writeShell(t, s.ID, "echo b3-post-$((40+2))\n")

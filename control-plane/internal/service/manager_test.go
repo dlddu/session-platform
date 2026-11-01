@@ -11,8 +11,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/archive"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
@@ -23,7 +23,7 @@ func newService() *service.Service {
 	return service.New(
 		k8s.NewStubOrchestrator("sessions"),
 		configmap.NewStore(fake.NewSimpleClientset(), "sessions"),
-		criu.NewStubCheckpointer(true),
+		archive.NewStubCheckpointer(true),
 		agent.NewStubClient(),
 	)
 }
@@ -33,7 +33,7 @@ func newService() *service.Service {
 func newServiceWithStore() (*service.Service, *configmap.Store, *agent.StubClient) {
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
 	ag := agent.NewStubClient()
-	svc := service.New(k8s.NewStubOrchestrator("sessions"), store, criu.NewStubCheckpointer(true), ag)
+	svc := service.New(k8s.NewStubOrchestrator("sessions"), store, archive.NewStubCheckpointer(true), ag)
 	return svc, store, ag
 }
 
@@ -84,7 +84,7 @@ func TestSnapshotDisabledLeavesActiveSessionAndPodIntact(t *testing.T) {
 	ctx := context.Background()
 	orch := k8s.NewStubOrchestrator("sessions")
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
-	svc := service.New(orch, store, criu.NewStubCheckpointer(false), agent.NewStubClient())
+	svc := service.New(orch, store, archive.NewStubCheckpointer(false), agent.NewStubClient())
 
 	created, err := svc.Create(ctx, session.CreateRequest{Name: "checkpoint-disabled"})
 	if err != nil {
@@ -136,10 +136,6 @@ type abortTrackingCheckpointer struct {
 }
 
 func (*abortTrackingCheckpointer) Enabled() bool { return true }
-
-func (*abortTrackingCheckpointer) Checkpoint(context.Context, k8s.PodRef) (*session.Checkpoint, error) {
-	return &session.Checkpoint{Ref: "archive", AbortToken: "generation-1"}, nil
-}
 
 func (c *abortTrackingCheckpointer) CheckpointWithGeneration(ctx context.Context, _ k8s.PodRef, generation string) (*session.Checkpoint, error) {
 	c.checkpointCalls++
@@ -264,8 +260,6 @@ func (s *deleteBeforeRestoreCASStore) CompareAndSwapSession(
 	)
 }
 
-type legacyCheckpointer struct{ criu.Checkpointer }
-
 type recoveryAbortAgent struct {
 	*agent.StubClient
 	abortCalls int
@@ -288,7 +282,7 @@ func TestSnapshotStopFailureLeavesDurableCommitForRecovery(t *testing.T) {
 	svc := service.New(
 		orch,
 		store,
-		criu.NewStubCheckpointer(true),
+		archive.NewStubCheckpointer(true),
 		agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 	)
@@ -323,7 +317,7 @@ func TestSnapshotStopFailureLeavesDurableCommitForRecovery(t *testing.T) {
 	// idempotent delete, and finish without another checkpoint or stale abort.
 	orch.stopErr = nil
 	restarted := service.New(
-		orch, store, criu.NewStubCheckpointer(true), agent.NewStubClient(),
+		orch, store, archive.NewStubCheckpointer(true), agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 	)
 	frozen, err := restarted.Snapshot(ctx, created.ID)
@@ -351,7 +345,7 @@ func TestSnapshotPersistsPrepareAndCommitBeforeSideEffects(t *testing.T) {
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
 	ckpt := &abortTrackingCheckpointer{}
 	svc := service.New(
-		orch, store, criu.NewStubCheckpointer(true), agent.NewStubClient(),
+		orch, store, archive.NewStubCheckpointer(true), agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 	)
 	created, err := svc.Create(ctx, session.CreateRequest{Name: "durable-order", WorkloadType: session.WorkloadTypeClaudeCode})
@@ -399,7 +393,7 @@ func TestPreparingSnapshotRecoversAfterControlPlaneRestart(t *testing.T) {
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
 	ckpt := &abortTrackingCheckpointer{}
 	svc := service.New(
-		orch, store, criu.NewStubCheckpointer(true), agent.NewStubClient(),
+		orch, store, archive.NewStubCheckpointer(true), agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 	)
 	created, err := svc.Create(ctx, session.CreateRequest{Name: "prepare-crash", WorkloadType: session.WorkloadTypeClaudeCode})
@@ -417,7 +411,7 @@ func TestPreparingSnapshotRecoversAfterControlPlaneRestart(t *testing.T) {
 	}
 
 	restarted := service.New(
-		orch, store, criu.NewStubCheckpointer(true), agent.NewStubClient(),
+		orch, store, archive.NewStubCheckpointer(true), agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 	)
 	if _, err := restarted.Write(ctx, created.ID, "after restart"); err != nil {
@@ -441,7 +435,7 @@ func TestCheckpointFailureAbortsAndClearsDurablePrepare(t *testing.T) {
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
 	ckpt := &abortTrackingCheckpointer{checkpointErr: errors.New("s3 unavailable")}
 	svc := service.New(
-		orch, store, criu.NewStubCheckpointer(true), agent.NewStubClient(),
+		orch, store, archive.NewStubCheckpointer(true), agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 	)
 	created, err := svc.Create(ctx, session.CreateRequest{Name: "archive-failure", WorkloadType: session.WorkloadTypeClaudeCode})
@@ -477,7 +471,7 @@ func TestCommittingSnapshotRecoversCrashBoundaries(t *testing.T) {
 			store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
 			ckpt := &abortTrackingCheckpointer{}
 			creator := service.New(
-				orch, store, criu.NewStubCheckpointer(true), agent.NewStubClient(),
+				orch, store, archive.NewStubCheckpointer(true), agent.NewStubClient(),
 				service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 			)
 			created, err := creator.Create(ctx, session.CreateRequest{
@@ -508,7 +502,7 @@ func TestCommittingSnapshotRecoversCrashBoundaries(t *testing.T) {
 			}
 
 			restarted := service.New(
-				orch, store, criu.NewStubCheckpointer(false), agent.NewStubClient(),
+				orch, store, archive.NewStubCheckpointer(false), agent.NewStubClient(),
 				service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 			)
 			frozen, err := restarted.Snapshot(ctx, created.ID)
@@ -542,7 +536,7 @@ func TestPreparingRecoveryOwnerClaimFencesExpiredHolderCommit(t *testing.T) {
 		abortRelease: abortRelease,
 	}
 	creator := service.New(
-		orch, store, criu.NewStubCheckpointer(true), agent.NewStubClient(),
+		orch, store, archive.NewStubCheckpointer(true), agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 	)
 	created, err := creator.Create(ctx, session.CreateRequest{
@@ -562,7 +556,7 @@ func TestPreparingRecoveryOwnerClaimFencesExpiredHolderCommit(t *testing.T) {
 	}
 
 	restarted := service.New(
-		orch, store, criu.NewStubCheckpointer(true), agent.NewStubClient(),
+		orch, store, archive.NewStubCheckpointer(true), agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 	)
 	writeDone := make(chan error, 1)
@@ -621,7 +615,7 @@ func TestHungLeaseRenewCancelsPrepareBeforeCommitSideEffects(t *testing.T) {
 	store := &controlledRenewStore{StateStore: baseStore, started: started}
 	ckpt := &abortTrackingCheckpointer{waitCheckpointCancel: true}
 	svc := service.New(
-		orch, store, criu.NewStubCheckpointer(true), agent.NewStubClient(),
+		orch, store, archive.NewStubCheckpointer(true), agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 		service.WithLeaseRenewInterval(2*time.Millisecond),
 	)
@@ -654,7 +648,7 @@ func TestHungLeaseRenewCancelsPrepareBeforeCommitSideEffects(t *testing.T) {
 
 	ckpt.waitCheckpointCancel = false
 	restarted := service.New(
-		orch, baseStore, criu.NewStubCheckpointer(true), agent.NewStubClient(),
+		orch, baseStore, archive.NewStubCheckpointer(true), agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 	)
 	if _, err := restarted.Write(ctx, created.ID, "resume"); err != nil {
@@ -679,7 +673,7 @@ func TestCanceledSnapshotUsesFreshUnlockContext(t *testing.T) {
 	}
 	svc := service.New(
 		k8s.NewStubOrchestrator("sessions"), store,
-		criu.NewStubCheckpointer(true), agent.NewStubClient(),
+		archive.NewStubCheckpointer(true), agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 	)
 	created, err := svc.Create(ctx, session.CreateRequest{
@@ -723,7 +717,7 @@ func TestLeaseRenewFailureCancelsStopAndLeavesCommitRecoverable(t *testing.T) {
 	orch.beforeStop = func() { releaseOnce.Do(func() { close(release) }) }
 	ckpt := &abortTrackingCheckpointer{}
 	svc := service.New(
-		orch, store, criu.NewStubCheckpointer(true), agent.NewStubClient(),
+		orch, store, archive.NewStubCheckpointer(true), agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 		service.WithLeaseRenewInterval(time.Millisecond),
 	)
@@ -753,7 +747,7 @@ func TestLeaseRenewFailureCancelsStopAndLeavesCommitRecoverable(t *testing.T) {
 	orch.beforeStop = nil
 	orch.waitStopCancel = false
 	restarted := service.New(
-		orch, baseStore, criu.NewStubCheckpointer(true), agent.NewStubClient(),
+		orch, baseStore, archive.NewStubCheckpointer(true), agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 	)
 	frozen, err := restarted.Snapshot(ctx, created.ID)
@@ -774,7 +768,7 @@ func TestRestoreLeaseRenewFailureCancelsTransferAndKeepsSnapshot(t *testing.T) {
 	baseStore := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
 	ckpt := &abortTrackingCheckpointer{}
 	normal := service.New(
-		orch, baseStore, criu.NewStubCheckpointer(true), agent.NewStubClient(),
+		orch, baseStore, archive.NewStubCheckpointer(true), agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 	)
 	created, err := normal.Create(ctx, session.CreateRequest{
@@ -799,7 +793,7 @@ func TestRestoreLeaseRenewFailureCancelsTransferAndKeepsSnapshot(t *testing.T) {
 	ckpt.onRestore = func() { releaseOnce.Do(func() { close(release) }) }
 	ckpt.waitRestoreCancel = true
 	restorer := service.New(
-		orch, wrapped, criu.NewStubCheckpointer(true), agent.NewStubClient(),
+		orch, wrapped, archive.NewStubCheckpointer(true), agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 		service.WithLeaseRenewInterval(time.Millisecond),
 	)
@@ -824,7 +818,7 @@ func TestRestoreTreatsCommittedCASWithLostResponseAsSuccess(t *testing.T) {
 	ctx := context.Background()
 	orch := &reachTrackingOrchestrator{StubOrchestrator: k8s.NewStubOrchestrator("sessions")}
 	baseStore := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
-	normal := service.New(orch, baseStore, criu.NewStubCheckpointer(true), agent.NewStubClient())
+	normal := service.New(orch, baseStore, archive.NewStubCheckpointer(true), agent.NewStubClient())
 
 	created, err := normal.Create(ctx, session.CreateRequest{Name: "restore-commit-response-lost"})
 	if err != nil {
@@ -838,7 +832,7 @@ func TestRestoreTreatsCommittedCASWithLostResponseAsSuccess(t *testing.T) {
 	restorer := service.New(
 		orch,
 		&commitThenErrorStore{StateStore: baseStore, err: injected},
-		criu.NewStubCheckpointer(true),
+		archive.NewStubCheckpointer(true),
 		agent.NewStubClient(),
 	)
 
@@ -869,7 +863,7 @@ func TestRestoreCleansPodWhenRecordDisappearsBeforeFinalCAS(t *testing.T) {
 	ctx := context.Background()
 	orch := &reachTrackingOrchestrator{StubOrchestrator: k8s.NewStubOrchestrator("sessions")}
 	baseStore := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
-	normal := service.New(orch, baseStore, criu.NewStubCheckpointer(true), agent.NewStubClient())
+	normal := service.New(orch, baseStore, archive.NewStubCheckpointer(true), agent.NewStubClient())
 
 	created, err := normal.Create(ctx, session.CreateRequest{Name: "restore-record-deleted"})
 	if err != nil {
@@ -882,7 +876,7 @@ func TestRestoreCleansPodWhenRecordDisappearsBeforeFinalCAS(t *testing.T) {
 	restorer := service.New(
 		orch,
 		&deleteBeforeRestoreCASStore{StateStore: baseStore},
-		criu.NewStubCheckpointer(true),
+		archive.NewStubCheckpointer(true),
 		agent.NewStubClient(),
 	)
 
@@ -900,63 +894,48 @@ func TestRestoreCleansPodWhenRecordDisappearsBeforeFinalCAS(t *testing.T) {
 	}
 }
 
-func TestClaudeLegacyStrategyFailsClosedAndGateOffRecoveryStillAborts(t *testing.T) {
+// A prepare left behind by a crash must still reopen the source pod's admission
+// barrier after a restart that turned the type's gate off: the abort falls
+// back to the agent client directly. Every workload type now freezes through
+// the same transaction, so shell is covered alongside claude-code.
+func TestGateOffRecoveryStillAborts(t *testing.T) {
 	ctx := context.Background()
-	t.Run("legacy strategy", func(t *testing.T) {
-		orch := k8s.NewStubOrchestrator("sessions")
-		store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
-		svc := service.New(
-			orch, store, criu.NewStubCheckpointer(true), agent.NewStubClient(),
-			service.WithWorkloadCheckpointer(
-				session.WorkloadTypeClaudeCode,
-				legacyCheckpointer{Checkpointer: criu.NewStubCheckpointer(true)},
-			),
-		)
-		created, err := svc.Create(ctx, session.CreateRequest{
-			Name: "legacy", WorkloadType: session.WorkloadTypeClaudeCode,
+	for _, workload := range []session.WorkloadType{session.WorkloadTypeShell, session.WorkloadTypeClaudeCode} {
+		workload := workload
+		t.Run(string(workload), func(t *testing.T) {
+			testGateOffRecoveryStillAborts(ctx, t, workload)
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := svc.Snapshot(ctx, created.ID); err == nil {
-			t.Fatal("legacy Claude strategy unexpectedly snapshotted")
-		}
-		stored, _ := store.Get(ctx, created.ID)
-		if stored.State != session.StateActive || stored.Pod != created.Pod ||
-			stored.SnapshotTransaction != nil || orch.RunningCount() != 1 {
-			t.Fatalf("legacy fail-closed result=%+v running=%d", stored, orch.RunningCount())
-		}
-	})
+	}
+}
 
-	t.Run("gate off recovery", func(t *testing.T) {
-		orch := k8s.NewStubOrchestrator("sessions")
-		store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
-		creator := service.New(orch, store, criu.NewStubCheckpointer(true), agent.NewStubClient())
-		created, err := creator.Create(ctx, session.CreateRequest{
-			Name: "gate-off-recovery", WorkloadType: session.WorkloadTypeClaudeCode,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		const generation = "0123456789abcdef0123456789abcdef"
-		created.SnapshotTransaction = &session.SnapshotTransaction{
-			Generation: generation,
-			Owner:      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			SourcePod:  created.Pod,
-			Phase:      session.SnapshotPhasePreparing,
-		}
-		if err := store.Put(ctx, created); err != nil {
-			t.Fatal(err)
-		}
-		ag := &recoveryAbortAgent{StubClient: agent.NewStubClient()}
-		restarted := service.New(orch, store, criu.NewStubCheckpointer(false), ag)
-		if _, err := restarted.Write(ctx, created.ID, "recover"); err != nil {
-			t.Fatalf("gate-off recovery: %v", err)
-		}
-		if ag.abortCalls != 1 || ag.abortPod != created.Pod || ag.abortToken != generation {
-			t.Fatalf("fallback abort=(%d,%q,%q)", ag.abortCalls, ag.abortPod, ag.abortToken)
-		}
+func testGateOffRecoveryStillAborts(ctx context.Context, t *testing.T, workload session.WorkloadType) {
+	orch := k8s.NewStubOrchestrator("sessions")
+	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
+	creator := service.New(orch, store, archive.NewStubCheckpointer(true), agent.NewStubClient())
+	created, err := creator.Create(ctx, session.CreateRequest{
+		Name: "gate-off-recovery", WorkloadType: workload,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const generation = "0123456789abcdef0123456789abcdef"
+	created.SnapshotTransaction = &session.SnapshotTransaction{
+		Generation: generation,
+		Owner:      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		SourcePod:  created.Pod,
+		Phase:      session.SnapshotPhasePreparing,
+	}
+	if err := store.Put(ctx, created); err != nil {
+		t.Fatal(err)
+	}
+	ag := &recoveryAbortAgent{StubClient: agent.NewStubClient()}
+	restarted := service.New(orch, store, archive.NewStubCheckpointer(false), ag)
+	if _, err := restarted.Write(ctx, created.ID, "recover"); err != nil {
+		t.Fatalf("gate-off recovery: %v", err)
+	}
+	if ag.abortCalls != 1 || ag.abortPod != created.Pod || ag.abortToken != generation {
+		t.Fatalf("fallback abort=(%d,%q,%q)", ag.abortCalls, ag.abortPod, ag.abortToken)
+	}
 }
 
 // TestReadDispatchesOnState covers the uniform resume-on-access read policy
@@ -1135,7 +1114,7 @@ func TestReadWriteSurfaceAgentErrors(t *testing.T) {
 	svc := service.New(
 		k8s.NewStubOrchestrator("sessions"),
 		configmap.NewStore(fake.NewSimpleClientset(), "sessions"),
-		criu.NewStubCheckpointer(true),
+		archive.NewStubCheckpointer(true),
 		failingAgent{err: errors.New("agent unreachable")},
 	)
 	sess, err := svc.Create(ctx, session.CreateRequest{Name: "broken-io"})
@@ -1185,7 +1164,7 @@ func (o *reachTrackingOrchestrator) Stop(ctx context.Context, refs ...k8s.PodRef
 func newTrackedService() (*service.Service, *reachTrackingOrchestrator, *configmap.Store) {
 	orch := &reachTrackingOrchestrator{StubOrchestrator: k8s.NewStubOrchestrator("sessions")}
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
-	return service.New(orch, store, criu.NewStubCheckpointer(true), agent.NewStubClient()), orch, store
+	return service.New(orch, store, archive.NewStubCheckpointer(true), agent.NewStubClient()), orch, store
 }
 
 // TestCreateVerifiesShellReachability: a session only becomes active after the
@@ -1328,7 +1307,7 @@ func TestTerminateRenewsLeaseWhileStoppingPod(t *testing.T) {
 	svc := service.New(
 		orch,
 		store,
-		criu.NewStubCheckpointer(true),
+		archive.NewStubCheckpointer(true),
 		agent.NewStubClient(),
 		service.WithLeaseRenewInterval(50*time.Millisecond),
 	)
@@ -1367,7 +1346,7 @@ func TestTerminateLeaseLossPreservesSession(t *testing.T) {
 	svc := service.New(
 		orch,
 		store,
-		criu.NewStubCheckpointer(true),
+		archive.NewStubCheckpointer(true),
 		agent.NewStubClient(),
 		service.WithLeaseRenewInterval(time.Millisecond),
 	)

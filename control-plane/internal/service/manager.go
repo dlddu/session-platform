@@ -8,14 +8,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/archive"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 	"github.com/dlddu/session-platform/control-plane/internal/store"
@@ -25,21 +24,13 @@ import (
 type Service struct {
 	orch               k8s.PodOrchestrator
 	store              store.StateStore
-	ckpts              map[session.WorkloadType]criu.Checkpointer
+	ckpts              map[session.WorkloadType]archive.Checkpointer
 	agent              agent.Client
 	now                func() time.Time // injectable clock for tests
 	leaseRenewInterval time.Duration
 }
 
 const defaultLeaseRenewInterval = 5 * time.Second
-
-type checkpointAborter interface {
-	AbortCheckpoint(context.Context, k8s.PodRef, *session.Checkpoint) error
-}
-
-type generationCheckpointer interface {
-	CheckpointWithGeneration(context.Context, k8s.PodRef, string) (*session.Checkpoint, error)
-}
 
 type agentCheckpointAborter interface {
 	AbortCheckpoint(context.Context, string, string) error
@@ -53,10 +44,10 @@ type approvalWaitReporter interface {
 // Option customises workload-specific service behaviour.
 type Option func(*Service)
 
-// WithWorkloadCheckpointer installs the snapshot strategy for a workload.
-// claude-code supplies an agent filesystem-archive checkpointer even when CRIU
-// is disabled (AC-E5).
-func WithWorkloadCheckpointer(workload session.WorkloadType, ckpt criu.Checkpointer) Option {
+// WithWorkloadCheckpointer installs the snapshot strategy for a workload. Each
+// type has its own archive gate, so one type's strategy never depends on
+// another's being enabled (AC-E5).
+func WithWorkloadCheckpointer(workload session.WorkloadType, ckpt archive.Checkpointer) Option {
 	return func(s *Service) {
 		if ckpt != nil {
 			s.ckpts[workload] = ckpt
@@ -86,10 +77,10 @@ func WithLeaseRenewInterval(interval time.Duration) Option {
 }
 
 // New builds a Service from its adapter ports.
-func New(orch k8s.PodOrchestrator, store store.StateStore, ckpt criu.Checkpointer, agent agent.Client, opts ...Option) *Service {
+func New(orch k8s.PodOrchestrator, store store.StateStore, ckpt archive.Checkpointer, agent agent.Client, opts ...Option) *Service {
 	s := &Service{
 		orch: orch, store: store, agent: agent,
-		ckpts:              map[session.WorkloadType]criu.Checkpointer{session.WorkloadTypeShell: ckpt},
+		ckpts:              map[session.WorkloadType]archive.Checkpointer{session.WorkloadTypeShell: ckpt},
 		now:                func() time.Time { return time.Now().UTC() },
 		leaseRenewInterval: defaultLeaseRenewInterval,
 	}
@@ -339,7 +330,7 @@ func (s *Service) Write(ctx context.Context, id, payload string) (*session.Write
 	if err != nil {
 		return nil, err
 	}
-	if current.WorkloadType.ArchivesThroughAgent() && len(payload) > session.MaxClaudePromptBytes {
+	if current.WorkloadType.QueuesPrompts() && len(payload) > session.MaxClaudePromptBytes {
 		return nil, session.ErrWorkloadPromptTooLarge
 	}
 	sess, branch, err := s.activate(ctx, id)
@@ -438,58 +429,18 @@ func (s *Service) snapshot(ctx context.Context, id string, idleCutoff *time.Time
 	if err != nil {
 		return nil, err
 	}
-	if sess.WorkloadType.ArchivesThroughAgent() {
-		generated, ok := ckpt.(generationCheckpointer)
-		if !ok {
-			return nil, fmt.Errorf("%s checkpoint strategy lacks durable generation support", sess.WorkloadType)
-		}
-		frozen, err := s.snapshotWithTransactionLocked(ctx, sess, token, ckpt, generated)
-		if err == nil && snapshotted != nil {
-			*snapshotted = true
-		}
-		return frozen, err
-	}
-
-	// Shell CRIU retains its existing single-call protocol. Unlike the Claude
-	// archive barrier it cannot be rolled back with a durable generation.
-	cp, err := ckpt.Checkpoint(ctx, k8s.PodRef{Name: sess.Pod, Namespace: ""})
-	if err != nil {
-		return nil, err
-	}
-	podRef := k8s.PodRef{Name: sess.Pod}
-	if stopErr := s.orch.Stop(ctx, sessionPodRefs(sess)...); stopErr != nil {
-		if aborter, ok := ckpt.(checkpointAborter); ok {
-			abortCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if abortErr := aborter.AbortCheckpoint(abortCtx, podRef, cp); abortErr != nil {
-				return nil, errors.Join(stopErr, abortErr)
-			}
-		}
-		return nil, stopErr
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	next := *sess
-	next.State = session.StateSnapshot
-	next.Pod = ""
-	next.AuxiliaryPods = nil
-	next.Checkpoint = cp
-	if err := s.store.CompareAndSwapSession(ctx, id, token, sess.State, sess.SnapshotTransaction, &next); err != nil {
-		return nil, err
-	}
-	if snapshotted != nil {
+	frozen, err := s.snapshotWithTransactionLocked(ctx, sess, token, ckpt)
+	if err == nil && snapshotted != nil {
 		*snapshotted = true
 	}
-	return &next, nil
+	return frozen, err
 }
 
 func (s *Service) snapshotWithTransactionLocked(
 	ctx context.Context,
 	sess *session.Session,
 	generation string,
-	ckpt criu.Checkpointer,
-	generated generationCheckpointer,
+	ckpt archive.Checkpointer,
 ) (*session.Session, error) {
 	podRef := k8s.PodRef{Name: sess.Pod}
 	next := *sess
@@ -512,7 +463,7 @@ func (s *Service) snapshotWithTransactionLocked(
 		return nil, err
 	}
 
-	cp, err := generated.CheckpointWithGeneration(ctx, podRef, generation)
+	cp, err := ckpt.CheckpointWithGeneration(ctx, podRef, generation)
 	if err != nil {
 		if ctx.Err() != nil {
 			// Renewal loss (or caller cancellation) leaves the durable prepare for
@@ -652,7 +603,7 @@ func (s *Service) recoverSnapshotLocked(ctx context.Context, sess *session.Sessi
 	}
 }
 
-func (s *Service) rollbackPreparingSnapshot(ctx context.Context, sess *session.Session, ckpt criu.Checkpointer, cause error) error {
+func (s *Service) rollbackPreparingSnapshot(ctx context.Context, sess *session.Session, ckpt archive.Checkpointer, cause error) error {
 	txn := sess.SnapshotTransaction
 	if txn == nil {
 		return cause
@@ -677,11 +628,11 @@ func (s *Service) rollbackPreparingSnapshot(ctx context.Context, sess *session.S
 }
 
 func (s *Service) abortSnapshotGeneration(ctx context.Context, workload session.WorkloadType, pod, generation string) error {
-	if ckpt := s.ckpts[workload]; ckpt != nil {
-		if _, ok := ckpt.(checkpointAborter); ok {
-			return s.abortSnapshotGenerationWithCheckpointer(ctx, ckpt, pod, generation)
-		}
+	if ckpt := s.ckpts[workload]; ckpt != nil && ckpt.Enabled() {
+		return s.abortSnapshotGenerationWithCheckpointer(ctx, ckpt, pod, generation)
 	}
+	// A gate turned off after a crash still leaves the source pod's admission
+	// barrier closed; reopen it through the agent directly.
 	aborter, ok := s.agent.(agentCheckpointAborter)
 	if !ok {
 		return errors.New("snapshot generation abort is unavailable")
@@ -691,14 +642,10 @@ func (s *Service) abortSnapshotGeneration(ctx context.Context, workload session.
 	return aborter.AbortCheckpoint(abortCtx, pod, generation)
 }
 
-func (s *Service) abortSnapshotGenerationWithCheckpointer(ctx context.Context, ckpt criu.Checkpointer, pod, generation string) error {
-	aborter, ok := ckpt.(checkpointAborter)
-	if !ok {
-		return errors.New("snapshot generation abort is unavailable")
-	}
+func (s *Service) abortSnapshotGenerationWithCheckpointer(ctx context.Context, ckpt archive.Checkpointer, pod, generation string) error {
 	abortCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return aborter.AbortCheckpoint(abortCtx, k8s.PodRef{Name: pod}, &session.Checkpoint{AbortToken: generation})
+	return ckpt.AbortCheckpoint(abortCtx, k8s.PodRef{Name: pod}, &session.Checkpoint{AbortToken: generation})
 }
 
 func (s *Service) finalizeSnapshotLocked(ctx context.Context, sess *session.Session, token string) (*session.Session, error) {
@@ -778,9 +725,10 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 	}
 
 	// RestoreInto shapes the new pod as a restore target from the snapshot ref.
-	// Shell restores resume the CRIU process tree and separately serialized
-	// scrollback; filesystem restores unpack workspace, CLI state, and output.
-	// Both preserve the byte stream, so a pre-snapshot read cursor remains valid.
+	// Every workload restores by unpacking its filesystem archive: a shell gets
+	// its home directory and scrollback back under a fresh shell process, agent
+	// workloads their workspace, CLI state, and output. All preserve the output
+	// byte stream, so a pre-snapshot read cursor remains valid.
 	// The restore pod runs the session's own workload type: the type is fixed at
 	// creation and a restore never changes it (AC-E1). Sessions stored before
 	// the type axis existed carry no type, so normalize to the shell default.
@@ -1005,15 +953,15 @@ func (s *Service) touchGet(ctx context.Context, id string) (*session.Session, er
 	return s.Get(ctx, id)
 }
 
-func (s *Service) checkpointerFor(workload session.WorkloadType) (criu.Checkpointer, error) {
+func (s *Service) checkpointerFor(workload session.WorkloadType) (archive.Checkpointer, error) {
 	workload, err := session.NormalizeWorkloadType(workload)
 	if err != nil {
 		return nil, err
 	}
 	ckpt := s.ckpts[workload]
 	if ckpt == nil || !ckpt.Enabled() {
-		// Never reclaim a pod behind synthetic checkpoint metadata. This was a
-		// data-loss path when the production CRIU gate was off.
+		// Never reclaim a pod behind synthetic checkpoint metadata: with a gate
+		// off, the live pod is the only copy of the session's state.
 		return nil, session.ErrCheckpointDisabled
 	}
 	return ckpt, nil

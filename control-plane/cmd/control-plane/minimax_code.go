@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/archive"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
@@ -50,7 +50,7 @@ func validateMiniMaxSecret(cfg miniMaxConfig, claudeSecret string) error {
 // filesystem-archive checkpointer for minimax-code, or nil when the gate is off.
 // The gate needs the image for the same reason claude-code's does: a gate that
 // is on for a type nobody can create is a misconfiguration worth failing on.
-func miniMaxArchiveOption(cfg miniMaxConfig, client *agent.HTTPClient, store criu.CheckpointStore) (service.Option, error) {
+func miniMaxArchiveOption(cfg miniMaxConfig, client *agent.HTTPClient, store archive.CheckpointStore) (service.Option, error) {
 	if !cfg.archiveEnabled {
 		return nil, nil
 	}
@@ -59,6 +59,6 @@ func miniMaxArchiveOption(cfg miniMaxConfig, client *agent.HTTPClient, store cri
 	}
 	return service.WithWorkloadCheckpointer(
 		session.WorkloadTypeMiniMaxCode,
-		criu.NewAgentArchiveCheckpointer(client, store),
+		archive.NewAgentCheckpointer(client, store),
 	), nil
 }
