@@ -56,6 +56,12 @@ resources:
   # because the target URL named a host that does not exist in this cluster.
   - fetch-origin.yaml
 
+  # The file-share service a session MCP's drop_upload/drop_download reach: the
+  # real drop server, built from source by scripts/e2e/up.sh, with its real
+  # ServiceAccount exchange (TokenReview against this cluster). Nothing in it is
+  # substituted, so it sits outside the allowlist like MinIO — see its header.
+  - e2e-drop.yaml
+
   # The ReadWriteMany class AC-F5's session-shared volume is provisioned from.
   # kind's default class is node-local and refuses a ReadWriteMany claim, so
   # without this the volume cannot stand here at all — see the file's header
@@ -98,8 +104,8 @@ patches:
   # locally built agent image scripts/e2e/up.sh loads into kind (the base
   # references the ghcr-published tag). env/1 is DATA_PLANE_IMAGE, env/2 is
   # SHELL_ARCHIVE_ENABLED, env/3 is DATA_PLANE_CLAUDE_CODE_IMAGE, env/4 is
-  # DATA_PLANE_APPROVAL_GATED_IMAGE, and env/17 (the base's last entry) is
-  # APPROVAL_GATED_ARCHIVE_ENABLED. Each gate replace is preceded by a `test`
+  # DATA_PLANE_APPROVAL_GATED_IMAGE, env/17 is APPROVAL_GATED_ARCHIVE_ENABLED and
+  # env/18 (the base's last entry) is DROP_URL. Each gate replace is preceded by a `test`
   # of the entry's name, so a reordered base fails the build instead of
   # silently flipping a different variable.
   #
@@ -170,6 +176,15 @@ patches:
             secretKeyRef:
               name: checkpoint-s3
               key: access-key
+      # drop's in-cluster address here (deploy/e2e-drop.yaml). env/18 is DROP_URL,
+      # the base's last entry; production goes through an ExternalName and
+      # Traefik, neither of which kind has.
+      - op: test
+        path: /spec/template/spec/containers/0/env/18/name
+        value: DROP_URL
+      - op: replace
+        path: /spec/template/spec/containers/0/env/18/value
+        value: http://drop.drop.svc.cluster.local
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
