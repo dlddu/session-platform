@@ -208,6 +208,7 @@ type ClientOrchestrator struct {
 	approvalGatewayURL       string // PocketAide base URL handed to approval-gated helper pods
 	repoAccessURL            string // control plane URL for the helper's repo access calls (repo_access.go)
 	dropURL                  string // drop's in-cluster URL for the helper's drop_* tools (drop.go)
+	k3sMCPProxyEnabled       bool   // run the K3s MCP proxy for the re-exported read tools (k3s_mcp_proxy.go)
 	miniMaxCredentialsSecret string
 	// AC-F5's per-session shared claim — see shared_volume.go.
 	sharedVolumeStorageClass string
@@ -741,6 +742,10 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 	}
 	helperVolumes = o.addRepoAccess(&mcp, helperVolumes)
 	helperVolumes = o.addDrop(&mcp, helperVolumes)
+	// The K3s MCP proxy the re-exported read tools delegate to (AC-F6 C1 —
+	// the token stays in that container, and this one holds only its
+	// loopback address).
+	o.addK3SMCPProxy(&mcp)
 
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{

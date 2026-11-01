@@ -64,6 +64,10 @@ type sessionMCPConfig struct {
 	push func(ctx context.Context, req pushRequest) (pushOutcome, error)
 	// mintGitHubToken is nil without a K3s MCP proxy.
 	mintGitHubToken func(ctx context.Context, repository, contents string) (string, error)
+	// k3s is nil without a K3s MCP proxy. Where it exists, the session MCP
+	// re-exposes the K3s MCP server's read tools as its own gated tools
+	// (session_mcp_k3s.go).
+	k3s *k3sMCPClient
 	// notices carries the wait and its decision to whoever is tailing, which in
 	// a real session is the workload pod's agent (session_mcp_notice_tail.go).
 	notices *noticeFeed
@@ -83,6 +87,7 @@ func newSessionMCPConfig(gateway *approvalGateway, sharedDir string, repoAccess 
 		push:            pushRepository,
 		repoAccess:      repoAccess,
 		mintGitHubToken: githubTokenMinter(k3sProxyMCPURL),
+		k3s:             newK3sMCPClient(k3sProxyMCPURL),
 		notices:         newNoticeFeed(),
 		sharedDir:       strings.TrimSpace(sharedDir),
 		drop:            drop,
@@ -201,6 +206,37 @@ func (c sessionMCPConfig) toolDefinitions() []any {
 			},
 		})
 	}
+	if c.k3s != nil {
+		tools = append(tools,
+			map[string]any{
+				"name": k3sResourceListTool,
+				"description": "List Kubernetes resources of one kind through the K3s MCP server. Every " +
+					"call needs human approval before it leaves the session, and the list is returned only " +
+					"if the request was approved. A result too large for this reply is written to the " +
+					"shared volume and its path is returned instead.",
+				"inputSchema": map[string]any{
+					"type":                 "object",
+					"properties":           k3sResourceListProperties(),
+					"required":             []any{"apiVersion", "kind"},
+					"additionalProperties": false,
+				},
+			},
+			map[string]any{
+				"name": k3sResourceGetTool,
+				"description": "Read one Kubernetes resource through the K3s MCP server, optionally its " +
+					"log, scale or status subresource. Every call needs human approval before it leaves " +
+					"the session, and the resource is returned only if the request was approved. A result " +
+					"too large for this reply is written to the shared volume and its path is returned " +
+					"instead.",
+				"inputSchema": map[string]any{
+					"type":                 "object",
+					"properties":           k3sResourceGetProperties(),
+					"required":             []any{"apiVersion", "kind", "name"},
+					"additionalProperties": false,
+				},
+			},
+		)
+	}
 	if c.drop != nil {
 		tools = append(tools, dropToolDefinitions()...)
 	}
@@ -239,7 +275,7 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 		}
 	}
 	switch call.Name {
-	case webFetchGetTool, gitCloneTool, pingTool, requestRepoAccessTool, gitPushTool, dropUploadTool, dropDownloadTool:
+	case webFetchGetTool, gitCloneTool, pingTool, requestRepoAccessTool, gitPushTool, dropUploadTool, dropDownloadTool, k3sResourceListTool, k3sResourceGetTool:
 	default:
 		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: fmt.Sprintf("no tool named %q", call.Name)}
 	}
@@ -268,6 +304,9 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 	}
 	if call.Name == dropDownloadTool {
 		return c.callDropDownload(ctx, logger, call.Arguments)
+	}
+	if call.Name == k3sResourceListTool || call.Name == k3sResourceGetTool {
+		return c.callK3sTool(ctx, logger, call.Name, call.Arguments)
 	}
 
 	var args struct {

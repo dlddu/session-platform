@@ -68,6 +68,7 @@ func main() {
 		"claude_code_models", len(cfg.claudeCodeModels),
 		"repo_access_enabled", cfg.repoAccess.enabled,
 		"drop_url", cfg.dropURL,
+		"k3s_mcp_proxy_enabled", cfg.k3sMCPProxyEnabled,
 	)
 	if cfg.dataPlaneImage == "" {
 		// The in-code fallback image has no session agent, so session pods will
@@ -88,7 +89,9 @@ func main() {
 		k8s.WithApprovalGatewayURL(cfg.approvalGatewayURL),
 		k8s.WithSharedVolume(cfg.sharedVolumeStorageClass, cfg.sharedVolumeSize),
 		k8s.WithRepoAccess(cfg.repoAccess.helperURL(namespace)),
-		k8s.WithDropURL(cfg.dropURL))
+		k8s.WithDropURL(cfg.dropURL),
+		// The K3s MCP proxy for the re-exported read tools (roadmap entry 2).
+		k8s.WithK3SMCPProxy(cfg.k3sMCPProxyEnabled))
 	store := configmap.NewStore(client, namespace)
 	// Shell I/O (write→stdin, read→scrollback delta) AND checkpoint/restore ride
 	// the same agent client: it resolves pod name → IP per request and dials the
@@ -255,6 +258,10 @@ type config struct {
 	miniMax                 miniMaxConfig
 	repoAccess              repoAccessConfig
 	dropURL                 string // drop's in-cluster URL for helper pods (docs/prd/drop-file-share.md AC-I2)
+	// k3sMCPProxyEnabled runs the K3s MCP proxy in approval-gated helper pods
+	// so the session MCP can re-export its read tools (roadmap entry 2,
+	// docs/session-mcp-tool-surface.md). The token stays in that container.
+	k3sMCPProxyEnabled bool
 }
 
 // GET /config lists only these, so clients never offer a type whose create would fail.
@@ -365,6 +372,7 @@ func loadConfig() (config, error) {
 		miniMax:                     loadMiniMaxConfig(),
 		repoAccess:                  loadRepoAccessConfig(),
 		dropURL:                     env("DROP_URL", ""),
+		k3sMCPProxyEnabled:          envBool("SESSION_K3S_MCP_PROXY_ENABLED", false),
 	}, nil
 }
 
