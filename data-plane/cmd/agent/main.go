@@ -1,6 +1,7 @@
 // Command agent is the data plane entrypoint for every workload mode, selected
 // by DATA_PLANE_WORKLOAD (default "shell"). The switch in main lists them, and
-// each mode's contract lives with its own code: shell here (AC-D1~D4),
+// each mode's contract lives with its own code: shell here (AC-D1~D3) and its
+// archive in checkpoint.go (AC-D4),
 // claude-code and approval-gated in claude.go (AC-E2~E5) with their tool
 // surfaces in agentToolSurface below, mcp in session_mcp.go, credential-proxy
 // in credential_proxy.go.
@@ -17,7 +18,9 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -62,14 +65,13 @@ const (
 	// agentPort (control-plane/internal/adapter/k8s/client_orchestrator.go).
 	defaultAddr = ":8090"
 	// restoreModeEnv is set by the control plane on restore-target pods
-	// (AnnotationRestoreCheckpoint path).
+	// (AnnotationRestoreArchive path).
 	restoreModeEnv = "DATA_PLANE_RESTORE_MODE"
-
-	nsLastPIDPath = "/proc/sys/kernel/ns_last_pid"
-	// defaultShellPIDFloor is written to nsLastPIDPath before the session shell
-	// forks; see docs/criu-verification.md 5차 (2026-07-23, 복원 pid 충돌) for
-	// why. Overridable via CRIU_PID_FLOOR while tuning against a runtime.
-	defaultShellPIDFloor = 300
+	// shellStateDirEnv names the shell's archived state root. The shell's home
+	// directory is its "home" child; keep the default in sync with the control
+	// plane orchestrator, which mounts the volume above it.
+	shellStateDirEnv     = "SHELL_STATE_DIR"
+	defaultShellStateDir = "/session/state"
 )
 
 func main() {
@@ -84,23 +86,26 @@ func main() {
 	switch workload {
 	case workloadShell:
 		a.shellPath = env("DATA_PLANE_SHELL", defaultShell)
-		a.engine = newExecCriuEngine()
+		stateDir, err := shellStateDir(env(shellStateDirEnv, defaultShellStateDir))
+		if err != nil {
+			logger.Error("invalid shell state dir", "err", err)
+			os.Exit(1)
+		}
+		a.stateDir = stateDir
 		if restoreMode {
-			logger.Info("shell agent started in restore mode; awaiting checkpoint", "addr", addr)
+			logger.Info("shell agent started in restore mode; awaiting archive", "addr", addr, "state_dir", stateDir)
 		} else {
-			floor := shellPIDFloor()
-			if err := reserveShellPID(floor); err != nil {
-				logger.Info("could not raise ns_last_pid; the shell will take a low pid"+
-					" (harmless without CRIU, but a restore may hit a pid collision)",
-					"path", nsLastPIDPath, "floor", floor, "err", err)
+			if err := os.MkdirAll(a.homeDir(), 0o700); err != nil {
+				logger.Error("failed to create shell home", "home", a.homeDir(), "err", err)
+				os.Exit(1)
 			}
-			sh, err := startShell(a.shellPath)
+			sh, err := startShell(a.shellPath, a.homeDir(), nil)
 			if err != nil {
 				logger.Error("failed to start session shell", "shell", a.shellPath, "err", err)
 				os.Exit(1)
 			}
 			a.adopt(sh)
-			logger.Info("session shell started", "shell", a.shellPath, "pid", sh.pid, "addr", addr)
+			logger.Info("session shell started", "shell", a.shellPath, "pid", sh.pid, "addr", addr, "home", a.homeDir())
 		}
 	case workloadClaudeCode, workloadApprovalGated:
 		tools, err := agentToolSurface(workload)
@@ -246,6 +251,8 @@ func main() {
 			a.claude.Close()
 		}
 		if sh := a.current(); sh != nil {
+			// A paused tree would hold SIGHUP pending until the kill timeout.
+			a.resumePaused()
 			sh.hangup(logger)
 		}
 		os.Exit(0)
@@ -257,20 +264,27 @@ func main() {
 }
 
 // agent holds the current session shell, which is swappable: a normal pod adopts
-// one at startup, a restore-mode pod adopts the CRIU-restored one on /restore.
+// one at startup, a restore-mode pod adopts a fresh one on /restore.
 type agent struct {
 	shellPath string
-	engine    criuEngine
+	stateDir  string
 	claude    *claudeWorkload
 
 	mu     sync.Mutex
 	sh     *shellProc
 	exited chan struct{} // closed once an adopted shell exits (triggers restart)
 	once   sync.Once
-	// checkpointing suppresses the shell-exit→container-restart path while a
-	// /checkpoint is in flight; handleCheckpoint sets it and says why.
-	checkpointing atomic.Bool
+	// ckpt is the snapshot admission state checkpoint.go owns, guarded by mu.
+	ckpt shellCheckpoint
+	// admission orders writes against a starting checkpoint: a write holds it
+	// shared across its check and its PTY write, so no accepted input can land
+	// after the archive's scrollback was taken.
+	admission sync.RWMutex
 }
+
+// homeDir is the shell's home and starting directory, the part of the shell
+// that survives a snapshot (AC-D4).
+func (a *agent) homeDir() string { return filepath.Join(a.stateDir, "home") }
 
 // current returns the adopted shell, or nil in restore mode before /restore.
 func (a *agent) current() *shellProc {
@@ -288,12 +302,6 @@ func (a *agent) adopt(sh *shellProc) {
 	a.mu.Unlock()
 	go func() {
 		<-sh.done
-		if a.checkpointing.Load() {
-			// Expected exit: criu dump froze/killed the shell for a checkpoint.
-			// Don't restart — the archive is still streaming and the control
-			// plane reclaims this pod once it has it.
-			return
-		}
 		a.once.Do(func() { close(a.exited) })
 	}()
 }
@@ -302,8 +310,8 @@ func (a *agent) adopt(sh *shellProc) {
 // its PTY since it started (stdout and stderr merged by the PTY itself, order
 // preserved). There is no size cap — the buffer bound is a deliberately open
 // design decision (see docs/prd/shell-workload.md). It lives in the agent's
-// memory rather than in the dumped process tree, which is why checkpoint.go
-// has to archive it separately (AC-D3/D4).
+// memory rather than on disk, which is why checkpoint.go archives it next to
+// the home directory (AC-D3/D4).
 type scrollback struct {
 	mu      sync.Mutex
 	buf     []byte
@@ -417,9 +425,8 @@ func (b *scrollback) notifyLocked() {
 }
 
 // shellProc is the one PTY-attached session shell (AC-D1) and its lifecycle.
-// It is lifecycle-generic rather than tied to *exec.Cmd so both a freshly
-// started shell (startShell) and a CRIU-restored one (criuEngine.Restore) share
-// the same drain/reap/hangup machinery.
+// It is lifecycle-generic rather than tied to *exec.Cmd so tests can drive the
+// drain/reap/hangup machinery with any process.
 type shellProc struct {
 	ptmx    *os.File    // PTY master; the shell owns the slave as its ctty
 	out     *scrollback // everything the shell has emitted (AC-D3)
@@ -468,40 +475,51 @@ func newShellProc(ptmx *os.File, pid int, initial []byte, wait func() error, sig
 	return s
 }
 
-// shellPIDFloor is the pid floor to claim before forking the shell, from
-// CRIU_PID_FLOOR or defaultShellPIDFloor. A non-positive or unparseable value
-// falls back to the default rather than disabling the guard silently.
-func shellPIDFloor() int {
-	if v := os.Getenv("CRIU_PID_FLOOR"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
-		}
-	}
-	return defaultShellPIDFloor
-}
-
-// reserveShellPID writes floor to ns_last_pid so the next fork in this pid
-// namespace gets floor+1. The agent's own threads may consume a few pids after
-// this, which only pushes the shell higher — the guarantee needed is "well above
-// the agent's tids", not an exact number. Fails on a non-privileged pod, where
-// the file is read-only; callers treat that as best-effort.
-func reserveShellPID(floor int) error {
-	return os.WriteFile(nsLastPIDPath, []byte(strconv.Itoa(floor)), 0o644)
-}
-
-// startShell launches exactly one interactive shell attached to a fresh PTY.
-func startShell(path string) (*shellProc, error) {
+// startShell launches exactly one interactive shell attached to a fresh PTY,
+// started in home with HOME pointing at it. initial preloads the scrollback a
+// restored shell continues from (AC-D3/D4); a fresh shell passes nil.
+func startShell(path, home string, initial []byte) (*shellProc, error) {
 	cmd := exec.Command(path)
+	cmd.Dir = home
 	// The PTY slave becomes the shell's stdin/stdout/stderr and controlling
 	// terminal, which is what makes the shell interactive. TERM is set for the
 	// shell's line editing; the size is a sane default until a client-driven
 	// resize exists (STP-command-input and later).
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	cmd.Env = shellEnvironment(home)
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
 	if err != nil {
 		return nil, err
 	}
-	return newShellProc(ptmx, cmd.Process.Pid, nil, cmd.Wait, cmd.Process.Signal, cmd.Process.Kill), nil
+	return newShellProc(ptmx, cmd.Process.Pid, initial, cmd.Wait, cmd.Process.Signal, cmd.Process.Kill), nil
+}
+
+// shellEnvironment is the agent's environment with HOME and the starting
+// directory moved to the archived home.
+func shellEnvironment(home string) []string {
+	env := make([]string, 0, len(os.Environ())+2)
+	for _, kv := range os.Environ() {
+		switch {
+		case strings.HasPrefix(kv, "HOME="), strings.HasPrefix(kv, "PWD="),
+			strings.HasPrefix(kv, "OLDPWD="), strings.HasPrefix(kv, "TERM="):
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, "HOME="+home, "PWD="+home, "TERM=xterm-256color")
+}
+
+// shellStateDir resolves the configured state root, refusing the filesystem
+// root: restore swaps the whole directory into place.
+func shellStateDir(dir string) (string, error) {
+	abs, err := filepath.Abs(strings.TrimSpace(dir))
+	if err != nil {
+		return "", fmt.Errorf("resolve shell state dir: %w", err)
+	}
+	abs = filepath.Clean(abs)
+	if abs == string(filepath.Separator) {
+		return "", errors.New("shell state dir must not be the filesystem root")
+	}
+	return abs, nil
 }
 
 // hangup terminates the shell the way a closing terminal does: SIGHUP first
@@ -580,7 +598,15 @@ func routes(logger *slog.Logger, a *agent) http.Handler {
 			http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if _, err := sh.ptmx.Write(payload); err != nil {
+		a.admission.RLock()
+		if a.checkpointInFlight() {
+			a.admission.RUnlock()
+			http.Error(w, errShellAdmissionClosed.Error(), http.StatusConflict)
+			return
+		}
+		_, err = sh.ptmx.Write(payload)
+		a.admission.RUnlock()
+		if err != nil {
 			http.Error(w, "write to shell stdin: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -621,8 +647,9 @@ func routes(logger *slog.Logger, a *agent) http.Handler {
 		serveOutputStream(w, r, sh.out)
 	})
 
-	// CRIU checkpoint/restore (in-pod). See checkpoint.go.
+	// Filesystem archive snapshot/restore (AC-D4). See checkpoint.go.
 	mux.HandleFunc("POST /checkpoint", a.handleCheckpoint(logger))
+	mux.HandleFunc("POST /checkpoint/abort", a.handleCheckpointAbort())
 	mux.HandleFunc("POST /restore", a.handleRestore(logger))
 
 	return mux

@@ -1,307 +1,356 @@
 package main
 
+// Shell snapshot and restore through the filesystem archive every workload
+// type shares (state_archive.go). What survives is the shell's home directory
+// and its scrollback (AC-D3/D4); the process tree does not. A restore starts a
+// fresh shell in the restored home with the scrollback preloaded, so cursors
+// issued before the snapshot stay valid.
+//
+// The protocol is the Claude archive's, generation-fenced by the control plane:
+// /checkpoint closes write admission and pauses the shell's process tree so the
+// home directory holds still while it is walked, then streams the archive. The
+// tree stays paused and writes stay closed until the control plane either
+// reclaims the pod or calls /checkpoint/abort, which resumes both.
+
 import (
-	"archive/tar"
-	"context"
+	"bufio"
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/creack/pty"
 )
 
-// This file implements in-pod CRIU checkpoint/restore of the session shell tree
-// (AC-B1/B2/B3, AC-D4), done by the agent because it already owns the shell
-// process and its PTY master. Why not a container-level kubelet checkpoint:
-// docs/criu-verification.md, decision ⑤.
-//
-// The archive is a tar carrying the criu image directory plus the scrollback
-// bytes, so the accumulated shell output (AC-D3/D4) survives the round trip even
-// though it lives in the agent's memory, not the dumped tree. The control plane
-// streams the archive to/from durable storage (S3); the agent never touches
-// object storage or cloud credentials.
+var (
+	errShellAdmissionClosed = errors.New("shell is checkpointing; writes are closed")
+	errShellNoLiveShell     = errors.New("no live shell")
+	errShellCheckpointBusy  = errors.New("shell checkpoint archive is still streaming")
+)
 
-// archiveScrollbackName is the tar entry holding the serialized scrollback.
-const archiveScrollbackName = "scrollback"
-const archiveImagesPrefix = "images/"
-
-// criuEngine performs the runtime-specific half of in-pod checkpoint/restore.
-// The default execCriuEngine shells out to criu; tests inject a fake so the
-// handlers and archive plumbing run without a CRIU runtime.
-type criuEngine interface {
-	// Dump CRIU-dumps the process tree rooted at pid into imagesDir. After a
-	// successful dump the process is frozen/gone (the pod is about to be
-	// reclaimed), so the caller snapshots the scrollback afterwards.
-	Dump(ctx context.Context, pid int, imagesDir string) error
-	// Restore CRIU-restores the tree from imagesDir, reattaches it to a fresh
-	// PTY, and returns a live shellProc whose scrollback is preloaded with
-	// initial (the checkpointed history).
-	Restore(ctx context.Context, imagesDir string, initial []byte) (*shellProc, error)
+// shellCheckpoint is one in-flight snapshot attempt, guarded by agent.mu.
+type shellCheckpoint struct {
+	active bool   // admission closed, tree paused
+	ready  bool   // archive fully streamed; only abort or reclamation follows
+	id     string // the control plane's generation
+	paused []int  // pids stopped for the walk, resumed on abort
 }
 
-// handleCheckpoint dumps the live shell tree and streams back a tar of the criu
-// images + scrollback. The control plane persists it and reclaims the pod.
-func (a *agent) handleCheckpoint(logger *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		sh := a.current()
-		if sh == nil || !sh.alive.Load() {
-			http.Error(w, "no live shell to checkpoint", http.StatusServiceUnavailable)
-			return
-		}
-		imagesDir, err := os.MkdirTemp("", "criu-dump-")
-		if err != nil {
-			http.Error(w, "make images dir: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer os.RemoveAll(imagesDir)
+// maxPauseRounds bounds the stop-then-rescan loop in pauseTree: a process that
+// forks between the scan and its own SIGSTOP is caught on the next round.
+const maxPauseRounds = 8
 
-		// Suppress the shell-exit→restart path BEFORE the dump: criu freezes and
-		// kills the shell tree, and without this the exit watch would os.Exit(1)
-		// mid-request and truncate the archive below. On dump failure criu leaves
-		// the tree running, so re-arm restart; on success we stay suppressed and
-		// let the control plane reclaim the pod after the archive lands.
-		a.checkpointing.Store(true)
-		if err := a.engine.Dump(r.Context(), sh.pid, imagesDir); err != nil {
-			a.checkpointing.Store(false)
-			http.Error(w, "criu dump: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		sb := sh.out.snapshot()
+// pauseSettleTimeout bounds how long beginCheckpoint waits for SIGSTOP to land.
+const pauseSettleTimeout = 2 * time.Second
 
-		w.Header().Set("Content-Type", "application/x-tar")
-		if err := writeArchive(w, imagesDir, sb); err != nil {
-			// Body streaming has begun, so we can only log — the control plane
-			// sees a truncated archive and fails the checkpoint.
-			logger.Error("stream checkpoint archive", "err", err)
-			return
-		}
-		logger.Info("checkpoint streamed; shell frozen, awaiting pod reclaim by control plane",
-			"pid", sh.pid, "scrollback_bytes", len(sb))
+func (a *agent) checkpointInFlight() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.ckpt.active
+}
+
+// beginCheckpoint closes admission and pauses the live shell's tree.
+func (a *agent) beginCheckpoint(id string) (*shellProc, error) {
+	a.admission.Lock()
+	defer a.admission.Unlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	switch {
+	case a.sh == nil || !a.sh.alive.Load():
+		return nil, errShellNoLiveShell
+	case a.ckpt.active:
+		return nil, errShellAdmissionClosed
+	}
+	a.ckpt = shellCheckpoint{active: true, id: id, paused: pauseTree(a.sh.pid)}
+	return a.sh, nil
+}
+
+// completeCheckpoint marks the archive as fully streamed.
+func (a *agent) completeCheckpoint() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.ckpt.active {
+		a.ckpt.ready = true
 	}
 }
 
-// handleRestore receives a checkpoint archive, CRIU-restores the shell tree, and
-// adopts it. Only valid in restore mode before a shell exists.
+// abortCheckpoint resumes the tree and reopens writes after a local failure.
+func (a *agent) abortCheckpoint() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.reopenLocked()
+}
+
+// abortCompletedCheckpoint is the control plane's rollback once it has read
+// the whole archive but could not commit the snapshot. It is idempotent: an
+// attempt that already rolled back locally reports success.
+func (a *agent) abortCompletedCheckpoint(id string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	switch {
+	case a.sh == nil:
+		return errShellNoLiveShell
+	case id == "":
+		return errClaudeCheckpointID
+	case !a.ckpt.active:
+		return nil
+	case id != a.ckpt.id:
+		return errClaudeCheckpointID
+	case !a.ckpt.ready:
+		return errShellCheckpointBusy
+	}
+	a.reopenLocked()
+	return nil
+}
+
+func (a *agent) reopenLocked() {
+	resumePids(a.ckpt.paused)
+	a.ckpt = shellCheckpoint{}
+}
+
+// resumePaused resumes a paused tree without reopening writes, for shutdown.
+func (a *agent) resumePaused() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	resumePids(a.ckpt.paused)
+}
+
+// handleCheckpoint streams the shell's archive (AC-B1/AC-D4).
+func (a *agent) handleCheckpoint(logger *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := claudeCheckpointID(r.Header.Get(claudeCheckpointIDHeader))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		archive, err := os.CreateTemp("", "shell-checkpoint-*.tar")
+		if err != nil {
+			http.Error(w, "create checkpoint archive: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer os.Remove(archive.Name())
+		defer archive.Close()
+
+		sh, err := a.beginCheckpoint(id)
+		if err != nil {
+			status := http.StatusConflict
+			if errors.Is(err, errShellNoLiveShell) {
+				status = http.StatusServiceUnavailable
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				a.abortCheckpoint()
+			}
+		}()
+		if err := writeStateArchive(archive, a.stateDir, "", sh.out.snapshot()); err != nil {
+			http.Error(w, "build checkpoint archive: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if _, err := archive.Seek(0, io.SeekStart); err != nil {
+			http.Error(w, "rewind checkpoint archive: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-tar")
+		w.Header().Set(claudeCheckpointIDHeader, id)
+		if _, err := io.Copy(w, archive); err != nil {
+			logger.Error("stream shell checkpoint archive", "err", err)
+			return
+		}
+		a.completeCheckpoint()
+		committed = true
+	}
+}
+
+// handleCheckpointAbort is the control plane's rollback of a streamed archive.
+func (a *agent) handleCheckpointAbort() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := a.abortCompletedCheckpoint(r.Header.Get(claudeCheckpointIDHeader)); err != nil {
+			status := http.StatusConflict
+			if errors.Is(err, errShellNoLiveShell) {
+				status = http.StatusServiceUnavailable
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"aborted"}`))
+	}
+}
+
+// handleRestore expands an archive into the state root and starts a fresh
+// shell in the restored home. Only valid in restore mode before a shell exists.
 func (a *agent) handleRestore(logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if a.current() != nil {
+		a.mu.Lock()
+		if a.sh != nil || a.ckpt.active {
+			a.mu.Unlock()
 			http.Error(w, "agent already has a shell", http.StatusConflict)
 			return
 		}
-		imagesDir, err := os.MkdirTemp("", "criu-restore-")
-		if err != nil {
-			http.Error(w, "make images dir: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer os.RemoveAll(imagesDir)
+		// Holding the slot as active keeps a concurrent restore out until this
+		// one has adopted its shell or failed.
+		a.ckpt.active = true
+		a.mu.Unlock()
+		defer func() {
+			a.mu.Lock()
+			a.ckpt = shellCheckpoint{}
+			a.mu.Unlock()
+		}()
 
-		sb, err := readArchive(r.Body, imagesDir)
+		r.Body = http.MaxBytesReader(w, r.Body, maxClaudeArchiveBytes)
+		sb, err := restoreStateArchive(r.Body, a.stateDir, "", validateRestoredShellState)
 		if err != nil {
-			http.Error(w, "read checkpoint archive: "+err.Error(), http.StatusBadRequest)
+			http.Error(w, "restore shell archive: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		sh, err := a.engine.Restore(r.Context(), imagesDir, sb)
+		sh, err := startShell(a.shellPath, a.homeDir(), sb)
 		if err != nil {
-			http.Error(w, "criu restore: "+err.Error(), http.StatusInternalServerError)
+			http.Error(w, "start restored shell: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		a.adopt(sh)
-		logger.Info("checkpoint restored", "pid", sh.pid, "scrollback_bytes", len(sb))
+		logger.Info("shell archive restored", "pid", sh.pid, "scrollback_bytes", len(sb))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"restored"}`))
 	}
 }
 
-// writeArchive tars the scrollback and every file in imagesDir into w.
-func writeArchive(w io.Writer, imagesDir string, scrollback []byte) error {
-	tw := tar.NewWriter(w)
-	if err := tw.WriteHeader(&tar.Header{
-		Name: archiveScrollbackName,
-		Mode: 0o600,
-		Size: int64(len(scrollback)),
-	}); err != nil {
-		return err
+// validateRestoredShellState refuses an archive without a home directory, the
+// one thing a shell snapshot always carries.
+func validateRestoredShellState(root string) error {
+	info, err := os.Lstat(filepath.Join(root, "home"))
+	if errors.Is(err, os.ErrNotExist) {
+		return errors.New("shell archive is missing home directory")
 	}
-	if _, err := tw.Write(scrollback); err != nil {
-		return err
-	}
-
-	entries, err := os.ReadDir(imagesDir)
 	if err != nil {
 		return err
 	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue // criu writes a flat image directory
-		}
-		info, err := e.Info()
-		if err != nil {
-			return err
-		}
-		if err := tw.WriteHeader(&tar.Header{
-			Name: archiveImagesPrefix + e.Name(),
-			Mode: 0o600,
-			Size: info.Size(),
-		}); err != nil {
-			return err
-		}
-		f, err := os.Open(filepath.Join(imagesDir, e.Name()))
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(tw, f); err != nil {
-			f.Close()
-			return err
-		}
-		f.Close()
-	}
-	return tw.Close()
-}
-
-// readArchive unpacks an archive written by writeArchive.
-func readArchive(r io.Reader, imagesDir string) ([]byte, error) {
-	tr := tar.NewReader(r)
-	var scrollback []byte
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		switch {
-		case hdr.Name == archiveScrollbackName:
-			scrollback, err = io.ReadAll(tr)
-			if err != nil {
-				return nil, err
-			}
-		case len(hdr.Name) > len(archiveImagesPrefix) && hdr.Name[:len(archiveImagesPrefix)] == archiveImagesPrefix:
-			name := hdr.Name[len(archiveImagesPrefix):]
-			// Guard against path traversal in a hostile archive.
-			if filepath.Base(name) != name {
-				return nil, fmt.Errorf("unsafe archive entry %q", hdr.Name)
-			}
-			dst, err := os.Create(filepath.Join(imagesDir, name))
-			if err != nil {
-				return nil, err
-			}
-			if _, err := io.Copy(dst, tr); err != nil { //nolint:gosec // size bounded by the trusted control plane
-				dst.Close()
-				return nil, err
-			}
-			dst.Close()
-		default:
-			return nil, fmt.Errorf("unexpected archive entry %q", hdr.Name)
-		}
-	}
-	return scrollback, nil
-}
-
-// execCriuEngine shells out to the criu binary.
-//
-// RUNTIME SEAM — being tuned against a real runtime. This is the one part of the
-// in-pod CRIU path that cannot run without a CRIU-capable node, so it is
-// exercised only during on-runtime verification, never in CI (tests inject a
-// fake engine). The PTY handling on restore — recreating a master and restoring
-// the shell job against that tty — remains the least-proven part. See
-// docs/criu-verification.md.
-type execCriuEngine struct {
-	bin string
-}
-
-func newExecCriuEngine() *execCriuEngine {
-	return &execCriuEngine{bin: env("CRIU_BIN", "criu")}
-}
-
-func (e *execCriuEngine) Dump(ctx context.Context, pid int, imagesDir string) error {
-	// --shell-job: the shell is a session/PTY job whose sid/tty is inherited
-	// from outside the dumped tree (the agent holds the PTY master).
-	cmd := exec.CommandContext(ctx, e.bin, "dump",
-		"--tree", strconv.Itoa(pid),
-		"--images-dir", imagesDir,
-		"--shell-job",
-		"--file-locks",
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%w: %s", err, out)
+	if !info.IsDir() {
+		return errors.New("shell archive home is not a directory")
 	}
 	return nil
 }
 
-func (e *execCriuEngine) Restore(ctx context.Context, imagesDir string, initial []byte) (*shellProc, error) {
-	// Recreate a PTY pair; the restored shell's controlling terminal is wired to
-	// the slave and the agent keeps the master to drain output, mirroring a fresh
-	// start. --shell-job tells criu the tty is inherited.
-	ptmx, tty, err := pty.Open()
-	if err != nil {
-		return nil, fmt.Errorf("open pty for restore: %w", err)
+// pauseTree SIGSTOPs root and every descendant, rescanning until a round finds
+// nothing new. A process that has already left the tree (daemonized onto the
+// pid namespace's init) is out of reach and keeps running.
+func pauseTree(root int) []int {
+	stopped := map[int]bool{}
+	var order []int
+	for round := 0; round < maxPauseRounds; round++ {
+		fresh := false
+		for _, pid := range processTree(root) {
+			if stopped[pid] {
+				continue
+			}
+			stopped[pid] = true
+			fresh = true
+			if err := syscall.Kill(pid, syscall.SIGSTOP); err == nil {
+				order = append(order, pid)
+			}
+		}
+		if !fresh {
+			break
+		}
 	}
-	fail := func(err error) (*shellProc, error) {
-		_ = ptmx.Close()
-		_ = tty.Close()
-		return nil, err
-	}
-
-	// --restore-detached: criu exits as soon as the tree is running, so criu's
-	// own lifetime is NOT the shell's. --restore-sibling: the restored root task
-	// becomes a child of criu's parent, i.e. of this agent, so the agent can
-	// signal and reap it. --pidfile: criu records the restored root task's real
-	// pid, which is what we then watch/signal instead of criu's. The incident
-	// these three answer is docs/criu-verification.md 5차 (2026-07-23).
-	pidfile := filepath.Join(imagesDir, "restored.pid")
-	cmd := exec.CommandContext(ctx, e.bin, "restore",
-		"--images-dir", imagesDir,
-		"--shell-job",
-		"--restore-detached",
-		"--restore-sibling",
-		"--pidfile", pidfile,
-	)
-	// criu's stdio is the PTY slave: that is the tty the shell job is restored
-	// against (and where criu's own diagnostics land if the restore fails).
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
-	if err := cmd.Run(); err != nil {
-		return fail(fmt.Errorf("criu restore: %w", err))
-	}
-	_ = tty.Close() // the restored task holds its own copy now
-
-	b, err := os.ReadFile(pidfile)
-	if err != nil {
-		return fail(fmt.Errorf("read criu pidfile %s: %w", pidfile, err))
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil || pid <= 0 {
-		return fail(fmt.Errorf("parse criu pidfile %s (%q): %w", pidfile, b, err))
-	}
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return fail(fmt.Errorf("find restored task %d: %w", pid, err))
-	}
-	return newShellProc(ptmx, pid, initial,
-		func() error { return waitRestored(proc) }, proc.Signal, proc.Kill), nil
+	waitStopped(order)
+	return order
 }
 
-// waitRestored blocks until the restored root task exits. --restore-sibling makes
-// it a child of this agent, so os.Process.Wait normally reaps it directly. If the
-// kernel/criu ever leaves it unreapable here (wait4 ECHILD), fall back to
-// liveness polling rather than returning early — an early return would be read
-// as "shell exited" and restart the container while the session is alive.
-func waitRestored(p *os.Process) error {
-	if _, err := p.Wait(); err == nil {
-		return nil
-	}
-	for {
-		if err := p.Signal(syscall.Signal(0)); err != nil {
-			return nil // process is gone
+// waitStopped gives SIGSTOP time to land: a process running on another CPU
+// only stops when it next enters the kernel. A process that never reports
+// stopped within the bound is left to the archive walk's own change checks.
+func waitStopped(pids []int) {
+	deadline := time.Now().Add(pauseSettleTimeout)
+	for _, pid := range pids {
+		for {
+			state, ok := processState(pid)
+			if !ok || state == "T" || state == "t" || state == "Z" || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
-		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// resumePids SIGCONTs pids in reverse stop order, children before the shell.
+func resumePids(pids []int) {
+	for i := len(pids) - 1; i >= 0; i-- {
+		_ = syscall.Kill(pids[i], syscall.SIGCONT)
+	}
+}
+
+// processTree returns root followed by its live descendants, read from /proc.
+func processTree(root int) []int {
+	children := map[int][]int{}
+	entries, err := os.ReadDir("/proc")
+	if err == nil {
+		for _, entry := range entries {
+			pid, err := strconv.Atoi(entry.Name())
+			if err != nil {
+				continue
+			}
+			ppid, ok := parentPID(pid)
+			if !ok {
+				continue
+			}
+			children[ppid] = append(children[ppid], pid)
+		}
+	}
+	tree := []int{root}
+	for i := 0; i < len(tree); i++ {
+		tree = append(tree, children[tree[i]]...)
+	}
+	return tree
+}
+
+// parentPID reads the ppid field of /proc/<pid>/stat.
+func parentPID(pid int) (int, bool) {
+	fields, ok := procStatFields(pid)
+	if !ok || len(fields) < 2 {
+		return 0, false
+	}
+	ppid, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return 0, false
+	}
+	return ppid, true
+}
+
+// processState reads the one-letter state field of /proc/<pid>/stat.
+func processState(pid int) (string, bool) {
+	fields, ok := procStatFields(pid)
+	if !ok || len(fields) < 1 {
+		return "", false
+	}
+	return fields[0], true
+}
+
+// procStatFields returns the /proc/<pid>/stat fields after the command name,
+// which may hold spaces and parentheses and so is skipped up to its last ')'.
+func procStatFields(pid int) ([]string, bool) {
+	f, err := os.Open(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	line, err := bufio.NewReader(f).ReadBytes('\n')
+	if err != nil && len(line) == 0 {
+		return nil, false
+	}
+	end := bytes.LastIndexByte(line, ')')
+	if end < 0 {
+		return nil, false
+	}
+	return strings.Fields(string(line[end+1:])), true
 }
