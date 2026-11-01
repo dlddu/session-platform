@@ -1,0 +1,115 @@
+# kind e2e: 실물 drop(dlddu/drop) — 세션 MCP 의 drop_upload·drop_download 가 닿는 파일 전달 서비스.
+#
+# 대역이 아니다. 서버는 운영과 같은 코드(DROP_SHA 커밋)이고, 서비스 어카운트 교환도 실물이다:
+# 헬퍼 파드의 세션 MCP 가 projected 토큰(audience drop)을 보내면 drop 이 자기 SA 로 이 클러스터의
+# apiserver 에 TokenReview 를 걸어 확인하고, 아래 SA_ALLOW 에 있는 계정에만 단기 키를 내준다.
+# 그래서 충실도 허용목록(docs/test/e2e.md)에 등재할 치환이 없다 — MinIO·fetch-origin 과 같은 자리다.
+#
+# 운영과 다른 것은 셋이고 셋 다 배포 지형의 차이다:
+#   - 주소: 운영은 ExternalName → Traefik → Sablier 를 지나지만(깨우기 대기), 여기는 Service 하나로
+#     곧장 닿는다. 깨우기 지연(307·블로킹)은 단위 테스트가 대신 본다.
+#   - 이미지: 발행 이미지(ghcr.io/dlddu/drop:<sha>)는 arm64 하나뿐이라 amd64 e2e 러너에서 돌지
+#     않는다. scripts/e2e/up.sh 가 같은 DROP_SHA 커밋을 소스에서 빌드해 `drop:e2e` 로 싣는다
+#     (PocketAide 와 같은 방식).
+#   - 저장소: PVC 대신 emptyDir — 보관 기간·용량 상한은 drop 자신의 e2e 몫이다.
+#
+# SA_ALLOW 는 이 SUT 의 네임스페이스(default)의 session-mcp 다. 운영은 session-platform/session-mcp,
+# 프리뷰 네임스페이스는 일부러 넣지 않는다(403 — 닫힌 쪽으로 실패).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: drop
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: drop
+  namespace: drop
+---
+# TokenReview 를 부를 권한. 클러스터 범위라 drop 의 base 에 없고, 운영은 flux-cd-apps 가 붙인다.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: drop-tokenreview-session-platform-e2e
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: drop
+    namespace: drop
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: drop
+  namespace: drop
+  labels:
+    app: drop
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: drop
+  template:
+    metadata:
+      labels:
+        app: drop
+    spec:
+      serviceAccountName: drop
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: drop
+          image: drop:e2e
+          imagePullPolicy: IfNotPresent
+          # 패커(scripts/e2e/pocket-aide.Dockerfile)에는 ENTRYPOINT 가 없다.
+          command: ["/usr/local/bin/drop"]
+          env:
+            - name: DATA_DIR
+              value: /data
+            - name: SA_ALLOW
+              value: default/session-mcp
+            - name: PUBLIC_BASE_URL
+              value: http://drop.drop.svc.cluster.local
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: drop
+  namespace: drop
+spec:
+  selector:
+    app: drop
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

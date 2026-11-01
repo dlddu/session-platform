@@ -99,6 +99,29 @@ docker build -q -f scripts/e2e/pocket-aide.Dockerfile --build-arg BINARY=oidcmoc
   -t oidc-mock:e2e "$PA_CTX" >/dev/null
 kind load docker-image pocket-aide:e2e oidc-mock:e2e --name "$CLUSTER"
 
+# The file-share service a session MCP's drop_* tools reach is the real drop
+# (deploy/e2e-drop.yaml). Its published image is arm64 only and this runner is
+# amd64, so it is built here from the pinned commit like PocketAide. DROP_SHA is
+# the only pin: move it when drop's ServiceAccount exchange, upload or get API
+# changes. The distroless packer is the same one, since both are one static
+# binary run as nonroot.
+DROP_SHA="${DROP_SHA:-4360deffa833b3d06aec45330af864cb5e2d831f}"
+DROP_SRC="$(mktemp -d)"
+DROP_CTX="$(mktemp -d)"
+trap 'rm -rf "$PA_SRC" "$PA_CTX" "$DROP_SRC" "$DROP_CTX"' EXIT
+echo "e2e: building drop at $DROP_SHA"
+git init -q "$DROP_SRC"
+git -C "$DROP_SRC" fetch -q --depth 1 https://github.com/dlddu/drop "$DROP_SHA"
+git -C "$DROP_SRC" checkout -q FETCH_HEAD
+test "$(git -C "$DROP_SRC" rev-parse HEAD)" = "$DROP_SHA"
+(
+  cd "$DROP_SRC"
+  CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$DROP_CTX/drop" .
+)
+docker build -q -f scripts/e2e/pocket-aide.Dockerfile --build-arg BINARY=drop \
+  -t drop:e2e "$DROP_CTX" >/dev/null
+kind load docker-image drop:e2e --name "$CLUSTER"
+
 echo "e2e: applying deploy/ overlay (kustomize: base k8s/ + kind patches)"
 kubectl apply -k deploy/
 
@@ -134,6 +157,9 @@ kubectl -n pocket-aide rollout status deploy/pocket-aide --timeout=180s
 # first one must not race this listener — a refused connection there would look
 # like the tool failing rather than the origin still starting.
 kubectl rollout status deploy/fetch-origin --timeout=120s
+# drop, which drop_upload/drop_download reach (deploy/e2e-drop.yaml). Same
+# reason: the first exchange must not race its listener.
+kubectl -n drop rollout status deploy/drop --timeout=120s
 # The ReadWriteMany provisioner behind AC-F5's session-shared volume
 # (deploy/shared-volume-provisioner.yaml). Same reason as the fixtures above:
 # the first approval-gated session must not race it. Without the class its
