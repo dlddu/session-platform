@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -206,6 +207,23 @@ func (c sessionMCPConfig) toolDefinitions() []any {
 	return tools
 }
 
+// argumentKeys lists a tools/call's top-level argument names, never their values.
+func argumentKeys(arguments json.RawMessage) []string {
+	if len(arguments) == 0 || string(arguments) == "null" {
+		return []string{}
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(arguments, &obj); err != nil {
+		return []string{"<not an object>"}
+	}
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // callTool runs one tools/call. The returned value is normally an MCP tool
 // result (mcpToolText/mcpToolError). The JSON-RPC error return is reserved for
 // faults that are not tool outcomes at all: a call this server cannot parse,
@@ -225,6 +243,10 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 	default:
 		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: fmt.Sprintf("no tool named %q", call.Name)}
 	}
+	// 무엇이 도착했는지 이름만 남긴다 — 값에는 비밀번호·토큰이 들어갈 수 있다. 에이전트가 선택 인자를
+	// 빠뜨렸는지 서버가 버렸는지를 가르는 근거다(2026-11-01 운영 drop_upload 에서 id·password·days 가
+	// 네 번 빠진 채 도착한 일).
+	logger.Info("tool call received", "tool", call.Name, "argument_keys", argumentKeys(call.Arguments))
 	if !c.gated() {
 		// Reachable only if a client calls a tool this server never listed.
 		return mcpToolError("the approval gate is not configured, so this server lists no tools"), nil
