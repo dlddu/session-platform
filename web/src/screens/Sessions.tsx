@@ -8,7 +8,7 @@ import { SessionCard } from "../app/SessionCard";
 import { PodIcon } from "../app/icons";
 import { useToast } from "../app/Toast";
 
-// checkpoint 의 `reclaimed` 는 "N vCPU · M GB" 자유 문자열이라 파싱해서 합친다.
+// checkpoint(와이어 필드 이름 — 화면 어휘는 archive) 의 `reclaimed` 는 "N vCPU · M GB" 자유 문자열이라 파싱해서 합친다.
 function aggregateReclaimed(sessions: Session[]): string | null {
   let vcpu = 0;
   let gb = 0;

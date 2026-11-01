@@ -8,8 +8,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/archive"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
@@ -29,7 +29,7 @@ func newAuxService(aux int) (*service.Service, *k8s.StubOrchestrator, *configmap
 	orch := k8s.NewStubOrchestrator("sessions")
 	orch.SetAuxiliaryPods(aux)
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
-	return service.New(orch, store, criu.NewStubCheckpointer(true), agent.NewStubClient()), orch, store
+	return service.New(orch, store, archive.NewStubCheckpointer(true), agent.NewStubClient()), orch, store
 }
 
 // TestCreateRecordsTheWholePodSet: creating a session with auxiliary pods
@@ -163,7 +163,7 @@ func TestFailedCreateReclaimsTheWholePodSet(t *testing.T) {
 	svc := service.New(
 		orch,
 		configmap.NewStore(fake.NewSimpleClientset(), "sessions"),
-		criu.NewStubCheckpointer(true),
+		archive.NewStubCheckpointer(true),
 		agent.NewStubClient(),
 	)
 
@@ -188,7 +188,7 @@ func TestReachTargetsOnlyTheWorkloadPod(t *testing.T) {
 	svc := service.New(
 		orch,
 		configmap.NewStore(fake.NewSimpleClientset(), "sessions"),
-		criu.NewStubCheckpointer(true),
+		archive.NewStubCheckpointer(true),
 		agent.NewStubClient(),
 	)
 

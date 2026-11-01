@@ -431,7 +431,7 @@
           <div>
             <div class="eyebrow">Control plane · us-east-1</div>
             <h1>Sessions</h1>
-            <div class="sub">Every session runs in its own dedicated pod. Idle sessions freeze to a checkpoint and hand their compute back.</div>
+            <div class="sub">Every session runs in its own dedicated pod. Idle sessions freeze to an archive and hand their compute back.</div>
           </div>
           <button class="btn btn-primary" onclick="location.href='new-session.html'">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -620,12 +620,12 @@ function cardHTML(s){
     body = `<div class="snap-body">
       <div class="crystal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M12 2 9.5 4.5M12 2l2.5 2.5M12 22l-2.5-2.5M12 22l2.5-2.5M3.3 7l17.4 10M3.3 7l3.4.9M3.3 7l.9 3.4M20.7 17l-3.4-.9M20.7 17l-.9-3.4M20.7 7 3.3 17M20.7 7l-3.4.9M20.7 7l-.9 3.4M3.3 17l3.4-.9M3.3 17l.9-3.4"/></svg></div>
       <div class="snap-meta">
-        <div class="row"><span class="k">checkpoint</span><span class="v">${s.checkpoint}</span></div>
+        <div class="row"><span class="k">archive</span><span class="v">${s.checkpoint}</span></div>
         <div class="row"><span class="k">frozen</span><span class="v">${s.frozenAgo}</span></div>
         <div class="row"><span class="k">reclaimed</span><span class="v">${s.reclaim}</span></div>
       </div></div>
       <div class="snap-hint">${ic('clock',13)} ${s.type==='shell'
-        ? 'open to thaw and resume exactly where it froze'
+        ? 'open to restore the archive — a fresh shell with your home files and output history'
         : 'open to restore the archive and continue the conversation'}</div>`;
   }
   const podLine = s.state==='snapshot'

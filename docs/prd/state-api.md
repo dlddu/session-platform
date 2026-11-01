@@ -10,15 +10,15 @@
 ## Acceptance Criteria
 
 ### AC-C1: ConfigMap(resourceVersion CAS) + Lease 기반 atomic 상태 전이
-- **설명**: 세션 상태 전이(active ↔ idle ↔ snapshot)와 세션 점유는 Kubernetes ConfigMap의 resourceVersion 낙관적 동시성(compare-and-swap)과 `coordination.k8s.io` Lease를 통한 atomic operation으로 처리된다. 공개 state뿐 아니라 session aggregate 전체를 한 번에 비교·교체하는 CAS를 사용하며, 동시 `Touch`가 기록한 더 최신 `lastAccess`는 merge한다. `claude-code` archive snapshot에서만 aggregate에 private owner/phase/generation transaction이 들어가고 owner-fenced `preparing→committing` 전이를 사용한다. shell CRIU에는 아직 동등한 durable post-dump transaction이 없다. 장시간 Snapshot·Restore·recovery는 기본 15초 Lease를 5초마다 갱신하고 각 Renew에도 5초 deadline을 적용해, holder 상실·hung API 호출 시 후속 side effect를 취소한다. 동일 세션에 대한 동시 요청(예: 복원과 스냅샷이 동시 발생)에서도 Lease/CAS 단일 승자만 상태를 전이하며, Claude transaction에서는 단일 owner/phase 전이만 성공한다. 상태는 control plane 다중 replica가 공유하므로 어느 replica가 처리하든 동일하게 보인다.
+- **설명**: 세션 상태 전이(active ↔ idle ↔ snapshot)와 세션 점유는 Kubernetes ConfigMap의 resourceVersion 낙관적 동시성(compare-and-swap)과 `coordination.k8s.io` Lease를 통한 atomic operation으로 처리된다. 공개 state뿐 아니라 session aggregate 전체를 한 번에 비교·교체하는 CAS를 사용하며, 동시 `Touch`가 기록한 더 최신 `lastAccess`는 merge한다. archive snapshot에서는 aggregate에 private owner/phase/generation transaction이 들어가고 owner-fenced `preparing→committing` 전이를 사용한다 — *2026-11-01 갱신*: CRIU 퇴역으로 모든 워크로드 타입(`shell` 포함)이 같은 아카이브 트랜잭션을 쓴다(이전 판의 「shell CRIU에는 아직 동등한 durable post-dump transaction이 없다」는 해소됐다). 장시간 Snapshot·Restore·recovery는 기본 15초 Lease를 5초마다 갱신하고 각 Renew에도 5초 deadline을 적용해, holder 상실·hung API 호출 시 후속 side effect를 취소한다. 동일 세션에 대한 동시 요청(예: 복원과 스냅샷이 동시 발생)에서도 Lease/CAS 단일 승자만 상태를 전이하며, archive transaction에서는 단일 owner/phase 전이만 성공한다. 상태는 control plane 다중 replica가 공유하므로 어느 replica가 처리하든 동일하게 보인다.
 - **달성 가치**: V5
-- **검증 방법**: 동일 세션에 복원/스냅샷/전환 요청을 동시 다발로 발생시켜, 최종 상태가 항상 유효한 단일 상태로 수렴하고 중복 pod 기동·이중 스냅샷이 발생하지 않음을 확인한다. 장시간 전이에서 Lease가 갱신되고 Renew timeout/holder 상실 시 side effect가 취소됨을 확인한다. Claude archive에서는 stale owner가 새 snapshot generation/phase를 진전·삭제하지 못하고, `Touch`와 aggregate CAS가 겹쳐도 private transaction과 최신 `lastAccess`가 모두 보존됨을 추가로 확인한다.
+- **검증 방법**: 동일 세션에 복원/스냅샷/전환 요청을 동시 다발로 발생시켜, 최종 상태가 항상 유효한 단일 상태로 수렴하고 중복 pod 기동·이중 스냅샷이 발생하지 않음을 확인한다. 장시간 전이에서 Lease가 갱신되고 Renew timeout/holder 상실 시 side effect가 취소됨을 확인한다. archive snapshot에서는 stale owner가 새 snapshot generation/phase를 진전·삭제하지 못하고, `Touch`와 aggregate CAS가 겹쳐도 private transaction과 최신 `lastAccess`가 모두 보존됨을 추가로 확인한다.
 
 ### AC-C2: Read API 상태별 분기
 - **설명**: 세션 단위 Read API는 대상 세션을 먼저 `active`로 만든 뒤 그 pod에서 읽는다(통일 규칙: 비-active 접근은 "active 보장 후 처리"). 상태별로 active 보장 경로만 다르다.
   - `active`: pod에서 직접 읽어 즉시 응답
   - `idle`: `idle→active` atomic 승격(AC-C1) 후 pod에서 읽기 (idle은 pod를 아직 보유)
-  - `snapshot`: workload별 복원(`shell`=CRIU, `claude-code`·`approval-gated`=filesystem archive)으로 `active` 전이(AC-B2) 후 읽기
+  - `snapshot`: workload별 복원(모든 타입 filesystem archive — 보존 대상은 `shell`=홈 디렉터리 파일+scrollback(AC-D4), `claude-code`·`minimax-code`=작업 디렉터리·HOME·대화+scrollback, `approval-gated`=그것+공유 볼륨)으로 `active` 전이(AC-B2) 후 읽기
   - 이는 switch(AC-C4)·snapshot 접근(AC-B2)과 동일한 "접근 시 active화" 원칙을 read에 적용한 것이다.
 - **달성 가치**: V3, V4
 - **구체화**: read가 반환하는 것은 워크로드 타입별로 다르다 — `shell`은 누적된 쉘 stdout/stderr → AC-D3 (`shell-workload.md`), `claude-code`는 실행마다 turn 마커(input·output·end)로 감싼 프롬프트와 투영된 assistant text delta·diagnostic stderr → AC-E3 (`claude-code-workload.md`), `approval-gated`는 거기에 승인 대기·결정 in-band 마커가 섞인 같은 바이트열 → AC-F3 (`approval-gated-workload.md`). **append-only byte offset 커서 규약(비파괴·`offset=0`=전체)은 세 타입이 동일**하다.
@@ -32,7 +32,7 @@
 - **설명**: 세션 단위 Write API도 read와 같은 통일 규칙을 따른다. 대상 세션을 먼저 `active`로 만든 뒤 write를 적용한다.
   - `active`: pod에 직접 write
   - `idle`: `idle→active` atomic 승격(AC-C1) 후 write
-  - `snapshot`: workload별 복원(`shell`=CRIU, `claude-code`·`approval-gated`=filesystem archive)으로 `active` 전이(AC-B2) 후 write — **snapshot write는 거부하지 않고 복원 후 적용한다** (AC-B2의 "접근=복원"과 일치)
+  - `snapshot`: workload별 복원(모든 타입 filesystem archive — 보존 대상은 `shell`=홈 디렉터리 파일+scrollback(AC-D4), `claude-code`·`minimax-code`=작업 디렉터리·HOME·대화+scrollback, `approval-gated`=그것+공유 볼륨)으로 `active` 전이(AC-B2) 후 write — **snapshot write는 거부하지 않고 복원 후 적용한다** (AC-B2의 "접근=복원"과 일치)
 - **달성 가치**: V3, V5
 - **구체화**: write가 반영하는 것은 워크로드 타입별로 다르다 — `shell`은 쉘 stdin 입력(명령/키 입력) → AC-D2 (`shell-workload.md`), `claude-code`는 프롬프트 1회 실행 트리거 → AC-E2 (`claude-code-workload.md`), `approval-gated`는 같은 프롬프트 실행이되 외부 도구가 승인 게이트에서 큐 안에 블로킹된다 → AC-F3 (`approval-gated-workload.md`). **비블로킹 반환 규약은 세 타입이 동일**하다 — 승인 대기도 write의 반환을 늦추지 않는다.
 - **검증 방법**: active/idle/snapshot 세션에 각각 write 요청 시 대상이 `active`로 처리되어 데이터가 일관되게 반영되고 상태 전이가 atomic하게 일어남을 확인한다.

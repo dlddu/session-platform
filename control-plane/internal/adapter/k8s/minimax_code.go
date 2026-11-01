@@ -72,14 +72,14 @@ func (o *ClientOrchestrator) miniMaxCodePod(container *corev1.Container, model s
 	}
 	container.Env = append(container.Env,
 		modelEnv,
-		corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: claudeCodeStateDir},
+		corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: workloadStateDir},
 		corev1.EnvVar{Name: AnthropicBaseURLEnvVar, Value: helper.ProxyURL},
 		corev1.EnvVar{Name: AnthropicAuthTokenEnvVar, Value: credentialProxyPlaceholderToken},
 		corev1.EnvVar{Name: SessionMCPURLEnvVar, Value: helper.MCPURL},
 		corev1.EnvVar{Name: K3SMCPProxyURLEnvVar, Value: helper.K3SMCPURL},
 	)
 	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-		Name: claudeCodeStateVolumeName, MountPath: claudeCodeStateVolumePath,
+		Name: claudeCodeStateVolumeName, MountPath: workloadStateVolumePath,
 	})
 	volumes := []corev1.Volume{{
 		Name:         claudeCodeStateVolumeName,

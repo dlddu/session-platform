@@ -112,7 +112,11 @@ test("an archived claude-code session is described as an archive and restored fr
   await expect(
     page.getByRole("heading", { name: "Resume from session archive" }),
   ).toBeVisible();
-  await expect(page.getByText("No CRIU checkpoint is used.")).toBeVisible();
+  await expect(
+    page.getByText(
+      "A fresh agent pod will restore the conversation history, working directory, and accumulated output from the session archive.",
+    ),
+  ).toBeVisible();
   await expect(page.getByText(/archive s3:\/\//)).toBeVisible();
 
   await page.getByTestId("restore-submit").click();

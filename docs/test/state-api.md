@@ -11,13 +11,13 @@
 ### 시나리오 1: 동시 요청 시 atomic 전이
 - **사전 조건**: `snapshot` 또는 `idle` 세션 1개 존재
 - **실행 단계**: 동일 세션에 복원·스냅샷·전환 요청을 동시 다발(N개)로 발생
-- **기대 결과**: Lease/CAS 단일 승자만 전이하고 최종 상태가 유효한 단일 상태로 수렴하며, 중복 pod 기동·이중 스냅샷이 없음. 긴 Snapshot/Restore 동안 Lease heartbeat가 유지되고 Renew 실패/timeout은 side effect context를 취소. `claude-code` archive 분기에서는 private transaction·최신 `lastAccess`가 aggregate CAS/partial Touch로 함께 보존되고 stale owner는 새 generation을 commit/clear하지 못함. shell CRIU에는 durable post-dump owner/phase transaction을 주장하지 않음
+- **기대 결과**: Lease/CAS 단일 승자만 전이하고 최종 상태가 유효한 단일 상태로 수렴하며, 중복 pod 기동·이중 스냅샷이 없음. 긴 Snapshot/Restore 동안 Lease heartbeat가 유지되고 Renew 실패/timeout은 side effect context를 취소. archive snapshot(모든 타입 공통, *2026-11-01*)에서는 private transaction·최신 `lastAccess`가 aggregate CAS/partial Touch로 함께 보존되고 stale owner는 새 generation을 commit/clear하지 못함 — `shell`도 같은 트랜잭션을 쓴다(이전 판의 「shell CRIU에는 durable post-dump transaction을 주장하지 않음」은 CRIU 퇴역으로 해소)
 - **검증 AC**: AC-C1
 
 ### 시나리오 2: Read 상태별 분기
 - **사전 조건**: `active`/`idle`/`snapshot` 상태 세션을 각각 준비
 - **실행 단계**: 동일한 read 요청을 세 세션에 각각 호출
-- **기대 결과**: active=직접 읽기 즉시 응답, idle=`idle→active` 승격 후 읽기, snapshot=workload별 복원(`shell`=CRIU, `claude-code`=archive) 후 읽기 — 각 경로로 처리되고 호출 후 세션 상태가 모두 `active`, 올바른 결과 반환
+- **기대 결과**: active=직접 읽기 즉시 응답, idle=`idle→active` 승격 후 읽기, snapshot=workload별 archive 복원(모든 타입 공통, 보존 대상만 타입별) 후 읽기 — 각 경로로 처리되고 호출 후 세션 상태가 모두 `active`, 올바른 결과 반환
 - **검증 AC**: AC-C2
 
 ### 시나리오 3: Write 상태별 분기

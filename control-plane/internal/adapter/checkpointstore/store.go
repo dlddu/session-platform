@@ -1,6 +1,6 @@
 // Package checkpointstore is the durable object store for workload snapshots.
-// A pod agent streams either a shell CRIU bundle or a Claude filesystem archive
-// here so it outlives the pod and can restore on another node.
+// A pod agent streams its workload's filesystem archive here so it outlives the
+// pod and can restore on another node.
 package checkpointstore
 
 import (
@@ -44,7 +44,7 @@ type objectAPI interface {
 }
 
 // S3 stores and retrieves workload snapshots in an S3 bucket and satisfies the
-// shared criu.CheckpointStore contract.
+// shared archive.CheckpointStore contract.
 type S3 struct {
 	api    objectAPI
 	bucket string
@@ -104,7 +104,7 @@ func (s *S3) Bucket() string { return s.bucket }
 // prefix) and returns its durable s3:// ref.
 //
 // The archive arrives as an unseekable stream of unknown length — the pod agent
-// produces it while dumping — which S3 cannot take directly: the SDK needs a
+// produces it while archiving — which S3 cannot take directly: the SDK needs a
 // seekable body to compute the request checksum and Content-Length, and its
 // fallback (trailing checksums over an aws-chunked body) requires TLS. So spool
 // the stream to a temp file first and upload that.

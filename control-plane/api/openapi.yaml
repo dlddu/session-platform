@@ -351,10 +351,11 @@ paths:
       summary: Archive a session on demand and reclaim its pod (AC-B1/AC-A3)
       operationId: snapshotSession
       description: >
-        Immediately captures the workload using its configured strategy
-        (CRIU checkpoint for shell, filesystem archive for claude-code and
-        minimax-code), moves
-        the session to snapshot state, and reclaims its pod. Calling this for
+        Immediately captures the workload into its filesystem archive (a
+        shell's home directory and scrollback; an agent workload's workspace,
+        CLI state and output), moves the session to snapshot state, and
+        reclaims its pod. A restored shell is a fresh shell started in its home
+        directory. Calling this for
         an already-snapshotted session is idempotent.
       parameters:
         - $ref: "#/components/parameters/SessionId"
@@ -598,7 +599,7 @@ paths:
 components:
   responses:
     RequestEntityTooLarge:
-      description: The JSON wire body exceeds 8 MiB, or a Claude Code prompt exceeds the 1 MiB decoded payload limit
+      description: The JSON wire body exceeds 8 MiB, or an agent workload prompt (claude-code, approval-gated, minimax-code) exceeds the 1 MiB decoded payload limit
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -821,8 +822,9 @@ components:
         payload:
           type: string
           description: >
-            Raw workload input. Claude Code writes are limited to 1 MiB of UTF-8
-            bytes per prompt; larger writes return 413.
+            Raw workload input. Agent workload writes (claude-code,
+            approval-gated, minimax-code) are limited to 1 MiB of UTF-8 bytes
+            per prompt; larger writes return 413.
     ReadRequest:
       type: object
       additionalProperties: false

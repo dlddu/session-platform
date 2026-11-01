@@ -56,8 +56,8 @@ test-unit:
 	cd $(DP_DIR) && go test ./...
 
 ## test-integration: opt-in happy-path integration harness (in-process stubs).
-## The real CRIU scenario additionally needs CRIU_ENABLED=1, a reachable
-## cluster, and the data-plane image; otherwise that scenario skips.
+## The real shell archive scenario additionally needs SHELL_ARCHIVE_ENABLED=1, a
+## reachable cluster, and the data-plane image; otherwise that scenario skips.
 test-integration:
 	cd $(CP_DIR) && go test -tags=integration ./...
 
@@ -131,8 +131,8 @@ tidy:
 docker:
 	docker build -t session-platform/control-plane:dev -f $(CP_DIR)/Dockerfile .
 
-## docker-data-plane: build the multi-workload agent image (PTY shell + CRIU,
-## Claude runner/archive, and credential-proxy sidecar mode).
+## docker-data-plane: build the multi-workload agent image (PTY shell, workload
+## runners and filesystem archives, and credential-proxy sidecar mode).
 docker-data-plane:
 	docker build -t session-platform/data-plane:dev -f $(DP_DIR)/Dockerfile .
 

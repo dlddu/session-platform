@@ -190,7 +190,6 @@ func TestClientOrchestrator_ClaudeProviderCredentialsAreIsolatedAndK3sTokenIsSec
 		k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, claudeCodeImage),
 		k8s.WithClaudeCredentialsSecret("provider-credentials"),
-		k8s.WithCheckpointPrivileged(true),
 	)
 	if _, err := orch.Start(context.Background(), "credential-isolation", k8s.WorkloadSpec{
 		Type: session.WorkloadTypeClaudeCode,
@@ -261,7 +260,7 @@ func TestClientOrchestrator_ClaudeProviderCredentialsAreIsolatedAndK3sTokenIsSec
 			k3sTokenRef, k8s.ClaudeCodeK3SMCPTokenSecretKey)
 	}
 	if main.SecurityContext != nil && main.SecurityContext.Privileged != nil && *main.SecurityContext.Privileged {
-		t.Fatal("claude-code main container became privileged under the CRIU gate")
+		t.Fatal("claude-code main container is privileged")
 	}
 	stateDir, ok := envVarOf(main, "CLAUDE_CODE_STATE_DIR")
 	if !ok || stateDir.Value != "/session/state" || stateDir.ValueFrom != nil {
@@ -392,8 +391,8 @@ func TestClientOrchestrator_RestoreKeepsWorkloadType(t *testing.T) {
 	if _, ok := pod.Annotations[k8s.AnnotationRestoreArchive]; !ok {
 		t.Errorf("restore pod is missing %s", k8s.AnnotationRestoreArchive)
 	}
-	if _, ok := pod.Annotations[k8s.AnnotationRestoreCheckpoint]; ok {
-		t.Errorf("claude-code restore pod unexpectedly carries CRIU annotation %s", k8s.AnnotationRestoreCheckpoint)
+	if len(pod.Annotations) != 1 {
+		t.Errorf("restore pod annotations = %v, want only %s", pod.Annotations, k8s.AnnotationRestoreArchive)
 	}
 }
 

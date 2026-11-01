@@ -177,7 +177,8 @@
 
       <dl class="kv">
         <dt>마지막 활동</dt><dd>방금 — <span class="mono">go test ./control-plane/...</span></dd>
-        <dt>보존되는 것</dt><dd>cwd · 환경 변수 · 쉘 히스토리 · 받아둔 출력 커서</dd>
+        <dt>보존되는 것</dt><dd>홈 디렉터리의 파일 · 출력 이력 · 받아둔 출력 커서</dd>
+        <dt>보존되지 않는 것</dt><dd>실행 중인 프로세스 · cwd · 환경 변수 · 쉘 변수 — 복원되면 홈 디렉터리에서 새 쉘이 시작됩니다</dd>
       </dl>
 
       <div class="row" style="margin-top:18px">
@@ -308,15 +309,17 @@
       </div>
 
       <div class="banner info" id="resume-banner">
-        복원 완료 — 접기 전 맥락 위에서 이어집니다.
-        cwd <span class="mono">/work/billing</span> · <span class="mono">GOFLAGS=-mod=mod</span> ·
-        받아둔 출력 커서 <span class="mono">offset 41,208</span> 그대로.
+        복원 완료 — 홈 디렉터리의 파일과 출력 이력이 그대로이고, 홈 디렉터리에서 <strong>새 쉘</strong>이 시작됐습니다.
+        <span class="mono">~/billing/</span> 작업 파일 · 받아둔 출력 커서 <span class="mono">offset 41,208</span> 그대로.
+        cwd·환경 변수(<span class="mono">GOFLAGS</span>)·실행 중이던 작업은 이어지지 않습니다.
       </div>
 
       <div class="term mono" id="resume-term"><span class="o">$ pwd
-/work/billing
-$ echo $GOFLAGS
--mod=mod</span>
+/session/state/home
+$ ls ~/billing
+invoice.go  invoice_test.go  NOTES.md
+$ echo "[$GOFLAGS]"
+[]</span>
 </div>
 
       <div class="input-row">
@@ -329,7 +332,7 @@ $ echo $GOFLAGS
       <p class="state-note" data-state-note hidden></p>
 
       <div class="row" style="margin-top:16px" data-journey-end>
-        <span class="pill" style="border-color:var(--ok);color:var(--ok)">완료 — 복원 후 첫 입력이 동결 전 맥락 위에서 처리됨</span>
+        <span class="pill" style="border-color:var(--ok);color:var(--ok)">완료 — 복원 후 첫 입력이 동결 전 파일·출력 이력 위에서 처리됨</span>
         <a href="../JRN-shell-interaction/index.html#STP-command-input">쉘 작업 루프 계속하기 →</a>
       </div>
 
@@ -449,13 +452,15 @@ $ echo $GOFLAGS
     }
     var body;
     if (cmd === 'pwd') {
-      body = carried ? '/work/billing' : '/';
-    } else if (cmd.indexOf('echo $') === 0) {
-      body = carried ? '-mod=mod' : '';
+      body = '/session/state/home';
+    } else if (cmd.indexOf('echo $') === 0 || cmd.indexOf('echo "') === 0) {
+      body = '';
+    } else if (cmd.indexOf('ls') === 0 || cmd.indexOf('cat ') === 0) {
+      body = carried ? 'invoice.go  invoice_test.go  NOTES.md' : '';
     } else {
       body = carried
-        ? 'ok — 동결 전 cwd·환경 변수 위에서 실행되었습니다.'
-        : 'ok — 새 쉘입니다. 이전 cwd·환경 변수는 이어지지 않았습니다.';
+        ? 'ok — 홈 디렉터리에서 시작한 새 쉘에서 실행되었습니다. 동결 전 파일은 그대로입니다.'
+        : 'ok — 새 쉘입니다. 이전 출력 이력은 이어지지 않았습니다.';
     }
     var line = document.createElement('div');
     line.textContent = '$ ' + cmd + (body ? '\n' + body : '');

@@ -111,7 +111,7 @@ if kubectl auth can-i get secrets --all-namespaces --as="$DATA_PLANE_USER" >/dev
 fi
 
 echo "e2e: waiting for rollouts"
-# MinIO backs the CRIU checkpoint archives (deploy/minio.yaml). Wait for it too,
+# MinIO backs the workload snapshot archives (deploy/minio.yaml). Wait for it too,
 # so the first snapshot cannot race its startup or bucket creation.
 kubectl rollout status deploy/minio --timeout=180s
 # The two endpoints a claude-code session pod contacts during its plugin

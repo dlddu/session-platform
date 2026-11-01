@@ -77,7 +77,7 @@ func TestS3_PutSpoolsUnseekableStream(t *testing.T) {
 	fake := &fakeS3{}
 	store := newWithAPI(fake, "b", "p")
 
-	archive := strings.Repeat("CRIU-ARCHIVE-", 1000)
+	archive := strings.Repeat("FILESYSTEM-ARCHIVE-", 1000)
 	ref, err := store.Put(context.Background(), "sess-abcd/checkpoint.tar",
 		unseekableReader{r: strings.NewReader(archive)})
 	if err != nil {

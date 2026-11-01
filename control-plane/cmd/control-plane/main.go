@@ -23,9 +23,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/archive"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/checkpointstore"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
 	"github.com/dlddu/session-platform/control-plane/internal/api"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
@@ -56,7 +56,8 @@ func main() {
 	logger.Info("starting control plane",
 		"addr", cfg.addr,
 		"namespace", namespace,
-		"criu_enabled", cfg.criuEnabled,
+		"shell_archive_enabled", cfg.shellArchiveEnabled,
+		"approval_gated_archive_enabled", cfg.approvalGatedArchiveEnabled,
 		"data_plane_image", cfg.dataPlaneImage,
 		"data_plane_claude_code_image", cfg.dataPlaneClaudeCodeImage,
 		"data_plane_approval_gated_image", cfg.dataPlaneApprovalGatedImage,
@@ -85,19 +86,19 @@ func main() {
 		k8s.WithMiniMaxCredentialsSecret(cfg.miniMax.credentialsSecret),
 		k8s.WithApprovalGatewayURL(cfg.approvalGatewayURL),
 		k8s.WithSharedVolume(cfg.sharedVolumeStorageClass, cfg.sharedVolumeSize),
-		k8s.WithRepoAccess(cfg.repoAccess.helperURL(namespace)),
-		k8s.WithCheckpointPrivileged(cfg.criuEnabled))
+		k8s.WithRepoAccess(cfg.repoAccess.helperURL(namespace)))
 	store := configmap.NewStore(client, namespace)
 	// Shell I/O (write→stdin, read→scrollback delta) AND checkpoint/restore ride
 	// the same agent client: it resolves pod name → IP per request and dials the
-	// session agent directly (AC-D2/D3, and /checkpoint·/restore for CRIU).
+	// session agent directly (AC-D2/D3, and /checkpoint·/restore for archives).
 	agentClient := agent.NewHTTPClient(client, namespace)
 
 	// Snapshot archives may contain workspace and conversation data. They are
 	// sent to the configured durable store only behind an explicit mechanism
-	// gate: CRIU_ENABLED for shell, CLAUDE_CODE_ARCHIVE_ENABLED for claude-code.
-	var cstore criu.CheckpointStore
-	if cfg.criuEnabled || cfg.claudeArchiveEnabled || cfg.miniMax.archiveEnabled {
+	// gate per workload type: SHELL_ARCHIVE_ENABLED, CLAUDE_CODE_ARCHIVE_ENABLED,
+	// APPROVAL_GATED_ARCHIVE_ENABLED and MINIMAX_CODE_ARCHIVE_ENABLED.
+	var cstore archive.CheckpointStore
+	if cfg.anyArchiveEnabled() {
 		cstore, err = buildCheckpointStore(cfg)
 		if err != nil {
 			logger.Error("checkpoint store misconfigured", "err", err)
@@ -105,15 +106,14 @@ func main() {
 		}
 	}
 
-	// mock-exception: CRIU-GATE — 검증된 런타임이 설 때까지 게이트 off가 프로덕션의 의도된
-	// 동작이고, 그 경로에서 쉘 동결은 이 no-op 스텁이다. e2e는 deploy/ 오버레이가 게이트를
-	// on으로 올려 실 경로(agent-driven in-pod checkpoint + S3 아카이브)를 탄다.
-	// 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
-	var shellCkpt criu.Checkpointer = criu.NewStubCheckpointer(false)
-	if cfg.criuEnabled {
-		shellCkpt = criu.NewAgentCheckpointer(agentClient, cstore)
-		logger.Info("CRIU on: agent-driven in-pod checkpoint",
-			"store", cfg.checkpointStoreDesc())
+	// mock-exception: SHELL-ARCHIVE-GATE — 프로덕션 base는 쉘 아카이브 게이트를 off로 두고,
+	// 그 경로에서 쉘 동결은 이 no-op 스텁이다(동결을 거부해 pod를 회수하지 않는다). e2e는
+	// deploy/ 오버레이가 게이트를 on으로 올려 실 경로(에이전트 홈 디렉터리·scrollback
+	// 파일시스템 아카이브 + S3)를 탄다. 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
+	var shellCkpt archive.Checkpointer = archive.NewStubCheckpointer(false)
+	if cfg.shellArchiveEnabled {
+		shellCkpt = archive.NewAgentCheckpointer(agentClient, cstore)
+		logger.Info("shell filesystem archive enabled", "store", cfg.checkpointStoreDesc())
 	}
 
 	var serviceOpts []service.Option
@@ -124,9 +124,18 @@ func main() {
 		}
 		serviceOpts = append(serviceOpts, service.WithWorkloadCheckpointer(
 			session.WorkloadTypeClaudeCode,
-			criu.NewAgentArchiveCheckpointer(agentClient, cstore),
+			archive.NewAgentCheckpointer(agentClient, cstore),
 		))
 		logger.Info("claude-code filesystem archive enabled", "store", cfg.checkpointStoreDesc())
+	}
+	approvalGatedArchive, err := approvalGatedArchiveOption(cfg, agentClient, cstore)
+	if err != nil {
+		logger.Error("approval-gated archive misconfigured", "err", err)
+		os.Exit(1)
+	}
+	if approvalGatedArchive != nil {
+		serviceOpts = append(serviceOpts, approvalGatedArchive)
+		logger.Info("approval-gated filesystem archive enabled", "store", cfg.checkpointStoreDesc())
 	}
 	miniMaxArchive, err := miniMaxArchiveOption(cfg.miniMax, agentClient, cstore)
 	if err != nil {
@@ -138,7 +147,7 @@ func main() {
 		logger.Info("minimax-code filesystem archive enabled", "store", cfg.checkpointStoreDesc())
 	}
 	mgr := service.New(orch, store, shellCkpt, agentClient, serviceOpts...)
-	snapshotEnabled := shellCkpt.Enabled() || cfg.claudeArchiveEnabled || cfg.miniMax.archiveEnabled
+	snapshotEnabled := cfg.anyArchiveEnabled()
 
 	// AC-B1: the operational idle->snapshot trigger. Manual snapshots reach the
 	// same manager operation through the product API, without the idle wait.
@@ -215,7 +224,14 @@ type config struct {
 	sharedVolumeSize         resource.Quantity
 	// claudeArchiveEnabled explicitly permits workspace/conversation/output
 	// archives to be written to CHECKPOINT_S3_* (default false).
-	claudeArchiveEnabled    bool
+	claudeArchiveEnabled bool
+	// approvalGatedArchiveEnabled is approval-gated's own gate: its archive also
+	// carries the AC-F5 shared volume's contents (default false).
+	approvalGatedArchiveEnabled bool
+	// shellArchiveEnabled permits a shell's home directory and scrollback to
+	// be archived to CHECKPOINT_S3_* (default false). A restored shell is a
+	// fresh process started in that home directory.
+	shellArchiveEnabled     bool
 	claudeCredentialsSecret string
 	// claudeCodeDefaultModel is the effective, public default shown by the SPA.
 	// It is a concrete Secret-backed model when configured, otherwise the
@@ -224,12 +240,11 @@ type config struct {
 	// claudeCodeModels is the ordered, public model catalog shown by the SPA.
 	// Empty preserves the free-text model input and existing API behaviour.
 	claudeCodeModels []string
-	criuEnabled      bool
 	// idleScanInterval is how often the reaper scans for sessions past their
 	// idle limit (AC-B1). The 60m limit itself is session.MaxIdle; this only
 	// bounds how promptly a newly-idle session is noticed.
 	idleScanInterval time.Duration
-	// Checkpoint/archive store used by either explicitly enabled strategy: an S3
+	// Checkpoint/archive store used by any explicitly enabled strategy: an S3
 	// bucket reached through checkpointstore.NewS3. checkpointS3Endpoint targets
 	// an S3-compatible backend instead of AWS.
 	checkpointS3Bucket      string
@@ -257,8 +272,31 @@ func (c config) offeredWorkloadTypes() []session.WorkloadType {
 	return types
 }
 
+// anyArchiveEnabled reports whether any workload type's archive gate is on,
+// which is what makes the durable store and the idle reaper necessary.
+func (c config) anyArchiveEnabled() bool {
+	return c.shellArchiveEnabled || c.claudeArchiveEnabled ||
+		c.approvalGatedArchiveEnabled || c.miniMax.archiveEnabled
+}
+
+// approvalGatedArchiveOption returns the service option that installs the
+// filesystem-archive checkpointer for approval-gated, or nil when the gate is
+// off. Like claude-code's gate it needs the type's image to be meaningful.
+func approvalGatedArchiveOption(cfg config, client *agent.HTTPClient, store archive.CheckpointStore) (service.Option, error) {
+	if !cfg.approvalGatedArchiveEnabled {
+		return nil, nil
+	}
+	if cfg.dataPlaneApprovalGatedImage == "" {
+		return nil, errors.New("APPROVAL_GATED_ARCHIVE_ENABLED needs DATA_PLANE_APPROVAL_GATED_IMAGE")
+	}
+	return service.WithWorkloadCheckpointer(
+		session.WorkloadTypeApprovalGated,
+		archive.NewAgentCheckpointer(client, store),
+	), nil
+}
+
 // buildCheckpointStore builds the checkpoint archive backend.
-func buildCheckpointStore(cfg config) (criu.CheckpointStore, error) {
+func buildCheckpointStore(cfg config) (archive.CheckpointStore, error) {
 	if cfg.checkpointS3Bucket == "" {
 		return nil, errors.New("snapshot strategy needs a checkpoint store: set CHECKPOINT_S3_BUCKET")
 	}
@@ -312,10 +350,11 @@ func loadConfig() (config, error) {
 		sharedVolumeStorageClass:    env("SESSION_SHARED_VOLUME_STORAGE_CLASS", ""),
 		sharedVolumeSize:            sharedVolumeSize,
 		claudeArchiveEnabled:        envBool("CLAUDE_CODE_ARCHIVE_ENABLED", false),
+		approvalGatedArchiveEnabled: envBool("APPROVAL_GATED_ARCHIVE_ENABLED", false),
 		claudeCredentialsSecret:     env("CLAUDE_CODE_CREDENTIALS_SECRET", "claude-code-credentials"),
 		claudeCodeDefaultModel:      claudeCodeDefaultModel,
 		claudeCodeModels:            claudeCodeModels,
-		criuEnabled:                 envBool("CRIU_ENABLED", false),
+		shellArchiveEnabled:         envBool("SHELL_ARCHIVE_ENABLED", false),
 		idleScanInterval:            envDuration("IDLE_SCAN_INTERVAL", time.Minute),
 		checkpointS3Endpoint:        env("CHECKPOINT_S3_ENDPOINT", ""),
 		checkpointS3Bucket:          env("CHECKPOINT_S3_BUCKET", ""),

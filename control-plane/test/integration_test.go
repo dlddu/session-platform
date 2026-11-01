@@ -20,8 +20,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/archive"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
 	"github.com/dlddu/session-platform/control-plane/internal/api"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
@@ -33,10 +33,11 @@ func harness(t *testing.T) (*httptest.Server, *service.Service) {
 	// TODO(kind): replace the stubs below with adapters pointed at the kind
 	// cluster brought up for the integration job. The ConfigMap state store
 	// already runs against a fake clientset here, so its contract is exercised
-	// in-process; only the pod orchestrator and CRIU remain stubs.
+	// in-process; only the pod orchestrator and the archive checkpointer remain
+	// stubs.
 	orch := k8s.NewStubOrchestrator("sessions")
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
-	ckpt := criu.NewStubCheckpointer(true)
+	ckpt := archive.NewStubCheckpointer(true)
 	svc := service.New(orch, store, ckpt, agent.NewStubClient())
 
 	mux := http.NewServeMux()
@@ -110,20 +111,22 @@ func TestScenario3_SnapshotReclaimsPod(t *testing.T) {
 
 // Snapshot here is a direct Service call — the public product transition is
 // driven by the idle reaper.
-func TestScenario4_CRIUIntegrity(t *testing.T) {
-	if os.Getenv("CRIU_ENABLED") != "1" {
-		t.Skip("CRIU verification environment not configured; see docs/criu-verification.md")
+func TestScenario4_ShellArchiveIntegrity(t *testing.T) {
+	if os.Getenv("SHELL_ARCHIVE_ENABLED") != "1" {
+		t.Skip("shell archive round trip not configured; set SHELL_ARCHIVE_ENABLED=1 with a reachable cluster")
 	}
-	svc := realService(t) // skips if no CRIU-capable runtime is reachable
+	svc := realService(t) // skips if no cluster or agent image is reachable
 	ctx := context.Background()
 
-	// export/cd emit nothing to stdout — the PTY echoes the typed input — so
-	// anchor the pre-freeze cursor on that echo.
-	sess := createReal(t, svc, "criu-integrity")
-	writeShell(t, svc, sess.ID, "export CRIUMARK=frozen42\n")
+	// Markers are produced by the shell at run time, so the PTY's echo of the
+	// typed input can never match them.
+	sess := createReal(t, svc, "shell-archive-integrity")
+	writeShell(t, svc, sess.ID, "printf 'mark:%s\\n' frozen42 > ~/marker.txt\n")
+	writeShell(t, svc, sess.ID, "export ARCHMARK=frozen42\n")
 	writeShell(t, svc, sess.ID, "cd /tmp\n")
+	writeShell(t, svc, sess.ID, "echo ready:$((40+2))\n")
 	_, cursorBefore := eventuallyReadShell(t, svc, sess.ID, 0, func(p string) bool {
-		return strings.Contains(p, "CRIUMARK=frozen42")
+		return strings.Contains(p, "ready:42")
 	})
 
 	frozen, err := svc.Snapshot(ctx, sess.ID)
@@ -134,20 +137,29 @@ func TestScenario4_CRIUIntegrity(t *testing.T) {
 		t.Fatalf("after snapshot state=%q pod=%q, want snapshot with reclaimed pod", frozen.State, frozen.Pod)
 	}
 
-	writeShell(t, svc, sess.ID, "echo restored:$CRIUMARK\n")
-	writeShell(t, svc, sess.ID, "pwd\n")
+	writeShell(t, svc, sess.ID, "cat ~/marker.txt\n")
+	writeShell(t, svc, sess.ID, "echo \"env:[$ARCHMARK]\"\n")
+	writeShell(t, svc, sess.ID, "echo \"cwd:$(pwd)\"\n")
 
 	delta, _ := eventuallyReadShell(t, svc, sess.ID, cursorBefore, func(p string) bool {
-		return strings.Contains(p, "restored:frozen42") && strings.Contains(p, "/tmp")
+		return strings.Contains(p, "mark:frozen42") &&
+			(strings.Contains(p, "env:[]") || strings.Contains(p, "env:[frozen42]")) &&
+			strings.Contains(p, "cwd:/")
 	})
-	if strings.Contains(delta, "export CRIUMARK") {
-		t.Fatalf("delta from the pre-freeze cursor replayed pre-freeze input %q; want the post-restore delta only (cursor continuity)", delta)
+	if !strings.Contains(delta, "env:[]") {
+		t.Fatalf("restored shell kept $ARCHMARK; want a fresh shell (AC-D4): %q", delta)
+	}
+	if !strings.Contains(delta, "cwd:/session/state/home") {
+		t.Fatalf("restored shell did not start in its home directory (AC-D4): %q", delta)
+	}
+	if strings.Contains(delta, "ready:42") {
+		t.Fatalf("delta from the pre-freeze cursor replayed pre-freeze output %q; want the post-restore delta only (cursor continuity)", delta)
 	}
 
 	full, _ := eventuallyReadShell(t, svc, sess.ID, 0, func(p string) bool {
-		return strings.Contains(p, "CRIUMARK=frozen42") && strings.Contains(p, "restored:frozen42")
+		return strings.Contains(p, "ready:42") && strings.Contains(p, "mark:frozen42")
 	})
-	if pre, post := strings.Index(full, "CRIUMARK=frozen42"), strings.Index(full, "restored:frozen42"); pre == -1 || post == -1 || pre > post {
+	if pre, post := strings.Index(full, "ready:42"), strings.Index(full, "mark:frozen42"); pre == -1 || post == -1 || pre > post {
 		t.Fatalf("full history order broken across the freeze: pre=%d post=%d in %q", pre, post, full)
 	}
 }
@@ -156,21 +168,20 @@ func realService(t *testing.T) *service.Service {
 	t.Helper()
 	client, ns, err := k8s.BuildClient()
 	if err != nil {
-		t.Skipf("CRIU_ENABLED=1 but no reachable cluster (%v); the AC-D4 round-trip needs a CRIU-capable runtime — see docs/criu-verification.md", err)
+		t.Skipf("SHELL_ARCHIVE_ENABLED=1 but no reachable cluster (%v); the AC-D4 round trip needs real session pods", err)
 	}
 	image := os.Getenv("DATA_PLANE_IMAGE")
 	if image == "" {
-		t.Skip("CRIU_ENABLED=1 but DATA_PLANE_IMAGE unset; the round-trip needs the published data plane agent image")
+		t.Skip("SHELL_ARCHIVE_ENABLED=1 but DATA_PLANE_IMAGE unset; the round trip needs the published data plane agent image")
 	}
 	orch := k8s.NewClientOrchestrator(client, ns,
-		k8s.WithImage(image), k8s.WithShell(os.Getenv("DATA_PLANE_SHELL")),
-		k8s.WithCheckpointPrivileged(true))
+		k8s.WithImage(image), k8s.WithShell(os.Getenv("DATA_PLANE_SHELL")))
 	store := configmap.NewStore(client, ns)
 	ag := agent.NewHTTPClient(client, ns)
 	// The in-memory store bridges the archive from checkpoint to restore inside
 	// this process, so the round trip needs no S3 — that store is covered by unit
 	// tests and the deployed control plane.
-	ckpt := criu.NewAgentCheckpointer(ag, &memStore{blobs: map[string][]byte{}})
+	ckpt := archive.NewAgentCheckpointer(ag, &memStore{blobs: map[string][]byte{}})
 	return service.New(orch, store, ckpt, ag)
 }
 

@@ -10,8 +10,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/archive"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
@@ -81,7 +81,7 @@ func (c *testClock) advance(d time.Duration) {
 // can freeze every workload type, so a type that stays active is doing so
 // because of AC-F3 and not because it had no snapshot strategy.
 func newApprovalIdleService(clock *testClock, ag agent.Client) *service.Service {
-	stub := criu.NewStubCheckpointer(true)
+	stub := archive.NewStubCheckpointer(true)
 	return service.New(
 		k8s.NewStubOrchestrator("sessions"),
 		configmap.NewStore(fake.NewSimpleClientset(), "sessions"),

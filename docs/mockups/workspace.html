@@ -406,8 +406,8 @@
               <div class="crystal-lg">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M12 2 9 5M12 2l3 3M12 22l-3-3M12 22l3-3M2.7 7l17.3 10M2.7 7l1.1 4M2.7 7l4-1.1M21.3 17l-1.1-4M21.3 17l-4 1.1M21.3 7 4 17M21.3 7l-4-1.1M21.3 7l-1.1 4M2.7 17l4-1.1M2.7 17l1.1-4"/></svg>
               </div>
-              <h3>Resuming from checkpoint</h3>
-              <p>Restoring pod from CRIU snapshot. Shell process tree — env vars, working dir, open descriptors — preserved exactly as frozen.</p>
+              <h3>Resuming from session archive</h3>
+              <p>Restoring pod from the session archive. Home directory files and the output history come back; a fresh shell starts in the home directory &mdash; env vars, working dir and running jobs are not kept.</p>
               <div class="pbar"><i id="ws-pbar"></i></div>
               <div class="rlog mono" id="ws-rlog"></div>
             </div>
@@ -424,10 +424,10 @@
             <div class="bar"><i class="active" id="ws-mem-bar" style="width:0"></i></div>
           </div>
 
-          <!-- accumulated shell state (STP-shell-state-carry · AC-D4) -->
+          <!-- accumulated shell state (STP-shell-state-carry · AC-D4: only home-dir files + output survive a freeze) -->
           <div class="panel" id="ws-state-panel">
             <h4><span class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span> Shell state</h4>
-            <div class="st-row"><span class="k">cwd</span><span class="v" id="ws-st-cwd">/work</span></div>
+            <div class="st-row"><span class="k">cwd</span><span class="v" id="ws-st-cwd">~/work</span></div>
             <div class="st-row"><span class="k">env</span><span class="v" id="ws-st-env">STAGE=dev<br>NODE_ENV=development</span></div>
             <div class="st-row"><span class="k">vars</span><span class="v" id="ws-st-vars">BUILD_TAG=1.4.0 <em>(shell var)</em></span></div>
             <div class="st-row"><span class="k">jobs</span><span class="v" id="ws-st-jobs">[1]+ node watch.js <em>&amp;</em></span></div>
@@ -435,7 +435,7 @@
               <span class="ic">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M4.2 7l15.6 10M19.8 7 4.2 17"/></svg>
               </span>
-              <span class="tx">Everything above carries into the next command &mdash; and it is exactly what gets frozen. This <b>process tree</b> is the checkpoint, so a resume lands back on this state, not a fresh shell.</span>
+              <span class="tx">Everything above carries into the next command while the session is live. A freeze keeps only the <b>home directory&rsquo;s files</b> and the output history &mdash; a resume starts a fresh shell in the home directory.</span>
             </div>
           </div>
 
@@ -519,18 +519,18 @@ function buildTimeline(s){
 const termActive = (s)=>[
   {c:'sys',t:`◆ attached to session/${s.id} · pod/${s.pod} — interactive shell (bash)`},
   {c:'sys',t:`◆ isolation: dedicated pod — no shared state with other sessions`},
-  {c:'req',t:`<span class="op">$</span> export STAGE=dev && cd /work`},
+  {c:'req',t:`<span class="op">$</span> export STAGE=dev && cd ~/work`},
   {c:'req',t:`<span class="op">$</span> ls`},
   {c:'res',t:`handlers/   server.js   package.json   README.md`},
   {c:'req w',t:`<span class="op">$</span> npm run build`},
   {c:'res',t:`▸ ${s.name}@1.4.0 build`},
   {c:'res',t:`compiled 128 modules in 3.2s — 0 errors`},
-  {c:'ok',t:`✓ done · cwd=/work $STAGE=dev persist for the next command`}
+  {c:'ok',t:`✓ done · cwd=~/work $STAGE=dev persist for the next command (not across a freeze)`}
 ];
 const termFrozen = (s)=>[
   {c:'sys',t:`◆ session/${s.id} is frozen — pod reclaimed`},
-  {c:'sys',t:`◆ shell process tree checkpointed (${s.checkpoint}) · frozen ${s.frozenAgo}`},
-  {c:'res',t:`read / write resumes the shell — CRIU restore → new pod → active`}
+  {c:'sys',t:`◆ home directory + output archived (${s.checkpoint}) · frozen ${s.frozenAgo}`},
+  {c:'res',t:`read / write restores the archive — new pod → fresh shell in its home dir → active`}
 ];
 function paintTerm(lines){
   const term = document.getElementById('ws-term');
@@ -546,7 +546,7 @@ function setGauge(cpu, mem, memMax){
 }
 function metaLine(s){
   if(s.state==='snapshot'){
-    return `<span class="it">${ic('pod',13)} <b>checkpoint ${s.checkpoint}</b></span>
+    return `<span class="it">${ic('pod',13)} <b>archive ${s.checkpoint}</b></span>
       <span class="it">${ic('clock',13)} <b>frozen ${s.frozenAgo}</b></span>
       <span class="it">${ic('pin',13)} <b>${s.region}</b></span>`;
   }
@@ -597,22 +597,22 @@ function populate(s){
     paintTerm(termFrozen(s));
   }
 }
-// STP-shell-state-carry · 축적된 쉘 상태 (다음 명령으로 이어지고, 그대로 체크포인트된다)
+// STP-shell-state-carry · 축적된 쉘 상태 (다음 명령으로 이어지지만, 동결을 건너 남는 것은 홈 디렉터리 파일·출력뿐이다)
 function paintShellState(s){
   const note = document.getElementById('ws-st-note');
   const jobs = document.getElementById('ws-st-jobs');
   if(s.state==='snapshot'){
-    document.getElementById('ws-st-cwd').innerHTML = '/work <em>(in checkpoint)</em>';
-    document.getElementById('ws-st-env').innerHTML = 'STAGE=dev<br>NODE_ENV=development';
-    document.getElementById('ws-st-vars').innerHTML = 'BUILD_TAG=1.4.0 <em>(shell var)</em>';
-    jobs.innerHTML = '[1]+ node watch.js <em>(suspended in checkpoint)</em>';
-    note.querySelector('.tx').innerHTML = 'Frozen inside <b>' + s.checkpoint + '</b> on cold storage. A restore rebuilds this exact process tree on a new pod &mdash; same cwd, same env, same job.';
+    document.getElementById('ws-st-cwd').innerHTML = '~ <em>(fresh shell on restore)</em>';
+    document.getElementById('ws-st-env').innerHTML = '<em>not kept</em>';
+    document.getElementById('ws-st-vars').innerHTML = '<em>not kept</em>';
+    jobs.innerHTML = '<em>stopped &mdash; not kept</em>';
+    note.querySelector('.tx').innerHTML = 'Home directory files and output history are in <b>' + s.checkpoint + '</b> on cold storage. A restore starts a fresh shell in the home directory on a new pod &mdash; the files are there, env, cwd and jobs start over.';
   } else {
-    document.getElementById('ws-st-cwd').innerHTML = '/work';
+    document.getElementById('ws-st-cwd').innerHTML = '~/work';
     document.getElementById('ws-st-env').innerHTML = 'STAGE=dev<br>NODE_ENV=development';
     document.getElementById('ws-st-vars').innerHTML = 'BUILD_TAG=1.4.0 <em>(shell var)</em>';
     jobs.innerHTML = '[1]+ node watch.js <em>&amp;</em>';
-    note.querySelector('.tx').innerHTML = 'Everything above carries into the next command &mdash; and it is exactly what gets frozen. This <b>process tree</b> is the checkpoint, so a resume lands back on this state, not a fresh shell.';
+    note.querySelector('.tx').innerHTML = 'Everything above carries into the next command while the session is live. A freeze keeps only the <b>home directory&rsquo;s files</b> and the output history &mdash; a resume starts a fresh shell in the home directory.';
   }
 }
 function clearRestore(){
@@ -626,7 +626,7 @@ function runRestore(s){
   const pbar=document.getElementById('ws-pbar');
   const rlog=document.getElementById('ws-rlog');
   ov.classList.add('show');
-  const logs=['reading checkpoint '+s.checkpoint+' …','scheduling fresh pod …','restoring shell process tree · memory pages · file descriptors …','state verified — resuming'];
+  const logs=['fetching archive '+s.checkpoint+' …','scheduling fresh pod …','unpacking home directory · output history …','archive verified — starting a fresh shell'];
   const reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const dur=reduce?0:2400; let step=0;
   const tick=()=>{rlog.textContent=logs[Math.min(step,logs.length-1)];step++;}; tick();
@@ -663,13 +663,14 @@ function promote(s){
   const tag=document.getElementById('ws-console-tag'); tag.style.display=''; tag.innerHTML='<span class="led"></span>shell attached';
   paintShellState(s);
   paintTerm([
-    {c:'ok',t:`✓ restored from checkpoint — shell process tree intact`},
-    {c:'sys',t:`◆ re-attached to session/${s.id} · pod/${s.pod} — interactive shell`},
-    {c:'req',t:`<span class="op">$</span> echo $STAGE; pwd`},
-    {c:'res',t:`dev`},
-    {c:'res',t:`/work   · env + cwd preserved across freeze`}
+    {c:'ok',t:`✓ restored from archive — home directory files and output history intact`},
+    {c:'sys',t:`◆ attached to session/${s.id} · pod/${s.pod} — fresh interactive shell in ~`},
+    {c:'req',t:`<span class="op">$</span> ls ~/work; echo "[$STAGE]"; pwd`},
+    {c:'res',t:`handlers/   server.js   package.json   README.md`},
+    {c:'res',t:`[]`},
+    {c:'res',t:`/session/state/home   · files kept · env, cwd and running jobs start fresh`}
   ]);
-  toast('Session resumed — picked up exactly where it froze','frozen');
+  toast('Session restored — fresh shell, files and output history kept','frozen');
 }
 function freezeNow(){
   toast('Session frozen — pod reclaimed','ok');

@@ -5,13 +5,13 @@
 - AC-E2: write = 프롬프트 1회 실행 (PRD: 세션 워크로드 — 클로드 코드 CLI)
 - AC-E3: read/stream = 실행 중 출력, offset 커서 기반 델타 (PRD: 세션 워크로드 — 클로드 코드 CLI)
 - AC-E4: 대화 연속성 = pod에 지속되는 대화 기록 (PRD: 세션 워크로드 — 클로드 코드 CLI)
-- AC-E5: CRIU 비대상 — 파일시스템 아카이브 기반 동결·복원 (PRD: 세션 워크로드 — 클로드 코드 CLI)
+- AC-E5: 파일시스템 아카이브 기반 동결·복원 (PRD: 세션 워크로드 — 클로드 코드 CLI)
 - AC-E6: 공급자 자격 증명은 sidecar Secret, 플러그인 토큰은 main Secret, 플랫폼 모델은 optional Secret (PRD: 세션 워크로드 — 클로드 코드 CLI)
 ## 자동화 상태 (2026-08-09)
 
 - data plane fake runner 단위 테스트가 exact argv(`--permission-mode auto -p --output-format stream-json --verbose --include-partial-messages -- <prompt>`), concrete `CLAUDE_CODE_MODEL`의 단일 `--model` argv와 empty/`platform-default` fallback, 비블로킹 write, process 종료 전 `text_delta` append, 1 MiB prompt 제한, bounded serial queue, 첫 성공 뒤 `--continue`, 고정 HOME/workdir, managed tool settings을 검증한다. stream 테스트는 SSE event id와 `{offset,payloadBase64,nextOffset}`의 decoded byte invariant, 직접 agent와 public proxy 모두의 `Last-Event-ID` 우선 재접속, 서버 발급 UTF-8 경계, stale cursor reset, read reconcile, stdout/stderr write 사이에 걸친 incremental redaction을 검증한다. 축소한 deterministic limit로 live invocation truncation marker와 cumulative terminal marker·기존 cursor 불변을 같은 production 경계 로직에서 검증한다. credential-proxy 테스트는 loopback bind, **HTTPS-only** 고정 upstream, 인증·라우팅 헤더 제거/토큰 주입, 1xx·최종 응답 redaction, upstream EOF 전 safe SSE chunk 전달, response-read 경계 split-token redaction, 축소 limit를 주입한 raw-upstream 64 MiB SSE cap 로직과 주 컨테이너의 실제 credential 거부를 검증한다.
 - archive 단위 테스트가 accepted queue drain/admission barrier, CP-supplied generation 기반 abort와 stale abort 거부, workspace·CLI home·resume flag·bounded scrollback 왕복, pre-snapshot cursor, output-full 복원 후 507, traversal/symlink 방어를 검증한다.
-- control plane 단위/통합 테스트가 workload/model 계약(각 필드 생략만 default, explicit workload `shell` 허용, explicit empty/null/비문자열·앞뒤 공백·허용값 밖 입력은 400), existing-session route의 immutable-field 변경 시도 400, 필수 base URL/token SecretKeyRef의 sidecar 한정, `platform-default` 주 컨테이너의 optional `model` SecretKeyRef와 구체 model의 literal 우선, 주 컨테이너의 localhost placeholder, sidecar 보안 컨텍스트, data-plane ServiceAccount/token 연결, Claude pod 비-CRIU 분기와 disabled-strategy 안전성을 검증한다. 배포 RBAC 검증은 일반 리소스 read 허용과 Secret read 거부를 함께 확인한다. `CLAUDE_CODE_DEFAULT_MODEL`과 `CLAUDE_CODE_MODELS` parser 테스트는 concrete default와 JSON array·model pattern·빈/공백 항목·중복·reserved alias를 엄격히 검증하고, config API 테스트는 concrete default 또는 fallback alias·ordered/non-null catalog·`no-store`와 catalog 밖 model의 API 허용을 검증한다. 단위 테스트는 durable prepare/commit 순서, crash-boundary recovery, owner fence, Lease Renew timeout/loss, latest-only Touch와 aggregate CAS도 검증한다.
+- control plane 단위/통합 테스트가 workload/model 계약(각 필드 생략만 default, explicit workload `shell` 허용, explicit empty/null/비문자열·앞뒤 공백·허용값 밖 입력은 400), existing-session route의 immutable-field 변경 시도 400, 필수 base URL/token SecretKeyRef의 sidecar 한정, `platform-default` 주 컨테이너의 optional `model` SecretKeyRef와 구체 model의 literal 우선, 주 컨테이너의 localhost placeholder, sidecar 보안 컨텍스트, data-plane ServiceAccount/token 연결, Claude pod의 아카이브 복원 분기(`session-platform.dev/restore-archive` 주석)와 disabled-strategy 안전성을 검증한다. 배포 RBAC 검증은 일반 리소스 read 허용과 Secret read 거부를 함께 확인한다. `CLAUDE_CODE_DEFAULT_MODEL`과 `CLAUDE_CODE_MODELS` parser 테스트는 concrete default와 JSON array·model pattern·빈/공백 항목·중복·reserved alias를 엄격히 검증하고, config API 테스트는 concrete default 또는 fallback alias·ordered/non-null catalog·`no-store`와 catalog 밖 model의 API 허용을 검증한다. 단위 테스트는 durable prepare/commit 순서, crash-boundary recovery, owner fence, Lease Renew timeout/loss, latest-only Touch와 aggregate CAS도 검증한다.
 - Playwright `web/e2e/journeys/j6-agent-prompt-loop.spec.ts`는 API route fixture로 non-empty config catalog picker, missing/empty catalog의 기존 free-text 입력, picker/model 요청, workload별 route/card, newline 없는 prompt, UTF-8 경계 SSE chunk 자동 append, cursor 재연결·read catch-up, stale cursor reset의 decoder 폐기·전체 replay, snapshot 오류 뒤 Restore 이동을 검증한다. UI는 output 연결 상태만 표시하고 서버 내부 running/queued 상태를 주장하지 않는다.
 - 실제 공급자 API를 호출하는 배포 full-stack 테스트는 비용·자격 증명·응답 비결정성 때문에 자동화 범위에 포함하지 않는다. 별도 opt-in smoke에서는 설치된 Claude Code가 위 stream-json argv로 process 종료 전에 첫 `text_delta`를 실제 방출하는지 확인한다.
 
@@ -49,10 +49,10 @@
 - **검증 AC**: AC-E4
 - **비고**: 첫 성공 실행 뒤 `--continue`와 세션별 고정 HOME/workdir를 사용하도록 확정했으며, fake runner와 archive 왕복 테스트로 해당 wiring을 자동 검증한다. 실제 응답 의미(“다르마” 포함)는 provider opt-in smoke 대상이다.
 
-### 시나리오 6: CRIU 없이 동결·회수, 아카이브 복원 후 연속성
+### 시나리오 6: 아카이브로 동결·회수, 복원 후 연속성
 - **사전 조건**: `claude-code` 세션 1개에 대화 몇 턴 + 파일 생성 프롬프트 수행. 동결 직전 read로 커서 확보(`cursorBefore`)
-- **실행 단계**: 유휴 한계 도달(또는 스냅샷 직접 호출)로 동결 → CRIU 호출 여부·아카이브 생성·pod 상태 확인 → 재접근으로 복원 → 동결 전 대화를 참조하는 프롬프트 write, 작업 디렉터리 조회 프롬프트 write → (a) `cursorBefore`로 read, (b) `offset=0`으로 read
-- **기대 결과**: 동결 시 **CRIU dump가 호출되지 않고** 작업 디렉터리·대화 기록·출력 버퍼 아카이브가 생성되며 pod가 회수되어 자원이 회복됨(AC-A3). control plane은 `preparing`을 agent 호출 전에, archive ref를 포함한 `committing`을 pod Stop 전에 durable하게 남긴다. 복원 후 세션이 `active`가 되고, 동결 전 대화 참조 프롬프트가 정상 응답하며 동결 전 생성 파일이 남아 있음. (a) `cursorBefore` 델타 read가 유효하게 동작(복원 전 커서가 깨지지 않음). (b) `offset=0`에 동결 전·후 출력이 순서대로 모두 포함
+- **실행 단계**: 유휴 한계 도달(또는 스냅샷 직접 호출)로 동결 → 아카이브 생성·pod 상태 확인 → 재접근으로 복원 → 동결 전 대화를 참조하는 프롬프트 write, 작업 디렉터리 조회 프롬프트 write → (a) `cursorBefore`로 read, (b) `offset=0`으로 read
+- **기대 결과**: 동결 시 작업 디렉터리·대화 기록·출력 버퍼 아카이브가 생성되며 pod가 회수되어 자원이 회복됨(AC-A3). control plane은 `preparing`을 agent 호출 전에, archive ref를 포함한 `committing`을 pod Stop 전에 durable하게 남긴다. 복원 후 세션이 `active`가 되고, 동결 전 대화 참조 프롬프트가 정상 응답하며 동결 전 생성 파일이 남아 있음. (a) `cursorBefore` 델타 read가 유효하게 동작(복원 전 커서가 깨지지 않음). (b) `offset=0`에 동결 전·후 출력이 순서대로 모두 포함
 - **검증 AC**: AC-E5 (AC-B1/B2/B3의 `claude-code` 타입 경로)
 
 ### 시나리오 7: 자격 증명 주입, 기본 모델, UI catalog

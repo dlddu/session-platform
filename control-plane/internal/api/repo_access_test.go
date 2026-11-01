@@ -14,8 +14,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/archive"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
 	"github.com/dlddu/session-platform/control-plane/internal/api"
 	"github.com/dlddu/session-platform/control-plane/internal/helperauth"
@@ -46,7 +46,7 @@ func newRepoAccessServer(t *testing.T, enabled bool) repoAccessFixture {
 	mgr := service.New(
 		k8s.NewStubOrchestrator("sessions"),
 		configmap.NewStore(fake.NewSimpleClientset(), "sessions"),
-		criu.NewStubCheckpointer(true),
+		archive.NewStubCheckpointer(true),
 		agent.NewStubClient(),
 	)
 	var store api.RepoAccessStore

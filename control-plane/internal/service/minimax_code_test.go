@@ -9,23 +9,19 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/archive"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
 // generationRecorder is the archive checkpointer installed for minimax-code. It
-// counts generation-fenced checkpoints and refuses the plain single-call one,
-// so a test passes only if the service took the AC-E5 transaction path.
+// counts generation-fenced checkpoints, so a test passes only if the service
+// reached this type's own strategy through the AC-E5 transaction path.
 type generationRecorder struct {
-	*criu.StubCheckpointer
+	*archive.StubCheckpointer
 	generations int
-}
-
-func (g *generationRecorder) Checkpoint(context.Context, k8s.PodRef) (*session.Checkpoint, error) {
-	return nil, errors.New("minimax-code must be checkpointed with a durable generation")
 }
 
 func (g *generationRecorder) CheckpointWithGeneration(ctx context.Context, ref k8s.PodRef, generation string) (*session.Checkpoint, error) {
@@ -34,14 +30,14 @@ func (g *generationRecorder) CheckpointWithGeneration(ctx context.Context, ref k
 }
 
 // newMiniMaxService wires the archive checkpointer for minimax-code only when
-// archive is true, mirroring MINIMAX_CODE_ARCHIVE_ENABLED (AC-G4).
-func newMiniMaxService(archive bool) (*service.Service, *k8s.StubOrchestrator, *generationRecorder) {
+// archiveOn is true, mirroring MINIMAX_CODE_ARCHIVE_ENABLED (AC-G4).
+func newMiniMaxService(archiveOn bool) (*service.Service, *k8s.StubOrchestrator, *generationRecorder) {
 	orch := k8s.NewStubOrchestrator("sessions")
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
-	ckpt := criu.NewStubCheckpointer(true)
-	recorder := &generationRecorder{StubCheckpointer: criu.NewStubCheckpointer(true)}
+	ckpt := archive.NewStubCheckpointer(true)
+	recorder := &generationRecorder{StubCheckpointer: archive.NewStubCheckpointer(true)}
 	var opts []service.Option
-	if archive {
+	if archiveOn {
 		opts = append(opts, service.WithWorkloadCheckpointer(session.WorkloadTypeMiniMaxCode, recorder))
 	}
 	return service.New(orch, store, ckpt, agent.NewStubClient(), opts...), orch, recorder

@@ -9,8 +9,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/archive"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
@@ -21,7 +21,7 @@ import (
 func newServiceWithOrch() (*service.Service, *k8s.StubOrchestrator, *configmap.Store) {
 	orch := k8s.NewStubOrchestrator("sessions")
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
-	ckpt := criu.NewStubCheckpointer(true)
+	ckpt := archive.NewStubCheckpointer(true)
 	svc := service.New(
 		orch, store, ckpt, agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
@@ -297,12 +297,11 @@ func TestLegacySessionRecordRestoresAsShell(t *testing.T) {
 	}
 }
 
-// AC-F5 is not implemented, so an approval-gated session has no archive
-// strategy. It must therefore refuse to freeze rather than fall through to the
-// shell's CRIU checkpointer: that would reclaim the pod pair behind a
-// checkpoint that cannot restore the workload — the exact data-loss shape
-// checkpointerFor exists to prevent. The refusal is what a later slice removes
-// by registering this type's archive strategy.
+// With APPROVAL_GATED_ARCHIVE_ENABLED off, an approval-gated session has no
+// archive strategy. It must refuse to freeze rather than fall through to the
+// shell's checkpointer: that would reclaim the pod pair behind an archive that
+// cannot restore the workload — the exact data-loss shape checkpointerFor
+// exists to prevent.
 func TestSnapshotIsRefusedForApprovalGated(t *testing.T) {
 	ctx := context.Background()
 	svc, orch, _ := newServiceWithOrch()
@@ -326,5 +325,112 @@ func TestSnapshotIsRefusedForApprovalGated(t *testing.T) {
 	}
 	if after.State == session.StateSnapshot {
 		t.Errorf("state = %q after a refused snapshot, want it unchanged", after.State)
+	}
+}
+
+// generationCountingCheckpointer records each generation-fenced checkpoint
+// so a test can prove a workload type reached its own strategy through the
+// durable snapshot transaction.
+type generationCountingCheckpointer struct {
+	*archive.StubCheckpointer
+	generations []string
+}
+
+func (g *generationCountingCheckpointer) CheckpointWithGeneration(ctx context.Context, ref k8s.PodRef, generation string) (*session.Checkpoint, error) {
+	g.generations = append(g.generations, generation)
+	return g.StubCheckpointer.CheckpointWithGeneration(ctx, ref, generation)
+}
+
+// Every workload type — shell and approval-gated included — freezes through the
+// same generation-fenced archive transaction and restores with its own type.
+func TestEveryWorkloadSnapshotsThroughTheArchiveTransaction(t *testing.T) {
+	ctx := context.Background()
+	for _, workload := range []session.WorkloadType{
+		session.WorkloadTypeShell,
+		session.WorkloadTypeClaudeCode,
+		session.WorkloadTypeApprovalGated,
+		session.WorkloadTypeMiniMaxCode,
+	} {
+		workload := workload
+		t.Run(string(workload), func(t *testing.T) {
+			orch := k8s.NewStubOrchestrator("sessions")
+			store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
+			disabled := archive.NewStubCheckpointer(false)
+			own := &generationCountingCheckpointer{StubCheckpointer: archive.NewStubCheckpointer(true)}
+			var shellCkpt archive.Checkpointer = disabled
+			var opts []service.Option
+			if workload == session.WorkloadTypeShell {
+				shellCkpt = own
+			} else {
+				opts = append(opts, service.WithWorkloadCheckpointer(workload, own))
+			}
+			svc := service.New(orch, store, shellCkpt, agent.NewStubClient(), opts...)
+
+			sess, err := svc.Create(ctx, session.CreateRequest{Name: "txn-" + string(workload), WorkloadType: workload})
+			if err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			frozen, err := svc.Snapshot(ctx, sess.ID)
+			if err != nil {
+				t.Fatalf("snapshot: %v", err)
+			}
+			if len(own.generations) != 1 || len(own.generations[0]) != 32 {
+				t.Fatalf("generation-fenced checkpoints = %q, want exactly one 32-hex generation", own.generations)
+			}
+			if frozen.State != session.StateSnapshot || frozen.SnapshotTransaction != nil || frozen.Checkpoint == nil {
+				t.Fatalf("after snapshot: %+v, want a committed snapshot with a checkpoint", frozen)
+			}
+			if got := orch.RunningCount(); got != 0 {
+				t.Fatalf("running pods after snapshot = %d, want 0", got)
+			}
+			restored, err := svc.Restore(ctx, sess.ID)
+			if err != nil {
+				t.Fatalf("restore: %v", err)
+			}
+			if restored.State != session.StateActive || restored.WorkloadType != workload {
+				t.Fatalf("restored = %s/%s, want active/%s", restored.State, restored.WorkloadType, workload)
+			}
+			if got := orch.WorkloadFor(sess.ID); got != workload {
+				t.Fatalf("restore provisioned for %q, want %q", got, workload)
+			}
+		})
+	}
+}
+
+// approval-gated now carries the same control-plane prompt bound as the other
+// agent workloads, so an oversized prompt never thaws its snapshot.
+func TestOversizedApprovalGatedPromptIsRejectedBeforeRestore(t *testing.T) {
+	ctx := context.Background()
+	orch := k8s.NewStubOrchestrator("sessions")
+	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
+	ckpt := archive.NewStubCheckpointer(true)
+	svc := service.New(orch, store, ckpt, agent.NewStubClient(),
+		service.WithWorkloadCheckpointer(session.WorkloadTypeApprovalGated, ckpt))
+
+	sess, err := svc.Create(ctx, session.CreateRequest{Name: "ag-limited", WorkloadType: session.WorkloadTypeApprovalGated})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if _, err := svc.Write(ctx, sess.ID, strings.Repeat("x", session.MaxClaudePromptBytes+1)); !errors.Is(err, session.ErrWorkloadPromptTooLarge) {
+		t.Fatalf("write error = %v, want %v", err, session.ErrWorkloadPromptTooLarge)
+	}
+	if got := orch.RunningCount(); got != 0 {
+		t.Fatalf("oversized write restored %d pods, want 0", got)
+	}
+}
+
+// A shell takes raw stdin: the prompt bound does not apply to it.
+func TestShellWriteIsNotPromptBounded(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _ := newServiceWithOrch()
+	sess, err := svc.Create(ctx, session.CreateRequest{Name: "shell-unbounded"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := svc.Write(ctx, sess.ID, strings.Repeat("x", session.MaxClaudePromptBytes+1)); err != nil {
+		t.Fatalf("shell write: %v", err)
 	}
 }

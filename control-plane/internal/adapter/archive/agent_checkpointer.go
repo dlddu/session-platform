@@ -1,15 +1,13 @@
-// The wired agent-driven workload archive strategies. Shell sessions ask their
-// agent to CRIU-dump the process tree; Claude sessions use a generation-fenced
-// filesystem archive. Both streams go to durable storage and are later streamed
-// to the selected workload's restore endpoint. Why this rather than the kubelet
-// path, and which part still needs a CRIU-capable node: docs/criu-verification.md
-// (decision ⑤).
-package criu
+// The wired agent-driven workload archive strategy. Every workload type —
+// shell, claude-code, approval-gated, minimax-code — freezes through the same
+// generation-fenced filesystem archive: the agent closes its admission barrier,
+// streams a tar of its state, and the stream goes to durable storage to be
+// streamed back later to the restore-target pod's agent.
+package archive
 
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -22,16 +20,13 @@ import (
 // checkpoint endpoints. The agent HTTP client implements it, resolving the pod
 // IP per call like the workload I/O client does.
 type AgentCheckpointClient interface {
-	// Checkpoint returns the archive stream the pod's agent produces by dumping
-	// its shell tree. The caller closes it.
-	Checkpoint(ctx context.Context, pod string) (archive io.ReadCloser, checkpointID string, err error)
 	// CheckpointWithGeneration uses a control-plane-owned, durably recorded
 	// generation for a crash-recoverable filesystem archive transaction.
 	CheckpointWithGeneration(ctx context.Context, pod, generation string) (archive io.ReadCloser, checkpointID string, err error)
 	// Restore streams a workload archive to a restore-target pod's agent.
 	Restore(ctx context.Context, pod string, archive io.Reader) error
-	// AbortCheckpoint reopens a filesystem workload whose archive transfer
-	// completed but the durable control-plane transaction failed.
+	// AbortCheckpoint reopens a workload whose archive transfer completed but
+	// the durable control-plane transaction failed.
 	AbortCheckpoint(ctx context.Context, pod, checkpointID string) error
 }
 
@@ -39,15 +34,14 @@ type AgentCheckpointClient interface {
 // CheckpointStore: the archive is produced inside the pod that is about to be
 // reclaimed, so it must be streamed to durable storage to survive.
 type AgentCheckpointer struct {
-	client    AgentCheckpointClient
-	store     CheckpointStore
-	now       func() time.Time
-	abortable bool
+	client AgentCheckpointClient
+	store  CheckpointStore
+	now    func() time.Time
 }
 
 var _ Checkpointer = (*AgentCheckpointer)(nil)
 
-// NewAgentCheckpointer builds the agent-driven checkpointer.
+// NewAgentCheckpointer builds the agent-driven filesystem-archive checkpointer.
 func NewAgentCheckpointer(client AgentCheckpointClient, store CheckpointStore) *AgentCheckpointer {
 	return &AgentCheckpointer{
 		client: client,
@@ -56,77 +50,37 @@ func NewAgentCheckpointer(client AgentCheckpointClient, store CheckpointStore) *
 	}
 }
 
-// NewAgentArchiveCheckpointer builds the filesystem-archive variant used by
-// claude-code.
-func NewAgentArchiveCheckpointer(client AgentCheckpointClient, store CheckpointStore) *AgentCheckpointer {
-	c := NewAgentCheckpointer(client, store)
-	c.abortable = true
-	return c
-}
-
-// Enabled reports that a real durable checkpoint/archive strategy is active.
+// Enabled reports that a real durable archive strategy is active.
 func (c *AgentCheckpointer) Enabled() bool { return true }
 
-// Checkpoint asks the pod's agent to dump its shell tree and streams the archive
-// to durable storage, recording the durable ref (AC-B1, AC-B3, AC-D4).
-func (c *AgentCheckpointer) Checkpoint(ctx context.Context, ref k8s.PodRef) (*session.Checkpoint, error) {
-	return c.checkpoint(ctx, ref, "")
-}
-
-// CheckpointWithGeneration is the archive-only variant used by the service's
-// durable snapshot transaction. The generation must already be stored before
-// this method closes the data-plane admission barrier.
+// CheckpointWithGeneration is used by the service's durable snapshot
+// transaction. The generation must already be stored before this method closes
+// the data-plane admission barrier. A failure after the agent answered is left
+// for the service to roll back: it owns the decision between abort and commit.
 func (c *AgentCheckpointer) CheckpointWithGeneration(ctx context.Context, ref k8s.PodRef, generation string) (*session.Checkpoint, error) {
-	if !c.abortable || !validArchiveGeneration(generation) {
+	if !validArchiveGeneration(generation) {
 		return nil, fmt.Errorf("checkpoint pod %s: durable archive generation is unavailable", ref.Name)
 	}
-	return c.checkpoint(ctx, ref, generation)
-}
-
-func (c *AgentCheckpointer) checkpoint(ctx context.Context, ref k8s.PodRef, generation string) (*session.Checkpoint, error) {
 	if c.store == nil {
 		return nil, fmt.Errorf("agent-driven checkpoint of pod %s requires a durable store (CHECKPOINT_S3_*)", ref.Name)
 	}
-	var rc io.ReadCloser
-	var checkpointID string
-	var err error
-	if generation == "" {
-		rc, checkpointID, err = c.client.Checkpoint(ctx, ref.Name)
-	} else {
-		rc, checkpointID, err = c.client.CheckpointWithGeneration(ctx, ref.Name, generation)
-	}
+	rc, checkpointID, err := c.client.CheckpointWithGeneration(ctx, ref.Name, generation)
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint pod %s: %w", ref.Name, err)
 	}
-	if generation != "" && checkpointID != generation {
+	if checkpointID != generation {
 		_ = rc.Close()
 		return nil, fmt.Errorf("checkpoint pod %s: agent returned generation %q, want %q", ref.Name, checkpointID, generation)
 	}
-	if c.abortable && checkpointID == "" {
-		_ = rc.Close()
-		return nil, fmt.Errorf("checkpoint pod %s: agent omitted checkpoint generation ID", ref.Name)
-	}
 
 	counting := &countingReader{r: rc}
-	key := agentCheckpointKey(ref.Name)
-	if generation != "" {
-		key = agentCheckpointGenerationKey(ref.Name, generation)
-	}
-	uri, err := c.store.Put(ctx, key, counting)
+	uri, err := c.store.Put(ctx, agentCheckpointKey(ref.Name, generation), counting)
 	closeErr := rc.Close()
 	if err != nil {
-		storeErr := fmt.Errorf("store checkpoint archive for pod %s: %w", ref.Name, err)
-		if generation != "" {
-			return nil, storeErr
-		}
-		return nil, c.abortAfterFailure(ref, checkpointID, storeErr)
+		return nil, fmt.Errorf("store checkpoint archive for pod %s: %w", ref.Name, err)
 	}
 	if closeErr != nil {
-		closeErr = fmt.Errorf("close checkpoint stream for pod %s: %w", ref.Name, closeErr)
-		if generation != "" {
-			return nil, closeErr
-		}
-		return nil, c.abortAfterFailure(ref, checkpointID, closeErr)
+		return nil, fmt.Errorf("close checkpoint stream for pod %s: %w", ref.Name, closeErr)
 	}
 	return &session.Checkpoint{
 		Ref:        uri,
@@ -137,32 +91,13 @@ func (c *AgentCheckpointer) checkpoint(ctx context.Context, ref k8s.PodRef, gene
 	}, nil
 }
 
-// AbortCheckpoint rolls back only the claude-code archive admission barrier.
-// Shell AgentCheckpointer instances deliberately no-op: CRIU already stopped
-// the process tree and cannot be resumed by the filesystem protocol.
+// AbortCheckpoint reopens the source workload's admission barrier for the
+// generation recorded in cp.AbortToken.
 func (c *AgentCheckpointer) AbortCheckpoint(ctx context.Context, ref k8s.PodRef, cp *session.Checkpoint) error {
-	if !c.abortable {
-		return nil
-	}
 	if cp == nil || cp.AbortToken == "" {
 		return fmt.Errorf("abort checkpoint for pod %s: checkpoint generation ID is empty", ref.Name)
 	}
 	return c.client.AbortCheckpoint(ctx, ref.Name, cp.AbortToken)
-}
-
-func (c *AgentCheckpointer) abortAfterFailure(ref k8s.PodRef, checkpointID string, cause error) error {
-	if !c.abortable {
-		return cause
-	}
-	abortCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := c.client.AbortCheckpoint(abortCtx, ref.Name, checkpointID); err != nil {
-		return errors.Join(
-			cause,
-			fmt.Errorf("abort checkpoint for pod %s: %w", ref.Name, err),
-		)
-	}
-	return cause
 }
 
 // Restore fetches the archive from durable storage and streams it to the
@@ -187,13 +122,10 @@ func (c *AgentCheckpointer) Restore(ctx context.Context, cp *session.Checkpoint,
 }
 
 // agentCheckpointKey is the durable object key for a pod's checkpoint archive.
-// The pod name is unique per restore cycle (RestoreInto mints a fresh name), so
-// keying by it never collides across a session's snapshot→restore history.
-func agentCheckpointKey(pod string) string {
-	return pod + "/checkpoint.tar"
-}
-
-func agentCheckpointGenerationKey(pod, generation string) string {
+// The pod name is unique per restore cycle (RestoreInto mints a fresh name) and
+// the generation is unique per attempt, so keys never collide across a
+// session's snapshot→restore history.
+func agentCheckpointKey(pod, generation string) string {
 	return pod + "/" + generation + "/checkpoint.tar"
 }
 

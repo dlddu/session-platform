@@ -24,7 +24,7 @@ func newTestAgent(sh *shellProc) *agent { return &agent{sh: sh} }
 // startTestShell starts the real default shell and guarantees it is reaped.
 func startTestShell(t *testing.T) *shellProc {
 	t.Helper()
-	sh, err := startShell(defaultShell)
+	sh, err := startShell(defaultShell, t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("start shell: %v", err)
 	}
@@ -35,36 +35,22 @@ func startTestShell(t *testing.T) *shellProc {
 	return sh
 }
 
-// shellPIDFloor's fallback rule, case by case.
-func TestShellPIDFloor(t *testing.T) {
-	for _, tc := range []struct {
-		env  string
-		want int
-	}{
-		{"", defaultShellPIDFloor},
-		{"1000", 1000},
-		{"garbage", defaultShellPIDFloor},
-		{"0", defaultShellPIDFloor},
-		{"-5", defaultShellPIDFloor},
-	} {
-		t.Setenv("CRIU_PID_FLOOR", tc.env)
-		if got := shellPIDFloor(); got != tc.want {
-			t.Errorf("CRIU_PID_FLOOR=%q floor = %d, want %d", tc.env, got, tc.want)
-		}
+// The shell starts in its archived home with HOME pointing at it (AC-D4).
+func TestStartShellUsesHome(t *testing.T) {
+	home := t.TempDir()
+	sh, err := startShell(defaultShell, home, nil)
+	if err != nil {
+		t.Fatalf("start shell: %v", err)
 	}
-}
-
-// startShell does not depend on the pid floor, which is what keeps the gate-off
-// path working when ns_last_pid is read-only.
-func TestReserveShellPIDIsBestEffort(t *testing.T) {
-	if err := reserveShellPID(300); err != nil {
-		t.Logf("ns_last_pid not writable here (expected unprivileged): %v", err)
-	}
-	// Either way a shell still starts.
-	sh := startTestShell(t)
-	if !sh.alive.Load() {
-		t.Fatal("shell not alive after start")
-	}
+	t.Cleanup(func() {
+		_ = sh.kill()
+		<-sh.done
+	})
+	srv := httptest.NewServer(routes(testLogger(), newTestAgent(sh)))
+	defer srv.Close()
+	writeViaHTTP(t, srv, "echo \"home=$HOME cwd=$(pwd)\"\n", http.StatusOK)
+	want := fmt.Sprintf("home=%s cwd=%s", home, home)
+	eventuallyRead(t, srv, 0, func(p string) bool { return strings.Contains(p, want) })
 }
 
 // AC-D1: the started shell is attached to a PTY — its stdin is a PTY slave —

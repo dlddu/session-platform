@@ -20,7 +20,7 @@ resources:
   # Throwaway credentials for creating claude-code pods in local e2e.
   - claude-code-credentials-secret.yaml
 
-  # S3-compatible backend for the CRIU checkpoint archives, so the round trip
+  # S3-compatible backend for the workload archives, so the round trip
   # runs against the real S3 code path with no cloud account.
   - minio.yaml
 
@@ -97,23 +97,20 @@ patches:
   # against the shared ConfigMap/Lease store; and point DATA_PLANE_IMAGE at the
   # locally built agent image scripts/e2e/up.sh loads into kind (the base
   # references the ghcr-published tag). env/1 is DATA_PLANE_IMAGE, env/2 is
-  # CRIU_ENABLED, env/3 is DATA_PLANE_CLAUDE_CODE_IMAGE, and env/4 is
-  # DATA_PLANE_APPROVAL_GATED_IMAGE in the base.
+  # SHELL_ARCHIVE_ENABLED, env/3 is DATA_PLANE_CLAUDE_CODE_IMAGE, env/4 is
+  # DATA_PLANE_APPROVAL_GATED_IMAGE, and env/17 (the base's last entry) is
+  # APPROVAL_GATED_ARCHIVE_ENABLED. Each gate replace is preceded by a `test`
+  # of the entry's name, so a reordered base fails the build instead of
+  # silently flipping a different variable.
   #
-  # CRIU is turned ON here: since checkpoint/restore moved into the agent
-  # (docs/criu-verification.md decision ⑤) it needs no CRIU-capable *runtime*,
-  # only a capable kernel and a privileged session pod — and the e2e CRIU probe
-  # confirms that holds on GitHub runners. That makes the AC-D4 round trip an
-  # automated assertion (e2e_d4_process_tree_test.go) instead of a manual round.
-  # It also needs the product snapshot trigger reachable over HTTP and an
-  # archive store
+  # The shell and approval-gated archive gates are turned ON here (the base
+  # keeps both off), so the AC-D4 shell round trip runs as an automated
+  # assertion (e2e_d4_process_tree_test.go) and approval-gated sessions freeze
+  # through the same agent archive path production uses. That needs the product snapshot trigger
+  # reachable over HTTP and an archive store
   # shared by both replicas (CHECKPOINT_S3_ENDPOINT → the in-cluster MinIO,
   # authenticated with the static keys from the checkpoint-s3 Secret since no
   # role is set here).
-  #
-  # mock-exception: CRIU-GATE — 아래 patch의 env/2 replace가 base의 off를 on으로 올린다.
-  # 프로덕션 base는 검증된 런타임 전까지 off가 의도된 동작이고, 이 지점이 e2e만 실 CRIU
-  # 경로를 타게 한다. 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
   - target:
       kind: Deployment
       name: control-plane
@@ -127,8 +124,17 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/env/1/value
         value: session-platform/data-plane:dev
+      - op: test
+        path: /spec/template/spec/containers/0/env/2/name
+        value: SHELL_ARCHIVE_ENABLED
       - op: replace
         path: /spec/template/spec/containers/0/env/2/value
+        value: "true"
+      - op: test
+        path: /spec/template/spec/containers/0/env/17/name
+        value: APPROVAL_GATED_ARCHIVE_ENABLED
+      - op: replace
+        path: /spec/template/spec/containers/0/env/17/value
         value: "true"
       - op: replace
         path: /spec/template/spec/containers/0/env/3/value

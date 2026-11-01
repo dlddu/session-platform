@@ -6,7 +6,7 @@
 ## 달성 가치
 - **V8 목적에 맞는 작업 환경 선택** — 세션 생성 시 워크로드 타입을 고를 수 있게 하고, 선택과 무관하게 V1~V5 보장이 동일하게 성립함을 확정 (AC-E1)
 - **V1 세션 격리** — 에이전트 실행과 자격 증명을 세션 전용 워크로드 파드에 가둠 (AC-A1/A2 구체화). credential-proxy는 같은 파드 안의 사이드카 컨테이너이므로 AC-A2의 보조 파드가 아니다
-- **V2 유휴 자원 회수** — CRIU 없이 파일시스템 아카이브 기반으로 동결·회수 (AC-B1의 타입별 경로)
+- **V2 유휴 자원 회수** — 파일시스템 아카이브 기반으로 동결·회수 (AC-B1의 타입별 경로)
 - **V3 끊김 없는 세션 연속성** — 메모리가 아닌 **대화 기록·작업 디렉터리** 보존으로 연속성 확보(AC-B2/B3 구체화), write/read를 프롬프트·실행 출력 시맨틱으로 확정 (AC-C2/C3 구체화)
 - **V4 자유로운 멀티세션 전환** — 전환 후에도 동일한 offset 커서 규약으로 출력을 이어 읽음 (AC-C2 구체화)
 
@@ -99,11 +99,12 @@
 
 > ✅ **구현 결정 (재개 방식, 2026-08-08)**: 첫 실행은 새 대화를 시작하고, 성공한 첫 실행 이후부터 `--continue`로 해당 세션 pod의 최근 대화를 잇는다. 세션별 고정 HOME과 작업 디렉터리를 사용하며, 별도 대화 ID를 control-plane 메타데이터에 저장하지 않는다. resume 플래그와 CLI 기록은 파일시스템 아카이브에 함께 보존된다.
 
-### AC-E5: CRIU 비대상 — 파일시스템 아카이브 기반 동결·복원
-- **설명**: `claude-code` 세션은 **CRIU 체크포인트 대상이 아니다.** 원샷 실행 모델이라 동결 시점에 보존해야 할 상주 프로세스 트리가 존재하지 않기 때문이다(쉘 타입은 상주 쉘의 메모리 상태가 곧 세션 상태이므로 CRIU가 필요했다 — AC-D4). 대신 유휴 한계 도달 시(AC-B1) 시스템은 세션의 **작업 디렉터리·대화 기록·누적 출력 버퍼를 아카이브하여 외부 스토리지에 저장**하고 pod를 회수한다. 재접근 시(AC-B2)에는 새 pod에 아카이브를 복원한 뒤 `active`로 전이하며, 복원 후의 write는 동결 이전 대화 문맥과 작업 디렉터리 위에서 이어진다. 누적 출력 버퍼(256 MiB terminal marker와 output-full 상태 포함)가 아카이브에 포함되므로 **복원 전 발급된 `nextOffset` 커서는 복원 후에도 유효**하고, 이미 output-full이었다면 복원 후 새 write도 계속 507이다(AC-E3의 커서 연속성 — 쉘 타입은 scrollback을 CRIU 이미지와 같은 체크포인트 아카이브에 직렬화하고, 이 타입은 filesystem archive에 직렬화한다).
+### AC-E5: 파일시스템 아카이브 기반 동결·복원
+> 📌 **개정 (2026-11-01)**: 초판 제목은 「CRIU 비대상 — …」였고, 쉘 타입만 CRIU로 프로세스 트리를 보존한다는 대비 위에 서 있었다. CRIU가 모든 워크로드에서 퇴역하면서 이 AC가 정의한 아카이브가 **모든 타입의 공통 동결 경로**가 됐다(`shell`의 보존 대상은 AC-D4, `approval-gated`의 공유 볼륨은 AC-F5). 아래 계약 자체는 바뀌지 않는다.
+- **설명**: `claude-code` 세션은 원샷 실행 모델이라 동결 시점에 보존해야 할 상주 프로세스 트리가 존재하지 않는다. 유휴 한계 도달 시(AC-B1) 시스템은 세션의 **작업 디렉터리·대화 기록·누적 출력 버퍼를 아카이브하여 외부 스토리지에 저장**하고 pod를 회수한다. 재접근 시(AC-B2)에는 새 pod에 아카이브를 복원한 뒤 `active`로 전이하며, 복원 후의 write는 동결 이전 대화 문맥과 작업 디렉터리 위에서 이어진다. 누적 출력 버퍼(256 MiB terminal marker와 output-full 상태 포함)가 아카이브에 포함되므로 **복원 전 발급된 `nextOffset` 커서는 복원 후에도 유효**하고, 이미 output-full이었다면 복원 후 새 write도 계속 507이다(AC-E3의 커서 연속성 — 모든 타입이 scrollback을 같은 filesystem archive에 직렬화한다).
 - **달성 가치**: V2, V3
-- **구체화 대상**: AC-B1(동결)·AC-B2(복원)·AC-B3(무결성)의 **메커니즘이 타입별로 분기**함 — `shell`은 CRIU 체크포인트(AC-D4), `claude-code`는 파일시스템 아카이브(AC-E5)
-- **검증 방법**: `claude-code` 세션이 유휴 한계에 도달하면 CRIU dump 없이 아카이브가 생성되고 pod가 회수됨을 확인한다(AC-A3의 자원 회복도 동일하게 성립). 재접근 시 새 pod로 복원되어 `active`가 되고, 동결 전 대화를 참조하는 프롬프트가 정상 응답하며 동결 전에 만든 파일이 작업 디렉터리에 남아 있음을 확인한다. 동결 직전 확보한 `nextOffset`으로 복원 후 read하면 델타만 반환되고, `offset=0`은 동결 전·후 전체 이력을 반환함을 확인한다.
+- **구체화 대상**: AC-B1(동결)·AC-B2(복원)·AC-B3(무결성) — 메커니즘은 모든 타입이 이 아카이브이고, 타입별로 다른 것은 보존 대상이다(`shell`=홈 디렉터리 파일+scrollback, AC-D4 · `claude-code`=이 AC · `approval-gated`=이 AC+공유 볼륨, AC-F5)
+- **검증 방법**: `claude-code` 세션이 유휴 한계에 도달하면 아카이브가 생성되고 pod가 회수됨을 확인한다(AC-A3의 자원 회복도 동일하게 성립). 재접근 시 새 pod로 복원되어 `active`가 되고, 동결 전 대화를 참조하는 프롬프트가 정상 응답하며 동결 전에 만든 파일이 작업 디렉터리에 남아 있음을 확인한다. 동결 직전 확보한 `nextOffset`으로 복원 후 read하면 델타만 반환되고, `offset=0`은 동결 전·후 전체 이력을 반환함을 확인한다.
 > 🔐 작업 디렉터리·대화·출력을 외부 저장소로 전송하므로 이 경로는 `CLAUDE_CODE_ARCHIVE_ENABLED=true`로 명시적으로 허용해야 한다(기본값 `false`). 비활성 상태에서는 pod를 회수하지 않고 snapshot 요청을 거부한다.
 
 > ✅ **구현 결정 (아카이브 crash recovery, 2026-08-08)**: control plane은 128-bit generation·현재 Lease owner·source pod를 가진 private durable `preparing` transaction을 먼저 aggregate CAS로 저장한 뒤, 그 generation을 agent에 넘긴다. agent는 admission을 닫고 accepted queue를 drain해 같은 generation의 archive를 내보낸다. archive ref가 durable해지면 control plane은 pod 삭제 전에 transaction을 `committing`으로 CAS한다. `preparing` 실패/재시작은 새 holder가 owner를 먼저 CAS로 claim한 뒤 **그 generation만** abort하고 조건부로 transaction을 지운다. `committing` 이후의 Stop/finalize 실패는 abort하거나 admission을 다시 열지 않고, recovery가 Stop을 idempotently 재시도한 뒤 한 번의 aggregate CAS로 `snapshot`을 확정한다. 활성 checkpoint와 다른 generation의 늦은 abort는 409이므로 새 barrier를 열 수 없고, 이미 abort된 generation 재요청은 idempotent하다.
@@ -132,4 +133,4 @@
 
 > ✅ **구현 결정 (워크로드 타입 목록, 2026-10-23)**: `GET /api/v1/config`가 `workloadTypes` 배열로 이 배포가 생성할 수 있는 타입(셸은 항상, 나머지는 이미지가 설정된 것만)을 표시 순서대로 공개한다. 각 항목은 `type`·`label`·`description`·`takesModel`·`input`(`prompt`|`terminal`)·`defaultModel`·`models`이고, `defaultModel`·`models`의 의미는 위 모델 카탈로그 결정과 같다(`takesModel=false`면 `defaultModel`은 `null`, `models`는 빈 배열). approval-gated는 claude-code Secret의 `model`/`models`를 그대로 보이고, minimax-code는 control plane이 그 Secret을 읽지 않으므로 `platform-default`와 빈 catalog다. 외부 클라이언트는 이 목록으로 타입 선택과 생성 요청 검증을 하므로 타입 추가에 클라이언트 배포가 필요 없다. 기존 `claudeCode` 필드는 하위 호환을 위해 유지한다. 목록은 표시용이며 Create Session API의 검증 범위를 바꾸지 않는다.
 
-> ✅ **구현 결정 (이미지/모드, 2026-08-08)**: 하나의 data-plane 이미지에 PTY shell, CRIU, Claude Code CLI를 포함하고 `DATA_PLANE_WORKLOAD`로 시작 모드를 분기한다. Kubernetes pod label/env와 control-plane의 immutable workload spec이 선택한 모드를 끝까지 전달한다.
+> ✅ **구현 결정 (이미지/모드, 2026-08-08)**: 하나의 data-plane 이미지에 PTY shell과 Claude Code CLI를 포함하고(*2026-11-01*: CRIU 바이너리는 제거됐다) `DATA_PLANE_WORKLOAD`로 시작 모드를 분기한다. Kubernetes pod label/env와 control-plane의 immutable workload spec이 선택한 모드를 끝까지 전달한다.

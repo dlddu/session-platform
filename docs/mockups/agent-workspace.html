@@ -425,7 +425,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M12 2 9 5M12 2l3 3M12 22l-3-3M12 22l3-3M2.7 7l17.3 10M2.7 7l1.1 4M2.7 7l4-1.1M21.3 17l-1.1-4M21.3 17l-4 1.1M21.3 7 4 17M21.3 7l-4-1.1M21.3 7l-1.1 4M2.7 17l4-1.1M2.7 17l1.1-4"/></svg>
               </div>
               <h3>Resuming from archive</h3>
-              <p>Restoring pod from the session archive. Conversation history, working directory and the accumulated output buffer come back exactly as frozen &mdash; no CRIU involved.</p>
+              <p>Restoring pod from the session archive. Conversation history, working directory and the accumulated output buffer come back exactly as frozen &mdash; a fresh pod picks up from the archive.</p>
               <div class="pbar"><i id="ws-pbar"></i></div>
               <div class="rlog mono" id="ws-rlog"></div>
             </div>
@@ -574,8 +574,7 @@ const termActive = (s)=>[
 ];
 const termFrozen = (s)=>[
   {c:'sys',t:`◆ session/${s.id} is frozen — pod reclaimed`},
-  {c:'sys',t:`◆ no CRIU checkpoint — one-shot runs leave no resident process tree to dump`},
-  {c:'sys',t:`◆ archived instead (${s.checkpoint}) · frozen ${s.frozenAgo}`},
+    {c:'sys',t:`◆ archived (${s.checkpoint}) · frozen ${s.frozenAgo}`},
   {c:'meta',t:`  archive contents: working dir (${s.cwd}) · conversation history (${s.turns} turns) · output buffer`},
   {c:'res',t:`the next prompt restores the archive to a fresh pod → active, then answers with the old context intact`},
   {c:'meta',t:`  ${s.cursor} stays valid across the freeze — the buffer travels inside the archive`}
@@ -599,7 +598,7 @@ function setGauge(cpu, mem, memMax){
 }
 function metaLine(s){
   if(s.state==='snapshot'){
-    return `<span class="it">${ic('pod',13)} <b>checkpoint ${s.checkpoint}</b></span>
+    return `<span class="it">${ic('pod',13)} <b>archive ${s.checkpoint}</b></span>
       <span class="it">${ic('clock',13)} <b>frozen ${s.frozenAgo}</b></span>
       <span class="it">${ic('pin',13)} <b>${s.region}</b></span>`;
   }

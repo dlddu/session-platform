@@ -13,8 +13,12 @@ interactive shell and Claude Code workloads.
 `DATA_PLANE_WORKLOAD` selects one of six modes across a session's pods:
 
 - `shell` (default) launches one PTY-attached interactive shell
-  (`DATA_PLANE_SHELL`, default `/bin/bash`). Write is shell stdin, read is
-  accumulated PTY output, and checkpoint/restore uses CRIU.
+  (`DATA_PLANE_SHELL`, default `/bin/bash`) in its home directory
+  `$SHELL_STATE_DIR/home` (default `/session/state/home`), with `HOME` pointing
+  there. Write is shell stdin and read is accumulated PTY output. A snapshot
+  archives the home directory and the scrollback; a restore starts a fresh
+  shell in the restored home with the scrollback preloaded. Running processes,
+  environment, cwd and shell variables/functions/aliases are not carried over.
 - `claude-code` launches no resident shell. Write asynchronously queues a
   prompt for one serial worker; each job executes
   `claude [--continue] [--model MODEL] --permission-mode auto
@@ -149,7 +153,19 @@ session volume at `/session`, leaving the replaceable state tree one level
 below the mount point so restore can atomically swap it without trying to
 rename an active mount. Its checkpoint closes prompt admission, drains accepted
 work, and archives that state tree plus the redacted scrollback; restore safely
-installs the archive before reopening writes. The image includes the official
+installs the archive before reopening writes. When the workload mounts the
+session's shared volume (`SESSION_SHARED_DIR`, approval-gated and minimax-code),
+the archive also carries that volume under `shared/` and restore copies it into
+the next round's freshly mounted volume; an archive with shared files refuses to
+restore into a pod without one rather than dropping them (AC-F5).
+
+The shell's state tree sits at the same place (`SHELL_STATE_DIR`, default
+`/session/state`, volume at `/session`). Its checkpoint closes write admission
+(409) and SIGSTOPs the shell and its descendants so the home directory holds
+still, archives `home/` plus the scrollback, and keeps both paused until the
+control plane reclaims the pod or calls `/checkpoint/abort`, which SIGCONTs the
+tree and reopens writes. A process that daemonized out of the shell's tree is
+not paused. The image includes the official
 `@anthropic-ai/claude-code` npm package. For a `claude-code` container only,
 `entrypoint.sh` calls K3s MCP with `K3S_MCP_TOKEN` to mint a short-lived
 `contents:read` GitHub App token scoped to `plugin-marketplace`, supplies that
@@ -229,7 +245,8 @@ never reopen a different active generation; repeating an already completed
 abort is idempotent.
 
 The shell and Claude modes expose `/healthz`, reachability-only `/attach`, `/write`,
-`/read`, `/stream`, `/checkpoint`, and `/restore` on port 8090. `/read`
+`/read`, `/stream`, `/checkpoint`, `/checkpoint/abort`, and `/restore` on port
+8090, with the same generation-fenced archive protocol for every type. `/read`
 remains the non-consuming JSON replay/catch-up endpoint. `/stream?offset=N` is
 a long-lived SSE view of the same append-only bytes. An `output` event uses
 `nextOffset` as its id and JSON `{offset,payloadBase64,nextOffset}`; the decoded
@@ -264,6 +281,8 @@ overlay both do). The control plane talks to a cluster either via its in-cluster
 config (as a pod) or the ambient kubeconfig (local development against a kind
 cluster).
 
-The agent-driven CRIU round trip is exercised by the kind e2e overlay. The
-production manifest deliberately keeps `CRIU_ENABLED=false` until its target
-nodes and privilege policy are approved (see `../docs/criu-verification.md`).
+Every workload type's archive round trip is exercised by the kind e2e overlay.
+Each type has its own control-plane data-transfer gate because archives move
+session files to the checkpoint store: `SHELL_ARCHIVE_ENABLED`,
+`CLAUDE_CODE_ARCHIVE_ENABLED`, `APPROVAL_GATED_ARCHIVE_ENABLED` and
+`MINIMAX_CODE_ARCHIVE_ENABLED`. Session pods need no privilege for any of them.

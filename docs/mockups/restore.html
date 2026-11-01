@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Resume from checkpoint</title>
+<title>Resume from session archive</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -392,8 +392,8 @@
               <div class="crystal-lg">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M12 2 9 5M12 2l3 3M12 22l-3-3M12 22l3-3M2.7 7l17.3 10M2.7 7l1.1 4M2.7 7l4-1.1M21.3 17l-1.1-4M21.3 17l-4 1.1M21.3 7 4 17M21.3 7l-4-1.1M21.3 7l-1.1 4M2.7 17l4-1.1M2.7 17l1.1-4"/></svg>
               </div>
-              <h3>Resuming from checkpoint</h3>
-              <p>Restoring pod from CRIU snapshot. In-memory state — variables, open connections — preserved exactly as frozen.</p>
+              <h3>Resuming from session archive</h3>
+              <p>Restoring pod from the session archive. Home directory files and the output history come back; a fresh shell starts in the home directory &mdash; running processes, environment variables and the working directory are not kept.</p>
               <div class="pbar"><i id="ws-pbar"></i></div>
               <div class="rlog mono" id="ws-rlog"></div>
             </div>
@@ -490,15 +490,15 @@ function buildTimeline(s){
 const termActive = (s)=>[
   {c:'sys',t:`◆ attached to session/${s.id} · pod/${s.pod}`},
   {c:'sys',t:`◆ isolation: dedicated pod — no shared state with other sessions`},
-  {c:'req',t:`<span class="op">$</span> export STAGE=dev && cd /work`},
+  {c:'req',t:`<span class="op">$</span> export STAGE=dev && cd ~/work`},
   {c:'req',t:`<span class="op">$</span> ls`},
   {c:'res',t:`handlers/   server.js   package.json   README.md`},
-  {c:'ok',t:`✓ cwd=/work · $STAGE=dev persist for the next command`}
+  {c:'ok',t:`✓ cwd=~/work · $STAGE=dev persist for the next command (not across a freeze)`}
 ];
 const termFrozen = (s)=>[
   {c:'sys',t:`◆ session/${s.id} is frozen — pod reclaimed`},
-  {c:'sys',t:`◆ checkpoint ${s.checkpoint} on cold storage · frozen ${s.frozenAgo}`},
-  {c:'res',t:`read / write resumes the shell — CRIU restore → new pod → active`}
+  {c:'sys',t:`◆ archive ${s.checkpoint} on cold storage · frozen ${s.frozenAgo}`},
+  {c:'res',t:`read / write restores the archive — new pod → fresh shell in its home dir → active`}
 ];
 function paintTerm(lines){
   const term = document.getElementById('ws-term');
@@ -514,7 +514,7 @@ function setGauge(cpu, mem, memMax){
 }
 function metaLine(s){
   if(s.state==='snapshot'){
-    return `<span class="it">${ic('pod',13)} <b>checkpoint ${s.checkpoint}</b></span>
+    return `<span class="it">${ic('pod',13)} <b>archive ${s.checkpoint}</b></span>
       <span class="it">${ic('clock',13)} <b>frozen ${s.frozenAgo}</b></span>
       <span class="it">${ic('pin',13)} <b>${s.region}</b></span>`;
   }
@@ -575,7 +575,7 @@ function runRestore(s){
   const pbar=document.getElementById('ws-pbar');
   const rlog=document.getElementById('ws-rlog');
   ov.classList.add('show');
-  const logs=['reading checkpoint '+s.checkpoint+' …','scheduling fresh pod …','restoring memory pages · file descriptors · open sockets …','state verified — resuming'];
+  const logs=['fetching archive '+s.checkpoint+' …','scheduling fresh pod …','unpacking home directory · output history …','archive verified — starting a fresh shell'];
   const reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const dur=reduce?0:2400; let step=0;
   const tick=()=>{rlog.textContent=logs[Math.min(step,logs.length-1)];step++;}; tick();
@@ -611,13 +611,14 @@ function promote(s){
   setGauge(s.cpu,s.mem,s.memMax);
   const tag=document.getElementById('ws-console-tag'); tag.style.display=''; tag.innerHTML='<span class="led"></span>shell attached';
   paintTerm([
-    {c:'ok',t:`✓ restored from checkpoint — shell process tree intact`},
-    {c:'sys',t:`◆ re-attached to session/${s.id} · pod/${s.pod} — interactive shell`},
-    {c:'req',t:`<span class="op">$</span> echo $STAGE; pwd`},
-    {c:'res',t:`dev`},
-    {c:'res',t:`/work   · env + cwd preserved across freeze`}
+    {c:'ok',t:`✓ restored from archive — home directory files and output history intact`},
+    {c:'sys',t:`◆ attached to session/${s.id} · pod/${s.pod} — fresh interactive shell in ~`},
+    {c:'req',t:`<span class="op">$</span> ls ~/work; echo "[$STAGE]"; pwd`},
+    {c:'res',t:`handlers/   server.js   package.json   README.md`},
+    {c:'res',t:`[]`},
+    {c:'res',t:`/session/state/home   · files kept · env, cwd and running jobs start fresh`}
   ]);
-  toast('Session resumed — picked up exactly where it froze','frozen');
+  toast('Session restored — fresh shell, files and output history kept','frozen');
 }
 function freezeNow(){
   toast('Session frozen — pod reclaimed','ok');

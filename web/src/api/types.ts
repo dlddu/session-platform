@@ -14,6 +14,7 @@ export interface PlatformConfig {
   };
 }
 
+// 와이어 필드 이름은 `checkpoint` 그대로다(OpenAPI 계약). 가리키는 것은 모든 타입에서 파일시스템 아카이브다.
 export interface Checkpoint {
   ref: string;
   sizeBytes: number;

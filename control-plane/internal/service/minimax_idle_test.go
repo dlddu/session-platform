@@ -6,8 +6,8 @@ import (
 
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/dlddu/session-platform/control-plane/internal/adapter/archive"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/criu"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
@@ -18,7 +18,7 @@ import (
 func TestMiniMaxCodeApprovalWaitHoldsTheIdleCount(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)}
 	ag := newApprovalReportingAgent()
-	stub := criu.NewStubCheckpointer(true)
+	stub := archive.NewStubCheckpointer(true)
 	svc := service.New(
 		k8s.NewStubOrchestrator("sessions"),
 		configmap.NewStore(fake.NewSimpleClientset(), "sessions"),

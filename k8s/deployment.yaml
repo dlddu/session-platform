@@ -51,12 +51,12 @@ spec:
             # images 변환이 닿지 않는 자리다).
             - name: DATA_PLANE_IMAGE
               value: "ghcr.io/dlddu/session-platform-data-plane:13d3f7fa2fbd5b518bea644ca14fc71d967d841c"
-            # mock-exception: CRIU-GATE — 검증된 런타임이 설 때까지 off가 프로덕션의 의도된
-            # 동작이다(그 경로에서 쉘 동결/복원은 no-op 스텁). e2e 오버레이(deploy/)만 on으로
-            # 올려 실 경로를 탄다. 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
-            - name: CRIU_ENABLED
-              # Production stays opt-in until node capability, privileged-pod,
-              # and durable checkpoint-store policies are explicitly approved.
+            # Shell data-transfer gate. When enabled, a shell session's home
+            # directory and scrollback are archived to the S3 destination below
+            # on snapshot; off, a shell refuses to freeze and keeps its pod.
+            # Production stays off until that destination is approved for shell
+            # data. This entry must stay at env index 2: deploy/ patches by index.
+            - name: SHELL_ARCHIVE_ENABLED
               value: "false"
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다.
             - name: DATA_PLANE_CLAUDE_CODE_IMAGE
@@ -102,13 +102,14 @@ spec:
             # destination below. Keep off until that destination is approved.
             - name: CLAUDE_CODE_ARCHIVE_ENABLED
               value: "true"
-            # Checkpoint archive S3 store config (decision ③, docs/criu-verification.md):
-            # bucket / assume-role ARN / region / key prefix. Sourced from the
+            # Workload archive S3 store config: bucket / assume-role ARN / region /
+            # key prefix. Sourced from the
             # `checkpoint-s3` Secret rather than inlined here. The Secret is
             # REQUIRED (no `optional`), so the pod will not start until it exists:
             # in production external-secrets provisions it (as it does the ghcr
-            # pull secret); the kind e2e overlay (deploy/) ships a placeholder; for
-            # CRIU verification create it directly (k8s/checkpoint-s3-secret.example.yaml).
+            # pull secret); the kind e2e overlay (deploy/) points it at MinIO; for
+            # a manual archive round trip create it directly
+            # (k8s/checkpoint-s3-secret.example.yaml).
             # These are config, not credentials — S3 access is by assume-role over
             # the node instance profile, so there are no static keys here.
             - name: CHECKPOINT_S3_BUCKET
@@ -161,6 +162,13 @@ spec:
             # 이 항목도 env 목록 맨 끝에 둔다(위 minimax 항목과 같은 이유).
             - name: APPROVAL_GATEWAY_URL
               value: http://pocket-aide.pocket-aide.svc.cluster.local:8080
+            # approval-gated 전용 데이터 전송 게이트. on 이면 이 타입 세션의 작업 디렉터리·
+            # 대화 기록·출력과 공유 볼륨(AC-F5) 내용이 위 CHECKPOINT_S3_* 로 아카이브된다.
+            # 프로덕션은 그 목적지가 승인될 때까지 off 다(PR 프리뷰 오버레이에는 S3 가
+            # 없으므로 off 인 동안은 그쪽 변경도 필요 없다). 이 항목도 env 목록 맨 끝에 둔다
+            # (위 minimax 항목과 같은 이유 — deploy/ 가 인덱스로 잡는다).
+            - name: APPROVAL_GATED_ARCHIVE_ENABLED
+              value: "false"
           readinessProbe:
             httpGet:
               path: /api/v1/healthz

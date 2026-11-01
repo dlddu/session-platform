@@ -189,8 +189,8 @@ jobs:
     # In-process happy-path harness (build tag `integration`): mounts the API
     # handlers over the in-memory stub adapters, so there is no external infra
     # and it runs on every PR alongside the unit tests. The deployed kind-SUT
-    # version of these scenarios lives in e2e.yml. CRIU scenarios stay skipped
-    # unless CRIU_ENABLED=1 (see docs/criu-verification.md).
+    # version of these scenarios lives in e2e.yml. The shell archive round trip
+    # (Scenario 4) skips unless SHELL_ARCHIVE_ENABLED=1 with a reachable cluster.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

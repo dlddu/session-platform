@@ -13,13 +13,21 @@ between sessions.
 > Claude Code `stream-json` text deltas plus diagnostic stderr into an append-only
 > output buffer. The SPA receives that buffer live over an offset-cursored SSE
 > stream; the existing JSON read remains available for full replay and catch-up.
-> Claude sessions can archive filesystem state without CRIU (J6, AC-E1~E6).
-> Each invocation is bounded to 16 MiB and cumulative Claude
-> output to 256 MiB with explicit terminal markers; the full state and cursors
-> survive archive restore. Shell CRIU is agent-driven behind `CRIU_ENABLED`; Claude
-> archives are separately gated by `CLAUDE_CODE_ARCHIVE_ENABLED` because they
-> transfer workspace, conversation, and output data to external storage. Both
-> gates default off in production. A reaper candidate whose workload gate is off
+> Every workload type freezes to a **filesystem archive** of its state directory
+> plus its output scrollback (J6, AC-E1~E6). Each invocation is bounded to
+> 16 MiB and cumulative Claude output to 256 MiB with explicit terminal markers;
+> the full state and cursors survive archive restore. What the archive holds
+> differs per type: `shell` keeps only the files in the shell's home directory
+> (`/session/state/home`) plus its scrollback — a restored shell is a fresh shell
+> started in that home, so running processes, environment and shell variables,
+> cwd and open descriptors are not kept (AC-D4); `claude-code` and
+> `minimax-code` keep workspace, CLI home, conversation and output;
+> `approval-gated` keeps the same plus the contents of the session's shared RWX
+> volume (`/shared`, AC-F5). Each type sits behind its own data-transfer gate
+> because the archive leaves the cluster: `SHELL_ARCHIVE_ENABLED`,
+> `CLAUDE_CODE_ARCHIVE_ENABLED`, `MINIMAX_CODE_ARCHIVE_ENABLED` and
+> `APPROVAL_GATED_ARCHIVE_ENABLED`. All four default off in production (the
+> kind e2e overlay turns them on). A reaper candidate whose workload gate is off
 > stays live and an explicit snapshot returns service unavailable: the platform
 > never deletes a pod behind synthetic checkpoint metadata. The plain 60-minute reaper exists;
 > finer policy such as grace periods and busy-shell handling remains open. See
@@ -47,7 +55,7 @@ control-plane/        Go: REST API + orchestration/state adapters + SPA serving
     adapter/k8s/        PodOrchestrator: client-go pod lifecycle (real)
     adapter/configmap/  StateStore: ConfigMap state + Lease locks via client-go (real)
       envtest/          isolated module: real-apiserver CAS/Lease conflict suite
-    adapter/criu/       Checkpointer port + agent-driven adapter + gate-off stub
+    adapter/archive/    Checkpointer port + agent-driven archive adapter + gate-off stub
     api/                REST handlers (thin) + tests
     static/             embeds web/dist and serves the SPA
   Dockerfile            multi-stage: build SPA -> embed in Go -> minimal image
@@ -59,10 +67,10 @@ web/                  React + Vite + TS SPA
   src/screens/          Sessions, NewSession, Workspace, Restore
   src/api/              typed client over /api/v1
 data-plane/           multi-workload agent selected by DATA_PLANE_WORKLOAD
-  cmd/agent/            PTY shell, Claude runner/archive, and credential proxy
-  Dockerfile            agent + CRIU 4.2 + Claude Code CLI runtime
+  cmd/agent/            PTY shell, agent CLI runners, state archive, and credential proxy
+  Dockerfile            agent + Claude Code / MiniMax Code CLI runtime (no CRIU)
 deploy/               kind config + control-plane manifests (2-replica e2e overlay)
-docs/                 value / PRD·AC / journeys / mockups / CRIU verification note
+docs/                 value / PRD·AC / journeys / mockups / retired CRIU verification record
 ```
 
 ## Architecture
@@ -115,13 +123,17 @@ docs/                 value / PRD·AC / journeys / mockups / CRIU verification n
   `MINIMAX_CODE_ARCHIVE_ENABLED` gate. See
   [`docs/prd/minimax-code-workload.md`](docs/prd/minimax-code-workload.md).
 - **Lifecycle**: 60-min max idle → workload snapshot + pod reclaim (AC-B1);
-  access → restore into a new pod (AC-B2). Shell uses CRIU behind
-  `CRIU_ENABLED`; Claude uses a filesystem archive behind the independent,
-  explicit `CLAUDE_CODE_ARCHIVE_ENABLED` data-transfer gate. A disabled gate
-  returns a service-unavailable snapshot error and preserves the live pod.
-  Claude archives use a CP-owned generation and durable owner-fenced
+  access → restore into a new pod (AC-B2). Every type uses the agent's
+  filesystem archive behind its own explicit data-transfer gate
+  (`SHELL_ARCHIVE_ENABLED`, `CLAUDE_CODE_ARCHIVE_ENABLED`,
+  `MINIMAX_CODE_ARCHIVE_ENABLED`, `APPROVAL_GATED_ARCHIVE_ENABLED`); the restore
+  target pod carries the `session-platform.dev/restore-archive` annotation. A
+  disabled gate returns a service-unavailable snapshot error and preserves the
+  live pod. Archives use a CP-owned generation and durable owner-fenced
   `preparing→committing` transaction: prepare failures abort only that generation,
   while committing recovery keeps admission closed and retries Stop/finalization.
+  While a shell checkpoint is in flight its process tree is paused (SIGSTOP) and
+  writes are rejected; an aborted snapshot resumes it (SIGCONT) and reopens writes.
   Explicit deletion uses the same lifecycle Lease, reclaims any live pod, and
   removes the session record.
   Already-uploaded checkpoint/archive objects remain governed by the checkpoint
@@ -157,11 +169,9 @@ The reaper scans the PRD's plain “last read/write was at least 60 minutes ago�
 boundary and rechecks authoritative `lastAccess` under the lifecycle Lease.
 Read/write do not hold that Lease and their `Touch` is best-effort, so an access
 finishing between the recheck and checkpoint is a tracked freshness race.
-Two crash windows are also tracked: a hard crash after `RestoreInto` succeeds
-but before final CAS can orphan the restore-target pod, and shell CRIU has no
-durable rollback/reconcile protocol after a successful dump followed by
-upload/Stop/final-metadata failure. The Claude archive prepare/commit protocol
-does not close those workload-independent/shell-specific gaps.
+A crash window is also tracked: a hard crash after `RestoreInto` succeeds but
+before final CAS can orphan the restore-target pod. The archive prepare/commit
+protocol, now shared by every type, does not close that workload-independent gap.
 `TODO(policy: ...)` also marks finer product choices such as grace periods,
 per-session overrides, and whether a client-idle shell with a long-running
 foreground job should freeze.
@@ -215,9 +225,9 @@ gitignored.
   Playwright browser suite against the deployed control-plane (reachable at
   `http://localhost:8080` via a NodePort). Covers create/list/get/switch·read·write,
   real-pod provisioning (AC-A1/A2), and cross-replica state consistency over the
-  shared ConfigMap store (AC-C1). With CRIU turned on in the overlay, the
-  snapshot → reclaim → restore round trip is a verified assertion too
-  (AC-B2/B3/D4). J6 browser contract coverage
+  shared ConfigMap store (AC-C1). With the archive gates turned on in the
+  overlay, the snapshot → reclaim → restore round trip is a verified assertion
+  too (AC-B2/B3/D4). J6 browser contract coverage
   uses deterministic Playwright route fixtures, while the Claude worker,
   cursor, live pre-exit output, reconnect, runner/proxy incremental redaction,
   proxy pre-EOF chunk forwarding, byte boundaries, output limits, resume,

@@ -1,4 +1,4 @@
-# kind e2e ONLY: an S3-compatible backend for the CRIU checkpoint archives.
+# kind e2e ONLY: an S3-compatible backend for the workload snapshot archives.
 #
 # The agent-driven checkpointer streams each archive out of the session pod
 # (reclaimed immediately after) and back into the restore pod, so it needs a

@@ -46,20 +46,13 @@ const (
 	labelManagedBy = "app.kubernetes.io/managed-by"
 	managedByValue = "control-plane"
 
-	// AnnotationRestoreCheckpoint marks a pod the orchestrator provisions as a
-	// CRIU *restore target* and records the checkpoint archive it must resume
-	// from (RestoreInto). The runtime-side mapping that makes it take effect is
-	// unwired — see docs/criu-verification.md.
-	AnnotationRestoreCheckpoint = "session-platform.dev/restore-checkpoint"
-
-	// AnnotationRestoreArchive marks a claude-code restore target. Unlike the
-	// shell annotation above, the agent unpacks a filesystem archive and never
-	// invokes CRIU (AC-E5).
+	// AnnotationRestoreArchive marks a pod the orchestrator provisions as a
+	// *restore target* of any workload type and records the filesystem archive
+	// its agent unpacks (RestoreInto, AC-B2, AC-E5).
 	AnnotationRestoreArchive = "session-platform.dev/restore-archive"
 
 	defaultClaudeCredentialsSecret = "claude-code-credentials"
-	// ContainerName is the workload container in each data plane pod; the CRIU
-	// checkpointer targets it by name and only for shell sessions.
+	// ContainerName is the workload container in each data plane pod.
 	ContainerName = "session"
 	// DataPlaneServiceAccountName is the dedicated identity mounted into every
 	// fresh and restored session pod (AC-E6).
@@ -80,15 +73,20 @@ const (
 	workloadEnvVar = "DATA_PLANE_WORKLOAD"
 
 	// Claude Code runtime configuration (AC-E6).
-	ClaudeCodeModelEnvVar     = "CLAUDE_CODE_MODEL"
-	K3SMCPTokenEnvVar         = "K3S_MCP_TOKEN"
-	claudeCodeStateDirEnvVar  = "CLAUDE_CODE_STATE_DIR"
-	claudeCodeStateVolumePath = "/session"
+	ClaudeCodeModelEnvVar    = "CLAUDE_CODE_MODEL"
+	K3SMCPTokenEnvVar        = "K3S_MCP_TOKEN"
+	claudeCodeStateDirEnvVar = "CLAUDE_CODE_STATE_DIR"
+	workloadStateVolumePath  = "/session"
 	// The state root must be a child of the volume mount, not the mount point
 	// itself: archive restore atomically renames this directory into place, and
 	// Linux rejects renaming an active mount point with EBUSY.
-	claudeCodeStateDir             = claudeCodeStateVolumePath + "/state"
-	claudeCodeStateVolumeName      = "claude-state"
+	workloadStateDir          = workloadStateVolumePath + "/state"
+	claudeCodeStateVolumeName = "claude-state"
+	// A shell's archived state root shares the same volume layout and the same
+	// child-of-the-mount rule; its home directory is $SHELL_STATE_DIR/home.
+	// Keep in sync with data-plane/cmd/agent.
+	shellStateDirEnvVar            = "SHELL_STATE_DIR"
+	shellStateVolumeName           = "shell-state"
 	AnthropicBaseURLEnvVar         = "ANTHROPIC_BASE_URL"
 	AnthropicAuthTokenEnvVar       = "ANTHROPIC_AUTH_TOKEN"
 	ClaudeCodeModelSecretKey       = "model"
@@ -215,7 +213,6 @@ type ClientOrchestrator struct {
 	sharedVolumeSize         resource.Quantity
 	workloadImages           map[session.WorkloadType]string
 	shell                    string // DATA_PLANE_SHELL override injected into pods ("" = agent default)
-	checkpointPrivileged     bool   // run session pods privileged for in-pod CRIU (CRIU_ENABLED)
 	agentPort                int
 	pollInterval             time.Duration
 	readyTimeout             time.Duration
@@ -275,16 +272,6 @@ func WithShell(shell string) Option {
 		if shell != "" {
 			o.shell = shell
 		}
-	}
-}
-
-// WithCheckpointPrivileged runs session pods privileged so the in-pod CRIU path
-// (agent-driven checkpoint/restore) works — capabilities alone are not enough,
-// see docs/criu-verification.md's 2026-07-23 2차. Wired from CRIU_ENABLED so
-// gate-off pods stay unprivileged.
-func WithCheckpointPrivileged(enabled bool) Option {
-	return func(o *ClientOrchestrator) {
-		o.checkpointPrivileged = enabled
 	}
 }
 
@@ -565,6 +552,15 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		if o.shell != "" {
 			container.Env = append(container.Env, corev1.EnvVar{Name: shellEnvVar, Value: o.shell})
 		}
+		container.Env = append(container.Env,
+			corev1.EnvVar{Name: shellStateDirEnvVar, Value: workloadStateDir})
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name: shellStateVolumeName, MountPath: workloadStateVolumePath,
+		})
+		volumes = append(volumes, corev1.Volume{
+			Name:         shellStateVolumeName,
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		})
 	case session.WorkloadTypeClaudeCode:
 		modelEnv := corev1.EnvVar{Name: ClaudeCodeModelEnvVar, Value: model}
 		if model == session.PlatformDefaultModel {
@@ -584,12 +580,12 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 				o.claudeCredentialsSecret,
 				ClaudeCodePluginMarketplaceURLSecretKey,
 			),
-			corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: claudeCodeStateDir},
+			corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: workloadStateDir},
 			corev1.EnvVar{Name: AnthropicBaseURLEnvVar, Value: ClaudeCredentialProxyURL},
 			corev1.EnvVar{Name: AnthropicAuthTokenEnvVar, Value: credentialProxyPlaceholderToken},
 		)
 		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-			Name: claudeCodeStateVolumeName, MountPath: claudeCodeStateVolumePath,
+			Name: claudeCodeStateVolumeName, MountPath: workloadStateVolumePath,
 		})
 		volumes = append(volumes, corev1.Volume{
 			Name:         claudeCodeStateVolumeName,
@@ -611,13 +607,13 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		}
 		container.Env = append(container.Env,
 			modelEnv,
-			corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: claudeCodeStateDir},
+			corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: workloadStateDir},
 			corev1.EnvVar{Name: AnthropicBaseURLEnvVar, Value: helper.ProxyURL},
 			corev1.EnvVar{Name: AnthropicAuthTokenEnvVar, Value: credentialProxyPlaceholderToken},
 			corev1.EnvVar{Name: SessionMCPURLEnvVar, Value: helper.MCPURL},
 		)
 		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-			Name: claudeCodeStateVolumeName, MountPath: claudeCodeStateVolumePath,
+			Name: claudeCodeStateVolumeName, MountPath: workloadStateVolumePath,
 		})
 		volumes = append(volumes, corev1.Volume{
 			Name:         claudeCodeStateVolumeName,
@@ -636,12 +632,6 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 	case session.WorkloadTypeMiniMaxCode:
 		sidecars, volumes = o.miniMaxCodePod(&container, model, helper, helperPodNameFor(sessionID, suffix))
 	}
-	if o.checkpointPrivileged && workloadType == session.WorkloadTypeShell {
-		// See WithCheckpointPrivileged. This makes CRIU-enabled session shells
-		// node-root; narrowing is a documented follow-up.
-		privileged := true
-		container.SecurityContext = &corev1.SecurityContext{Privileged: &privileged}
-	}
 	name := podName(sessionID)
 	var annotations map[string]string
 	if checkpointRef != "" {
@@ -649,11 +639,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			return nil, fmt.Errorf("restore target for session %s has no provisioning suffix", sessionID)
 		}
 		name = restorePodName(sessionID, suffix)
-		annotation := AnnotationRestoreCheckpoint
-		if workloadType != session.WorkloadTypeShell {
-			annotation = AnnotationRestoreArchive
-		}
-		annotations = map[string]string{annotation: checkpointRef}
+		annotations = map[string]string{AnnotationRestoreArchive: checkpointRef}
 		container.Env = append(container.Env, corev1.EnvVar{Name: restoreModeEnvVar, Value: "1"})
 	}
 	containers := append([]corev1.Container{container}, sidecars...)
