@@ -103,8 +103,8 @@ patches:
   # of the entry's name, so a reordered base fails the build instead of
   # silently flipping a different variable.
   #
-  # The shell and approval-gated archive gates are turned ON here (the base
-  # keeps both off), so the AC-D4 shell round trip runs as an automated
+  # The shell and approval-gated archive gates are pinned ON here (the base
+  # turns them on too; pinning keeps e2e on the real path if the base flips), so the AC-D4 shell round trip runs as an automated
   # assertion (e2e_d4_process_tree_test.go) and approval-gated sessions freeze
   # through the same agent archive path production uses. That needs the product snapshot trigger
   # reachable over HTTP and an archive store

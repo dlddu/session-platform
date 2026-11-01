@@ -106,10 +106,7 @@ func main() {
 		}
 	}
 
-	// mock-exception: SHELL-ARCHIVE-GATE — 프로덕션 base는 쉘 아카이브 게이트를 off로 두고,
-	// 그 경로에서 쉘 동결은 이 no-op 스텁이다(동결을 거부해 pod를 회수하지 않는다). e2e는
-	// deploy/ 오버레이가 게이트를 on으로 올려 실 경로(에이전트 홈 디렉터리·scrollback
-	// 파일시스템 아카이브 + S3)를 탄다. 등재: docs/test/e2e.md 「e2e 충실도 허용목록」.
+	// 게이트가 꺼진 배포에서 쉘 동결은 이 스텁이 거부한다(pod를 회수하지 않는다).
 	var shellCkpt archive.Checkpointer = archive.NewStubCheckpointer(false)
 	if cfg.shellArchiveEnabled {
 		shellCkpt = archive.NewAgentCheckpointer(agentClient, cstore)

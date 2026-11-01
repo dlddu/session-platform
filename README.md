@@ -26,8 +26,8 @@ between sessions.
 > volume (`/shared`, AC-F5). Each type sits behind its own data-transfer gate
 > because the archive leaves the cluster: `SHELL_ARCHIVE_ENABLED`,
 > `CLAUDE_CODE_ARCHIVE_ENABLED`, `MINIMAX_CODE_ARCHIVE_ENABLED` and
-> `APPROVAL_GATED_ARCHIVE_ENABLED`. All four default off in production (the
-> kind e2e overlay turns them on). A reaper candidate whose workload gate is off
+> `APPROVAL_GATED_ARCHIVE_ENABLED`. All four default off in code and are turned
+> on in the production manifest and the kind e2e overlay. A reaper candidate whose workload gate is off
 > stays live and an explicit snapshot returns service unavailable: the platform
 > never deletes a pod behind synthetic checkpoint metadata. The plain 60-minute reaper exists;
 > finer policy such as grace periods and busy-shell handling remains open. See
