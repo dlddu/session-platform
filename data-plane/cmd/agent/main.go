@@ -174,9 +174,10 @@ func main() {
 				k3sProxyMCP = mcpURL
 			}
 		}
-		handler = sessionMCPRoutes(logger, newSessionMCPConfig(gateway, shared, repoAccess, k3sProxyMCP))
+		drop := newDropClient(os.Getenv(dropURLEnv), os.Getenv(dropTokenFileEnv))
+		handler = sessionMCPRoutes(logger, newSessionMCPConfig(gateway, shared, repoAccess, k3sProxyMCP, drop))
 		logger.Info("session MCP started", "addr", addr, "gated", gateway != nil, "shared_dir", shared,
-			"repo_access", repoAccess != nil, "k3s_mcp_proxy", k3sProxyMCP != "")
+			"repo_access", repoAccess != nil, "k3s_mcp_proxy", k3sProxyMCP != "", "drop", drop != nil)
 	case workloadCredentialProxy:
 		placement, err := credentialProxyPlacementFromEnv()
 		if err != nil {

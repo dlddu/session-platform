@@ -67,6 +67,7 @@ func main() {
 		"claude_code_default_model", cfg.claudeCodeDefaultModel,
 		"claude_code_models", len(cfg.claudeCodeModels),
 		"repo_access_enabled", cfg.repoAccess.enabled,
+		"drop_url", cfg.dropURL,
 	)
 	if cfg.dataPlaneImage == "" {
 		// The in-code fallback image has no session agent, so session pods will
@@ -86,7 +87,8 @@ func main() {
 		k8s.WithMiniMaxCredentialsSecret(cfg.miniMax.credentialsSecret),
 		k8s.WithApprovalGatewayURL(cfg.approvalGatewayURL),
 		k8s.WithSharedVolume(cfg.sharedVolumeStorageClass, cfg.sharedVolumeSize),
-		k8s.WithRepoAccess(cfg.repoAccess.helperURL(namespace)))
+		k8s.WithRepoAccess(cfg.repoAccess.helperURL(namespace)),
+		k8s.WithDropURL(cfg.dropURL))
 	store := configmap.NewStore(client, namespace)
 	// Shell I/O (write→stdin, read→scrollback delta) AND checkpoint/restore ride
 	// the same agent client: it resolves pod name → IP per request and dials the
@@ -252,6 +254,7 @@ type config struct {
 	checkpointS3Endpoint    string
 	miniMax                 miniMaxConfig
 	repoAccess              repoAccessConfig
+	dropURL                 string // drop's in-cluster URL for helper pods (docs/prd/drop-file-share.md AC-I2)
 }
 
 // GET /config lists only these, so clients never offer a type whose create would fail.
@@ -361,6 +364,7 @@ func loadConfig() (config, error) {
 		checkpointS3SessionName:     env("CHECKPOINT_S3_SESSION_NAME", ""),
 		miniMax:                     loadMiniMaxConfig(),
 		repoAccess:                  loadRepoAccessConfig(),
+		dropURL:                     env("DROP_URL", ""),
 	}, nil
 }
 

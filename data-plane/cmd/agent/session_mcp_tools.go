@@ -71,9 +71,10 @@ type sessionMCPConfig struct {
 	// the branch that mounts the volume, so a value here also says the workload
 	// pod holds the same filesystem at the same path (AC-F5).
 	sharedDir string
+	drop      *dropClient // nil where the deployment set no DROP_URL (session_mcp_drop.go)
 }
 
-func newSessionMCPConfig(gateway *approvalGateway, sharedDir string, repoAccess *repoAccessClient, k3sProxyMCPURL string) sessionMCPConfig {
+func newSessionMCPConfig(gateway *approvalGateway, sharedDir string, repoAccess *repoAccessClient, k3sProxyMCPURL string, drop *dropClient) sessionMCPConfig {
 	return sessionMCPConfig{
 		gateway:         gateway,
 		fetch:           fetchURL,
@@ -83,6 +84,7 @@ func newSessionMCPConfig(gateway *approvalGateway, sharedDir string, repoAccess 
 		mintGitHubToken: githubTokenMinter(k3sProxyMCPURL),
 		notices:         newNoticeFeed(),
 		sharedDir:       strings.TrimSpace(sharedDir),
+		drop:            drop,
 	}
 }
 
@@ -198,6 +200,9 @@ func (c sessionMCPConfig) toolDefinitions() []any {
 			},
 		})
 	}
+	if c.drop != nil {
+		tools = append(tools, dropToolDefinitions()...)
+	}
 	return tools
 }
 
@@ -216,7 +221,7 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 		}
 	}
 	switch call.Name {
-	case webFetchGetTool, gitCloneTool, pingTool, requestRepoAccessTool, gitPushTool:
+	case webFetchGetTool, gitCloneTool, pingTool, requestRepoAccessTool, gitPushTool, dropUploadTool, dropDownloadTool:
 	default:
 		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: fmt.Sprintf("no tool named %q", call.Name)}
 	}
@@ -235,6 +240,12 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 	}
 	if call.Name == gitPushTool {
 		return c.callGitPush(ctx, logger, call.Arguments)
+	}
+	if call.Name == dropUploadTool {
+		return c.callDropUpload(ctx, logger, call.Arguments)
+	}
+	if call.Name == dropDownloadTool {
+		return c.callDropDownload(ctx, logger, call.Arguments)
 	}
 
 	var args struct {
