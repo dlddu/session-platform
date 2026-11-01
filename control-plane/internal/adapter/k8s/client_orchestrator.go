@@ -562,6 +562,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			Name:         shellStateVolumeName,
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		})
+		container.SecurityContext = shellSecurityContext()
 	case session.WorkloadTypeClaudeCode:
 		modelEnv := corev1.EnvVar{Name: ClaudeCodeModelEnvVar, Value: model}
 		if model == session.PlatformDefaultModel {
@@ -666,6 +667,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			RestartPolicy:                corev1.RestartPolicyAlways,
 			ServiceAccountName:           DataPlaneServiceAccountName,
 			AutomountServiceAccountToken: &automountServiceAccountToken,
+			SecurityContext:              workloadPodSecurityContext(workloadType),
 			Containers:                   containers,
 			Volumes:                      volumes,
 		},

@@ -88,6 +88,14 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=gh-build /out/gh /usr/local/bin/gh
 RUN gh --version
+# The shell workload runs as this account (control plane: ShellUserID, non-root,
+# all capabilities dropped). Other workload types still run as root. The home
+# field names the archived state tree the agent points HOME at; it is not
+# created here because it lives on the pod's state volume.
+RUN groupadd --gid 1000 session \
+ && useradd --uid 1000 --gid 1000 --no-create-home \
+      --home-dir /session/state/home --shell /bin/bash session \
+ && test "$(id -u session)" = 1000
 # The same image serves both workload modes. Copy the official Node 22 runtime,
 # npm installation metadata, and the pinned Claude Code package together.
 COPY --from=claude-build /usr/local/ /usr/local/

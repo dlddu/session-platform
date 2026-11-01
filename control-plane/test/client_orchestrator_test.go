@@ -305,8 +305,8 @@ func TestClientOrchestrator_RestoreIntoMarksRestoreTargetPod(t *testing.T) {
 
 // A shell's archived state lives under SHELL_STATE_DIR on an EmptyDir mounted
 // one level above it: restore renames the state root into place, which Linux
-// refuses for a mount point. The pod needs no privilege for that, so it
-// carries no securityContext at all.
+// refuses for a mount point. That needs no privilege, so the shell runs as a
+// non-root user with every capability dropped.
 func TestClientOrchestrator_ShellPodMountsArchivableStateRoot(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t)
 	if _, err := orch.Start(context.Background(), "shst", k8s.WorkloadSpec{Type: session.WorkloadTypeShell}); err != nil {
@@ -344,8 +344,19 @@ func TestClientOrchestrator_ShellPodMountsArchivableStateRoot(t *testing.T) {
 	if !emptyDir {
 		t.Fatalf("volume %q mounted at /session is not an EmptyDir (volumes=%+v)", mountVolume, pod.Spec.Volumes)
 	}
-	if c.SecurityContext != nil {
-		t.Fatalf("shell container securityContext=%+v, want none (archive needs no privilege)", c.SecurityContext)
+	sc := c.SecurityContext
+	if sc == nil || sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot ||
+		sc.RunAsUser == nil || *sc.RunAsUser != k8s.ShellUserID ||
+		sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation ||
+		(sc.Privileged != nil && *sc.Privileged) ||
+		sc.Capabilities == nil || len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL" ||
+		len(sc.Capabilities.Add) != 0 ||
+		sc.SeccompProfile == nil || sc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Fatalf("shell container securityContext=%+v, want non-root uid %d, no escalation, drop ALL, RuntimeDefault seccomp",
+			sc, k8s.ShellUserID)
+	}
+	if psc := pod.Spec.SecurityContext; psc == nil || psc.FSGroup == nil || *psc.FSGroup != k8s.ShellUserID {
+		t.Fatalf("shell pod securityContext=%+v, want fsGroup %d", psc, k8s.ShellUserID)
 	}
 }
 
