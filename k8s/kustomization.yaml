@@ -21,3 +21,4 @@ resources:
   - session-mcp-serviceaccount.yaml
   - deployment.yaml
   - service.yaml
+  - network-policy.yaml
