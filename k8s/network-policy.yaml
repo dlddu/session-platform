@@ -13,8 +13,10 @@
 #    링크로컬 대역을 뺀 인터넷이다. traefik 게이트웨이도 파드/노드 IP 로만 닿으므로 이
 #    정책이 shell → 게이트웨이 → control plane 우회로를 함께 막는다.
 #
-# 집행은 CNI 의 몫이다. 운영 k3s 는 내장 kube-router 가 집행하고(노드 자신이 출발지인
-# kubelet 프로브는 허용), e2e 의 kindnet 은 집행하지 않아 오브젝트만 선다.
+# 집행은 CNI 의 몫이다. 운영 k3s 는 내장 kube-router 가 집행한다(노드 자신이 출발지인
+# kubelet 프로브는 허용). e2e 오버레이(deploy/)는 둘 다 지운다 — kind 의 kindnet 도
+# 집행하는데, 그 SUT 는 호스트에서 NodePort 로 control plane 에 닿고 shell 이 클러스터
+# 안 MinIO 를 쓴다.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
