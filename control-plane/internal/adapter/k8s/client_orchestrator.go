@@ -52,6 +52,7 @@ const (
 	AnnotationRestoreArchive = "session-platform.dev/restore-archive"
 
 	defaultClaudeCredentialsSecret = "claude-code-credentials"
+	defaultClaudeConfigConfigMap   = "claude-code-config"
 	// ContainerName is the workload container in each data plane pod.
 	ContainerName = "session"
 	// DataPlaneServiceAccountName is the dedicated identity mounted into every
@@ -89,10 +90,10 @@ const (
 	shellStateVolumeName           = "shell-state"
 	AnthropicBaseURLEnvVar         = "ANTHROPIC_BASE_URL"
 	AnthropicAuthTokenEnvVar       = "ANTHROPIC_AUTH_TOKEN"
-	ClaudeCodeModelSecretKey       = "model"
-	ClaudeCodeBaseURLSecretKey     = "base-url"
 	ClaudeCodeAuthTokenSecretKey   = "auth-token"
 	ClaudeCodeK3SMCPTokenSecretKey = "k3s-mcp-token"
+	ClaudeCodeModelConfigKey       = "model"
+	ClaudeCodeBaseURLConfigKey     = "base-url"
 	// AnthropicCACertEnvVar carries an optional PEM bundle the credential proxy
 	// must trust *in addition to* the system roots, for a deployment whose
 	// provider `base-url` is a private gateway issued by a CA no public store
@@ -102,15 +103,15 @@ const (
 	// 「e2e 충실도 허용목록」의 `CLAUDE-PROVIDER`).
 	// Keep in sync with data-plane/cmd/agent (providerCACertEnv).
 	AnthropicCACertEnvVar     = "ANTHROPIC_CA_CERT"
-	ClaudeCodeCACertSecretKey = "ca-cert"
+	ClaudeCodeCACertConfigKey = "ca-cert"
 
 	// The plugin bootstrap's two endpoints, as optional keys: absent, the
 	// entrypoint keeps its built-in defaults, so k8s/ needs no change
 	// (docs/test/e2e.md's PLUGIN-CRED row is why they are overridable).
 	K3SMCPURLEnvVar                         = "K3S_MCP_URL"
 	ClaudeCodePluginMarketplaceURLEnvVar    = "CLAUDE_CODE_PLUGIN_MARKETPLACE_URL"
-	ClaudeCodeK3SMCPURLSecretKey            = "k3s-mcp-url"
-	ClaudeCodePluginMarketplaceURLSecretKey = "plugin-marketplace-url"
+	ClaudeCodeK3SMCPURLConfigKey            = "k3s-mcp-url"
+	ClaudeCodePluginMarketplaceURLConfigKey = "plugin-marketplace-url"
 	// ClaudeCredentialsContainerName identifies the isolated Secret holder.
 	ClaudeCredentialsContainerName = "claude-credentials"
 	// ClaudeCredentialProxyURL is the loopback-only endpoint visible to the
@@ -205,10 +206,12 @@ type ClientOrchestrator struct {
 	namespace                string
 	image                    string
 	claudeCredentialsSecret  string // platform Secret referenced by claude-code pods
+	claudeConfigConfigMap    string // its non-credential counterpart
 	approvalGatewayURL       string // PocketAide base URL handed to approval-gated helper pods
 	repoAccessURL            string // control plane URL for the helper's repo access calls (repo_access.go)
 	dropURL                  string // drop's in-cluster URL for the helper's drop_* tools (drop.go)
 	miniMaxCredentialsSecret string
+	miniMaxConfigConfigMap   string
 	// AC-F5's per-session shared claim — see shared_volume.go.
 	sharedVolumeStorageClass string
 	sharedVolumeSize         resource.Quantity
@@ -253,6 +256,16 @@ func WithClaudeCredentialsSecret(name string) Option {
 	return func(o *ClientOrchestrator) {
 		if strings.TrimSpace(name) != "" {
 			o.claudeCredentialsSecret = strings.TrimSpace(name)
+		}
+	}
+}
+
+// WithClaudeConfigConfigMap selects the platform-managed ConfigMap claude-code
+// pods project their non-credential keys from (AC-E6).
+func WithClaudeConfigConfigMap(name string) Option {
+	return func(o *ClientOrchestrator) {
+		if name = strings.TrimSpace(name); name != "" {
+			o.claudeConfigConfigMap = name
 		}
 	}
 }
@@ -306,7 +319,9 @@ func NewClientOrchestrator(client kubernetes.Interface, namespace string, opts .
 		image:                    defaultDataPlaneImage,
 		agentPort:                AgentPort,
 		claudeCredentialsSecret:  defaultClaudeCredentialsSecret,
+		claudeConfigConfigMap:    defaultClaudeConfigConfigMap,
 		miniMaxCredentialsSecret: defaultMiniMaxCredentialsSecret,
+		miniMaxConfigConfigMap:   defaultMiniMaxConfigConfigMap,
 		sharedVolumeSize:         resource.MustParse(defaultSharedVolumeSize),
 		pollInterval:             defaultPollInterval,
 		readyTimeout:             defaultReadyTimeout,
@@ -567,20 +582,20 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		modelEnv := corev1.EnvVar{Name: ClaudeCodeModelEnvVar, Value: model}
 		if model == session.PlatformDefaultModel {
 			// platform-default resolves at pod start from the optional key (AC-E6).
-			modelEnv = optionalSecretEnv(
+			modelEnv = optionalConfigMapEnv(
 				ClaudeCodeModelEnvVar,
-				o.claudeCredentialsSecret,
-				ClaudeCodeModelSecretKey,
+				o.claudeConfigConfigMap,
+				ClaudeCodeModelConfigKey,
 			)
 		}
 		container.Env = append(container.Env,
 			modelEnv,
 			secretEnv(K3SMCPTokenEnvVar, o.claudeCredentialsSecret, ClaudeCodeK3SMCPTokenSecretKey),
-			optionalSecretEnv(K3SMCPURLEnvVar, o.claudeCredentialsSecret, ClaudeCodeK3SMCPURLSecretKey),
-			optionalSecretEnv(
+			optionalConfigMapEnv(K3SMCPURLEnvVar, o.claudeConfigConfigMap, ClaudeCodeK3SMCPURLConfigKey),
+			optionalConfigMapEnv(
 				ClaudeCodePluginMarketplaceURLEnvVar,
-				o.claudeCredentialsSecret,
-				ClaudeCodePluginMarketplaceURLSecretKey,
+				o.claudeConfigConfigMap,
+				ClaudeCodePluginMarketplaceURLConfigKey,
 			),
 			corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: workloadStateDir},
 			corev1.EnvVar{Name: AnthropicBaseURLEnvVar, Value: ClaudeCredentialProxyURL},
@@ -601,10 +616,10 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		// their omission is the decision, not an oversight.
 		modelEnv := corev1.EnvVar{Name: ClaudeCodeModelEnvVar, Value: model}
 		if model == session.PlatformDefaultModel {
-			modelEnv = optionalSecretEnv(
+			modelEnv = optionalConfigMapEnv(
 				ClaudeCodeModelEnvVar,
-				o.claudeCredentialsSecret,
-				ClaudeCodeModelSecretKey,
+				o.claudeConfigConfigMap,
+				ClaudeCodeModelConfigKey,
 			)
 		}
 		container.Env = append(container.Env,
@@ -802,9 +817,9 @@ func (o *ClientOrchestrator) credentialProxyContainer(name, image, listenAddr, p
 			// plane refuses a bind its placement does not sanction, and a
 			// missing declaration means the restrictive one.
 			{Name: CredentialProxyPlacementEnvVar, Value: placement},
-			secretEnv(AnthropicBaseURLEnvVar, o.claudeCredentialsSecret, ClaudeCodeBaseURLSecretKey),
+			configMapEnv(AnthropicBaseURLEnvVar, o.claudeConfigConfigMap, ClaudeCodeBaseURLConfigKey),
 			secretEnv(AnthropicAuthTokenEnvVar, o.claudeCredentialsSecret, ClaudeCodeAuthTokenSecretKey),
-			optionalSecretEnv(AnthropicCACertEnvVar, o.claudeCredentialsSecret, ClaudeCodeCACertSecretKey),
+			optionalConfigMapEnv(AnthropicCACertEnvVar, o.claudeConfigConfigMap, ClaudeCodeCACertConfigKey),
 		},
 		// An exec probe reaches the proxy over loopback from inside its own
 		// container, which works for both placements. An HTTP probe would come
@@ -855,6 +870,23 @@ func optionalSecretEnv(envName, secretName, key string) corev1.EnvVar {
 	env := secretEnv(envName, secretName, key)
 	optional := true
 	env.ValueFrom.SecretKeyRef.Optional = &optional
+	return env
+}
+
+func configMapEnv(envName, configMapName, key string) corev1.EnvVar {
+	return corev1.EnvVar{
+		Name: envName,
+		ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: configMapName},
+			Key:                  key,
+		}},
+	}
+}
+
+func optionalConfigMapEnv(envName, configMapName, key string) corev1.EnvVar {
+	env := configMapEnv(envName, configMapName, key)
+	optional := true
+	env.ValueFrom.ConfigMapKeyRef.Optional = &optional
 	return env
 }
 

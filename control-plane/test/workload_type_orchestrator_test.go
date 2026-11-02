@@ -99,27 +99,27 @@ func TestClientOrchestrator_UnspecifiedWorkloadTypeIsShell(t *testing.T) {
 
 func TestClientOrchestrator_ModelIsValidatedAndCopiedToPod(t *testing.T) {
 	cases := []struct {
-		name       string
-		id         string
-		spec       k8s.WorkloadSpec
-		wantModel  string
-		wantSecret bool
-		wantErr    bool
+		name          string
+		id            string
+		spec          k8s.WorkloadSpec
+		wantModel     string
+		wantConfigMap bool
+		wantErr       bool
 	}{
 		{
-			name:       "claude-code defaults from platform secret",
-			id:         "model-default",
-			spec:       k8s.WorkloadSpec{Type: session.WorkloadTypeClaudeCode},
-			wantSecret: true,
+			name:          "claude-code defaults from platform configmap",
+			id:            "model-default",
+			spec:          k8s.WorkloadSpec{Type: session.WorkloadTypeClaudeCode},
+			wantConfigMap: true,
 		},
 		{
-			name: "explicit platform alias also uses platform secret",
+			name: "explicit platform alias also uses platform configmap",
 			id:   "model-platform-alias",
 			spec: k8s.WorkloadSpec{
 				Type:  session.WorkloadTypeClaudeCode,
 				Model: session.PlatformDefaultModel,
 			},
-			wantSecret: true,
+			wantConfigMap: true,
 		},
 		{
 			name:      "explicit claude-code model",
@@ -146,7 +146,8 @@ func TestClientOrchestrator_ModelIsValidatedAndCopiedToPod(t *testing.T) {
 			orch, cs := newReadyOrchestrator(t,
 				k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
 				k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, claudeCodeImage),
-				k8s.WithClaudeCredentialsSecret("provider-credentials"))
+				k8s.WithClaudeCredentialsSecret("provider-credentials"),
+				k8s.WithClaudeConfigConfigMap("provider-config"))
 			_, err := orch.Start(context.Background(), tc.id, tc.spec)
 			if tc.wantErr {
 				if !errors.Is(err, session.ErrInvalidInput) {
@@ -164,14 +165,14 @@ func TestClientOrchestrator_ModelIsValidatedAndCopiedToPod(t *testing.T) {
 			if !ok {
 				t.Fatalf("missing %s", k8s.ClaudeCodeModelEnvVar)
 			}
-			if tc.wantSecret {
-				if env.Value != "" || env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
-					t.Fatalf("%s = %+v, want SecretKeyRef", k8s.ClaudeCodeModelEnvVar, env)
+			if tc.wantConfigMap {
+				if env.Value != "" || env.ValueFrom == nil || env.ValueFrom.ConfigMapKeyRef == nil {
+					t.Fatalf("%s = %+v, want ConfigMapKeyRef", k8s.ClaudeCodeModelEnvVar, env)
 				}
-				ref := env.ValueFrom.SecretKeyRef
-				if ref.Name != "provider-credentials" || ref.Key != k8s.ClaudeCodeModelSecretKey {
-					t.Errorf("%s selector = %s/%s, want provider-credentials/%s",
-						k8s.ClaudeCodeModelEnvVar, ref.Name, ref.Key, k8s.ClaudeCodeModelSecretKey)
+				ref := env.ValueFrom.ConfigMapKeyRef
+				if ref.Name != "provider-config" || ref.Key != k8s.ClaudeCodeModelConfigKey {
+					t.Errorf("%s selector = %s/%s, want provider-config/%s",
+						k8s.ClaudeCodeModelEnvVar, ref.Name, ref.Key, k8s.ClaudeCodeModelConfigKey)
 				}
 				if ref.Optional == nil || !*ref.Optional {
 					t.Errorf("%s selector must be optional for CLI-default compatibility", k8s.ClaudeCodeModelEnvVar)
@@ -190,6 +191,7 @@ func TestClientOrchestrator_ClaudeProviderCredentialsAreIsolatedAndK3sTokenIsSec
 		k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, claudeCodeImage),
 		k8s.WithClaudeCredentialsSecret("provider-credentials"),
+		k8s.WithClaudeConfigConfigMap("provider-config"),
 	)
 	if _, err := orch.Start(context.Background(), "credential-isolation", k8s.WorkloadSpec{
 		Type: session.WorkloadTypeClaudeCode,
@@ -215,26 +217,32 @@ func TestClientOrchestrator_ClaudeProviderCredentialsAreIsolatedAndK3sTokenIsSec
 		t.Fatalf("missing main container %q", k8s.ContainerName)
 	}
 	for _, env := range main.Env {
-		if env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
+		if env.ValueFrom == nil {
 			continue
 		}
-		ref := env.ValueFrom.SecretKeyRef
-		isOptionalModel := env.Name == k8s.ClaudeCodeModelEnvVar &&
-			ref.Name == "provider-credentials" && ref.Key == k8s.ClaudeCodeModelSecretKey &&
-			ref.Optional != nil && *ref.Optional
-		isRequiredK3SToken := env.Name == k8s.K3SMCPTokenEnvVar &&
-			ref.Name == "provider-credentials" && ref.Key == k8s.ClaudeCodeK3SMCPTokenSecretKey &&
-			(ref.Optional == nil || !*ref.Optional)
-		// Bootstrap *addresses*, not credentials: optional so a Secret without
-		// them leaves the entrypoint's production defaults in place.
-		isOptionalK3SURL := env.Name == k8s.K3SMCPURLEnvVar &&
-			ref.Name == "provider-credentials" && ref.Key == k8s.ClaudeCodeK3SMCPURLSecretKey &&
-			ref.Optional != nil && *ref.Optional
-		isOptionalMarketplaceURL := env.Name == k8s.ClaudeCodePluginMarketplaceURLEnvVar &&
-			ref.Name == "provider-credentials" && ref.Key == k8s.ClaudeCodePluginMarketplaceURLSecretKey &&
-			ref.Optional != nil && *ref.Optional
-		if !isOptionalModel && !isRequiredK3SToken && !isOptionalK3SURL && !isOptionalMarketplaceURL {
-			t.Fatalf("main container has unexpected Secret env %s: %+v", env.Name, env)
+		if ref := env.ValueFrom.SecretKeyRef; ref != nil {
+			isRequiredK3SToken := env.Name == k8s.K3SMCPTokenEnvVar &&
+				ref.Name == "provider-credentials" && ref.Key == k8s.ClaudeCodeK3SMCPTokenSecretKey &&
+				(ref.Optional == nil || !*ref.Optional)
+			if !isRequiredK3SToken {
+				t.Fatalf("main container has unexpected Secret env %s: %+v", env.Name, env)
+			}
+		}
+		if ref := env.ValueFrom.ConfigMapKeyRef; ref != nil {
+			isOptionalModel := env.Name == k8s.ClaudeCodeModelEnvVar &&
+				ref.Name == "provider-config" && ref.Key == k8s.ClaudeCodeModelConfigKey &&
+				ref.Optional != nil && *ref.Optional
+			// Bootstrap *addresses*, not credentials: optional so a ConfigMap
+			// without them leaves the entrypoint's production defaults in place.
+			isOptionalK3SURL := env.Name == k8s.K3SMCPURLEnvVar &&
+				ref.Name == "provider-config" && ref.Key == k8s.ClaudeCodeK3SMCPURLConfigKey &&
+				ref.Optional != nil && *ref.Optional
+			isOptionalMarketplaceURL := env.Name == k8s.ClaudeCodePluginMarketplaceURLEnvVar &&
+				ref.Name == "provider-config" && ref.Key == k8s.ClaudeCodePluginMarketplaceURLConfigKey &&
+				ref.Optional != nil && *ref.Optional
+			if !isOptionalModel && !isOptionalK3SURL && !isOptionalMarketplaceURL {
+				t.Fatalf("main container has unexpected ConfigMap env %s: %+v", env.Name, env)
+			}
 		}
 	}
 	baseURL, ok := envVarOf(main, k8s.AnthropicBaseURLEnvVar)
@@ -246,8 +254,8 @@ func TestClientOrchestrator_ClaudeProviderCredentialsAreIsolatedAndK3sTokenIsSec
 		t.Fatalf("main auth token = %q (present=%v), want non-secret proxy placeholder", placeholder.Value, ok)
 	}
 	model, ok := envVarOf(main, k8s.ClaudeCodeModelEnvVar)
-	if !ok || model.ValueFrom == nil || model.ValueFrom.SecretKeyRef == nil {
-		t.Fatalf("main model is not Secret-backed: %+v", model)
+	if !ok || model.ValueFrom == nil || model.ValueFrom.ConfigMapKeyRef == nil {
+		t.Fatalf("main model is not ConfigMap-backed: %+v", model)
 	}
 	k3sToken, ok := envVarOf(main, k8s.K3SMCPTokenEnvVar)
 	if !ok || k3sToken.ValueFrom == nil || k3sToken.ValueFrom.SecretKeyRef == nil {
@@ -287,35 +295,34 @@ func TestClientOrchestrator_ClaudeProviderCredentialsAreIsolatedAndK3sTokenIsSec
 	if got, _ := envOf(proxy, "DATA_PLANE_AGENT_ADDR"); got != "127.0.0.1:8091" {
 		t.Fatalf("proxy listen address = %q, want loopback", got)
 	}
-	for _, tc := range []struct {
-		name string
-		key  string
-	}{
-		{k8s.AnthropicBaseURLEnvVar, k8s.ClaudeCodeBaseURLSecretKey},
-		{k8s.AnthropicAuthTokenEnvVar, k8s.ClaudeCodeAuthTokenSecretKey},
-	} {
-		env, ok := envVarOf(proxy, tc.name)
-		if !ok || env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
-			t.Fatalf("proxy env %s is not Secret-backed: %+v", tc.name, env)
-		}
-		selector := env.ValueFrom.SecretKeyRef
-		if selector.Name != "provider-credentials" || selector.Key != tc.key {
-			t.Fatalf("proxy env %s selector = %s/%s, want provider-credentials/%s", tc.name, selector.Name, selector.Key, tc.key)
-		}
-		if selector.Optional != nil && *selector.Optional {
-			t.Fatalf("proxy credential env %s must remain required", tc.name)
-		}
+	authToken, ok := envVarOf(proxy, k8s.AnthropicAuthTokenEnvVar)
+	if !ok || authToken.ValueFrom == nil || authToken.ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("proxy env %s is not Secret-backed: %+v", k8s.AnthropicAuthTokenEnvVar, authToken)
+	}
+	if sel := authToken.ValueFrom.SecretKeyRef; sel.Name != "provider-credentials" ||
+		sel.Key != k8s.ClaudeCodeAuthTokenSecretKey || (sel.Optional != nil && *sel.Optional) {
+		t.Fatalf("proxy env %s selector = %+v, want required provider-credentials/%s",
+			k8s.AnthropicAuthTokenEnvVar, sel, k8s.ClaudeCodeAuthTokenSecretKey)
+	}
+	baseURLRef, ok := envVarOf(proxy, k8s.AnthropicBaseURLEnvVar)
+	if !ok || baseURLRef.ValueFrom == nil || baseURLRef.ValueFrom.ConfigMapKeyRef == nil {
+		t.Fatalf("proxy env %s is not ConfigMap-backed: %+v", k8s.AnthropicBaseURLEnvVar, baseURLRef)
+	}
+	if sel := baseURLRef.ValueFrom.ConfigMapKeyRef; sel.Name != "provider-config" ||
+		sel.Key != k8s.ClaudeCodeBaseURLConfigKey || (sel.Optional != nil && *sel.Optional) {
+		t.Fatalf("proxy env %s selector = %+v, want required provider-config/%s",
+			k8s.AnthropicBaseURLEnvVar, sel, k8s.ClaudeCodeBaseURLConfigKey)
 	}
 	// The provider CA rides with the credentials it is paired with and is
 	// optional: a deployment whose gateway has a publicly issued certificate
 	// omits the key entirely and the proxy stays on the system pool.
 	caEnv, ok := envVarOf(proxy, k8s.AnthropicCACertEnvVar)
-	if !ok || caEnv.ValueFrom == nil || caEnv.ValueFrom.SecretKeyRef == nil {
-		t.Fatalf("proxy env %s is not Secret-backed: %+v", k8s.AnthropicCACertEnvVar, caEnv)
+	if !ok || caEnv.ValueFrom == nil || caEnv.ValueFrom.ConfigMapKeyRef == nil {
+		t.Fatalf("proxy env %s is not ConfigMap-backed: %+v", k8s.AnthropicCACertEnvVar, caEnv)
 	}
-	if sel := caEnv.ValueFrom.SecretKeyRef; sel.Name != "provider-credentials" ||
-		sel.Key != k8s.ClaudeCodeCACertSecretKey || sel.Optional == nil || !*sel.Optional {
-		t.Fatalf("proxy CA selector = %+v, want optional provider-credentials/%s", sel, k8s.ClaudeCodeCACertSecretKey)
+	if sel := caEnv.ValueFrom.ConfigMapKeyRef; sel.Name != "provider-config" ||
+		sel.Key != k8s.ClaudeCodeCACertConfigKey || sel.Optional == nil || !*sel.Optional {
+		t.Fatalf("proxy CA selector = %+v, want optional provider-config/%s", sel, k8s.ClaudeCodeCACertConfigKey)
 	}
 	if _, ok := envVarOf(main, k8s.AnthropicCACertEnvVar); ok {
 		t.Fatalf("tool-running container must not receive %s", k8s.AnthropicCACertEnvVar)
@@ -396,11 +403,12 @@ func TestClientOrchestrator_RestoreKeepsWorkloadType(t *testing.T) {
 	}
 }
 
-func TestClientOrchestrator_RestorePlatformDefaultModelUsesSecret(t *testing.T) {
+func TestClientOrchestrator_RestorePlatformDefaultModelUsesConfigMap(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t,
 		k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, claudeCodeImage),
-		k8s.WithClaudeCredentialsSecret("provider-credentials"))
+		k8s.WithClaudeCredentialsSecret("provider-credentials"),
+		k8s.WithClaudeConfigConfigMap("provider-config"))
 
 	restoredPods, err := orch.RestoreInto(context.Background(), "wt05", "s3://bucket/wt05.tar", k8s.WorkloadSpec{
 		Type:  session.WorkloadTypeClaudeCode,
@@ -422,13 +430,13 @@ func TestClientOrchestrator_RestorePlatformDefaultModelUsesSecret(t *testing.T) 
 		t.Fatalf("restore pod %q not found", ref.Name)
 	}
 	env, ok := envVarOf(restored.Spec.Containers[0], k8s.ClaudeCodeModelEnvVar)
-	if !ok || env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
-		t.Fatalf("restore %s = %+v, want SecretKeyRef", k8s.ClaudeCodeModelEnvVar, env)
+	if !ok || env.ValueFrom == nil || env.ValueFrom.ConfigMapKeyRef == nil {
+		t.Fatalf("restore %s = %+v, want ConfigMapKeyRef", k8s.ClaudeCodeModelEnvVar, env)
 	}
-	selector := env.ValueFrom.SecretKeyRef
-	if selector.Name != "provider-credentials" || selector.Key != k8s.ClaudeCodeModelSecretKey ||
+	selector := env.ValueFrom.ConfigMapKeyRef
+	if selector.Name != "provider-config" || selector.Key != k8s.ClaudeCodeModelConfigKey ||
 		selector.Optional == nil || !*selector.Optional {
-		t.Fatalf("restore %s selector = %+v, want optional provider-credentials/%s",
-			k8s.ClaudeCodeModelEnvVar, selector, k8s.ClaudeCodeModelSecretKey)
+		t.Fatalf("restore %s selector = %+v, want optional provider-config/%s",
+			k8s.ClaudeCodeModelEnvVar, selector, k8s.ClaudeCodeModelConfigKey)
 	}
 }

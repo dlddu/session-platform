@@ -91,11 +91,12 @@ docs/                 value / PRD·AC / journeys / mockups / retired CRIU verifi
   text deltas and diagnostic stderr before appending them to the session
   scrollback. Type and Claude model are immutable session
   metadata. For the `platform-default` alias, the pod projects the optional
-  `model` key from the platform credentials Secret into the tool-running
-  container as `CLAUDE_CODE_MODEL`; a missing or empty key leaves `--model`
-  unset so the installed Claude CLI chooses its default. A concrete session
-  model is injected literally and takes precedence over that Secret default.
-  The required `base-url` and `auth-token` Secret keys remain isolated in a
+  `model` key from the platform `claude-code-config` ConfigMap into the
+  tool-running container as `CLAUDE_CODE_MODEL`; a missing or empty key leaves
+  `--model` unset so the installed Claude CLI chooses its default. A concrete
+  session model is injected literally and takes precedence over that platform
+  default. The required `base-url` (ConfigMap) and `auth-token` (credentials
+  Secret) keys remain isolated in a
   hardened localhost proxy sidecar that accepts one configured HTTPS upstream.
   For Claude workloads, the data-plane entrypoint uses the required
   `K3S_MCP_TOKEN` to mint a repository-scoped, read-only GitHub App token from
@@ -104,7 +105,7 @@ docs/                 value / PRD·AC / journeys / mockups / retired CRIU verifi
   agent. The GitHub token is not inherited by the agent; `K3S_MCP_TOKEN` is
   exposed only to the tool-running container and redacted from streamed/read
   output.
-  A separate optional `models` Secret key is an ordered UI soft catalog, not
+  A separate optional `models` ConfigMap key is an ordered UI soft catalog, not
   an API allowlist. The Deployment projects the public `model` and `models`
   keys into the control plane as `CLAUDE_CODE_DEFAULT_MODEL` and
   `CLAUDE_CODE_MODELS`; `GET /api/v1/config` exposes their validated startup
@@ -117,8 +118,9 @@ docs/                 value / PRD·AC / journeys / mockups / retired CRIU verifi
   read-only Kubernetes access while excluding Secrets.
   `minimax-code` runs the MiniMax Code CLI (`mcode exec`) on that same one-shot
   runner, queue, cursor and archive (AC-G1~G4). It gets the same loopback proxy
-  sidecar reading its own `minimax-code-credentials` Secret — whose
-  `auth-token` may be a MiniMax Token Plan subscription key — and no Claude
+  sidecar reading its own `minimax-code-credentials` Secret and
+  `minimax-code-config` ConfigMap — whose `auth-token` may be a MiniMax Token
+  Plan subscription key — and no Claude
   plugin bootstrap; its archive sits behind its own
   `MINIMAX_CODE_ARCHIVE_ENABLED` gate. See
   [`docs/prd/minimax-code-workload.md`](docs/prd/minimax-code-workload.md).
@@ -294,17 +296,21 @@ The cluster runs this via GitOps (Flux) from the `flux-cd-apps` repo.
   side in `flux-cd-apps`.
 
 Before creating Claude Code sessions, provision the Secret named by
-`CLAUDE_CODE_CREDENTIALS_SECRET` (default `claude-code-credentials`). Its
-`base-url` and `auth-token` keys are required and are exposed only to the
-credential-proxy sidecar. Its required `k3s-mcp-token` key is exposed only to
-the Claude tool-running container as `K3S_MCP_TOKEN`. Its entrypoint uses that
+`CLAUDE_CODE_CREDENTIALS_SECRET` (default `claude-code-credentials`) and the
+ConfigMap named by `CLAUDE_CODE_CONFIG_CONFIGMAP` (default
+`claude-code-config`). The Secret holds credentials only: its required
+`auth-token` key is exposed only to the credential-proxy sidecar, and its
+required `k3s-mcp-token` key is exposed only to the Claude tool-running
+container as `K3S_MCP_TOKEN`. Every other key below lives in the ConfigMap; its
+required `base-url` key, like `auth-token`, is exposed only to the
+credential-proxy sidecar. Its entrypoint uses that
 token to obtain short-lived read access to the private plugin marketplace and
 bootstrap `session-platform@dlddu-plugins`; the running plugin then uses the
 same K3s MCP credential. The agent redacts its literal value from read/SSE
-output. Its `model` key is optional: a non-empty value selects
+output. The ConfigMap's `model` key is optional: a non-empty value selects
 the model for `platform-default` sessions, while a missing or empty value falls
 back to the installed Claude CLI default. A concrete model supplied when the
-session is created always wins. Non-empty Secret values are validated against
+session is created always wins. Non-empty `model` values are validated against
 `^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$`
 when the data-plane container starts, so an invalid platform default fails fast
 instead of being forwarded as a CLI option. The optional leading `~` supports
@@ -327,12 +333,12 @@ with `Cache-Control: no-store`; missing/empty `model` returns
 other choices are pinned literally. The catalog remains advisory: the
 create-session API accepts valid model identifiers outside it.
 
-If `CLAUDE_CODE_CREDENTIALS_SECRET` is changed from its default name, also
-patch the `valueFrom.secretKeyRef.name` field for both
-`CLAUDE_CODE_DEFAULT_MODEL` and `CLAUDE_CODE_MODELS` to the same Secret.
+If `CLAUDE_CODE_CONFIG_CONFIGMAP` is changed from its default name, also
+patch the `valueFrom.configMapKeyRef.name` field for both
+`CLAUDE_CODE_DEFAULT_MODEL` and `CLAUDE_CODE_MODELS` to the same ConfigMap.
 Kubernetes does not
 interpolate one environment variable into a
-`secretKeyRef.name`.
+`configMapKeyRef.name`.
 
 Changing the singular `model` key is observed the next time a
 `platform-default` primary container starts: in a new pod, a pod recreated
@@ -341,9 +347,11 @@ already-running container, and a concrete-model session keeps its literal
 setting. The config API and UI read both `model` and `models` from the
 control-plane process's startup environment, so either display change requires
 a Deployment rollout. During the interval before that rollout, a newly started
-`platform-default` session may already use the new Secret model while the UI
+`platform-default` session may already use the new ConfigMap model while the UI
 still shows the prior snapshot. See
-[`k8s/claude-code-credentials-secret.example.yaml`](k8s/claude-code-credentials-secret.example.yaml).
+[`k8s/claude-code-credentials-secret.example.yaml`](k8s/claude-code-credentials-secret.example.yaml)
+and
+[`k8s/claude-code-config-configmap.example.yaml`](k8s/claude-code-config-configmap.example.yaml).
 
 The [`deploy/`](deploy/) directory remains the local `kind` setup for the
 integration harness; `k8s/` is the deployed-cluster source of truth.

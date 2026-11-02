@@ -18,8 +18,9 @@ resources:
   # in-cluster MinIO below, plus the MinIO root credentials Secret
   # (production uses the k8s/ base + external-secrets, and no credentials).
   - checkpoint-s3.yaml
-  # Throwaway credentials for creating claude-code pods in local e2e.
-  - claude-code-credentials-secret.yaml
+  # Throwaway claude-code configuration (ConfigMap) and credentials (Secret)
+  # for creating claude-code pods in local e2e.
+  - claude-code.yaml
 
   # S3-compatible backend for the workload archives, so the round trip
   # runs against the real S3 code path with no cloud account.

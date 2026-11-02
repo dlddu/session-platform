@@ -47,7 +47,7 @@
 #
 # 왜 HTTPS 인가: 선택이 아니다. credential-proxy 는 upstream 스킴을 https 로 강제한다
 # (data-plane/cmd/agent/credential_proxy.go 의 parseCredentialProxyUpstream). 그래서 대역은
-# 사설 CA 로 서명한 인증서로 TLS 를 종단하고, 그 CA 를 플랫폼 Secret 의 optional `ca-cert`
+# 사설 CA 로 서명한 인증서로 TLS 를 종단하고, 그 CA 를 플랫폼 ConfigMap 의 optional `ca-cert`
 # 키로 프록시 컨테이너에만 넘긴다. 프로덕션 base(k8s/)는 그 키가 없어 시스템 풀 그대로다.
 #
 # 아래 키 자료는 이 레포 전용 일회용이다 — 실 자격 증명이 아니고, 실 호스트를 위한 것도

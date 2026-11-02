@@ -61,7 +61,7 @@ func (p *credentialProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // addition to the system roots, for a deployment whose provider `base-url` is a
 // private gateway issued by a CA no public store knows. It is an address-class
 // setting, not a credential: a CA certificate is public by construction, and
-// the platform Secret key behind it is optional exactly like `k3s-mcp-url` —
+// the platform ConfigMap key behind it is optional exactly like `k3s-mcp-url` —
 // omit it and the proxy keeps the system pool it has always used. The kind e2e
 // SUT is the first such deployment (docs/test/e2e.md `CLAUDE-PROVIDER`).
 const providerCACertEnv = "ANTHROPIC_CA_CERT"
