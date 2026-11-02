@@ -1,0 +1,36 @@
+# kind e2e ONLY: the `checkpoint-s3` ConfigMap the control-plane pod reads (its
+# configMapKeyRefs are required, see k8s/deployment.yaml). Here it points at the
+# in-cluster MinIO (deploy/minio.yaml) instead of AWS, so the archive round trip
+# exercises the real S3 code path without any cloud account.
+#
+# role-arn is intentionally EMPTY: with no role the store uses the ambient
+# credentials directly, which for this SUT are the static keys in the
+# `checkpoint-s3-credentials` Secret below (injected as
+# AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY by the overlay patch and used as
+# MinIO's root user). Production instead sets a real role ARN and assumes it
+# over the node instance profile — external-secrets renders that ConfigMap, there
+# is no credentials Secret, and this overlay is not used there.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: checkpoint-s3
+  labels:
+    app: control-plane
+data:
+  bucket: "session-checkpoints"
+  role-arn: ""
+  region: "us-east-1"
+  prefix: "checkpoints"
+---
+# These credentials are throwaway values for a local kind cluster, not secrets.
+# They only exist because this SUT has no role to assume (see above).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: checkpoint-s3-credentials
+  labels:
+    app: control-plane
+type: Opaque
+stringData:
+  access-key: "e2e-minio-root"
+  secret-key: "e2e-minio-password"

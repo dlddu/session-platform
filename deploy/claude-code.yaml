@@ -1,4 +1,7 @@
-# kind e2e only. These throwaway values let the credential-proxy resolve its
+# kind e2e only: the claude-code platform configuration, split the way
+# production splits it — the `claude-code-config` ConfigMap holds the
+# non-credential keys and the `claude-code-credentials` Secret below holds only
+# the credentials. These throwaway values let the credential-proxy resolve its
 # base-url/auth-token refs and the tool-running container resolve K3S_MCP_TOKEN.
 # The tool-running container never receives the provider credentials, and
 # hermetic tests never send any placeholder to an external API. The optional
@@ -7,13 +10,12 @@
 # optional models catalog is also exposed there.
 # Production provisions the same keys out-of-band.
 apiVersion: v1
-kind: Secret
+kind: ConfigMap
 metadata:
-  name: claude-code-credentials
+  name: claude-code-config
   labels:
     app: control-plane
-type: Opaque
-stringData:
+data:
   # The in-cluster provider stand-in the overlay deploys
   # (deploy/e2e-anthropic-fake.yaml, approved mock exception CLAUDE-PROVIDER).
   # Until 2026-09-04 this was a deliberately unroutable loopback address, so a
@@ -23,10 +25,8 @@ stringData:
   # historical copy in a comment would let a future row pass while the setting it
   # describes had already moved.
   base-url: "https://anthropic-fake:8443"
-  auth-token: "e2e-placeholder-not-a-real-token"
-  k3s-mcp-token: "e2e-k3s-mcp-placeholder-not-a-real-token"
   # The two bootstrap endpoints the session pod reaches before the agent starts.
-  # Both keys are optional in the production Secret; when absent the data plane
+  # Both keys are optional in production; when absent the data plane
   # entrypoint falls back to the real organisation endpoints, so `k8s/` is
   # unaffected. Here they point at the in-cluster stand-ins the overlay deploys:
   #   - k3s-mcp-url          -> deploy/e2e-k3s-mcp-fake.yaml (approved mock
@@ -57,3 +57,14 @@ stringData:
     BAMCA0gAMEUCIQDEZnJHixg+RYdNxzaK68zcvqOz28ksuDK6gRmAIt7a2AIgM9rR
     xvcVknvVIds0pvA66HpAJ3jHc8029qIFiHEAsm4=
     -----END CERTIFICATE-----
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: claude-code-credentials
+  labels:
+    app: control-plane
+type: Opaque
+stringData:
+  auth-token: "e2e-placeholder-not-a-real-token"
+  k3s-mcp-token: "e2e-k3s-mcp-placeholder-not-a-real-token"

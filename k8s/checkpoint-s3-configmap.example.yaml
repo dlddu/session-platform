@@ -1,31 +1,32 @@
-# Example Secret for the workload archive S3 store.
-# The control-plane Deployment reads these four keys via secretKeyRef (REQUIRED —
-# the pod will not start until this Secret exists):
+# Example ConfigMap for the workload archive S3 store.
+# The control-plane Deployment reads these four keys via configMapKeyRef
+# (REQUIRED — the pod will not start until this ConfigMap exists):
 #   bucket → CHECKPOINT_S3_BUCKET, role-arn → CHECKPOINT_S3_ROLE_ARN,
 #   region → CHECKPOINT_S3_REGION, prefix → CHECKPOINT_S3_PREFIX.
 #
 # This file is EXAMPLE-ONLY and is deliberately NOT listed in kustomization.yaml:
-# real values are provisioned out-of-band, the same way the ghcr pull secret is —
-#   - production: external-secrets syncs the `checkpoint-s3` Secret,
+# real values are provisioned out-of-band —
+#   - production: external-secrets renders the `checkpoint-s3` ConfigMap from SSM
+#     (flux-cd-apps apps/session-platform/checkpoint-s3-external-secret.yaml),
 #   - a manual archive round trip: create it directly, e.g.
 #
-#     kubectl create secret generic checkpoint-s3 \
+#     kubectl create configmap checkpoint-s3 \
 #       --from-literal=bucket=my-ckpt-bucket \
 #       --from-literal=role-arn=arn:aws:iam::123456789012:role/session-checkpointer \
 #       --from-literal=region=ap-northeast-2 \
 #       --from-literal=prefix=checkpoints
 #
 # These are configuration, not credentials: S3 access is by assuming role-arn
-# over the node instance profile (no static keys). They live in a Secret only to
-# keep them out of the committed Deployment manifest.
+# over the node instance profile (no static keys), so they live in a ConfigMap.
+# They are kept out of the committed Deployment manifest because they differ per
+# environment.
 apiVersion: v1
-kind: Secret
+kind: ConfigMap
 metadata:
   name: checkpoint-s3
   labels:
     app: control-plane
-type: Opaque
-stringData:
+data:
   bucket: "REPLACE_ME-checkpoint-bucket"
   role-arn: "arn:aws:iam::REPLACE_ME-account:role/session-checkpointer"
   region: "ap-northeast-2"

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"k8s.io/client-go/kubernetes/fake"
@@ -11,9 +12,10 @@ import (
 func TestLoadMiniMaxConfigDefaults(t *testing.T) {
 	t.Setenv("DATA_PLANE_MINIMAX_CODE_IMAGE", "")
 	t.Setenv("MINIMAX_CODE_CREDENTIALS_SECRET", "")
+	t.Setenv("MINIMAX_CODE_CONFIG_CONFIGMAP", "")
 	t.Setenv("MINIMAX_CODE_ARCHIVE_ENABLED", "")
 	got := loadMiniMaxConfig()
-	want := miniMaxConfig{credentialsSecret: "minimax-code-credentials"}
+	want := miniMaxConfig{credentialsSecret: "minimax-code-credentials", configConfigMap: "minimax-code-config"}
 	if got != want {
 		t.Fatalf("config = %+v, want %+v", got, want)
 	}
@@ -22,21 +24,28 @@ func TestLoadMiniMaxConfigDefaults(t *testing.T) {
 func TestLoadMiniMaxConfigReadsEnvironment(t *testing.T) {
 	t.Setenv("DATA_PLANE_MINIMAX_CODE_IMAGE", "ghcr.io/example/data-plane:1")
 	t.Setenv("MINIMAX_CODE_CREDENTIALS_SECRET", "mm-secret")
+	t.Setenv("MINIMAX_CODE_CONFIG_CONFIGMAP", "mm-config")
 	t.Setenv("MINIMAX_CODE_ARCHIVE_ENABLED", "true")
 	got := loadMiniMaxConfig()
-	want := miniMaxConfig{image: "ghcr.io/example/data-plane:1", credentialsSecret: "mm-secret", archiveEnabled: true}
+	want := miniMaxConfig{image: "ghcr.io/example/data-plane:1", credentialsSecret: "mm-secret", configConfigMap: "mm-config", archiveEnabled: true}
 	if got != want {
 		t.Fatalf("config = %+v, want %+v", got, want)
 	}
 }
 
-// AC-G3: the two agent types must not be configured onto one Secret.
+// AC-G3: the two agent types must not be configured onto one Secret or one
+// ConfigMap.
 func TestValidateMiniMaxSecret(t *testing.T) {
-	if err := validateMiniMaxSecret(miniMaxConfig{credentialsSecret: "minimax-code-credentials"}, "claude-code-credentials"); err != nil {
-		t.Fatalf("distinct secrets: %v", err)
+	distinct := miniMaxConfig{credentialsSecret: "minimax-code-credentials", configConfigMap: "minimax-code-config"}
+	if err := validateMiniMaxSecret(distinct, "claude-code-credentials", "claude-code-config"); err != nil {
+		t.Fatalf("distinct names: %v", err)
 	}
-	if err := validateMiniMaxSecret(miniMaxConfig{credentialsSecret: " shared "}, "shared"); err == nil {
+	if err := validateMiniMaxSecret(miniMaxConfig{credentialsSecret: " shared ", configConfigMap: "minimax-code-config"}, "shared", "claude-code-config"); err == nil {
 		t.Fatal("shared secret: want an error")
+	}
+	err := validateMiniMaxSecret(miniMaxConfig{credentialsSecret: "minimax-code-credentials", configConfigMap: " shared "}, "claude-code-credentials", "shared")
+	if err == nil || !strings.Contains(err.Error(), "MINIMAX_CODE_CONFIG_CONFIGMAP") {
+		t.Fatalf("shared configmap: err = %v, want one naming MINIMAX_CODE_CONFIG_CONFIGMAP", err)
 	}
 }
 

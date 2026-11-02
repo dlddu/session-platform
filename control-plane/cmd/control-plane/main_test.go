@@ -139,6 +139,26 @@ func TestLoadConfigDefaultsClaudeCodeDefaultModel(t *testing.T) {
 	}
 }
 
+func TestLoadConfigReadsClaudeConfigConfigMap(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_CONFIG_CONFIGMAP", "")
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if got, want := cfg.claudeConfigConfigMap, "claude-code-config"; got != want {
+		t.Fatalf("claudeConfigConfigMap = %q, want %q", got, want)
+	}
+
+	t.Setenv("CLAUDE_CODE_CONFIG_CONFIGMAP", "custom-config")
+	cfg, err = loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if got, want := cfg.claudeConfigConfigMap, "custom-config"; got != want {
+		t.Fatalf("claudeConfigConfigMap = %q, want %q", got, want)
+	}
+}
+
 func TestLoadConfigRejectsInvalidClaudeCodeDefaultModel(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_DEFAULT_MODEL", "platform-default")
 

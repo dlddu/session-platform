@@ -70,32 +70,37 @@ spec:
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다.
             - name: DATA_PLANE_APPROVAL_GATED_IMAGE
               value: "ghcr.io/dlddu/session-platform-data-plane:c92487c7e0ab77d9e3b4c303578ab16b84d6ef53"
-            # The required base-url/auth-token keys are referenced only by the
-            # localhost credential-proxy sidecar. The required k3s-mcp-token is
-            # referenced only by the Claude tool-running container. A
-            # platform-default Claude session may reference the optional model
-            # key from that container. The control plane receives only the
-            # optional, public default model and models catalog below; it never
-            # receives provider credentials or the K3s MCP token (AC-E6).
-            # Provision it out of band; see the example Secret manifest. If
-            # this name is changed, patch both SecretKeyRef names below to the
-            # same literal (Kubernetes does not interpolate env values).
+            # This Secret holds credentials only: the required auth-token,
+            # referenced only by the localhost credential-proxy sidecar, and the
+            # required k3s-mcp-token, referenced only by the Claude tool-running
+            # container. The non-credential keys live in the `claude-code-config`
+            # ConfigMap (CLAUDE_CODE_CONFIG_CONFIGMAP's default, so it is not
+            # set here): the required base-url and optional ca-cert reach the
+            # sidecar only; the optional model, k3s-mcp-url and
+            # plugin-marketplace-url reach the tool-running container only; and
+            # the optional model and models catalog also reach the control plane
+            # below. The control plane never receives provider credentials or
+            # the K3s MCP token (AC-E6). Provision both out of band; see the
+            # example Secret and ConfigMap manifests.
             - name: CLAUDE_CODE_CREDENTIALS_SECRET
               value: "claude-code-credentials"
             # Public effective default shown by the SPA. The session pod still
-            # resolves its own platform-default SecretKeyRef when it starts.
+            # resolves its own platform-default ConfigMapKeyRef when it starts.
+            # If CLAUDE_CODE_CONFIG_CONFIGMAP is changed from its default, patch
+            # both configMapKeyRef names below to the same literal (Kubernetes
+            # does not interpolate env values).
             - name: CLAUDE_CODE_DEFAULT_MODEL
               valueFrom:
-                secretKeyRef:
-                  name: claude-code-credentials
+                configMapKeyRef:
+                  name: claude-code-config
                   key: model
                   optional: true
-            # Ordered model choices shown by the SPA. This optional Secret key
-            # is a JSON string array. Missing/empty keeps the free-text input.
+            # Ordered model choices shown by the SPA. This optional ConfigMap
+            # key is a JSON string array. Missing/empty keeps the free-text input.
             - name: CLAUDE_CODE_MODELS
               valueFrom:
-                secretKeyRef:
-                  name: claude-code-credentials
+                configMapKeyRef:
+                  name: claude-code-config
                   key: models
                   optional: true
             # Explicit data-transfer gate. When enabled, Claude workspace,
@@ -105,32 +110,32 @@ spec:
               value: "true"
             # Workload archive S3 store config: bucket / assume-role ARN / region /
             # key prefix. Sourced from the
-            # `checkpoint-s3` Secret rather than inlined here. The Secret is
+            # `checkpoint-s3` ConfigMap rather than inlined here. The ConfigMap is
             # REQUIRED (no `optional`), so the pod will not start until it exists:
-            # in production external-secrets provisions it (as it does the ghcr
-            # pull secret); the kind e2e overlay (deploy/) points it at MinIO; for
-            # a manual archive round trip create it directly
-            # (k8s/checkpoint-s3-secret.example.yaml).
+            # in production external-secrets renders it from SSM; the kind e2e
+            # overlay (deploy/) points it at MinIO; for a manual archive round trip
+            # create it directly (k8s/checkpoint-s3-configmap.example.yaml).
             # These are config, not credentials — S3 access is by assume-role over
-            # the node instance profile, so there are no static keys here.
+            # the node instance profile, so there are no static keys here, and
+            # that is why this is a ConfigMap rather than a Secret.
             - name: CHECKPOINT_S3_BUCKET
               valueFrom:
-                secretKeyRef:
+                configMapKeyRef:
                   name: checkpoint-s3
                   key: bucket
             - name: CHECKPOINT_S3_ROLE_ARN
               valueFrom:
-                secretKeyRef:
+                configMapKeyRef:
                   name: checkpoint-s3
                   key: role-arn
             - name: CHECKPOINT_S3_REGION
               valueFrom:
-                secretKeyRef:
+                configMapKeyRef:
                   name: checkpoint-s3
                   key: region
             - name: CHECKPOINT_S3_PREFIX
               valueFrom:
-                secretKeyRef:
+                configMapKeyRef:
                   name: checkpoint-s3
                   key: prefix
             # minimax-code 워크로드(AC-G1~G4). 이 세 항목은 env 목록 **맨 끝**에 둔다 —
@@ -141,10 +146,13 @@ spec:
             # 문자열이 위 이미지와 같아서 CI `pin` job 의 sed 가 이 자리도 함께 SHA 로 고정한다.
             - name: DATA_PLANE_MINIMAX_CODE_IMAGE
               value: "ghcr.io/dlddu/session-platform-data-plane:c92487c7e0ab77d9e3b4c303578ab16b84d6ef53"
-            # base-url/auth-token(필수)과 model/ca-cert(선택)을 이 타입의 credential-proxy
-            # 사이드카(와 platform-default 세션의 model)만 읽는다 — claude-code Secret 과
-            # 섞이지 않는다. k8s/minimax-code-credentials-secret.example.yaml 참고.
-            # Secret 이 없으면 이 타입의 세션 생성만 실패하고 다른 타입은 영향이 없다.
+            # 이 Secret 은 자격 증명만 담는다 — 필수 auth-token(헬퍼 파드 credential-proxy)과
+            # 선택 k3s-mcp-token(헬퍼 파드 k3s-mcp-proxy). 필수 base-url·선택 ca-cert(credential-proxy)
+            # 와 선택 model(platform-default 세션의 주 컨테이너)은 ConfigMap `minimax-code-config`
+            # (MINIMAX_CODE_CONFIG_CONFIGMAP 기본값)에 있다. 둘 다 claude-code 쪽과 섞이지 않는다 —
+            # 이름이 겹치면 control plane 이 기동을 거부한다.
+            # k8s/minimax-code-credentials-secret.example.yaml · minimax-code-config-configmap.example.yaml 참고.
+            # 둘이 없으면 이 타입의 세션 생성만 실패하고 다른 타입은 영향이 없다.
             - name: MINIMAX_CODE_CREDENTIALS_SECRET
               value: "minimax-code-credentials"
             # 이 타입 전용 데이터 전송 게이트(AC-G4). on 이면 minimax-code 세션의 작업

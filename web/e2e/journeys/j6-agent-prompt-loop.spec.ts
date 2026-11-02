@@ -11,7 +11,7 @@ import { expect, test } from "@playwright/test";
 // (deploy/e2e-anthropic-fake.yaml).
 const PROVIDER_REPLY = "session-platform-e2e-provider-ok";
 
-// 배포 오버레이가 심는 카탈로그의 둘째 항목(deploy/claude-code-credentials-secret.yaml).
+// 배포 오버레이가 심는 카탈로그의 둘째 항목(deploy/claude-code.yaml).
 const ALTERNATE_MODEL = "claude-e2e-alternate";
 
 type CreatedSession = {

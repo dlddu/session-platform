@@ -152,7 +152,7 @@ func TestRuntimeConfigListsWorkloadTypes(t *testing.T) {
 		e := byType[typ]
 		if !e.TakesModel || e.Input != "prompt" || e.DefaultModel == nil || *e.DefaultModel != "claude-default" ||
 			!reflect.DeepEqual(e.Models, []string{"sonnet", "opus"}) {
-			t.Errorf("%s = %+v, want prompt with the Claude Secret's default and catalog", typ, e)
+			t.Errorf("%s = %+v, want prompt with the Claude ConfigMap's default and catalog", typ, e)
 		}
 	}
 	mm := byType["minimax-code"]

@@ -30,6 +30,7 @@ const (
 	// credentialsSecretName is the platform-global Secret the orchestrator
 	// references; the deployment provisions it (deploy/, k8s/ example).
 	credentialsSecretName = "claude-code-credentials"
+	configConfigMapName   = "claude-code-config"
 	// What the main container gets in place of the provider's address and token.
 	proxyURLForMainContainer = "http://127.0.0.1:8091"
 	proxyPlaceholderToken    = "session-platform-proxy"
@@ -113,6 +114,19 @@ func (e e6Session) credentialsSecret(t *testing.T) map[string]string {
 	return values
 }
 
+func (e e6Session) configConfigMap(t *testing.T) map[string]string {
+	t.Helper()
+	cm, err := e.cs.CoreV1().ConfigMaps(e.ns).Get(context.Background(), configConfigMapName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("read %s/%s: %v", e.ns, configConfigMapName, err)
+	}
+	values := make(map[string]string, len(cm.Data))
+	for k, v := range cm.Data {
+		values[k] = strings.TrimSpace(v)
+	}
+	return values
+}
+
 func e6Env(c corev1.Container, name string) (corev1.EnvVar, bool) {
 	for _, env := range c.Env {
 		if env.Name == name {
@@ -144,6 +158,32 @@ func e6RequireSecretRef(t *testing.T, c corev1.Container, envName, key string, o
 	if ref.Name != credentialsSecretName || ref.Key != key {
 		t.Fatalf("container %q %s reads %s/%s, want %s/%s",
 			c.Name, envName, ref.Name, ref.Key, credentialsSecretName, key)
+	}
+	if got := ref.Optional != nil && *ref.Optional; got != optional {
+		t.Fatalf("container %q %s optional=%v, want %v", c.Name, envName, got, optional)
+	}
+}
+
+func e6ConfigMapRef(env corev1.EnvVar) *corev1.ConfigMapKeySelector {
+	if env.ValueFrom == nil {
+		return nil
+	}
+	return env.ValueFrom.ConfigMapKeyRef
+}
+
+func e6RequireConfigMapRef(t *testing.T, c corev1.Container, envName, key string, optional bool) {
+	t.Helper()
+	env, found := e6Env(c, envName)
+	if !found {
+		t.Fatalf("container %q has no %s", c.Name, envName)
+	}
+	ref := e6ConfigMapRef(env)
+	if ref == nil {
+		t.Fatalf("container %q %s is not ConfigMap-backed (value=%q)", c.Name, envName, env.Value)
+	}
+	if ref.Name != configConfigMapName || ref.Key != key {
+		t.Fatalf("container %q %s reads %s/%s, want %s/%s",
+			c.Name, envName, ref.Name, ref.Key, configConfigMapName, key)
 	}
 	if got := ref.Optional != nil && *ref.Optional; got != optional {
 		t.Fatalf("container %q %s optional=%v, want %v", c.Name, envName, got, optional)
@@ -226,25 +266,27 @@ func TestCredentialPlacementOnTheDeployedSUT(t *testing.T) {
 	proxy := e.container(t, credentialsContainer)
 
 	t.Run("ProviderCredentialsOnlyInTheProxySidecar", func(t *testing.T) {
-		e6RequireSecretRef(t, proxy, "ANTHROPIC_BASE_URL", "base-url", false)
+		e6RequireConfigMapRef(t, proxy, "ANTHROPIC_BASE_URL", "base-url", false)
 		e6RequireSecretRef(t, proxy, "ANTHROPIC_AUTH_TOKEN", "auth-token", false)
 		// The trust anchor is optional and rides with the credential it is
 		// paired with: a deployment whose provider is a public endpoint omits
 		// the key and keeps the system pool.
-		e6RequireSecretRef(t, proxy, "ANTHROPIC_CA_CERT", "ca-cert", true)
+		e6RequireConfigMapRef(t, proxy, "ANTHROPIC_CA_CERT", "ca-cert", true)
 
 		e6RequireLiteral(t, main, "ANTHROPIC_BASE_URL", proxyURLForMainContainer)
 		e6RequireLiteral(t, main, "ANTHROPIC_AUTH_TOKEN", proxyPlaceholderToken)
 		e6RequireAbsent(t, main, "ANTHROPIC_CA_CERT")
 		for _, env := range main.Env {
-			ref := e6SecretRef(env)
-			if ref == nil {
-				continue
+			key := ""
+			if ref := e6SecretRef(env); ref != nil {
+				key = ref.Key
+			} else if ref := e6ConfigMapRef(env); ref != nil {
+				key = ref.Key
 			}
-			switch ref.Key {
+			switch key {
 			case "base-url", "auth-token", "ca-cert":
 				t.Fatalf("main container reads provider key %q through %s — those belong to the sidecar only",
-					ref.Key, env.Name)
+					key, env.Name)
 			}
 		}
 	})
@@ -254,25 +296,25 @@ func TestCredentialPlacementOnTheDeployedSUT(t *testing.T) {
 		e6RequireSecretRef(t, main, "K3S_MCP_TOKEN", "k3s-mcp-token", false)
 		// Optional address-class keys: absent, entrypoint.sh keeps its
 		// production defaults, which is why k8s/ needs no change for them.
-		e6RequireSecretRef(t, main, "K3S_MCP_URL", "k3s-mcp-url", true)
-		e6RequireSecretRef(t, main, "CLAUDE_CODE_PLUGIN_MARKETPLACE_URL", "plugin-marketplace-url", true)
+		e6RequireConfigMapRef(t, main, "K3S_MCP_URL", "k3s-mcp-url", true)
+		e6RequireConfigMapRef(t, main, "CLAUDE_CODE_PLUGIN_MARKETPLACE_URL", "plugin-marketplace-url", true)
 
 		// The proxy skips the bootstrap entirely, so it is given none of them.
 		e6RequireAbsent(t, proxy, "K3S_MCP_TOKEN", "K3S_MCP_URL", "CLAUDE_CODE_PLUGIN_MARKETPLACE_URL")
 	})
 
-	t.Run("PlatformModelIsAnOptionalSecretOnTheMainContainerOnly", func(t *testing.T) {
+	t.Run("PlatformModelIsAnOptionalConfigMapKeyOnTheMainContainerOnly", func(t *testing.T) {
 		// A session created without `model` carries the platform-default alias,
 		// which resolves at pod start from the optional key.
-		e6RequireSecretRef(t, main, "CLAUDE_CODE_MODEL", "model", true)
+		e6RequireConfigMapRef(t, main, "CLAUDE_CODE_MODEL", "model", true)
 		e6RequireAbsent(t, proxy, "CLAUDE_CODE_MODEL")
 
-		want := e.credentialsSecret(t)["model"]
+		want := e.configConfigMap(t)["model"]
 		if want == "" {
 			t.Skip("this deployment leaves the optional model key empty; the --model omission branch is unit-owned")
 		}
 		if got := strings.TrimSpace(e.sh(t, workloadContainer, `printf %s "$CLAUDE_CODE_MODEL"`)); got != want {
-			t.Fatalf("main container resolved CLAUDE_CODE_MODEL=%q, want the Secret's %q", got, want)
+			t.Fatalf("main container resolved CLAUDE_CODE_MODEL=%q, want the ConfigMap's %q", got, want)
 		}
 	})
 
@@ -369,7 +411,7 @@ func TestCredentialPlacement_ConcreteModelLiteralBeatsThePlatformDefault(t *test
 	e6RequireAbsent(t, e.container(t, credentialsContainer), "CLAUDE_CODE_MODEL")
 
 	if got := strings.TrimSpace(e.sh(t, workloadContainer, `printf %s "$CLAUDE_CODE_MODEL"`)); got != concrete {
-		t.Fatalf("main container resolved CLAUDE_CODE_MODEL=%q, want the literal %q — the Secret default must not win",
+		t.Fatalf("main container resolved CLAUDE_CODE_MODEL=%q, want the literal %q — the ConfigMap default must not win",
 			got, concrete)
 	}
 }

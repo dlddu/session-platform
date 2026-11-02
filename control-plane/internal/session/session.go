@@ -57,7 +57,7 @@ const (
 	WorkloadTypeApprovalGated WorkloadType = "approval-gated"
 
 	// PlatformDefaultModel is the stable session-level alias for the model
-	// selected by the platform's optional Secret configuration (falling back to
+	// selected by the platform's optional ConfigMap configuration (falling back to
 	// the Claude Code installation default). (AC-E6)
 	PlatformDefaultModel = "platform-default"
 
@@ -187,7 +187,7 @@ type Session struct {
 	WorkloadType WorkloadType `json:"workloadType,omitempty"`
 	// Model is meaningful only for the agent workload types (claude-code and
 	// approval-gated) and, like the workload type, is fixed at creation.
-	// "platform-default" delegates selection to the platform-managed Secret and
+	// "platform-default" delegates selection to the platform-managed ConfigMap and
 	// then the Claude Code installation fallback (AC-E6, reused verbatim by
 	// AC-F1).
 	Model string `json:"model,omitempty"`

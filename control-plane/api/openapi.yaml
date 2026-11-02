@@ -30,10 +30,10 @@ info:
     tool-running container receives no real token. Its optional session model
     is immutable and defaults to `platform-default`: whenever that session's
     primary container starts (new pod, restore, or container restart), the alias
-    uses the Secret's optional `model` value and then falls back to the
+    uses the platform ConfigMap's optional `model` value and then falls back to the
     installed CLI default when the value is missing or empty. A non-empty
     effective model must match `^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$`; invalid
-    Secret configuration makes the data-plane agent fail startup.
+    ConfigMap configuration makes the data-plane agent fail startup.
     The control plane receives the same optional model as
     `CLAUDE_CODE_DEFAULT_MODEL`; `GET /config` exposes that effective concrete
     default (or `platform-default` when absent) together with a separate,
@@ -64,7 +64,7 @@ paths:
         input style and model picker configuration) and, for existing clients,
         the Claude Code model picker configuration, all captured when this
         control-plane process started. `defaultModel` is the effective concrete
-        model projected from the Secret, or the stable `platform-default`
+        model projected from the platform ConfigMap, or the stable `platform-default`
         session alias when that value is missing or empty. `models` is an
         ordered soft catalog: clients may present its entries as choices, but
         session creation continues to accept any model that satisfies the model
@@ -695,7 +695,7 @@ components:
           maxLength: 128
           description: >
             Same meaning as `ClaudeCodeConfig.defaultModel` for this type: the
-            concrete Secret-backed default, or `platform-default`. `null`
+            concrete ConfigMap-backed default, or `platform-default`. `null`
             exactly when `takesModel` is false.
         models:
           type: array
@@ -714,7 +714,7 @@ components:
           pattern: '^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$'
           description: >
             Effective platform default shown by the UI: the concrete
-            Secret-backed model when configured, otherwise the stable
+            ConfigMap-backed model when configured, otherwise the stable
             `platform-default` session alias. Omitting model from a create
             request still records that stable alias so future pod starts follow
             the platform default.
@@ -742,7 +742,7 @@ components:
         `approval-gated` is the same agent execution model behind a human
         approval gate, provisioned as a workload pod plus a session-scoped
         helper pod (AC-F1~F6); `minimax-code` is the MiniMax Code CLI
-        (`mcode`) on that same execution model, with its own provider Secret
+        (`mcode`) on that same execution model, with its own provider Secret and ConfigMap
         behind the same credential proxy (AC-G1~G4). Each non-default type requires the control plane
         to have an image configured for it, and creating a session of a type
         with no configured image fails rather than falling back to a shell.
@@ -769,7 +769,7 @@ components:
             this contract (AC-E6, reused by AC-F1 and AC-G1); omitted at creation resolves to
             `platform-default`.
             Whenever the primary container starts, including a restart, that
-            alias resolves through the optional Secret model and then the CLI
+            alias resolves through the optional ConfigMap model and then the CLI
             fallback.
         pod:
           type: string
@@ -813,7 +813,7 @@ components:
             Model for this session. Valid when workloadType is `claude-code`,
             `approval-gated` or `minimax-code`; omitted resolves to `platform-default`. A concrete
             value is passed literally and takes precedence over the platform
-            Secret default. The catalog returned by GET /config is advisory,
+            ConfigMap default. The catalog returned by GET /config is advisory,
             not an allowlist. Credentials are never accepted in this request.
     WriteRequest:
       type: object

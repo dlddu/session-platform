@@ -74,9 +74,10 @@ interactive shell and Claude Code workloads.
   pod address that must not be loopback: the provider proxy (`:8091`), the
   session MCP (`SESSION_MCP_URL`, `:8092`) and the K3s MCP proxy
   (`K3S_MCP_PROXY_URL`, `:8093`). The helper's provider proxy is the
-  `approval-gated` one pointed at the `minimax-code-credentials` Secret, whose
-  `base-url` is MiniMax's Anthropic-compatible endpoint (for example
-  `https://api.minimax.io/anthropic`) and whose `auth-token` may be a Token Plan
+  `approval-gated` one pointed at the `minimax-code-credentials` Secret and
+  `minimax-code-config` ConfigMap: the ConfigMap's `base-url` is MiniMax's
+  Anthropic-compatible endpoint (for example
+  `https://api.minimax.io/anthropic`) and the Secret's `auth-token` may be a Token Plan
   subscription key: MiniMax accepts it as `Authorization: Bearer`, which is
   exactly what the proxy injects. On every start and restore the agent stages
   Claude-format plugins beside the managed config and copies them into
@@ -179,37 +180,37 @@ Provider authentication credentials are not present in the Claude container or
 inherited by its Bash tools. That container receives
 `ANTHROPIC_BASE_URL=http://127.0.0.1:8091` and the non-secret
 `ANTHROPIC_AUTH_TOKEN=session-platform-proxy`; the credential-proxy sidecar
-alone receives the required Secret `base-url` and `auth-token` keys. The primary
+alone receives the required ConfigMap `base-url` and Secret `auth-token` keys. The primary
 container separately receives the required
 Secret key `k3s-mcp-token` as `K3S_MCP_TOKEN`; that literal is included in
 incremental output redaction and is never projected into the credential proxy.
 For a session whose immutable model metadata is `platform-default`, the primary
-container also receives `CLAUDE_CODE_MODEL` from that Secret's optional `model`
-key. A missing or empty key omits `--model` and therefore delegates to the
+container also receives `CLAUDE_CODE_MODEL` from the platform ConfigMap's
+optional `model` key. A missing or empty key omits `--model` and therefore delegates to the
 installed Claude CLI; a concrete session model is instead injected literally
-and takes precedence over the Secret default. The optional model is not exposed
+and takes precedence over the ConfigMap default. The optional model is not exposed
 to the credential-proxy sidecar. Any non-empty effective model must match
 `^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$`.
-A leading `~` supports OpenRouter moving aliases. Invalid Secret configuration
+A leading `~` supports OpenRouter moving aliases. Invalid ConfigMap configuration
 is rejected when the agent starts instead of being forwarded as CLI options.
-Changes to that Secret default are resolved
+Changes to that ConfigMap default are resolved
 whenever a `platform-default` primary container starts, including a new pod,
 a pod recreated after restore, or a container restart. They do not immediately
 mutate a running container environment or a concrete session model.
 
-The plural Secret key `models` is not data-plane configuration and is never
+The plural ConfigMap key `models` is not data-plane configuration and is never
 projected into either session container. For UI presentation, the Deployment
 projects the public singular `model` and plural `models` keys into the control
 plane as `CLAUDE_CODE_DEFAULT_MODEL` and `CLAUDE_CODE_MODELS`. The config API
 returns their validated startup snapshot; a concrete default is rendered once
 as `<model> (platform default)`, while missing/empty falls back to the generic
 alias. Either display change requires a control-plane rollout, but a session
-pod still resolves its own `model` SecretKeyRef whenever it starts. Missing,
+pod still resolves its own `model` ConfigMapKeyRef whenever it starts. Missing,
 empty, or `[]` preserves the UI's free-text input, and the catalog does not
-restrict models accepted by the session API. If the credentials Secret is
-renamed, both control-plane SecretKeyRef names must be patched to the same
+restrict models accepted by the session API. If the config ConfigMap is
+renamed, both control-plane ConfigMapKeyRef names must be patched to the same
 literal name because Kubernetes does not interpolate
-`CLAUDE_CODE_CREDENTIALS_SECRET` there.
+`CLAUDE_CODE_CONFIG_CONFIGMAP` there.
 
 Fresh session HOME also receives a platform-managed `.claude/settings.json`
 that enables only `session-platform@dlddu-plugins` and allows only the coding

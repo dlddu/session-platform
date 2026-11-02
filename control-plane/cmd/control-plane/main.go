@@ -38,7 +38,7 @@ func main() {
 
 	cfg, err := loadConfig()
 	if err == nil {
-		err = validateMiniMaxSecret(cfg.miniMax, cfg.claudeCredentialsSecret)
+		err = validateMiniMaxSecret(cfg.miniMax, cfg.claudeCredentialsSecret, cfg.claudeConfigConfigMap)
 	}
 	if err != nil {
 		logger.Error("invalid runtime configuration", "err", err)
@@ -84,7 +84,9 @@ func main() {
 		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, cfg.dataPlaneApprovalGatedImage),
 		k8s.WithWorkloadImage(session.WorkloadTypeMiniMaxCode, cfg.miniMax.image),
 		k8s.WithClaudeCredentialsSecret(cfg.claudeCredentialsSecret),
+		k8s.WithClaudeConfigConfigMap(cfg.claudeConfigConfigMap),
 		k8s.WithMiniMaxCredentialsSecret(cfg.miniMax.credentialsSecret),
+		k8s.WithMiniMaxConfigConfigMap(cfg.miniMax.configConfigMap),
 		k8s.WithApprovalGatewayURL(cfg.approvalGatewayURL),
 		k8s.WithSharedVolume(cfg.sharedVolumeStorageClass, cfg.sharedVolumeSize),
 		k8s.WithRepoAccess(cfg.repoAccess.helperURL(namespace)),
@@ -155,7 +157,7 @@ func main() {
 	mux := http.NewServeMux()
 	api.New(mgr,
 		api.WithClaudeCodeModelConfig(cfg.claudeCodeDefaultModel, cfg.claudeCodeModels),
-		// approval-gated reads the same Secret's model keys (AC-F6 → AC-E6).
+		// approval-gated reads the same ConfigMap's model keys (AC-F6 → AC-E6).
 		api.WithWorkloadModelConfig(session.WorkloadTypeApprovalGated, cfg.claudeCodeDefaultModel, cfg.claudeCodeModels),
 		api.WithOfferedWorkloadTypes(cfg.offeredWorkloadTypes()...),
 	).Routes(mux)
@@ -232,8 +234,9 @@ type config struct {
 	// fresh process started in that home directory.
 	shellArchiveEnabled     bool
 	claudeCredentialsSecret string
+	claudeConfigConfigMap   string
 	// claudeCodeDefaultModel is the effective, public default shown by the SPA.
-	// It is a concrete Secret-backed model when configured, otherwise the
+	// It is a concrete ConfigMap-backed model when configured, otherwise the
 	// stable platform-default alias.
 	claudeCodeDefaultModel string
 	// claudeCodeModels is the ordered, public model catalog shown by the SPA.
@@ -352,6 +355,7 @@ func loadConfig() (config, error) {
 		claudeArchiveEnabled:        envBool("CLAUDE_CODE_ARCHIVE_ENABLED", false),
 		approvalGatedArchiveEnabled: envBool("APPROVAL_GATED_ARCHIVE_ENABLED", false),
 		claudeCredentialsSecret:     env("CLAUDE_CODE_CREDENTIALS_SECRET", "claude-code-credentials"),
+		claudeConfigConfigMap:       env("CLAUDE_CODE_CONFIG_CONFIGMAP", "claude-code-config"),
 		claudeCodeDefaultModel:      claudeCodeDefaultModel,
 		claudeCodeModels:            claudeCodeModels,
 		shellArchiveEnabled:         envBool("SHELL_ARCHIVE_ENABLED", false),
@@ -368,9 +372,9 @@ func loadConfig() (config, error) {
 	}, nil
 }
 
-// parseClaudeCodeDefaultModel validates the optional Secret-backed default
+// parseClaudeCodeDefaultModel validates the optional ConfigMap-backed default
 // model. The reserved alias is produced only as the missing/empty fallback;
-// explicitly configuring it would hide a likely Secret projection mistake.
+// explicitly configuring it would hide a likely ConfigMap projection mistake.
 func parseClaudeCodeDefaultModel(value string) (string, error) {
 	if value == "" {
 		return session.PlatformDefaultModel, nil
@@ -388,7 +392,7 @@ func parseClaudeCodeDefaultModel(value string) (string, error) {
 	return normalized, nil
 }
 
-// parseClaudeCodeModels decodes the optional Secret-backed JSON catalog. It is
+// parseClaudeCodeModels decodes the optional ConfigMap-backed JSON catalog. It is
 // intentionally presentation configuration, not an API allowlist: existing
 // clients may still submit any model accepted by session.NormalizeModel.
 func parseClaudeCodeModels(value string) ([]string, error) {

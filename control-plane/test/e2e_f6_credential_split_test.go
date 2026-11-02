@@ -134,6 +134,19 @@ func (f f6Session) sh(t *testing.T, pod, container, script string, args ...strin
 
 // The test runner may read these — it holds the cluster's admin kubeconfig;
 // neither session pod may, which is what the placement is for.
+func (f f6Session) configMap(t *testing.T, name string) map[string]string {
+	t.Helper()
+	cm, err := f.cs.CoreV1().ConfigMaps(f.ns).Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("read %s/%s: %v", f.ns, name, err)
+	}
+	values := make(map[string]string, len(cm.Data))
+	for k, v := range cm.Data {
+		values[k] = strings.TrimSpace(v)
+	}
+	return values
+}
+
 func (f f6Session) secret(t *testing.T, name string) map[string]string {
 	t.Helper()
 	s, err := f.cs.CoreV1().Secrets(f.ns).Get(context.Background(), name, metav1.GetOptions{})
@@ -231,6 +244,22 @@ func f6RequireSecretRef(t *testing.T, c corev1.Container, secretName, envName, k
 	}
 }
 
+func f6RequireConfigMapRef(t *testing.T, c corev1.Container, configMapName, envName, key string, optional bool) {
+	t.Helper()
+	env := mustEnv(t, c, envName)
+	ref := e6ConfigMapRef(env)
+	if ref == nil {
+		t.Fatalf("container %q %s is not ConfigMap-backed (value=%q)", c.Name, envName, env.Value)
+	}
+	if ref.Name != configMapName || ref.Key != key {
+		t.Fatalf("container %q %s reads %s/%s, want %s/%s",
+			c.Name, envName, ref.Name, ref.Key, configMapName, key)
+	}
+	if got := ref.Optional != nil && *ref.Optional; got != optional {
+		t.Fatalf("container %q %s optional=%v, want %v", c.Name, envName, got, optional)
+	}
+}
+
 // Naming the entry is not enough: the same key can arrive under a different
 // variable name, and the claim AC-F6 makes is about the *key*, not its spelling.
 func f6NoSecretRefTo(t *testing.T, c corev1.Container, secretName string, keys ...string) {
@@ -240,13 +269,18 @@ func f6NoSecretRefTo(t *testing.T, c corev1.Container, secretName string, keys .
 		banned[k] = true
 	}
 	for _, env := range c.Env {
-		ref := e6SecretRef(env)
-		if ref == nil || ref.Name != secretName {
+		name, key := "", ""
+		if ref := e6SecretRef(env); ref != nil {
+			name, key = ref.Name, ref.Key
+		} else if ref := e6ConfigMapRef(env); ref != nil {
+			name, key = ref.Name, ref.Key
+		}
+		if name != secretName && name != configConfigMapName {
 			continue
 		}
-		if banned[ref.Key] {
+		if banned[key] {
 			t.Fatalf("container %q reads %s/%s through %s — that key belongs to another container (AC-F6)",
-				c.Name, ref.Name, ref.Key, env.Name)
+				c.Name, name, key, env.Name)
 		}
 	}
 }
@@ -324,9 +358,9 @@ func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
 	})
 
 	t.Run("ProviderCredentialsOnlyInTheProxyContainer", func(t *testing.T) {
-		f6RequireSecretRef(t, proxy, credentialsSecretName, "ANTHROPIC_BASE_URL", "base-url", false)
+		f6RequireConfigMapRef(t, proxy, configConfigMapName, "ANTHROPIC_BASE_URL", "base-url", false)
 		f6RequireSecretRef(t, proxy, credentialsSecretName, "ANTHROPIC_AUTH_TOKEN", "auth-token", false)
-		f6RequireSecretRef(t, proxy, credentialsSecretName, "ANTHROPIC_CA_CERT", "ca-cert", true)
+		f6RequireConfigMapRef(t, proxy, configConfigMapName, "ANTHROPIC_CA_CERT", "ca-cert", true)
 
 		e6RequireAbsent(t, mcp, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_CA_CERT")
 		f6NoSecretRefTo(t, mcp, credentialsSecretName, "base-url", "auth-token", "ca-cert")
@@ -403,17 +437,17 @@ func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
 	})
 
 	t.Run("PlatformDefaultModelResolvesFromTheOptionalKey", func(t *testing.T) {
-		f6RequireSecretRef(t, work, credentialsSecretName, modelEnvVar, "model", true)
+		f6RequireConfigMapRef(t, work, configConfigMapName, modelEnvVar, "model", true)
 		e6RequireAbsent(t, mcp, modelEnvVar)
 		e6RequireAbsent(t, proxy, modelEnvVar)
 
-		want := f.secret(t, credentialsSecretName)["model"]
+		want := f.configMap(t, configConfigMapName)["model"]
 		if want == "" {
 			t.Skip("this deployment leaves the optional model key empty; the omission branch is unit-owned")
 		}
 		if got := strings.TrimSpace(f.sh(t, f.work.Name, workloadContainer,
 			`printf %s "$CLAUDE_CODE_MODEL"`)); got != want {
-			t.Fatalf("workload container resolved CLAUDE_CODE_MODEL=%q, want the Secret's %q", got, want)
+			t.Fatalf("workload container resolved CLAUDE_CODE_MODEL=%q, want the ConfigMap's %q", got, want)
 		}
 	})
 
@@ -456,14 +490,14 @@ func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
 			}
 		}
 
-		// A second control for the log alone: a Secret-resolved value it echoes
-		// on the startup line proves the log carries Secret-derived material at
+		// A second control for the log alone: a platform-configured value it
+		// echoes on the startup line proves the log carries that material at
 		// all, so the absences below are a property of what the control plane
 		// logs rather than of a log that could never hold one.
-		if model := provider["model"]; model != "" {
+		if model := f.configMap(t, configConfigMapName)["model"]; model != "" {
 			if log := surfaces[len(surfaces)-1].text; !strings.Contains(log, model) {
 				t.Fatalf("the control plane log echoes no value resolved from %s; the absences below would say less than AC-F6 asks",
-					credentialsSecretName)
+					configConfigMapName)
 			}
 		}
 
