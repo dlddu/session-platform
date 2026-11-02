@@ -676,7 +676,7 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 >   📌 같은 낡음이 `control-plane/cmd/control-plane/main.go:79-82`의 Go 주석에도 있다("its data
 >   plane runtime — the helper pod's session MCP — is not implemented yet"). **코드 주석은 이 렌즈의
 >   산출물이 아니라 손대지 않았다** — 지목만 남긴다(소관: `tbm_session-platform-docs-impl` ·
->   `tbm_session-platform-comment-redundancy`).
+>   `tbm_session-platform-comment-necessity`).
 >
 >   현재 F 계열의 절반을 지키는 것은 `control-plane/test/approval_gated_orchestrator_test.go`
 >   (fake clientset · pod 스펙 단언)와 `internal/api/workload_type_test.go`(타입 허용값·400 거부)다
