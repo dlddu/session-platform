@@ -105,32 +105,32 @@ spec:
               value: "true"
             # Workload archive S3 store config: bucket / assume-role ARN / region /
             # key prefix. Sourced from the
-            # `checkpoint-s3` Secret rather than inlined here. The Secret is
+            # `checkpoint-s3` ConfigMap rather than inlined here. The ConfigMap is
             # REQUIRED (no `optional`), so the pod will not start until it exists:
-            # in production external-secrets provisions it (as it does the ghcr
-            # pull secret); the kind e2e overlay (deploy/) points it at MinIO; for
-            # a manual archive round trip create it directly
-            # (k8s/checkpoint-s3-secret.example.yaml).
+            # in production external-secrets renders it from SSM; the kind e2e
+            # overlay (deploy/) points it at MinIO; for a manual archive round trip
+            # create it directly (k8s/checkpoint-s3-configmap.example.yaml).
             # These are config, not credentials — S3 access is by assume-role over
-            # the node instance profile, so there are no static keys here.
+            # the node instance profile, so there are no static keys here, and
+            # that is why this is a ConfigMap rather than a Secret.
             - name: CHECKPOINT_S3_BUCKET
               valueFrom:
-                secretKeyRef:
+                configMapKeyRef:
                   name: checkpoint-s3
                   key: bucket
             - name: CHECKPOINT_S3_ROLE_ARN
               valueFrom:
-                secretKeyRef:
+                configMapKeyRef:
                   name: checkpoint-s3
                   key: role-arn
             - name: CHECKPOINT_S3_REGION
               valueFrom:
-                secretKeyRef:
+                configMapKeyRef:
                   name: checkpoint-s3
                   key: region
             - name: CHECKPOINT_S3_PREFIX
               valueFrom:
-                secretKeyRef:
+                configMapKeyRef:
                   name: checkpoint-s3
                   key: prefix
             # minimax-code 워크로드(AC-G1~G4). 이 세 항목은 env 목록 **맨 끝**에 둔다 —

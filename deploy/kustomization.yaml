@@ -14,9 +14,10 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - ../k8s
-  # The `checkpoint-s3` Secret the control plane requires, pointed at the
-  # in-cluster MinIO below (production uses the k8s/ base + external-secrets).
-  - checkpoint-s3-secret.yaml
+  # The `checkpoint-s3` ConfigMap the control plane requires, pointed at the
+  # in-cluster MinIO below, plus the MinIO root credentials Secret
+  # (production uses the k8s/ base + external-secrets, and no credentials).
+  - checkpoint-s3.yaml
   # Throwaway credentials for creating claude-code pods in local e2e.
   - claude-code-credentials-secret.yaml
 
@@ -115,7 +116,7 @@ patches:
   # through the same agent archive path production uses. That needs the product snapshot trigger
   # reachable over HTTP and an archive store
   # shared by both replicas (CHECKPOINT_S3_ENDPOINT → the in-cluster MinIO,
-  # authenticated with the static keys from the checkpoint-s3 Secret since no
+  # authenticated with the static keys from the checkpoint-s3-credentials Secret since no
   # role is set here).
   - target:
       kind: Deployment
@@ -174,7 +175,7 @@ patches:
           name: AWS_ACCESS_KEY_ID
           valueFrom:
             secretKeyRef:
-              name: checkpoint-s3
+              name: checkpoint-s3-credentials
               key: access-key
       # drop's in-cluster address here (deploy/e2e-drop.yaml). env/18 is DROP_URL,
       # the base's last entry; production goes through an ExternalName and
@@ -191,7 +192,7 @@ patches:
           name: AWS_SECRET_ACCESS_KEY
           valueFrom:
             secretKeyRef:
-              name: checkpoint-s3
+              name: checkpoint-s3-credentials
               key: secret-key
   # The base's two static NetworkPolicies (k8s/network-policy.yaml) are a
   # production boundary and do not fit this SUT: the suites reach the control
