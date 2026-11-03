@@ -406,7 +406,7 @@
         <!-- left: read/write console -->
         <div class="console">
           <div class="console-bar">
-            <span>claude-code session</span>
+            <span id="ws-console-type">claude-code session</span>
             <span class="mono" id="ws-console-pod">—</span>
             <span class="mono" id="ws-console-model" style="color:#b79ae0">—</span>
             <span class="tag" id="ws-console-tag"><span class="led"></span>agent available</span>
@@ -460,7 +460,7 @@
           <!-- workload config (AC-E1 / AC-E6) -->
           <div class="panel">
             <h4><span class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span> Workload</h4>
-            <div class="kv"><span class="k">Type</span><span class="v" style="color:#b79ae0">claude-code</span></div>
+            <div class="kv"><span class="k">Type</span><span class="v" id="ws-type-v" style="color:#b79ae0">claude-code</span></div>
             <div class="kv"><span class="k">Model</span><span class="v" id="ws-model-v">platform default</span></div>
             <div class="kv"><span class="k">Base URL</span><span class="v masked">from ConfigMap</span></div>
             <div class="kv"><span class="k">Auth token</span><span class="v masked">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;<span class="lock"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M20 6 9 17l-5-5"/></svg></span></span></div>
@@ -511,7 +511,13 @@ const ICON = {
 };
 function ic(n,s){return ICON[n].replace('viewBox',`width="${s}" height="${s}" viewBox`);}
 const STATE_LABEL = {active:'active', idle:'idle', snapshot:'snapshot'};
-// 이 화면은 workloadType=claude-code 세션 전용이다 (shell 타입은 workspace.html)
+// 입력 placeholder — 기본 문장은 마크업에 있는 claude-code 것이고, minimax-code는 구현(Workspace.tsx)과
+// 같은 문장을 쓴다. claude-code 문구는 2026-08-08 출처의 구현과의 차이와 함께 그대로 둔다 (목업이 카피의 SSOT).
+const INPUT_PH_DEFAULT = document.getElementById('ws-input-ph').innerHTML;
+const INPUT_PH = {
+  'minimax-code':'send a prompt — runs mcode exec once in the session pod'
+};
+// 이 화면은 workloadType이 claude-code · minimax-code인 에이전트 세션 전용이다 (shell 타입은 workspace.html)
 let sessions = [
   {id:'5b1e', name:'refactor-billing', type:'claude-code', model:'platform default', state:'active',
    pod:'sess-5b1e-h7za', region:'us-east-1', up:'1h 05m', upMin:65, cpu:22, mem:408, memMax:2048, idleMin:0,
@@ -519,6 +525,9 @@ let sessions = [
   {id:'a92f', name:'migrate-schema', type:'claude-code', model:'model-a', state:'idle',
    pod:'sess-a92f-k3md', region:'us-east-1', up:'2h 11m', upMin:131, cpu:2, mem:196, memMax:2048, idleMin:41, freezeSec:1140,
    turns:7, cwd:'/work/db', files:'0007_add_index.sql', cursor:'nextOffset=19677'},
+  {id:'b2d7', name:'changelog-autogen', type:'minimax-code', model:'platform default', state:'active',
+   pod:'sess-b2d7-q4mf', region:'us-east-1', up:'38m', upMin:38, cpu:18, mem:341, memMax:2048, idleMin:0,
+   turns:2, cwd:'/work', files:'CHANGELOG.md', cursor:'nextOffset=5120'},
   {id:'c83d', name:'doc-migration', type:'claude-code', model:'platform default', state:'snapshot',
    pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'18m ago', checkpoint:'38 MB archive', reclaim:'1 vCPU · 2 GB',
    turns:12, cwd:'/work/docs', files:'42 files', cursor:'nextOffset=31408'}
@@ -554,7 +563,7 @@ function buildTimeline(s){
   return tl([{cls:'done',lab:'created',fillNext:true},{cls:'done',lab:'active',fillNext:true},{cls:'done',lab:'idle',fillNext:true},{cls:'now frozen-now',lab:'snapshot',time:s.frozenAgo}]);
 }
 const termActive = (s)=>[
-  {c:'sys',t:`◆ attached to session/${s.id} · pod/${s.pod} — workloadType=claude-code`},
+  {c:'sys',t:`◆ attached to session/${s.id} · pod/${s.pod} — workloadType=${s.type}`},
   {c:'sys',t:`◆ isolation: dedicated pod — conversation and workspace are private to this session`},
   {c:'prompt',t:`<span class="op">▸</span> read invoice.go and tell me what the rounding bug is`},
   {c:'agent',t:`<span class="op">‹agent›</span> Line 88 rounds each line item with math.Round before summing,`},
@@ -612,6 +621,9 @@ function populate(s){
   document.getElementById('ws-crumb-id').textContent = 'session/'+s.id;
   document.getElementById('ws-name').textContent = s.name;
   document.getElementById('ws-console-pod').textContent = s.state==='snapshot' ? 'pod reclaimed' : 'pod/'+s.pod;
+  document.getElementById('ws-console-type').textContent = s.type + ' session';
+  document.getElementById('ws-input-ph').innerHTML = INPUT_PH[s.type] || INPUT_PH_DEFAULT;
+  document.getElementById('ws-type-v').textContent = s.type;
   document.getElementById('ws-badge').className = 'badge '+s.state;
   document.getElementById('ws-badge-t').textContent = STATE_LABEL[s.state];
   document.getElementById('ws-meta').innerHTML = metaLine(s);
@@ -726,7 +738,7 @@ function promote(s){
   paintContext(s);
   paintTerm([
     {c:'ok',t:`\u2713 restored from archive \u2014 conversation history and working dir intact`},
-    {c:'sys',t:`\u25c6 session/${s.id} \u00b7 pod/${s.pod} \u2014 workloadType=claude-code`},
+    {c:'sys',t:`\u25c6 session/${s.id} \u00b7 pod/${s.pod} \u2014 workloadType=${s.type}`},
     {c:'prompt',t:`<span class="op">\u25b8</span> remind me what we decided about the rounding`},
     {c:'agent',t:`<span class="op">\u2039agent\u203a</span> We moved rounding out of the per-item loop in invoice.go so the`},
     {c:'agent',t:`        error stops accumulating \u2014 same thing you asked about before the pause.`},
