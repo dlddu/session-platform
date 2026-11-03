@@ -101,4 +101,4 @@
 - **웹 화면** — SPA의 게이트 전용 표면(`isGatedWorkload`)과 새 세션 카드 설명은 아직 `approval-gated`만 게이트로 그린다. 승인 대기 마커는 출력 스트림에 그대로 보인다.
 - **marketplace 스킬 로드 실측** — 핀된 `mcode`가 MCP 서버를 뺀 marketplace 플러그인의 스킬을 읽는지는 운영 반영 뒤 세션에서 확인한다.
 - **K3s MCP 조회 2초 한도** — `mcp.json`의 http 서버는 turn마다 `initialize`·`tools/list`가 2초 안에 끝나야 그 turn에 실린다(`mcode`에 조정 수단 없음). K3s MCP는 헬퍼 파드 프록시를 거쳐 외부 origin까지 가므로, 상류가 느린 turn에는 K3s 도구만 빠질 수 있다(세션 MCP는 별개로 조회된다).
-- ~~**`docs/test/minimax-code-workload.md`(테스트 시나리오)와 그 e2e 매핑**~~ — *2026-11-02 해소*: 테스트 문서를 신설해 AC-G1~G5를 다루는 시나리오 5개를 세웠다. 전용 e2e 파일이 없어 그 5개는 `test/e2e.md`의 「유예」 표에 사유와 해제 조건을 적어 등재했다. 검증 수단은 지금도 단위·통합 테스트(`control-plane/test/minimax_code_orchestrator_test.go` 등)다.
+- ~~**`docs/test/minimax-code-workload.md`(테스트 시나리오)와 그 e2e 매핑**~~ — *2026-11-03 해소*: 테스트 문서를 신설해 AC-G1~G6을 다루는 시나리오 6개를 세웠다. 전용 e2e 파일이 없어 그 6개는 `test/e2e.md`의 「유예」 표에 사유와 해제 조건을 적어 등재했다. 검증 수단은 지금도 단위·통합 테스트(`control-plane/test/minimax_code_orchestrator_test.go` 등)다.

@@ -522,6 +522,7 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 | `minimax-code-workload.md#시나리오 3` | **kube 관측 의존 — 제출된 pod spec의 Secret·ConfigMap 참조를 봐야 한다.** 어느 컨테이너가 어떤 키를 받는지는 브라우저나 HTTP API로 드러나지 않는다. | 없음 | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환. 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 단위·통합: `control-plane/test/minimax_code_orchestrator_test.go`(파드별 Secret·ConfigMap 참조 개수·주 컨테이너 무자격 증명), `data-plane/cmd/agent/minimax_code_test.go`(자격 증명 변수 기동 거부). |
 | `minimax-code-workload.md#시나리오 4` | **kube 관측 의존 — 파일시스템 아카이브 왕복이다.** 동결·복원 뒤의 작업 디렉터리·`~/.minimax`·공유 볼륨 내용은 pod 안에서만 보인다. | 없음 | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환. 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 단위: `data-plane/cmd/agent/minimax_code_test.go`(아카이브·복원 왕복), `control-plane/test/minimax_code_orchestrator_test.go`(복원 대상 아카이브 주석). |
 | `minimax-code-workload.md#시나리오 5` | **kube 관측 의존 — 헬퍼 파드의 프록시 컨테이너를 봐야 한다.** 토큰이 어느 컨테이너에 있고 프록시가 무엇을 주입·차단하는지는 세션 안에서도 관측되지 않는다. | 없음 | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환. 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 단위: `control-plane/test/minimax_code_orchestrator_test.go`(토큰 배치·세션 헤더), `data-plane/cmd/agent/minimax_marketplace_test.go`(프록시 경유 토큰·시드 경로), `data-plane/cmd/agent/minimax_mcp_registration_test.go`·`minimax_plugins_test.go`(서버 등록·플러그인 동기화). |
+| `minimax-code-workload.md#시나리오 6` | **kube 관측 의존 — 헬퍼 파드의 컨테이너 구성과 네트워크 정책 경계를 봐야 한다.** 이 시나리오의 기대 결과는 제출된 헬퍼 파드의 컨테이너 셋·헬퍼 포트·egress/ingress 경계·승인 게이트 통과라 브라우저나 control-plane HTTP API로 관측되지 않는다. | 없음 | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환. 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 단위·통합: `control-plane/internal/adapter/k8s/minimax_code.go`(헬퍼 파드 컨테이너 셋·`8093` 포트·헬퍼 포트 정책), `control-plane/internal/service/minimax_code_test.go`, `data-plane/cmd/agent/minimax_mcp_registration_test.go`(`~/.minimax/mcp.json` 등록). |
 <!-- scenario-deferred:end -->
 
 > **이 표가 비는 날 완전 1:1이다.** 현재 잔여는 두 갈래다 — 이관 26(매칭 공간 축소가 만든 부채, 검증은
@@ -561,9 +562,9 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 ## 집계
 
 <!-- scenario-summary:begin -->
-- 시나리오 총계: 51
+- 시나리오 총계: 52
 - 예외: 3
-- 유예: 47
+- 유예: 48
 - 시나리오 매칭 파일: 1
 - 공백: 0
 <!-- scenario-summary:end -->
