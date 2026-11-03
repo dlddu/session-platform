@@ -39,7 +39,7 @@ spec:
       containers:
         - name: control-plane
           # ⚙️ CI가 관리하는 줄입니다(ci.yml 의 `pin` job).
-          image: ghcr.io/dlddu/session-platform:fda24597d4a1595cdfba10edecc07820562c38c8
+          image: ghcr.io/dlddu/session-platform:e58cdd24b8e982c675cf30bdaa1fd269be96a519
           ports:
             - containerPort: 8080
           env:
@@ -50,7 +50,7 @@ spec:
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다(env value 라 kustomize 의
             # images 변환이 닿지 않는 자리다).
             - name: DATA_PLANE_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:fda24597d4a1595cdfba10edecc07820562c38c8"
+              value: "ghcr.io/dlddu/session-platform-data-plane:e58cdd24b8e982c675cf30bdaa1fd269be96a519"
             # Shell data-transfer gate. When enabled, a shell session's home
             # directory and scrollback are archived to the S3 destination below
             # on snapshot; off, a shell refuses to freeze and keeps its pod.
@@ -61,7 +61,7 @@ spec:
               value: "true"
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다.
             - name: DATA_PLANE_CLAUDE_CODE_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:fda24597d4a1595cdfba10edecc07820562c38c8"
+              value: "ghcr.io/dlddu/session-platform-data-plane:e58cdd24b8e982c675cf30bdaa1fd269be96a519"
             # approval-gated 워크로드 파드와 그 세션 전용 헬퍼 파드(MCP·credential-proxy
             # 컨테이너)가 쓰는 이미지다(AC-F1/AC-F4). 같은 data plane 에이전트 바이너리가
             # DATA_PLANE_WORKLOAD 로 `approval-gated`·`mcp` 경로를 모두 태우므로
@@ -69,7 +69,7 @@ spec:
             # 실패한다(main.go 의 기본값이 빈 문자열) — 그래서 여기서 명시적으로 켠다.
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다.
             - name: DATA_PLANE_APPROVAL_GATED_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:fda24597d4a1595cdfba10edecc07820562c38c8"
+              value: "ghcr.io/dlddu/session-platform-data-plane:e58cdd24b8e982c675cf30bdaa1fd269be96a519"
             # This Secret holds credentials only: the required auth-token,
             # referenced only by the localhost credential-proxy sidecar, and the
             # required k3s-mcp-token, referenced only by the Claude tool-running
@@ -145,7 +145,7 @@ spec:
             # 이미지는 같은 멀티 워크로드 data plane 이미지다(DATA_PLANE_WORKLOAD 로 분기).
             # 문자열이 위 이미지와 같아서 CI `pin` job 의 sed 가 이 자리도 함께 SHA 로 고정한다.
             - name: DATA_PLANE_MINIMAX_CODE_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:fda24597d4a1595cdfba10edecc07820562c38c8"
+              value: "ghcr.io/dlddu/session-platform-data-plane:e58cdd24b8e982c675cf30bdaa1fd269be96a519"
             # 이 Secret 은 자격 증명만 담는다 — 필수 auth-token(헬퍼 파드 credential-proxy)과
             # 선택 k3s-mcp-token(헬퍼 파드 k3s-mcp-proxy). 필수 base-url·선택 ca-cert(credential-proxy)
             # 와 선택 model(platform-default 세션의 주 컨테이너)은 ConfigMap `minimax-code-config`
