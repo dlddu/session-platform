@@ -147,7 +147,7 @@
 
   <!-- ─────────────────────── STP-freeze-decision ─────────────────────── -->
   <section class="step" data-step="STP-freeze-decision" id="STP-freeze-decision">
-    <div class="card">
+    <div class="card screen" data-screen="workspace">
       <div class="row" style="margin-bottom:14px">
         <h1 style="margin:0"><span class="mono">refactor-billing</span></h1>
         <span class="pill on">active</span>
@@ -156,7 +156,7 @@
         <span class="crumb">오늘 작업 일단락</span>
       </div>
 
-      <div class="banner err" id="ckpt-503" hidden>
+      <div class="banner err" data-state="error" id="ckpt-503" hidden>
         이 환경은 체크포인트 기능이 꺼져 있습니다 (503). 접어두기를 제공하지 않으며
         세션은 <span class="mono">active</span> 그대로 둡니다 — 지우거나 그대로 두는 선택만 남습니다.
       </div>
@@ -190,7 +190,7 @@
         <span class="t-desc">전이가 끝나면 알려 줍니다. 접기는 즉시 시작되고 알림과 무관하게 진행됩니다.</span></span>
       </label>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">이 화면에서 마주치는 상태</span>
@@ -213,11 +213,11 @@
 
   <!-- ───────────────────────── STP-freeze-now ────────────────────────── -->
   <section class="step" data-step="STP-freeze-now" id="STP-freeze-now" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="workspace">
       <h1>Freezing <span class="mono">refactor-billing</span></h1>
       <p class="sub">상태를 저장하고 pod와 자원을 회수하는 중입니다. 세션은 사라지지 않습니다.</p>
 
-      <div class="banner err" id="freeze-err" hidden>
+      <div class="banner err" data-state="error" id="freeze-err" hidden>
         <span id="freeze-err-msg"></span>
       </div>
 
@@ -231,7 +231,7 @@
         <button class="btn primary" id="btn-to-list" data-advance-to="STP-freeze-confirm">목록에서 확인하기</button>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">여기서 갈라지는 길</span>
@@ -261,10 +261,10 @@
 
   <!-- ──────────────────────── STP-freeze-confirm ─────────────────────── -->
   <section class="step" data-step="STP-freeze-confirm" id="STP-freeze-confirm" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="sessions">
       <h1>Sessions</h1>
 
-      <div class="banner ok" id="confirm-banner">
+      <div class="banner ok" data-state="success" id="confirm-banner">
         <span class="mono">refactor-billing</span> 을 접어두었습니다.
         목록에 그대로 남아 있고, 다시 열면 접기 전 상태에서 이어집니다.
       </div>
@@ -294,7 +294,7 @@
         <dt>메모</dt><dd id="confirm-memo">—</dd>
       </dl>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="row" style="margin-top:16px" data-journey-end>
         <span class="pill" style="border-color:var(--ok);color:var(--ok)">완료 — <span class="mono">snapshot</span> 으로 전이, 되살릴 수 있는 항목으로 목록에 남음</span>
