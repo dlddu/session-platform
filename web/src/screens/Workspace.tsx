@@ -700,7 +700,7 @@ export function Workspace() {
                   : isAgent
                     ? sess.workloadType === "minimax-code"
                       ? "send a prompt — runs mcode exec once in the session pod"
-                      : "send a prompt — runs claude -p once in the session pod"
+                      : "send a prompt — streams one claude -p response"
                     : "run a command — executes in the session shell (bash)"
               }
               spellCheck={isAgent}

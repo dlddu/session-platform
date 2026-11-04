@@ -512,7 +512,7 @@ const ICON = {
 function ic(n,s){return ICON[n].replace('viewBox',`width="${s}" height="${s}" viewBox`);}
 const STATE_LABEL = {active:'active', idle:'idle', snapshot:'snapshot'};
 // 입력 placeholder — 기본 문장은 마크업에 있는 claude-code 것이고, minimax-code는 구현(Workspace.tsx)과
-// 같은 문장을 쓴다. claude-code 문구는 2026-08-08 출처의 구현과의 차이와 함께 그대로 둔다 (목업이 카피의 SSOT).
+// 같은 문장을 쓴다. claude-code 문구는 목업(카피의 SSOT)에 구현을 맞춰 일치시켰다 (rct_20261104-0002).
 const INPUT_PH_DEFAULT = document.getElementById('ws-input-ph').innerHTML;
 const INPUT_PH = {
   'minimax-code':'send a prompt — runs mcode exec once in the session pod'
