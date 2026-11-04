@@ -696,7 +696,7 @@ export function Workspace() {
               onChange={(event) => setCmd(event.target.value)}
               placeholder={
                 gated
-                  ? "send a prompt — outbound calls wait for your approval"
+                  ? "send a prompt — anything that leaves the pod waits for your approval"
                   : isAgent
                     ? sess.workloadType === "minimax-code"
                       ? "send a prompt — runs mcode exec once in the session pod"

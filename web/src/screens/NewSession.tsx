@@ -242,8 +242,8 @@ export function NewSession() {
         <div className="m-mark">{hexMark}</div>
         <h3>New session</h3>
         <p className="desc">
-          Pick a working environment. Either way, this session gets one fully
-          isolated, dedicated pod.
+          Pick the working environment for this session. Whichever you pick, it
+          runs on its own dedicated pod.
         </p>
 
         {phase === "input" ? (
@@ -379,7 +379,7 @@ export function NewSession() {
                     ? "Workload type is fixed for this session. It runs the platform default MiniMax model, resolved at container start."
                     : isAgentWorkload(workloadType)
                       ? "Workload type and model choice are fixed for this session. Platform default resolves to the configured default at container start."
-                      : "Workload type is fixed for the lifetime of this session."}
+                      : "Workload type is fixed for the lifetime of the session. To use a different one, create a new session."}
               </span>
             </div>
             {error && (
