@@ -287,6 +287,99 @@ mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="pane
 
 ---
 
+## 화면 식별자 규약
+
+**이 인덱스가 화면 식별자 규약의 단일 진실 원천(SSOT)다.** 규약 전문은
+[`../journeys/README.md`](../journeys/README.md) 의 「10. 화면 식별자」 절이고,
+여기서는 규약의 요약과 **어떤 식별자가 무엇을 가리키는지**를 등재한다.
+
+- **화면(screen)** — 한 단계가 지나는 제품 표면 하나. 마크업은 `<div class="card screen" data-screen="<screen-id>">`.
+  한 단계에 표면이 둘이면 **둘 다** `.screen` 이고 `data-screen` 가 서로 달라야 한다.
+- **화면 식별자(screen-id)** — 구현 화면 이름의 kebab-case.
+  **같은 화면은 단계·여정이 달라도 같은 식별자다** — 이 식별자가 mockup 화면 ↔ 구현 화면을 잇는 키다.
+- **상태(state)** — 그 화면이 실제로 그리는 변형. 변형을 실현하는 요소에 `data-state="<state-id>"`.
+  허용 값: `error` · `info` · `success` · `warning` · `pending` · `empty` · `result`.
+- **`data-state` 는 화면 상태에만 쓴다.** 세션 생명주기 배지(`active` · `snapshot`)는
+  `data-session-state` 다 — 구현 `web/src/app/SessionCard.tsx` 의 `data-state` 와 이름이 겹치지 않게 한다.
+- **여정 밖 행동(off-path)** — 여정 경로에 속하지 않는 보조 행동. `data-offpath="<action-id>"`.
+  `data-advance-to` · `data-branch-row` 를 함께 갖지 않는다.
+- `data-state` · `data-offpath` 를 가진 요소는 반드시 화면 표면 안에 있어야 한다.
+
+| 화면 식별자 | 구현 | mockup | 쓰는 여정 |
+|-------------|------|--------|-----------|
+| `new-session` | `web/src/screens/NewSession.tsx` | [`new-session.html`](./new-session.html) | `JRN-agent-prompt-loop` · `JRN-session-creation` |
+| `sessions` | `web/src/screens/Sessions.tsx` | [`index.html`](./index.html) | `JRN-idle-resume` · `JRN-manual-freeze` · `JRN-multi-session-switch` · `JRN-session-deletion` |
+| `workspace` | `web/src/screens/Workspace.tsx` | [`workspace.html`](./workspace.html) | `JRN-idle-resume` · `JRN-manual-freeze` · `JRN-multi-session-switch` · `JRN-session-creation` · `JRN-shell-interaction` |
+| `agent-workspace` | `web/src/screens/Workspace.tsx` (`claude-code` 변형) | [`agent-workspace.html`](./agent-workspace.html) | `JRN-agent-prompt-loop` |
+| `gated-workspace` | `web/src/screens/Workspace.tsx` (`approval-gated` 변형) | [`gated-workspace.html`](./gated-workspace.html) | `JRN-approval-gated-work` · `JRN-repo-access` |
+| `restore` | `web/src/screens/Restore.tsx` | [`restore.html`](./restore.html) | `JRN-idle-resume` |
+| `repo-access` | `web/src/screens/RepoAccess.tsx` | [`repo-access.html`](./repo-access.html) | `JRN-repo-access` |
+| `delete-session-dialog` | `web/src/app/DeleteSessionDialog.tsx` | — (대응 mockup 없음) | `JRN-session-deletion` |
+| `authelia-login` | — (외부 Authelia 화면) | — | `JRN-repo-access` |
+
+**아래 「단계별 화면·상태 목록」 표가 하네스가 DOM과 대조하는 기준이다.**
+DOM이 정본이고, 표와 DOM이 어긋나면 `tools/journey-prototype.test.mjs` 가 CI(`ci` 워크플 `journey-prototype` 잡)에서
+**실패**한다 — 표를 손으로 DOM에 맞추는 게 아니라 어긋남을 고쳐야 한다.
+
+---
+
+## 단계별 화면·상태 목록
+
+여정 페이지 DOM(`docs/journeys/<journey-id>/index.html`)에서 뽑은 **(여정, 단계, 화면, 상태)** 실측 목록이다.
+한 단계에 화면이 둘이면 두 줄로 나뉜다 — 화면 표면 35개 = 35줄.
+상태는 그 화면이 실현하는 변형이고, 규칙 4의 분기 결과 메모(`[data-state-note]`)처럼 화면 뒤 구역에 붙는
+장치의 상태는 그 단계의 마지막 화면에 속한다.
+
+| 여정 | 단계 | 화면 | 상태 |
+|------|------|------|------|
+| `JRN-agent-prompt-loop` | `STP-workload-choice` | `new-session` | `info` · `result` |
+| `JRN-agent-prompt-loop` | `STP-prompt-submit` | `agent-workspace` | `error` · `success` · `result` |
+| `JRN-agent-prompt-loop` | `STP-response-watch` | `agent-workspace` | `info` · `result` |
+| `JRN-agent-prompt-loop` | `STP-conversation-carry` | `agent-workspace` | `error` · `result` |
+| `JRN-agent-prompt-loop` | `STP-agent-freeze-resume` | `agent-workspace` | `success` · `result` |
+| `JRN-approval-gated-work` | `STP-gated-prompt-submit` | `gated-workspace` | `error` · `success` · `result` |
+| `JRN-approval-gated-work` | `STP-approval-wait` | `gated-workspace` | `pending` · `info` · `result` |
+| `JRN-approval-gated-work` | `STP-approval-decide` | `gated-workspace` | `result` |
+| `JRN-approval-gated-work` | `STP-gated-result` | `gated-workspace` | `info` · `result` |
+| `JRN-idle-resume` | `STP-step-away` | `workspace` | `error` · `info` · `result` |
+| `JRN-idle-resume` | `STP-auto-freeze` | `sessions` | `info` · `result` |
+| `JRN-idle-resume` | `STP-reaccess` | `restore` | `error` · `result` |
+| `JRN-idle-resume` | `STP-restore-resume` | `workspace` | `info` · `result` |
+| `JRN-manual-freeze` | `STP-freeze-decision` | `workspace` | `error` · `result` |
+| `JRN-manual-freeze` | `STP-freeze-now` | `workspace` | `error` · `result` |
+| `JRN-manual-freeze` | `STP-freeze-confirm` | `sessions` | `success` · `result` |
+| `JRN-multi-session-switch` | `STP-session-list` | `sessions` | `error` · `empty` · `result` |
+| `JRN-multi-session-switch` | `STP-switch-away` | `workspace` | `info` · `result` |
+| `JRN-multi-session-switch` | `STP-target-activation` | `workspace` | `info` · `result` |
+| `JRN-multi-session-switch` | `STP-switch-back` | `workspace` | `success` · `result` |
+| `JRN-repo-access` | `STP-access-request` | `gated-workspace` | `result` |
+| `JRN-repo-access` | `STP-access-review` | `authelia-login` |  |
+| `JRN-repo-access` | `STP-access-review` | `repo-access` | `result` |
+| `JRN-repo-access` | `STP-access-decide` | `repo-access` | `result` |
+| `JRN-repo-access` | `STP-private-clone` | `gated-workspace` | `result` |
+| `JRN-session-creation` | `STP-create-request` | `new-session` | `error` · `result` |
+| `JRN-session-creation` | `STP-workspace-entry` | `workspace` | `error` · `result` |
+| `JRN-session-creation` | `STP-isolated-work` | `workspace` | `result` |
+| `JRN-session-deletion` | `STP-delete-intent` | `sessions` | `result` |
+| `JRN-session-deletion` | `STP-delete-confirm` | `delete-session-dialog` | `error` · `warning` · `result` |
+| `JRN-session-deletion` | `STP-delete-settled` | `sessions` | `success` · `result` |
+| `JRN-shell-interaction` | `STP-shell-attach` | `workspace` | `info` · `result` |
+| `JRN-shell-interaction` | `STP-command-input` | `workspace` | `warning` · `result` |
+| `JRN-shell-interaction` | `STP-output-read` | `workspace` | `warning` · `error` · `result` |
+| `JRN-shell-interaction` | `STP-shell-state-carry` | `workspace` | `info` · `result` |
+
+---
+
+## 의도적 제외
+
+여정 문서의 시스템 응답·AC나 구현이 **요구하지만** 여정 mockup이 **그리지 않는** 화면·상태는
+반드시 여기 등재한다. 등재는 **근거**와 **사유**를 함께 적는 것이고, **등재하지 않은 누락은 drift다**.
+
+- **화면 `approval-gateway`** — 근거: `JRN-approval-gated-work` `STP-approval-decide` 의 터치포인트("외부 승인 게이트웨이의 알림과 승인 화면")와 AC-F3. 사유: 외부 제품 화면이라 이 레포가 그리지 않는다 — 요청 카드와 승인·거절 동작은 `gated-workspace` 화면 안에서 그린다.
+- **여정 `JRN-concurrent-access`** — 근거: `docs/doc-structure-state.md` "수용된 위험" 등재(3단계, 재검토 시점 2027-06-27). 사유: "지키는 것은 화면이 아니라 결과의 일관성"이라 UI 시각화 대상이 아니다.
+
+---
+
 ## 미시각화 단계 메모
 
 - **🟠 신설 여정 미시각화 (2026-08-30)**: `JRN-session-deletion` 3단계 전부와 `STP-freeze-decision`이 ❌입니다.

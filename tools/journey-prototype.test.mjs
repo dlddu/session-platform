@@ -128,8 +128,132 @@ function parseMapping() {
   return out;
 }
 
-/* ────────────────────────────── 수집 ────────────────────────────── */
+/**
+ * mockups/README.md "단계별 화면·상태 목록" 표 → [{journey, step, screen, states[]}]
+ * states 는 정렬된 배열이다 — 표의 표기 순서와 무관하게 집합으로 비교한다.
+ */
+function parseScreenIndex() {
+  const src = read(MAPPING_FILE);
+  const sec = src.match(/^##\s*단계별 화면·상태 목록[^\n]*\n([\s\S]*?)(?=\n##\s|(?![\s\S]))/m);
+  assert.ok(sec, `${path.relative(ROOT, MAPPING_FILE)} 에 "단계별 화면·상태 목록" 섹션이 없다`);
+  const rows = [];
+  for (const line of sec[1].split('\n')) {
+    const l = line.trim();
+    if (!l.startsWith('|') || /^\|\s*-+/.test(l)) continue;
+    const cells = l.split('|').slice(1, -1).map((c) => c.trim());
+    if (cells.length < 4) continue;
+    const jm = cells[0].match(/`(JRN-[a-z0-9-]+)`/);
+    const st = cells[1].match(/`(STP-[a-z0-9-]+)`/);
+    const sc = cells[2].match(/`([a-z0-9-]+)`/);
+    if (!jm || !st || !sc) continue; // 헤더 행
+    rows.push({
+      journey: jm[1],
+      step: st[1],
+      screen: sc[1],
+      states: [...cells[3].matchAll(/`([a-z0-9-]+)`/g)].map((m) => m[1]).sort(),
+    });
+  }
+  assert.ok(rows.length > 0, '"단계별 화면·상태 목록" 표에 데이터 행이 없다');
+  return rows;
+}
 
+/** mockups/README.md "의도적 제외" 섹션 → [{line, screen, journey}] */
+function parseIntentionalOmissions() {
+  const src = read(MAPPING_FILE);
+  const sec = src.match(/^##\s*의도적 제외[^\n]*\n([\s\S]*?)(?=\n##\s|(?![\s\S]))/m);
+  assert.ok(sec, `${path.relative(ROOT, MAPPING_FILE)} 에 "의도적 제외" 섹션이 없다`);
+  const entries = [];
+  for (const line of sec[1].split('\n')) {
+    const l = line.trim();
+    if (!l.startsWith('- ')) continue;
+    entries.push({
+      line: l,
+      screen: (l.match(/^- \*\*화면 `([a-z0-9-]+)`\*\*/) || [])[1] || null,
+      journey: (l.match(/^- \*\*여정 `(JRN-[a-z0-9-]+)`\*\*/) || [])[1] || null,
+    });
+  }
+  assert.ok(entries.length > 0, '"의도적 제외" 섹션에 등재가 하나도 없다');
+  return entries;
+}
+
+/**
+ * 여정 페이지 DOM → 화면 인벤토리 실측.
+ *
+ * 화면 표면(.screen)의 "그림"은 표면 자체 + 그 뒤 구역(다음 .screen 직전까지)이다.
+ * 규칙 4의 분기 결과 메모([data-state-note])처럼 화면 뒤에 붙는 장치는 그 단계의
+ * 마지막 화면에 속한다 — 그래서 한 단계에 화면이 둘이어도 상태가 새지 않는다.
+ */
+async function readScreenFacts(page) {
+  return page.evaluate(() => {
+    const facts = {
+      inventory: [],
+      steps: [],
+      screenIds: [],
+      blankScreen: [],
+      strayScreen: [],
+      orphanState: [],
+      orphanOffpath: [],
+      offpathNav: [],
+      stepsWithoutScreen: [],
+    };
+    const journeyEl = document.querySelector('[data-journey]');
+    if (!journeyEl) return facts;
+    const journey = journeyEl.getAttribute('data-journey');
+
+    // data-screen 은 화면 표면에만 쓴다.
+    for (const el of document.querySelectorAll('[data-screen]')) {
+      if (!el.classList.contains('screen')) facts.strayScreen.push(el.outerHTML.slice(0, 100));
+    }
+
+    for (const step of document.querySelectorAll('section[data-step]')) {
+      const screens = [...step.querySelectorAll('.screen')];
+      facts.steps.push({ journey, step: step.dataset.step });
+      if (screens.length === 0) facts.stepsWithoutScreen.push(`${journey} ${step.dataset.step}`);
+
+      const owned = new Map(screens.map((s) => [s, new Set()]));
+      for (const el of step.querySelectorAll('[data-state]')) {
+        const own = el.closest('.screen');
+        if (own) {
+          owned.get(own).add(el.getAttribute('data-state'));
+          continue;
+        }
+        const prior = screens.filter(
+          (s) => (s.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+        );
+        const target = prior[prior.length - 1];
+        if (target && el.hasAttribute('data-state-note')) {
+          owned.get(target).add(el.getAttribute('data-state'));
+        } else {
+          facts.orphanState.push(`${journey} ${step.dataset.step}: ${el.outerHTML.slice(0, 100)}`);
+        }
+      }
+
+      for (const s of screens) {
+        const id = s.getAttribute('data-screen');
+        facts.screenIds.push(id);
+        if (!id || !id.trim()) {
+          facts.blankScreen.push(`${journey} ${step.dataset.step}: ${s.outerHTML.slice(0, 100)}`);
+        }
+        facts.inventory.push({
+          journey,
+          step: step.dataset.step,
+          screen: id,
+          states: [...owned.get(s)].sort(),
+        });
+      }
+    }
+
+    for (const el of document.querySelectorAll('[data-offpath]')) {
+      if (!el.closest('.screen')) facts.orphanOffpath.push(el.outerHTML.slice(0, 100));
+      if (el.hasAttribute('data-advance-to') || el.hasAttribute('data-branch-row')) {
+        facts.offpathNav.push(el.outerHTML.slice(0, 100));
+      }
+    }
+    return facts;
+  });
+}
+
+/* ────────────────────────────── 수집 ────────────────────────────── */
 const journeys = fs
   .readdirSync(JOURNEY_DOC_DIR)
   .filter((f) => /^JRN-[a-z0-9-]+\.md$/.test(f))
@@ -235,6 +359,118 @@ describe('고아 페이지 (규칙 2)', () => {
   it('모든 페이지 디렉터리가 실재하는 여정이다', () => {
     for (const dir of pageDirs) {
       assert.ok(journeyById.has(dir), `docs/journeys/${dir}/ 에 대응하는 여정 문서가 없다(고아 페이지)`);
+    }
+  });
+});
+
+/* ──────────────────────── 화면 식별자 축 (규약 10) ──────────────────────── */
+
+describe('화면 식별자 (규약 10)', () => {
+  const facts = {
+    inventory: [],
+    steps: [],
+    screenIds: new Set(),
+    blankScreen: [],
+    strayScreen: [],
+    orphanState: [],
+    orphanOffpath: [],
+    offpathNav: [],
+    stepsWithoutScreen: [],
+  };
+
+  before(async () => {
+    for (const id of pageDirs) {
+      const p = await browser.newPage();
+      await p.goto(pathToFileURL(path.join(PAGE_ROOT, id, 'index.html')).href);
+      const f = await readScreenFacts(p);
+      facts.inventory.push(...f.inventory);
+      facts.steps.push(...f.steps);
+      for (const s of f.screenIds) facts.screenIds.add(s);
+      facts.blankScreen.push(...f.blankScreen);
+      facts.strayScreen.push(...f.strayScreen);
+      facts.orphanState.push(...f.orphanState);
+      facts.orphanOffpath.push(...f.orphanOffpath);
+      facts.offpathNav.push(...f.offpathNav);
+      facts.stepsWithoutScreen.push(...f.stepsWithoutScreen);
+      await p.close();
+    }
+  });
+
+  it('모든 화면 표면이 화면 식별자를 노출한다', () => {
+    assert.ok(facts.inventory.length > 0, '화면 표면이 하나도 수집되지 않았다');
+    assert.deepEqual(facts.blankScreen, [], '화면 표면(.screen) 중 data-screen 이 비어 있거나 없는 것이 있다');
+    assert.deepEqual(
+      facts.strayScreen,
+      [],
+      'data-screen 을 단 요소 중 .screen 이 아닌 것이 있다 — 화면 식별자는 화면 표면에만 쓴다'
+    );
+  });
+
+  it('상태·여정 밖 행동은 화면 표면 안에만 있다', () => {
+    assert.deepEqual(
+      facts.orphanState,
+      [],
+      '화면 밖(또는 화면 뒤 구역이 아닌 곳)의 data-state 가 있다 — 규칙 4 의 분기 결과 메모([data-state-note])만 예외다'
+    );
+    assert.deepEqual(
+      facts.orphanOffpath,
+      [],
+      '화면 밖의 data-offpath 가 있다 — 여정 밖 행동도 그리는 화면 안에 있어야 한다'
+    );
+    assert.deepEqual(
+      facts.offpathNav,
+      [],
+      'data-offpath 를 단 요소가 data-advance-to · data-branch-row 를 함께 갖는다 — 여정 밖 행동은 전진도 분기도 아니다'
+    );
+  });
+
+  it('단계별 화면·상태 목록이 DOM과 같다', () => {
+    const index = parseScreenIndex();
+    const key = (r) => `${r.journey}|${r.step}|${r.screen}|${[...r.states].sort().join(',')}`;
+    assert.deepEqual(
+      facts.inventory.map(key).sort(),
+      index.map(key).sort(),
+      'mockups/README.md "단계별 화면·상태 목록" 이 DOM과 다르다 — DOM이 정본이다'
+    );
+    // 침묵한 누락: 단계도 화면도 인덱스에 반드시 실려 있어야 한다.
+    assert.deepEqual(facts.stepsWithoutScreen, [], '화면 표면이 하나도 없는 단계가 있다');
+    const indexSteps = new Set(index.map((r) => `${r.journey}|${r.step}`));
+    for (const s of facts.steps) {
+      assert.ok(
+        indexSteps.has(`${s.journey}|${s.step}`),
+        `${s.journey} ${s.step} 가 "단계별 화면·상태 목록" 에 없다 — 침묵한 누락`
+      );
+    }
+    const indexScreens = new Set(index.map((r) => `${r.journey}|${r.step}|${r.screen}`));
+    for (const r of facts.inventory) {
+      assert.ok(
+        indexScreens.has(`${r.journey}|${r.step}|${r.screen}`),
+        `${r.journey} ${r.step} 의 화면 ${r.screen} 가 "단계별 화면·상태 목록" 에 없다`
+      );
+    }
+  });
+
+  it('의도적 제외 등재는 형식을 갖추고 그리지 않은 대상만 든다', () => {
+    for (const e of parseIntentionalOmissions()) {
+      assert.ok(e.line.includes('근거:'), `의도적 제외 등재에 근거가 없다: ${e.line}`);
+      assert.ok(e.line.includes('사유:'), `의도적 제외 등재에 사유가 없다: ${e.line}`);
+      assert.ok(e.screen || e.journey, `의도적 제외 등재 형식이 아니다(화면/여정 식별자가 없다): ${e.line}`);
+      if (e.screen) {
+        assert.ok(
+          !facts.screenIds.has(e.screen),
+          `화면 ${e.screen} 를 "의도적 제외" 에 등재했는데 DOM에 그려져 있다 — 등재를 걷는다`
+        );
+      }
+      if (e.journey) {
+        assert.ok(
+          !hasPage(e.journey),
+          `여정 ${e.journey} 를 "의도적 제외" 에 등재했는데 페이지가 있다 — 등재를 걷는다`
+        );
+        assert.ok(
+          exceptedIds.has(e.journey),
+          `여정 ${e.journey} 는 doc-structure-state.md "수용된 위험" 에 등재돼 있지 않다 — 예외 등재 없이는 의도적 제외가 아니다`
+        );
+      }
     }
   });
 });

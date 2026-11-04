@@ -146,7 +146,7 @@
 
   <!-- ───────────────────────── STP-workload-choice ───────────────────────── -->
   <section class="step" data-step="STP-workload-choice" id="STP-workload-choice">
-    <div class="card">
+    <div class="card screen" data-screen="new-session">
       <h1>New session</h1>
       <p class="sub">작업 환경을 고릅니다. <strong>타입과 모델은 세션 수명 동안 바꿀 수 없습니다</strong> — 바꾸려면 새 세션을 만듭니다.</p>
 
@@ -180,7 +180,7 @@
         </select>
       </label>
 
-      <div class="banner info" id="immutable-note">
+      <div class="banner info" data-state="info" id="immutable-note">
         고른 타입과 모델은 <strong>되돌릴 수 없습니다</strong>. 이 안내를 만든 이유는, 고른 뒤에 알게 되면
         세션을 버리고 다시 만들게 되기 때문입니다.
       </div>
@@ -189,7 +189,7 @@
         <button class="btn primary" id="btn-create" data-advance-to="STP-prompt-submit">Create session</button>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">여기서 갈라지는 길</span>
@@ -212,7 +212,7 @@
 
   <!-- ────────────────────────── STP-prompt-submit ────────────────────────── -->
   <section class="step" data-step="STP-prompt-submit" id="STP-prompt-submit" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="agent-workspace">
       <div class="row" style="margin-bottom:14px">
         <h1 style="margin:0"><span class="mono" id="ws-name">bench-tokenizer</span></h1>
         <span class="pill on">active</span>
@@ -223,8 +223,8 @@
 
       <p class="sub">하려는 일을 자연어로 씁니다. 보낸 뒤 응답을 기다리지 않고 다른 일을 봐도 됩니다.</p>
 
-      <div class="banner err" id="reject-banner" hidden><span id="reject-msg"></span></div>
-      <div class="banner ok" id="accept-banner" hidden>
+      <div class="banner err" data-state="error" id="reject-banner" hidden><span id="reject-msg"></span></div>
+      <div class="banner ok" data-state="success" id="accept-banner" hidden>
         접수됐습니다 (<span class="mono" id="accept-id">req-8f21</span>). 실행이 시작되면 출력이 이어 붙습니다 —
         <strong>접수와 실행 시작은 다른 일</strong>이라 이 표시가 먼저 뜹니다.
       </div>
@@ -239,7 +239,7 @@
         <span class="crumb">대기열: <span class="mono" id="queue-depth">0</span> / 8</span>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">이 화면에서 마주치는 상태</span>
@@ -265,7 +265,7 @@
 
   <!-- ────────────────────────── STP-response-watch ───────────────────────── -->
   <section class="step" data-step="STP-response-watch" id="STP-response-watch" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="agent-workspace">
       <div class="row" style="margin-bottom:14px">
         <h1 style="margin:0">응답</h1>
         <span class="conn" id="conn"><span class="dot"></span><span id="conn-text">연결됨 · 실행 중에 이어서 나타납니다</span></span>
@@ -273,7 +273,7 @@
         <span class="crumb">새로고침이나 수동 조회는 필요 없습니다</span>
       </div>
 
-      <div class="banner info" id="resume-banner" hidden><span id="resume-msg"></span></div>
+      <div class="banner info" data-state="info" id="resume-banner" hidden><span id="resume-msg"></span></div>
 
       <div class="console" id="console-1">&gt; tokenizer 벤치를 돌리고 결과를 표로 정리해 줘
 
@@ -285,7 +285,7 @@
         <button class="btn primary" id="btn-next-prompt" data-advance-to="STP-conversation-carry">이어서 다음 프롬프트 보내기</button>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">여기서 갈라지는 길</span>
@@ -314,11 +314,11 @@
 
   <!-- ──────────────────────── STP-conversation-carry ─────────────────────── -->
   <section class="step" data-step="STP-conversation-carry" id="STP-conversation-carry" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="agent-workspace">
       <h1>대화가 하나로 이어집니다</h1>
       <p class="sub">앞선 요청·응답이 문맥으로 남아 있어 <strong>"아까 그거"라고만 해도 통합니다.</strong> 이전 실행이 만든 파일도 그대로 남습니다.</p>
 
-      <div class="banner err" id="cap-507" hidden>
+      <div class="banner err" data-state="error" id="cap-507" hidden>
         누적 출력이 한계에 도달했습니다 (507). 새 프롬프트를 받지 않습니다 —
         <strong>복원 후에도 같은 상태가 유지</strong>되므로, 이어서 하려면 출력을 비워야 합니다.
       </div>
@@ -343,7 +343,7 @@
         <dt>남아 있는 파일</dt><dd><span class="mono">bench/result.md</span> — 다음 실행이 이어 씁니다</dd>
       </dl>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">이 화면에서 마주치는 상태</span>
@@ -366,7 +366,7 @@
 
   <!-- ─────────────────────── STP-agent-freeze-resume ─────────────────────── -->
   <section class="step" data-step="STP-agent-freeze-resume" id="STP-agent-freeze-resume" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="agent-workspace">
       <div class="row" style="margin-bottom:14px">
         <h1 style="margin:0"><span class="mono">bench-tokenizer</span></h1>
         <span class="pill snap">snapshot → active</span>
@@ -375,7 +375,7 @@
         <span class="crumb">4시간 만에 다시 열었습니다</span>
       </div>
 
-      <div class="banner ok">
+      <div class="banner ok" data-state="success">
         접히기 전 대화 맥락과 작업 디렉터리 위에서 이어집니다. 받아둔 출력 위치도 그대로 유효합니다 —
         <strong>쉘 세션과 똑같이 동작합니다.</strong>
       </div>
@@ -390,7 +390,7 @@
         <dt>사용자가 한 일</dt><dd>목록에서 <span class="mono">snapshot</span> 배지를 눌러 열었을 뿐</dd>
       </dl>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="row" style="margin-top:16px" data-journey-end>
         <span class="pill" style="border-color:var(--ok);color:var(--ok)">완료 — 앞선 요청의 결과에 의존하는 후속 요청이 성공했다</span>

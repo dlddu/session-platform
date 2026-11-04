@@ -146,7 +146,7 @@
 
   <!-- ────────────────────────── STP-step-away ────────────────────────── -->
   <section class="step" data-step="STP-step-away" id="STP-step-away">
-    <div class="card">
+    <div class="card screen" data-screen="workspace">
       <div class="row" style="margin-bottom:14px">
         <h1 style="margin:0"><span class="mono">refactor-billing</span></h1>
         <span class="pill on" id="away-state">active</span>
@@ -155,12 +155,12 @@
         <span class="crumb">pod <span class="mono">sess-refactor-billing-0</span></span>
       </div>
 
-      <div class="banner err" id="away-503" hidden>
+      <div class="banner err" data-state="error" id="away-503" hidden>
         체크포인트 기능이 꺼진 환경입니다 (503). 이 세션은 접히지 않고
         <span class="mono">active</span> 그대로 유지됩니다 — 자리를 비워도 사라지지 않습니다.
       </div>
 
-      <div class="banner info">
+      <div class="banner info" data-state="info">
         <strong>지금 자리를 비워도 됩니다.</strong>
         <span id="away-countdown">유휴 <span class="mono">15분</span></span> 뒤 이 세션은 자동으로 접힙니다.
         접힘은 <em>소멸이 아니라 보관</em>입니다 — 다시 열면 지금 이 상태에서 이어집니다.
@@ -189,7 +189,7 @@
            data-branch-target="JRN-manual-freeze#STP-freeze-now">기다리지 않고 지금 접기</a>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
     </div>
 
     <details class="step-meta">
@@ -205,7 +205,7 @@
 
   <!-- ────────────────────────── STP-auto-freeze ──────────────────────── -->
   <section class="step" data-step="STP-auto-freeze" id="STP-auto-freeze" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="sessions">
       <h1>Sessions</h1>
       <p class="sub">자리를 비운 사이 시스템이 알아서 접었습니다. 작업자는 이 과정을 보지 않습니다.</p>
 
@@ -224,12 +224,12 @@
         </li>
       </ul>
 
-      <div class="banner info">
+      <div class="banner info" data-state="info">
         접힌 세션은 목록에서 사라지지 않습니다. pod와 자원만 회수되었고
         상태는 <span class="mono">snapshot</span>으로 보관 중입니다.
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">여기서 갈라지는 길</span>
@@ -255,11 +255,11 @@
 
   <!-- ────────────────────────── STP-reaccess ─────────────────────────── -->
   <section class="step" data-step="STP-reaccess" id="STP-reaccess" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="restore">
       <h1>Restoring <span class="mono">refactor-billing</span></h1>
       <p class="sub">접어둔 상태를 그대로 되살리는 중입니다. 보통 10초 안쪽입니다.</p>
 
-      <div class="banner err" id="restore-err" hidden>
+      <div class="banner err" data-state="error" id="restore-err" hidden>
         <span id="restore-err-msg"></span>
       </div>
 
@@ -273,7 +273,7 @@
         <button class="btn primary" id="btn-resume" data-advance-to="STP-restore-resume">이어서 작업하기</button>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">이 화면에서 마주치는 상태</span>
@@ -299,7 +299,7 @@
 
   <!-- ────────────────────────── STP-restore-resume ───────────────────── -->
   <section class="step" data-step="STP-restore-resume" id="STP-restore-resume" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="workspace">
       <div class="row" style="margin-bottom:14px">
         <h1 style="margin:0"><span class="mono">refactor-billing</span></h1>
         <span class="pill on" id="resume-state">active</span>
@@ -308,7 +308,7 @@
         <span class="crumb">pod <span class="mono">sess-refactor-billing-1</span></span>
       </div>
 
-      <div class="banner info" id="resume-banner">
+      <div class="banner info" data-state="info" id="resume-banner">
         복원 완료 — 홈 디렉터리의 파일과 출력 이력이 그대로이고, 홈 디렉터리에서 <strong>새 쉘</strong>이 시작됐습니다.
         <span class="mono">~/billing/</span> 작업 파일 · 받아둔 출력 커서 <span class="mono">offset 41,208</span> 그대로.
         cwd·환경 변수(<span class="mono">GOFLAGS</span>)·실행 중이던 작업은 이어지지 않습니다.
@@ -329,7 +329,7 @@ $ echo "[$GOFLAGS]"
         <button class="btn" id="btn-run">Run</button>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="row" style="margin-top:16px" data-journey-end>
         <span class="pill" style="border-color:var(--ok);color:var(--ok)">완료 — 복원 후 첫 입력이 동결 전 파일·출력 이력 위에서 처리됨</span>
