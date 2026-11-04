@@ -119,7 +119,7 @@ func (o *ClientOrchestrator) miniMaxCodePod(container *corev1.Container, model s
 func (o *ClientOrchestrator) helperProxyContainers(sessionID string, workloadType session.WorkloadType, image string) []corev1.Container {
 	provider := o.credentialProxyContainer(HelperCredentialProxyContainerName, image, helperProxyListenAddr, proxyPlacementHelper)
 	if workloadType != session.WorkloadTypeMiniMaxCode {
-		if o.repoAccessEnabled() {
+		if o.repoAccessEnabled() || o.k3sMCPReexportEnabled() {
 			return []corev1.Container{provider, o.k3sMCPProxy(sessionID, image, o.claudeCredentialsSecret, false)}
 		}
 		return []corev1.Container{provider}

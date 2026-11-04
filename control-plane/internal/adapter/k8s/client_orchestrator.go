@@ -209,6 +209,7 @@ type ClientOrchestrator struct {
 	claudeConfigConfigMap    string // its non-credential counterpart
 	approvalGatewayURL       string // PocketAide base URL handed to approval-gated helper pods
 	repoAccessURL            string // control plane URL for the helper's repo access calls (repo_access.go)
+	k3sMCPReexport           bool   // the session MCP delegates K3s MCP reads behind the gate (k3s_mcp_reexport.go)
 	dropURL                  string // drop's in-cluster URL for the helper's drop_* tools (drop.go)
 	miniMaxCredentialsSecret string
 	miniMaxConfigConfigMap   string
@@ -756,6 +757,7 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 	}
 	helperVolumes = o.addRepoAccess(&mcp, helperVolumes)
 	helperVolumes = o.addDrop(&mcp, helperVolumes)
+	o.addK3sMCPReexport(&mcp)
 
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{

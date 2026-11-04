@@ -64,6 +64,11 @@ type sessionMCPConfig struct {
 	push func(ctx context.Context, req pushRequest) (pushOutcome, error)
 	// mintGitHubToken is nil without a K3s MCP proxy.
 	mintGitHubToken func(ctx context.Context, repository, contents string) (string, error)
+	// k3sMCP delegates a read-only slice of the K3s MCP server's tools behind
+	// the gate (session_mcp_k3s.go). It is nil without the helper pod's K3s
+	// MCP proxy, which is how a deployment that has not enabled the re-export
+	// keeps the tool surface as it was.
+	k3sMCP *k3sMCPClient
 	// notices carries the wait and its decision to whoever is tailing, which in
 	// a real session is the workload pod's agent (session_mcp_notice_tail.go).
 	notices *noticeFeed
@@ -83,6 +88,7 @@ func newSessionMCPConfig(gateway *approvalGateway, sharedDir string, repoAccess 
 		push:            pushRepository,
 		repoAccess:      repoAccess,
 		mintGitHubToken: githubTokenMinter(k3sProxyMCPURL),
+		k3sMCP:          newK3sMCPClient(k3sProxyMCPURL),
 		notices:         newNoticeFeed(),
 		sharedDir:       strings.TrimSpace(sharedDir),
 		drop:            drop,
@@ -204,6 +210,30 @@ func (c sessionMCPConfig) toolDefinitions() []any {
 	if c.drop != nil {
 		tools = append(tools, dropToolDefinitions()...)
 	}
+	if c.k3sMCP != nil {
+		tools = append(tools,
+			map[string]any{
+				"name": k3sAPIResourcesTool,
+				"description": "List the Kubernetes API resource kinds this cluster serves. Every call needs " +
+					"human approval before it leaves the session, and the list is returned only if the " +
+					"request was approved.",
+				"inputSchema": k3sAPIResourcesSchema,
+			},
+			map[string]any{
+				"name": k3sResourceListTool,
+				"description": "List Kubernetes objects of one kind. Every call needs human approval before " +
+					"it leaves the session, and the list is returned only if the request was approved.",
+				"inputSchema": k3sResourceListSchema,
+			},
+			map[string]any{
+				"name": k3sResourceGetTool,
+				"description": "Read one Kubernetes object, or one pod's logs. Every call needs human " +
+					"approval before it leaves the session, and the answer is returned only if the " +
+					"request was approved.",
+				"inputSchema": k3sResourceGetSchema,
+			},
+		)
+	}
 	return tools
 }
 
@@ -239,7 +269,8 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 		}
 	}
 	switch call.Name {
-	case webFetchGetTool, gitCloneTool, pingTool, requestRepoAccessTool, gitPushTool, dropUploadTool, dropDownloadTool:
+	case webFetchGetTool, gitCloneTool, pingTool, requestRepoAccessTool, gitPushTool, dropUploadTool, dropDownloadTool,
+		k3sAPIResourcesTool, k3sResourceListTool, k3sResourceGetTool:
 	default:
 		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: fmt.Sprintf("no tool named %q", call.Name)}
 	}
@@ -268,6 +299,15 @@ func (c sessionMCPConfig) callTool(ctx context.Context, logger *slog.Logger, par
 	}
 	if call.Name == dropDownloadTool {
 		return c.callDropDownload(ctx, logger, call.Arguments)
+	}
+	if call.Name == k3sAPIResourcesTool {
+		return c.callK3sAPIResources(ctx, logger, call.Arguments)
+	}
+	if call.Name == k3sResourceListTool {
+		return c.callK3sResourceList(ctx, logger, call.Arguments)
+	}
+	if call.Name == k3sResourceGetTool {
+		return c.callK3sResourceGet(ctx, logger, call.Arguments)
 	}
 
 	var args struct {
