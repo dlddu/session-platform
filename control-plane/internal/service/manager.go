@@ -56,7 +56,7 @@ func WithWorkloadCheckpointer(workload session.WorkloadType, ckpt archive.Checkp
 }
 
 // WithClock replaces the service clock, which a test must own to pin AC-F3's
-// idle exception (docs/test/approval-gated-workload.md scenario 5).
+// idle exception (docs/test/approval-gate.md scenario 5).
 func WithClock(now func() time.Time) Option {
 	return func(s *Service) {
 		if now != nil {

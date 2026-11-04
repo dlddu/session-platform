@@ -24,7 +24,7 @@ import (
 
 const (
 	// control-plane/internal/session ErrInvalidInput / ErrInvalidState, written
-	// out rather than imported for the reason e2e_f1 gives.
+	// out rather than imported for the reason harness_approval_gate_test.go gives.
 	s6InvalidInput = "invalid input"
 	s6InvalidState = "session in invalid state for operation"
 	// data-plane/cmd/agent/output_stream.go outputStreamHeartbeat, same.

@@ -1,4 +1,4 @@
-// AC-F2's network boundary for an approval-gated session, as Kubernetes
+// AC-F2's network boundary for a gated session (session.HasApprovalGate), as Kubernetes
 // objects — two policies, both created with the session:
 //
 //   - a workload egress allowlist, which is the property itself, and

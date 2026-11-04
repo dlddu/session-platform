@@ -24,11 +24,17 @@ type WorkloadTypeInfo struct {
 	// carry a model for this type.
 	TakesModel bool
 	Input      InputMode
+	// ApprovalGate mirrors HasApprovalGate: true exactly when sessions of this
+	// type run behind the approval gate (docs/prd/approval-gate.md AC-F2~F6).
+	// Clients render the gated workspace from it instead of from a type name,
+	// so a new gated type needs no client change.
+	ApprovalGate bool
 }
 
 // workloadTypeCatalog lists every valid type once, in display order. Adding a
-// workload type means adding it here; Valid and NormalizeModel are checked
-// against this list by tests so the three cannot drift apart.
+// workload type means adding it here; Valid, NormalizeModel and
+// HasApprovalGate are checked against this list by tests so they cannot drift
+// apart.
 var workloadTypeCatalog = []WorkloadTypeInfo{
 	{
 		Type:        WorkloadTypeShell,
@@ -45,18 +51,12 @@ var workloadTypeCatalog = []WorkloadTypeInfo{
 		Input:       InputModePrompt,
 	},
 	{
-		Type:        WorkloadTypeMiniMaxCode,
-		Label:       "MiniMax Code",
-		Description: "MiniMax Code CLI behind the approval gate. K3s MCP tools use their own gate.",
-		TakesModel:  true,
-		Input:       InputModePrompt,
-	},
-	{
-		Type:        WorkloadTypeApprovalGated,
-		Label:       "Approval-gated",
-		Description: "Same agent, but every outbound call waits for your approval.",
-		TakesModel:  true,
-		Input:       InputModePrompt,
+		Type:         WorkloadTypeMiniMaxCode,
+		Label:        "MiniMax Code",
+		Description:  "MiniMax Code CLI behind the approval gate. K3s MCP tools use their own gate.",
+		TakesModel:   true,
+		Input:        InputModePrompt,
+		ApprovalGate: true,
 	},
 }
 

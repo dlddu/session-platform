@@ -19,7 +19,7 @@ import (
 
 const (
 	// api.maxRequestBodyBytes / session.MaxClaudePromptBytes as the product
-	// spells them. Written out rather than imported for the reason e2e_f1 gives.
+	// spells them. Written out rather than imported for the reason harness_approval_gate_test.go gives.
 	a5MaxWireBytes     = 8 << 20
 	a5MaxPromptBytes   = 1 << 20
 	a5InvalidInput     = "invalid input"

@@ -1,5 +1,5 @@
 // The wired agent-driven workload archive strategy. Every workload type —
-// shell, claude-code, approval-gated, minimax-code — freezes through the same
+// shell, claude-code, minimax-code — freezes through the same
 // generation-fenced filesystem archive: the agent closes its admission barrier,
 // streams a tar of its state, and the stream goes to durable storage to be
 // streamed back later to the restore-target pod's agent.

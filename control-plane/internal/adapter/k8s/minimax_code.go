@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -10,13 +11,13 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// MiniMax Code runtime configuration (AC-G3, AC-G6). The pod shape is
-// approval-gated's (AC-F2~F6): the CLI container holds no credential and
-// reaches the world only through its session's helper pod, which carries the
-// session MCP, a provider credential proxy and a K3s MCP proxy. Only the Secret
-// and ConfigMap the two proxies read differ from approval-gated, so a deployment can hold an
-// Anthropic token and a MiniMax subscription key side by side without one type
-// ever seeing the other's.
+// MiniMax Code runtime configuration (AC-G3, AC-G6). The pod shape is the
+// approval gate's (docs/prd/approval-gate.md AC-F2~F6): the CLI container holds
+// no credential and reaches the world only through its session's helper pod,
+// which carries the session MCP, a provider credential proxy and a K3s MCP
+// proxy. The two proxies read this type's own Secret and ConfigMap, so a
+// deployment can hold an Anthropic token and a MiniMax subscription key side by
+// side without one type ever seeing the other's.
 const (
 	defaultMiniMaxCredentialsSecret = "minimax-code-credentials"
 	defaultMiniMaxConfigConfigMap   = "minimax-code-config"
@@ -107,25 +108,20 @@ func (o *ClientOrchestrator) miniMaxCodePod(container *corev1.Container, model s
 }
 
 // helperProxyContainers are the helper pod's containers beside the session
-// MCP. approval-gated has one, the provider proxy reading the claude-code
-// Secret and ConfigMap (AC-F4). minimax-code has that proxy re-pointed at its
-// own pair and the K3s MCP proxy (AC-G5, AC-G6).
-//
-// With repo access on (docs/prd/repo-access.md, AC-H5) approval-gated gets a
-// K3s MCP proxy too, on the claude-code Secret's token and without the
-// marketplace: its only caller is the session MCP beside it, which mints
-// per-repository clone tokens through it. helperPolicyPorts keeps its port
-// closed to the workload pod.
-func (o *ClientOrchestrator) helperProxyContainers(sessionID string, workloadType session.WorkloadType, image string) []corev1.Container {
-	provider := o.credentialProxyContainer(HelperCredentialProxyContainerName, image, helperProxyListenAddr, proxyPlacementHelper)
-	if workloadType != session.WorkloadTypeMiniMaxCode {
-		if o.repoAccessEnabled() {
-			return []corev1.Container{provider, o.k3sMCPProxy(sessionID, image, o.claudeCredentialsSecret, false)}
-		}
-		return []corev1.Container{provider}
+// MCP. They are per type, because each gated type has its own provider and
+// credentials: minimax-code runs the provider proxy re-pointed at its own
+// Secret and ConfigMap, plus the K3s MCP proxy (AC-G5, AC-G6). A type that
+// opts into the gate (session.HasApprovalGate) without a case here is a
+// configuration bug, refused rather than given another type's credentials.
+func (o *ClientOrchestrator) helperProxyContainers(sessionID string, workloadType session.WorkloadType, image string) ([]corev1.Container, error) {
+	switch workloadType {
+	case session.WorkloadTypeMiniMaxCode:
+		provider := o.credentialProxyContainer(HelperCredentialProxyContainerName, image, helperProxyListenAddr, proxyPlacementHelper)
+		o.repointToMiniMax(&provider)
+		return []corev1.Container{provider, o.k3sMCPProxy(sessionID, image, o.miniMaxCredentialsSecret, true)}, nil
+	default:
+		return nil, fmt.Errorf("workload type %q has no helper pod proxy configuration", workloadType)
 	}
-	o.repointToMiniMax(&provider)
-	return []corev1.Container{provider, o.k3sMCPProxy(sessionID, image, o.miniMaxCredentialsSecret, true)}
 }
 
 // repointToMiniMax moves every Secret and ConfigMap reference of a credential
@@ -182,8 +178,9 @@ func helperProxyVolumes(workloadType session.WorkloadType) []corev1.Volume {
 }
 
 // helperPolicyPorts are the helper pod ports a session's network policies
-// admit (AC-F2). The K3s MCP proxy's port is admitted only for the type whose
-// helper pod runs it, so approval-gated's boundary stays exactly two ports.
+// admit (AC-F2). The K3s MCP proxy's port is admitted only for a type whose
+// helper pod runs it, so a gated type without that proxy keeps the boundary at
+// exactly two ports.
 func helperPolicyPorts(owner *corev1.Pod) []networkingv1.NetworkPolicyPort {
 	ports := []networkingv1.NetworkPolicyPort{
 		tcpPort(credentialProxyPort),

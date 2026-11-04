@@ -146,7 +146,7 @@ kubectl rollout status deploy/plugin-marketplace-git --timeout=180s
 # The provider stand-in a claude-code session talks to once it is running. Same
 # reason again: the first prompt must not race its TLS listener coming up.
 kubectl rollout status deploy/anthropic-fake --timeout=120s
-# The approval gateway an approval-gated session's helper pod calls before every
+# The approval gateway a gated session's helper pod calls before every
 # external tool call. Same reason once more: the first gated call must not race
 # its listener. The IdP first — PocketAide fetches its discovery document at
 # start and exits if it cannot, so it may restart once before going Ready.
@@ -162,7 +162,7 @@ kubectl rollout status deploy/fetch-origin --timeout=120s
 kubectl -n drop rollout status deploy/drop --timeout=120s
 # The ReadWriteMany provisioner behind AC-F5's session-shared volume
 # (deploy/shared-volume-provisioner.yaml). Same reason as the fixtures above:
-# the first approval-gated session must not race it. Without the class its
+# the first gated session must not race it. Without the class its
 # claim never binds and the session hangs instead of failing, so the existence
 # check below turns a 90-second mystery into one line.
 kubectl -n session-shared-storage rollout status deploy/local-path-provisioner --timeout=120s

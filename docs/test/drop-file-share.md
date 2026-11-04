@@ -8,13 +8,13 @@
 
 > 📌 **e2e 범위**: kind SUT 에는 **실물 drop** 이 선다(`deploy/e2e-drop.yaml` — 같은 커밋을 소스에서 빌드, 서비스 어카운트
 > 교환도 이 클러스터의 TokenReview 그대로). 그래서 시나리오 1 은 대역 없이 배포 SUT 에서 돈다. 다만 이 레포의 매칭 단위는
-> `web/e2e/` 최상위 Playwright 파일이라, Go e2e 는 `e2e.md` 「유예」 표의 **현행 대체 검증**으로 등재된다(다른 `approval-gated`
+> `web/e2e/` 최상위 Playwright 파일이라, Go e2e 는 `e2e.md` 「유예」 표의 **현행 대체 검증**으로 등재된다(다른 승인 게이트
 > 시나리오와 같은 자리). 운영 주소의 깨우기 경로(시나리오 3)는 kind 에 Traefik·Sablier 가 없어 운영 확인이다.
 
 ## 테스트 시나리오
 
 ### 시나리오 1: 공유 볼륨 → drop → 공유 볼륨 왕복, 게이트 없이
-- **사전 조건**: `DROP_URL` 이 실물 drop 을 가리키고 그 drop 의 `SA_ALLOW` 에 이 네임스페이스의 `session-mcp` 가 있는 배포. 공유 볼륨이 켜진 `approval-gated` 세션 1개
+- **사전 조건**: `DROP_URL` 이 실물 drop 을 가리키고 그 drop 의 `SA_ALLOW` 에 이 네임스페이스의 `session-mcp` 가 있는 배포. 공유 볼륨이 켜진 게이트 타입(`minimax-code`) 세션 1개
 - **실행 단계**: (a) 워크로드 파드에서 표식 문자열을 담은 파일을 공유 볼륨에 쓴다 → (b) 에이전트가 그 경로로 `drop_upload`(아이디·비밀번호 지정)를 부르게 한다 → (c) drop 의 받기 API(아이디·비밀번호, `Accept: application/json`)로 목록과 파일을 직접 받는다 → (d) 에이전트가 같은 아이디·비밀번호로 `drop_download`(대상 `in`)를 부르게 한다 → (e) 워크로드 파드에서 받은 파일을 읽는다 → (f) 세션 출력을 훑는다
 - **기대 결과**: (c) 목록에 파일 하나가 원래 이름·크기로 있고 내용이 표식 문자열이다. (e) 공유 볼륨의 `in/` 아래 같은 내용의 파일이 있다. (f) 승인 대기 마커가 없다(AC-I3). 두 도구의 결과에는 경로·메타데이터만 있다(AC-I1)
 - **검증 AC**: AC-I1, AC-I2, AC-I3
@@ -26,7 +26,7 @@
 - **검증 AC**: AC-I1, AC-I3, AC-I4
 
 ### 시나리오 3: 운영 주소 — 잠든 drop 깨우기
-- **사전 조건**: 운영 배포(`DROP_URL=http://drop-external.drop.svc.cluster.local`), drop 이 Sablier 로 0 으로 내려가 있는 상태. 공유 볼륨이 켜진 `approval-gated` 세션 1개. PR 프리뷰 배포 1개
+- **사전 조건**: 운영 배포(`DROP_URL=http://drop-external.drop.svc.cluster.local`), drop 이 Sablier 로 0 으로 내려가 있는 상태. 공유 볼륨이 켜진 게이트 타입(`minimax-code`) 세션 1개. PR 프리뷰 배포 1개
 - **실행 단계**: (a) 운영 세션에서 수십 MiB 파일 하나로 `drop_upload` → (b) 공개 주소 `https://drop.llkm.nl/get` 에서 결과의 아이디·비밀번호로 받는다 → (c) 프리뷰 세션에서 `drop_upload`
 - **기대 결과**: (a) 첫 요청이 깨우기를 기다린 뒤 성공하고 결과의 `url` 이 공개 주소다. (b) 같은 파일을 받는다. (c) 403 — 허용 목록에 없다는 사유로 실패한다
 - **검증 AC**: AC-I2, AC-I4

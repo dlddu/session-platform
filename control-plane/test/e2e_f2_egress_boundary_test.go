@@ -1,8 +1,9 @@
 //go:build e2e
 
-// 검증 시나리오: approval-gated-workload.md#시나리오 2
+// 검증 시나리오: approval-gate.md#시나리오 2
 //
-// AC-F2's network boundary, enforced — not just present — on the deployed SUT.
+// AC-F2's network boundary (docs/prd/approval-gate.md), enforced — not just
+// present — on the deployed SUT, for a session of the gated type.
 // kind's kindnet enforces NetworkPolicy since v0.24.0, so a refused connection
 // here is the policy at work. Every refusal is paired with a control: the same
 // destination dialled from a pod the policy does not confine (the session's
@@ -60,12 +61,12 @@ func (f f6Session) sessionPolicies(t *testing.T) []string {
 	return names
 }
 
-func TestApprovalGatedEgressBoundary_IsEnforcedOnTheDeployedSUT(t *testing.T) {
-	s1, ok := newF6Session(t, map[string]any{"name": uniqueName(t), "workloadType": "approval-gated"})
+func TestApprovalGateEgressBoundary_IsEnforcedOnTheDeployedSUT(t *testing.T) {
+	s1, ok := newF6Session(t, map[string]any{"name": uniqueName(t), "workloadType": gatedWorkloadType})
 	if !ok {
 		t.Skip("no kube API access (kubeconfig/in-cluster) — enforcement is observed from inside the pods")
 	}
-	s2, _ := newF6Session(t, map[string]any{"name": uniqueName(t) + "-b", "workloadType": "approval-gated"})
+	s2, _ := newF6Session(t, map[string]any{"name": uniqueName(t) + "-b", "workloadType": gatedWorkloadType})
 
 	s1Helper := s1.helper.Status.PodIP
 	s2Helper := s2.helper.Status.PodIP
@@ -83,7 +84,7 @@ func TestApprovalGatedEgressBoundary_IsEnforcedOnTheDeployedSUT(t *testing.T) {
 	})
 
 	t.Run("b_c_own_helper_ports_connect", func(t *testing.T) {
-		for _, port := range []string{sessionMCPPortText, helperProxyPort} {
+		for _, port := range gatedHelperPorts {
 			if got := s1.dial(t, s1.work.Name, workloadContainer, s1Helper, port); got != "open" {
 				t.Errorf("workload → own helper %s:%s = %s, want open", s1Helper, port, got)
 			}
@@ -113,7 +114,7 @@ func TestApprovalGatedEgressBoundary_IsEnforcedOnTheDeployedSUT(t *testing.T) {
 	})
 
 	t.Run("g_other_sessions_helper_refused", func(t *testing.T) {
-		for _, port := range []string{sessionMCPPortText, helperProxyPort} {
+		for _, port := range gatedHelperPorts {
 			if got := s2.dial(t, s2.work.Name, workloadContainer, s2Helper, port); got != "open" {
 				t.Fatalf("control: S2 workload → S2 helper %s:%s = %s, want open", s2Helper, port, got)
 			}

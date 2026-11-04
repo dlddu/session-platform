@@ -24,9 +24,9 @@ type agentCLI interface {
 	validateState(root string) error
 }
 
-// claudeCLI is the Claude Code CLI shared by claude-code and approval-gated.
-// It is the default when a config names no CLI, so those two types run exactly
-// as they did before the seam existed.
+// claudeCLI is the Claude Code CLI that claude-code runs. It is the default
+// when a config names no CLI, so that type runs exactly as it did before the
+// seam existed.
 type claudeCLI struct{}
 
 func (claudeCLI) workloadName() string { return workloadClaudeCode }

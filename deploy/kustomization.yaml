@@ -21,6 +21,9 @@ resources:
   # Throwaway claude-code configuration (ConfigMap) and credentials (Secret)
   # for creating claude-code pods in local e2e.
   - claude-code.yaml
+  # The same for minimax-code, the type the approval gate's e2e runs on. Its
+  # provider proxy reaches the same in-cluster provider stand-in.
+  - minimax-code.yaml
 
   # S3-compatible backend for the workload archives, so the round trip
   # runs against the real S3 code path with no cloud account.
@@ -43,8 +46,8 @@ resources:
   # real implementation to deploy — the service *is* the model.
   - e2e-anthropic-fake.yaml
 
-  # The approval gateway an `approval-gated` session's helper pod asks before
-  # every external tool call: the real PocketAide server, built from source by
+  # The approval gateway a gated session's helper pod asks before every
+  # external tool call (docs/prd/approval-gate.md AC-F3): the real PocketAide server, built from source by
   # scripts/e2e/up.sh, at the same in-cluster address production uses, so the
   # base APPROVAL_GATEWAY_URL needs no patch. Only its IdP is a stand-in
   # (POCKET-AIDE-IDP, EXT) — see the file's header.
@@ -105,15 +108,15 @@ patches:
   # against the shared ConfigMap/Lease store; and point DATA_PLANE_IMAGE at the
   # locally built agent image scripts/e2e/up.sh loads into kind (the base
   # references the ghcr-published tag). env/1 is DATA_PLANE_IMAGE, env/2 is
-  # SHELL_ARCHIVE_ENABLED, env/3 is DATA_PLANE_CLAUDE_CODE_IMAGE, env/4 is
-  # DATA_PLANE_APPROVAL_GATED_IMAGE, env/17 is APPROVAL_GATED_ARCHIVE_ENABLED and
-  # env/18 (the base's last entry) is DROP_URL. Each gate replace is preceded by a `test`
+  # SHELL_ARCHIVE_ENABLED, env/3 is DATA_PLANE_CLAUDE_CODE_IMAGE, env/12 is
+  # DATA_PLANE_MINIMAX_CODE_IMAGE, env/14 is MINIMAX_CODE_ARCHIVE_ENABLED and
+  # env/16 (the base's last entry) is DROP_URL. Each replace past env/3 is preceded by a `test`
   # of the entry's name, so a reordered base fails the build instead of
   # silently flipping a different variable.
   #
-  # The shell and approval-gated archive gates are pinned ON here (the base
+  # The shell and minimax-code archive gates are pinned ON here (the base
   # turns them on too; pinning keeps e2e on the real path if the base flips), so the AC-D4 shell round trip runs as an automated
-  # assertion (e2e_d4_process_tree_test.go) and approval-gated sessions freeze
+  # assertion (e2e_d4_process_tree_test.go) and gated (minimax-code) sessions freeze
   # through the same agent archive path production uses. That needs the product snapshot trigger
   # reachable over HTTP and an archive store
   # shared by both replicas (CHECKPOINT_S3_ENDPOINT → the in-cluster MinIO,
@@ -139,24 +142,28 @@ patches:
         path: /spec/template/spec/containers/0/env/2/value
         value: "true"
       - op: test
-        path: /spec/template/spec/containers/0/env/17/name
-        value: APPROVAL_GATED_ARCHIVE_ENABLED
+        path: /spec/template/spec/containers/0/env/14/name
+        value: MINIMAX_CODE_ARCHIVE_ENABLED
       - op: replace
-        path: /spec/template/spec/containers/0/env/17/value
+        path: /spec/template/spec/containers/0/env/14/value
         value: "true"
       - op: replace
         path: /spec/template/spec/containers/0/env/3/value
         value: session-platform/data-plane:dev
-      # approval-gated 도 같은 로컬 빌드 에이전트 이미지다(base 와 같은 관계를 유지한다 —
+      # minimax-code 도 같은 로컬 빌드 에이전트 이미지다(base 와 같은 관계를 유지한다 —
       # 프로덕션도 claude-code 와 동일 이미지를 가리킨다). kind 에는 ghcr 태그가 로드되어
       # 있지 않으므로, 이 replace 가 없으면 이 타입의 세션만 ImagePullBackOff 로 갈린다.
+      # 승인 게이트 e2e(docs/prd/approval-gate.md AC-F2~F6)가 이 타입으로 돈다.
+      - op: test
+        path: /spec/template/spec/containers/0/env/12/name
+        value: DATA_PLANE_MINIMAX_CODE_IMAGE
       - op: replace
-        path: /spec/template/spec/containers/0/env/4/value
+        path: /spec/template/spec/containers/0/env/12/value
         value: session-platform/data-plane:dev
       # AC-F5's file-exchange volume is opt-in on a class name, because which
       # class serves ReadWriteMany is a property of the target cluster and the
       # production base cannot know it. Naming the class this overlay deploys
-      # is what makes an approval-gated session here actually provision the
+      # is what makes a gated session here actually provision the
       # claim and mount it into both pods — the path the e2e suite asserts.
       - op: add
         path: /spec/template/spec/containers/0/env/-
@@ -178,14 +185,14 @@ patches:
             secretKeyRef:
               name: checkpoint-s3-credentials
               key: access-key
-      # drop's in-cluster address here (deploy/e2e-drop.yaml). env/18 is DROP_URL,
+      # drop's in-cluster address here (deploy/e2e-drop.yaml). env/16 is DROP_URL,
       # the base's last entry; production goes through an ExternalName and
       # Traefik, neither of which kind has.
       - op: test
-        path: /spec/template/spec/containers/0/env/18/name
+        path: /spec/template/spec/containers/0/env/16/name
         value: DROP_URL
       - op: replace
-        path: /spec/template/spec/containers/0/env/18/value
+        path: /spec/template/spec/containers/0/env/16/value
         value: http://drop.drop.svc.cluster.local
       - op: add
         path: /spec/template/spec/containers/0/env/-

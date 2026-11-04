@@ -122,7 +122,7 @@ func TestStateArchiveWithoutSharedLeavesVolumeAlone(t *testing.T) {
 }
 
 // newSharedClaudeServer serves a Claude-family workload that mounts a shared
-// volume, as approval-gated (and minimax-code) pods do.
+// volume, as gated (minimax-code) pods do.
 func newSharedClaudeServer(t *testing.T, stateDir, sharedDir string, restoreMode bool) *httptest.Server {
 	t.Helper()
 	c, err := newClaudeWorkload(claudeConfig{

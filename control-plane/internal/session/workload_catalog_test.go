@@ -4,8 +4,7 @@ import "testing"
 
 func TestWorkloadTypeCatalogMatchesValidation(t *testing.T) {
 	known := []WorkloadType{
-		WorkloadTypeShell, WorkloadTypeClaudeCode,
-		WorkloadTypeApprovalGated, WorkloadTypeMiniMaxCode,
+		WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode,
 	}
 	catalog := WorkloadTypes()
 	if len(catalog) != len(known) {
@@ -29,6 +28,9 @@ func TestWorkloadTypeCatalogMatchesValidation(t *testing.T) {
 		_, err := NormalizeModel(info.Type, "some-model")
 		if accepts := err == nil; accepts != info.TakesModel {
 			t.Errorf("%q TakesModel = %v, but NormalizeModel accepts a model: %v", info.Type, info.TakesModel, accepts)
+		}
+		if info.ApprovalGate != info.Type.HasApprovalGate() {
+			t.Errorf("%q ApprovalGate = %v, but HasApprovalGate() = %v", info.Type, info.ApprovalGate, info.Type.HasApprovalGate())
 		}
 	}
 	for _, w := range known {

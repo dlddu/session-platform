@@ -64,7 +64,7 @@ func newNoticeTailer(baseURL string, sink noticeSink, logger *slog.Logger) *noti
 }
 
 // run tails until ctx ends. It never returns an error to its caller: an
-// approval-gated session whose notice feed is unreachable still gates every
+// gated session whose notice feed is unreachable still gates every
 // call — it only loses the marker — so this must not be able to take the
 // workload down with it.
 func (t *noticeTailer) run(ctx context.Context) {

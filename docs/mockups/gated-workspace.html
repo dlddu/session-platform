@@ -441,7 +441,7 @@
         <!-- left: read/write console -->
         <div class="console">
           <div class="console-bar">
-            <span>approval-gated session</span>
+            <span>minimax-code session · approval gate</span>
             <span class="mono" id="ws-console-pod">—</span>
             <span class="mono" id="ws-console-model" style="color:#b79ae0">—</span>
             <span class="tag" id="ws-console-tag"><span class="led"></span>gate armed</span>
@@ -527,7 +527,7 @@
           <!-- workload config (AC-E1 / AC-E6) -->
           <div class="panel">
             <h4><span class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span> Workload</h4>
-            <div class="kv"><span class="k">Type</span><span class="v" style="color:var(--idle)">approval-gated</span></div>
+            <div class="kv"><span class="k">Type</span><span class="v" style="color:var(--idle)">minimax-code</span></div>
             <div class="kv"><span class="k">Model</span><span class="v" id="ws-model-v">platform default</span></div>
             <div class="kv"><span class="k">Gateway key</span><span class="v masked">mcp container</span></div>
             <div class="kv"><span class="k">Notify target</span><span class="v masked">mcp container</span></div>
@@ -580,18 +580,18 @@ const ICON = {
 };
 function ic(n,s){return ICON[n].replace('viewBox',`width="${s}" height="${s}" viewBox`);}
 const STATE_LABEL = {active:'active', idle:'idle', snapshot:'snapshot'};
-// 이 화면은 workloadType=approval-gated 세션 전용이다
+// 이 화면은 승인 게이트를 쓰는 타입(지금은 minimax-code)의 세션 전용이다 — docs/prd/approval-gate.md
 // (shell 타입은 workspace.html · claude-code 타입은 agent-workspace.html)
 // 세션마다 워크로드 파드 + 헬퍼 보조 파드 1개(MCP · credential-proxy 컨테이너)가 있고(AC-F4),
 // 공유 볼륨은 워크로드 파드와 헬퍼의 MCP 컨테이너만 마운트한다(AC-F5).
 let sessions = [
-  {id:'6d40', name:'vendor-rates-sync', type:'approval-gated', model:'platform default', state:'active',
+  {id:'6d40', name:'vendor-rates-sync', type:'minimax-code', model:'platform default', state:'active',
    pod:'sess-6d40-p2vq', helper:'sess-6d40-helper-l9xt', region:'us-east-1', up:'42m', upMin:42, cpu:19, mem:372, memMax:2048, idleMin:0,
    turns:3, cwd:'/work', vol:'/shared', files:'rates-2026-09-03.json', cursor:'nextOffset=6120'},
-  {id:'b715', name:'partner-api-probe', type:'approval-gated', model:'model-a', state:'idle',
+  {id:'b715', name:'partner-api-probe', type:'minimax-code', model:'platform default', state:'idle',
    pod:'sess-b715-c8rm', helper:'sess-b715-helper-t3kd', region:'us-east-1', up:'1h 54m', upMin:114, cpu:2, mem:204, memMax:2048, idleMin:37, freezeSec:1380,
    turns:6, cwd:'/work', vol:'/shared', files:'probe-log.txt', cursor:'nextOffset=14208'},
-  {id:'e2a9', name:'license-audit', type:'approval-gated', model:'platform default', state:'snapshot',
+  {id:'e2a9', name:'license-audit', type:'minimax-code', model:'platform default', state:'snapshot',
    pod:'— reclaimed —', helper:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'26m ago', checkpoint:'54 MB archive', reclaim:'2 vCPU · 4 GB',
    turns:11, cwd:'/work', vol:'/shared', files:'9 fetched files', cursor:'nextOffset=27740'}
 ];
@@ -633,7 +633,7 @@ function buildTimeline(s){
 }
 // 콘솔은 append-only 바이트열 하나다 — 대기·승인·거절이 별도 event가 아니라 in-band 마커로 섞인다 (AC-F3)
 const termActive = (s)=>[
-  {c:'sys',t:`◆ attached to session/${s.id} · pod/${s.pod} — workloadType=approval-gated`},
+  {c:'sys',t:`◆ attached to session/${s.id} · pod/${s.pod} — workloadType=minimax-code`},
   {c:'sys',t:`◆ egress: kube-dns + helper/${s.helper} only — no external origin at all`},
   {c:'sep'},
   {c:'prompt',t:`<span class="op">▸</span> grab that bundle from the CDN link in the ticket and read it`},
@@ -858,7 +858,7 @@ function promote(s){
   paintContext(s);
   paintTerm([
     {c:'ok',t:`\u2713 restored from archive \u2014 conversation, working dir and shared volume intact`},
-    {c:'sys',t:`\u25c6 session/${s.id} \u00b7 pod/${s.pod} \u00b7 helper/${s.helper} \u2014 workloadType=approval-gated`},
+    {c:'sys',t:`\u25c6 session/${s.id} \u00b7 pod/${s.pod} \u00b7 helper/${s.helper} \u2014 workloadType=minimax-code`},
     {c:'prompt',t:`<span class="op">\u25b8</span> what did we end up fetching before the pause?`},
     {c:'agent',t:`<span class="op">\u2039agent\u203a</span> The approved vendor pull \u2014 ${s.vol}/rates-2026-09-03.json is still here,`},
     {c:'agent',t:`        and the CDN request you rejected never ran.`},

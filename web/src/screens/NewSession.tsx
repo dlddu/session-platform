@@ -305,29 +305,11 @@ export function NewSession() {
                   data-testid="new-session-workload-minimax-code"
                   onClick={() => setWorkloadType("minimax-code")}
                 >
-                  <span className="workload-icon agent" aria-hidden="true">◇</span>
+                  <span className="workload-icon gated" aria-hidden="true">⏸</span>
                   <strong>minimax-code</strong>
                   <small>
-                    MiniMax Code CLI on the same prompt loop. Runs the
-                    platform's default MiniMax model.
-                  </small>
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={workloadType === "approval-gated"}
-                  className={
-                    "workload-option wide" +
-                    (workloadType === "approval-gated" ? " selected" : "")
-                  }
-                  data-testid="new-session-workload-approval-gated"
-                  onClick={() => setWorkloadType("approval-gated")}
-                >
-                  <span className="workload-icon gated" aria-hidden="true">⏸</span>
-                  <strong>approval-gated</strong>
-                  <small>
-                    Same agent, but it cannot reach the outside on its own —
-                    every outbound call waits for your approval.
+                    MiniMax Code CLI behind the approval gate — it cannot reach
+                    the outside on its own; external calls wait for approval.
                   </small>
                 </button>
               </div>
@@ -375,10 +357,10 @@ export function NewSession() {
               <LockIcon size={14} className="immutable-note-icon" />
               <span>
                 {isGatedWorkload(workloadType)
-                  ? "Workload type and model choice are fixed for this session. The session also gets a helper pod that holds the approval gate and the only route out."
-                  : workloadType === "minimax-code"
-                    ? "Workload type is fixed for this session. It runs the platform default MiniMax model, resolved at container start."
-                    : isAgentWorkload(workloadType)
+                  ? hasModelChoice(workloadType)
+                    ? "Workload type and model choice are fixed for this session. The session also gets a helper pod that holds the approval gate and the only route out."
+                    : "Workload type is fixed for this session. It runs the platform default model, resolved at container start, and gets a helper pod that holds the approval gate and the only route out."
+                  : isAgentWorkload(workloadType)
                       ? "Workload type and model choice are fixed for this session. Platform default resolves to the configured default at container start."
                       : (
                         <>

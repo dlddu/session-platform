@@ -62,14 +62,6 @@ spec:
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다.
             - name: DATA_PLANE_CLAUDE_CODE_IMAGE
               value: "ghcr.io/dlddu/session-platform-data-plane:cc4615f73c4db0df6151680d65ee6390a0e5ee52"
-            # approval-gated 워크로드 파드와 그 세션 전용 헬퍼 파드(MCP·credential-proxy
-            # 컨테이너)가 쓰는 이미지다(AC-F1/AC-F4). 같은 data plane 에이전트 바이너리가
-            # DATA_PLANE_WORKLOAD 로 `approval-gated`·`mcp` 경로를 모두 태우므로
-            # claude-code 와 같은 이미지를 가리킨다. 비어 있으면 이 타입의 세션 생성이
-            # 실패한다(main.go 의 기본값이 빈 문자열) — 그래서 여기서 명시적으로 켠다.
-            # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다.
-            - name: DATA_PLANE_APPROVAL_GATED_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:cc4615f73c4db0df6151680d65ee6390a0e5ee52"
             # This Secret holds credentials only: the required auth-token,
             # referenced only by the localhost credential-proxy sidecar, and the
             # required k3s-mcp-token, referenced only by the Claude tool-running
@@ -163,28 +155,22 @@ spec:
             # 이 값보다 먼저 들어가 있어야 한다.
             - name: MINIMAX_CODE_ARCHIVE_ENABLED
               value: "true"
-            # 승인 게이트(AC-F3)는 PocketAide 다. 이 주소는 approval-gated·minimax-code
-            # 헬퍼 파드의 MCP 컨테이너에만 평문 env 로 전달된다(비밀이 아니다). 인증은
+            # 승인 게이트(docs/prd/approval-gate.md AC-F3)는 PocketAide 다. 이 주소는 게이트
+            # 뒤의 타입(지금은 minimax-code) 헬퍼 파드의 MCP 컨테이너에만 평문 env 로 전달된다(비밀이 아니다). 인증은
             # session-mcp 서비스 어카운트의 projected 토큰이고, 그 어카운트가 PocketAide 에
             # 호출자로 등록돼 있어야 한다 — session-mcp-serviceaccount.yaml 참고.
             # 비우면 헬퍼 파드는 게이트 없이 떠서 세션 MCP 가 도구를 하나도 내놓지 않는다.
             # 이 항목도 env 목록 맨 끝에 둔다(위 minimax 항목과 같은 이유).
             - name: APPROVAL_GATEWAY_URL
               value: http://pocket-aide.pocket-aide.svc.cluster.local:8080
-            # approval-gated 전용 데이터 전송 게이트. on 이면 이 타입 세션의 작업 디렉터리·
-            # 대화 기록·출력과 공유 볼륨(AC-F5) 내용이 위 CHECKPOINT_S3_* 로 아카이브된다.
-            # ⚠️ PR 프리뷰 오버레이는 이 이름도 false 로 덮어쓴다(flux-cd-apps #100). 이 항목도
-            # env 목록 맨 끝에 둔다(위 minimax 항목과 같은 이유 — deploy/ 가 인덱스로 잡는다).
-            - name: APPROVAL_GATED_ARCHIVE_ENABLED
-              value: "true"
-            # drop 파일 전달(docs/prd/drop-file-share.md). approval-gated·minimax-code 헬퍼 파드의
+            # drop 파일 전달(docs/prd/drop-file-share.md). 게이트 뒤 타입(minimax-code) 헬퍼 파드의
             # 세션 MCP 컨테이너에만 평문 env 로 간다 — drop_upload·drop_download 가 이 주소로 나가고,
             # 인증은 session-mcp 서비스 어카운트의 projected 토큰(audience drop)을 drop 이 단기 키로
             # 바꿔 주는 것이다. drop 쪽 SA_ALLOW 에 session-platform/session-mcp 가 있어야 하고,
             # 없으면(PR 프리뷰 네임스페이스처럼) 두 도구는 403 으로 실패한다(fail-closed).
             # ExternalName → Traefik → Sablier 를 지나므로 첫 요청은 drop 을 깨우느라 늦을 수 있다.
             # 비우면 drop 도구가 목록에 오르지 않는다. 이 항목도 env 목록 맨 끝에 둔다(위와 같은 이유) —
-            # deploy/ 오버레이가 이 자리를 env/17 로 잡아 kind 안 drop 주소로 바꾼다.
+            # deploy/ 오버레이가 이 자리를 env/16 으로 잡아 kind 안 drop 주소로 바꾼다.
             - name: DROP_URL
               value: http://drop-external.drop.svc.cluster.local
           readinessProbe:
