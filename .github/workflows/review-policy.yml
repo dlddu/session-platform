@@ -1,0 +1,55 @@
+name: review-policy
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: review-policy-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  judge:
+    name: judge
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Judge and attach review/manual-approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+        run: |
+          set -euo pipefail
+          if [ "$CHANGED_FILES" -ge 3000 ]; then
+            echo "::error title=review-policy::변경 파일 $CHANGED_FILES 개 — files API 상한(3000)이라 판정 불가"
+            exit 1
+          fi
+          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+            --jq '.[] | .filename, (.previous_filename // empty)' > "$RUNNER_TEMP/paths.txt"
+          rc=0
+          python3 scripts/review-policy/judge.py --policy docs/review-policy.md < "$RUNNER_TEMP/paths.txt" || rc=$?
+          case "$rc" in
+            0)
+              gh api -X POST "repos/$REPO/statuses/$HEAD_SHA" \
+                -f state=success -f context=review/manual-approval \
+                -f description="판정기: 수동 승인 케이스 미접촉" \
+                -f target_url="$GITHUB_SERVER_URL/$REPO/actions/runs/$GITHUB_RUN_ID" > /dev/null
+              ;;
+            1)
+              echo "::notice title=review-policy::수동 승인 케이스 접촉 — docs/review-policy.md 「사람 승인」 절차로 승인한다"
+              ;;
+            *)
+              echo "::error title=review-policy::판정 불가(종료 코드 $rc)"
+              exit 1
+              ;;
+          esac
