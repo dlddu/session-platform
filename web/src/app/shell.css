@@ -1083,8 +1083,18 @@ article.card {
   padding: 10px 12px;
   font-size: 11px;
 }
-.immutable-note > span:first-child {
+.immutable-note > :first-child {
+  flex: 0 0 auto;
+  margin-top: 1px;
   color: var(--frozen);
+}
+.immutable-note {
+  line-height: 1.5;
+}
+.immutable-note b {
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--frozen);
+  font-weight: 600;
 }
 .provision-workload {
   display: inline-flex;
