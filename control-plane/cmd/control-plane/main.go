@@ -57,10 +57,8 @@ func main() {
 		"addr", cfg.addr,
 		"namespace", namespace,
 		"shell_archive_enabled", cfg.shellArchiveEnabled,
-		"approval_gated_archive_enabled", cfg.approvalGatedArchiveEnabled,
 		"data_plane_image", cfg.dataPlaneImage,
 		"data_plane_claude_code_image", cfg.dataPlaneClaudeCodeImage,
-		"data_plane_approval_gated_image", cfg.dataPlaneApprovalGatedImage,
 		"data_plane_minimax_code_image", cfg.miniMax.image,
 		"approval_gateway_url", cfg.approvalGatewayURL,
 		"data_plane_shell", cfg.dataPlaneShell,
@@ -80,8 +78,6 @@ func main() {
 		k8s.WithImage(cfg.dataPlaneImage), k8s.WithShell(cfg.dataPlaneShell),
 		// Per-type image (AC-E1); empty is a no-op — see the config fields.
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, cfg.dataPlaneClaudeCodeImage),
-		// Same for approval-gated (AC-F1).
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, cfg.dataPlaneApprovalGatedImage),
 		k8s.WithWorkloadImage(session.WorkloadTypeMiniMaxCode, cfg.miniMax.image),
 		k8s.WithClaudeCredentialsSecret(cfg.claudeCredentialsSecret),
 		k8s.WithClaudeConfigConfigMap(cfg.claudeConfigConfigMap),
@@ -99,8 +95,8 @@ func main() {
 
 	// Snapshot archives may contain workspace and conversation data. They are
 	// sent to the configured durable store only behind an explicit mechanism
-	// gate per workload type: SHELL_ARCHIVE_ENABLED, CLAUDE_CODE_ARCHIVE_ENABLED,
-	// APPROVAL_GATED_ARCHIVE_ENABLED and MINIMAX_CODE_ARCHIVE_ENABLED.
+	// gate per workload type: SHELL_ARCHIVE_ENABLED, CLAUDE_CODE_ARCHIVE_ENABLED
+	// and MINIMAX_CODE_ARCHIVE_ENABLED.
 	var cstore archive.CheckpointStore
 	if cfg.anyArchiveEnabled() {
 		cstore, err = buildCheckpointStore(cfg)
@@ -129,15 +125,6 @@ func main() {
 		))
 		logger.Info("claude-code filesystem archive enabled", "store", cfg.checkpointStoreDesc())
 	}
-	approvalGatedArchive, err := approvalGatedArchiveOption(cfg, agentClient, cstore)
-	if err != nil {
-		logger.Error("approval-gated archive misconfigured", "err", err)
-		os.Exit(1)
-	}
-	if approvalGatedArchive != nil {
-		serviceOpts = append(serviceOpts, approvalGatedArchive)
-		logger.Info("approval-gated filesystem archive enabled", "store", cfg.checkpointStoreDesc())
-	}
 	miniMaxArchive, err := miniMaxArchiveOption(cfg.miniMax, agentClient, cstore)
 	if err != nil {
 		logger.Error("minimax-code archive misconfigured", "err", err)
@@ -157,8 +144,6 @@ func main() {
 	mux := http.NewServeMux()
 	api.New(mgr,
 		api.WithClaudeCodeModelConfig(cfg.claudeCodeDefaultModel, cfg.claudeCodeModels),
-		// approval-gated reads the same ConfigMap's model keys (AC-F6 → AC-E6).
-		api.WithWorkloadModelConfig(session.WorkloadTypeApprovalGated, cfg.claudeCodeDefaultModel, cfg.claudeCodeModels),
 		api.WithOfferedWorkloadTypes(cfg.offeredWorkloadTypes()...),
 	).Routes(mux)
 	repoAccess, err := openRepoAccess(context.Background(), cfg.repoAccess)
@@ -210,15 +195,11 @@ type config struct {
 	// sessions (AC-E1). Unset means the type is not deployable here: creating
 	// such a session fails loudly rather than getting a shell pod.
 	dataPlaneClaudeCodeImage string
-	// dataPlaneApprovalGatedImage is the image for `workloadType=approval-gated`
-	// sessions and their helper pods (AC-F1/AC-F4). Unset means the type is not
-	// deployable here.
-	dataPlaneApprovalGatedImage string
 	// approvalGatewayURL is the PocketAide approval API the helper pod's MCP
-	// container asks (AC-F3). Unset leaves approval-gated sessions without tools.
+	// container asks (AC-F3). Unset leaves gated sessions without tools.
 	approvalGatewayURL string
 	// sharedVolumeStorageClass and sharedVolumeSize size the ReadWriteMany claim
-	// an approval-gated session's two pods share (AC-F5; see WithSharedVolume).
+	// a gated session's two pods share (AC-F5; see WithSharedVolume).
 	// An empty class leaves the volume off: only a deployment that knows which
 	// of its classes serves ReadWriteMany can ask for one that will bind.
 	sharedVolumeStorageClass string
@@ -226,9 +207,6 @@ type config struct {
 	// claudeArchiveEnabled explicitly permits workspace/conversation/output
 	// archives to be written to CHECKPOINT_S3_* (default false).
 	claudeArchiveEnabled bool
-	// approvalGatedArchiveEnabled is approval-gated's own gate: its archive also
-	// carries the AC-F5 shared volume's contents (default false).
-	approvalGatedArchiveEnabled bool
 	// shellArchiveEnabled permits a shell's home directory and scrollback to
 	// be archived to CHECKPOINT_S3_* (default false). A restored shell is a
 	// fresh process started in that home directory.
@@ -264,9 +242,8 @@ type config struct {
 func (c config) offeredWorkloadTypes() []session.WorkloadType {
 	types := []session.WorkloadType{session.WorkloadTypeShell}
 	for w, image := range map[session.WorkloadType]string{
-		session.WorkloadTypeClaudeCode:    c.dataPlaneClaudeCodeImage,
-		session.WorkloadTypeApprovalGated: c.dataPlaneApprovalGatedImage,
-		session.WorkloadTypeMiniMaxCode:   c.miniMax.image,
+		session.WorkloadTypeClaudeCode:  c.dataPlaneClaudeCodeImage,
+		session.WorkloadTypeMiniMaxCode: c.miniMax.image,
 	} {
 		if image != "" {
 			types = append(types, w)
@@ -278,24 +255,7 @@ func (c config) offeredWorkloadTypes() []session.WorkloadType {
 // anyArchiveEnabled reports whether any workload type's archive gate is on,
 // which is what makes the durable store and the idle reaper necessary.
 func (c config) anyArchiveEnabled() bool {
-	return c.shellArchiveEnabled || c.claudeArchiveEnabled ||
-		c.approvalGatedArchiveEnabled || c.miniMax.archiveEnabled
-}
-
-// approvalGatedArchiveOption returns the service option that installs the
-// filesystem-archive checkpointer for approval-gated, or nil when the gate is
-// off. Like claude-code's gate it needs the type's image to be meaningful.
-func approvalGatedArchiveOption(cfg config, client *agent.HTTPClient, store archive.CheckpointStore) (service.Option, error) {
-	if !cfg.approvalGatedArchiveEnabled {
-		return nil, nil
-	}
-	if cfg.dataPlaneApprovalGatedImage == "" {
-		return nil, errors.New("APPROVAL_GATED_ARCHIVE_ENABLED needs DATA_PLANE_APPROVAL_GATED_IMAGE")
-	}
-	return service.WithWorkloadCheckpointer(
-		session.WorkloadTypeApprovalGated,
-		archive.NewAgentCheckpointer(client, store),
-	), nil
+	return c.shellArchiveEnabled || c.claudeArchiveEnabled || c.miniMax.archiveEnabled
 }
 
 // buildCheckpointStore builds the checkpoint archive backend.
@@ -346,29 +306,27 @@ func loadConfig() (config, error) {
 		dataPlaneImage: env("DATA_PLANE_IMAGE", ""),
 		// Propagated into session pods; the agent launches
 		// ${DATA_PLANE_SHELL:-/bin/bash} on a PTY (AC-D1).
-		dataPlaneShell:              env("DATA_PLANE_SHELL", ""),
-		dataPlaneClaudeCodeImage:    env("DATA_PLANE_CLAUDE_CODE_IMAGE", ""),
-		dataPlaneApprovalGatedImage: env("DATA_PLANE_APPROVAL_GATED_IMAGE", ""),
-		approvalGatewayURL:          env("APPROVAL_GATEWAY_URL", ""),
-		sharedVolumeStorageClass:    env("SESSION_SHARED_VOLUME_STORAGE_CLASS", ""),
-		sharedVolumeSize:            sharedVolumeSize,
-		claudeArchiveEnabled:        envBool("CLAUDE_CODE_ARCHIVE_ENABLED", false),
-		approvalGatedArchiveEnabled: envBool("APPROVAL_GATED_ARCHIVE_ENABLED", false),
-		claudeCredentialsSecret:     env("CLAUDE_CODE_CREDENTIALS_SECRET", "claude-code-credentials"),
-		claudeConfigConfigMap:       env("CLAUDE_CODE_CONFIG_CONFIGMAP", "claude-code-config"),
-		claudeCodeDefaultModel:      claudeCodeDefaultModel,
-		claudeCodeModels:            claudeCodeModels,
-		shellArchiveEnabled:         envBool("SHELL_ARCHIVE_ENABLED", false),
-		idleScanInterval:            envDuration("IDLE_SCAN_INTERVAL", time.Minute),
-		checkpointS3Endpoint:        env("CHECKPOINT_S3_ENDPOINT", ""),
-		checkpointS3Bucket:          env("CHECKPOINT_S3_BUCKET", ""),
-		checkpointS3RoleARN:         env("CHECKPOINT_S3_ROLE_ARN", ""),
-		checkpointS3Region:          env("CHECKPOINT_S3_REGION", env("AWS_REGION", "")),
-		checkpointS3Prefix:          env("CHECKPOINT_S3_PREFIX", "checkpoints"),
-		checkpointS3SessionName:     env("CHECKPOINT_S3_SESSION_NAME", ""),
-		miniMax:                     loadMiniMaxConfig(),
-		repoAccess:                  loadRepoAccessConfig(),
-		dropURL:                     env("DROP_URL", ""),
+		dataPlaneShell:           env("DATA_PLANE_SHELL", ""),
+		dataPlaneClaudeCodeImage: env("DATA_PLANE_CLAUDE_CODE_IMAGE", ""),
+		approvalGatewayURL:       env("APPROVAL_GATEWAY_URL", ""),
+		sharedVolumeStorageClass: env("SESSION_SHARED_VOLUME_STORAGE_CLASS", ""),
+		sharedVolumeSize:         sharedVolumeSize,
+		claudeArchiveEnabled:     envBool("CLAUDE_CODE_ARCHIVE_ENABLED", false),
+		claudeCredentialsSecret:  env("CLAUDE_CODE_CREDENTIALS_SECRET", "claude-code-credentials"),
+		claudeConfigConfigMap:    env("CLAUDE_CODE_CONFIG_CONFIGMAP", "claude-code-config"),
+		claudeCodeDefaultModel:   claudeCodeDefaultModel,
+		claudeCodeModels:         claudeCodeModels,
+		shellArchiveEnabled:      envBool("SHELL_ARCHIVE_ENABLED", false),
+		idleScanInterval:         envDuration("IDLE_SCAN_INTERVAL", time.Minute),
+		checkpointS3Endpoint:     env("CHECKPOINT_S3_ENDPOINT", ""),
+		checkpointS3Bucket:       env("CHECKPOINT_S3_BUCKET", ""),
+		checkpointS3RoleARN:      env("CHECKPOINT_S3_ROLE_ARN", ""),
+		checkpointS3Region:       env("CHECKPOINT_S3_REGION", env("AWS_REGION", "")),
+		checkpointS3Prefix:       env("CHECKPOINT_S3_PREFIX", "checkpoints"),
+		checkpointS3SessionName:  env("CHECKPOINT_S3_SESSION_NAME", ""),
+		miniMax:                  loadMiniMaxConfig(),
+		repoAccess:               loadRepoAccessConfig(),
+		dropURL:                  env("DROP_URL", ""),
 	}, nil
 }
 

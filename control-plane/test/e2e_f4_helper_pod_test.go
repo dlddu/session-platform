@@ -1,10 +1,11 @@
 //go:build e2e
 
-// 검증 시나리오: approval-gated-workload.md#시나리오 7
+// 검증 시나리오: approval-gate.md#시나리오 7
 //
-// docs/prd/approval-gated-workload.md AC-F4, asserted on the deployed SUT. The
-// freeze and restore branches need the deploy/ overlay's
-// APPROVAL_GATED_ARCHIVE_ENABLED, which registers this type's archive strategy.
+// docs/prd/approval-gate.md AC-F4, asserted on the deployed SUT with a session of
+// the gated type (harness_approval_gate_test.go). The freeze and restore
+// branches need the deploy/ overlay's MINIMAX_CODE_ARCHIVE_ENABLED, which
+// registers that type's archive strategy.
 package e2e_test
 
 import (
@@ -35,17 +36,17 @@ type f4Session struct {
 func f4Create(t *testing.T) f4Session {
 	t.Helper()
 	resp, raw := do(t, http.MethodPost, "/api/v1/sessions", map[string]any{
-		"name": uniqueName(t), "workloadType": "approval-gated",
+		"name": uniqueName(t), "workloadType": gatedWorkloadType,
 	})
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("create approval-gated session: status=%d body=%s", resp.StatusCode, raw)
+		t.Fatalf("create %s session: status=%d body=%s", gatedWorkloadType, resp.StatusCode, raw)
 	}
 	var s f4Session
 	if err := json.Unmarshal(raw, &s); err != nil {
 		t.Fatalf("decode created session: %v body=%s", err, raw)
 	}
-	if s.WorkloadType != "approval-gated" {
-		t.Fatalf("workloadType=%q want approval-gated", s.WorkloadType)
+	if s.WorkloadType != gatedWorkloadType {
+		t.Fatalf("workloadType=%q want %s", s.WorkloadType, gatedWorkloadType)
 	}
 	if s.Pod == "" {
 		t.Fatal("created session has no workload pod (AC-A2)")
@@ -139,7 +140,7 @@ func f4WorkloadMarker(t *testing.T, cs kubernetes.Interface, cfg *rest.Config, n
 
 // A helper shared between sessions would show up under both selectors; one
 // mislabelled would show up under neither.
-func TestApprovalGatedHelperPod_IsDedicatedToOneSession(t *testing.T) {
+func TestApprovalGateHelperPod_IsDedicatedToOneSession(t *testing.T) {
 	cs, _, ok := kubeClient(t)
 	if !ok {
 		t.Skip("no cluster: helper pod dedication is a claim about deployed pods")
@@ -186,7 +187,7 @@ func TestApprovalGatedHelperPod_IsDedicatedToOneSession(t *testing.T) {
 
 // A freeze reclaims the pair together, and the restore provisions a fresh pair
 // whose workload pod reaches this round's helper rather than the reclaimed one.
-func TestApprovalGatedHelperPod_FreezeReclaimsBothPodsAndRestoreRewiresAFreshPair(t *testing.T) {
+func TestApprovalGateHelperPod_FreezeReclaimsBothPodsAndRestoreRewiresAFreshPair(t *testing.T) {
 	cs, _, ok := kubeClient(t)
 	if !ok {
 		t.Skip("no cluster: reclaim and rewiring are claims about deployed pods")
@@ -249,7 +250,7 @@ func TestApprovalGatedHelperPod_FreezeReclaimsBothPodsAndRestoreRewiresAFreshPai
 
 // The freeze path leaves a snapshot behind and the delete path does not, so they
 // reach reclamation differently; the helper pod has to go on both.
-func TestApprovalGatedHelperPod_DeleteReclaimsBothPods(t *testing.T) {
+func TestApprovalGateHelperPod_DeleteReclaimsBothPods(t *testing.T) {
 	cs, _, ok := kubeClient(t)
 	if !ok {
 		t.Skip("no cluster: reclaim is a claim about deployed pods")
@@ -272,7 +273,7 @@ func TestApprovalGatedHelperPod_DeleteReclaimsBothPods(t *testing.T) {
 // This is the property AC-F4 leans on when it puts both of the platform's
 // external secrets in one pod: the isolation that keeps them apart is the
 // container boundary, not the pod boundary.
-func TestApprovalGatedHelperPod_ContainersDoNotSharePIDNamespace(t *testing.T) {
+func TestApprovalGateHelperPod_ContainersDoNotSharePIDNamespace(t *testing.T) {
 	cs, cfg, ok := kubeClient(t)
 	if !ok {
 		t.Skip("no cluster: namespace isolation needs real processes")
@@ -311,5 +312,79 @@ func TestApprovalGatedHelperPod_ContainersDoNotSharePIDNamespace(t *testing.T) {
 			t.Fatalf("container %q can read %s process environments carrying %q — the two helper containers are not PID-isolated (AC-F4)",
 				tc.container, probe["neighbour"], tc.neighbour)
 		}
+	}
+}
+
+// Create only returns after every pod in the set reports Ready, so a passing
+// create already proves the helper pod got its gateway token and came up; what
+// this test adds is the shape of the set (AC-F4).
+func TestApprovalGateHelperPod_SessionStandsUpWithItsHelperPod(t *testing.T) {
+	cs, _, ok := kubeClient(t)
+	if !ok {
+		t.Skip("no cluster: the helper pod's shape is a claim about deployed pods")
+	}
+	ns := sessionNamespace()
+
+	s := f4Create(t)
+	if s.State != "active" {
+		t.Fatalf("state=%q want active", s.State)
+	}
+	getPodEventually(t, cs, ns, s.Pod) // the workload half of the set
+
+	helper := f4TheHelperPod(t, cs, ns, s)
+	if helper.Name == s.Pod {
+		t.Fatalf("helper pod and workload pod are the same pod %q — the proxy did not leave the workload pod (AC-F2)", helper.Name)
+	}
+	for _, name := range gatedHelperContainers {
+		if _, found := containerByName(&helper, name); !found {
+			t.Fatalf("helper pod %s has no %q container: %v", helper.Name, name, containerNames(&helper))
+		}
+		found, ready := containerReady(&helper, name)
+		if !found {
+			t.Fatalf("helper pod %s publishes no status for container %q", helper.Name, name)
+		}
+		if !ready {
+			t.Fatalf("helper pod %s container %q is not Ready — create returned before the pod set was up", helper.Name, name)
+		}
+	}
+	if n := len(helper.Spec.Containers); n != len(gatedHelperContainers) {
+		t.Fatalf("helper pod %s has %d containers %v, want exactly %v", helper.Name, n, containerNames(&helper), gatedHelperContainers)
+	}
+}
+
+// Without this, the case above would pass just as well against a control plane
+// that gave *every* session a helper pod: the helper pod belongs to the gate,
+// not to sessions in general.
+func TestApprovalGateHelperPod_UngatedTypesGetNoHelperPod(t *testing.T) {
+	cs, _, ok := kubeClient(t)
+	if !ok {
+		t.Skip("no cluster: the helper-pod-absence assertion needs the deployed cluster")
+	}
+	ns := sessionNamespace()
+
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		want string
+	}{
+		{name: "omitted", body: map[string]any{}, want: "shell"},
+		{name: "explicit shell", body: map[string]any{"workloadType": "shell"}, want: "shell"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := map[string]any{"name": uniqueName(t)}
+			for k, v := range tc.body {
+				body[k] = v
+			}
+			status, s := createTyped(t, body)
+			if status != http.StatusCreated {
+				t.Fatalf("create: status=%d", status)
+			}
+			if s.WorkloadType != tc.want {
+				t.Fatalf("workloadType=%q want %q", s.WorkloadType, tc.want)
+			}
+			if helpers := helperPodsFor(t, cs, ns, s.ID); len(helpers) != 0 {
+				t.Fatalf("%s session %s got %d helper pods, want 0 — the helper pod is not tied to the gate", tc.want, s.ID, len(helpers))
+			}
+		})
 	}
 }

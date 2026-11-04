@@ -3,15 +3,25 @@
 export type State = "active" | "idle" | "snapshot";
 
 /**
- * AC-E1/AC-F1. 화면은 리터럴이 아니라 계열로 갈린다 — `app/workloadKind.ts`.
+ * AC-E1/AC-G1. 화면은 리터럴이 아니라 계열로 갈린다 — `app/workloadKind.ts`.
+ * 승인 게이트는 타입이 아니라 타입의 능력이다(`WorkloadTypeConfig.approvalGate`).
  */
-export type WorkloadType = "shell" | "claude-code" | "approval-gated" | "minimax-code";
+export type WorkloadType = "shell" | "claude-code" | "minimax-code";
+
+/** GET /config 의 workloadTypes 한 항목 중 화면이 읽는 필드. */
+export interface WorkloadTypeConfig {
+  type: string;
+  /** docs/prd/approval-gate.md AC-F2~F6. 이 타입의 세션이 승인 게이트 뒤에서 도는가. */
+  approvalGate?: boolean;
+}
 
 export interface PlatformConfig {
   claudeCode: {
     defaultModel: string;
     models: string[];
   };
+  /** 오래된 control plane 은 이 필드가 없다. */
+  workloadTypes?: WorkloadTypeConfig[];
 }
 
 // 와이어 필드 이름은 `checkpoint` 그대로다(OpenAPI 계약). 가리키는 것은 모든 타입에서 파일시스템 아카이브다.

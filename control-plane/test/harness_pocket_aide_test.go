@@ -42,7 +42,7 @@ const (
 	// ServiceAccount as a caller and so owns, and decides, every request.
 	approverSubject = "e2e-approver"
 	// The helper pod's identity — client_orchestrator.go's
-	// SessionMCPServiceAccountName, written out for the reason e2e_f1 gives.
+	// SessionMCPServiceAccountName, written out for the reason harness_approval_gate_test.go gives.
 	sessionMCPServiceAccount = "session-mcp"
 	// Also client_orchestrator.go's, same reason: ApprovalGatewayTokenAudience
 	// and the token file the session MCP container reads.

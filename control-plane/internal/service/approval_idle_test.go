@@ -17,8 +17,10 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// docs/test/approval-gated-workload.md scenario 5, as far as it can be pinned
-// without a cluster.
+// docs/test/approval-gate.md scenario 5, as far as it can be pinned without a
+// cluster. The gate is a capability of a type (session.HasApprovalGate), so the
+// gated type here is minimax-code, today the only one; any type added behind
+// the gate is held by the same rule.
 
 // approvalReportingAgent is the workload I/O stub plus the one extra answer
 // the idle path asks for.
@@ -88,7 +90,7 @@ func newApprovalIdleService(clock *testClock, ag agent.Client) *service.Service 
 		stub,
 		ag,
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, stub),
-		service.WithWorkloadCheckpointer(session.WorkloadTypeApprovalGated, stub),
+		service.WithWorkloadCheckpointer(session.WorkloadTypeMiniMaxCode, stub),
 		service.WithClock(clock.Now),
 	)
 }
@@ -131,7 +133,7 @@ func TestApprovalWaitHoldsTheIdleCountAndReleasesIt(t *testing.T) {
 	ag := newApprovalReportingAgent()
 	svc := newApprovalIdleService(clock, ag)
 
-	sess := mustCreate(t, svc, session.WorkloadTypeApprovalGated)
+	sess := mustCreate(t, svc, session.WorkloadTypeMiniMaxCode)
 	ag.setAwaiting(sess.Pod, true)
 
 	// Without AC-F3 this is exactly the shape that freezes.
@@ -216,7 +218,7 @@ func TestManualSnapshotStillFreezesDuringAnApprovalWait(t *testing.T) {
 	ag := newApprovalReportingAgent()
 	svc := newApprovalIdleService(clock, ag)
 
-	sess := mustCreate(t, svc, session.WorkloadTypeApprovalGated)
+	sess := mustCreate(t, svc, session.WorkloadTypeMiniMaxCode)
 	ag.setAwaiting(sess.Pod, true)
 
 	frozen, err := svc.Snapshot(context.Background(), sess.ID)
@@ -238,7 +240,7 @@ func TestUnreadableApprovalStateFallsBackToTheOrdinaryIdleRule(t *testing.T) {
 	ag.err = errors.New("agent unreachable")
 	svc := newApprovalIdleService(clock, ag)
 
-	sess := mustCreate(t, svc, session.WorkloadTypeApprovalGated)
+	sess := mustCreate(t, svc, session.WorkloadTypeMiniMaxCode)
 
 	clock.advance(session.MaxIdle + time.Minute)
 	if n := scan(t, svc, clock); n != 1 {
@@ -255,7 +257,7 @@ func TestAgentWithoutApprovalReportingKeepsTheOrdinaryIdleRule(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)}
 	svc := newApprovalIdleService(clock, agent.NewStubClient())
 
-	sess := mustCreate(t, svc, session.WorkloadTypeApprovalGated)
+	sess := mustCreate(t, svc, session.WorkloadTypeMiniMaxCode)
 
 	clock.advance(session.MaxIdle + time.Minute)
 	if n := scan(t, svc, clock); n != 1 {

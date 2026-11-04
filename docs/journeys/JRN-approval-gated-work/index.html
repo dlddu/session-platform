@@ -147,7 +147,7 @@
       <div class="row" style="margin-bottom:14px">
         <h1 style="margin:0"><span class="mono">vendor-sync</span></h1>
         <span class="pill on">active</span>
-        <span class="pill mono">approval-gated</span>
+        <span class="pill mono">minimax-code</span>
         <span class="spacer"></span>
         <span class="pill gate">밖으로 나갈 때 승인 필요</span>
       </div>
@@ -183,6 +183,9 @@
         <button id="br-rejected" type="button"
                 data-branch-row="7"
                 data-branch-target="STP-gated-prompt-submit">너무 큼 · 대기열 포화 · 출력 한계</button>
+        <button id="br-own-gate-tool" type="button"
+                data-branch-row="10"
+                data-branch-target="STP-gated-result">예외 도구를 부름 (K3s MCP 도구)</button>
       </div>
     </div>
 
@@ -191,7 +194,7 @@
       <dl>
         <dt>단계</dt><dd><code>STP-gated-prompt-submit</code> 게이트가 걸린 채로 일을 맡긴다</dd>
         <dt>터치포인트</dt><dd>승인 게이트 워크스페이스의 프롬프트 입력 행과 "외부 접근은 승인 필요" 표시</dd>
-        <dt>연결 AC</dt><dd>AC-F3, AC-F2 (보조 AC-F1)</dd>
+        <dt>연결 AC</dt><dd>AC-F3, AC-F2 (보조 AC-G6)</dd>
         <dt>페인포인트</dt><dd>게이트가 걸려 있다는 사실이 화면에 없으면 일반 에이전트 세션과 구분하지 못한다 — 상시 표시한다.</dd>
       </dl>
     </details>
@@ -441,6 +444,16 @@
     $('blocked-banner').hidden = true;
     $('queue-depth').textContent = '8';
     show('STP-gated-prompt-submit');
+  });
+
+  // minimax-code 의 K3s MCP 도구는 세션 게이트가 아니라 그 서비스의 자체 승인 게이트를 지난다(AC-G6).
+  $('br-own-gate-tool').addEventListener('click', function () {
+    $('outcome-crumb').textContent = '자체 게이트 도구';
+    $('outcome-banner').className = 'banner ok';
+    $('outcome-banner').textContent =
+      'K3s MCP 도구는 이 세션의 게이트가 아니라 그 서비스의 자체 승인 게이트를 지났습니다 — 결정은 그 서비스의 화면에서 했고, ' +
+      '여기에는 대기 표시 없이 결과만 이어 붙었습니다.';
+    show('STP-gated-result');
   });
 
   /* ---------- STP-approval-wait ---------- */

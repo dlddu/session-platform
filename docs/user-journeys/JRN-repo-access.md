@@ -6,18 +6,18 @@
 |---|---|
 | 여정 식별자 | `JRN-repo-access` |
 | 여정명 | 에이전트가 비공개 레포를 쓰도록 내가 허락한다 |
-| 상태 | 초안 (v0.3) |
+| 상태 | 초안 (v0.3.1) |
 | 담당자 | 미지정 |
-| 최종 수정일 | 2026-10-24 |
+| 최종 수정일 | 2026-11-05 |
 | 달성 가치 | V8 목적에 맞는 작업 환경 선택 · V1 격리된 작업 공간 |
-| 연결 문서 | PRD [`repo-access`](../prd/repo-access.md)(AC-H1~H5) · [`approval-gated-workload`](../prd/approval-gated-workload.md)(AC-F3·F5·F6) · mockup `repo-access.html`·`gated-workspace.html` ([매핑](../mockups/README.md)) |
+| 연결 문서 | PRD [`repo-access`](../prd/repo-access.md)(AC-H1~H5) · [`approval-gate`](../prd/approval-gate.md)(AC-F3·F5·F6) · mockup `repo-access.html`·`gated-workspace.html` ([매핑](../mockups/README.md)) |
 
 > 이 여정은 [`JRN-approval-gated-work`](./JRN-approval-gated-work.md)의 **갈래**다. 그 여정은
 > "밖으로 나가는 호출마다 승인한다"를 다루고, 이 여정은 그중 **레포 클론**을 떼어 내
 > "어느 레포를 받게 할지는 내가 미리 정해 둔다"로 바꾼다. 허용 목록이 있는 배포에서 `git_clone`은 호출마다
 > 승인을 받지 않는다 — 여기서 하는 **레포 단위로 오래 남는 허락**이 그 호출의 문이다. 다른 외부 호출의 승인은
 > 여전히 그 여정의 `STP-approval-decide`가 맡는다.
-> `approval-gated`와 `minimax-code` 세션이 같은 경험을 한다.
+> 승인 게이트가 걸린 모든 타입의 세션(지금은 `minimax-code`)이 같은 경험을 한다.
 
 ## 1. 서비스 개요 (참고)
 
@@ -121,6 +121,7 @@ P1 멀티세션 작업자 ([README](./README.md#p1-멀티세션-작업자)).
 
 | 버전 | 날짜 | 변경 내용 | 작성자 |
 |---|---|---|---|
+| v0.3.1 | 2026-11-05 | `approval-gated` 타입 제거 반영 — 이 갈래가 붙는 세션을 「승인 게이트가 걸린 세션」으로 고쳐 적고 PRD 링크를 `approval-gate.md`로 옮겼다. 단계·식별자 변화 없음 | Claude |
 | v0.3 | 2026-10-24 | 레포 접근 화면의 앱 자체 로그인을 걷었다(사용자 결정) — 화면은 다른 화면과 같은 Authelia forward-auth 하나 뒤에 있다. `STP-access-review`의 로그인 단계·로그인 안내 터치포인트를 지우고 분기 2행을 인그레스 로그인으로 바꿨다. 허용 목록에서 「Added by」(추가한 사람)를 지우고 출처만 남겼다 | Claude |
 | v0.2 | 2026-10-24 | 허용 목록이 있는 배포에서 `git_clone`의 호출 승인을 걷었다(사용자 결정) — 허락한 레포는 승인 없이 받고, 공개 레포도 목록에 있어야 받는다. 분기 6·7행을 그에 맞게 바꿨다 | Claude |
 | v0.1 | 2026-10-24 | 최초 작성 — 비공개 레포 허용 목록과 접근 요청(AC-H1~H5) 신설에 따라 신설. 계약 서술은 AC로 위임하고 사용자 관측 경험만 남김 | Claude |

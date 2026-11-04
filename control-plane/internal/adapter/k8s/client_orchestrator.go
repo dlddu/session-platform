@@ -124,7 +124,7 @@ const (
 	credentialProxyPlaceholderToken = "session-platform-proxy"
 	agentAddrEnvVar                 = "DATA_PLANE_AGENT_ADDR"
 
-	// Approval-gated runtime configuration (AC-F4/AC-F6).
+	// Approval-gate runtime configuration (docs/prd/approval-gate.md AC-F4/AC-F6).
 	// SessionMCPServiceAccountName is the helper pod's identity — see
 	// k8s/session-mcp-serviceaccount.yaml for why it exists.
 	SessionMCPServiceAccountName = "session-mcp"
@@ -207,7 +207,7 @@ type ClientOrchestrator struct {
 	image                    string
 	claudeCredentialsSecret  string // platform Secret referenced by claude-code pods
 	claudeConfigConfigMap    string // its non-credential counterpart
-	approvalGatewayURL       string // PocketAide base URL handed to approval-gated helper pods
+	approvalGatewayURL       string // PocketAide base URL handed to gated helper pods
 	repoAccessURL            string // control plane URL for the helper's repo access calls (repo_access.go)
 	dropURL                  string // drop's in-cluster URL for the helper's drop_* tools (drop.go)
 	miniMaxCredentialsSecret string
@@ -610,42 +610,6 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		})
 
 		sidecars = append(sidecars, o.claudeCredentialProxy(image))
-	case session.WorkloadTypeApprovalGated:
-		// AC-F6: this container holds *no* external credential. The K3s MCP
-		// token and the marketplace plugin bootstrap are deliberately absent —
-		// their omission is the decision, not an oversight.
-		modelEnv := corev1.EnvVar{Name: ClaudeCodeModelEnvVar, Value: model}
-		if model == session.PlatformDefaultModel {
-			modelEnv = optionalConfigMapEnv(
-				ClaudeCodeModelEnvVar,
-				o.claudeConfigConfigMap,
-				ClaudeCodeModelConfigKey,
-			)
-		}
-		container.Env = append(container.Env,
-			modelEnv,
-			corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: workloadStateDir},
-			corev1.EnvVar{Name: AnthropicBaseURLEnvVar, Value: helper.ProxyURL},
-			corev1.EnvVar{Name: AnthropicAuthTokenEnvVar, Value: credentialProxyPlaceholderToken},
-			corev1.EnvVar{Name: SessionMCPURLEnvVar, Value: helper.MCPURL},
-		)
-		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-			Name: claudeCodeStateVolumeName, MountPath: workloadStateVolumePath,
-		})
-		volumes = append(volumes, corev1.Volume{
-			Name:         claudeCodeStateVolumeName,
-			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
-		})
-		// The file-exchange volume this session shares with its helper pod's MCP
-		// container (AC-F5), when the deployment has named a class that serves it.
-		if o.sharedVolumeEnabled() {
-			container.VolumeMounts = append(container.VolumeMounts, sharedVolumeMount())
-			container.Env = append(container.Env,
-				corev1.EnvVar{Name: SharedVolumeDirEnvVar, Value: SharedVolumeMountPath})
-			volumes = append(volumes, sharedVolume(sharedClaimName(helperPodNameFor(sessionID, suffix))))
-		}
-		// No sidecar: moving the proxy out of this pod is the whole point of
-		// AC-F2's arrangement.
 	case session.WorkloadTypeMiniMaxCode:
 		sidecars, volumes = o.miniMaxCodePod(&container, model, helper, helperPodNameFor(sessionID, suffix))
 	}
@@ -689,7 +653,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 	}, nil
 }
 
-// helperPodSpec assembles an approval-gated session's helper pod: the session
+// helperPodSpec assembles a gated session's helper pod: the session
 // MCP that fronts the approval gate (AC-F3) and the provider credential proxy
 // AC-F2 moved out of the workload pod (AC-F4/AC-F6).
 //
@@ -756,6 +720,10 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 	}
 	helperVolumes = o.addRepoAccess(&mcp, helperVolumes)
 	helperVolumes = o.addDrop(&mcp, helperVolumes)
+	proxies, err := o.helperProxyContainers(sessionID, workloadType, image)
+	if err != nil {
+		return nil, err
+	}
 
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -772,7 +740,7 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 			RestartPolicy:                corev1.RestartPolicyAlways,
 			ServiceAccountName:           SessionMCPServiceAccountName,
 			AutomountServiceAccountToken: &automountServiceAccountToken,
-			Containers:                   append([]corev1.Container{mcp}, o.helperProxyContainers(sessionID, workloadType, image)...),
+			Containers:                   append([]corev1.Container{mcp}, proxies...),
 			Volumes:                      append(helperVolumes, helperProxyVolumes(workloadType)...),
 		},
 	}, nil

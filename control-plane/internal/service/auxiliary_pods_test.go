@@ -20,10 +20,10 @@ import (
 // pod plus the session-scoped auxiliary pods that serve it (AC-F4's helper pod
 // is the first such pod), and the lifecycle holds across that whole set.
 //
-// No workload type provisions an auxiliary pod yet: AC-F1's approval-gated type
-// is not implemented, and shell/claude-code need none. The stub's
-// SetAuxiliaryPods knob stands in for that future type so the contract is
-// pinned before its first consumer arrives.
+// Only the types behind the approval gate (session.HasApprovalGate) provision an
+// auxiliary pod — their helper pod; shell and claude-code need none. The stub's
+// SetAuxiliaryPods knob stands in for any such type, so the contract is pinned
+// independently of which types opt into the gate.
 
 func newAuxService(aux int) (*service.Service, *k8s.StubOrchestrator, *configmap.Store) {
 	orch := k8s.NewStubOrchestrator("sessions")

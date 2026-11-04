@@ -869,7 +869,7 @@ article.card {
   font-size: 11.5px;
 }
 
-/* ---------- egress panel (approval-gated only, AC-F2) ---------- */
+/* ---------- egress panel (gated types only, AC-F2) ---------- */
 .egress-panel {
   border-color: var(--idle-soft);
 }

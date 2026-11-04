@@ -8,8 +8,8 @@
 > 구↔신 매핑표는 [`user-journeys/README.md`](./user-journeys/README.md#구-식별자-매핑-2026-08-30-전환)에 있습니다.
 > 아래 "변경 이력"의 과거 항목은 당시 기록이므로 옛 식별자를 그대로 둡니다.
 
-- **마지막 검증 시점**: 2026-10-24 (`JRN-repo-access` 신설 — 여정 10 · 단계 37 · mockup 7 · `docs/journeys/` **9 / 9**)
-- **직전 검증 시점**: 2026-09-03 (12) (여정 mockup agent 클러스터 3종 신설 — `docs/journeys/` 5 → **8 / 8**)
+- **마지막 검증 시점**: 2026-11-05 (`approval-gated` 타입 제거 — 승인 게이트를 타입의 능력으로. 수치 변화 없음: 여정 10 · 단계 37 · mockup 7 · `docs/journeys/` 9 / 9. `JRN-approval-gated-work`의 달성 가치 V8 → V1)
+- **직전 검증 시점**: 2026-10-24 (`JRN-repo-access` 신설 — 여정 10 · 단계 37 · mockup 7 · `docs/journeys/` **9 / 9**)
 - **검증 범위**: 상류(product-doc 사슬)에서 세 번째 워크로드 타입(AC-F1~F6)이 확정되어, 여정
   `JRN-approval-gated-work`(4단계)와 mockup `gated-workspace.html`을 신설하고 `new-session.html`·`index.html`의
   타입 분기를 3종으로 확장했다. 여정 8→9, 단계 29→33, mockup 5→6. **가치는 변하지 않았다**(V8 상속).
@@ -40,12 +40,12 @@
 ### 가치 ↔ 여정
 | 가치 | 여정 | 상태 |
 |------|------|------|
-| V1 세션 격리 | `JRN-session-creation`, `JRN-repo-access` | ✅ |
+| V1 세션 격리 | `JRN-session-creation`, `JRN-repo-access`, `JRN-approval-gated-work` | ✅ |
 | V2 유휴 자원 회수 | `JRN-idle-resume`, `JRN-manual-freeze`, `JRN-session-deletion`(부분) | ✅ |
 | V3 끊김 없는 세션 연속성 | `JRN-idle-resume`, `JRN-multi-session-switch`, `JRN-concurrent-access`, `JRN-shell-interaction`, `JRN-agent-prompt-loop`, `JRN-manual-freeze`, `JRN-approval-gated-work` | ✅ |
 | V4 자유로운 멀티세션 전환 | `JRN-multi-session-switch` | ✅ |
 | V5 일관된 세션 상태 | `JRN-session-creation`, `JRN-concurrent-access` | ✅ |
-| V8 목적에 맞는 작업 환경 선택 | `JRN-agent-prompt-loop`, `JRN-approval-gated-work`, `JRN-repo-access` | ✅ |
+| V8 목적에 맞는 작업 환경 선택 | `JRN-agent-prompt-loop`, `JRN-repo-access` | ✅ |
 
 ### 여정 단계 ↔ mockup
 표기: ✅ 전용 화면 · ⚠️ 부분/암시 · ❌ 없음 · ⚪ 의도적 비시각화
@@ -189,6 +189,7 @@
 
 | 시점 | 변경 내용 | 이전 상태 | 이후 상태 |
 |------|-----------|-----------|-----------|
+| 2026-11-05 | **`approval-gated` 타입 제거의 하류 반영 — 승인 게이트는 타입의 능력**. 상류 PRD가 `approval-gate.md`(AC-F1 폐기, AC-F2~F6 유지, 적용 타입 `minimax-code`)로 바뀐 것을 하류에 맞췄다. 여정 `JRN-approval-gated-work`는 식별자를 유지한 채 「게이트가 걸린 세션」의 여정 v0.2로 재작성(달성 가치 V8 → V1 — 타입 선택은 `JRN-agent-prompt-loop`의 `STP-workload-choice`가 계속 담는다), `JRN-agent-prompt-loop`·`JRN-repo-access`는 갈래 서술만 고쳤다. mockup은 `new-session.html`의 `approval-gated` 카드를 걷고 `minimax-code` 카드를 게이트 타입으로, `index.html`·`gated-workspace.html`·`repo-access.html`의 예시 세션을 `minimax-code`로 바꿨다. 여정 페이지 3종(`JRN-approval-gated-work`·`JRN-agent-prompt-loop`·`JRN-session-creation`)의 타입 선택지도 같다. 구현(SPA)은 같은 변경에서 `GET /config`의 `approvalGate`를 따르게 됐다. | 여정 10 · 단계 37 · mockup 7 · 페이지 9/9 | 같음(수치 변화 없음) |
 | 2026-11-01 | **CRIU 퇴역의 하류 반영 (AC-D4 개정)**. 상류에서 모든 타입의 동결이 파일시스템 아카이브로 통일되고 쉘의 보존 대상이 「홈 디렉터리 파일 + 출력 이력, 복원은 새 쉘」로 좁아져, 그 계약을 말하던 하류 표면을 맞췄다: 여정 문서 `JRN-shell-interaction`(v0.3 — `STP-shell-state-carry`·분기표·지표)·`JRN-idle-resume`(v0.3 — 완료 기준·`STP-restore-resume`)·`JRN-multi-session-switch`(v0.3 — 완료 기준 단서)와 README 열린 결정(바쁜 쉘 동결은 이제 작업 중단을 뜻함), 여정 mockup 페이지 넷(`JRN-idle-resume`·`JRN-manual-freeze`·`JRN-multi-session-switch`·`JRN-shell-interaction`의 보존/비보존 카피), 화면 mockup 여섯의 CRIU·「exactly where it froze」 카피(`mockups/README.md` 2026-11-01 항목), SPA `Restore.tsx`·`SessionCard.tsx`. **단계 식별자·분기 행 수·여정·단계·mockup 수와 커버리지 합계는 변하지 않는다** — 바뀐 것은 무엇이 보존되는가의 서술뿐이다. 가치도 변하지 않는다. | 여정 10 · 단계 37 · mockup 7 · 여정 페이지 9/9 | 동일 (내용만 갱신) |
 | 2026-10-24 | **`JRN-repo-access` 신설 — 비공개 레포 허용 목록과 접근 요청의 하류 반영**. 상류에 PRD `repo-access`(AC-H1~H5)가 생기면서, 에이전트의 접근 요청 → control plane 레포 접근 화면에서의 검토·허락 → 호출 승인을 거친 비공개 클론을 여정(4단계)으로 세우고, 화면 단위 mockup `repo-access.html`(대기 요청·허용 목록·로그인 안내)과 여정 페이지 `journeys/JRN-repo-access/`를 함께 신설했다. 사용자 결정으로 **화면 구현에 앞서 mockup을 먼저** 만들었으므로 `repo-access.html`은 「구현이 없는 mockup」에 구현 신호 `RepoAccess`로 등재했다. 요청·비공개 클론 두 단계는 기존 `gated-workspace.html` 콘솔이 같은 자리라 ⚠️로 남겼다. **가치는 변하지 않았다** — V8·V1 상속. 두 신설 파일을 토큰 복제 원장에 `DUP`로 스스로 등재했다. | 여정 9, 단계 33, mockup 6, 여정 페이지 8/8, ✅18 / ⚠️5 | 여정 10, 단계 37, mockup 7, 여정 페이지 9/9, ✅20 / ⚠️7, 구현 없는 mockup 1종 |
 | 2026-09-05 | **`approval-gated` 하류 구현 착지 — mockup 6종이 전부 구현에 대응된다**. SPA가 `workloadType === "claude-code"` 라는 **이진 분기**로 타입을 갈라 왔기 때문에, 프로덕션에서 타입이 켜진 뒤 만들어질 `approval-gated` 세션은 카드에 `$ shell`로 표시되고 셸 터미널로 렌더될 상태였다 — 세 번째 값이 조용히 기본 갈래로 떨어지는 형태의 결함이다. 분기 판정을 `app/workloadKind.ts` 한 곳으로 모아 **에이전트 계열(claude-code · approval-gated)** 과 **게이트 고유 표면**을 나눠, 생성 화면의 세 번째 타입 카드 · 카드 태그 · SSE 루프 · 복원 카피 · `Egress` 패널이 타입을 따라간다. `gated-workspace.html`이 「구현이 없는 mockup」 표에서 `Workspace.tsx`의 1:N 대응으로 이동했고, 패널 차집합 상한이 10 → 15가 됐다(정합성 악화가 아니라 **대조 대상이 하나 는 것**). 남은 mockup-only `Approvals`는 **의도적 보류** — AC-F3이 승인 대기·판정을 별도 event type 없이 in-band 마커로만 흘리기로 해 패널이 읽을 구조화된 소스가 API에 없다. | 구현 없는 mockup 1종, `Workspace.tsx` 1:2, 패널 차집합 10 | 구현 없는 mockup 0종, `Workspace.tsx` 1:3, 패널 차집합 15 |

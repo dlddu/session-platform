@@ -125,6 +125,8 @@ type workloadTypeConfResp struct {
 	Description string               `json:"description"`
 	TakesModel  bool                 `json:"takesModel"`
 	Input       session.InputMode    `json:"input"`
+	// ApprovalGate tells the client to render the gated workspace (AC-F2~F6).
+	ApprovalGate bool `json:"approvalGate"`
 	// DefaultModel is null exactly when TakesModel is false.
 	DefaultModel *string  `json:"defaultModel"`
 	Models       []string `json:"models"`
@@ -159,12 +161,13 @@ func (a *API) runtimeConfig(w http.ResponseWriter, _ *http.Request) {
 			continue
 		}
 		entry := workloadTypeConfResp{
-			Type:        info.Type,
-			Label:       info.Label,
-			Description: info.Description,
-			TakesModel:  info.TakesModel,
-			Input:       info.Input,
-			Models:      []string{},
+			Type:         info.Type,
+			Label:        info.Label,
+			Description:  info.Description,
+			TakesModel:   info.TakesModel,
+			Input:        info.Input,
+			ApprovalGate: info.ApprovalGate,
+			Models:       []string{},
 		}
 		if info.TakesModel {
 			mc := a.modelConfig(info.Type)

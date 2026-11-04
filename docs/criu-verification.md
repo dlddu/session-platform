@@ -14,7 +14,7 @@
 >   쓰던 generation 펜스(prepare → committing → 회수, 실패 시 abort)를 공유한다(`prd/claude-code-workload.md` AC-E5).
 > - **게이트**: `CRIU_ENABLED` → `SHELL_ARCHIVE_ENABLED`(같은 날 프로덕션 base·kind e2e 오버레이 모두 `"true"`).
 >   `approval-gated`에는 새 게이트 `APPROVAL_GATED_ARCHIVE_ENABLED`가 생겨 처음으로 동결할 수 있게 됐고,
->   그 아카이브는 세션 공유 볼륨(`/shared`) 내용까지 담는다(`prd/approval-gated-workload.md` AC-F5).
+>   그 아카이브는 세션 공유 볼륨(`/shared`) 내용까지 담는다(당시 `prd/approval-gated-workload.md`, 지금 `prd/approval-gate.md` AC-F5 — 2026-11-05 에 타입은 제거되었다).
 > - **결정 ③(durable S3 저장소)은 그대로 쓰인다** — 아래 ③ 절의 업로드 경로·권한(인스턴스 프로파일/IRSA +
 >   STS AssumeRole)·env(`CHECKPOINT_S3_*`)는 이제 모든 타입의 아카이브가 공유한다.
 > - **결정 ⑤(에이전트 주도 in-pod CRIU)는 퇴역했다.** "에이전트가 `/checkpoint`·`/restore`로 아카이브를

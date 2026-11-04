@@ -25,6 +25,7 @@ type workloadTypeEntry struct {
 	Description  string   `json:"description"`
 	TakesModel   bool     `json:"takesModel"`
 	Input        string   `json:"input"`
+	ApprovalGate bool     `json:"approvalGate"`
 	DefaultModel *string  `json:"defaultModel"`
 	Models       []string `json:"models"`
 }
@@ -115,7 +116,6 @@ func TestRuntimeConfigUsesEmptyArrayWithoutCatalog(t *testing.T) {
 func TestRuntimeConfigListsWorkloadTypes(t *testing.T) {
 	srv := newServer(
 		api.WithClaudeCodeModelConfig("claude-default", []string{"sonnet", "opus"}),
-		api.WithWorkloadModelConfig(session.WorkloadTypeApprovalGated, "claude-default", []string{"sonnet", "opus"}),
 	)
 	defer srv.Close()
 
@@ -126,7 +126,7 @@ func TestRuntimeConfigListsWorkloadTypes(t *testing.T) {
 		order = append(order, e.Type)
 		byType[e.Type] = e
 	}
-	if want := []string{"shell", "claude-code", "minimax-code", "approval-gated"}; !reflect.DeepEqual(order, want) {
+	if want := []string{"shell", "claude-code", "minimax-code"}; !reflect.DeepEqual(order, want) {
 		t.Fatalf("workload type order = %v, want %v", order, want)
 	}
 	for _, e := range got.WorkloadTypes {
@@ -148,16 +148,28 @@ func TestRuntimeConfigListsWorkloadTypes(t *testing.T) {
 		t.Errorf("shell defaultModel = %v (present=%v), want explicit null", v, ok)
 	}
 
-	for _, typ := range []string{"claude-code", "approval-gated"} {
-		e := byType[typ]
-		if !e.TakesModel || e.Input != "prompt" || e.DefaultModel == nil || *e.DefaultModel != "claude-default" ||
-			!reflect.DeepEqual(e.Models, []string{"sonnet", "opus"}) {
-			t.Errorf("%s = %+v, want prompt with the Claude ConfigMap's default and catalog", typ, e)
-		}
+	cc := byType["claude-code"]
+	if !cc.TakesModel || cc.Input != "prompt" || cc.DefaultModel == nil || *cc.DefaultModel != "claude-default" ||
+		!reflect.DeepEqual(cc.Models, []string{"sonnet", "opus"}) {
+		t.Errorf("claude-code = %+v, want prompt with the Claude ConfigMap's default and catalog", cc)
 	}
 	mm := byType["minimax-code"]
 	if !mm.TakesModel || mm.Input != "prompt" || mm.DefaultModel == nil || *mm.DefaultModel != "platform-default" || len(mm.Models) != 0 {
 		t.Errorf("minimax-code = %+v, want prompt with platform-default and empty catalog", mm)
+	}
+
+	// The gate is a capability the catalog reports per type (AC-F2~F6), so a
+	// client renders the gated workspace without knowing type names. It must be
+	// an explicit boolean on every entry.
+	for typ, want := range map[string]bool{"shell": false, "claude-code": false, "minimax-code": true} {
+		if got := byType[typ].ApprovalGate; got != want {
+			t.Errorf("%s approvalGate = %v, want %v", typ, got, want)
+		}
+	}
+	for i, e := range types {
+		if _, ok := e.(map[string]any)["approvalGate"].(bool); !ok {
+			t.Errorf("workloadTypes[%d] approvalGate is not an explicit boolean", i)
+		}
 	}
 }
 

@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// minimax-code runs behind approval-gated's boundary (AC-G6): its workload pod
+// minimax-code runs behind the approval gate's boundary (AC-G6): its workload pod
 // reaches nothing but its session's helper pod, which serves the provider
 // proxy, the session MCP and the K3s MCP proxy. This file is the agent's side
 // of that arrangement — the three addresses it is given, and the MCP servers it

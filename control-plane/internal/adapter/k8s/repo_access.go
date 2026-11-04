@@ -29,7 +29,7 @@ const (
 
 // WithRepoAccess hands helper pods the control plane's in-cluster address for
 // the internal repo access API. Empty leaves the feature off: no token is
-// projected and approval-gated helpers run no K3s MCP proxy.
+// projected into the helper pod's session MCP container.
 func WithRepoAccess(controlPlaneURL string) Option {
 	return func(o *ClientOrchestrator) {
 		o.repoAccessURL = strings.TrimRight(strings.TrimSpace(controlPlaneURL), "/")

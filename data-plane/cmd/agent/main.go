@@ -2,9 +2,9 @@
 // by DATA_PLANE_WORKLOAD (default "shell"). The switch in main lists them, and
 // each mode's contract lives with its own code: shell here (AC-D1~D3) and its
 // archive in checkpoint.go (AC-D4),
-// claude-code and approval-gated in claude.go (AC-E2~E5) with their tool
-// surfaces in agentToolSurface below, mcp in session_mcp.go, credential-proxy
-// in credential_proxy.go.
+// claude-code in claude.go (AC-E2~E5) with its tool surface in
+// agentToolSurface below, minimax-code in minimax_code.go on the same runner,
+// mcp in session_mcp.go, credential-proxy in credential_proxy.go.
 package main
 
 import (
@@ -34,7 +34,6 @@ const (
 	workloadEnv             = "DATA_PLANE_WORKLOAD"
 	workloadShell           = "shell"
 	workloadClaudeCode      = "claude-code"
-	workloadApprovalGated   = "approval-gated"
 	workloadSessionMCP      = "mcp"
 	workloadCredentialProxy = "credential-proxy"
 
@@ -107,7 +106,7 @@ func main() {
 			a.adopt(sh)
 			logger.Info("session shell started", "shell", a.shellPath, "pid", sh.pid, "addr", addr, "home", a.homeDir())
 		}
-	case workloadClaudeCode, workloadApprovalGated:
+	case workloadClaudeCode:
 		tools, err := agentToolSurface(workload)
 		if err != nil {
 			logger.Error("unsafe agent credential configuration", "workload", workload, "err", err)
@@ -134,12 +133,6 @@ func main() {
 			os.Exit(1)
 		}
 		a.claude = claude
-		if workload == workloadApprovalGated {
-			// AC-F3's wait marker (session_mcp_notice_tail.go). Only this type
-			// has a gate to report on and a helper pod to ask.
-			tailer := newNoticeTailer(tools.SessionMCP, claude, logger)
-			go tailer.run(claude.ctx)
-		}
 		logger.Info("agent workload started", "workload", workload, "addr", addr,
 			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode)
 	case workloadMiniMaxCode:
@@ -675,9 +668,9 @@ func durationEnv(k string, def time.Duration) (time.Duration, error) {
 	return duration, nil
 }
 
-// agentToolSurface validates the credential wiring of a one-shot agent workload
-// and reports the platform-managed tool surface it must run with. The two agent
-// types share an execution model and differ only here.
+// agentToolSurface validates the credential wiring of a Claude CLI workload and
+// reports the platform-managed tool surface it must run with. minimax-code
+// validates its own (validateMiniMaxClientEnv).
 func agentToolSurface(workload string) (toolSurface, error) {
 	switch workload {
 	case workloadClaudeCode:
@@ -685,13 +678,6 @@ func agentToolSurface(workload string) (toolSurface, error) {
 			return toolSurface{}, err
 		}
 		return toolSurface{Plugin: true}, nil
-	case workloadApprovalGated:
-		mcpURL, err := validateApprovalGatedClientEnv()
-		if err != nil {
-			return toolSurface{}, err
-		}
-		// The same volume the MCP container spills into (AC-F5).
-		return toolSurface{SessionMCP: mcpURL, SharedDir: env(sharedVolumeDirEnv, "")}, nil
 	default:
 		return toolSurface{}, fmt.Errorf("workload %q has no agent tool surface", workload)
 	}

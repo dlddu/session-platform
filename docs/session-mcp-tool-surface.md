@@ -37,11 +37,11 @@
 > 2026-11-01 착지(사용자 결정 — `drop_upload`·`drop_download`, [`prd/drop-file-share.md`](./prd/drop-file-share.md) AC-I1~I4. 같은 운영자의 클러스터 안
 > 파일 전달 서비스 drop 으로 공유 볼륨의 파일을 내보내고 받아 온다. **R1의 명시적 예외가 다섯이 됐다**(조건은 R1 항목). 인자·결과에는
 > 경로·메타데이터만 싣는다 — 파일 바이트가 도구 I/O 를 지나면 대화 컨텍스트를 태운다. 2·3번의 번호와 근거는 움직이지 않았다)*.
-> `approval-gated` 세션에서 에이전트가 파드 밖에 닿는 유일한 경로는 그 세션 헬퍼 파드의 MCP이고,
+> 승인 게이트를 쓰는 타입의 세션(지금은 `minimax-code`, [`prd/approval-gate.md`](./prd/approval-gate.md) 「적용 타입」)에서 에이전트가 파드 밖에 닿는 경로는 그 세션 헬퍼 파드의 MCP이고(타입 PRD가 열거한 예외 — `minimax-code`의 K3s MCP 도구, AC-G6 — 밖에서),
 > **그 표면에서 파드 밖에 닿는 것은** R1 의 명시적 예외를 빼고 전부 AC-F3의 승인 게이트를 지난다(AC-F6의 확정 항목). 이
 > 문서는 **그 표면에 무엇을 실을지 판정하는 자리**다.
 
-> 📌 **정본 관계**: 도구 표면이 *무엇을 보장해야 하는가*는 [`prd/approval-gated-workload.md`](./prd/approval-gated-workload.md)의
+> 📌 **정본 관계**: 도구 표면이 *무엇을 보장해야 하는가*는 [`prd/approval-gate.md`](./prd/approval-gate.md)의
 > AC-F3·F5·F6이, *지금 실제로 무엇을 내는가*는 `data-plane/cmd/agent/session_mcp_tools.go`의
 > `toolDefinitions`가 갖는다. 이 문서는 그 둘 사이의 **판정 기준과 구현 대상 등재**만 갖고 사본을 두지 않는다 —
 > 도구의 인자·응답 스키마를 여기에 다시 적으면 코드가 바뀔 때 조용히 거짓이 된다
@@ -238,7 +238,7 @@ R4(사람이 읽고 판정할 수 있는 컨텍스트)가 함께 설계되어야
 - **범위**: 한꺼번에 다 내지 않는다. 읽기(로그·파드 조회·검색)와 쓰기(재시작·스케일·문서 색인)는 승인
   컨텍스트의 성격이 다르다 — 쓰기는 「무엇을 어떻게 바꾸는가」가 사람에게 읽히는 형태여야 한다(R4).
 - **사본 금지**: 어느 도구를 냈는지의 목록은 코드가 갖는다. 이 문서에 그 목록을 복사하지 않는다.
-- **이것과 헷갈리지 않을 것 (2026-10-24)**: repo access opt-in 배포에서 `approval-gated` 헬퍼 파드에도 K3s MCP
+- **이것과 헷갈리지 않을 것 (2026-10-24; 2026-11-05 갱신 — 아래의 `approval-gated` 배치는 그 타입과 함께 사라졌고, 지금 토큰 발급은 `minimax-code` 헬퍼 파드의 K3s MCP 프록시가 한다)**: repo access opt-in 배포에서 `approval-gated` 헬퍼 파드에도 K3s MCP
   프록시 컨테이너가 선다(AC-H5). **그것은 이 항목의 재노출이 아니다** — 그 프록시를 부르는 것은 같은 파드의
   세션 MCP뿐이고, 부르는 일도 허용 목록이 허락한 `git_clone` 안의 **토큰 발급 하나**뿐이며, 그 포트는 워크로드 파드에
   열리지 않는다(AC-F2 경계 그대로). 도구 표면에 K3s 도구는 하나도 오르지 않았다. AC-F6의 네 조건으로 읽으면:
@@ -286,8 +286,8 @@ R4(사람이 읽고 판정할 수 있는 컨텍스트)가 함께 설계되어야
   없다(`helperPodSpec`은 ServiceAccount를 주지 않는다). *걷은 축은 권한이다*: 그 SA가 갖는 것은 `view`와
   노드 읽기뿐이라(`k8s/data-plane-rbac.yaml`) `apply`·`exec`는 **애초에 되지 않고**, 되게 하려면 RBAC을
   넓혀야 한다 — 조회 쪽은 위 2번이 도구별로 좁은 승인 컨텍스트에 실어 내므로(R4), **`kubectl`이 그 위에
-  더하는 고유분이 정확히 그 확대분이다.** 그리고 그 SA는 `approval-gated` 전용이 아니다 — 워크로드 파드
-  스펙은 **타입 공통**이고 그 토큰을 자동 마운트하는데, egress 정책과 승인 게이트는 `approval-gated`
+  더하는 고유분이 정확히 그 확대분이다.** 그리고 그 SA는 게이트 타입 전용이 아니다 — 워크로드 파드
+  스펙은 **타입 공통**이고 그 토큰을 자동 마운트하는데, egress 정책과 승인 게이트는 게이트를 쓰는 타입의
   분기에서만 붙는다. **게이트 뒤에 도구 하나를 세우려고 넓힌 권한이, 게이트가 아예 없는 `shell`·
   `claude-code` 워크로드 파드에 그대로 열린다.** 전용 자격 증명으로 그 누출을 피해도 그 신원이 앉을
   자리는 플랫폼의 외부 Secret 둘을 이미 다 든 헬퍼 파드다(AC-F6). **미룸이 아니라 기각인 이유가
@@ -299,10 +299,10 @@ R4(사람이 읽고 판정할 수 있는 컨텍스트)가 함께 설계되어야
 
 ## 관련 문서
 
-- [`prd/approval-gated-workload.md`](./prd/approval-gated-workload.md) — AC-F3(게이트)·F5(공유 볼륨)·F6(자격 증명 배치)의 정본
+- [`prd/approval-gate.md`](./prd/approval-gate.md) — AC-F3(게이트)·F5(공유 볼륨)·F6(자격 증명 배치)의 정본
 - [`prd/repo-access.md`](./prd/repo-access.md) — AC-H4(`request_repo_access`)·H5(비공개 `git_clone`)의 정본 · [`test/repo-access.md`](./test/repo-access.md)
 - [`prd/drop-file-share.md`](./prd/drop-file-share.md) — AC-I1~I4(`drop_upload`·`drop_download`)의 정본 · [`test/drop-file-share.md`](./test/drop-file-share.md)
-- [`test/approval-gated-workload.md`](./test/approval-gated-workload.md) — 위 AC의 검증 시나리오
+- [`test/approval-gate.md`](./test/approval-gate.md) — 위 AC의 검증 시나리오
 - [`doc-tracker/`](./doc-tracker/index.md) — 이 표면의 선행·차단 요인이 걸려 있는 **열린 항목의 정본**(무엇이 열려 있는지의 목록은 그쪽이 갖는다)
 - [`mockups/gated-workspace.html`](./mockups/gated-workspace.html) · [`user-journeys/JRN-approval-gated-work.md`](./user-journeys/JRN-approval-gated-work.md) — 사람이 보는 쪽
 - [`comment-policy/README.md`](./comment-policy/README.md) — 「포인터는 남기고 사본은 지운다」의 정본
