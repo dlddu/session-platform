@@ -129,11 +129,63 @@
 
 ---
 
+## 10. 화면 식별자
+
+여정 단계가 그리는 제품 표면을 기계적으로 세려면 축이 세 개다 — **화면 · 상태 · 여정 밖 행동**.
+각 축은 속성 하나로 드러내고, 하네스가 브라우저에서 세어
+[`../mockups/README.md`](../mockups/README.md) 의 「단계별 화면·상태 목록」 과 대조한다.
+
+**화면 표면(screen)** — 한 단계가 지나는 제품 표면 하나.
+
+```html
+<div class="card screen" data-screen="new-session">
+```
+
+- 한 단계에 표면이 둘이면 **둘 다** `.screen` 이고 `data-screen` 가 서로 달라야 한다.
+
+**화면 식별자(screen-id)** — 구현 화면 이름의 kebab-case.
+
+- `web/src/screens/NewSession.tsx` → `new-session` · `web/src/app/DeleteSessionDialog.tsx` → `delete-session-dialog`.
+- **같은 화면은 단계·여정이 달라도 같은 식별자다** — 이 식별자가 mockup 화면 ↔ 구현 화면을 잇는 키다.
+- 한 구현 화면이 1:N으로 갈리면(`Workspace.tsx`) 변형마다 `workspace` · `agent-workspace` · `gated-workspace` 를 쓴다.
+
+**상태(state)** — 그 화면이 실제로 그리는 변형. 변형을 실현하는 요소에 `data-state="<state-id>"`.
+
+- 허용 값: `error` · `info` · `success` · `warning` · `pending` · `empty` · `result`.
+
+**여정 밖 행동(off-path)** — 여정 경로에 속하지 않는 보조 행동. `data-offpath="<action-id>"`.
+
+- `data-offpath` 를 단 요소는 `data-advance-to` · `data-branch-row` 를 함께 갖지 않는다 — 여정 밖이므로 전진도 분기도 아니다.
+
+**`data-state` 는 화면 상태에만 쓴다.**
+
+- 세션 생명주기 배지(`active` · `snapshot`)는 `data-session-state` 다 —
+  구현 `web/src/app/SessionCard.tsx` 의 `data-state` 와 **이름이 겹치지 않게** 한다.
+
+**배치 규칙**
+
+- `data-state` · `data-offpath` 를 가진 요소는 반드시 `.screen` 안에 있어야 한다.
+  (규칙 4의 분기 결과 메모 `[data-state-note]` 만 예외 — 그 단계의 마지막 화면 뒤 구역에 붙는 장치로 본다.)
+
+**집행**
+
+- 규약 위반은 `tools/journey-prototype.test.mjs` 가 CI(`ci` 워크플 `journey-prototype` 잡)에서 집행한다.
+  **규약과 하네스는 같은 커밋에서 같이 고친다.**
+- 단계별 화면·상태 목록의 정본은 DOM이고, 인덱스 표는 그 실측이다 — 둘이 어긋나면 하네스가 실패한다.
+
+**단면 금지**
+
+- 화면은 여정 경로에 필요한 요소만이 아니라 **구현될 모습 전체**를 담아야 한다 —
+  앱 크롬·다른 탭·메뉴 항목 같은 여정 밖 행동도 그리되 `data-offpath` 로 표시한다.
+- 이 축의 실제 시공은 아직 없다 — 현재 `data-offpath` 는 1건(`cancel-create`)뿐이다.
+
+---
+
 ## 페이지를 새로 만들 때
 
 1. `../user-journeys/JRN-<슬러그>.md` 의 단계 헤딩과 분기표를 그대로 읽어 온다.
    (단계 헤딩은 `### \`STP-…\`` 처럼 백틱 코드스팬 안에 있다 — `^### STP-` 로 grep 하면 0건이 나온다.)
-2. 위 1~9 를 지켜 `<journey-id>/index.html` 을 만든다.
+2. 위 1~10 을 지켜 `<journey-id>/index.html` 을 만든다.
 3. `../mockups/README.md` 의 매핑 표에서 그 여정 행을 `⏳ 예정` → `✅` 로 올리고 공개 경로를 적는다.
 4. `../index.html` 허브의 그 여정 행 링크를 `journeys/<journey-id>/` 로 바꾼다.
 5. 다른 여정 페이지가 이 여정을 `data-branch-pending` 으로 걸어 두었으면 실제 링크로 승급한다

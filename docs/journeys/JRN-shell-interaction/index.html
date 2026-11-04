@@ -134,12 +134,12 @@
 
   <!-- ────────────────────────── STP-shell-attach ──────────────────────────── -->
   <section class="step" data-step="STP-shell-attach" id="STP-shell-attach">
-    <div class="card">
+    <div class="card screen" data-screen="workspace">
       <div class="row"><h1>session shell</h1><span class="spacer"></span>
         <span class="crumb">pod <span class="mono">sess-refactor-billing-0</span></span></div>
       <p class="sub">별도의 접속 절차는 없습니다 — 세션을 열면 이미 떠 있는 쉘 앞에 앉습니다.</p>
 
-      <div class="banner info" id="attach-banner">이전 출력 이력을 그대로 다시 불러왔습니다 (잘린 구간 없음).</div>
+      <div class="banner info" data-state="info" id="attach-banner">이전 출력 이력을 그대로 다시 불러왔습니다 (잘린 구간 없음).</div>
 
       <div class="term mono" id="attach-term"><span class="o">$ cd /work/billing
 $ npm run build
@@ -154,7 +154,7 @@ $ npm run build
         <button class="btn primary" id="btn-to-prompt" data-advance-to="STP-command-input">이력 끝으로 이동해 입력 시작</button>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
     </div>
 
     <details class="step-meta">
@@ -170,12 +170,12 @@ $ npm run build
 
   <!-- ────────────────────────── STP-command-input ─────────────────────────── -->
   <section class="step" data-step="STP-command-input" id="STP-command-input" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="workspace">
       <div class="row"><h1>session shell</h1><span class="spacer"></span>
         <span class="crumb"><span class="mono" id="ci-cwd-crumb">/work/billing</span></span></div>
       <p class="sub">평소 쓰던 터미널처럼 칩니다. 다른 점이 있는 지점은 콘솔이 명시적으로 알립니다.</p>
 
-      <div class="banner warn" id="ci-diff-note">붙여넣기 개행은 한 번에 실행됩니다 — 일반 터미널과 다른 유일한 지점입니다.</div>
+      <div class="banner warn" data-state="warning" id="ci-diff-note">붙여넣기 개행은 한 번에 실행됩니다 — 일반 터미널과 다른 유일한 지점입니다.</div>
 
       <div class="term mono" id="ci-term"><span class="o">$ cd /work/billing
 $ npm run build
@@ -189,7 +189,7 @@ $ npm run build
         <button class="btn primary" id="btn-run" data-advance-to="STP-output-read">Run</button>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">여기서 갈라지는 길</span>
@@ -217,12 +217,12 @@ $ npm run build
 
   <!-- ────────────────────────── STP-output-read ───────────────────────────── -->
   <section class="step" data-step="STP-output-read" id="STP-output-read" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="workspace">
       <div class="row"><h1>session shell</h1><span class="spacer"></span>
         <span class="pill" id="or-cursor">읽기는 비파괴 — 나갔다 와도 이력이 남습니다</span></div>
       <p class="sub">계속 보고 있으면 새 출력만 이어 붙고, 나갔다 들어오면 처음부터 다시 볼 수 있습니다.</p>
 
-      <div class="banner warn" id="or-trunc" hidden>
+      <div class="banner warn" data-state="warning" id="or-trunc" hidden>
         누적 출력이 한계에 근접해 앞부분을 잘랐습니다 — 조용히 자르지 않고 잘림 지점을 표시합니다.
         <button type="button" class="btn ghost small" id="btn-read-truncated" hidden
                 data-branch-row="4"
@@ -230,7 +230,7 @@ $ npm run build
                 data-branch-open="trigger-trunc">잘림 표시를 확인하고 계속 읽기</button>
       </div>
 
-      <div class="banner err" id="or-dead" hidden>쉘 프로세스가 종료되었습니다 — 되살릴지 정리할지 고르세요.</div>
+      <div class="banner err" data-state="error" id="or-dead" hidden>쉘 프로세스가 종료되었습니다 — 되살릴지 정리할지 고르세요.</div>
 
       <div class="term mono" id="or-term"><span class="o">$ npm run build
 &gt; billing@0.4.1 build
@@ -243,7 +243,7 @@ $ npm run build
         <button class="btn primary" id="btn-continue" data-advance-to="STP-shell-state-carry">이어서 실행</button>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">여기서 갈라지는 길</span>
@@ -267,12 +267,12 @@ $ npm run build
 
   <!-- ────────────────────────── STP-shell-state-carry ─────────────────────── -->
   <section class="step" data-step="STP-shell-state-carry" id="STP-shell-state-carry" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="workspace">
       <div class="row"><h1>session shell</h1><span class="spacer"></span>
         <span class="crumb">동결을 건너 남는 것은 홈 디렉터리의 파일과 출력뿐입니다</span></div>
       <p class="sub">앞선 명령이 만든 상태 위에서 다음 명령이 실행됩니다. 세션이 살아 있는 동안 이어지고, 동결·복원 뒤에는 홈 디렉터리에서 새 쉘이 시작됩니다.</p>
 
-      <div class="banner info" id="sc-restart" hidden>
+      <div class="banner info" data-state="info" id="sc-restart" hidden>
         컨테이너가 재시작되었습니다 — <strong>복원이 아닙니다.</strong> 새 쉘로 시작하므로 이전 상태는 이어지지 않습니다.
         <button type="button" class="btn ghost small" id="btn-reattach" hidden
                 data-branch-row="5"
@@ -299,7 +299,7 @@ stg in /work/billing</span>
                    value="echo &quot;$DEPLOY_ENV in $(pwd)&quot;" autocomplete="off">
             <button class="btn primary" id="btn-run-stateful">상태에 의존하는 명령 실행</button>
           </div>
-          <p class="state-note" data-state-note hidden></p>
+          <p class="state-note" data-state="result" data-state-note hidden></p>
           <div class="row" style="margin-top:16px" data-journey-end>
             <span class="pill" style="border-color:var(--ok);color:var(--ok)" id="sc-done">완료 — 상태에 의존하는 명령 연쇄 성공</span>
           </div>

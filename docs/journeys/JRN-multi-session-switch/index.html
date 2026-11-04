@@ -144,11 +144,11 @@
 
   <!-- ────────────────────────── STP-session-list ────────────────────────── -->
   <section class="step" data-step="STP-session-list" id="STP-session-list">
-    <div class="card">
+    <div class="card screen" data-screen="sessions">
       <h1>Sessions</h1>
       <p class="sub">지금 살아 있는 것과 접혀 있는 것을 한 화면에서 봅니다 — <strong>어느 것이 살아 있는지 계산할 필요가 없습니다.</strong></p>
 
-      <div class="banner err" id="gone-404" hidden>
+      <div class="banner err" data-state="error" id="gone-404" hidden>
         <span class="mono">spike-tokenizer</span> 는 이미 삭제된 세션입니다 (404).
         빈 세션을 새로 만들지 않고 목록으로 되돌렸습니다.
       </div>
@@ -169,7 +169,7 @@
       </div>
 
       <ul class="slist" id="session-list">
-        <li data-state="active" data-name="refactor-billing">
+        <li data-session-state="active" data-name="refactor-billing">
           <span class="nm mono">refactor-billing</span>
           <span class="pill on">active</span>
           <span class="pill mono">shell</span>
@@ -177,13 +177,13 @@
           <span class="spacer"></span>
           <button class="btn small primary" id="btn-open-a" data-advance-to="STP-switch-away">이어서 작업하기</button>
         </li>
-        <li data-state="snapshot" data-name="spike-tokenizer">
+        <li data-session-state="snapshot" data-name="spike-tokenizer">
           <span class="nm mono">spike-tokenizer</span>
           <span class="pill snap">snapshot</span>
           <span class="pill mono">claude-code</span>
           <span class="when">3시간 전 접힘 · 다시 열 수 있음</span>
         </li>
-        <li data-state="active" data-name="docs-portal">
+        <li data-session-state="active" data-name="docs-portal">
           <span class="nm mono">docs-portal</span>
           <span class="pill on">active</span>
           <span class="pill mono">shell</span>
@@ -191,9 +191,9 @@
         </li>
       </ul>
 
-      <p class="empty" id="list-empty" hidden>조건에 맞는 세션이 없습니다. 조건을 지우면 전체가 다시 보입니다.</p>
+      <p class="empty" data-state="empty" id="list-empty" hidden>조건에 맞는 세션이 없습니다. 조건을 지우면 전체가 다시 보입니다.</p>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">여기서 갈라지는 길</span>
@@ -216,7 +216,7 @@
 
   <!-- ────────────────────────── STP-switch-away ────────────────────────── -->
   <section class="step" data-step="STP-switch-away" id="STP-switch-away" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="workspace">
       <div class="row" style="margin-bottom:14px">
         <h1 style="margin:0"><span class="mono">refactor-billing</span></h1>
         <span class="pill on">active</span>
@@ -231,7 +231,7 @@
 &gt; building… (계속 진행 중)
 </div>
 
-      <div class="banner info">
+      <div class="banner info" data-state="info">
         나가도 이 세션의 실행은 계속됩니다. 돌아오면 그 사이의 출력까지 이어서 봅니다.
       </div>
 
@@ -239,7 +239,7 @@
         <button class="btn primary" id="btn-goto-b" data-advance-to="STP-target-activation">목록으로 나가서 <span class="mono">spike-tokenizer</span> 열기</button>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">이 화면에서 마주치는 상태</span>
@@ -265,7 +265,7 @@
 
   <!-- ─────────────────────── STP-target-activation ─────────────────────── -->
   <section class="step" data-step="STP-target-activation" id="STP-target-activation" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="workspace">
       <div class="row" style="margin-bottom:14px">
         <h1 style="margin:0"><span class="mono">spike-tokenizer</span></h1>
         <span class="pill" id="b-state">active</span>
@@ -274,7 +274,7 @@
         <span class="crumb">세션 B</span>
       </div>
 
-      <div class="banner info" id="restoring" hidden>
+      <div class="banner info" data-state="info" id="restoring" hidden>
         접혀 있던 세션이라 <strong>복원 중</strong>입니다. 입구는 같고, 차이는 이 표시 하나뿐입니다.
       </div>
 
@@ -294,7 +294,7 @@
         <button class="btn primary" id="btn-back-a" data-advance-to="STP-switch-back">다시 <span class="mono">refactor-billing</span> 으로 돌아가기</button>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">여기서 갈라지는 길</span>
@@ -318,7 +318,7 @@
 
   <!-- ────────────────────────── STP-switch-back ────────────────────────── -->
   <section class="step" data-step="STP-switch-back" id="STP-switch-back" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="workspace">
       <div class="row" style="margin-bottom:14px">
         <h1 style="margin:0"><span class="mono">refactor-billing</span></h1>
         <span class="pill on">active</span>
@@ -327,7 +327,7 @@
         <span class="crumb">세션 A — 돌아옴</span>
       </div>
 
-      <div class="banner ok">
+      <div class="banner ok" data-state="success">
         떠나 있는 동안에도 계속 돌았습니다. 빌드가 끝나 있고, 그 사이 출력이 빠짐없이 남아 있습니다.
       </div>
 
@@ -350,7 +350,7 @@ $ </div>
         <dt>격리</dt><dd>세션 A·B는 각자의 워크로드 파드 — 전환은 격리를 깨지 않습니다</dd>
       </dl>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="row" style="margin-top:16px" data-journey-end>
         <span class="pill" style="border-color:var(--ok);color:var(--ok)">완료 — 두 세션 모두 전환 직전 상태 그대로 이어짐</span>

@@ -4,8 +4,8 @@
 # differences. Keep environment-neutral defaults here.
 #
 # 이 base 를 소비하는 곳이 셋이다:
-#   1) 운영    flux-cd-apps/cluster/session-platform.yaml — main 브랜치를 추적하되,
-#              돌아가는 이미지는 deployment.yaml 에 SHA 로 고정되어 있다(CI 의 `pin`).
+#   1) 운영    flux-cd-apps/cluster/session-platform.yaml — deploy 브랜치를 추적한다.
+#              deploy = main@SHA + 「deployment.yaml 을 그 SHA 로 고정」 커밋(CI 의 `pin`).
 #   2) PR 프리뷰 flux-cd-apps/apps/session-platform-preview — PR head SHA 에 고정하고
 #              S3 체크포인트 저장소는 주입하지 않는다(아카이브 게이트 off).
 #   3) e2e     deploy/ 오버레이 — 로컬 빌드 이미지 + MinIO.
