@@ -386,12 +386,15 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 5
     permissions:
-      # 이 job 만 main 에 커밋한다. 워크플로 전체 기본값은 contents: read 유지.
+      # 이 job 만 deploy 브랜치에 push 한다. 워크플로 전체 기본값은 contents: read 유지.
       contents: write
     steps:
+      # main 의 HEAD 가 아니라 방금 빌드한 커밋 그대로를 deploy 의 부모로 삼는다.
+      # 전체 히스토리는 아래 「더 새 커밋이 이미 발행됐는가」 조상 판정에 쓴다.
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
+          fetch-depth: 0
 
       - name: Pin k8s/deployment.yaml images to ${{ github.sha }}
         env:
@@ -426,21 +429,30 @@ jobs:
           n=$(grep -cE "ghcr\.io/dlddu/session-platform[a-z-]*:${SHA}" "$f" || true)
           [ "$n" -ge 3 ] || { echo "::error::$f: 고정된 참조가 ${n}개뿐입니다(3개 이상 기대)"; exit 1; }
 
-          if git diff --quiet; then
-            echo "이미 ${SHA} 로 고정되어 있음 — 커밋할 것 없음(재실행)."
-            exit 0
+          # ── deploy 브랜치로 발행 ─────────────────────────────────────────────
+          # main 은 ruleset(required status check)으로 보호되어 봇이 직접 커밋할 수 없다.
+          # 대신 「main@SHA + 고정 커밋 하나」를 deploy 브랜치로 force-push 하고, Flux 는
+          # deploy 를 추적한다(homelab-k3s-mcp 와 같은 방식). 기본 GITHUB_TOKEN 의 push 는
+          # 새 워크플로를 트리거하지 않고, 어떤 워크플로도 deploy 푸시에 걸려 있지 않다.
+          git fetch --no-tags origin +refs/heads/deploy:refs/remotes/origin/deploy 2>/dev/null || true
+          old=$(git rev-parse -q --verify refs/remotes/origin/deploy || true)
+
+          # 늦게 끝난 옛 실행이 더 새 배포를 덮지 않게 한다. deploy 끝 커밋의
+          # Source-Commit 트레일러가 이 SHA 의 후손이면 이미 앞서 있으니 건너뛴다.
+          # (롤백은 main 에 revert PR 을 올리는 것 — 그 머지가 새 SHA 로 다시 여기를 탄다.)
+          if [ -n "$old" ]; then
+            cur=$(git log -1 --format='%(trailers:key=Source-Commit,valueonly)' "$old" | tr -d '[:space:]')
+            if [ -n "$cur" ] && [ "$cur" != "$SHA" ] && git merge-base --is-ancestor "$SHA" "$cur" 2>/dev/null; then
+              echo "deploy 는 이미 더 새로운 main 커밋(${cur})을 가리킨다 — 건너뜀."
+              exit 0
+            fi
           fi
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -am "chore(deploy): session-platform 이미지를 ${SHA} 로 고정 [skip ci]"
+          git commit -a --allow-empty \
+            -m "deploy: session-platform 이미지를 ${SHA} 로 고정" \
+            -m "Source-Commit: ${SHA}"
 
-          # 이 push 는 기본 GITHUB_TOKEN 으로 나가므로 새 워크플로 실행을 트리거하지
-          # 않는다(GitHub 문서화된 동작). 나중에 PAT/App 토큰으로 바꾸더라도 커밋
-          # 메시지의 [skip ci] 가 재귀를 한 번 더 막는다.
-          # 머지가 연달아 들어와 main 이 앞서 있으면 rebase 후 재시도.
-          for i in 1 2 3; do
-            git push origin HEAD:main && exit 0
-            git pull --rebase origin main
-          done
-          exit 1
+          # lease 로 「읽은 뒤 누가 먼저 밀었으면」 실패시킨다(old 가 비면 = 브랜치가 없어야 함).
+          git push --force-with-lease="refs/heads/deploy:${old}" origin HEAD:refs/heads/deploy
