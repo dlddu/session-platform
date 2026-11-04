@@ -22,7 +22,7 @@
 
 | 판정일 | 범위 | 주석 줄 | 지문 | 판정 | 결과 |
 | --- | --- | ---: | --- | --- | --- |
-| 2026-11-02 | `.github/workflows/ci.yml` | 119 | `988bdd2b0ad3` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. |
+| 2026-11-02 | `.github/workflows/ci.yml` | 126 | `14062a48fbcf` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. *2026-11-04 main 반영 재측정(44b1128 #195·07e2b1c #196 반영): `.github/workflows/ci.yml` 119→126줄. 판정하지 않았다 — 판정 칸 `—` 유지.* |
 | 2026-11-02 | `.github/workflows/e2e.yml` | 51 | `0f15cf5f7162` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. |
 | 2026-11-02 | `.gitignore` | 11 | `18a02dcf52b6` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. |
 | 2026-11-02 | `Makefile` | 47 | `35783f7b5041` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. |
@@ -110,7 +110,7 @@
 | 2026-11-02 | `k8s/claude-code-credentials-secret.example.yaml` | 18 | `1fd042989b3b` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. *2026-11-04 main 반영 재측정: fda2459 의 반영으로 이 범위의 주석이 바뀐 파일 — `k8s/claude-code-credentials-secret.example.yaml` 46→18줄. 판정하지 않았다 — 판정 칸 `—` 유지.* |
 | 2026-11-02 | `k8s/data-plane-rbac.yaml` | 14 | `9228646c2800` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. |
 | 2026-11-02 | `k8s/deployment.yaml` | 108 | `87552ae6c5bf` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. *2026-11-04 main 반영 재측정: 2e101af·5c0df6a·bdb7a86·fda2459 의 반영으로 이 범위의 주석이 바뀐 파일 — `k8s/deployment.yaml` 100→108줄. 판정하지 않았다 — 판정 칸 `—` 유지.* |
-| 2026-11-02 | `k8s/kustomization.yaml` | 15 | `c9dd5c3eaaef` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. |
+| 2026-11-02 | `k8s/kustomization.yaml` | 15 | `0f336eeba18c` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. *2026-11-04 main 반영 재측정(44b1128 #195·07e2b1c #196 반영): `k8s/kustomization.yaml` 15줄 유지·내용 변경. 판정하지 않았다 — 판정 칸 `—` 유지.* |
 | 2026-11-04 | `k8s/minimax-code-config-configmap.example.yaml` | 27 | `a333213351d3` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. fda2459 k8s: 비밀 아닌 설정을 ConfigMap 으로 읽기 (checkpoint-s3, claude-code, minimax-code) (#187) 가 이 파일을 판정 범위에 들였다. |
 | 2026-11-02 | `k8s/minimax-code-credentials-secret.example.yaml` | 25 | `dced3711e2e8` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. *2026-11-04 main 반영 재측정: fda2459 의 반영으로 이 범위의 주석이 바뀐 파일 — `k8s/minimax-code-credentials-secret.example.yaml` 35→25줄. 판정하지 않았다 — 판정 칸 `—` 유지.* |
 | 2026-11-02 | `k8s/network-policy.yaml` | 19 | `3323c4f8032b` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. |
@@ -123,7 +123,7 @@
 | 2026-11-02 | `scripts/e2e/check-scenario-mapping.sh` | 75 | `4e461f07f925` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. |
 | 2026-11-02 | `scripts/e2e/down.sh` | 1 | `3f2f7bc434c2` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. |
 | 2026-11-02 | `scripts/e2e/up.sh` | 53 | `2aae99d1256e` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. |
-| 2026-11-02 | `tools/journey-prototype.test.mjs` | 42 | `56068d32ad61` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. |
+| 2026-11-02 | `tools/journey-prototype.test.mjs` | 55 | `11f5f549663f` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. *2026-11-04 main 반영 재측정(44b1128 #195·07e2b1c #196 반영): `tools/journey-prototype.test.mjs` 42→55줄. 판정하지 않았다 — 판정 칸 `—` 유지.* |
 | 2026-09-06 | `web/e2e/journeys/deferred.spec.ts` · `web/e2e/journeys/j1-session-creation.spec.ts` · `web/e2e/journeys/j3-multi-session-switch.spec.ts` · `web/e2e/journeys/j5-shell-interaction.spec.ts` · `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` · `web/e2e/journeys/j6-model-selection.spec.ts` · `web/e2e/journeys/j6-stream-recovery.spec.ts` · `web/e2e/journeys/manual-archive.spec.ts` · `web/e2e/journeys/session-deletion.spec.ts` · `web/e2e/smoke.spec.ts` · `web/src/api/client.ts` · `web/src/api/types.ts` · `web/src/app/SessionCard.tsx` · `web/src/app/Toast.tsx` · `web/src/app/sessionRoutes.ts` · `web/src/app/shell.css` · `web/src/app/workloadKind.ts` · `web/src/design/tokens.css` · `web/src/main.tsx` · `web/src/screens/NewSession.tsx` · `web/src/screens/Restore.tsx` · `web/src/screens/Sessions.tsx` · `web/src/screens/Workspace.tsx` | 150 | `3370f3d637c1` | — | 8차 판정 패스 — **379줄 판정, 제거 231 · 유지 146**(지문 기준 379 → 148; `tokens.css`의 CSS 전체 선택자 `* {` 2줄은 주석이 아니라 이 패스가 새로 찾은 오검출이다). **`web/` 스캔 범위 전량**이고, 이 행으로 남는 미판정은 `control-plane/test/` 하나뿐이다. [상세](./passes/2026-09-06-web.md) *2026-11-01 증분 재판정: CRIU 퇴역(모든 타입 파일시스템 아카이브 전환) 슬라이스의 주석 증분 — CRIU 서술을 걷어낸 재작성과 새 아카이브 경로의 계약 주석으로, 코드·PRD에서 복원되지 않는 「왜」만 남겼다.* *필요성 개정(2026-09-29) — 옛 기준(복원 가능성)의 판정이므로 새 기준의 판정 완료가 아니다. 판정 칸 `—`.* *2026-11-04 main 반영 재측정: fda2459 의 반영으로 이 범위의 주석이 바뀐 파일 — `web/e2e/journeys/j6-agent-prompt-loop.spec.ts` 12→12줄. 판정하지 않았다 — 판정 칸 `—` 유지.* |
 | 2026-11-02 | `web/e2e/lifecycle-2-snapshot-restore.spec.ts` | 26 | `f42a83350e01` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. |
 | 2026-11-02 | `web/playwright.config.ts` | 6 | `43c68db6b018` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. |
@@ -204,6 +204,6 @@ as-is 지문과 달랐다 — 포함 목록(`control-plane`·`data-plane`·`web/
 | 2026-11-04 | `scripts/check-render-fidelity.py` | 1 | `900b879ce98c` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 지문 표면 개정(L + D·E)으로 판정 범위에 들어온 표면. |
 | 2026-11-04 | `scripts/check_comment_policy.py` | 5 | `c8fb65c734f9` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 지문 표면 개정(L + D·E)으로 판정 범위에 들어온 표면. |
 | 2026-11-04 | `scripts/e2e/check-scenario-mapping.sh` | 6 | `63ce16ba328e` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 지문 표면 개정(L + D·E)으로 판정 범위에 들어온 표면. |
-| 2026-11-04 | `tools/journey-prototype.test.mjs` | 3 | `3c2988f503d6` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 지문 표면 개정(L + D·E)으로 판정 범위에 들어온 표면. |
+| 2026-11-04 | `tools/journey-prototype.test.mjs` | 4 | `df6104375466` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 지문 표면 개정(L + D·E)으로 판정 범위에 들어온 표면. *2026-11-04 main 반영 재측정(44b1128 #195·07e2b1c #196 반영): `tools/journey-prototype.test.mjs` 3→4줄. 판정하지 않았다 — 판정 칸 `—` 유지.* |
 
 <!-- /판정-원장-E -->
