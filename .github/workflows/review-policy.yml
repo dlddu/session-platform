@@ -35,9 +35,9 @@ jobs:
             exit 1
           fi
           gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
-            --jq '.[] | .filename, (.previous_filename // empty)' > "$ubuntu-latest_TEMP/paths.txt"
+            --jq '.[] | .filename, (.previous_filename // empty)' > "$RUNNER_TEMP/paths.txt"
           rc=0
-          python3 scripts/review-policy/judge.py --policy docs/review-policy.md < "$ubuntu-latest_TEMP/paths.txt" || rc=$?
+          python3 scripts/review-policy/judge.py --policy docs/review-policy.md < "$RUNNER_TEMP/paths.txt" || rc=$?
           case "$rc" in
             0)
               gh api -X POST "repos/$REPO/statuses/$HEAD_SHA" \
