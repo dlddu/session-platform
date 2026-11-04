@@ -115,7 +115,7 @@
 
   <!-- ───────────────────────── STP-access-request ─────────────────────── -->
   <section class="step" data-step="STP-access-request" id="STP-access-request">
-    <div class="card">
+    <div class="card screen" data-screen="gated-workspace">
       <h1>minimax 정합성 감지 스킬</h1>
       <p class="sub">minimax-code · 밖으로 나가는 호출은 모두 승인을 받는다</p>
       <span class="gate-flag">● 외부 접근은 승인 필요</span>
@@ -130,7 +130,7 @@
       <div class="row" style="margin-top:16px">
         <button class="btn primary" id="btn-open-access" data-advance-to="STP-access-review">Repo access 열기</button>
       </div>
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
       <div class="proto-bar">
         <span class="cap">다른 갈래:</span>
         <button id="btn-already" data-branch-row="3" data-branch-target="STP-private-clone">이미 허용된 레포를 요청함</button>
@@ -148,14 +148,14 @@
 
   <!-- ───────────────────────── STP-access-review ─────────────────────── -->
   <section class="step" data-step="STP-access-review" id="STP-access-review" hidden>
-    <div class="card" id="review-signed-out" hidden>
+    <div class="card screen" data-screen="authelia-login" id="review-signed-out" hidden>
       <div class="signin">
         <h1>Authelia</h1>
         <p>인그레스가 control plane에 닿기 전에 Authelia 로그인으로 돌려보냅니다. 다른 화면과 같은 문이고, 로그인하면 레포 접근 화면으로 돌아옵니다 — 화면에 따로 로그인은 없습니다.</p>
         <button class="btn primary" id="btn-signin">Authelia에 로그인</button>
       </div>
     </div>
-    <div class="card" id="review-signed-in">
+    <div class="card screen" data-screen="repo-access" id="review-signed-in">
       <h1>Repo access</h1>
       <p class="sub">대기 중인 요청 1 · 허용된 레포 2 — 항목 하나가 레포 하나를 읽기 전용으로 엽니다</p>
       <h2>Pending requests</h2>
@@ -179,7 +179,7 @@
         <button id="btn-no-login" data-branch-row="2" data-branch-target="STP-access-review">Authelia에 로그인하지 않은 채 화면을 엶</button>
       </div>
     </div>
-    <p class="state-note" data-state-note hidden></p>
+    <p class="state-note" data-state="result" data-state-note hidden></p>
     <details class="step-meta">
       <summary>이 화면이 담는 여정 단계</summary>
       <dl>
@@ -192,7 +192,7 @@
 
   <!-- ───────────────────────── STP-access-decide ─────────────────────── -->
   <section class="step" data-step="STP-access-decide" id="STP-access-decide" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="repo-access">
       <h1>Repo access</h1>
       <p class="sub">허락은 레포 하나 · 읽기 전용 · 언제든 지울 수 있음</p>
       <div class="req" id="decide-card">
@@ -220,7 +220,7 @@
         <input type="text" id="add-repo" placeholder="owner/repo" autocomplete="off" aria-label="추가할 레포 (owner/repo)" data-required-input>
         <button class="btn small" type="submit">Add</button>
       </form>
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
     </div>
     <details class="step-meta">
       <summary>이 화면이 담는 여정 단계</summary>
@@ -234,7 +234,7 @@
 
   <!-- ───────────────────────── STP-private-clone ─────────────────────── -->
   <section class="step" data-step="STP-private-clone" id="STP-private-clone" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="gated-workspace">
       <h1>minimax 정합성 감지 스킬</h1>
       <p class="sub">minimax-code · 밖으로 나가는 호출은 모두 승인을 받는다</p>
       <div class="console mono" id="clone-console">
@@ -255,7 +255,7 @@
       <div class="row" style="margin-top:16px" data-journey-end>
         <span class="pill on">완료 — 허락한 레포 위에서 작업이 이어짐</span>
       </div>
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
       <div class="proto-bar">
         <span class="cap">다른 갈래:</span>
         <button id="btn-check-down" data-branch-row="6" data-branch-target="STP-private-clone">허용 목록을 확인할 수 없음</button>

@@ -140,11 +140,11 @@
 
   <!-- ────────────────────────── STP-create-request ────────────────────────── -->
   <section class="step" data-step="STP-create-request" id="STP-create-request">
-    <div class="card">
+    <div class="card screen" data-screen="new-session">
       <h1>New session</h1>
       <p class="sub">전용 pod 하나가 이 세션만을 위해 뜹니다. 이름 말고는 전부 기본값으로 넘어가도 됩니다.</p>
 
-      <div class="banner err" id="create-err" hidden>
+      <div class="banner err" data-state="error" id="create-err" hidden>
         <span id="create-err-msg"></span>
         <button type="button" class="btn ghost small" id="btn-fix-model" hidden
                 data-branch-row="1"
@@ -186,10 +186,10 @@
 
       <div class="row">
         <button class="btn primary" id="btn-create" data-advance-to="STP-workspace-entry">Create session</button>
-        <button class="btn ghost" id="btn-cancel">Cancel</button>
+        <button class="btn ghost" id="btn-cancel" data-offpath="cancel-create">Cancel</button>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">이 화면에서 마주치는 상태</span>
@@ -210,11 +210,11 @@
 
   <!-- ────────────────────────── STP-workspace-entry ───────────────────────── -->
   <section class="step" data-step="STP-workspace-entry" id="STP-workspace-entry" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="workspace">
       <h1>Provisioning <span class="mono" id="prov-name">refactor-billing</span></h1>
       <p class="sub">이 세션 전용 워크로드 파드가 정확히 하나 뜹니다.</p>
 
-      <div class="banner err" id="prov-err" hidden>
+      <div class="banner err" data-state="error" id="prov-err" hidden>
         <span id="prov-err-msg"></span>
         <button type="button" class="btn ghost small" id="btn-retry-create" hidden
                 data-branch-row="2"
@@ -236,7 +236,7 @@
            data-branch-target="JRN-multi-session-switch#STP-session-list">창을 닫고 세션 목록으로</a>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">이 화면에서 마주치는 상태</span>
@@ -257,7 +257,7 @@
 
   <!-- ────────────────────────── STP-isolated-work ─────────────────────────── -->
   <section class="step" data-step="STP-isolated-work" id="STP-isolated-work" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="workspace">
       <div class="row" style="margin-bottom:14px">
         <h1 style="margin:0"><span class="mono" id="ws-name">refactor-billing</span></h1>
         <span class="pill on" id="ws-state">active</span>
@@ -277,7 +277,7 @@
         <button class="btn" id="btn-run">Run</button>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="row" style="margin-top:16px" data-journey-end>
         <span class="pill" style="border-color:var(--ok);color:var(--ok)">완료 — 첫 read/write 성공</span>

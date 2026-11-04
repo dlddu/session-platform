@@ -143,7 +143,7 @@
 
   <!-- ─────────────────────── STP-gated-prompt-submit ─────────────────────── -->
   <section class="step" data-step="STP-gated-prompt-submit" id="STP-gated-prompt-submit">
-    <div class="card">
+    <div class="card screen" data-screen="gated-workspace">
       <div class="row" style="margin-bottom:14px">
         <h1 style="margin:0"><span class="mono">vendor-sync</span></h1>
         <span class="pill on">active</span>
@@ -154,12 +154,12 @@
 
       <p class="sub">이 세션의 에이전트는 <strong>스스로 밖에 나갈 수 없습니다.</strong> 외부가 필요한 일이면 반드시 물어보러 옵니다 — 그래서 맡길 수 있습니다.</p>
 
-      <div class="banner err" id="reject-banner" hidden><span id="reject-msg"></span></div>
-      <div class="banner err" id="blocked-banner" hidden>
+      <div class="banner err" data-state="error" id="reject-banner" hidden><span id="reject-msg"></span></div>
+      <div class="banner err" data-state="error" id="blocked-banner" hidden>
         에이전트가 <span class="mono">api.vendor.example</span> 로 직접 나가려다
         <strong>네트워크 경계에서 막혔습니다.</strong> 우회 경로가 없으므로 승인 요청으로만 나갈 수 있습니다.
       </div>
-      <div class="banner ok" id="accept-banner" hidden>
+      <div class="banner ok" data-state="success" id="accept-banner" hidden>
         접수됐습니다 (<span class="mono">req-3c07</span>). 실행이 시작되면 출력이 이어 붙습니다.
       </div>
 
@@ -173,7 +173,7 @@
         <span class="crumb">대기열: <span class="mono" id="queue-depth">0</span> / 8</span>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">이 화면에서 마주치는 상태</span>
@@ -199,7 +199,7 @@
 
   <!-- ────────────────────────── STP-approval-wait ────────────────────────── -->
   <section class="step" data-step="STP-approval-wait" id="STP-approval-wait" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="gated-workspace">
       <div class="row" style="margin-bottom:14px">
         <h1 style="margin:0">승인 대기</h1>
         <span class="pill" style="border-color:var(--active);color:var(--active)">진행 중</span>
@@ -207,7 +207,7 @@
         <span class="crumb">멈춘 것이 아니라 기다리는 중입니다</span>
       </div>
 
-      <div class="banner wait">
+      <div class="banner wait" data-state="pending">
         무엇을 하려다 멈췄는지가 그 자리에 적혀 있어, <strong>승인할지 판단할 재료가 화면 안에 있습니다.</strong>
       </div>
 
@@ -226,7 +226,7 @@
         </dl>
       </div>
 
-      <div class="banner info" id="no-freeze" hidden>
+      <div class="banner info" data-state="info" id="no-freeze" hidden>
         자리를 비운 동안에도 <strong>대기 중에는 자동 동결이 진행되지 않습니다.</strong>
         승인했을 때 실행할 자리가 사라지지 않도록 유휴 타이머를 멈춰 둡니다.
       </div>
@@ -240,7 +240,7 @@
         <button class="btn ghost" id="btn-open-request" data-advance-to="STP-approval-decide">알림에서 승인 요청 열기</button>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">여기서 갈라지는 길</span>
@@ -266,7 +266,7 @@
 
   <!-- ───────────────────────── STP-approval-decide ───────────────────────── -->
   <section class="step" data-step="STP-approval-decide" id="STP-approval-decide" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="gated-workspace">
       <h1>승인 요청 <span class="mono id">req-3c07</span></h1>
       <p class="sub">결정은 세션 화면 밖에서 이뤄지고, 결과는 세션 화면으로 돌아와 보입니다 — <strong>두 화면은 요청 식별자로 이어집니다.</strong></p>
 
@@ -307,7 +307,7 @@
         </div>
       </div>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
         <span class="cap">여기서 갈라지는 길</span>
@@ -330,7 +330,7 @@
 
   <!-- ────────────────────────── STP-gated-result ─────────────────────────── -->
   <section class="step" data-step="STP-gated-result" id="STP-gated-result" hidden>
-    <div class="card">
+    <div class="card screen" data-screen="gated-workspace">
       <div class="row" style="margin-bottom:14px">
         <h1 style="margin:0">결과</h1>
         <span class="pill on" id="sess-pill">세션 살아 있음</span>
@@ -338,7 +338,7 @@
         <span class="crumb" id="outcome-crumb">승인됨</span>
       </div>
 
-      <div class="banner" id="outcome-banner">
+      <div class="banner" data-state="info" id="outcome-banner">
         승인한 호출이 실행됐고 결과가 콘솔에 이어 붙었습니다. 승인이 만들어낸 파일은 다음 실행이 그대로 이어 씁니다.
       </div>
 
@@ -361,7 +361,7 @@
         <dt>거절했다면</dt><dd>그 도구 호출만 실패하고 <strong>세션과 대기열은 유지</strong>됩니다</dd>
       </dl>
 
-      <p class="state-note" data-state-note hidden></p>
+      <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="row" style="margin-top:16px" data-journey-end>
         <span class="pill" style="border-color:var(--ok);color:var(--ok)">완료 — 승인이 만든 결과물 위에서 후속 요청이 이어졌다</span>
