@@ -109,7 +109,7 @@ func TestK3sMCPResourceListDelegatesAfterApproval(t *testing.T) {
 // A refused call never reaches the K3s MCP.
 func TestK3sMCPResourceListStaysInsideTheGate(t *testing.T) {
 	upstream := newFakeK3sMCP(t, "pod-a")
-	server := newSessionMCPServerWith(t, upstream.config(t, newFakeGateway(t, "REFUSED")))
+	server := newSessionMCPServerWith(t, upstream.config(t, newFakeGateway(t, "REJECTED")))
 
 	_, body := postMCP(t, server, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"`+
 		k3sResourceListTool+`","arguments":{"apiVersion":"v1","kind":"Pod"}}}`)
