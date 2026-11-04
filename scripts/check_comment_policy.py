@@ -13,6 +13,11 @@
 글자 그대로**여야 한다. 하나라도 갈리면 이 게이트가 강제하는 지문이 모델이 관측하는 지문과 다른
 것을 재므로, 고칠 때는 모델 정의와 함께 고칠 것.
 
+표면은 셋이고 원장은 표면마다 표가 하나다: **L**(줄머리 주석 — 첫 진단 줄 `lines=… files=…`),
+**D**(Python docstring 본문), **E**(코드 뒤의 줄 끝·줄 중간 주석) — 뒤의 둘이 둘째 진단 줄
+`docstring=… eol=… unparsed=…` 이다. 아래 R1~R5 는 세 표 모두에 같은 규칙으로 적용된다. 출력의
+`모델 진단`·`전체 지문` 은 모델 스크립트의 출력 세 줄과 같은 트리에서 글자 그대로 같아야 한다.
+
 * **R1** 원장 행의 범위 파일이 실재하고 정책의 스캔 범위 안이다. 빈 범위는 등재가 아니다.
 * **R2** 각 행의 범위를 **모델 as-is 지문과 동일한 추출·정규화·정렬**로 재측정한 주석 줄 수와
   지문이 등재값과 같다. 다르면 그 범위는 판정 이후 주석이 바뀐 것이므로 재판정 대상이다.
@@ -34,11 +39,15 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
+import io
+import os
 import pathlib
 import re
 import subprocess
 import sys
+import tokenize
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
@@ -111,14 +120,172 @@ LANGUAGE_GROUPS = (
     ("NONE", NONE_FILES, None),
 )
 GENERATED_MARKER_RE = re.compile(r"DO NOT EDIT|@generated")
+# D·E 표면을 보는 언어군(모델 as-is 의 TAGGED). MIXED·MARKUP·NONE 은 보지 않는다.
+SURFACE_TAGGED_GROUPS = ("C", "HASH", "DASH")
+
+
+def has_shebang(rel: str) -> bool:
+    try:
+        with open(REPO_ROOT / rel, "rb") as fh:
+            return fh.read(2) == b"#!"
+    except OSError:
+        return False
+
+# ── D·E 표면 (모델 as-is 버전 스크립트의 `DE_PY` 와 글자 그대로 같은 추출) ──
+# L 이 줄머리 패턴이라 못 보는 주석: D = Python docstring 본문(ast), E = 코드 뒤의 줄 끝·줄 중간 주석.
+# 기계가 읽는 주석은 여기서도 뺀다. 파싱에 실패한 파일은 `X:` 줄로 남아 unparsed 로 세진다.
+DIR = re.compile(DIRECTIVE_RE.pattern.replace(":#!|", "", 1))
+SUFFIX_RE = re.compile(r"\.(example|sample|template|tmpl|tpl|dist|in|j2)$")
+HASH_E_EXT = {"sh", "bash", "zsh", "fish", "rb", "pl", "r", "yaml", "yml", "toml", "tf", "tfvars", "hcl", "mk", "nix", "awk"}
+MAKE = re.compile(r"^(Makefile|GNUmakefile)$|\.mk$")
+OPEN_OK = set(" \t=([{,:")
+_de_out: list[str] = []
+
+def emit(kind, path, text):
+    t = re.sub(r"\s+", " ", text).strip()
+    # D(docstring)는 지시자가 줄머리에 오는 줄만 뺀다 — `검증 시나리오:` 같은 docstring 선언은 기계가 읽고,
+    # 문장 중간에 지시자 낱말이 나오는 사람의 문장은 그대로 센다.
+    if t and not ((kind == "E" and DIR.search(t)) or (kind == "D" and DIR.match(t))):
+        _de_out.append(f"{kind}:{path}:{t}")
+
+def rescue(path, comment, tail):
+    # 지시자 줄 뒤에 붙은 사유(`# shellcheck disable=X # 이유`, `// eslint-disable-line r -- 이유`)는
+    # L이 지시자와 함께 버리므로 E로 남긴다 — 사유는 기계가 읽지 않는 사람의 문장이다.
+    if DIR.search(comment):
+        m = re.search(tail, comment[1:])
+        if m:
+            emit("E", path, comment[1 + m.start():])
+
+def py(path, src):
+    try:
+        tree = ast.parse(src)
+    except (SyntaxError, ValueError):
+        _de_out.append(f"X:{path}:ast"); tree = None
+    if tree is not None:
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                for line in (ast.get_docstring(n, clean=True) or "").splitlines():
+                    emit("D", path, line)
+    lines = src.splitlines()
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            if tok.type == tokenize.COMMENT:
+                r, c = tok.start
+                if lines[r - 1][:c].strip():
+                    emit("E", path, tok.string)
+                else:
+                    rescue(path, tok.string, r"\s#\s")
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        _de_out.append(f"X:{path}:tokenize")
+
+def marker_lang(path, src, marker, quotes, make=False):
+    # `#`·`--` 계열 줄 스캐너. 줄머리 주석은 L 몫이라 건너뛰고, 코드 뒤 주석만 E로 낸다.
+    for line in src.splitlines():
+        s = line.lstrip()
+        if s.startswith(marker):
+            rescue(path, s, r"\s" + re.escape(marker) + r"\s")
+            continue
+        q = None; i = 0
+        while i < len(line):
+            ch = line[i]
+            if q:
+                if ch == "\\" and q == '"':
+                    i += 2; continue
+                if ch == q:
+                    q = None
+            elif ch in quotes and (i == 0 or line[i - 1] in OPEN_OK):
+                q = ch
+            elif line.startswith(marker, i) and (marker != "#" or line[i - 1] in " \t"):
+                c = line[i:]
+                if not (make and re.match(r"^##( |$)", c)):
+                    emit("E", path, c)
+                break
+            i += 1
+
+def slash_lang(path, src, line_comments):
+    # C 언어군 줄 스캐너. 문자열(" ' `)과 블록 주석 상태를 줄을 넘어 따라간다. ' "는 줄 끝에서 닫는다.
+    q = None; block = False
+    for line in src.splitlines():
+        s = line.lstrip()
+        if q in ('"', "'"):
+            q = None
+        lead = not block and q is None and s.startswith(("//", "/*", "*", "{/*"))
+        if lead and s.startswith("//"):
+            rescue(path, s[1:], r"\s(--|//)\s")
+        i = 0; code = False
+        while i < len(line):
+            ch = line[i]; nx = line[i + 1] if i + 1 < len(line) else ""
+            if block:
+                if ch == "*" and nx == "/":
+                    block = False; i += 2; continue
+                i += 1; continue
+            if q:
+                if ch == "\\":
+                    i += 2; continue
+                if ch == q:
+                    q = None
+                i += 1; continue
+            if ch == "\\":
+                i += 2; code = True; continue
+            if line_comments and ch == "/" and nx == "/":
+                if code and not lead:
+                    emit("E", path, line[i:])
+                break
+            if ch == "/" and nx == "*":
+                end = line.find("*/", i + 2)
+                if code and not lead:
+                    emit("E", path, line[i:] if end < 0 else line[i:end + 2])
+                if end < 0:
+                    block = True; break
+                i = end + 2; continue
+            if ch in "\"'`":
+                q = ch
+            if not ch.isspace() and ch != "{":
+                code = True
+            i += 1
+
+def surface_record(tag: str, path: str) -> None:
+    """파일 하나의 D·E 줄을 `_de_out` 에 덧붙인다(모델 as-is 의 `for rec` 본문과 같다)."""
+    try:
+        src = (REPO_ROOT / path).read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        _de_out.append(f"X:{path}:read"); return
+    name = SUFFIX_RE.sub("", os.path.basename(path))
+    ext = name.rsplit(".", 1)[1].lower() if "." in name else ""
+    if tag == "C":
+        n = len(_de_out)
+        slash_lang(path, src, ext != "css")
+        if name in ("go.mod", "go.work"):
+            # `// indirect`는 go mod tidy가 쓰고 읽는 표식이다(기계가 읽는 주석).
+            _de_out[n:] = [o for o in _de_out[n:] if not o.endswith(":// indirect")]
+    elif tag == "DASH":
+        marker_lang(path, src, "--", "'\"")
+    elif tag in ("HASH", "SHEBANG"):
+        if ext in ("py", "pyi") or (tag == "SHEBANG" and "python" in src.split("\n", 1)[0]):
+            py(path, src)
+        elif tag == "SHEBANG" or ext in HASH_E_EXT or MAKE.search(name) or name.startswith("requirements"):
+            marker_lang(path, src, "#", "'\"", make=bool(MAKE.search(name)))
+
+
+def surface_lines(tags: dict[str, str]) -> list[str]:
+    """D·E·X 줄(`종류:경로:본문`)의 정렬 목록. 지문·판정 모두 줄 번호·식별자를 담지 않는다."""
+    _de_out.clear()
+    for rel in sorted(tags):
+        surface_record(tags[rel], rel)
+    return sorted(line for line in _de_out if line)
+
 
 # ── 원장 형식 ──
 # R6 — 원장이 가리키는 좌표에서 금지되는 형태. 확장자를 요구해 산문의 우연한 `낱말:1` 을 피하고,
 # 뒤에 숫자가 붙는 경우만 본다(`docs/test/e2e.md` 같은 순수 경로 포인터는 권장 형태라 걸리지 않는다).
 LINE_COORDINATE_RE = re.compile(r"[A-Za-z0-9_./-]+\.(?:go|ts|tsx|md|yaml|yml|sh|py):\d+(?:-\d+)?")
 
-LEDGER_OPEN = "<!-- 판정-원장 -->"
-LEDGER_CLOSE = "<!-- /판정-원장 -->"
+# 표면마다 표가 하나다(원장 형식 「표면이 여럿이면 표도 여럿」). L 표의 마커는 바뀌지 않았다.
+LEDGER_MARKERS = {
+    "L": ("<!-- 판정-원장 -->", "<!-- /판정-원장 -->"),
+    "D": ("<!-- 판정-원장-D -->", "<!-- /판정-원장-D -->"),
+    "E": ("<!-- 판정-원장-E -->", "<!-- /판정-원장-E -->"),
+}
 JUDGED_MARKERS = ("완료", "—")
 
 BACKTICKED_RE = re.compile(r"`([^`]+)`")
@@ -174,10 +341,10 @@ def language_group(rel: str) -> tuple[str, re.Pattern[str] | None] | None:
     return None
 
 
-def scan_files() -> tuple[dict[str, re.Pattern[str]], list[str]]:
+def scan_files() -> tuple[dict[str, re.Pattern[str]], dict[str, str], list[str]]:
     """모델 as-is 지문과 동일한 스캔 범위.
 
-    반환: (스캔 대상 파일 → 주석 줄 패턴, 미분류 파일 경로). NONE 언어군(③ 주석 문법 없음)은
+    반환: (스캔 대상 파일 → 주석 줄 패턴, 파일 → D·E 스캐너 태그, 미분류 파일 경로). NONE 언어군(③ 주석 문법 없음)은
     스캔하지 않는다 — 파일 자체는 제외되지만 지문에도 주석 줄이 없다.
     """
     exclude = repo_exclude_pattern()
@@ -201,17 +368,25 @@ def scan_files() -> tuple[dict[str, re.Pattern[str]], list[str]]:
             continue
         kept.append(rel)
     scanned: dict[str, re.Pattern[str]] = {}
+    tags: dict[str, str] = {}
     unclassified: list[str] = []
     for rel in kept:
         group = language_group(rel)
         if group is None:
+            # 확장자로 못 가른 텍스트 파일: shebang 이 있으면 # 언어군, 없으면 미분류.
+            if has_shebang(rel):
+                scanned[rel] = HASH_PATTERN
+                tags[rel] = "SHEBANG"
+                continue
             unclassified.append(rel)  # 미분류 — 경로가 지문에 들어가므로 생기거나 사라지면 감지가 돈다
             continue
         name, pattern = group
         if pattern is None:  # NONE 언어군 — 주석 문법이 없으므로 스캔하지 않는다
             continue
         scanned[rel] = pattern
-    return scanned, unclassified
+        if name in SURFACE_TAGGED_GROUPS:  # MIXED·MARKUP 은 D·E 표면을 보지 않는다
+            tags[rel] = name
+    return scanned, tags, unclassified
 
 
 def comment_lines(paths: list[str], scanned: dict[str, re.Pattern[str]]) -> list[str]:
@@ -246,14 +421,15 @@ def marked_block(text: str, open_marker: str, close_marker: str) -> str:
     """마커 사이 본문. 정규식 끝 앵커(`$`)로 뜯지 않는다 — 멀티라인에서 줄 끝에도 붙어
     표가 조용히 0행으로 파싱되고, 0행은 '위반 0' 으로 보여 초록으로 새어 나간다."""
     if open_marker not in text or close_marker not in text:
-        raise SystemExit(f"{LEDGER.name}: 마커({open_marker} … )를 찾지 못했다.")
+        raise SystemExit(f"{LEDGER.name}: 마커({open_marker} … {close_marker})를 찾지 못했다.")
     return text.split(open_marker, 1)[1].split(close_marker, 1)[0]
 
 
-def parse_ledger(text: str) -> list[dict]:
-    """판정 이력 표를 행 목록으로. 헤더 행과 구분선은 버린다."""
+def parse_ledger(text: str, surface: str, allow_empty: bool = False) -> list[dict]:
+    """표면 하나의 판정 이력 표를 행 목록으로. 헤더 행과 구분선은 버린다."""
+    open_marker, close_marker = LEDGER_MARKERS[surface]
     rows: list[dict] = []
-    lines = [ln.strip() for ln in marked_block(text, LEDGER_OPEN, LEDGER_CLOSE).splitlines()]
+    lines = [ln.strip() for ln in marked_block(text, open_marker, close_marker).splitlines()]
     table = [ln for ln in lines if ln.startswith("|") and ln.endswith("|")]
     for index, line in enumerate(table):
         cells = [c.strip() for c in line.strip("|").split("|")]
@@ -264,14 +440,14 @@ def parse_ledger(text: str) -> list[dict]:
             if nxt and all(set(c) <= set("-: ") and c for c in nxt):
                 continue  # 구분선 바로 앞 = 헤더
         if len(cells) != 6:
-            raise SystemExit(f"{LEDGER.name}: 판정 이력 행의 열 수가 6가 아니다 -> {line}")
+            raise SystemExit(f"{LEDGER.name}: {surface} 표의 행의 열 수가 6가 아니다 -> {line}")
         count = cells[2].strip("`")
         if not count.isdigit():
-            raise SystemExit(f"{LEDGER.name}: 주석 줄 수가 정수가 아니다 ({count!r}).")
+            raise SystemExit(f"{LEDGER.name}: {surface} 표의 주석 줄 수가 정수가 아니다 ({count!r}).")
         rows.append(
             {
                 # 같은 날 두 범위를 판정하는 일이 흔하므로 날짜만으로는 행을 못 가리킨다.
-                "date": f"{cells[0]}(#{len(rows) + 1})",
+                "date": f"{surface}:{cells[0]}(#{len(rows) + 1})",
                 "paths": [m.group(1) for m in BACKTICKED_RE.finditer(cells[1])],
                 "lines": int(count),
                 "fingerprint": cells[3].strip("`"),
@@ -279,8 +455,8 @@ def parse_ledger(text: str) -> list[dict]:
                 "row": line,
             }
         )
-    if not rows:
-        raise SystemExit(f"{LEDGER.name}: 판정 이력에서 행을 하나도 읽지 못했다(파싱 실패).")
+    if not rows and not allow_empty:
+        raise SystemExit(f"{LEDGER.name}: {surface} 표에서 행을 하나도 읽지 못했다(파싱 실패).")
     return rows
 
 
@@ -301,21 +477,22 @@ def census(hits: list[str]) -> str:
     return f"판정 대상 주석 {len(hits)}줄 / {len(files)}파일 ({breakdown})"
 
 
-def main() -> int:
-    for required in (POLICY_DIR, POLICY_README, LEDGER):
-        if not required.exists():
-            what = "정책 디렉터리" if required is POLICY_DIR else (
-                "정책 본문" if required is POLICY_README else "판정 원장")
-            print(f"[R1] {what} 가 없다: {required.relative_to(REPO_ROOT)}", file=sys.stderr)
-            return 1
+def group_by_path(entries: list[str], path_of) -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = {}
+    for entry in entries:
+        grouped.setdefault(path_of(entry), []).append(entry)
+    return grouped
 
-    text = LEDGER.read_text(encoding="utf-8")
-    rows = parse_ledger(text)
 
-    scanned, unclassified = scan_files()
-    in_scope = set(scanned)
-    # 모델 as-is 지문의 `files=` 값과 같은 집합 — 주석 줄이 하나라도 있는 파일만 판정 대상이다.
-    comment_files = {h.split(":", 1)[0] for h in comment_lines(sorted(scanned), scanned)}
+def check_surface(
+    surface: str, rows: list[dict], in_scope: set[str], measured: dict[str, list[str]]
+) -> set[str]:
+    """R1~R5 를 표면 하나에 적용한다. 반환: 등재된 파일 집합.
+
+    measured 는 파일 → 그 표면의 정규화된 주석 항목(판정 대상 파일 집합은 항목이 있는 파일)이다.
+    표면마다 추출만 다르고 규칙은 같다 — D·E 가 L 보다 약한 규칙을 받는 일이 없게 한 함수로 둔다.
+    """
+    comment_files = {rel for rel, items in measured.items() if items}
 
     # R1 — 범위의 실재와 유효성
     for row in rows:
@@ -325,7 +502,7 @@ def main() -> int:
             if rel not in in_scope:
                 fail(
                     "R1",
-                    f"{row['date']} 행의 `{rel}` 이 정책 스캔 범위에 없다"
+                    f"{row['date']} 행의 `{rel}` 이 {surface} 표면의 스캔 범위에 없다"
                     " (범위: 레포 전체 − 제외). 파일이 사라졌거나 이름이 바뀌었으면"
                     " 그 범위는 다시 판정받아야 한다.",
                 )
@@ -344,15 +521,14 @@ def main() -> int:
     if missing:
         fail(
             "R4",
-            f"원장이 판정 대상 파일 {len(missing)}개를 담지 않았다 (예: {', '.join(missing[:5])}"
+            f"{surface} 표가 판정 대상 파일 {len(missing)}개를 담지 않았다 (예: {', '.join(missing[:5])}"
             f"{' …' if len(missing) > 5 else ''}). 등재가 빠진 파일의 주석은 판정받지 않고"
             " 미판정으로 남는다 — 파일별로 행을 만들어 등재할 것.",
         )
 
     # R2 — 등재값 ↔ 재측정
     for row in rows:
-        present = [rel for rel in row["paths"] if rel in in_scope]
-        hits = comment_lines(present, scanned)
+        hits = sorted(item for rel in row["paths"] if rel in in_scope for item in measured.get(rel, []))
         actual_fingerprint = fingerprint(hits)[:FINGERPRINT_LEN]
         if len(hits) != row["lines"]:
             fail(
@@ -377,6 +553,52 @@ def main() -> int:
                 " 유효한 표기는 `완료` 또는 `—` 뿐이다 — 옛 기준의 표기(①②③④ 등)는"
                 " 필요성 기준이 바뀐 뒤의 판정 완료가 아니다.",
             )
+    return set(seen)
+
+
+def surface_summary(rows: list[dict]) -> str:
+    judged_lines = sum(r["lines"] for r in rows if r["judgment"] == "완료")
+    judged_rows = sum(1 for r in rows if r["judgment"] == "완료")
+    pending_lines = sum(r["lines"] for r in rows if r["judgment"] != "완료")
+    pending_rows = sum(1 for r in rows if r["judgment"] != "완료")
+    total = judged_lines + pending_lines
+    share = (judged_lines * 100.0 / total) if total else 0.0
+    return (
+        f"판정 완료 {judged_lines}줄({share:.1f}%) / {judged_rows}행"
+        f" · 미판정 {pending_lines}줄 / {pending_rows}행"
+    )
+
+
+def main() -> int:
+    for required in (POLICY_DIR, POLICY_README, LEDGER):
+        if not required.exists():
+            what = "정책 디렉터리" if required is POLICY_DIR else (
+                "정책 본문" if required is POLICY_README else "판정 원장")
+            print(f"[R1] {what} 가 없다: {required.relative_to(REPO_ROOT)}", file=sys.stderr)
+            return 1
+
+    text = LEDGER.read_text(encoding="utf-8")
+    rows_l = parse_ledger(text, "L")
+    rows_d = parse_ledger(text, "D", allow_empty=True)
+    rows_e = parse_ledger(text, "E", allow_empty=True)
+
+    scanned, tags, unclassified = scan_files()
+    in_scope = set(scanned)
+    # L — 모델 as-is 지문의 `lines=`·`files=` 값과 같은 표면.
+    measured_l = {rel: comment_lines([rel], scanned) for rel in sorted(scanned)}
+    hits = sorted(h for items in measured_l.values() for h in items)
+    # D·E — 둘째 진단 줄 `docstring=… eol=… unparsed=…` 의 표면.
+    surface = surface_lines(tags)
+    measured_d = group_by_path([x for x in surface if x.startswith("D:")], lambda x: x.split(":", 2)[1])
+    measured_e = group_by_path([x for x in surface if x.startswith("E:")], lambda x: x.split(":", 2)[1])
+    unparsed = [x for x in surface if x.startswith("X:")]
+    if unparsed:
+        # 파싱에 실패한 파일은 D·E 에서 조용히 빠진다 — 측정되지 않은 파일은 등재할 수 없으므로 막는다.
+        fail("R4", f"D·E 추출이 파싱에 실패한 파일 {len(unparsed)}개 ({', '.join(unparsed[:5])}) — 모델 지문의 unparsed 와 같다.")
+
+    seen_l = check_surface("L", rows_l, in_scope, measured_l)
+    seen_d = check_surface("D", rows_d, set(tags), measured_d)
+    seen_e = check_surface("E", rows_e, set(tags), measured_e)
 
     # R6 — 줄 번호 좌표 금지(정책 디렉터리의 모든 마크다운)
     r6_docs = policy_docs()
@@ -394,35 +616,47 @@ def main() -> int:
                     " 재측정하지 않는다 — 심볼 이름이나 AC 번호로 적을 것.",
                 )
 
-    hits = comment_lines(sorted(in_scope), scanned)
     if failures:
         for line in failures:
             print(line, file=sys.stderr)
         print(f"\nFAIL: {len(failures)}건 — {census(hits)}", file=sys.stderr)
         return 1
 
-    judged_lines = sum(row["lines"] for row in rows if row["judgment"] == "완료")
-    judged_rows = sum(1 for row in rows if row["judgment"] == "완료")
-    pending_lines = sum(row["lines"] for row in rows if row["judgment"] != "완료")
-    pending_rows = sum(1 for row in rows if row["judgment"] != "완료")
-    share = (judged_lines * 100.0 / len(hits)) if hits else 0.0
+    # 모델 as-is 가 출력하는 진단 두 줄과 최종 지문을 그대로 재현한다 — 같은 트리에서 모델 스크립트의
+    # 출력과 글자 그대로 같아야 하고, 갈리면 이 게이트의 추출이 모델과 다른 것을 재고 있다.
+    files_l = {h.split(":", 1)[0] for h in hits}
+    d_items = [x for items in measured_d.values() for x in items]
+    e_items = [x for items in measured_e.values() for x in items]
+    diag1 = f"lines={len(hits)} files={len(files_l)} unclassified={len(unclassified)}"
+    diag2 = (
+        f"docstring={len(d_items)}/{len(measured_d)} eol={len(e_items)}/{len(measured_e)}"
+        f" unparsed={len(unparsed)}"
+    )
+    model_lines = sorted(
+        hits + [f"unclassified:{p}" for p in unclassified] + surface
+    )
+    model_fingerprint = hashlib.sha256(("\n".join(model_lines) + "\n").encode("utf-8")).hexdigest()
+
     print(
         f"OK: 규칙 R1~R6 위반 없음 — {census(hits)}"
-        f" · 판정 완료 {judged_lines}줄({share:.1f}%) / {judged_rows}행"
-        f" · 미판정 {pending_lines}줄 / {pending_rows}행"
-        f" · 등재 파일 {len(seen)} / 판정 대상 파일 {len(comment_files)}"
+        f" · L {surface_summary(rows_l)}"
+        f" · 등재 파일 L {len(seen_l)} / {len(files_l)} · D {len(seen_d)} / {len(measured_d)}"
+        f" · E {len(seen_e)} / {len(measured_e)}"
         # R6 가 무엇을 덮었는지 함께 싣는다. 스캔 범위가 줄어드는 사고는 좁아진 범위 안에
         # 위반이 없는 한 rc=0 이라 초록으로 새어 나가므로, 크기를 눈에 보이게 두는 것이
         # 이 게이트가 자기 강제력의 축소를 알리는 유일한 수단이다.
         f" · R6 스캔 {len(r6_docs)}파일 {r6_lines}줄"
         f" · 미분류 {len(unclassified)}파일"
     )
-    for row in rows:
-        print(
-            f"  {row['date']}  {row['lines']:>4}줄  {row['fingerprint']}  [{row['judgment']}]"
-            f"  {' '.join(row['paths'])}"
-        )
-    print(f"  전체 지문: {fingerprint(hits)}")
+    print(f"  D {surface_summary(rows_d)} · E {surface_summary(rows_e)}")
+    print(f"  모델 진단: {diag1} / {diag2}")
+    for label, rows in (("L", rows_l), ("D", rows_d), ("E", rows_e)):
+        for row in rows:
+            print(
+                f"  {row['date']}  {row['lines']:>4}줄  {row['fingerprint']}  [{row['judgment']}]"
+                f"  {' '.join(row['paths'])}"
+            )
+    print(f"  전체 지문: {model_fingerprint}")
     return 0
 
 
