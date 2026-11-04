@@ -41,10 +41,16 @@ type spilledBody struct {
 // spillBody takes head separately from rest because callTool has already read
 // that prefix to decide the response was large, and an http body does not seek.
 func (c sessionMCPConfig) spillBody(requestID string, head []byte, rest io.Reader) (spilledBody, error) {
+	return c.spillBodyIn(requestID, spillSubdir, head, rest)
+}
+
+// spillBodyIn is spillBody with the directory named by the caller, so a second
+// kind of artifact does not sit under the first one's name.
+func (c sessionMCPConfig) spillBodyIn(requestID, subdir string, head []byte, rest io.Reader) (spilledBody, error) {
 	if c.sharedDir == "" {
 		return spilledBody{}, errors.New("no shared volume is configured for this session")
 	}
-	dir := filepath.Join(c.sharedDir, spillSubdir)
+	dir := filepath.Join(c.sharedDir, subdir)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return spilledBody{}, fmt.Errorf("prepare the shared volume directory: %w", err)
 	}

@@ -90,6 +90,7 @@ func main() {
 		k8s.WithApprovalGatewayURL(cfg.approvalGatewayURL),
 		k8s.WithSharedVolume(cfg.sharedVolumeStorageClass, cfg.sharedVolumeSize),
 		k8s.WithRepoAccess(cfg.repoAccess.helperURL(namespace)),
+		k8s.WithK3sMCPReexport(cfg.k3sMCPReexport),
 		k8s.WithDropURL(cfg.dropURL))
 	store := configmap.NewStore(client, namespace)
 	// Shell I/O (write→stdin, read→scrollback delta) AND checkpoint/restore ride
@@ -258,6 +259,7 @@ type config struct {
 	miniMax                 miniMaxConfig
 	repoAccess              repoAccessConfig
 	dropURL                 string // drop's in-cluster URL for helper pods (docs/prd/drop-file-share.md AC-I2)
+	k3sMCPReexport          bool   // the session MCP delegates K3s MCP reads behind the gate
 }
 
 // GET /config lists only these, so clients never offer a type whose create would fail.
@@ -369,6 +371,7 @@ func loadConfig() (config, error) {
 		miniMax:                     loadMiniMaxConfig(),
 		repoAccess:                  loadRepoAccessConfig(),
 		dropURL:                     env("DROP_URL", ""),
+		k3sMCPReexport:              envBool("K3S_MCP_REEXPORT", false),
 	}, nil
 }
 
