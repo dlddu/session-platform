@@ -18,9 +18,6 @@ func writeMiniMaxMCPConfig(t *testing.T, home, content string) {
 	}
 }
 
-// The user's servers and the file's other keys survive; an entry a previous
-// pod tagged and this boot does not register goes; the platform's names are
-// the platform's even when the user wrote one first.
 func TestMiniMaxMCPRegistrationMergesByTag(t *testing.T) {
 	home := t.TempDir()
 	writeMiniMaxMCPConfig(t, home, `{"version":3,"mcpServers":{
@@ -58,8 +55,6 @@ func TestMiniMaxMCPRegistrationMergesByTag(t *testing.T) {
 	}
 }
 
-// Nothing to register and nothing tagged leaves the file as it was — or
-// absent — rather than rewritten.
 func TestMiniMaxMCPRegistrationLeavesAnUnchangedFileAlone(t *testing.T) {
 	home := t.TempDir()
 	if err := ensureMiniMaxMCPRegistration(home, nil); err != nil {

@@ -29,8 +29,6 @@ func (g *generationRecorder) CheckpointWithGeneration(ctx context.Context, ref k
 	return g.StubCheckpointer.CheckpointWithGeneration(ctx, ref, generation)
 }
 
-// newMiniMaxService wires the archive checkpointer for minimax-code only when
-// archiveOn is true, mirroring MINIMAX_CODE_ARCHIVE_ENABLED (AC-G4).
 func newMiniMaxService(archiveOn bool) (*service.Service, *k8s.StubOrchestrator, *generationRecorder) {
 	orch := k8s.NewStubOrchestrator("sessions")
 	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
@@ -43,7 +41,6 @@ func newMiniMaxService(archiveOn bool) (*service.Service, *k8s.StubOrchestrator,
 	return service.New(orch, store, ckpt, agent.NewStubClient(), opts...), orch, recorder
 }
 
-// AC-G1: the type and its model reach provisioning with the AC-E6 contract.
 func TestMiniMaxCodeCreateAppliesTypeAndModel(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
@@ -71,8 +68,6 @@ func TestMiniMaxCodeCreateAppliesTypeAndModel(t *testing.T) {
 	}
 }
 
-// AC-G4: with its gate on, the type freezes and thaws through the same
-// generation-fenced archive path as claude-code and keeps its settings.
 func TestMiniMaxCodeSurvivesSnapshotRestore(t *testing.T) {
 	ctx := context.Background()
 	svc, orch, recorder := newMiniMaxService(true)
@@ -104,8 +99,6 @@ func TestMiniMaxCodeSurvivesSnapshotRestore(t *testing.T) {
 	}
 }
 
-// AC-G4: with its gate off, the type refuses to freeze rather than falling
-// through to the shell's checkpointer, and keeps its pod.
 func TestMiniMaxCodeSnapshotIsRefusedWithoutItsGate(t *testing.T) {
 	ctx := context.Background()
 	svc, orch, _ := newMiniMaxService(false)
@@ -121,8 +114,6 @@ func TestMiniMaxCodeSnapshotIsRefusedWithoutItsGate(t *testing.T) {
 	}
 }
 
-// AC-G2 (AC-E2's 1 MiB bound): an oversized prompt is refused before it can
-// thaw a snapshotted session.
 func TestMiniMaxCodeOversizedPromptIsRejectedBeforeRestore(t *testing.T) {
 	ctx := context.Background()
 	svc, orch, _ := newMiniMaxService(true)

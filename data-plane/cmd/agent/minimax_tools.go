@@ -30,16 +30,12 @@ const (
 	miniMaxSeedTimeout      = 10 * time.Second
 )
 
-// miniMaxEndpoints are the helper pod addresses the control plane injects.
 type miniMaxEndpoints struct {
 	provider   string
 	sessionMCP string
 	k3sProxy   string
 }
 
-// validateMiniMaxClientEnv is AC-G3's credential rule on AC-G6's placement:
-// every address points at the helper pod, never loopback, and the CLI
-// container holds no credential under any name either CLI would read.
 func validateMiniMaxClientEnv() (miniMaxEndpoints, error) {
 	endpoints := miniMaxEndpoints{
 		provider:   os.Getenv("ANTHROPIC_BASE_URL"),

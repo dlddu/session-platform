@@ -1,8 +1,5 @@
 //go:build integration
 
-// AC-G1/AC-G3~G6 on the real client-go orchestrator: the submitted pod specs
-// and network policies of a minimax-code session. Same fake clientset and
-// helpers as workload_type_orchestrator_test.go and the approval-gated suite.
 package integration_test
 
 import (
@@ -44,8 +41,6 @@ func startMiniMax(t *testing.T, sessionID string, opts ...k8s.Option) (*fake.Cli
 	return cs, newPodSet(t, listPods(t, cs), started)
 }
 
-// AC-G1/AC-G6: a workload pod running only the agent, plus the session's
-// helper pod with the session MCP and both proxies.
 func TestMiniMaxCode_ProvisionsWorkloadAndHelperPod(t *testing.T) {
 	_, set := startMiniMax(t, "mm01")
 	if n := len(set.started.Auxiliary); n != 1 || set.started.Auxiliary[0].Name != set.helper.Name {
@@ -88,9 +83,6 @@ func TestMiniMaxCode_ProvisionsWorkloadAndHelperPod(t *testing.T) {
 	}
 }
 
-// AC-G3/AC-G6: the CLI container holds no credential. It knows its helper's
-// three addresses and the placeholder, reads no Secret at all, and the only
-// ConfigMap key it reads is the optional model of its own type's ConfigMap.
 func TestMiniMaxCode_MainContainerHoldsNoCredential(t *testing.T) {
 	_, set := startMiniMax(t, "mm02")
 	main := container(t, set.workload, k8s.ContainerName)
@@ -131,9 +123,6 @@ func TestMiniMaxCode_MainContainerHoldsNoCredential(t *testing.T) {
 	}
 }
 
-// AC-G3/AC-G6: the provider proxy is approval-gated's helper proxy (same
-// placement, probe and hardening) reading this type's Secret — never the
-// claude-code one, in any container of either pod.
 func TestMiniMaxCode_ProviderProxyReadsItsOwnSecret(t *testing.T) {
 	_, set := startMiniMax(t, "mm03")
 	proxy := container(t, set.helper, k8s.HelperCredentialProxyContainerName)
@@ -192,9 +181,6 @@ func TestMiniMaxCode_ProviderProxyReadsItsOwnSecret(t *testing.T) {
 	}
 }
 
-// AC-G5: the K3s MCP token lives only in the helper pod's K3s MCP proxy, read
-// from this type's Secret as an optional key so a deployment without it still
-// runs.
 func TestMiniMaxCode_K3SMCPProxyHoldsTheToken(t *testing.T) {
 	_, set := startMiniMax(t, "mm07")
 	proxy := container(t, set.helper, k8s.MiniMaxK3SMCPProxyContainerName)
@@ -262,8 +248,6 @@ func TestMiniMaxCode_K3SMCPProxyHoldsTheToken(t *testing.T) {
 	}
 }
 
-// AC-G6: the session MCP is approval-gated's, gateway address and caller token
-// included.
 func TestMiniMaxCode_SessionMCPHoldsTheGateway(t *testing.T) {
 	_, set := startMiniMax(t, "mm08")
 	mcp := container(t, set.helper, k8s.SessionMCPContainerName)
@@ -292,7 +276,6 @@ func TestMiniMaxCode_SessionMCPHoldsTheGateway(t *testing.T) {
 	}
 }
 
-// AC-G6: approval-gated's boundary, widened by exactly the K3s MCP proxy port.
 func TestMiniMaxCode_BoundaryAdmitsTheHelperPortsOnly(t *testing.T) {
 	cs, set := startMiniMax(t, "mm09")
 	policies := listNetworkPolicies(t, cs)
@@ -314,8 +297,6 @@ func TestMiniMaxCode_BoundaryAdmitsTheHelperPortsOnly(t *testing.T) {
 	assertPorts(t, "helper ingress", ingress.Spec.Ingress[0].Ports, 8091, 8092, 8093)
 }
 
-// AC-G6 (AC-F5): with a configured class the workload pod mounts the helper
-// round's shared claim, as the session MCP does.
 func TestMiniMaxCode_SharedVolumeIsMountedByWorkloadAndMCP(t *testing.T) {
 	cs, set := startMiniMax(t, "mm10", withSharedVolume())
 	claim := onlyClaim(t, cs)
@@ -336,8 +317,6 @@ func TestMiniMaxCode_SharedVolumeIsMountedByWorkloadAndMCP(t *testing.T) {
 	}
 }
 
-// AC-G1 (model contract of AC-E6): an explicit model is a literal that wins
-// over the Secret; the alias resolves from the Secret's optional key.
 func TestMiniMaxCode_ModelEnv(t *testing.T) {
 	for _, tc := range []struct {
 		name, model string
@@ -373,7 +352,6 @@ func TestMiniMaxCode_ModelEnv(t *testing.T) {
 	}
 }
 
-// AC-G1: same fail-loud rule as AC-E1 when the deployment has no image for it.
 func TestMiniMaxCode_UnconfiguredImageIsRefused(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t, k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"))
 	_, err := orch.Start(context.Background(), "mm05", k8s.WorkloadSpec{Type: session.WorkloadTypeMiniMaxCode})
@@ -385,9 +363,6 @@ func TestMiniMaxCode_UnconfiguredImageIsRefused(t *testing.T) {
 	}
 }
 
-// AC-G4/AC-G6: a restore builds a fresh pod pair. The workload half is shaped
-// like claude-code's restore target — the filesystem archive annotation and
-// nothing else — and keeps the type and model.
 func TestMiniMaxCode_RestoreTargetUsesArchiveAnnotation(t *testing.T) {
 	orch, cs := newMiniMaxOrchestrator(t)
 	set, err := orch.RestoreInto(context.Background(), "mm06", "s3://bucket/mm06.tar", k8s.WorkloadSpec{
@@ -418,9 +393,6 @@ func TestMiniMaxCode_RestoreTargetUsesArchiveAnnotation(t *testing.T) {
 	}
 }
 
-// AC-G5: the K3s MCP proxy names the session it serves on every upstream call,
-// so the control plane hands it the id as a plain value — on a fresh set and on
-// a restore's fresh helper pod alike.
 func TestMiniMaxCode_K3SMCPProxyKnowsItsSession(t *testing.T) {
 	_, set := startMiniMax(t, "mm09")
 	proxy := container(t, set.helper, k8s.MiniMaxK3SMCPProxyContainerName)
@@ -448,9 +420,6 @@ func TestMiniMaxCode_K3SMCPProxyKnowsItsSession(t *testing.T) {
 	}
 }
 
-// AC-E6/AC-G3: with no names configured, each type's non-credential keys come
-// from its own default ConfigMap and its credentials from its own default
-// Secret.
 func TestDefaultSecretAndConfigMapNames(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t,
 		k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),

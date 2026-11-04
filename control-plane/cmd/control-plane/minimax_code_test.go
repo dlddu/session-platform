@@ -33,8 +33,6 @@ func TestLoadMiniMaxConfigReadsEnvironment(t *testing.T) {
 	}
 }
 
-// AC-G3: the two agent types must not be configured onto one Secret or one
-// ConfigMap.
 func TestValidateMiniMaxSecret(t *testing.T) {
 	distinct := miniMaxConfig{credentialsSecret: "minimax-code-credentials", configConfigMap: "minimax-code-config"}
 	if err := validateMiniMaxSecret(distinct, "claude-code-credentials", "claude-code-config"); err != nil {
@@ -49,8 +47,6 @@ func TestValidateMiniMaxSecret(t *testing.T) {
 	}
 }
 
-// AC-G4: the archive gate is off by default, and turning it on for a type with
-// no image is a startup error rather than a silently dead gate.
 func TestMiniMaxArchiveOption(t *testing.T) {
 	client := agent.NewHTTPClient(fake.NewSimpleClientset(), "sessions")
 

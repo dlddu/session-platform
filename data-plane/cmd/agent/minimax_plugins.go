@@ -9,11 +9,6 @@ import (
 	"path/filepath"
 )
 
-// ensureHome stages the platform's MiniMax plugins outside the state tree
-// (AC-G5, AC-G6) and copies them into the place mcode scans, ~/.minimax/plugins.
-// HOME is archived, so the copy is redone on every boot and restore: an archive
-// can never bring back a plugin the current pod did not stage.
-//
 // miniMaxManagedPluginMarker tags a plugin directory the platform installed.
 // Only tagged directories are ever removed, so a plugin the user installed by
 // hand inside the session survives every sync.

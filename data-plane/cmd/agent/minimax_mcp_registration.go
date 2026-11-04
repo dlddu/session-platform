@@ -39,8 +39,6 @@ func miniMaxMCPConfigPath(homeDir string) string {
 	return filepath.Join(homeDir, ".minimax", miniMaxMCPConfigFile)
 }
 
-// ensureMiniMaxMCPRegistration makes the platform's entries in mcp.json exactly
-// servers, leaving every entry it did not tag alone.
 func ensureMiniMaxMCPRegistration(homeDir string, servers map[string]map[string]any) error {
 	path := miniMaxMCPConfigPath(homeDir)
 	doc, err := readMiniMaxMCPConfig(path)

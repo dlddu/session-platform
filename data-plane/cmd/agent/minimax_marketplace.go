@@ -74,18 +74,15 @@ type miniMaxSeedPlugin struct {
 	Files map[string]string `json:"files"`
 }
 
-// miniMaxMarketplaceSeeder runs the bootstrap and holds its result.
 type miniMaxMarketplaceSeeder struct {
 	marketplaceURL string
 	plugins        []string
 	workDir        string
 	logger         *slog.Logger
 
-	// githubToken asks the K3s MCP for a short-lived marketplace read token.
 	githubToken func(context.Context) (string, error)
-	// clone fetches the marketplace into dir with the given auth header.
-	clone   func(ctx context.Context, url, authHeader, dir string) error
-	backoff time.Duration
+	clone       func(ctx context.Context, url, authHeader, dir string) error
+	backoff     time.Duration
 
 	mu     sync.Mutex
 	bundle miniMaxSeedBundle
@@ -282,7 +279,6 @@ func parseGitHubTokenResponse(body []byte) (string, error) {
 	return "", errors.New("K3s MCP response omitted GITHUB_TOKEN")
 }
 
-// bufferedResponse is the minimal ResponseWriter for an in-process call.
 type bufferedResponse struct {
 	header http.Header
 	status int
@@ -411,7 +407,6 @@ func stringOr(v any, fallback string) string {
 	return fallback
 }
 
-// pathList accepts a manifest path field as one string or a list of strings.
 func pathList(v any) ([]string, error) {
 	switch value := v.(type) {
 	case nil:
@@ -495,8 +490,6 @@ func validMiniMaxPluginName(name string) bool {
 	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, `/\`) && path.Base(name) == name
 }
 
-// writeMiniMaxSeedPlugin writes one bundled plugin under seedDir, refusing any
-// file path that would land outside its own directory.
 func writeMiniMaxSeedPlugin(seedDir string, plugin miniMaxSeedPlugin) error {
 	if !validMiniMaxPluginName(plugin.Name) {
 		return fmt.Errorf("seed plugin name %q is not a single path segment", plugin.Name)

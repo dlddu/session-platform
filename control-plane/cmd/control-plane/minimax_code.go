@@ -11,9 +11,6 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// miniMaxConfig is the minimax-code slice of the control-plane configuration
-// (AC-G1, AC-G3, AC-G4). It is kept apart from claude-code's fields so that
-// turning one type on never changes what the other does.
 type miniMaxConfig struct {
 	// image is the data plane image for `workloadType=minimax-code` sessions.
 	// Unset means the type is not deployable here: creating such a session

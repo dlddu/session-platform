@@ -62,8 +62,6 @@ func newK3SMCPProxy(rawURL, token, sessionID string, logger *slog.Logger) (*k3sM
 	return newK3SMCPProxyWithTransport(rawURL, token, sessionID, logger, transport)
 }
 
-// k3sMCPFixedHeaders are the headers the proxy itself sets on every upstream
-// request (docs/prd/minimax-code-workload.md AC-G5).
 func k3sMCPFixedHeaders(sessionID string) map[string]string {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" || strings.ContainsFunc(sessionID, func(r rune) bool { return r < 0x21 || r == 0x7f }) {
@@ -140,8 +138,6 @@ func newK3SMCPProxyWithTransport(rawURL, token, sessionID string, logger *slog.L
 	return result, nil
 }
 
-// k3sMCPPath is the K3s MCP endpoint's path on its origin, which is where the
-// marketplace bootstrap sends its own call.
 func k3sMCPPath(raw string) (string, error) {
 	if strings.TrimSpace(raw) == "" {
 		raw = defaultK3SMCPURL
