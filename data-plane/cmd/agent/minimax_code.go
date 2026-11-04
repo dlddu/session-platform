@@ -60,12 +60,9 @@ type miniMaxCLI struct {
 	baseURL     string
 	placeholder string
 	model       string
-	// k3sProxyURL is the helper pod's K3s MCP proxy, or empty for none (AC-G5).
 	k3sProxyURL string
-	// fetchSeed reads that proxy's marketplace bundle; a field so tests need no
-	// server.
-	fetchSeed func(baseURL string) (miniMaxSeedBundle, error)
-	logger    *slog.Logger
+	fetchSeed   func(baseURL string) (miniMaxSeedBundle, error)
+	logger      *slog.Logger
 }
 
 func newMiniMaxCLI(stateDir, model, baseURL, placeholder string) (miniMaxCLI, error) {
@@ -85,8 +82,6 @@ func newMiniMaxCLI(stateDir, model, baseURL, placeholder string) (miniMaxCLI, er
 	}, nil
 }
 
-// resolveMiniMaxModel turns the session's model setting into the concrete
-// model mcode runs (AC-G1). An explicit model wins, exactly as in AC-E6.
 func resolveMiniMaxModel(model string) string {
 	if model == "" || model == platformDefaultModel {
 		return miniMaxDefaultModel
@@ -150,8 +145,6 @@ func (m miniMaxCLI) ensureHome(homeDir string, tools toolSurface) error {
 	return ensureMiniMaxMCPRegistration(homeDir, servers)
 }
 
-// marketplacePlugins is the proxy's bundle when it has one ready, and nothing
-// when there is no proxy, it holds no token, or its bootstrap failed.
 func (m miniMaxCLI) marketplacePlugins() ([]miniMaxSeedPlugin, error) {
 	if m.k3sProxyURL == "" {
 		return nil, nil
@@ -357,7 +350,6 @@ type miniMaxStreamProjector struct {
 	dst io.Writer
 	buf []byte
 
-	// openItem is the agent_message whose text is being written.
 	openItem string
 	// streamed records agent_message items that produced at least one delta,
 	// so a completed record carrying the full content is not projected twice.
@@ -485,8 +477,6 @@ func (p *miniMaxStreamProjector) projectLine(line []byte, hadNewline bool) error
 	return nil
 }
 
-// openMessage ends the previous message before a different one starts, so two
-// messages never run together on one line.
 func (p *miniMaxStreamProjector) openMessage(id string) error {
 	if p.openItem == id {
 		return nil

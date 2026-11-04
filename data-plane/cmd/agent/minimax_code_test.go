@@ -51,9 +51,6 @@ func miniMaxArgv(cli miniMaxCLI, model string, resume bool, prompt string) []str
 	return append(argv, "--", prompt)
 }
 
-// AC-G2: each write is one `mcode exec` run in the session workspace with the
-// session HOME, resuming only after a successful first run (AC-E4), and a
-// prompt that looks like a flag stays a prompt.
 func TestMiniMaxArgvAndResume(t *testing.T) {
 	runner := newFakeClaudeRunner()
 	stateDir := filepath.Join(t.TempDir(), "state")
@@ -76,8 +73,6 @@ func TestMiniMaxArgvAndResume(t *testing.T) {
 	}
 }
 
-// AC-G1: platform-default (with no ConfigMap model) runs the built-in default,
-// and the managed config declares exactly the model the argv names.
 func TestMiniMaxPlatformDefaultModel(t *testing.T) {
 	runner := newFakeClaudeRunner()
 	_, cli, srv := newMiniMaxTestServerAt(t, runner, platformDefaultModel, false, filepath.Join(t.TempDir(), "state"))
@@ -124,8 +119,6 @@ func readMiniMaxConfig(t *testing.T, path string) miniMaxConfigShape {
 	return config
 }
 
-// AC-G3: the managed config points mcode at the loopback proxy with the
-// placeholder, lives outside the archived state tree, and is private.
 func TestMiniMaxManagedConfig(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "state")
 	c, cli, _ := newMiniMaxTestServerAt(t, newFakeClaudeRunner(), "MiniMax-M2.7", false, stateDir)
@@ -168,10 +161,6 @@ type miniMaxModelShape struct {
 	} `json:"limit"`
 }
 
-// AC-G2: mcode refuses --effort for a model whose definition lists no effort
-// options, and without a limit it caps every response at 16384 tokens. The
-// managed config therefore declares the effort levels for any session model,
-// and the real token limits for the models they are known for.
 func TestMiniMaxManagedModelDefinition(t *testing.T) {
 	for _, tc := range []struct {
 		model            string
@@ -207,9 +196,6 @@ func TestMiniMaxManagedModelDefinition(t *testing.T) {
 	}
 }
 
-// AC-G2: only assistant message text reaches the session output. Reasoning,
-// tool calls and lifecycle records are dropped, deltas are not repeated by the
-// completed record, and consecutive messages end on their own lines.
 func TestMiniMaxStreamProjector(t *testing.T) {
 	stream := strings.Join([]string{
 		`{"type":"exec.started"}`,
@@ -240,8 +226,6 @@ func TestMiniMaxStreamProjector(t *testing.T) {
 	}
 }
 
-// An interrupted run (no completed record) still ends its partial message with
-// a newline on Close, like the Claude projector.
 func TestMiniMaxStreamProjectorTerminatesPartialMessage(t *testing.T) {
 	var out bytes.Buffer
 	p := newMiniMaxStreamProjector(&out)
@@ -263,8 +247,6 @@ func splitEvery(s string, n int) []string {
 	return append(parts, s)
 }
 
-// AC-G3/AC-G6: the CLI container refuses to start holding any credential, or
-// pointed anywhere but its helper pod.
 func TestValidateMiniMaxClientEnv(t *testing.T) {
 	good := func(t *testing.T) {
 		t.Setenv("ANTHROPIC_BASE_URL", "http://10.1.2.3:8091")
@@ -318,9 +300,6 @@ func TestValidateMiniMaxClientEnv(t *testing.T) {
 	}
 }
 
-// AC-G4: a minimax-code archive round-trips workspace, mcode's HOME data and
-// the output cursor, needs no Claude settings, and the restored pod regenerates
-// its own managed config and resumes the conversation.
 func TestMiniMaxArchiveRestoreRoundTrip(t *testing.T) {
 	runner := newFakeClaudeRunner()
 	runner.output = func(_ int, opts runnerOptions) {
@@ -416,8 +395,6 @@ func tarEntryNames(t *testing.T, archive []byte) map[string]bool {
 	}
 }
 
-// A record that is valid JSON but not the expected shape — here a tool item
-// whose content is an object — is dropped, never echoed as raw text.
 func TestMiniMaxStreamProjectorDropsUnexpectedRecords(t *testing.T) {
 	var out bytes.Buffer
 	p := newMiniMaxStreamProjector(&out)
@@ -436,7 +413,6 @@ func TestMiniMaxStreamProjectorDropsUnexpectedRecords(t *testing.T) {
 	}
 }
 
-// The healthz body names the workload the pod actually runs.
 func TestMiniMaxHealthzNamesWorkload(t *testing.T) {
 	_, _, srv := newMiniMaxTestServerAt(t, newFakeClaudeRunner(), "MiniMax-M3", false, filepath.Join(t.TempDir(), "state"))
 	resp, err := http.Get(srv.URL + "/healthz")

@@ -60,8 +60,6 @@ func decodedFiles(t *testing.T, plugin miniMaxSeedPlugin) map[string]string {
 	return files
 }
 
-// AC-G5: each selected plugin carries its manifest and the files its path
-// fields name — never hooks, never anything outside its source.
 func TestBuildMiniMaxSeedCarriesTheSelectedPlugins(t *testing.T) {
 	clone := t.TempDir()
 	writeTestMarketplace(t, clone)
@@ -183,8 +181,6 @@ func TestMiniMaxSeederReportsAFailedBootstrap(t *testing.T) {
 	}
 }
 
-// The bootstrap's K3s MCP call goes through the proxy's own handler, which is
-// what injects the token; the bootstrap sends none of its own.
 func TestGithubTokenThroughProxy(t *testing.T) {
 	for _, tc := range []struct {
 		name, body string
@@ -265,8 +261,6 @@ func TestK3SMCPProxySeedRoute(t *testing.T) {
 	}
 }
 
-// The real clone: scoped header, no credential helper, and a failure message
-// that never echoes the header.
 func TestGitCloneMarketplaceFromALocalRemote(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")

@@ -5,7 +5,6 @@ import (
 	"testing"
 )
 
-// AC-G1: minimax-code is a valid type with the agent model contract of AC-E6.
 func TestMiniMaxCodeWorkloadType(t *testing.T) {
 	if !WorkloadTypeMiniMaxCode.Valid() {
 		t.Fatal("minimax-code must be a valid workload type")
@@ -25,8 +24,6 @@ func TestMiniMaxCodeWorkloadType(t *testing.T) {
 	}
 }
 
-// Every agent workload queues prompts and gets the control-plane prompt bound;
-// only shell takes raw stdin.
 func TestQueuesPrompts(t *testing.T) {
 	for w, want := range map[WorkloadType]bool{
 		WorkloadTypeShell:         false,

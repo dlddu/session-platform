@@ -38,7 +38,6 @@ func readFile(t *testing.T, path string) string {
 	return string(data)
 }
 
-// AC-G5: the seed lands where mcode scans, tagged as the platform's.
 func TestSyncMiniMaxPluginsInstallsTheSeed(t *testing.T) {
 	home, seed := t.TempDir(), t.TempDir()
 	writeSeedPlugin(t, seed, "mcp-servers", `{"v":1}`)
@@ -55,8 +54,6 @@ func TestSyncMiniMaxPluginsInstallsTheSeed(t *testing.T) {
 	}
 }
 
-// AC-G5: a restored HOME carries the previous pod's copy; the current seed
-// replaces it whole, so a file the new seed no longer has does not linger.
 func TestSyncMiniMaxPluginsReplacesAnArchivedCopy(t *testing.T) {
 	home, seed := t.TempDir(), t.TempDir()
 	writeSeedPlugin(t, seed, "mcp-servers", `{"v":1}`)
@@ -83,8 +80,6 @@ func TestSyncMiniMaxPluginsReplacesAnArchivedCopy(t *testing.T) {
 	}
 }
 
-// AC-G5: a pod that staged nothing (no token) removes the platform's plugins
-// from the archived HOME but leaves one the user installed by hand.
 func TestSyncMiniMaxPluginsWithoutSeedRemovesOnlyManagedPlugins(t *testing.T) {
 	home, seed := t.TempDir(), t.TempDir()
 	writeSeedPlugin(t, seed, "mcp-servers", `{}`)
@@ -175,15 +170,11 @@ func readServers(t *testing.T, path string) map[string]map[string]any {
 	return doc.MCPServers
 }
 
-// registeredMiniMaxServers reads the MCP servers mcp.json registers.
 func registeredMiniMaxServers(t *testing.T, home string) map[string]map[string]any {
 	t.Helper()
 	return readServers(t, miniMaxMCPConfigPath(home))
 }
 
-// AC-G5/AC-G6: every marketplace plugin, with the session MCP and the K3s MCP
-// server — alone re-pointed at the proxy and stripped of its own auth —
-// registered in mcp.json rather than left in a plugin.
 func TestMiniMaxEnsureHomeInstallsMarketplacePlugins(t *testing.T) {
 	cli, home, _ := newTestMiniMaxHome(t, testMarketplaceBundle, nil)
 	if err := cli.ensureHome(home, testMiniMaxTools); err != nil {
@@ -241,9 +232,6 @@ func TestMiniMaxEnsureHomeInstallsMarketplacePlugins(t *testing.T) {
 	}
 }
 
-// A failed or absent marketplace leaves the session MCP alone, and a restored
-// HOME that still holds an earlier pod's marketplace plugins and servers loses
-// them.
 func TestMiniMaxEnsureHomeWithoutAMarketplaceKeepsOnlyTheSessionMCP(t *testing.T) {
 	for _, state := range []string{miniMaxSeedStateFailed, miniMaxSeedStateUnconfigured} {
 		t.Run(state, func(t *testing.T) {
@@ -338,7 +326,6 @@ func TestMiniMaxEnsureHomeWithoutSessionMCPInstallsNothing(t *testing.T) {
 	}
 }
 
-// The agent waits out the proxy's bootstrap (503) and takes the bundle.
 func TestFetchMiniMaxSeedWaitsForTheBootstrap(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

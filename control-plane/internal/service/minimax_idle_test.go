@@ -13,8 +13,6 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// AC-G6: minimax-code sits behind the same gate as approval-gated, so a pending
-// human decision holds its idle count exactly as AC-F3 does.
 func TestMiniMaxCodeApprovalWaitHoldsTheIdleCount(t *testing.T) {
 	clock := &testClock{now: time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)}
 	ag := newApprovalReportingAgent()

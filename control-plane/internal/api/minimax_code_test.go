@@ -7,8 +7,6 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// AC-G1: the create wire contract accepts minimax-code and applies the model
-// rules of AC-E6 to it, the same as for the other agent types.
 func TestCreateSessionMiniMaxCode(t *testing.T) {
 	srv, orch, _ := newServerWithOrchestrator()
 	defer srv.Close()

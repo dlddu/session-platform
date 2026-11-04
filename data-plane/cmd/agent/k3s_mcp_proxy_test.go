@@ -28,9 +28,6 @@ func TestK3SMCPOriginKeepsOnlySchemeAndHost(t *testing.T) {
 	}
 }
 
-// AC-G5: with the optional Secret key unset the sidecar still starts and
-// reports itself unconfigured, so the pod runs and the entrypoint skips the
-// plugin instead of failing.
 func TestK3SMCPProxyWithoutTokenReportsUnconfigured(t *testing.T) {
 	handler, err := newK3SMCPProxy("", "", "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -112,8 +109,6 @@ func TestK3SMCPProxyInjectsBearerAndKeepsTheMCPSurface(t *testing.T) {
 	}
 }
 
-// AC-G5: the proxy, not the workload, names the session on every upstream call.
-// A caller-supplied copy never survives, and an unset id sends no header at all.
 func TestK3SMCPProxySetsTheSessionIDHeader(t *testing.T) {
 	for _, tc := range []struct {
 		name, sessionID, spoofed, want string

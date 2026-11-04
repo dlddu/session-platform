@@ -1,15 +1,11 @@
 package session
 
 // WorkloadTypeMiniMaxCode selects the MiniMax Code CLI (`mcode`) workload
-// (docs/prd/minimax-code-workload.md, AC-G1~G6). It runs on the claude-code
-// execution model (AC-E2~E5) behind approval-gated's network boundary and
-// helper pod (AC-G6).
+// (docs/prd/minimax-code-workload.md, AC-G1~G6).
 const WorkloadTypeMiniMaxCode WorkloadType = "minimax-code"
 
 // HasApprovalGate reports whether a session of this type runs behind a helper
-// pod that fronts the approval gate, with its workload egress confined to that
-// pod (AC-F2~F4, AC-G6). Every such type also holds its idle count while a
-// human decision is pending (AC-F3).
+// pod that fronts the approval gate.
 func (w WorkloadType) HasApprovalGate() bool {
 	return w == WorkloadTypeApprovalGated || w == WorkloadTypeMiniMaxCode
 }
