@@ -383,3 +383,91 @@ func (c sessionMCPConfig) k3sMCPResult(tool, requestID, body string) (any, *json
 	}
 	return mcpToolText(string(payload)), nil
 }
+
+// The three tools' input schemas. They live beside the handlers rather than
+// inside toolDefinitions so the surface's list stays a list of names, and so
+// the property a caller sends as "name" is written where the tool's own
+// arguments are read.
+var (
+	k3sAPIResourcesSchema = map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{},
+		"additionalProperties": false,
+	}
+
+	k3sResourceListSchema = map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"apiVersion": map[string]any{
+				"type":        "string",
+				"description": "The API version of the kind, for example v1.",
+			},
+			"kind": map[string]any{
+				"type":        "string",
+				"description": "The kind to list, for example Pod.",
+			},
+			"namespace": map[string]any{
+				"type":        "string",
+				"description": "The namespace to list in. Omit to list across all namespaces.",
+			},
+			"labelSelector": map[string]any{
+				"type":        "string",
+				"description": "A label selector the listed objects must match.",
+			},
+			"fieldSelector": map[string]any{
+				"type":        "string",
+				"description": "A field selector the listed objects must match.",
+			},
+			"limit": map[string]any{
+				"type":        "integer",
+				"description": "How many objects to list at most.",
+			},
+		},
+		"required":             []any{"apiVersion", "kind"},
+		"additionalProperties": false,
+	}
+
+	k3sResourceGetSchema = map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"apiVersion": map[string]any{
+				"type":        "string",
+				"description": "The API version of the kind, for example v1.",
+			},
+			"kind": map[string]any{
+				"type":        "string",
+				"description": "The kind to read, for example Pod.",
+			},
+			"namespace": map[string]any{
+				"type":        "string",
+				"description": "The namespace the object is in. Omit for a cluster-scoped kind.",
+			},
+			"name": map[string]any{
+				"type":        "string",
+				"description": "The name of the object.",
+			},
+			"subresource": map[string]any{
+				"type":        "string",
+				"description": "log to read a pod's output, status to read an object's status.",
+			},
+			"container": map[string]any{
+				"type":        "string",
+				"description": "The container to read logs from. Only with the log subresource.",
+			},
+			"tailLines": map[string]any{
+				"type":        "integer",
+				"description": "How many log lines to read from the end.",
+			},
+			"sinceSeconds": map[string]any{
+				"type":        "integer",
+				"description": "How far back to read logs from, in seconds.",
+			},
+			"previous": map[string]any{
+				"type":        "boolean",
+				"description": "Whether to read the previous terminated container's logs.",
+			},
+		},
+		"required":             []any{"apiVersion", "kind", "name"},
+		"additionalProperties": false,
+	}
+)
