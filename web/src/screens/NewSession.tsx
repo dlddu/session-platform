@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { Session, WorkloadType } from "../api/types";
+import { LockIcon } from "../app/icons";
 import { liveSessionPath } from "../app/sessionRoutes";
 import {
   hasModelChoice,
@@ -371,7 +372,7 @@ export function NewSession() {
               </label>
             ) : null}
             <div className="immutable-note">
-              <span aria-hidden="true">▣</span>
+              <LockIcon size={14} className="immutable-note-icon" />
               <span>
                 {isGatedWorkload(workloadType)
                   ? "Workload type and model choice are fixed for this session. The session also gets a helper pod that holds the approval gate and the only route out."
@@ -379,7 +380,13 @@ export function NewSession() {
                     ? "Workload type is fixed for this session. It runs the platform default MiniMax model, resolved at container start."
                     : isAgentWorkload(workloadType)
                       ? "Workload type and model choice are fixed for this session. Platform default resolves to the configured default at container start."
-                      : "Workload type is fixed for the lifetime of the session. To use a different one, create a new session."}
+                      : (
+                        <>
+                          Workload type is <b>fixed for the lifetime</b> of the
+                          session. To use a different one, create a new
+                          session.
+                        </>
+                      )}
               </span>
             </div>
             <div className="guarantee">
