@@ -14,7 +14,7 @@ import (
 // against a real TLS handshake.
 
 // tlsUpstreamCAPEM re-encodes an httptest TLS server's own certificate as the
-// PEM a platform Secret would carry. httptest signs with an ephemeral CA whose
+// PEM a platform ConfigMap would carry. httptest signs with an ephemeral CA whose
 // leaf is self-signed for 127.0.0.1, so trusting that certificate is exactly
 // what an operator does when they paste their gateway's issuer.
 func tlsUpstreamCAPEM(t *testing.T, server *httptest.Server) string {

@@ -11,7 +11,7 @@
 #
 # Throwaway single-node instance: emptyDir storage (archives only need to live
 # for the duration of a test) and the root credentials from the overlay's
-# checkpoint-s3 Secret. Production uses real S3 with assume-role instead.
+# checkpoint-s3-credentials Secret. Production uses real S3 with assume-role instead.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -64,12 +64,12 @@ spec:
             - name: MINIO_ROOT_USER
               valueFrom:
                 secretKeyRef:
-                  name: checkpoint-s3
+                  name: checkpoint-s3-credentials
                   key: access-key
             - name: MINIO_ROOT_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: checkpoint-s3
+                  name: checkpoint-s3-credentials
                   key: secret-key
           ports:
             - containerPort: 9000

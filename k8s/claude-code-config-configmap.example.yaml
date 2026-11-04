@@ -1,0 +1,59 @@
+# Example ConfigMap for the claude-code workload's non-credential settings, the
+# counterpart of the credentials-only `claude-code-credentials` Secret
+# (claude-code-credentials-secret.example.yaml). The control plane names it
+# with CLAUDE_CODE_CONFIG_CONFIGMAP (default `claude-code-config`).
+#
+#   base-url  (required) The provider's HTTPS endpoint, projected only into the
+#             localhost credential-proxy sidecar beside auth-token.
+#   model     (optional) Projected into the tool-running container as
+#             CLAUDE_CODE_MODEL only for platform-default sessions, and into the
+#             control plane as CLAUDE_CODE_DEFAULT_MODEL for its UI snapshot.
+#   models    (optional) JSON string array, projected only into the control
+#             plane as CLAUDE_CODE_MODELS (the UI picker catalog).
+#   ca-cert   (optional) PEM bundle for a provider base-url served by a private
+#             gateway whose issuer no public store knows. The credential proxy
+#             adds it to the system roots rather than replacing them, so a
+#             publicly issued endpoint keeps working; omit the key entirely and
+#             the proxy uses the system pool. It reaches the proxy container
+#             only, like base-url. A CA certificate is public, so it is not a
+#             credential.
+#   k3s-mcp-url, plugin-marketplace-url (optional) The two bootstrap addresses
+#             the Claude tool-running container reaches before the agent
+#             starts, projected there as K3S_MCP_URL and
+#             CLAUDE_CODE_PLUGIN_MARKETPLACE_URL. Omit them and the data plane
+#             entrypoint keeps the production defaults
+#             (https://homelab-k3s-mcp.llkm.nl/mcp and
+#             https://github.com/dlddu/plugin-marketplace.git), which is why the
+#             example below leaves them out. Point them elsewhere only at hosts
+#             that serve the same shapes; the short-lived GitHub token's Git
+#             auth header is scoped to whichever marketplace URL is configured,
+#             so the scope moves with the address and never widens (AC-E6).
+#
+# Omit model (or set it to an empty string) to let the installed Claude Code
+# CLI choose its own default without a --model flag. Explicit concrete models
+# selected on a session are injected literally and take precedence over this
+# platform default. Omit models (or set it to []) to keep the free-text picker.
+# Non-empty model and models entries must match
+# ^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$.
+# A single leading ~ is supported for OpenRouter moving aliases.
+#
+# This file is EXAMPLE-ONLY and is deliberately NOT listed in kustomization.yaml:
+# real values are provisioned out-of-band —
+#   - production: external-secrets renders the `claude-code-config` ConfigMap
+#     from SSM (flux-cd-apps),
+#   - otherwise create it directly, e.g.
+#
+#     kubectl create configmap claude-code-config \
+#       --from-literal=base-url=https://api.anthropic.com \
+#       --from-literal=model=sonnet \
+#       --from-literal=models='["sonnet","opus"]'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: claude-code-config
+  labels:
+    app: control-plane
+data:
+  base-url: "https://api.anthropic.com"
+  model: "sonnet"
+  models: '["sonnet","opus"]'

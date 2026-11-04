@@ -76,7 +76,7 @@ func TestMiniMaxArgvAndResume(t *testing.T) {
 	}
 }
 
-// AC-G1: platform-default (with no Secret model) runs the built-in default,
+// AC-G1: platform-default (with no ConfigMap model) runs the built-in default,
 // and the managed config declares exactly the model the argv names.
 func TestMiniMaxPlatformDefaultModel(t *testing.T) {
 	runner := newFakeClaudeRunner()

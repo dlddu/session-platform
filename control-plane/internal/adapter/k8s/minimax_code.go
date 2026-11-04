@@ -14,14 +14,16 @@ import (
 // approval-gated's (AC-F2~F6): the CLI container holds no credential and
 // reaches the world only through its session's helper pod, which carries the
 // session MCP, a provider credential proxy and a K3s MCP proxy. Only the Secret
-// the two proxies read differs from approval-gated, so a deployment can hold an
+// and ConfigMap the two proxies read differ from approval-gated, so a deployment can hold an
 // Anthropic token and a MiniMax subscription key side by side without one type
 // ever seeing the other's.
 const (
 	defaultMiniMaxCredentialsSecret = "minimax-code-credentials"
-	// MiniMaxCodeModelEnvVar carries the session's model, or the Secret's
-	// optional `model` key for platform-default sessions. The Secret keys
-	// themselves are claude-code's names (base-url, auth-token, model, ca-cert).
+	defaultMiniMaxConfigConfigMap   = "minimax-code-config"
+	// MiniMaxCodeModelEnvVar carries the session's model, or the ConfigMap's
+	// optional `model` key for platform-default sessions. The Secret and
+	// ConfigMap keys themselves are claude-code's names (auth-token; base-url,
+	// model, ca-cert).
 	// Keep in sync with data-plane/cmd/agent (miniMaxModelEnv).
 	MiniMaxCodeModelEnvVar = "MINIMAX_CODE_MODEL"
 	// MiniMaxK3SMCPProxyContainerName is the helper pod container that holds
@@ -59,6 +61,16 @@ func WithMiniMaxCredentialsSecret(name string) Option {
 	}
 }
 
+// WithMiniMaxConfigConfigMap selects the platform-managed ConfigMap
+// minimax-code pods project their non-credential provider keys from (AC-G3).
+func WithMiniMaxConfigConfigMap(name string) Option {
+	return func(o *ClientOrchestrator) {
+		if name = strings.TrimSpace(name); name != "" {
+			o.miniMaxConfigConfigMap = name
+		}
+	}
+}
+
 // miniMaxCodePod fills in the workload container of a minimax-code pod and
 // returns the volumes the pod needs; it has no sidecar (AC-G6). The state
 // volume and the state-dir variable are claude-code's on purpose: the data
@@ -68,7 +80,7 @@ func WithMiniMaxCredentialsSecret(name string) Option {
 func (o *ClientOrchestrator) miniMaxCodePod(container *corev1.Container, model string, helper helperEndpoints, helperPod string) ([]corev1.Container, []corev1.Volume) {
 	modelEnv := corev1.EnvVar{Name: MiniMaxCodeModelEnvVar, Value: model}
 	if model == session.PlatformDefaultModel {
-		modelEnv = optionalSecretEnv(MiniMaxCodeModelEnvVar, o.miniMaxCredentialsSecret, ClaudeCodeModelSecretKey)
+		modelEnv = optionalConfigMapEnv(MiniMaxCodeModelEnvVar, o.miniMaxConfigConfigMap, ClaudeCodeModelConfigKey)
 	}
 	container.Env = append(container.Env,
 		modelEnv,
@@ -96,8 +108,8 @@ func (o *ClientOrchestrator) miniMaxCodePod(container *corev1.Container, model s
 
 // helperProxyContainers are the helper pod's containers beside the session
 // MCP. approval-gated has one, the provider proxy reading the claude-code
-// Secret (AC-F4). minimax-code has that proxy re-pointed at its own Secret and
-// the K3s MCP proxy (AC-G5, AC-G6).
+// Secret and ConfigMap (AC-F4). minimax-code has that proxy re-pointed at its
+// own pair and the K3s MCP proxy (AC-G5, AC-G6).
 //
 // With repo access on (docs/prd/repo-access.md, AC-H5) approval-gated gets a
 // K3s MCP proxy too, on the claude-code Secret's token and without the
@@ -112,17 +124,23 @@ func (o *ClientOrchestrator) helperProxyContainers(sessionID string, workloadTyp
 		}
 		return []corev1.Container{provider}
 	}
-	o.repointToMiniMaxSecret(&provider)
+	o.repointToMiniMax(&provider)
 	return []corev1.Container{provider, o.k3sMCPProxy(sessionID, image, o.miniMaxCredentialsSecret, true)}
 }
 
-// repointToMiniMaxSecret moves every Secret reference of a credential proxy
-// from the claude-code Secret to this type's. None is left behind (AC-G3).
-func (o *ClientOrchestrator) repointToMiniMaxSecret(proxy *corev1.Container) {
+// repointToMiniMax moves every Secret and ConfigMap reference of a credential
+// proxy from the claude-code pair to this type's. None is left behind (AC-G3).
+func (o *ClientOrchestrator) repointToMiniMax(proxy *corev1.Container) {
 	for i := range proxy.Env {
 		ref := proxy.Env[i].ValueFrom
-		if ref != nil && ref.SecretKeyRef != nil && ref.SecretKeyRef.Name == o.claudeCredentialsSecret {
+		if ref == nil {
+			continue
+		}
+		if ref.SecretKeyRef != nil && ref.SecretKeyRef.Name == o.claudeCredentialsSecret {
 			ref.SecretKeyRef.Name = o.miniMaxCredentialsSecret
+		}
+		if ref.ConfigMapKeyRef != nil && ref.ConfigMapKeyRef.Name == o.claudeConfigConfigMap {
+			ref.ConfigMapKeyRef.Name = o.miniMaxConfigConfigMap
 		}
 	}
 }

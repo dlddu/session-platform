@@ -26,7 +26,9 @@ func newMiniMaxOrchestrator(t *testing.T, opts ...k8s.Option) (*k8s.ClientOrches
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, claudeCodeImage),
 		k8s.WithWorkloadImage(session.WorkloadTypeMiniMaxCode, miniMaxCodeImage),
 		k8s.WithClaudeCredentialsSecret("claude-provider"),
+		k8s.WithClaudeConfigConfigMap("claude-config"),
 		k8s.WithMiniMaxCredentialsSecret("minimax-provider"),
+		k8s.WithMiniMaxConfigConfigMap("minimax-config"),
 		k8s.WithApprovalGatewayURL(approvalGatewayURL),
 	}
 	return newReadyOrchestrator(t, append(base, opts...)...)
@@ -87,20 +89,26 @@ func TestMiniMaxCode_ProvisionsWorkloadAndHelperPod(t *testing.T) {
 }
 
 // AC-G3/AC-G6: the CLI container holds no credential. It knows its helper's
-// three addresses and the placeholder, and the only Secret it reads is the
-// optional model of its own type's Secret.
+// three addresses and the placeholder, reads no Secret at all, and the only
+// ConfigMap key it reads is the optional model of its own type's ConfigMap.
 func TestMiniMaxCode_MainContainerHoldsNoCredential(t *testing.T) {
 	_, set := startMiniMax(t, "mm02")
 	main := container(t, set.workload, k8s.ContainerName)
 	for _, env := range main.Env {
-		if env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
+		if env.ValueFrom == nil {
 			continue
 		}
-		ref := env.ValueFrom.SecretKeyRef
-		isOptionalModel := env.Name == k8s.MiniMaxCodeModelEnvVar && ref.Name == "minimax-provider" &&
-			ref.Key == k8s.ClaudeCodeModelSecretKey && ref.Optional != nil && *ref.Optional
-		if !isOptionalModel {
+		if env.ValueFrom.SecretKeyRef != nil {
 			t.Fatalf("main container has unexpected Secret env %s: %+v", env.Name, env)
+		}
+		ref := env.ValueFrom.ConfigMapKeyRef
+		if ref == nil {
+			continue
+		}
+		isOptionalModel := env.Name == k8s.MiniMaxCodeModelEnvVar && ref.Name == "minimax-config" &&
+			ref.Key == k8s.ClaudeCodeModelConfigKey && ref.Optional != nil && *ref.Optional
+		if !isOptionalModel {
+			t.Fatalf("main container has unexpected ConfigMap env %s: %+v", env.Name, env)
 		}
 	}
 	for name, port := range map[string]string{
@@ -138,29 +146,43 @@ func TestMiniMaxCode_ProviderProxyReadsItsOwnSecret(t *testing.T) {
 	if addr, _ := envOf(proxy, "DATA_PLANE_AGENT_ADDR"); strings.HasPrefix(addr, "127.") {
 		t.Errorf("proxy bind = %q, want the pod network", addr)
 	}
+	token, ok := envVarOf(proxy, k8s.AnthropicAuthTokenEnvVar)
+	if !ok || token.ValueFrom == nil || token.ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("proxy env %s is not Secret-backed: %+v", k8s.AnthropicAuthTokenEnvVar, token)
+	}
+	if ref := token.ValueFrom.SecretKeyRef; ref.Name != "minimax-provider" ||
+		ref.Key != k8s.ClaudeCodeAuthTokenSecretKey || (ref.Optional != nil && *ref.Optional) {
+		t.Errorf("proxy env %s selector = %+v, want required minimax-provider/%s",
+			k8s.AnthropicAuthTokenEnvVar, ref, k8s.ClaudeCodeAuthTokenSecretKey)
+	}
 	for _, tc := range []struct {
 		env, key string
 		optional bool
 	}{
-		{k8s.AnthropicBaseURLEnvVar, k8s.ClaudeCodeBaseURLSecretKey, false},
-		{k8s.AnthropicAuthTokenEnvVar, k8s.ClaudeCodeAuthTokenSecretKey, false},
-		{k8s.AnthropicCACertEnvVar, k8s.ClaudeCodeCACertSecretKey, true},
+		{k8s.AnthropicBaseURLEnvVar, k8s.ClaudeCodeBaseURLConfigKey, false},
+		{k8s.AnthropicCACertEnvVar, k8s.ClaudeCodeCACertConfigKey, true},
 	} {
 		env, ok := envVarOf(proxy, tc.env)
-		if !ok || env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
-			t.Fatalf("proxy env %s is not Secret-backed: %+v", tc.env, env)
+		if !ok || env.ValueFrom == nil || env.ValueFrom.ConfigMapKeyRef == nil {
+			t.Fatalf("proxy env %s is not ConfigMap-backed: %+v", tc.env, env)
 		}
-		ref := env.ValueFrom.SecretKeyRef
+		ref := env.ValueFrom.ConfigMapKeyRef
 		optional := ref.Optional != nil && *ref.Optional
-		if ref.Name != "minimax-provider" || ref.Key != tc.key || optional != tc.optional {
-			t.Errorf("proxy env %s selector = %+v, want minimax-provider/%s optional=%v", tc.env, ref, tc.key, tc.optional)
+		if ref.Name != "minimax-config" || ref.Key != tc.key || optional != tc.optional {
+			t.Errorf("proxy env %s selector = %+v, want minimax-config/%s optional=%v", tc.env, ref, tc.key, tc.optional)
 		}
 	}
 	for _, pod := range []corev1.Pod{set.workload, set.helper} {
 		for _, c := range pod.Spec.Containers {
 			for _, env := range c.Env {
-				if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil && env.ValueFrom.SecretKeyRef.Name == "claude-provider" {
+				if env.ValueFrom == nil {
+					continue
+				}
+				if r := env.ValueFrom.SecretKeyRef; r != nil && r.Name == "claude-provider" {
 					t.Errorf("container %s/%s reads the claude-code Secret via %s", pod.Name, c.Name, env.Name)
+				}
+				if r := env.ValueFrom.ConfigMapKeyRef; r != nil && r.Name == "claude-config" {
+					t.Errorf("container %s/%s reads the claude-code ConfigMap via %s", pod.Name, c.Name, env.Name)
 				}
 			}
 		}
@@ -344,8 +366,8 @@ func TestMiniMaxCode_ModelEnv(t *testing.T) {
 				}
 				return
 			}
-			if env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil || env.ValueFrom.SecretKeyRef.Name != "minimax-provider" {
-				t.Fatalf("%s = %+v, want the minimax Secret's optional model", k8s.MiniMaxCodeModelEnvVar, env)
+			if env.ValueFrom == nil || env.ValueFrom.ConfigMapKeyRef == nil || env.ValueFrom.ConfigMapKeyRef.Name != "minimax-config" {
+				t.Fatalf("%s = %+v, want the minimax ConfigMap's optional model", k8s.MiniMaxCodeModelEnvVar, env)
 			}
 		})
 	}
@@ -423,5 +445,75 @@ func TestMiniMaxCode_K3SMCPProxyKnowsItsSession(t *testing.T) {
 	proxy = container(t, pods.helper, k8s.MiniMaxK3SMCPProxyContainerName)
 	if got, _ := envValue(proxy, k8s.SessionIDEnvVar); got != "mm10" {
 		t.Errorf("restore helper %s k3s mcp proxy %s = %q, want mm10", pods.helper.Name, k8s.SessionIDEnvVar, got)
+	}
+}
+
+// AC-E6/AC-G3: with no names configured, each type's non-credential keys come
+// from its own default ConfigMap and its credentials from its own default
+// Secret.
+func TestDefaultSecretAndConfigMapNames(t *testing.T) {
+	orch, cs := newReadyOrchestrator(t,
+		k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
+		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, claudeCodeImage),
+		k8s.WithWorkloadImage(session.WorkloadTypeMiniMaxCode, miniMaxCodeImage),
+		k8s.WithApprovalGatewayURL(approvalGatewayURL),
+	)
+	claude, err := orch.Start(context.Background(), "dn01", k8s.WorkloadSpec{Type: session.WorkloadTypeClaudeCode})
+	if err != nil {
+		t.Fatalf("start claude-code: %v", err)
+	}
+	miniMax, err := orch.Start(context.Background(), "dn02", k8s.WorkloadSpec{Type: session.WorkloadTypeMiniMaxCode})
+	if err != nil {
+		t.Fatalf("start minimax-code: %v", err)
+	}
+	pods := listPods(t, cs)
+	byName := map[string]corev1.Pod{}
+	for _, p := range pods {
+		byName[p.Name] = p
+	}
+	claudePod := byName[claude.Workload.Name]
+	var miniMaxPods []corev1.Pod
+	for _, p := range pods {
+		if p.Labels[k8s.LabelSessionID] == "dn02" {
+			miniMaxPods = append(miniMaxPods, p)
+		}
+	}
+	miniMaxSet := newPodSet(t, miniMaxPods, miniMax)
+
+	for _, tc := range []struct {
+		what              string
+		pod               corev1.Pod
+		secret, configMap string
+		wantSecretRefs    int
+		wantConfigMapRefs int
+	}{
+		{"claude-code workload pod", claudePod, "claude-code-credentials", "claude-code-config", 2, 5},
+		{"minimax-code workload pod", miniMaxSet.workload, "minimax-code-credentials", "minimax-code-config", 0, 1},
+		{"minimax-code helper pod", miniMaxSet.helper, "minimax-code-credentials", "minimax-code-config", 2, 2},
+	} {
+		secrets, configMaps := 0, 0
+		for _, c := range tc.pod.Spec.Containers {
+			for _, env := range c.Env {
+				if env.ValueFrom == nil {
+					continue
+				}
+				if r := env.ValueFrom.SecretKeyRef; r != nil {
+					secrets++
+					if r.Name != tc.secret {
+						t.Errorf("%s: %s/%s reads Secret %q, want %q", tc.what, c.Name, env.Name, r.Name, tc.secret)
+					}
+				}
+				if r := env.ValueFrom.ConfigMapKeyRef; r != nil {
+					configMaps++
+					if r.Name != tc.configMap {
+						t.Errorf("%s: %s/%s reads ConfigMap %q, want %q", tc.what, c.Name, env.Name, r.Name, tc.configMap)
+					}
+				}
+			}
+		}
+		if secrets != tc.wantSecretRefs || configMaps != tc.wantConfigMapRefs {
+			t.Errorf("%s: %d Secret refs and %d ConfigMap refs, want %d and %d",
+				tc.what, secrets, configMaps, tc.wantSecretRefs, tc.wantConfigMapRefs)
+		}
 	}
 }

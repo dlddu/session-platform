@@ -24,16 +24,18 @@
 | [`index.html`](./index.html) | Sessions — control plane (세션 목록 대시보드) | **`STP-session-list`** (보조: `STP-step-away`·`STP-switch-away`·`STP-freeze-confirm`) | V4 (보조 V1·V5·V8) | 미연결 — 인라인 임의 토큰 |
 | [`new-session.html`](./new-session.html) | New session (새 세션 생성) | **`STP-create-request`, `STP-workspace-entry`, `STP-workload-choice`**(타입 카드 3종) | V1, V5, **V8** | 미연결 — 인라인 임의 토큰 |
 | [`workspace.html`](./workspace.html) | Session workspace (활성 `shell` 세션 작업) | **`STP-isolated-work`, `STP-shell-attach`, `STP-command-input`, `STP-output-read`, `STP-shell-state-carry`, `STP-freeze-now`** | V1, V3, V2 | 미연결 — 인라인 임의 토큰 |
-| [`agent-workspace.html`](./agent-workspace.html) | Agent session workspace (활성 `claude-code` 세션 작업) | **`STP-prompt-submit`, `STP-response-watch`, `STP-conversation-carry`, `STP-agent-freeze-resume`, `STP-freeze-now`** | V8, V3, V2 (보조 V1) | 미연결 — 인라인 임의 토큰 |
+| [`agent-workspace.html`](./agent-workspace.html) | Agent session workspace (활성 `claude-code` · `minimax-code` 세션 작업) | **`STP-prompt-submit`, `STP-response-watch`, `STP-conversation-carry`, `STP-agent-freeze-resume`, `STP-freeze-now`** | V8, V3, V2 (보조 V1) | 미연결 — 인라인 임의 토큰 |
 | [`gated-workspace.html`](./gated-workspace.html) | Gated agent session workspace (활성 `approval-gated` 세션 작업 · 워크로드 파드 + 헬퍼 파드) | **`STP-gated-prompt-submit`, `STP-approval-wait`, `STP-gated-result`, `STP-freeze-now`** | V8, V3, V2 (보조 V1) | 미연결 — 인라인 임의 토큰 |
 | [`restore.html`](./restore.html) | Resume from session archive (`shell` 아카이브 복원 — 2026-11-01 이전 CRIU) | **`STP-restore-resume`(`shell`)** (보조: `STP-auto-freeze`) | V3, V2 | 미연결 — 인라인 임의 토큰 |
 | [`repo-access.html`](./repo-access.html) | Repo access — control plane (비공개 레포 허용 목록 · 접근 요청 승인) | **`STP-access-review`, `STP-access-decide`** | V8, V1 | 미연결 — 인라인 임의 토큰 |
 
-> **타입별 작업 화면이 셋으로 갈립니다 (2026-08-08 → 2026-09-03)**: `workspace.html`은 `shell` 타입,
-> `agent-workspace.html`은 `claude-code` 타입, `gated-workspace.html`은 `approval-gated` 타입 전용입니다.
+> **타입별 작업 화면이 넷으로 갈립니다 (2026-08-08 → 2026-09-03 → 2026-11-01)**: `workspace.html`은 `shell` 타입,
+> `agent-workspace.html`은 `claude-code` · `minimax-code` 타입, `gated-workspace.html`은 `approval-gated` 타입 전용입니다.
+> 워크로드 타입은 네 종류(`shell` · `claude-code` · `minimax-code` · `approval-gated`)지만 화면은 세 장입니다 —
+> `minimax-code`는 `claude-code`와 실행 모델이 같아 `agent-workspace.html`을 함께 씁니다.
 > `index.html`의 세션 카드는 workloadType 태그를 달고 타입에 따라 세 화면 중 하나로 링크합니다 — 이것이
 > `JRN-shell-interaction`(쉘) · `JRN-agent-prompt-loop`(에이전트) · `JRN-approval-gated-work`(승인 게이트)가
-> 갈리는 지점입니다. 고르는 순간은 셋 다 `new-session.html`의 같은 카드 묶음에서 일어납니다.
+> 갈리는 지점입니다. 고르는 순간은 넷 다 `new-session.html`의 같은 카드 묶음에서 일어납니다.
 >
 > 참고: `workspace.html`의 session shell 콘솔은 2026-07-01 쉘 명령 기준으로 갱신됨(옛 key/value write 예시 → `$ ls` / `$ npm run build` 등 쉘 입력·출력, 복원 시 env·cwd 보존 시연). `JRN-shell-interaction`과 정합.
 > `restore.html` 콘솔도 2026-08-08 같은 기준으로 갱신됨(옛 key/value read/write 예시 제거 — 이전 판의 🟡 위험 해소).
@@ -71,7 +73,7 @@
 |-----------|------|-------------|------|------|
 | `web/src/screens/Sessions.tsx` | screen | `docs/mockups/index.html` | 세션 목록 대시보드. 상태별 카드 + workloadType 태그 | ✅ 매핑 |
 | `web/src/screens/NewSession.tsx` | screen | `docs/mockups/new-session.html` | 생성 모달 · 워크로드 타입 카드 · 프로비저닝 단계 뷰 | ✅ 매핑 |
-| `web/src/screens/Workspace.tsx` | screen | `docs/mockups/workspace.html`, `docs/mockups/agent-workspace.html`, `docs/mockups/gated-workspace.html` | 한 화면이 `workloadType`에 따라 셋으로 갈린다(`shell` / `claude-code` / `approval-gated`). 뒤의 둘은 실행 모델이 같아 같은 SSE 루프를 쓰고, 갈리는 것은 카피와 `Egress` 패널뿐이다 | ✅ 매핑 (1:N) |
+| `web/src/screens/Workspace.tsx` | screen | `docs/mockups/workspace.html`, `docs/mockups/agent-workspace.html`, `docs/mockups/gated-workspace.html` | 한 화면이 `workloadType`에 따라 넷으로 갈린다(`shell` / `claude-code` / `minimax-code` / `approval-gated`). `claude-code`와 `minimax-code`는 `agent-workspace.html`을 함께 쓴다 — 실행 모델이 같아 같은 SSE 루프를 쓰고 갈리는 것은 카피뿐이다. `approval-gated`는 같은 화면에서 갈리는 게 `Egress` 패널이다 | ✅ 매핑 (1:N) |
 | `web/src/screens/Restore.tsx` | screen | `docs/mockups/restore.html` | 체크포인트 복원 화면 | ✅ 매핑 |
 | `web/src/screens/RepoAccess.tsx` | screen | `docs/mockups/repo-access.html` | 레포 접근 화면(`/access`, AC-H2). 대기 요청 카드 · 허용 목록 표 · 추가 입력. 앱 자체 로그인은 없다(인그레스 forward-auth 가 문). mockup에 없는 비활성(`503`) 상태는 한 줄 안내로 그린다 | ✅ 매핑 |
 | `web/src/screens/RepoAccess.css` | style | `docs/mockups/repo-access.html` | 이 화면 전용 CSS. 공용 셸과 섞이지 않게 `.access` 아래로 범위를 묶었다 | ✅ 매핑 |
@@ -200,7 +202,7 @@ mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="pane
 
 | 단계 | 시각화 | mockup · 근거 |
 |------|:---:|------|
-| `STP-workload-choice` 작업 환경 선택 | ✅ | `new-session.html` **workload type 카드**(shell/claude-code) + model 선택 + 불변성 안내 |
+| `STP-workload-choice` 작업 환경 선택 | ✅ | `new-session.html` **workload type 카드**(shell/claude-code/minimax-code/approval-gated) + model 선택 + 불변성 안내 |
 | `STP-prompt-submit` 프롬프트 전송 | ✅ | `agent-workspace.html` input-row `▸` 프롬프트 + passive output 연결 표시 |
 | `STP-response-watch` 응답 확인 | ✅ | `agent-workspace.html` term — 실행 중 자동 append + 재연결 가능한 커서 표기 |
 | `STP-conversation-carry` 대화 이어짐 | ✅ | `agent-workspace.html` **Conversation 패널** — 턴 이력·작업 디렉터리·생성 파일 |
@@ -320,8 +322,8 @@ mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="pane
   `models` soft catalog가 있는 상태를 그린 자리표시자다. 실제 UI는 no-store config API의 concrete default를
   `<model> (platform default)` 한 항목으로 합치고 ordered catalog를 사용하며, missing/empty/`[]`이면 default 이름을
   안내하는 free-text 입력으로 돌아간다. catalog는 API allowlist가 아니다. `platform-default`는 특정 공급자 버전을
-  API에 고정하지 않는 별칭이며, 새/복원 pod 또는 container restart 때 optional Secret `model`을 우선하고
-  missing/empty면 CLI 기본 선택에 위임한다. 실행 중 컨테이너는 Secret 변경으로 즉시 바뀌지 않는다.
+  API에 고정하지 않는 별칭이며, 새/복원 pod 또는 container restart 때 optional ConfigMap `model`을 우선하고
+  missing/empty면 CLI 기본 선택에 위임한다. 실행 중 컨테이너는 ConfigMap 변경으로 즉시 바뀌지 않는다.
 - **대화 재개 (AC-E4)**: 실제 계약은 첫 성공 실행 뒤 `--continue`와 세션별 고정 HOME/workdir이다.
   mockup은 CLI flag 자체보다 사용자가 보는 연속 대화 결과를 표현한다.
 - **승인 요청 예시 (AC-F3)**: `gated-workspace.html`의 `req-2c81`·`req-4f2a`, `rates.vendor.example`,
@@ -338,6 +340,7 @@ mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="pane
 
 ## 마지막 갱신
 
+- **2026-11-01 (2)** — **`minimax-code` 갈래를 목업에 반영 (AC-G1)**: 4번째 워크로드 타입 `minimax-code`(PRD `docs/prd/minimax-code-workload.md` AC-G1~G6)가 세션 목록과 에이전트 작업 화면에 반영되지 않은 채 있었다 — `agent-workspace.html`은 "minimax-code" 0건인 claude-code 고정값이었고(`claude-code session` · `Type: claude-code` · `workloadType=claude-code`), `index.html`의 `WS_PAGE`에 minimax-code가 없어 그 타입의 세션 카드가 쉘 화면(`workspace.html`)으로 링크되고 타입 태그도 찍히지 않았다. `agent-workspace.html`의 콘솔 라벨·입력 placeholder·Workload 패널의 `Type`·터미널의 `workloadType=` 줄을 세션의 타입에서 나오게 하고 minimax-code 세션 예시 1건을 추가했으며, `index.html`에 `minimax-code → agent-workspace.html` 경로와 `◇ minimax-code` 태그와 세션 카드 1건을 넣었다. claude-code 갈래의 입력 placeholder 문구(목업 "streams one claude -p response" 대 구현 "runs claude -p once in the session pod")는 2026-08-08 출처의 기존 차이라 목업 카피를 그대로 두고 이번 변경에서 닫지 않았다. mockup 수·매핑 표의 행·패널 구조·여정 커버리지는 변하지 않았다.
 - **2026-11-01** — **CRIU 퇴역 반영 (AC-D4 개정)**: 모든 타입의 동결이 파일시스템 아카이브로 통일되고 쉘 복원이 「홈 디렉터리 파일·출력 이력을 가진 새 쉘」로 바뀐 것을 화면 카피에 맞췄다. `restore.html`·`workspace.html`의 복원 오버레이·콘솔·Shell state 패널에서 CRIU·프로세스 트리 보존 서술을 걷고 보존되는 것/되지 않는 것을 나눠 적었으며, `index.html`·`new-session.html` 카드의 `checkpoint` 라벨을 `archive`로, `agent-workspace.html`·`gated-workspace.html`의 「no CRIU」 문구를 걷었다. 같은 변경에서 SPA(`Restore.tsx`·`SessionCard.tsx`)도 같은 어휘로 갱신했다. 패널 구조·mockup 수·매핑·여정 커버리지는 변하지 않았다.
 - **2026-10-24 (3)** — **레포 접근 화면의 앱 자체 로그인 제거**: control plane 전체가 배포의 Authelia forward-auth 뒤로 옮겨 가 화면의 OIDC 로그인이 중복이 됐으므로, `repo-access.html`에서 로그인 안내 화면·상태 전환·「Signed in as」 줄을 지우고, 허용 목록 표의 「Added by」 열을 「Source」(직접 추가 / 요청 허락)로 바꾼 뒤 `RepoAccess.tsx`도 같이 맞췄다. mockup 수·매핑·여정 커버리지는 변하지 않았다.
 - **2026-10-24 (2)** — **레포 접근 화면 SPA 구현**: `web/src/screens/RepoAccess.tsx`(+ `RepoAccess.css`)가 `repo-access.html`을 `/access` 경로로 구현해, 이 mockup을 「구현이 없는 mockup」에서 화면 ↔ mockup 매핑 표로 옮겼다(매핑된 구현 파일 11→13). mockup 수·여정 커버리지는 변하지 않았다.

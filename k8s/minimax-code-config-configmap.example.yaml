@@ -1,0 +1,36 @@
+# Example ConfigMap for the minimax-code workload's non-credential settings, the
+# counterpart of the credentials-only `minimax-code-credentials` Secret
+# (minimax-code-credentials-secret.example.yaml). The control plane names it
+# with MINIMAX_CODE_CONFIG_CONFIGMAP (default `minimax-code-config`), which must
+# differ from the claude-code ConfigMap's name (AC-G3). Same key names as
+# claude-code-config:
+#
+#   base-url  (required) MiniMax's Anthropic-compatible endpoint, projected only
+#             into the helper pod's credential-proxy container. Use the global
+#             origin for a global account; a key issued there is rejected by the
+#             mainland-China origin (api.minimaxi.com) and vice versa.
+#   model     (optional) The model platform-default sessions run, projected
+#             into the tool-running container as MINIMAX_CODE_MODEL. Omit it
+#             (or leave it empty) to run the data plane's built-in default,
+#             MiniMax-M3.1-Flash. A model chosen on the session itself wins.
+#   ca-cert   (optional) Only for a private gateway; see the claude-code
+#             example for the semantics, which are identical.
+#
+# This file is EXAMPLE-ONLY and is deliberately NOT listed in kustomization.yaml:
+# real values are provisioned out-of-band —
+#   - production: external-secrets renders the `minimax-code-config` ConfigMap
+#     from SSM (flux-cd-apps),
+#   - otherwise create it directly, e.g.
+#
+#     kubectl create configmap minimax-code-config \
+#       --from-literal=base-url=https://api.minimax.io/anthropic \
+#       --from-literal=model=MiniMax-M3.1-Flash
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: minimax-code-config
+  labels:
+    app: control-plane
+data:
+  base-url: "https://api.minimax.io/anthropic"
+  model: "MiniMax-M3.1-Flash"

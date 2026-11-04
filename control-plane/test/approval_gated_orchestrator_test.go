@@ -102,6 +102,19 @@ func secretKey(c corev1.Container, name string) (secret, key string, ok bool) {
 	return "", "", false
 }
 
+func configMapKey(c corev1.Container, name string) (configMap, key string, ok bool) {
+	for _, e := range c.Env {
+		if e.Name != name {
+			continue
+		}
+		if e.ValueFrom == nil || e.ValueFrom.ConfigMapKeyRef == nil {
+			return "", "", false
+		}
+		return e.ValueFrom.ConfigMapKeyRef.Name, e.ValueFrom.ConfigMapKeyRef.Key, true
+	}
+	return "", "", false
+}
+
 // AC-F1/AC-F4.
 func TestApprovalGated_ProvisionsWorkloadAndHelperPod(t *testing.T) {
 	_, set := newApprovalGatedOrchestrator(t)
@@ -174,27 +187,28 @@ func TestApprovalGated_CredentialsAreSplitAcrossHelperContainers(t *testing.T) {
 	}
 	assertGatewayTokenOnlyInMCP(t, set.helper, tokenFile)
 
-	for _, provider := range []struct{ env, key string }{
-		{k8s.AnthropicBaseURLEnvVar, k8s.ClaudeCodeBaseURLSecretKey},
-		{k8s.AnthropicAuthTokenEnvVar, k8s.ClaudeCodeAuthTokenSecretKey},
-	} {
-		_, key, ok := secretKey(proxy, provider.env)
-		if !ok {
-			t.Errorf("proxy container is missing Secret-backed %s (AC-E6 contract, AC-F6 placement)", provider.env)
-			continue
-		}
-		if key != provider.key {
-			t.Errorf("%s reads Secret key %q, want %q", provider.env, key, provider.key)
-		}
-		if _, _, ok := secretKey(mcp, provider.env); ok {
-			t.Errorf("%s is also projected into the MCP container; the provider token must not be there (AC-F6)", provider.env)
+	if _, key, ok := secretKey(proxy, k8s.AnthropicAuthTokenEnvVar); !ok || key != k8s.ClaudeCodeAuthTokenSecretKey {
+		t.Errorf("proxy %s reads Secret key %q (present=%v), want %q (AC-E6 contract, AC-F6 placement)",
+			k8s.AnthropicAuthTokenEnvVar, key, ok, k8s.ClaudeCodeAuthTokenSecretKey)
+	}
+	if _, key, ok := configMapKey(proxy, k8s.AnthropicBaseURLEnvVar); !ok || key != k8s.ClaudeCodeBaseURLConfigKey {
+		t.Errorf("proxy %s reads ConfigMap key %q (present=%v), want %q (AC-E6 contract, AC-F6 placement)",
+			k8s.AnthropicBaseURLEnvVar, key, ok, k8s.ClaudeCodeBaseURLConfigKey)
+	}
+	for _, name := range []string{k8s.AnthropicBaseURLEnvVar, k8s.AnthropicAuthTokenEnvVar} {
+		if _, ok := envValue(mcp, name); ok {
+			t.Errorf("%s is also projected into the MCP container; the provider token must not be there (AC-F6)", name)
 		}
 	}
 
 	for _, e := range workload.Env {
-		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Key != k8s.ClaudeCodeModelSecretKey {
+		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
 			t.Errorf("workload container reads Secret key %q through %s; AC-F6 injects no external credential here",
 				e.ValueFrom.SecretKeyRef.Key, e.Name)
+		}
+		if e.ValueFrom != nil && e.ValueFrom.ConfigMapKeyRef != nil && e.ValueFrom.ConfigMapKeyRef.Key != k8s.ClaudeCodeModelConfigKey {
+			t.Errorf("workload container reads ConfigMap key %q through %s; only the optional model belongs here",
+				e.ValueFrom.ConfigMapKeyRef.Key, e.Name)
 		}
 	}
 	// AC-F6's ✅ 2026-09-03 decision.
