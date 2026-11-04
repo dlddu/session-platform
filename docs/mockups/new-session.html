@@ -505,7 +505,7 @@
             <span class="ic">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
             </span>
-            <span class="tx">Workload type and model are <b>fixed for the lifetime</b> of the session. To use a different one, create a new session.</span>
+            <span class="tx" id="immutable-tx">Workload type is <b>fixed for the lifetime</b> of the session. To use a different one, create a new session.</span>
           </div>
         </div>
       </div>
@@ -668,9 +668,18 @@ let draft = { type:'shell', model:'platform-default' };
 const AGENT_TYPES = ['claude-code','approval-gated','minimax-code'];
 // minimax-code는 model을 고르지 않는다 — 항상 플랫폼 기본 MiniMax 모델 (AC-G1)
 const MODEL_CHOICE_TYPES = ['claude-code','approval-gated'];
+// 고정 안내문은 워크로드별 플랫폼 사실을 말한다 — 모델을 고르는 타입만 'model choice'를 언급하고,
+// minimax-code는 항상 플랫폼 기본 MiniMax 모델, approval-gated는 헬퍼 파드(승인 게이트·유일한 외부 경로)를 덧붙인다.
+const IMMUTABLE_NOTE = {
+  'shell': 'Workload type is <b>fixed for the lifetime</b> of the session. To use a different one, create a new session.',
+  'claude-code': 'Workload type and model choice are fixed for this session. Platform default resolves to the configured default at container start.',
+  'minimax-code': 'Workload type is fixed for this session. It runs the platform default MiniMax model, resolved at container start.',
+  'approval-gated': 'Workload type and model choice are fixed for this session. The session also gets a helper pod that holds the approval gate and the only route out.'
+};
 function pickType(t){
   if(provBusy) return;
   draft.type = t;
+  document.getElementById('immutable-tx').innerHTML = IMMUTABLE_NOTE[t];
   document.querySelectorAll('.type').forEach(b=>b.classList.toggle('sel', b.dataset.type===t));
   document.getElementById('model-field').classList.toggle('on', MODEL_CHOICE_TYPES.includes(t));
 }
