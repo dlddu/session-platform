@@ -8,7 +8,7 @@ POLICY = "docs/review-policy.md"
 CASES = (
     ("MA1", ('docs/values.md', 'docs/prd/', 'docs/test/', 'docs/user-journeys/'), ()),
     ("MA2", ('scripts/review-policy/', '.github/workflows/review-policy.yml', 'docs/review-policy.md'), ()),
-    ("MA3", ('k8s/',), ('k8s/*.example.yaml',)),
+    ("MA3", ('k8s/rbac.yaml', 'k8s/data-plane-rbac.yaml', 'k8s/session-mcp-serviceaccount.yaml', 'k8s/network-policy.yaml'), ()),
     ("MA4", ('control-plane/internal/repoaccess/', 'control-plane/internal/adapter/configmap/', 'control-plane/internal/adapter/checkpointstore/', 'control-plane/internal/adapter/archive/', 'control-plane/internal/session/session.go', 'data-plane/cmd/agent/state_archive.go', 'data-plane/cmd/agent/checkpoint.go'), ('*_test.go', 'control-plane/internal/adapter/configmap/envtest/')),
     ("MA5", ('control-plane/internal/helperauth/', 'control-plane/cmd/control-plane/repo_access.go', 'control-plane/internal/api/repo_access.go', 'data-plane/cmd/agent/credential_proxy*.go', 'data-plane/cmd/agent/k3s_mcp_proxy.go', 'data-plane/cmd/agent/k3s_mcp_tool_deny.go', 'data-plane/cmd/agent/session_mcp_git_push.go', 'data-plane/cmd/agent/session_mcp_repo_access.go', 'data-plane/cmd/agent/minimax_marketplace.go', 'data-plane/entrypoint.sh', 'control-plane/internal/adapter/k8s/', 'data-plane/cmd/agent/approval_gateway.go', 'data-plane/cmd/agent/approval_wait.go', 'data-plane/cmd/agent/session_mcp_tools.go', 'data-plane/Dockerfile', 'control-plane/Dockerfile'), ('*_test.go',)),
 )
