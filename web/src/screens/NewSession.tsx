@@ -382,6 +382,12 @@ export function NewSession() {
                       : "Workload type is fixed for the lifetime of the session. To use a different one, create a new session."}
               </span>
             </div>
+            <div className="guarantee">
+              <b>Same guarantees whichever you pick</b> — dedicated pod
+              isolation, idle reclaim, restore-on-access, free switching, and
+              consistent state apply to every workload type. Only the freeze
+              mechanism, and whether outbound calls need your approval, differ.
+            </div>
             {error && (
               <div className="error" style={{ padding: "0 0 12px" }}>
                 {error}
