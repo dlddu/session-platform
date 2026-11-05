@@ -43,7 +43,18 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  getConfig: () => req<PlatformConfig>("/config", { cache: "no-store" }),
+  // Older control planes omit the tenancy and catalog fields.
+  getConfig: () =>
+    req<Partial<PlatformConfig> & Pick<PlatformConfig, "claudeCode">>("/config", {
+      cache: "no-store",
+    }).then(
+      (r): PlatformConfig => ({
+        claudeCode: r.claudeCode,
+        workloadTypes: r.workloadTypes ?? [],
+        tenant: r.tenant ?? null,
+        tenants: r.tenants ?? [],
+      }),
+    ),
 
   listSessions: () =>
     req<{ sessions: Session[] }>("/sessions").then((r) => r.sessions ?? []),

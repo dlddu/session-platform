@@ -29,7 +29,8 @@ const HUB_FILE = path.join(DOCS, 'index.html');
 
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 // 2026-08-30 순번 → 슬러그 전환으로 폐기된 식별자. 새 대상에 재사용하면 drift.
-const RETIRED_ID = /\bJ[1-9](-S[0-9]+)?\b/;
+// `AC-J1` 은 2026-11-05 에 생긴 AC 식별자(codex)라 폐기 여정 식별자가 아니다.
+const RETIRED_ID = /(?<!AC-)\bJ[1-9](-S[0-9]+)?\b/;
 
 const read = (p) => fs.readFileSync(p, 'utf8');
 

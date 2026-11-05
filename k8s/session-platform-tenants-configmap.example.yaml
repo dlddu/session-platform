@@ -1,0 +1,36 @@
+# Example tenant set (docs/prd/multitenancy.md, AC-K1~K5), projected into the
+# control plane as SESSION_PLATFORM_TENANTS from key `tenants.json`.
+#
+# A tenant is the ServiceAccounts (`<namespace>/<name>`) that speak for it and
+# the workload types its sessions may run. A request carrying
+#   Authorization: Bearer <projected token, audience "session-platform">
+# from one of those accounts sees and creates only that tenant's sessions. A
+# request with no Authorization header is the operator (the Authelia-fronted
+# SPA): it sees every session. Unknown accounts get 403, unproven tokens 401.
+#
+# The control plane proves tokens with TokenReview, so its ServiceAccount needs
+# a ClusterRoleBinding to system:auth-delegator (cluster-scoped, kept out of
+# this base — see rbac.yaml). A tenant's pod mounts its token like this:
+#
+#   volumes:
+#     - name: session-platform-token
+#       projected:
+#         sources:
+#           - serviceAccountToken:
+#               audience: session-platform
+#               expirationSeconds: 3600
+#               path: token
+#
+# EXAMPLE-ONLY, not in kustomization.yaml (production: flux-cd-apps).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: session-platform-tenants
+  labels:
+    app: control-plane
+data:
+  tenants.json: |
+    {"tenants": [
+      {"name": "pocket-aide", "serviceAccounts": ["pocket-aide/pocket-aide"], "workloadTypes": ["codex", "claude-code"]},
+      {"name": "homelab-k3s-mcp", "serviceAccounts": ["homelab-k3s-mcp/homelab-k3s-mcp"], "workloadTypes": ["shell"]}
+    ]}

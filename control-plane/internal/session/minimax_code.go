@@ -19,5 +19,5 @@ func (w WorkloadType) HasApprovalGate() bool {
 // those prompts before activation so an oversized one never restores a
 // snapshot only to be rejected by the agent (AC-E2, AC-F1, AC-G1).
 func (w WorkloadType) QueuesPrompts() bool {
-	return w == WorkloadTypeClaudeCode || w == WorkloadTypeApprovalGated || w == WorkloadTypeMiniMaxCode
+	return w == WorkloadTypeClaudeCode || w == WorkloadTypeApprovalGated || w == WorkloadTypeMiniMaxCode || w == WorkloadTypeCodex
 }

@@ -15,6 +15,9 @@ type CreateRequest struct {
 	// PlatformDefaultModel for claude-code and is invalid when supplied for a
 	// shell session. It is immutable after creation.
 	Model string
+	// Tenant names the owning tenant (AC-K2). The API fills it from the
+	// caller; the manager stores it verbatim.
+	Tenant string
 }
 
 // ReadResult is the state-branched result of a Read (AC-C2).

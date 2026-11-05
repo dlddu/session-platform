@@ -52,6 +52,13 @@ var workloadTypeCatalog = []WorkloadTypeInfo{
 		Input:       InputModePrompt,
 	},
 	{
+		Type:        WorkloadTypeCodex,
+		Label:       "Codex",
+		Description: "Codex SDK agent on your ChatGPT plan. Conversation, plugin skills and K3s MCP only.",
+		TakesModel:  true,
+		Input:       InputModePrompt,
+	},
+	{
 		Type:        WorkloadTypeApprovalGated,
 		Label:       "Approval-gated",
 		Description: "Same agent, but every outbound call waits for your approval.",

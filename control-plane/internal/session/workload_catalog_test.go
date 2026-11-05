@@ -6,6 +6,7 @@ func TestWorkloadTypeCatalogMatchesValidation(t *testing.T) {
 	known := []WorkloadType{
 		WorkloadTypeShell, WorkloadTypeClaudeCode,
 		WorkloadTypeApprovalGated, WorkloadTypeMiniMaxCode,
+		WorkloadTypeCodex,
 	}
 	catalog := WorkloadTypes()
 	if len(catalog) != len(known) {

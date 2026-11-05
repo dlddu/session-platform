@@ -8,9 +8,9 @@ needs (AC-A2). The control plane provisions and reclaims these pods via the
 The runtime image includes `git`, `gh`, `curl`, `jq`, and `kubectl` for use by
 interactive shell and Claude Code workloads.
 
-## Status: shell, claude-code, approval-gated, minimax-code, mcp, credential-proxy, and k3s-mcp-proxy agents built
+## Status: shell, claude-code, approval-gated, minimax-code, codex, mcp, credential-proxy, and k3s-mcp-proxy agents built
 
-`DATA_PLANE_WORKLOAD` selects one of six modes across a session's pods:
+`DATA_PLANE_WORKLOAD` selects one of these modes across a session's pods:
 
 - `shell` (default) launches one PTY-attached interactive shell
   (`DATA_PLANE_SHELL`, default `/bin/bash`) in its home directory
@@ -90,7 +90,72 @@ interactive shell and Claude Code workloads.
   removed, and any other server is dropped with a warning, since the pod cannot
   reach it. The K3s MCP tools are not behind the session gate because the K3s
   MCP gates its own writes.
-- `k3s-mcp-proxy` is the `minimax-code` helper pod's K3s MCP proxy: the
+- `codex` runs the Codex SDK on the same one-shot runner as `claude-code`
+  (AC-J1/J2): queue, bounds, cursor, resume flag and archive are shared. Each
+  job executes `codex-runner --model MODEL [--resume] -- PROMPT`
+  (`CODEX_RUNNER_BIN`, default `/usr/local/bin/codex-runner`, a shim for
+  `node /opt/codex-runner/runner.mjs`). `MODEL` is `CODEX_MODEL` or
+  `platform-default`, which lets codex pick its own default. The runner
+  (`codex-runner/`, `@openai/codex-sdk` pinned to 0.166.0 by its lockfile)
+  first checks `codex login status`. If the session is not signed in, it runs
+  `codex login --device-auth` and forwards the ChatGPT verification URL and
+  one-time code as notice lines, then runs the turn once sign-in completes. A
+  failed sign-in exits 2 (AC-J3). It starts a thread, or resumes the one
+  recorded in `$CODEX_HOME/session-platform-thread.json`, with
+  `sandboxMode: read-only`, `approvalPolicy: never`, web search and sandbox
+  network off and `skipGitRepoCheck`. It writes every SDK event as one JSON
+  line and exits 0 on `turn.completed` and 1 on `turn.failed` or `error`. Its
+  codex child gets only `HOME`, `CODEX_HOME`, `PATH`, `LANG`, `TZ` and
+  `SSL_CERT_FILE`. A `command_execution`, `file_change` or `web_search` item
+  trips a kill switch: the runner writes a notice, aborts the turn and exits 3.
+  The agent projects notices, finished `agent_message` text, a
+  `· server.tool` line per MCP call (plus an `error:` line if it fails) and
+  `error:` lines for failed turns, and drops everything else, including
+  reasoning and tool output. Records are capped at 8 MiB per line.
+  On every start and restore the agent rewrites the platform-owned
+  `$HOME/.codex/config.toml`. It pins approval, sandbox, web search, file-based
+  ChatGPT login (`cli_auth_credentials_store = "file"`,
+  `forced_login_method = "chatgpt"`) and no update check. It turns off the
+  shell, `unified_exec`, `view_image`, image generation, apps, plugins, browser
+  and computer use, memories, hooks and the other side-channel features, and
+  the bundled system skills. It sets `developer_instructions` that tell the
+  model to read skills through the skills MCP. It registers two MCP servers:
+  `skills` (`/agent skills-mcp`, a stdio MCP serving `list_skills` and
+  `read_skill{name, file?}` from `CODEX_SKILLS_DIR`, with regular files only,
+  no symlinks, nothing outside the directory and a 256 KiB cap per file) and,
+  only when the sidecar's `/healthz` reports `configured: true`, `k3s` at
+  `K3S_MCP_PROXY_URL/mcp`. Codex is left with conversation, plugin skills and
+  the K3s MCP (AC-J5). `apply_patch` and the collaboration tools stay
+  model-visible because the remote model catalog forces code mode on. The
+  read-only sandbox and the kill switch are what stop them. Plugin skills come
+  from the sidecar's `/plugin-seed` bundle (the `minimax-code` format). Each
+  `skills/<name>/` directory a seeded plugin names is installed as
+  `$HOME/.agents/skills/<plugin>--<name>/` with the managed marker; stale
+  managed skills are removed and skills the user installed are left alone.
+  The agent waits up to 90 s for the sidecar and its seed. After that it
+  starts without skills, or without the K3s MCP, rather than failing the pod.
+  The pod has no provider credential: `K3S_MCP_PROXY_URL` must be
+  `http://<loopback IP>:8093` (the `k3s-mcp-proxy` sidecar, AC-J6), and the
+  agent refuses to start if `OPENAI_API_KEY`, `CODEX_API_KEY`,
+  `CODEX_ACCESS_TOKEN`, `K3S_MCP_TOKEN`, any `ANTHROPIC_*` key, `GITHUB_TOKEN`
+  or another credential a bundled CLI reads is set. The ChatGPT login
+  (`$HOME/.codex/auth.json`) and codex's own thread history are part of HOME,
+  so the archive carries them and a restored session stays signed in. The
+  control plane only offers the archive when `CODEX_ARCHIVE_ENABLED` is set
+  (AC-J4). Before archiving, the agent drops the absolute helper links codex
+  leaves in `$CODEX_HOME/tmp/arg0-linux` when a run is killed. The image build
+  installs the runner with `npm ci`, runs its `node --test` suite, renders the
+  managed config with the hidden `/agent codex-render-config <home>` (widest
+  surface, K3s MCP included) and runs `codex-runner/surface-check.mjs` against
+  it. The check runs `codex debug prompt-input` and fails the build if
+  `exec_command`, `write_stdin`, `view_image` or another shell, image or web
+  tool is model-visible, if bundled system skills are listed, or if the
+  managed instructions are missing. That rendering does not include MCP
+  tools, because codex does not wait for MCP servers there, so the check
+  covers what the config removes.
+- `k3s-mcp-proxy` is the `minimax-code` helper pod's K3s MCP proxy, and the
+  `codex` pod's loopback sidecar (`DATA_PLANE_PROXY_PLACEMENT=sidecar`,
+  `127.0.0.1:8093`): the
   credential-proxy implementation with the MCP Streamable HTTP header allowlist
   (`Accept`, `Content-Type`, `Mcp-Session-Id`, `Mcp-Protocol-Version`,
   `Last-Event-Id`, `User-Agent`), bound per `DATA_PLANE_PROXY_PLACEMENT` like
@@ -285,5 +350,5 @@ cluster).
 Every workload type's archive round trip is exercised by the kind e2e overlay.
 Each type has its own control-plane data-transfer gate because archives move
 session files to the checkpoint store: `SHELL_ARCHIVE_ENABLED`,
-`CLAUDE_CODE_ARCHIVE_ENABLED`, `APPROVAL_GATED_ARCHIVE_ENABLED` and
-`MINIMAX_CODE_ARCHIVE_ENABLED`. Session pods need no privilege for any of them.
+`CLAUDE_CODE_ARCHIVE_ENABLED`, `APPROVAL_GATED_ARCHIVE_ENABLED`,
+`MINIMAX_CODE_ARCHIVE_ENABLED` and `CODEX_ARCHIVE_ENABLED`. Session pods need no privilege for any of them.

@@ -124,6 +124,27 @@ docs/                 value / PRD·AC / journeys / mockups / retired CRIU verifi
   plugin bootstrap; its archive sits behind its own
   `MINIMAX_CODE_ARCHIVE_ENABLED` gate. See
   [`docs/prd/minimax-code-workload.md`](docs/prd/minimax-code-workload.md).
+  `codex` runs the Codex SDK (`@openai/codex-sdk`, pinned) on that same
+  one-shot runner, queue, cursor and archive (AC-J1~J6). There is no provider
+  Secret: each session signs in to ChatGPT itself — its first prompt prints a
+  device-code URL and one-time code into the transcript, and the resulting
+  `~/.codex/auth.json` is part of the session state, so it survives
+  snapshot/restore behind its own `CODEX_ARCHIVE_ENABLED` gate. Its tool
+  surface is conversation, the platform plugin's skills (served to the model
+  by a stdio `skills` MCP, since it has no shell) and the K3s MCP through a
+  loopback `k3s-mcp-proxy` sidecar that alone holds the optional token; shell,
+  file-edit, web-search and image tools are off, writes are blocked by a
+  read-only sandbox, and the runner aborts a turn on any shell/file/web item.
+  See [`docs/prd/codex-workload.md`](docs/prd/codex-workload.md).
+- **Tenancy** (AC-K1~K5, [`docs/prd/multitenancy.md`](docs/prd/multitenancy.md)):
+  a request carrying `Authorization: Bearer <ServiceAccount token>` (audience
+  `session-platform`, proven by TokenReview) speaks for the tenant that lists
+  that ServiceAccount; it sees and operates only its own sessions (others are
+  404) and creates only the workload types its tenant is granted (403). A
+  request with no bearer token is the operator — the Authelia-fronted SPA — and
+  sees every session, can filter by `?tenant=` and create on a tenant's behalf.
+  Tenants come from the optional `session-platform-tenants` ConfigMap
+  (`SESSION_PLATFORM_TENANTS`); without it nothing changes for the operator.
 - **Lifecycle**: 60-min max idle → workload snapshot + pod reclaim (AC-B1);
   access → restore into a new pod (AC-B2). Every type uses the agent's
   filesystem archive behind its own explicit data-transfer gate
@@ -204,7 +225,7 @@ gitignored.
 | ---------------------------- | ------------------------------ | ------ |
 | `GET  /config`               | non-sensitive runtime UI config | E6     |
 | `POST /sessions`             | create (provision pod, active) | A1, A2 |
-| `GET  /sessions`             | list                           | V5     |
+| `GET  /sessions`             | list (`?tenant=` operator filter) | V5, K2 |
 | `GET  /sessions/{id}`        | get one                        | V5     |
 | `DELETE /sessions/{id}`       | delete and reclaim live pod    | A3     |
 | `POST /sessions/{id}/read`   | read (state-branched)          | C2     |
@@ -352,6 +373,15 @@ still shows the prior snapshot. See
 [`k8s/claude-code-credentials-secret.example.yaml`](k8s/claude-code-credentials-secret.example.yaml)
 and
 [`k8s/claude-code-config-configmap.example.yaml`](k8s/claude-code-config-configmap.example.yaml).
+
+Codex sessions need `DATA_PLANE_CODEX_IMAGE` (the same data-plane image) and,
+optionally, the `codex-credentials` Secret (`k3s-mcp-token`) and `codex-config`
+ConfigMap (`model`, `models`, `k3s-mcp-url`, `plugin-marketplace-url`); see the
+`k8s/codex-*.example.yaml` files. Tenancy needs the
+`session-platform-tenants` ConfigMap
+([example](k8s/session-platform-tenants-configmap.example.yaml)) and a
+`system:auth-delegator` ClusterRoleBinding for the control-plane
+ServiceAccount, kept outside this base for the reason `k8s/rbac.yaml` gives.
 
 The [`deploy/`](deploy/) directory remains the local `kind` setup for the
 integration harness; `k8s/` is the deployed-cluster source of truth.

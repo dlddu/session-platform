@@ -187,6 +187,42 @@ spec:
             # deploy/ 오버레이가 이 자리를 env/17 로 잡아 kind 안 drop 주소로 바꾼다.
             - name: DROP_URL
               value: http://drop-external.drop.svc.cluster.local
+            # codex 워크로드(docs/prd/codex-workload.md, AC-J1~J6)와 멀티테넌시(docs/prd/multitenancy.md).
+            # 이 다섯 항목도 env 목록 맨 끝에 둔다 — deploy/ 오버레이가 env/19(이미지)를 인덱스로 잡는다.
+            # 이미지 문자열이 위와 같아서 CI `pin` job 의 sed 가 이 자리도 함께 SHA 로 고정한다.
+            - name: DATA_PLANE_CODEX_IMAGE
+              value: "ghcr.io/dlddu/session-platform-data-plane:cc4615f73c4db0df6151680d65ee6390a0e5ee52"
+            # codex 세션은 ChatGPT 로그인을 세션마다 스스로 한다(AC-J3) — 공급자 Secret 이 없다.
+            # Secret `codex-credentials` 는 선택 k3s-mcp-token 하나만, ConfigMap `codex-config` 는
+            # 선택 model·models·k3s-mcp-url·plugin-marketplace-url 만 담는다. 둘 다 없어도 세션은
+            # 뜬다(K3s MCP 도구와 플러그인 스킬 없이). k8s/codex-*.example.yaml 참고.
+            - name: CODEX_DEFAULT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: codex-config
+                  key: model
+                  optional: true
+            - name: CODEX_MODELS
+              valueFrom:
+                configMapKeyRef:
+                  name: codex-config
+                  key: models
+                  optional: true
+            # codex 전용 데이터 전송 게이트(AC-J4). 이 타입의 아카이브에는 세션의 ChatGPT
+            # 로그인(auth.json)이 들어간다. PR 프리뷰 오버레이가 이 이름을 false 로 덮어쓰도록
+            # flux-cd-apps 를 먼저 고친 뒤에 true 로 올린다(MINIMAX_CODE_ARCHIVE_ENABLED 와 같은 순서).
+            - name: CODEX_ARCHIVE_ENABLED
+              value: "false"
+            # 테넌시 설정(AC-K3). 없으면 테넌시가 없다 — 토큰 없는 호출(운영자)은 지금과 같고,
+            # Bearer 토큰 호출은 모두 403 이다. 토큰 검증(TokenReview)에는 control-plane SA 의
+            # system:auth-delegator 바인딩이 필요하다(rbac.yaml 머리말과 같은 이유로 base 밖, flux-cd-apps).
+            # k8s/session-platform-tenants-configmap.example.yaml 참고.
+            - name: SESSION_PLATFORM_TENANTS
+              valueFrom:
+                configMapKeyRef:
+                  name: session-platform-tenants
+                  key: tenants.json
+                  optional: true
           readinessProbe:
             httpGet:
               path: /api/v1/healthz

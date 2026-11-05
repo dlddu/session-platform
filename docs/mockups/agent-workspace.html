@@ -234,6 +234,11 @@
   .ln.agent{color:var(--text-dim)}
   .ln.agent .op{color:#8f7fb0}
   .ln.meta{color:#5a6b76;font-size:11.5px}
+  /* codex 기기 로그인 안내 줄 (AC-J3) — 플랫폼 notice 는 sys 줄과 같은 색이다 */
+  .ln.notice{color:var(--frozen)}
+  .ln.notice .code{font-weight:600;color:var(--text);letter-spacing:.08em}
+  .agent-hint{border-top:1px dashed var(--line);padding:8px 16px 10px;background:var(--ink);
+    color:var(--text-faint);font-size:11px;line-height:1.5}
   .turn-sep{height:1px;background:var(--line);margin:9px 0 9px 26px}
 
   /* conversation context panel */
@@ -417,6 +422,8 @@
             <span class="ph" id="ws-input-ph">send a prompt — streams one <span class="mono">claude -p</span> response</span>
             <span class="stream-state on" id="ws-stream-state">output connected · cursor resumes</span>
           </div>
+          <!-- codex 전용 (AC-J3): 첫 프롬프트가 ChatGPT 기기 로그인을 시작한다 -->
+          <div class="agent-hint" id="ws-codex-hint" style="display:none">First prompt signs this session in to ChatGPT — watch the transcript for a link and code.</div>
 
           <!-- thaw / restore overlay -->
           <div class="restore" id="ws-restore">
@@ -462,13 +469,14 @@
             <h4><span class="ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span> Workload</h4>
             <div class="kv"><span class="k">Type</span><span class="v" id="ws-type-v" style="color:#b79ae0">claude-code</span></div>
             <div class="kv"><span class="k">Model</span><span class="v" id="ws-model-v">platform default</span></div>
-            <div class="kv"><span class="k">Base URL</span><span class="v masked">from ConfigMap</span></div>
-            <div class="kv"><span class="k">Auth token</span><span class="v masked">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;<span class="lock"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M20 6 9 17l-5-5"/></svg></span></span></div>
+            <div class="kv" id="ws-login-row" style="display:none"><span class="k">Login</span><span class="v">ChatGPT · this session only</span></div>
+            <div class="kv" id="ws-baseurl-row"><span class="k">Base URL</span><span class="v masked">from ConfigMap</span></div>
+            <div class="kv" id="ws-token-row"><span class="k">Auth token</span><span class="v masked">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;<span class="lock"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M20 6 9 17l-5-5"/></svg></span></span></div>
             <div class="ctx-note" style="margin-top:12px">
               <span class="ic" style="color:var(--ok)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 21 6v6c0 5-3.8 8.9-9 10-5.2-1.1-9-5-9-10V6l9-4Z"/></svg>
               </span>
-              <span class="tx">Credentials are injected from a platform Secret and never appear in session reads, logs, or the API response. Type and model are <b>immutable</b> for this session.</span>
+              <span class="tx" id="ws-cred-tx">Credentials are injected from a platform Secret and never appear in session reads, logs, or the API response. Type and model are <b>immutable</b> for this session.</span>
             </div>
           </div>
 
@@ -514,10 +522,13 @@ const STATE_LABEL = {active:'active', idle:'idle', snapshot:'snapshot'};
 // 입력 placeholder — 기본 문장은 마크업에 있는 claude-code 것이고, minimax-code는 구현(Workspace.tsx)과
 // 같은 문장을 쓴다. claude-code 문구는 목업(카피의 SSOT)에 구현을 맞춰 일치시켰다 (rct_20261104-0002).
 const INPUT_PH_DEFAULT = document.getElementById('ws-input-ph').innerHTML;
+const CRED_TX_DEFAULT = document.getElementById('ws-cred-tx').innerHTML;
+const CRED_TX_CODEX = 'No provider key is stored on the platform. The session signs in to ChatGPT on its first prompt, and that login travels inside the session archive. Type and model are <b>immutable</b> for this session.';
 const INPUT_PH = {
-  'minimax-code':'send a prompt — runs mcode exec once in the session pod'
+  'minimax-code':'send a prompt — runs mcode exec once in the session pod',
+  'codex':'send a prompt — runs one Codex turn in the session pod'
 };
-// 이 화면은 workloadType이 claude-code · minimax-code인 에이전트 세션 전용이다 (shell 타입은 workspace.html)
+// 이 화면은 workloadType이 claude-code · minimax-code · codex인 에이전트 세션 전용이다 (shell 타입은 workspace.html)
 let sessions = [
   {id:'5b1e', name:'refactor-billing', type:'claude-code', model:'platform default', state:'active',
    pod:'sess-5b1e-h7za', region:'us-east-1', up:'1h 05m', upMin:65, cpu:22, mem:408, memMax:2048, idleMin:0,
@@ -528,6 +539,9 @@ let sessions = [
   {id:'b2d7', name:'changelog-autogen', type:'minimax-code', model:'platform default', state:'active',
    pod:'sess-b2d7-q4mf', region:'us-east-1', up:'38m', upMin:38, cpu:18, mem:341, memMax:2048, idleMin:0,
    turns:2, cwd:'/work', files:'CHANGELOG.md', cursor:'nextOffset=5120'},
+  {id:'e41c', name:'cluster-triage', type:'codex', model:'platform default', state:'active',
+   pod:'sess-e41c-v9rn', region:'us-east-1', up:'12m', upMin:12, cpu:9, mem:226, memMax:2048, idleMin:0,
+   turns:1, cwd:'/work', files:'—', cursor:'nextOffset=1730', firstLogin:true},
   {id:'c83d', name:'doc-migration', type:'claude-code', model:'platform default', state:'snapshot',
    pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'18m ago', checkpoint:'38 MB archive', reclaim:'1 vCPU · 2 GB',
    turns:12, cwd:'/work/docs', files:'42 files', cursor:'nextOffset=31408'}
@@ -581,6 +595,21 @@ const termActive = (s)=>[
   {c:'ok',t:`✓ turn 3 saw turns 1–2 — conversation history persists on the pod between runs`},
   {c:'meta',t:`  SSE resumes from ${s.cursor} · read(offset=0) still replays the whole output history`}
 ];
+// codex 첫 턴 (AC-J3): 로그인이 없으면 러너가 ChatGPT 기기 코드 로그인을 먼저 열고, 그 URL·일회용 코드를
+// 플랫폼 notice 줄로 내보낸 뒤 로그인이 끝나면 같은 턴을 이어 간다. URL·코드는 자리표시자다.
+const termCodexLogin = (s)=>[
+  {c:'sys',t:`◆ attached to session/${s.id} · pod/${s.pod} — workloadType=${s.type}`},
+  {c:'sys',t:`◆ isolation: dedicated pod — conversation and workspace are private to this session`},
+  {c:'prompt',t:`<span class="op">▸</span> which pods in the media namespace restarted today?`},
+  {c:'notice',t:`◆ codex: this session is not signed in to ChatGPT yet`},
+  {c:'notice',t:`◆ codex: open https://auth.openai.com/codex/device and enter the code <span class="code">WXYZ-1234</span>`},
+  {c:'notice',t:`◆ codex: waiting for the device login to finish…`},
+  {c:'notice',t:`◆ codex: signed in — the login is kept with this session's archive`},
+  {c:'agent',t:`<span class="op">· k3s.pods_list</span>`},
+  {c:'agent',t:`<span class="op">‹agent›</span> Two pods restarted today: jellyfin-7c9d (OOMKilled at 09:12)`},
+  {c:'agent',t:`        and sonarr-5f2b (liveness probe, 13:40). Both are Running now.`},
+  {c:'meta',t:`        response streamed live · turn 1 exited · next prompt reuses the login`}
+];
 const termFrozen = (s)=>[
   {c:'sys',t:`◆ session/${s.id} is frozen — pod reclaimed`},
     {c:'sys',t:`◆ archived (${s.checkpoint}) · frozen ${s.frozenAgo}`},
@@ -623,6 +652,13 @@ function populate(s){
   document.getElementById('ws-console-pod').textContent = s.state==='snapshot' ? 'pod reclaimed' : 'pod/'+s.pod;
   document.getElementById('ws-console-type').textContent = s.type + ' session';
   document.getElementById('ws-input-ph').innerHTML = INPUT_PH[s.type] || INPUT_PH_DEFAULT;
+  document.getElementById('ws-codex-hint').style.display = (s.type==='codex' && s.state!=='snapshot') ? '' : 'none';
+  // codex 는 공급자 키가 없다 — 세션마다 ChatGPT 기기 로그인을 하고 그 로그인이 아카이브에 실린다 (AC-J3)
+  const isCodex = s.type==='codex';
+  document.getElementById('ws-login-row').style.display = isCodex ? '' : 'none';
+  document.getElementById('ws-baseurl-row').style.display = isCodex ? 'none' : '';
+  document.getElementById('ws-token-row').style.display = isCodex ? 'none' : '';
+  document.getElementById('ws-cred-tx').innerHTML = isCodex ? CRED_TX_CODEX : CRED_TX_DEFAULT;
   document.getElementById('ws-type-v').textContent = s.type;
   document.getElementById('ws-badge').className = 'badge '+s.state;
   document.getElementById('ws-badge-t').textContent = STATE_LABEL[s.state];
@@ -656,7 +692,7 @@ function populate(s){
     tag.style.display=''; tag.innerHTML='<span class="led"></span>agent available';
     streamState.textContent='output connected · '+s.cursor;
     streamState.classList.add('on');
-    paintTerm(termActive(s));
+    paintTerm(s.firstLogin ? termCodexLogin(s) : termActive(s));
   } else if(s.state==='idle'){
     vit.style.display=''; setGauge(s.cpu,s.mem,s.memMax);
     tag.style.display=''; tag.innerHTML='<span class="led" style="background:var(--idle);box-shadow:none"></span>pod held';
@@ -671,7 +707,9 @@ function populate(s){
 }
 // STP-conversation-carry · 대화 문맥 패널 (AC-E4)
 function paintContext(s){
-  const turns = [
+  const turns = s.type==='codex' ? [
+    {n:'1', t:'which pods in the media namespace restarted today?'}
+  ] : [
     {n:'1', t:'read invoice.go and tell me what the rounding bug is'},
     {n:'2', t:'fix it and leave a marker file so I know you were here'},
     {n:'3', t:"what did you change, and what's in the working dir now?"}

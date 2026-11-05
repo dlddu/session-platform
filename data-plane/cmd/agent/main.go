@@ -75,6 +75,9 @@ const (
 )
 
 func main() {
+	if code, handled := runAgentSubcommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); handled {
+		os.Exit(code)
+	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	addr := env("DATA_PLANE_AGENT_ADDR", defaultAddr)
@@ -140,6 +143,15 @@ func main() {
 			tailer := newNoticeTailer(tools.SessionMCP, claude, logger)
 			go tailer.run(claude.ctx)
 		}
+		logger.Info("agent workload started", "workload", workload, "addr", addr,
+			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode)
+	case workloadCodex:
+		claude, err := newCodexWorkloadFromEnv(logger, restoreMode)
+		if err != nil {
+			logger.Error("failed to initialise agent workload", "workload", workload, "err", err)
+			os.Exit(1)
+		}
+		a.claude = claude
 		logger.Info("agent workload started", "workload", workload, "addr", addr,
 			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode)
 	case workloadMiniMaxCode:

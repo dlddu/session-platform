@@ -155,6 +155,15 @@
         <input type="text" id="sess-name" data-required-input placeholder="예: bench-tokenizer">
       </label>
 
+      <label class="field">
+        <span class="lab">테넌트 — 테넌트가 설정된 배포의 운영자에게만 보입니다</span>
+        <select id="sess-tenant">
+          <option value="">No tenant</option>
+          <option value="pocket-aide">pocket-aide</option>
+          <option value="lab">lab</option>
+        </select>
+      </label>
+
       <span class="lab">작업 환경</span>
       <div class="types">
         <label>
@@ -164,6 +173,10 @@
         <label>
           <span class="tt"><input type="radio" name="wl" value="claude-code" id="wl-agent" data-required-input checked>에이전트</span>
           <span class="td">목표를 설명하고 맡깁니다. 보낸 뒤 다른 일을 봐도 됩니다.</span>
+        </label>
+        <label>
+          <span class="tt"><input type="radio" name="wl" value="codex" id="wl-codex" data-required-input>Codex</span>
+          <span class="td">내 ChatGPT 구독으로 돕니다. 대화·플랫폼 스킬·K3s MCP만 씁니다.</span>
         </label>
         <label>
           <span class="tt"><input type="radio" name="wl" value="approval-gated" id="wl-gated" data-required-input>승인 게이트 에이전트</span>
@@ -196,6 +209,9 @@
         <a id="br-need-gate" href="../JRN-approval-gated-work/index.html#STP-gated-prompt-submit"
            data-branch-row="8"
            data-branch-target="JRN-approval-gated-work#STP-gated-prompt-submit">외부 접근에 사람의 승인이 필요하다면</a>
+        <button id="br-tenant-narrow" type="button"
+                data-branch-row="10"
+                data-branch-target="STP-workload-choice">고른 테넌트가 쓸 수 없는 환경</button>
       </div>
     </div>
 
@@ -203,8 +219,8 @@
       <summary>이 화면이 담는 여정 단계</summary>
       <dl>
         <dt>단계</dt><dd><code>STP-workload-choice</code> 작업 환경을 고른다</dd>
-        <dt>터치포인트</dt><dd>New session 모달의 workload type 카드 3종과 model 선택</dd>
-        <dt>연결 AC</dt><dd>AC-E1, AC-E6, AC-F1 (보조 AC-A1·A2)</dd>
+        <dt>터치포인트</dt><dd>New session 모달의 workload type 카드와 model 선택, 테넌트가 설정된 배포의 테넌트 선택</dd>
+        <dt>연결 AC</dt><dd>AC-E1, AC-E6, AC-F1, AC-J1, AC-K3, AC-K4 (보조 AC-A1·A2)</dd>
         <dt>페인포인트</dt><dd>불변이라는 사실을 고른 뒤에 알면 세션을 버리고 다시 만든다 — 선택 시점에 명시하고, 각 환경이 어떤 일에 맞는지 한 줄로 적는다.</dd>
       </dl>
     </details>
@@ -298,6 +314,9 @@
         <a id="br-folded" href="../JRN-idle-resume/index.html#STP-reaccess"
            data-branch-row="6"
            data-branch-target="JRN-idle-resume#STP-reaccess">보고 있는 중 세션이 접힘</a>
+        <button id="br-codex-login" type="button"
+                data-branch-row="9"
+                data-branch-target="STP-response-watch">Codex 세션의 첫 프롬프트 — 아직 로그인 전</button>
       </div>
     </div>
 
@@ -453,7 +472,31 @@
   }
 
   /* ---------- STP-workload-choice ---------- */
-  var TYPE_LABEL = { 'shell': 'shell', 'claude-code': 'claude-code', 'approval-gated': 'approval-gated' };
+  var TYPE_LABEL = { 'shell': 'shell', 'claude-code': 'claude-code', 'codex': 'codex', 'approval-gated': 'approval-gated' };
+  var TENANT_TYPES = { 'pocket-aide': ['claude-code', 'codex'], 'lab': ['shell'] };
+
+  function narrowToTenant(tenant) {
+    var allowed = TENANT_TYPES[tenant];
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="wl"]'), function (r) {
+      var off = !!allowed && allowed.indexOf(r.value) < 0;
+      r.closest('label').hidden = off;
+      if (off && r.checked) { r.checked = false; }
+    });
+  }
+
+  $('sess-tenant').addEventListener('change', function () {
+    narrowToTenant(this.value);
+    noteIn(this, this.value
+      ? '이 테넌트가 쓸 수 있는 환경만 남겼습니다. 만든 세션은 이 테넌트 소속으로 고정됩니다.'
+      : '무소속 세션은 운영자만 봅니다.');
+  });
+
+  $('br-tenant-narrow').addEventListener('click', function () {
+    $('sess-tenant').value = 'lab';
+    narrowToTenant('lab');
+    show('STP-workload-choice');
+    noteIn($('sess-tenant'), 'lab 테넌트는 쉘만 쓸 수 있습니다 — 에이전트 카드는 보이지 않고, API로 직접 만들면 403으로 거절됩니다.');
+  });
 
   function chosenType() {
     var r = document.querySelector('input[name="wl"]:checked');
@@ -512,6 +555,17 @@
     $('console-1').textContent =
       '[콘솔 교체 — 전체 이력 재수신]\n> tokenizer 벤치를 돌리고 결과를 표로 정리해 줘\n\n' +
       '[1/3] 벤치 스크립트 준비\n[2/3] 3개 구현 실행\n[3/3] 표 정리 완료\n';
+    show('STP-response-watch');
+  });
+
+  $('br-codex-login').addEventListener('click', function () {
+    $('ws-type').textContent = 'codex';
+    $('console-1').textContent =
+      '> tokenizer 벤치를 돌리고 결과를 표로 정리해 줘\n\n' +
+      '[session-platform] 이 세션은 아직 ChatGPT에 로그인하지 않았습니다. 기기 코드로 로그인합니다.\n' +
+      '[session-platform] 브라우저에서 https://auth.openai.com/codex/device 를 열고 코드 WXYZ-7K2Q 를 입력하세요.\n' +
+      '[session-platform] 로그인되었습니다. 이 로그인은 세션에 남아 접혔다 돌아와도 다시 묻지 않습니다.\n' +
+      '[1/3] 벤치 스크립트 준비\n';
     show('STP-response-watch');
   });
 

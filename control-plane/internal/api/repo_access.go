@@ -61,6 +61,10 @@ var errRepoAccessDisabled = errors.New("repo access is not enabled on this deplo
 
 func (ra *RepoAccess) admin(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if _, bearer := r.Header["Authorization"]; bearer {
+			writeErr(w, session.ErrForbidden)
+			return
+		}
 		if ra.store == nil {
 			writeJSON(w, http.StatusServiceUnavailable, errResp{Error: errRepoAccessDisabled.Error()})
 			return

@@ -13,6 +13,7 @@ const WORKLOAD_TAG: Record<string, string> = {
   "claude-code": "◇ claude-code",
   "approval-gated": "⏸ approval-gated",
   "minimax-code": "◇ minimax-code",
+  codex: "◇ codex",
 };
 
 // control-plane/internal/session.MaxIdle 의 사본이다 — 어느 게이트도 둘을 대조하지 않는다.
@@ -165,12 +166,20 @@ export function SessionCard({
       data-session-id={s.id}
       data-state={s.state}
       data-workload-type={s.workloadType}
+      data-tenant={s.tenant}
     >
       <button
         type="button"
         className="card-open"
         onClick={() => navigate(sessionEntryPath(s))}
-        aria-label={s.name + ", " + s.workloadType + ", " + s.state}
+        aria-label={
+          s.name +
+          ", " +
+          s.workloadType +
+          (s.tenant ? ", tenant " + s.tenant : "") +
+          ", " +
+          s.state
+        }
       >
         {s.state === "snapshot" ? (
           <>
@@ -200,6 +209,15 @@ export function SessionCard({
               <PodIcon size={12} /> pod/{s.pod}
             </span>
           )}
+          {s.tenant ? (
+            <span
+              className="tenant-tag"
+              data-testid="session-tenant"
+              title={"tenant=" + s.tenant}
+            >
+              {s.tenant}
+            </span>
+          ) : null}
           <span
             className={
               "workload-tag" +

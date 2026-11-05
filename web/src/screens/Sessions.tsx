@@ -1,8 +1,8 @@
 // mockup: docs/mockups/index.html
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { Session } from "../api/types";
+import type { Session, TenantConfig } from "../api/types";
 import { DeleteSessionDialog } from "../app/DeleteSessionDialog";
 import { SessionCard } from "../app/SessionCard";
 import { PodIcon } from "../app/icons";
@@ -32,12 +32,54 @@ function aggregateReclaimed(sessions: Session[]): string | null {
   return `${fmt(vcpu)} vCPU · ${fmt(gb)} GB`;
 }
 
+// `?tenant=` absent shows every session, empty shows untenanted ones only —
+// the same meaning as the list API's own filter (AC-K2).
+const TENANT_PARAM = "tenant";
+
+function matchesTenant(s: Session, filter: string | null): boolean {
+  if (filter === null) return true;
+  return (s.tenant ?? "") === filter;
+}
+
 export function Sessions() {
   const [sessions, setSessions] = useState<Session[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [sessionToDelete, setSessionToDelete] = useState<Session | null>(null);
+  const [tenants, setTenants] = useState<TenantConfig[]>([]);
+  const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
+
+  useEffect(() => {
+    let active = true;
+    void api
+      .getConfig()
+      .then((config) => {
+        if (active) setTenants(config.tenants);
+      })
+      .catch(() => {
+        if (active) setTenants([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const tenantFilter =
+    tenants.length > 0 ? searchParams.get(TENANT_PARAM) : null;
+  const shown = sessions?.filter((s) => matchesTenant(s, tenantFilter)) ?? null;
+
+  const pickTenant = (value: string | null) => {
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        if (value === null) next.delete(TENANT_PARAM);
+        else next.set(TENANT_PARAM, value);
+        return next;
+      },
+      { replace: true },
+    );
+  };
 
   const load = useCallback(() => {
     return api
@@ -78,11 +120,20 @@ export function Sessions() {
   );
 
   const counts = {
-    active: sessions?.filter((s) => s.state === "active").length ?? 0,
-    idle: sessions?.filter((s) => s.state === "idle").length ?? 0,
-    snapshot: sessions?.filter((s) => s.state === "snapshot").length ?? 0,
+    active: shown?.filter((s) => s.state === "active").length ?? 0,
+    idle: shown?.filter((s) => s.state === "idle").length ?? 0,
+    snapshot: shown?.filter((s) => s.state === "snapshot").length ?? 0,
   };
-  const reclaimed = sessions ? aggregateReclaimed(sessions) : null;
+  const reclaimed = shown ? aggregateReclaimed(shown) : null;
+  const filterOptions: { value: string | null; label: string; testId: string }[] = [
+    { value: null, label: "All", testId: "tenant-filter-all" },
+    ...tenants.map((t) => ({
+      value: t.name,
+      label: t.name,
+      testId: "tenant-filter-tenant",
+    })),
+    { value: "", label: "No tenant", testId: "tenant-filter-none" },
+  ];
 
   return (
     <div className="pad">
@@ -144,14 +195,48 @@ export function Sessions() {
         )}
       </div>
 
+      {tenants.length > 0 ? (
+        <div
+          className="tenant-filter"
+          role="group"
+          aria-label="Filter by tenant"
+          data-testid="tenant-filter"
+        >
+          <span className="tenant-filter-label">Tenant</span>
+          {filterOptions.map((option) => (
+            <button
+              key={option.value ?? "*"}
+              type="button"
+              className={
+                "tenant-filter-option" +
+                (tenantFilter === option.value ? " selected" : "")
+              }
+              aria-pressed={tenantFilter === option.value}
+              data-testid={option.testId}
+              data-tenant={option.value ?? undefined}
+              onClick={() => pickTenant(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       {error && <div className="error">Failed to load sessions: {error}</div>}
       {!error && sessions === null && <div className="empty">Loading…</div>}
       {!error && sessions?.length === 0 && (
         <div className="empty">No sessions yet. Create one to get started.</div>
       )}
+      {!error && sessions !== null && sessions.length > 0 && shown?.length === 0 && (
+        <div className="empty">
+          {tenantFilter === ""
+            ? "No untenanted sessions."
+            : `No sessions for tenant ${tenantFilter}.`}
+        </div>
+      )}
 
       <div className="grid">
-        {sessions?.map((s) => (
+        {shown?.map((s) => (
           <SessionCard
             key={s.id}
             s={s}

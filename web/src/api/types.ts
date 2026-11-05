@@ -5,13 +5,41 @@ export type State = "active" | "idle" | "snapshot";
 /**
  * AC-E1/AC-F1. 화면은 리터럴이 아니라 계열로 갈린다 — `app/workloadKind.ts`.
  */
-export type WorkloadType = "shell" | "claude-code" | "approval-gated" | "minimax-code";
+export type WorkloadType =
+  | "shell"
+  | "claude-code"
+  | "approval-gated"
+  | "minimax-code"
+  | "codex";
+
+export interface ModelCatalog {
+  defaultModel: string;
+  models: string[];
+}
+
+export interface WorkloadTypeConfig {
+  type: WorkloadType;
+  label: string;
+  description: string;
+  takesModel: boolean;
+  input: "prompt" | "terminal";
+  defaultModel: string | null;
+  models: string[];
+}
+
+/** AC-K4 */
+export interface TenantConfig {
+  name: string;
+  workloadTypes: WorkloadType[];
+}
 
 export interface PlatformConfig {
-  claudeCode: {
-    defaultModel: string;
-    models: string[];
-  };
+  claudeCode: ModelCatalog;
+  workloadTypes: WorkloadTypeConfig[];
+  /** The calling tenant; null for the operator. */
+  tenant: TenantConfig | null;
+  /** What the operator may create into and filter by; empty for a tenant caller. */
+  tenants: TenantConfig[];
 }
 
 // 와이어 필드 이름은 `checkpoint` 그대로다(OpenAPI 계약). 가리키는 것은 모든 타입에서 파일시스템 아카이브다.
@@ -35,6 +63,8 @@ export interface Session {
    * `pod` 이 없을 때 정확히 함께 없다.
    */
   auxiliaryPods?: string[];
+  /** AC-K2. Absent means operator-owned (untenanted). */
+  tenant?: string;
   createdAt: string;
   lastAccess: string;
   checkpoint?: Checkpoint;
@@ -45,6 +75,8 @@ export interface CreateSessionRequest {
   /** omitted means "shell" (AC-E1) */
   workloadType?: WorkloadType;
   model?: string;
+  /** Operator only (AC-K2); omitted means untenanted. */
+  tenant?: string;
 }
 
 export interface ReadResult {
