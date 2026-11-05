@@ -64,6 +64,13 @@ resources:
   # substituted, so it sits outside the allowlist like MinIO — see its header.
   - e2e-drop.yaml
 
+  # Tenants for docs/test/multitenancy.md: two tenant ServiceAccounts, one
+  # ServiceAccount no tenant claims, the tenant ConfigMap the base projects into
+  # SESSION_PLATFORM_TENANTS, and the TokenReview grant production keeps in
+  # flux-cd-apps. Nothing is substituted — the e2e suites mint real projected
+  # tokens for these accounts.
+  - e2e-tenancy.yaml
+
   # The ReadWriteMany class AC-F5's session-shared volume is provisioned from.
   # kind's default class is node-local and refuses a ReadWriteMany claim, so
   # without this the volume cannot stand here at all — see the file's header
@@ -106,8 +113,8 @@ patches:
   # locally built agent image scripts/e2e/up.sh loads into kind (the base
   # references the ghcr-published tag). env/1 is DATA_PLANE_IMAGE, env/2 is
   # SHELL_ARCHIVE_ENABLED, env/3 is DATA_PLANE_CLAUDE_CODE_IMAGE, env/4 is
-  # DATA_PLANE_APPROVAL_GATED_IMAGE, env/17 is APPROVAL_GATED_ARCHIVE_ENABLED and
-  # env/18 (the base's last entry) is DROP_URL. Each gate replace is preceded by a `test`
+  # DATA_PLANE_APPROVAL_GATED_IMAGE, env/17 is APPROVAL_GATED_ARCHIVE_ENABLED,
+  # env/18 is DROP_URL and env/19 is DATA_PLANE_CODEX_IMAGE. Each gate replace is preceded by a `test`
   # of the entry's name, so a reordered base fails the build instead of
   # silently flipping a different variable.
   #
@@ -187,6 +194,13 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/env/18/value
         value: http://drop.drop.svc.cluster.local
+      # codex 도 같은 로컬 빌드 에이전트 이미지다. env/19 가 DATA_PLANE_CODEX_IMAGE.
+      - op: test
+        path: /spec/template/spec/containers/0/env/19/name
+        value: DATA_PLANE_CODEX_IMAGE
+      - op: replace
+        path: /spec/template/spec/containers/0/env/19/value
+        value: session-platform/data-plane:dev
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:

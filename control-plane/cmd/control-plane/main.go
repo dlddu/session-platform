@@ -40,6 +40,14 @@ func main() {
 	if err == nil {
 		err = validateMiniMaxSecret(cfg.miniMax, cfg.claudeCredentialsSecret, cfg.claudeConfigConfigMap)
 	}
+	if err == nil {
+		err = validateCodexConfig(cfg.codex, map[string]string{
+			"CLAUDE_CODE_CREDENTIALS_SECRET":  cfg.claudeCredentialsSecret,
+			"CLAUDE_CODE_CONFIG_CONFIGMAP":    cfg.claudeConfigConfigMap,
+			"MINIMAX_CODE_CREDENTIALS_SECRET": cfg.miniMax.credentialsSecret,
+			"MINIMAX_CODE_CONFIG_CONFIGMAP":   cfg.miniMax.configConfigMap,
+		})
+	}
 	if err != nil {
 		logger.Error("invalid runtime configuration", "err", err)
 		os.Exit(1)
@@ -62,6 +70,8 @@ func main() {
 		"data_plane_claude_code_image", cfg.dataPlaneClaudeCodeImage,
 		"data_plane_approval_gated_image", cfg.dataPlaneApprovalGatedImage,
 		"data_plane_minimax_code_image", cfg.miniMax.image,
+		"data_plane_codex_image", cfg.codex.image,
+		"tenants", len(cfg.tenancy.tenants.Tenants()),
 		"approval_gateway_url", cfg.approvalGatewayURL,
 		"data_plane_shell", cfg.dataPlaneShell,
 		"claude_code_default_model", cfg.claudeCodeDefaultModel,
@@ -87,6 +97,10 @@ func main() {
 		k8s.WithClaudeConfigConfigMap(cfg.claudeConfigConfigMap),
 		k8s.WithMiniMaxCredentialsSecret(cfg.miniMax.credentialsSecret),
 		k8s.WithMiniMaxConfigConfigMap(cfg.miniMax.configConfigMap),
+		k8s.WithWorkloadImage(session.WorkloadTypeCodex, cfg.codex.image),
+		k8s.WithCodexCredentialsSecret(cfg.codex.credentialsSecret),
+		k8s.WithCodexConfigConfigMap(cfg.codex.configConfigMap),
+		k8s.WithCodexPlugins(cfg.codex.plugins),
 		k8s.WithApprovalGatewayURL(cfg.approvalGatewayURL),
 		k8s.WithSharedVolume(cfg.sharedVolumeStorageClass, cfg.sharedVolumeSize),
 		k8s.WithRepoAccess(cfg.repoAccess.helperURL(namespace)),
@@ -147,6 +161,15 @@ func main() {
 		serviceOpts = append(serviceOpts, miniMaxArchive)
 		logger.Info("minimax-code filesystem archive enabled", "store", cfg.checkpointStoreDesc())
 	}
+	codexArchive, err := codexArchiveOption(cfg.codex, agentClient, cstore)
+	if err != nil {
+		logger.Error("codex archive misconfigured", "err", err)
+		os.Exit(1)
+	}
+	if codexArchive != nil {
+		serviceOpts = append(serviceOpts, codexArchive)
+		logger.Info("codex filesystem archive enabled", "store", cfg.checkpointStoreDesc())
+	}
 	mgr := service.New(orch, store, shellCkpt, agentClient, serviceOpts...)
 	snapshotEnabled := cfg.anyArchiveEnabled()
 
@@ -159,7 +182,9 @@ func main() {
 		api.WithClaudeCodeModelConfig(cfg.claudeCodeDefaultModel, cfg.claudeCodeModels),
 		// approval-gated reads the same ConfigMap's model keys (AC-F6 → AC-E6).
 		api.WithWorkloadModelConfig(session.WorkloadTypeApprovalGated, cfg.claudeCodeDefaultModel, cfg.claudeCodeModels),
+		api.WithWorkloadModelConfig(session.WorkloadTypeCodex, cfg.codex.defaultModel, cfg.codex.models),
 		api.WithOfferedWorkloadTypes(cfg.offeredWorkloadTypes()...),
+		cfg.tenancy.apiOption(client),
 	).Routes(mux)
 	repoAccess, err := openRepoAccess(context.Background(), cfg.repoAccess)
 	if err != nil {
@@ -256,6 +281,8 @@ type config struct {
 	checkpointS3SessionName string
 	checkpointS3Endpoint    string
 	miniMax                 miniMaxConfig
+	codex                   codexConfig
+	tenancy                 tenancyConfig
 	repoAccess              repoAccessConfig
 	dropURL                 string // drop's in-cluster URL for helper pods (docs/prd/drop-file-share.md AC-I2)
 }
@@ -267,6 +294,7 @@ func (c config) offeredWorkloadTypes() []session.WorkloadType {
 		session.WorkloadTypeClaudeCode:    c.dataPlaneClaudeCodeImage,
 		session.WorkloadTypeApprovalGated: c.dataPlaneApprovalGatedImage,
 		session.WorkloadTypeMiniMaxCode:   c.miniMax.image,
+		session.WorkloadTypeCodex:         c.codex.image,
 	} {
 		if image != "" {
 			types = append(types, w)
@@ -279,7 +307,7 @@ func (c config) offeredWorkloadTypes() []session.WorkloadType {
 // which is what makes the durable store and the idle reaper necessary.
 func (c config) anyArchiveEnabled() bool {
 	return c.shellArchiveEnabled || c.claudeArchiveEnabled ||
-		c.approvalGatedArchiveEnabled || c.miniMax.archiveEnabled
+		c.approvalGatedArchiveEnabled || c.miniMax.archiveEnabled || c.codex.archiveEnabled
 }
 
 // approvalGatedArchiveOption returns the service option that installs the
@@ -341,6 +369,14 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("SESSION_SHARED_VOLUME_SIZE: %w", err)
 	}
+	codex, err := loadCodexConfig()
+	if err != nil {
+		return config{}, err
+	}
+	tenants, err := loadTenancyConfig()
+	if err != nil {
+		return config{}, err
+	}
 	return config{
 		addr:           env("CP_ADDR", ":8080"),
 		dataPlaneImage: env("DATA_PLANE_IMAGE", ""),
@@ -367,6 +403,8 @@ func loadConfig() (config, error) {
 		checkpointS3Prefix:          env("CHECKPOINT_S3_PREFIX", "checkpoints"),
 		checkpointS3SessionName:     env("CHECKPOINT_S3_SESSION_NAME", ""),
 		miniMax:                     loadMiniMaxConfig(),
+		codex:                       codex,
+		tenancy:                     tenants,
 		repoAccess:                  loadRepoAccessConfig(),
 		dropURL:                     env("DROP_URL", ""),
 	}, nil

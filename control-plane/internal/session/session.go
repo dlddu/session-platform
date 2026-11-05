@@ -75,7 +75,7 @@ var modelNamePattern = regexp.MustCompile(`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}
 // default. Use that on the way in and this to reject explicit garbage.
 func (w WorkloadType) Valid() bool {
 	switch w {
-	case WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeApprovalGated, WorkloadTypeMiniMaxCode:
+	case WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeApprovalGated, WorkloadTypeMiniMaxCode, WorkloadTypeCodex:
 		return true
 	default:
 		return false
@@ -114,7 +114,7 @@ func NormalizeModel(workload WorkloadType, model string) (string, error) {
 			return "", ErrInvalidInput
 		}
 		return "", nil
-	case WorkloadTypeClaudeCode, WorkloadTypeApprovalGated, WorkloadTypeMiniMaxCode:
+	case WorkloadTypeClaudeCode, WorkloadTypeApprovalGated, WorkloadTypeMiniMaxCode, WorkloadTypeCodex:
 		if model == "" {
 			return PlatformDefaultModel, nil
 		}
@@ -191,8 +191,12 @@ type Session struct {
 	// then the Claude Code installation fallback (AC-E6, reused verbatim by
 	// AC-F1).
 	Model string `json:"model,omitempty"`
-	Name  string `json:"name"`
-	State State  `json:"state"`
+	// Tenant is the tenant that owns the session (docs/prd/multitenancy.md,
+	// AC-K2), fixed at creation. Empty means operator-owned: sessions created
+	// before tenancy existed, or by the operator without naming a tenant.
+	Tenant string `json:"tenant,omitempty"`
+	Name   string `json:"name"`
+	State  State  `json:"state"`
 	// Pod is the session's dedicated *workload* pod — the one running the
 	// workload its type selects. It is the 1:1 subject of AC-A2 and is empty
 	// when the session is snapshotted/reclaimed.
@@ -258,4 +262,9 @@ var (
 	// live pod behind synthetic metadata. Callers may retry after the workload's
 	// real snapshot strategy is enabled.
 	ErrCheckpointDisabled = errors.New("checkpoint strategy is disabled")
+	// ErrUnauthenticated and ErrForbidden are the tenancy boundary's errors
+	// (AC-K1, AC-K3): a bearer token that does not prove a ServiceAccount, and
+	// a proven caller asking for something its tenant may not have.
+	ErrUnauthenticated = errors.New("unauthenticated")
+	ErrForbidden       = errors.New("forbidden")
 )

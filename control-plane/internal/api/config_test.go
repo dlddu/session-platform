@@ -126,7 +126,7 @@ func TestRuntimeConfigListsWorkloadTypes(t *testing.T) {
 		order = append(order, e.Type)
 		byType[e.Type] = e
 	}
-	if want := []string{"shell", "claude-code", "minimax-code", "approval-gated"}; !reflect.DeepEqual(order, want) {
+	if want := []string{"shell", "claude-code", "minimax-code", "codex", "approval-gated"}; !reflect.DeepEqual(order, want) {
 		t.Fatalf("workload type order = %v, want %v", order, want)
 	}
 	for _, e := range got.WorkloadTypes {

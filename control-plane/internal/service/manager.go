@@ -198,6 +198,7 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 		ID:            id,
 		WorkloadType:  workload,
 		Model:         model,
+		Tenant:        req.Tenant,
 		Name:          name,
 		State:         session.StateActive,
 		Pod:           pods.Workload.Name,

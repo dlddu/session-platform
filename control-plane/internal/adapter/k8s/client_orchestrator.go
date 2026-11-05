@@ -212,6 +212,9 @@ type ClientOrchestrator struct {
 	dropURL                  string // drop's in-cluster URL for the helper's drop_* tools (drop.go)
 	miniMaxCredentialsSecret string
 	miniMaxConfigConfigMap   string
+	codexCredentialsSecret   string
+	codexConfigConfigMap     string
+	codexPlugins             string
 	// AC-F5's per-session shared claim — see shared_volume.go.
 	sharedVolumeStorageClass string
 	sharedVolumeSize         resource.Quantity
@@ -322,6 +325,9 @@ func NewClientOrchestrator(client kubernetes.Interface, namespace string, opts .
 		claudeConfigConfigMap:    defaultClaudeConfigConfigMap,
 		miniMaxCredentialsSecret: defaultMiniMaxCredentialsSecret,
 		miniMaxConfigConfigMap:   defaultMiniMaxConfigConfigMap,
+		codexCredentialsSecret:   defaultCodexCredentialsSecret,
+		codexConfigConfigMap:     defaultCodexConfigConfigMap,
+		codexPlugins:             DefaultCodexPlugins,
 		sharedVolumeSize:         resource.MustParse(defaultSharedVolumeSize),
 		pollInterval:             defaultPollInterval,
 		readyTimeout:             defaultReadyTimeout,
@@ -648,6 +654,8 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		// AC-F2's arrangement.
 	case session.WorkloadTypeMiniMaxCode:
 		sidecars, volumes = o.miniMaxCodePod(&container, model, helper, helperPodNameFor(sessionID, suffix))
+	case session.WorkloadTypeCodex:
+		sidecars, volumes = o.codexPod(&container, sessionID, model, image)
 	}
 	name := podName(sessionID)
 	var annotations map[string]string
@@ -664,7 +672,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 	// inspect cluster resources. Its ClusterRoleBinding uses the built-in `view`
 	// role rather than a wildcard rule because RBAC cannot subtract Secrets from
 	// an otherwise-wildcard grant.
-	automountServiceAccountToken := true
+	automountServiceAccountToken := workloadType != session.WorkloadTypeCodex
 
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
