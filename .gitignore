@@ -7,6 +7,7 @@ data-plane/agent
 web/node_modules/
 web/dist/
 web/tsconfig.tsbuildinfo
+data-plane/codex-runner/node_modules/
 *.log
 
 # --- Node / tools (문서 게이트 하네스) ---

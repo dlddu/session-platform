@@ -33,6 +33,18 @@ RUN npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && mcode --version \
  && npm cache clean --force
 
+FROM node:22-trixie-slim AS codex-build
+WORKDIR /opt/codex-runner
+COPY data-plane/codex-runner/package.json data-plane/codex-runner/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+COPY data-plane/codex-runner/*.mjs ./
+COPY --from=build /out/agent /agent
+RUN node --test \
+ && "$(node runner.mjs --print-codex-bin)" --version \
+ && /agent codex-render-config /tmp/codex-surface \
+ && node surface-check.mjs --home /tmp/codex-surface \
+ && rm -rf /tmp/codex-surface
+
 # ---- stage 3: install the official GitHub CLI release ----
 # Debian trixie's community gh 2.46 package uses retired GitHub APIs. Download
 # a current pinned upstream release instead, verifying the release checksum.
@@ -101,6 +113,10 @@ RUN groupadd --gid 1000 session \
 COPY --from=claude-build /usr/local/ /usr/local/
 ENV DISABLE_AUTOUPDATER=1
 RUN node --version && npm --version && claude --version && mcode --version
+COPY --from=codex-build /opt/codex-runner /opt/codex-runner
+RUN printf '#!/bin/sh\nexec node /opt/codex-runner/runner.mjs "$@"\n' > /usr/local/bin/codex-runner \
+ && chmod 0755 /usr/local/bin/codex-runner \
+ && "$(codex-runner --print-codex-bin)" --version
 COPY --from=build /out/agent /agent
 COPY --chmod=0755 data-plane/entrypoint.sh /entrypoint.sh
 # Agent port; keep in sync with cmd/agent (defaultAddr) and the control plane

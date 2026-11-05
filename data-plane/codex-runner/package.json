@@ -1,0 +1,17 @@
+{
+  "name": "session-platform-codex-runner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Codex SDK runner for the session-platform codex workload (AC-J2).",
+  "type": "module",
+  "main": "runner.mjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@openai/codex-sdk": "0.166.0"
+  }
+}
