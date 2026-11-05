@@ -700,7 +700,9 @@ export function Workspace() {
                   : isAgent
                     ? sess.workloadType === "minimax-code"
                       ? "send a prompt — runs mcode exec once in the session pod"
-                      : "send a prompt — streams one claude -p response"
+                      : sess.workloadType === "codex"
+                        ? "send a prompt — runs one Codex turn in the session pod"
+                        : "send a prompt — streams one claude -p response"
                     : "run a command — executes in the session shell (bash)"
               }
               spellCheck={isAgent}
@@ -730,6 +732,12 @@ export function Workspace() {
               </button>
             ) : null}
           </form>
+          {sess.workloadType === "codex" && !frozen ? (
+            <div className="agent-hint" data-testid="ws-codex-login-hint">
+              First prompt signs this session in to ChatGPT — watch the
+              transcript for a link and code.
+            </div>
+          ) : null}
         </div>
 
         <div>

@@ -369,6 +369,14 @@
     font-size:11px;color:var(--text-faint);line-height:1.55}
   .guarantee b{color:var(--text-dim);font-weight:500}
 
+  /* tenant picker (AC-K2 · AC-K4) — 테넌트가 하나라도 설정된 운영자에게만 보인다 */
+  .field .tenant-in{width:100%;height:40px;border-radius:10px;background:var(--ink-2);border:1px solid var(--line);
+    color:var(--text);padding:0 12px;font-family:"IBM Plex Mono",monospace;font-size:13px;color-scheme:dark}
+  .field .tenant-in:focus{outline:none;border-color:var(--active)}
+  .field .hint{display:block;margin-top:6px;font-size:11px;color:var(--text-faint)}
+  .tenant-line{margin:-4px 0 16px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-faint)}
+  .tenant-line b{font-family:"IBM Plex Mono",monospace;font-weight:600;color:var(--text);letter-spacing:0;text-transform:none}
+
   .prov-type{display:inline-flex;align-items:center;gap:6px;font-family:"IBM Plex Mono",monospace;
     font-size:11px;color:var(--active);background:var(--active-soft);border:1px solid rgba(255,180,58,.22);
     border-radius:7px;padding:4px 8px;margin-bottom:16px}
@@ -460,6 +468,16 @@
         <input class="name-in mono" id="sess-name" value="refactor-billing" placeholder="my-session" />
       </div>
 
+      <!-- 운영자 + 테넌트 설정 있음: 고르는 칸 · 테넌트 호출자: 고정 한 줄 · 테넌트 없음: 둘 다 없다 (AC-K4) -->
+      <div class="field" id="tenant-field">
+        <label for="tenant-in">Tenant</label>
+        <select class="tenant-in" id="tenant-in" onchange="pickTenant(this.value)">
+          <option value="">No tenant</option>
+        </select>
+        <span class="hint" id="tenant-hint">No tenant keeps the session operator-only.</span>
+      </div>
+      <div class="tenant-line" id="tenant-line" style="display:none">Tenant: <b id="tenant-line-name">—</b></div>
+
       <div class="field">
         <label>Workload type</label>
         <div class="types">
@@ -484,6 +502,13 @@
             </span>
             <span class="t-n">minimax-code</span>
             <span class="t-d">MiniMax Code CLI on the same prompt loop. Runs the platform's default MiniMax model.</span>
+          </button>
+          <button class="type wide" data-type="codex" onclick="pickType('codex')">
+            <span class="t-ic">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3.2"/></svg>
+            </span>
+            <span class="t-n">codex</span>
+            <span class="t-d">Codex SDK agent on your ChatGPT plan. Conversation, plugin skills and K3s MCP only.</span>
           </button>
           <button class="type wide" data-type="approval-gated" onclick="pickType('approval-gated')">
             <span class="t-ic">
@@ -560,14 +585,14 @@ let sessions = [
   {id:'c83d', name:'doc-migration', type:'claude-code', model:'platform default', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'18m ago', checkpoint:'38 MB archive', reclaim:'1 vCPU · 2 GB'}
 ];
 // workloadType은 세션 수명 동안 불변 (AC-E1/AC-F1) · 링크 대상이 타입에 따라 갈린다
-const WS_PAGE = {'claude-code':'agent-workspace.html', 'minimax-code':'agent-workspace.html', 'approval-gated':'gated-workspace.html', 'shell':'workspace.html'};
+const WS_PAGE = {'claude-code':'agent-workspace.html', 'minimax-code':'agent-workspace.html', 'codex':'agent-workspace.html', 'approval-gated':'gated-workspace.html', 'shell':'workspace.html'};
 function wsHref(s){
   if(s.state==='snapshot') return `restore.html?id=${s.id}`;
   return `${WS_PAGE[s.type]||'workspace.html'}?id=${s.id}`;
 }
 function typeTag(s){
-  if(s.type==='claude-code')
-    return `<span class="pod" style="color:#b79ae0" title="workloadType=claude-code">◇ claude-code</span>`;
+  if(s.type==='claude-code' || s.type==='minimax-code' || s.type==='codex')
+    return `<span class="pod" style="color:#b79ae0" title="workloadType=${s.type}">◇ ${s.type}</span>`;
   if(s.type==='approval-gated')
     return `<span class="pod" style="color:var(--idle)" title="workloadType=approval-gated">⏸ approval-gated</span>`;
   return `<span class="pod" style="color:var(--text-faint)" title="workloadType=shell">$ shell</span>`;
@@ -662,18 +687,19 @@ function startGridTick(){
 
 /* ---------- STP-workload-choice · workload type selection (AC-E1 / AC-E6 · V8) ---------- */
 let provBusy=false;
-let draft = { type:'shell', model:'platform-default' };
+let draft = { type:'shell', model:'platform-default', tenant:'' };
 
-// 에이전트 계열 타입(claude-code · approval-gated · minimax-code) (AC-E6 · AC-F1 · AC-G1)
-const AGENT_TYPES = ['claude-code','approval-gated','minimax-code'];
+// 에이전트 계열 타입(claude-code · approval-gated · minimax-code · codex) (AC-E6 · AC-F1 · AC-G1 · AC-J1)
+const AGENT_TYPES = ['claude-code','approval-gated','minimax-code','codex'];
 // minimax-code는 model을 고르지 않는다 — 항상 플랫폼 기본 MiniMax 모델 (AC-G1)
-const MODEL_CHOICE_TYPES = ['claude-code','approval-gated'];
+const MODEL_CHOICE_TYPES = ['claude-code','approval-gated','codex'];
 // 고정 안내문은 워크로드별 플랫폼 사실을 말한다 — 모델을 고르는 타입만 'model choice'를 언급하고,
 // minimax-code는 항상 플랫폼 기본 MiniMax 모델, approval-gated는 헬퍼 파드(승인 게이트·유일한 외부 경로)를 덧붙인다.
 const IMMUTABLE_NOTE = {
   'shell': 'Workload type is <b>fixed for the lifetime</b> of the session. To use a different one, create a new session.',
   'claude-code': 'Workload type and model choice are fixed for this session. Platform default resolves to the configured default at container start.',
   'minimax-code': 'Workload type is fixed for this session. It runs the platform default MiniMax model, resolved at container start.',
+  'codex': 'Workload type and model choice are fixed for this session. The first prompt signs the session in to ChatGPT, and the login is kept in its archive.',
   'approval-gated': 'Workload type and model choice are fixed for this session. The session also gets a helper pod that holds the approval gate and the only route out.'
 };
 function pickType(t){
@@ -682,6 +708,42 @@ function pickType(t){
   document.getElementById('immutable-tx').innerHTML = IMMUTABLE_NOTE[t];
   document.querySelectorAll('.type').forEach(b=>b.classList.toggle('sel', b.dataset.type===t));
   document.getElementById('model-field').classList.toggle('on', MODEL_CHOICE_TYPES.includes(t));
+}
+/* ---------- AC-K2 · AC-K4 · 테넌트 선택 ----------
+   ?tenancy=none     테넌트 설정 없음 — 오늘과 똑같은 화면(칸 자체가 없다)
+   ?tenancy=tenant   호출자가 테넌트 — 고정 한 줄, 타입 카드는 그 테넌트가 받은 것만
+   (기본)            운영자 + 테넌트 둘 — 고르는 칸, 기본값 No tenant */
+const TENANTS = [
+  {name:'pocket-aide', workloadTypes:['shell','codex','claude-code']},
+  {name:'ops-bot', workloadTypes:['shell']}
+];
+const TENANCY = new URLSearchParams(location.search).get('tenancy') || 'operator';
+const ALL_TYPES = ['shell','claude-code','minimax-code','codex','approval-gated'];
+function showTypes(allowed){
+  document.querySelectorAll('.type').forEach(b=>{ b.style.display = allowed.includes(b.dataset.type) ? '' : 'none'; });
+  if(!allowed.includes(draft.type)) pickType(allowed[0]);
+}
+function pickTenant(name){
+  if(provBusy) return;
+  draft.tenant = name;
+  const t = TENANTS.find(x=>x.name===name);
+  document.getElementById('tenant-hint').textContent = t
+    ? `Only the types ${t.name} is granted are shown. The tenant can see and use this session.`
+    : 'No tenant keeps the session operator-only.';
+  showTypes(t ? t.workloadTypes : ALL_TYPES);
+}
+function initTenancy(){
+  const field = document.getElementById('tenant-field');
+  const line = document.getElementById('tenant-line');
+  if(TENANCY==='none'){ field.style.display='none'; return; }
+  if(TENANCY==='tenant'){
+    field.style.display='none'; line.style.display='';
+    document.getElementById('tenant-line-name').textContent = TENANTS[0].name;
+    showTypes(TENANTS[0].workloadTypes);
+    return;
+  }
+  const sel = document.getElementById('tenant-in');
+  TENANTS.forEach(t=>{ const o=document.createElement('option'); o.value=t.name; o.textContent=t.name; sel.appendChild(o); });
 }
 function pickModel(m){
   if(provBusy) return;
@@ -732,7 +794,7 @@ function startProvision(){
       if(i===1){ setTimeout(()=>{document.getElementById('prov-pod-name').textContent='pod/'+pod+' scheduled'; document.getElementById('prov-pod').classList.add('show');}, gap*0.5); }
       setTimeout(()=>run(i+1), gap);
     } else {
-      const s={id:newId, name:rawName||('session-'+newId), type:draft.type, state:'active',
+      const s={id:newId, name:rawName||('session-'+newId), type:draft.type, state:'active', tenant:draft.tenant||undefined,
         pod:pod, region:'us-east-1', up:'0m', upMin:0,
         cpu:18+Math.floor(Math.random()*16), mem:240+Math.floor(Math.random()*120), memMax:2048, idleMin:0};
       if(isAgent) s.model = MODEL_LABEL[draft.model];
@@ -740,14 +802,14 @@ function startProvision(){
       setTimeout(()=>{
         closeModal(); provBusy=false; renderGrid(); renderSummary();
         toast(draft.type==='approval-gated' ? 'approval-gated session created — outbound calls will need your approval'
-          : isAgent ? 'claude-code session created on a dedicated pod' : 'shell session created on a dedicated pod','warm');
+          : isAgent ? `${draft.type} session created on a dedicated pod` : 'shell session created on a dedicated pod','warm');
       }, reduce?80:480);
     }
   };
   setTimeout(()=>run(0), reduce?40:260);
 }
 document.getElementById('scrim').addEventListener('click',e=>{ if(e.target.id==='scrim' && !provBusy) closeModal(); });
-renderSummary(); renderGrid(); startGridTick();
+renderSummary(); renderGrid(); startGridTick(); initTenancy();
 setTimeout(openModal, 350);
 
 </script>

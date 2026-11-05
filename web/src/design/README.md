@@ -39,10 +39,10 @@
 역할별로 묶은 것이고, 정확한 정의는 항상 파일을 봅니다.
 
 - **셸/레이아웃** — `.app` `.rail` `.rail-btn` `.rail-me` `.rail-spacer` `.mark` `.viewport` `.pad` `.h-top` `.grid` `.panel` `.bar` `.crumbs` `.back`
-- **세션 표현** — `.card` `.card-head` `.card-foot` `.c-name` `.c-id` `.badge` `.chip` `.summary` `.vit` `.lc-state` `.reclaim-lab`
-- **콘솔/작업 영역** — `.console` `.console-bar` `.term` `.input-row` `.ws-body` `.steps` `.step`
+- **세션 표현** — `.card` `.card-head` `.card-foot` `.c-name` `.c-id` `.badge` `.chip` `.summary` `.vit` `.lc-state` `.reclaim-lab` `.tenant-tag` `.tenant-filter` `.tenant-filter-option`
+- **콘솔/작업 영역** — `.console` `.console-bar` `.term` `.input-row` `.ws-body` `.steps` `.step` `.agent-hint`
 - **스냅샷·복원** — `.crystal` `.ring` `.freeze` `.snap-body` `.snap-meta` `.snap-hint`
-- **오버레이·피드백** — `.modal` `.modal-actions` `.scrim` `.toast` `.toast-wrap` `.error` `.empty` `.field`
+- **오버레이·피드백** — `.modal` `.modal-actions` `.scrim` `.toast` `.toast-wrap` `.error` `.empty` `.field` `.tenant-line`
 
 ---
 
