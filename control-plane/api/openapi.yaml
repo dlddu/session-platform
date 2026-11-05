@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: session-platform control plane API
-  version: 0.4.0
+  version: 0.5.0
   description: >
     REST surface the SPA uses to create, list and operate sessions. Each
     session maps 1:1 to a dedicated data plane *workload* pod and may own
@@ -433,6 +433,65 @@ paths:
           $ref: "#/components/responses/RequestEntityTooLarge"
         "503":
           description: The workload's checkpoint or archive strategy is disabled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /sessions/{id}/plugins/refresh:
+    post:
+      summary: Fetch a codex session's plugin skills again, keeping its conversation (AC-J7)
+      operationId: refreshSessionPlugins
+      description: >
+        Codex sessions only. The session's K3s MCP sidecar clones the plugin
+        marketplace again and the agent makes the session's platform-managed
+        skills match it; the conversation and thread are untouched, and the
+        next resumed turn opens with a note naming what changed. It runs only
+        between turns. Like a write, it brings an idle session active and
+        restores a snapshotted one first (which by itself already starts from
+        the current marketplace). A refresh that cannot reach the marketplace
+        keeps the skills the session had. Nothing refreshes on its own.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          description: What the refresh changed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginRefreshResult" }
+        "400":
+          description: Malformed body, trailing JSON, or a non-empty request object
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Not found, or another tenant's session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: A turn is running or queued, a refresh or checkpoint is already running, or the session's state changed concurrently
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "422":
+          description: The session is not a codex session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: The marketplace could not be fetched again; the session keeps the skills it had
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -963,6 +1022,31 @@ components:
         path:
           type: string
           description: which state branch served the write
+    PluginRefreshResult:
+      type: object
+      required: [session, path, state, added, updated, removed]
+      properties:
+        session: { $ref: "#/components/schemas/Session" }
+        path:
+          type: string
+          description: Which state branch served the refresh, as for a write (e.g. `active`, `snapshot->restore->refresh-plugins`).
+        state:
+          type: string
+          enum: [ready, unconfigured]
+          description: "`unconfigured`: the session has no plugin marketplace (no K3s MCP token), so there was nothing to fetch."
+        revision:
+          type: string
+          description: The marketplace commit the skills now come from, when known.
+        added:
+          type: array
+          items: { type: string }
+          description: Platform-managed skill directories (`<plugin>--<skill>`) the refresh installed.
+        updated:
+          type: array
+          items: { type: string }
+        removed:
+          type: array
+          items: { type: string }
     Error:
       type: object
       properties:

@@ -41,6 +41,8 @@ type fakeAgent struct {
 	abortCalls          int
 	abortStatus         int // non-200 to force an abort error
 	abortCheckpointID   string
+	refreshStatus       int // non-200 to force a plugin refresh error
+	refreshCalls        int
 }
 
 func (a *fakeAgent) handler() http.Handler {
@@ -87,6 +89,15 @@ func (a *fakeAgent) handler() http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"aborted"}`))
+	})
+	mux.HandleFunc("POST /plugins/refresh", func(w http.ResponseWriter, r *http.Request) {
+		a.refreshCalls++
+		if a.refreshStatus != 0 && a.refreshStatus != http.StatusOK {
+			http.Error(w, "refresh refused", a.refreshStatus)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"state":"ready","revision":"abc","added":["p--new"],"updated":[],"removed":["p--old"]}`))
 	})
 	mux.HandleFunc("GET /stream", func(w http.ResponseWriter, r *http.Request) {
 		a.streamOffset = r.URL.Query().Get("offset")
@@ -368,5 +379,34 @@ func TestHTTPClientWritePreservesAdmissionErrors(t *testing.T) {
 				t.Fatalf("write error = %v, want errors.Is(_, %v)", err, tc.want)
 			}
 		})
+	}
+}
+
+// AC-J7: the client relays the agent's refresh and keeps its refusals apart —
+// busy between turns, the marketplace unreachable, no plugins at all.
+func TestHTTPClientRefreshPlugins(t *testing.T) {
+	c, fa := harness(t, "sess-cx")
+	changes, err := c.RefreshPlugins(context.Background(), "sess-cx")
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if changes.State != "ready" || changes.Revision != "abc" || len(changes.Added) != 1 || changes.Removed[0] != "p--old" {
+		t.Fatalf("changes = %+v", changes)
+	}
+	for _, tc := range []struct {
+		status int
+		want   error
+	}{
+		{http.StatusConflict, session.ErrWorkloadBusy},
+		{http.StatusBadGateway, session.ErrPluginRefreshFailed},
+		{http.StatusNotFound, session.ErrInvalidState},
+	} {
+		fa.refreshStatus = tc.status
+		if _, err := c.RefreshPlugins(context.Background(), "sess-cx"); !errors.Is(err, tc.want) {
+			t.Errorf("agent %d: error = %v, want %v", tc.status, err, tc.want)
+		}
+	}
+	if fa.refreshCalls != 4 {
+		t.Errorf("refresh calls = %d, want 4", fa.refreshCalls)
 	}
 }

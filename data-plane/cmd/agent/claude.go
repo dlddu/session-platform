@@ -210,13 +210,16 @@ type claudeWorkload struct {
 	checkpointID            string
 	lastAbortedCheckpointID string
 	restoring               bool
-	active                  bool
-	hasRun                  bool
-	turns                   int
-	stopping                bool
-	runTimeout              time.Duration
-	runOutputLimit          int
-	scrollbackLimit         int
+	// refreshing holds the worker between turns while AC-J7's plugin refresh
+	// rewrites the session's skills.
+	refreshing      bool
+	active          bool
+	hasRun          bool
+	turns           int
+	stopping        bool
+	runTimeout      time.Duration
+	runOutputLimit  int
+	scrollbackLimit int
 
 	now        func() time.Time
 	ctx        context.Context
@@ -434,7 +437,7 @@ func (c *claudeWorkload) runWorker() {
 	defer close(c.workerDone)
 	for {
 		c.mu.Lock()
-		for !c.stopping && (!c.ready || c.queue.Len() == 0) {
+		for !c.stopping && (!c.ready || c.refreshing || c.queue.Len() == 0) {
 			c.cond.Wait()
 		}
 		if c.stopping {
@@ -452,6 +455,7 @@ func (c *claudeWorkload) runWorker() {
 		c.mu.Unlock()
 
 		c.beginTurn(seq, job.prompt)
+		prompt, noticed := c.withTurnNotice(job.prompt, resume)
 		output := newClaudeOutputSink(
 			&c.out,
 			c.redact,
@@ -463,7 +467,7 @@ func (c *claudeWorkload) runWorker() {
 		stdout := c.cli.newProjector(stdoutUTF8)
 		stderr := newUTF8NormalizingWriter(output)
 		runCtx, cancelRun := context.WithTimeout(c.ctx, c.runTimeout)
-		err := c.runner.Run(runCtx, c.argv(job.prompt, resume), runnerOptions{
+		err := c.runner.Run(runCtx, c.argv(prompt, resume), runnerOptions{
 			Dir:    c.workDir,
 			Env:    environmentWithHome(c.homeDir),
 			Stdout: stdout,
@@ -482,8 +486,12 @@ func (c *claudeWorkload) runWorker() {
 
 		// Resume state follows AC-E4. Persist before reporting idle, so a
 		// checkpoint cannot archive a stale flag.
-		nextHasRun := resume || err == nil || errors.Is(err, exec.ErrWaitDelay)
+		succeeded := err == nil || errors.Is(err, exec.ErrWaitDelay)
+		nextHasRun := resume || succeeded
 		persistErr := persistClaudeRuntimeState(c.stateDir, nextHasRun)
+		if succeeded && noticed {
+			c.clearTurnNotice()
+		}
 		c.mu.Lock()
 		c.hasRun = nextHasRun
 		c.active = false
@@ -497,6 +505,81 @@ func (c *claudeWorkload) runWorker() {
 			c.logger.Error("persist claude runtime state", "err", c.redactString(persistErr.Error()))
 		}
 	}
+}
+
+// withTurnNotice prepends AC-J7's skill-change note to a resumed turn. A first
+// turn starts a conversation that reads the skills as they are now, so it is
+// not told; either way a turn that succeeds settles the note. noticed reports
+// whether there was one to settle.
+func (c *claudeWorkload) withTurnNotice(prompt string, resume bool) (string, bool) {
+	refresher, ok := c.cli.(pluginRefresher)
+	if !ok {
+		return prompt, false
+	}
+	notice, err := refresher.turnNotice(c.homeDir)
+	if err != nil {
+		c.logger.Warn("read the pending plugin skill note", "err", c.redactString(err.Error()))
+		return prompt, false
+	}
+	if notice == "" {
+		return prompt, false
+	}
+	if resume {
+		prompt = notice + "\n\n" + prompt
+	}
+	return prompt, true
+}
+
+func (c *claudeWorkload) clearTurnNotice() {
+	if refresher, ok := c.cli.(pluginRefresher); ok {
+		if err := refresher.clearTurnNotice(c.homeDir); err != nil {
+			c.logger.Warn("clear the plugin skill note", "err", c.redactString(err.Error()))
+		}
+	}
+}
+
+// refreshPlugins is AC-J7: fetch the platform plugins again without leaving
+// the conversation. It runs only between turns — never under a running one,
+// never with one queued, never during a checkpoint — and holds the worker
+// while it rewrites the skills, so a prompt that arrives meanwhile waits.
+func (c *claudeWorkload) refreshPlugins() (pluginRefresh, error) {
+	refresher, ok := c.cli.(pluginRefresher)
+	if !ok {
+		return pluginRefresh{}, errPluginRefreshUnsupported
+	}
+	c.mu.Lock()
+	switch {
+	case c.stopping:
+		c.mu.Unlock()
+		return pluginRefresh{}, errClaudeStopping
+	case !c.ready:
+		c.mu.Unlock()
+		return pluginRefresh{}, errClaudeAwaitingRestore
+	case !c.accepting || c.checkpointing:
+		c.mu.Unlock()
+		return pluginRefresh{}, errClaudeAdmissionClosed
+	case c.refreshing:
+		c.mu.Unlock()
+		return pluginRefresh{}, errPluginRefreshRunning
+	case c.active || c.queue.Len() != 0:
+		c.mu.Unlock()
+		return pluginRefresh{}, errPluginRefreshBusy
+	}
+	c.refreshing = true
+	c.mu.Unlock()
+
+	result, err := refresher.refreshPlugins(c.homeDir)
+
+	c.mu.Lock()
+	c.refreshing = false
+	c.cond.Broadcast()
+	c.mu.Unlock()
+	if err != nil {
+		c.logger.Warn("plugin refresh failed", "err", c.redactString(err.Error()))
+		return pluginRefresh{}, err
+	}
+	c.appendPlatformNotice(pluginRefreshNotice(result))
+	return result, nil
 }
 
 func (c *claudeWorkload) argv(prompt string, resume bool) []string {
@@ -548,7 +631,7 @@ func (c *claudeWorkload) beginCheckpoint(ctx context.Context, requestedID string
 	c.checkpointing = true
 	c.checkpointReady = false
 	c.checkpointID = checkpointID
-	for !c.stopping && ctx.Err() == nil && (c.active || c.queue.Len() != 0) {
+	for !c.stopping && ctx.Err() == nil && (c.active || c.refreshing || c.queue.Len() != 0) {
 		c.cond.Wait()
 	}
 	if c.stopping {
@@ -1233,6 +1316,27 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 			return
 		}
 		serveOutputStream(w, r, &c.out)
+	})
+
+	mux.HandleFunc("POST "+pluginRefreshPath, func(w http.ResponseWriter, _ *http.Request) {
+		result, err := c.refreshPlugins()
+		if err != nil {
+			status := http.StatusInternalServerError
+			switch {
+			case errors.Is(err, errPluginRefreshUnsupported):
+				status = http.StatusNotFound
+			case errors.Is(err, errClaudeAwaitingRestore), errors.Is(err, errClaudeStopping):
+				status = http.StatusServiceUnavailable
+			case errors.Is(err, errClaudeAdmissionClosed), errors.Is(err, errPluginRefreshBusy), errors.Is(err, errPluginRefreshRunning):
+				status = http.StatusConflict
+			case errors.Is(err, errPluginRefreshFailed):
+				status = http.StatusBadGateway
+			}
+			http.Error(w, c.redactString(err.Error()), status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(result)
 	})
 
 	mux.HandleFunc("POST /checkpoint", func(w http.ResponseWriter, r *http.Request) {

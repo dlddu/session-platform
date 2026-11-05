@@ -342,7 +342,14 @@
         <strong>복원 후에도 같은 상태가 유지</strong>되므로, 이어서 하려면 출력을 비워야 합니다.
       </div>
 
-      <ul class="convo">
+      <div class="banner info" data-state="info" id="refresh-banner" hidden>
+        <strong>Refresh plugin skills</strong> — 대화는 그대로 두고 플랫폼 스킬을 새로 받았습니다.
+        수정 <span class="mono">codex-session--k3s-connectivity-check</span> · 추가 0 · 삭제 0.
+        다음 프롬프트는 바뀐 스킬을 다시 읽으라는 안내와 함께 시작합니다.
+        응답이 진행 중이면 받지 않습니다(409) — 끝난 뒤 다시 누릅니다.
+      </div>
+
+      <ul class="convo" id="convo-2">
         <li><span class="who">나</span>tokenizer 벤치를 돌리고 결과를 표로 정리해 줘</li>
         <li><span class="who">에이전트</span>3개 구현 벤치 완료. <span class="mono">bench/result.md</span> 에 표로 남겼습니다.</li>
       </ul>
@@ -369,6 +376,9 @@
         <button id="br-out-cap" type="button"
                 data-branch-row="3"
                 data-branch-target="STP-conversation-carry">누적 출력이 한계에 도달 (507)</button>
+        <button id="br-codex-refresh" type="button"
+                data-branch-row="11"
+                data-branch-target="STP-conversation-carry">오래 쓰는 Codex 세션 — 플랫폼 스킬이 바뀌었다</button>
       </div>
     </div>
 
@@ -377,7 +387,7 @@
       <dl>
         <dt>단계</dt><dd><code>STP-conversation-carry</code> 대화가 하나로 이어진다</dd>
         <dt>터치포인트</dt><dd>에이전트 워크스페이스의 conversation 패널</dd>
-        <dt>연결 AC</dt><dd>AC-E4</dd>
+        <dt>연결 AC</dt><dd>AC-E4 · AC-J7</dd>
         <dt>페인포인트</dt><dd>어디까지 기억하는지 보이지 않으면 방어적으로 맥락을 반복 입력한다 — 대화 이력과 작업 디렉터리를 화면에 드러낸다.</dd>
       </dl>
     </details>
@@ -573,6 +583,18 @@
   $('br-out-cap').addEventListener('click', function () {
     $('cap-507').hidden = false;
     $('btn-send-2').disabled = true;
+    show('STP-conversation-carry');
+  });
+
+  $('br-codex-refresh').addEventListener('click', function () {
+    $('ws-type').textContent = 'codex';
+    $('refresh-banner').hidden = false;
+    if (!$('refresh-line')) {
+      var li = document.createElement('li');
+      li.id = 'refresh-line';
+      li.innerHTML = '<span class="who">플랫폼</span>plugin skills refreshed at 74f4d945d768 — updated codex-session--k3s-connectivity-check';
+      $('convo-2').appendChild(li);
+    }
     show('STP-conversation-carry');
   });
 

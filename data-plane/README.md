@@ -134,6 +134,18 @@ interactive shell and Claude Code workloads.
   managed skills are removed and skills the user installed are left alone.
   The agent waits up to 90 s for the sidecar and its seed. After that it
   starts without skills, or without the K3s MCP, rather than failing the pod.
+  `POST /plugins/refresh` (AC-J7) fetches them again mid-session: only
+  between turns (409 while a turn runs or waits, a checkpoint or another
+  refresh is under way), it asks the sidecar's `POST /plugin-seed/refresh` to
+  clone the marketplace once more, re-syncs the managed skills from the new
+  bundle and answers `{state, revision, added, updated, removed}`. A refresh
+  that cannot fetch or read the new bundle answers 502 and leaves the skills as
+  they were. Every sync that changes skills — a refresh, or a restore into a
+  newer marketplace — folds the change into
+  `$HOME/.codex/session-platform-skill-changes.json`; the next resumed turn's
+  prompt opens with a note naming those skills and asking the model to re-read
+  them, and the record is cleared once a turn succeeds. Nothing refreshes on
+  its own.
   The pod has no provider credential: `K3S_MCP_PROXY_URL` must be
   `http://<loopback IP>:8093` (the `k3s-mcp-proxy` sidecar, AC-J6), and the
   agent refuses to start if `OPENAI_API_KEY`, `CODEX_API_KEY`,

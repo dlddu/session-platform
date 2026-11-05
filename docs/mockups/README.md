@@ -342,7 +342,7 @@ DOM이 정본이고, 표와 DOM이 어긋나면 `tools/journey-prototype.test.mj
 | `JRN-agent-prompt-loop` | `STP-workload-choice` | `new-session` | `info` · `result` |
 | `JRN-agent-prompt-loop` | `STP-prompt-submit` | `agent-workspace` | `error` · `success` · `result` |
 | `JRN-agent-prompt-loop` | `STP-response-watch` | `agent-workspace` | `info` · `result` |
-| `JRN-agent-prompt-loop` | `STP-conversation-carry` | `agent-workspace` | `error` · `result` |
+| `JRN-agent-prompt-loop` | `STP-conversation-carry` | `agent-workspace` | `error` · `info` · `result` |
 | `JRN-agent-prompt-loop` | `STP-agent-freeze-resume` | `agent-workspace` | `success` · `result` |
 | `JRN-approval-gated-work` | `STP-gated-prompt-submit` | `gated-workspace` | `error` · `success` · `result` |
 | `JRN-approval-gated-work` | `STP-approval-wait` | `gated-workspace` | `pending` · `info` · `result` |

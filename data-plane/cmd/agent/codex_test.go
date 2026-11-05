@@ -493,8 +493,15 @@ func TestSyncCodexSkills(t *testing.T) {
 		"p--s":      {"SKILL.md": []byte("new\n"), "refs/a.md": []byte("a\n")},
 		"p--shadow": {"SKILL.md": []byte("seeded\n")},
 	}
-	if err := syncCodexSkills(dir, skills, testLogger()); err != nil {
+	changes, err := syncCodexSkills(dir, skills, testLogger())
+	if err != nil {
 		t.Fatal(err)
+	}
+	if want := (codexSkillChanges{Updated: []string{"p--s"}, Removed: []string{"old--gone"}}); !reflect.DeepEqual(changes, want) {
+		t.Errorf("changes = %+v, want %+v", changes, want)
+	}
+	if changes, err := syncCodexSkills(dir, skills, testLogger()); err != nil || !changes.empty() {
+		t.Errorf("a second sync of the same seed = %+v, %v; want no changes", changes, err)
 	}
 	if got := readFile(t, filepath.Join(dir, "mine", "SKILL.md")); got != "user skill\n" {
 		t.Errorf("user skill = %q, want it untouched", got)
@@ -515,7 +522,7 @@ func TestSyncCodexSkills(t *testing.T) {
 		t.Errorf("shadowed skill = %q, want the user's", got)
 	}
 
-	if err := syncCodexSkills(dir, nil, testLogger()); err != nil {
+	if _, err := syncCodexSkills(dir, nil, testLogger()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "p--s")); !os.IsNotExist(err) {

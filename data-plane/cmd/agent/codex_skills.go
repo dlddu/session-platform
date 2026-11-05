@@ -33,6 +33,8 @@ type codexSidecar struct {
 	// configured is the proxy's own report that it holds a K3s MCP token.
 	configured bool
 	plugins    []miniMaxSeedPlugin
+	// revision is the marketplace commit the plugins were read from.
+	revision string
 }
 
 // codexSkill is one skill directory: its files keyed by slash path.
@@ -76,6 +78,7 @@ func fetchCodexSidecarWith(client *http.Client, proxyURL string, deadline time.T
 			}
 			if bundle.State == miniMaxSeedStateReady {
 				sidecar.plugins = bundle.Plugins
+				sidecar.revision = bundle.Revision
 			}
 			return sidecar, nil
 		}
@@ -218,17 +221,29 @@ func validCodexSkillSegment(name string) bool {
 	return validMiniMaxPluginName(name) && !strings.HasPrefix(name, ".")
 }
 
+// codexSkillChanges is what one sync did to the managed skills, by directory
+// name. A skill whose files were already what the seed carries is in none.
+type codexSkillChanges struct {
+	Added, Updated, Removed []string
+}
+
+func (c codexSkillChanges) empty() bool {
+	return len(c.Added)+len(c.Updated)+len(c.Removed) == 0
+}
+
 // syncCodexSkills makes the managed skill directories under skillsDir exactly
-// skills, leaving every untagged directory alone.
-func syncCodexSkills(skillsDir string, skills map[string]codexSkill, logger *slog.Logger) error {
+// skills, leaving every untagged directory alone, and reports what it changed.
+func syncCodexSkills(skillsDir string, skills map[string]codexSkill, logger *slog.Logger) (codexSkillChanges, error) {
+	var changes codexSkillChanges
 	if err := os.MkdirAll(skillsDir, 0o700); err != nil {
-		return fmt.Errorf("create codex skills directory: %w", err)
+		return changes, fmt.Errorf("create codex skills directory: %w", err)
 	}
 	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
-		return fmt.Errorf("read codex skills directory: %w", err)
+		return changes, fmt.Errorf("read codex skills directory: %w", err)
 	}
 	userOwned := map[string]bool{}
+	installed := map[string]bool{}
 	for _, entry := range entries {
 		dir := filepath.Join(skillsDir, entry.Name())
 		if !entry.IsDir() {
@@ -237,18 +252,20 @@ func syncCodexSkills(skillsDir string, skills map[string]codexSkill, logger *slo
 		}
 		managed, err := isCodexManagedSkill(dir)
 		if err != nil {
-			return err
+			return changes, err
 		}
 		if !managed {
 			userOwned[entry.Name()] = true
 			continue
 		}
 		if _, keep := skills[entry.Name()]; keep {
+			installed[entry.Name()] = true
 			continue
 		}
 		if err := os.RemoveAll(dir); err != nil {
-			return fmt.Errorf("remove stale codex skill %s: %w", entry.Name(), err)
+			return changes, fmt.Errorf("remove stale codex skill %s: %w", entry.Name(), err)
 		}
+		changes.Removed = append(changes.Removed, entry.Name())
 	}
 	names := make([]string, 0, len(skills))
 	for name := range skills {
@@ -260,11 +277,68 @@ func syncCodexSkills(skillsDir string, skills map[string]codexSkill, logger *slo
 			logger.Warn("a seeded skill is shadowed by one the user installed; keeping the user's", "skill", name)
 			continue
 		}
-		if err := installCodexSkill(filepath.Join(skillsDir, name), skills[name]); err != nil {
-			return fmt.Errorf("install codex skill %s: %w", name, err)
+		dir := filepath.Join(skillsDir, name)
+		if installed[name] {
+			same, err := codexSkillMatches(dir, skills[name])
+			if err != nil {
+				return changes, err
+			}
+			if same {
+				continue
+			}
+		}
+		if err := installCodexSkill(dir, skills[name]); err != nil {
+			return changes, fmt.Errorf("install codex skill %s: %w", name, err)
+		}
+		if installed[name] {
+			changes.Updated = append(changes.Updated, name)
+		} else {
+			changes.Added = append(changes.Added, name)
 		}
 	}
-	return nil
+	sort.Strings(changes.Removed)
+	return changes, nil
+}
+
+// codexSkillMatches reports whether the installed dir holds exactly skill's
+// files, the marker aside.
+func codexSkillMatches(dir string, skill codexSkill) (bool, error) {
+	found := 0
+	same := true
+	err := filepath.WalkDir(dir, func(p string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		if rel == miniMaxManagedPluginMarker {
+			return nil
+		}
+		want, ok := skill[filepath.ToSlash(rel)]
+		if !ok || !entry.Type().IsRegular() {
+			same = false
+			return filepath.SkipAll
+		}
+		got, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		if string(got) != string(want) {
+			same = false
+			return filepath.SkipAll
+		}
+		found++
+		return nil
+	})
+	if err != nil {
+		return false, fmt.Errorf("compare codex skill %s: %w", filepath.Base(dir), err)
+	}
+	return same && found == len(skill), nil
 }
 
 func isCodexManagedSkill(dir string) (bool, error) {

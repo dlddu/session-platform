@@ -265,6 +265,13 @@ var (
 	// ErrUnauthenticated and ErrForbidden are the tenancy boundary's errors
 	// (AC-K1, AC-K3): a bearer token that does not prove a ServiceAccount, and
 	// a proven caller asking for something its tenant may not have.
+	// ErrWorkloadBusy reports an operation that runs only between turns —
+	// a plugin refresh (AC-J7) — asked for while one runs or waits.
+	ErrWorkloadBusy = errors.New("workload is busy")
+	// ErrPluginRefreshFailed reports a plugin marketplace the session could not
+	// fetch again; the skills it had are kept (AC-J7).
+	ErrPluginRefreshFailed = errors.New("plugin refresh failed")
+
 	ErrUnauthenticated = errors.New("unauthenticated")
 	ErrForbidden       = errors.New("forbidden")
 )
