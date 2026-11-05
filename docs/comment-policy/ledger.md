@@ -137,7 +137,7 @@
 | 2026-11-05 | `control-plane/internal/tenancy/resolver.go` | 15 | `231c195cee42` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
 | 2026-11-05 | `control-plane/internal/tenancy/tenancy.go` | 20 | `f4f8782c16e3` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
 | 2026-11-05 | `control-plane/test/codex_orchestrator_test.go` | 2 | `c1cc838b9d16` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
-| 2026-11-05 | `control-plane/test/e2e_codex_4_tool_surface_test.go` | 3 | `44323d90b6e4` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
+| 2026-11-05 | `control-plane/test/e2e_codex_4_tool_surface_test.go` | 5 | `04e629a1b6c0` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
 | 2026-11-05 | `control-plane/test/harness_tenancy_test.go` | 5 | `70f4a59a1138` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
 | 2026-11-05 | `data-plane/cmd/agent/codex.go` | 65 | `d8a41b583957` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
 | 2026-11-05 | `data-plane/cmd/agent/codex_config.go` | 31 | `5e758e31bbb0` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
