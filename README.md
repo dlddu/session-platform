@@ -125,7 +125,7 @@ docs/                 value / PRD·AC / journeys / mockups / retired CRIU verifi
   `MINIMAX_CODE_ARCHIVE_ENABLED` gate. See
   [`docs/prd/minimax-code-workload.md`](docs/prd/minimax-code-workload.md).
   `codex` runs the Codex SDK (`@openai/codex-sdk`, pinned) on that same
-  one-shot runner, queue, cursor and archive (AC-J1~J6). There is no provider
+  one-shot runner, queue, cursor and archive (AC-J1~J7). There is no provider
   Secret: each session signs in to ChatGPT itself — its first prompt prints a
   device-code URL and one-time code into the transcript, and the resulting
   `~/.codex/auth.json` is part of the session state, so it survives
@@ -135,7 +135,10 @@ docs/                 value / PRD·AC / journeys / mockups / retired CRIU verifi
   loopback `k3s-mcp-proxy` sidecar that alone holds the optional token; shell,
   file-edit, web-search and image tools are off, writes are blocked by a
   read-only sandbox, and the runner aborts a turn on any shell/file/web item.
-  See [`docs/prd/codex-workload.md`](docs/prd/codex-workload.md).
+  A long-lived session takes a plugin update without losing its conversation
+  through the workspace's `Refresh plugin skills` button
+  (`POST /api/v1/sessions/{id}/plugins/refresh`, AC-J7); nothing refreshes on
+  its own. See [`docs/prd/codex-workload.md`](docs/prd/codex-workload.md).
 - **Tenancy** (AC-K1~K5, [`docs/prd/multitenancy.md`](docs/prd/multitenancy.md)):
   a request carrying `Authorization: Bearer <ServiceAccount token>` (audience
   `session-platform`, proven by TokenReview) speaks for the tenant that lists

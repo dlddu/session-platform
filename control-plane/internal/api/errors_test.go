@@ -20,6 +20,8 @@ func TestWriteErrPreservesPublicStatus(t *testing.T) {
 		{name: "prompt too large", err: session.ErrWorkloadPromptTooLarge, want: http.StatusRequestEntityTooLarge},
 		{name: "request body too large", err: session.ErrRequestBodyTooLarge, want: http.StatusRequestEntityTooLarge},
 		{name: "output full", err: session.ErrWorkloadOutputFull, want: http.StatusInsufficientStorage},
+		{name: "workload busy", err: session.ErrWorkloadBusy, want: http.StatusConflict},
+		{name: "plugin refresh failed", err: session.ErrPluginRefreshFailed, want: http.StatusBadGateway},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()

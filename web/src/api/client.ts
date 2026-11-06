@@ -4,6 +4,7 @@ import type {
   AllowlistEntry,
   CreateSessionRequest,
   PlatformConfig,
+  PluginRefreshResult,
   ReadResult,
   RepoAccessState,
   Session,
@@ -94,6 +95,10 @@ export const api = {
   /** Archive immediately and reclaim the workload pod (every workload type). */
   archiveSession: (id: string) =>
     req<Session>(`/sessions/${id}/snapshot`, { method: "POST" }),
+
+  /** AC-J7 — codex only, between turns; the conversation is kept. */
+  refreshPlugins: (id: string) =>
+    req<PluginRefreshResult>(`/sessions/${id}/plugins/refresh`, { method: "POST" }),
 
   getRepoAccess: () =>
     req<RepoAccessState>("/repo-access", { cache: "no-store" }).then((r) => ({

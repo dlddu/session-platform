@@ -7,6 +7,7 @@
 - AC-J4: 파일시스템 아카이브, 전용 게이트 (PRD: Codex 워크로드)
 - AC-J5: 도구 표면 — 대화, 플랫폼 플러그인 스킬, K3s MCP뿐 (PRD: Codex 워크로드)
 - AC-J6: K3s MCP 토큰은 loopback 사이드카에만 (PRD: Codex 워크로드)
+- AC-J7: 수동 플러그인 새로고침 — 대화를 유지한 채 스킬을 다시 받는다 (PRD: Codex 워크로드)
 
 > ⚠️ **e2e 범위 주의**: kind SUT는 codex 세션 파드를 실물로 띄울 수 있지만(같은 로컬 빌드 data plane 이미지,
 > 오버레이가 `DATA_PLANE_CODEX_IMAGE`를 그 이미지로 바꾼다) **ChatGPT 로그인은 할 수 없다** — device code 승인은
@@ -50,3 +51,12 @@
 - **실행 단계**: 러너가 그 이벤트를 받는다
 - **기대 결과**: 안내 한 줄이 출력에 남고 턴이 즉시 중단되며 러너가 0이 아닌 코드로 끝난다
 - **검증 AC**: AC-J5
+
+### 시나리오 7: 작업 화면에서 플러그인 스킬을 새로 받는다
+- **사전 조건**: `codex` 세션 하나와 `shell` 세션 하나가 있는 SUT를 운영자로 연 브라우저
+- **실행 단계**: (a) `codex` 세션의 작업 화면을 연다 → (b) `Refresh plugin skills`를 누른다 → (c) 같은 API를 `shell` 세션에 부른다
+- **기대 결과**: (a) Actions 패널에 `Refresh plugin skills` 버튼이 있다(`shell`·다른 에이전트 세션에는 없다). (b) 세션이 `active`로 남고 결과가 알림으로 보이며, 세션 출력에 새로고침 안내 한 줄이 남는다 — 마켓플레이스가 없는 SUT에서는 "새로 받을 마켓플레이스가 없다"는 결과다. (c) 422로 거절된다
+- **검증 AC**: AC-J7
+
+> 실 마켓플레이스의 추가·수정·삭제가 같은 세션에 반영되고 다음 재개 턴이 안내를 받는 것은 data plane 단위 테스트
+> (`codex_plugin_refresh_test.go`·`minimax_marketplace_test.go`)와 운영 프리뷰 확인이 맡는다 — kind SUT 에는 마켓플레이스 토큰이 없다.

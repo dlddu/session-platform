@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -345,6 +346,34 @@ func (s *Service) Write(ctx context.Context, id, payload string) (*session.Write
 	return &session.WriteResult{
 		Session: sess,
 		Path:    dispatchPath(branch, "write"),
+	}, nil
+}
+
+// RefreshPlugins fetches a codex session's plugin skills again without ending
+// its conversation (AC-J7). Like a write it brings the session active first; a
+// session restored for it already starts from the current marketplace, and the
+// refresh then simply finds nothing new.
+func (s *Service) RefreshPlugins(ctx context.Context, id string) (*session.PluginRefreshResult, error) {
+	current, err := s.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if current.WorkloadType != session.WorkloadTypeCodex {
+		return nil, fmt.Errorf("%w: plugin refresh is offered for codex sessions only", session.ErrInvalidState)
+	}
+	sess, branch, err := s.activate(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	changes, err := s.agent.RefreshPlugins(ctx, sess.Pod)
+	if err != nil {
+		return nil, err
+	}
+	s.touch(ctx, id)
+	return &session.PluginRefreshResult{
+		Session: sess,
+		Path:    dispatchPath(branch, "refresh-plugins"),
+		Changes: changes,
 	}, nil
 }
 

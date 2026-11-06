@@ -93,6 +93,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/sessions/{id}/switch", a.switchSession)
 
 	mux.HandleFunc("POST /api/v1/sessions/{id}/snapshot", a.snapshotSession)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/plugins/refresh", a.refreshPlugins)
 }
 
 // ---- request/response DTOs ----
@@ -127,6 +128,13 @@ type readResp struct {
 type writeResp struct {
 	Session *session.Session `json:"session"`
 	Path    string           `json:"path"`
+}
+
+// pluginRefreshResp flattens the refresh's changes beside the session.
+type pluginRefreshResp struct {
+	Session *session.Session `json:"session"`
+	Path    string           `json:"path"`
+	session.PluginChanges
 }
 
 type runtimeConfigResp struct {
@@ -459,6 +467,28 @@ func (a *API) snapshotSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sess)
 }
 
+// refreshPlugins fetches a codex session's plugin skills again, between
+// turns, without ending its conversation (AC-J7).
+func (a *API) refreshPlugins(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
+	if err := decodeRequestBody(r.Body, &struct{}{}, false); err != nil {
+		writeErr(w, err)
+		return
+	}
+	res, err := a.mgr.RefreshPlugins(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, pluginRefreshResp{
+		Session:       res.Session,
+		Path:          res.Path,
+		PluginChanges: res.Changes,
+	})
+}
+
 // ---- tenancy ----
 
 // caller resolves the request's caller, answering the request itself when it
@@ -616,6 +646,10 @@ func writeErr(w http.ResponseWriter, err error) {
 		status = http.StatusInsufficientStorage
 	case errors.Is(err, session.ErrCheckpointDisabled):
 		status = http.StatusServiceUnavailable
+	case errors.Is(err, session.ErrWorkloadBusy):
+		status = http.StatusConflict
+	case errors.Is(err, session.ErrPluginRefreshFailed):
+		status = http.StatusBadGateway
 	}
 	writeJSON(w, status, errResp{Error: err.Error()})
 }

@@ -63,7 +63,10 @@ type codexCLI struct {
 	// probeSidecar reads what the sidecar offers; a field so tests need no
 	// server. It reports what it learned even when it also returns an error.
 	probeSidecar func(proxyURL string) (codexSidecar, error)
-	logger       *slog.Logger
+	// refreshSidecar asks the sidecar to clone the marketplace again (AC-J7);
+	// a field for the same reason.
+	refreshSidecar func(proxyURL string) (miniMaxRefreshResult, error)
+	logger         *slog.Logger
 }
 
 func newCodexCLI(k3sProxyURL string, logger *slog.Logger) codexCLI {
@@ -105,7 +108,13 @@ func (c codexCLI) ensureHome(homeDir string, _ toolSurface) error {
 	sidecar := c.sidecar()
 	skillsDir := codexSkillsDir(homeDir)
 	skills := codexSkillsFromSeed(sidecar.plugins, c.log())
-	if err := syncCodexSkills(skillsDir, skills, c.log()); err != nil {
+	changes, err := syncCodexSkills(skillsDir, skills, c.log())
+	if err != nil {
+		return err
+	}
+	// A restore into a pod whose marketplace moved changes skills under a
+	// conversation that already read them; the next turn is told (AC-J7).
+	if err := recordCodexSkillChanges(homeDir, sidecar.revision, changes); err != nil {
 		return err
 	}
 	cfg := codexConfig{

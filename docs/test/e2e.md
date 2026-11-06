@@ -449,6 +449,7 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 | --- | --- | --- | --- |
 | `lifecycle.md#시나리오 2` | `web/e2e/lifecycle-2-snapshot-restore.spec.ts` | playwright | 제품 `POST /snapshot` 으로 동결한 세션에 **명시적 접근**(`POST /switch`)을 하면 `active` 로 전이하고 **동결 전과 다른 pod** 위에 복원된다는 것, 그리고 그 전이가 뒤이은 조회에도 같은 pod 로 남아 있다는 것. |
 | `codex-workload.md#시나리오 1` | `web/e2e/codex-workload-1-agent-type.spec.ts` | playwright | 새 세션 화면에 `Codex` 카드와 그 고정 안내가 있고, 그 타입으로 만든 세션이 `active` 의 `codex` 세션이며 에이전트 작업 화면(프롬프트 입력·ChatGPT 로그인 안내)으로 열리고, 목록 카드가 `◇ codex` 태그를 단다는 것. 프롬프트는 보내지 않는다 — 로그인은 시나리오 3(예외)의 몫이다. |
+| `codex-workload.md#시나리오 7` | `web/e2e/codex-workload-7-plugin-refresh.spec.ts` | playwright | `codex` 세션 작업 화면의 Actions 패널에만 `Refresh plugin skills` 가 있고, 누르면 세션이 `active` 로 남은 채 결과 알림(kind SUT 는 마켓플레이스 토큰이 없어 「새로 받을 마켓플레이스가 없다」)과 출력 안내 줄이 나타나며, `shell` 세션에 같은 API 를 부르면 422 라는 것. |
 | `multitenancy.md#시나리오 4` | `web/e2e/multitenancy-4-operator-ui.spec.ts` | playwright | 테넌트가 설정된 SUT 에서 운영자의 새 세션 화면에 테넌트 선택(기본 무소속)이 있고, `e2e-alpha` 를 고르면 타입 카드가 `shell`·`codex` 로 좁혀지며, 그렇게 만든 세션이 `tenant: e2e-alpha` 로 저장되고 목록에서 태그·필터(새로고침 뒤 포함)로 갈린다는 것. |
 <!-- scenario-mapping:end -->
 
@@ -568,10 +569,10 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 ## 집계
 
 <!-- scenario-summary:begin -->
-- 시나리오 총계: 58
+- 시나리오 총계: 59
 - 예외: 6
 - 유예: 49
-- 시나리오 매칭 파일: 3
+- 시나리오 매칭 파일: 4
 - 공백: 0
 <!-- scenario-summary:end -->
 

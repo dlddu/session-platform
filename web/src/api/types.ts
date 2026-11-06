@@ -110,6 +110,17 @@ export interface WriteResult {
   path: string;
 }
 
+/** AC-J7 — what a codex session's plugin refresh changed. */
+export interface PluginRefreshResult {
+  session: Session;
+  path: string;
+  state: "ready" | "unconfigured";
+  revision?: string;
+  added: string[];
+  updated: string[];
+  removed: string[];
+}
+
 export type AllowlistSource = "manual" | "request";
 
 export interface AllowlistEntry {

@@ -40,6 +40,24 @@ type WriteResult struct {
 	Path    string
 }
 
+// PluginChanges is what a plugin refresh did inside the session (AC-J7):
+// State is "ready", or "unconfigured" when the session has no marketplace;
+// the lists name managed skill directories.
+type PluginChanges struct {
+	State    string   `json:"state"`
+	Revision string   `json:"revision,omitempty"`
+	Added    []string `json:"added"`
+	Updated  []string `json:"updated"`
+	Removed  []string `json:"removed"`
+}
+
+// PluginRefreshResult is the state-branched result of RefreshPlugins.
+type PluginRefreshResult struct {
+	Session *Session
+	Path    string
+	Changes PluginChanges
+}
+
 // Manager is the primary port the API depends on. It owns session lifecycle
 // and orchestration, delegating to the adapter ports.
 //
@@ -55,6 +73,8 @@ type WriteResult struct {
 //   - Snapshot  → AC-B1 (workload archive + reclaim on idle).
 //   - Restore   → AC-B2 (restore the workload into a new pod).
 //   - Terminate → AC-A3 (reclaim resources).
+//   - RefreshPlugins → AC-J7 (fetch a codex session's plugin skills again,
+//     between turns, keeping its conversation).
 type Manager interface {
 	Create(ctx context.Context, req CreateRequest) (*Session, error)
 	Get(ctx context.Context, id string) (*Session, error)
@@ -66,4 +86,5 @@ type Manager interface {
 	Snapshot(ctx context.Context, id string) (*Session, error)
 	Restore(ctx context.Context, id string) (*Session, error)
 	Terminate(ctx context.Context, id string) error
+	RefreshPlugins(ctx context.Context, id string) (*PluginRefreshResult, error)
 }

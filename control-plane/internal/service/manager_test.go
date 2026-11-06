@@ -1105,6 +1105,9 @@ func (f failingAgent) Write(context.Context, string, string) error { return f.er
 func (f failingAgent) Stream(context.Context, string, int64) (io.ReadCloser, error) {
 	return nil, f.err
 }
+func (f failingAgent) RefreshPlugins(context.Context, string) (session.PluginChanges, error) {
+	return session.PluginChanges{}, f.err
+}
 func (f failingAgent) Read(context.Context, string, int64) (string, int64, error) {
 	return "", 0, f.err
 }
