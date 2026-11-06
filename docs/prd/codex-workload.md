@@ -76,6 +76,6 @@
 - **도구 표면**: 대화 · 플러그인 스킬 · K3s MCP만 (AC-J5). 세션 MCP(파일·git·drop)는 주지 않는다.
 
 ## 남은 일
-- 운영 배포에서 `CODEX_ARCHIVE_ENABLED`를 켜는 것 — flux-cd-apps의 PR 프리뷰 오버레이가 이 이름을 false로 덮어쓴 뒤에 base를 true로 올린다(`MINIMAX_CODE_ARCHIVE_ENABLED`와 같은 순서).
+- ~~운영 배포에서 `CODEX_ARCHIVE_ENABLED`를 켜는 것~~ — 2026-11-05 켰다. PR 프리뷰 오버레이의 false 덮어쓰기(flux-cd-apps #109)가 먼저 들어갔다.
 - 실 ChatGPT 계정 로그인과 그 뒤의 대화 왕복은 e2e로 검증하지 않는다 — 사람의 브라우저 승인이 필요하다(`../test/codex-workload.md`의 예외).
 - 원격 모델 카탈로그가 `apply_patch`·하위 에이전트 도구를 설정 밖에서 강제하는 동안 그 둘은 모델에 보인다. 카탈로그를 덮는 설정이 생기면 그쪽으로 옮기고, 그때까지는 샌드박스와 킬 스위치가 경계다.
