@@ -73,6 +73,7 @@ func TestCodex_OnePodWithLoopbackK3SProxy(t *testing.T) {
 		"DATA_PLANE_PROXY_PLACEMENT": "sidecar",
 		"SESSION_ID":                 "cx01",
 		"MINIMAX_CODE_PLUGINS":       "session-platform,extra",
+		"K3S_MCP_TOOL_POLICY":        "allow-all",
 	}
 	for name, value := range want {
 		if got, _ := envValue(proxy, name); got != value {

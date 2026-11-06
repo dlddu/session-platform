@@ -25,7 +25,7 @@
 ### 시나리오 2: 파드 모양 — 사이드카 하나, 자격 증명은 사이드카에만
 - **사전 조건**: SUT와 그 클러스터의 kube 접근
 - **실행 단계**: `codex` 세션을 만들고 그 워크로드 파드를 조회한다
-- **기대 결과**: 세션의 보조 파드가 없다. 파드에 컨테이너가 둘(주 컨테이너, `k3s-mcp-proxy`)이고 `automountServiceAccountToken`이 false다. 주 컨테이너의 `K3S_MCP_PROXY_URL`은 `http://127.0.0.1:8093`이고 Secret 참조가 없다. `k3s-mcp-proxy`만 `codex-credentials`의 선택 `k3s-mcp-token`을 읽는다
+- **기대 결과**: 세션의 보조 파드가 없다. 파드에 컨테이너가 둘(주 컨테이너, `k3s-mcp-proxy`)이고 `automountServiceAccountToken`이 false다. 주 컨테이너의 `K3S_MCP_PROXY_URL`은 `http://127.0.0.1:8093`이고 Secret 참조가 없다. `k3s-mcp-proxy`만 `codex-credentials`의 선택 `k3s-mcp-token`을 읽고, `K3S_MCP_TOOL_POLICY=allow-all`을 받는다(거부 목록 없음)
 - **검증 AC**: AC-J1, AC-J6
 
 ### 시나리오 3: 첫 프롬프트가 device code 로그인을 띄우고, 승인하면 턴이 이어진다
