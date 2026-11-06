@@ -32,6 +32,7 @@ const (
 	// miniMaxMarketplaceURLEnv): the sidecar reuses minimax-code's seeder.
 	pluginSeedPluginsEnvVar        = "MINIMAX_CODE_PLUGINS"
 	pluginSeedMarketplaceURLEnvVar = "MINIMAX_CODE_PLUGIN_MARKETPLACE_URL"
+	K3SMCPAllowAllToolsEnvVar      = "K3S_MCP_ALLOW_ALL_TOOLS"
 )
 
 // CodexK3SMCPProxyURL is where the workload container reaches its sidecar.
@@ -104,6 +105,7 @@ func (o *ClientOrchestrator) codexK3SMCPProxy(sessionID, image string) corev1.Co
 		{Name: SessionIDEnvVar, Value: sessionID},
 		{Name: MiniMaxMarketplaceDirEnvVar, Value: miniMaxMarketplacePath},
 		{Name: pluginSeedPluginsEnvVar, Value: o.codexPlugins},
+		{Name: K3SMCPAllowAllToolsEnvVar, Value: "true"},
 		optionalSecretEnv(K3SMCPTokenEnvVar, o.codexCredentialsSecret, MiniMaxK3SMCPTokenSecretKey),
 		optionalConfigMapEnv(K3SMCPURLEnvVar, o.codexConfigConfigMap, ClaudeCodeK3SMCPURLConfigKey),
 		optionalConfigMapEnv(pluginSeedMarketplaceURLEnvVar, o.codexConfigConfigMap, ClaudeCodePluginMarketplaceURLConfigKey),

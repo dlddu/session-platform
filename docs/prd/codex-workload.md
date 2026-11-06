@@ -65,10 +65,10 @@
 - **검증 방법**: 관리형 설정으로 렌더한 모델 도구 목록에 `exec_command`·`write_stdin`·`view_image`와 번들 스킬이 없음을 확인한다(이미지 빌드 검사 + 배포 파드 안 실측). 스킬 동기화(표식·오래된 관리 스킬 제거·사용자 스킬 보존)와 `read_skill`의 경로 경계·크기 상한을 확인한다. 금지 아이템 이벤트가 오면 러너가 턴을 중단함을 확인한다.
 
 ### AC-J6: K3s MCP 토큰은 loopback 사이드카에만
-- **설명**: 선택 `k3s-mcp-token`은 Secret `codex-credentials`(control plane `CODEX_CREDENTIALS_SECRET`)에 두고, 세션 파드의 `k3s-mcp-proxy` 사이드카에만 투영한다. 사이드카는 `minimax-code`의 K3s MCP 프록시(AC-G5)를 헬퍼 파드 대신 **같은 파드의 loopback**(`127.0.0.1:8093`)에 띄운 것이다 — 같은 헤더 허용 목록, 같은 쓰기·exec·세션 도구 차단, 같은 마켓플레이스 시드. 주 컨테이너는 그 주소만 받고 Secret 참조를 하나도 갖지 않는다. 워크로드 파드는 Kubernetes API 자격 증명도 받지 않는다(`automountServiceAccountToken: false`) — 다른 에이전트 타입은 셸로 클러스터를 조회하지만 이 타입에는 그 도구가 없다. Secret·ConfigMap 이름은 다른 에이전트 타입과 겹치면 control plane이 기동을 거부한다(키 이름이 같아 겹치면 다른 타입의 토큰이 조용히 넘어온다).
+- **설명**: 선택 `k3s-mcp-token`은 Secret `codex-credentials`(control plane `CODEX_CREDENTIALS_SECRET`)에 두고, 세션 파드의 `k3s-mcp-proxy` 사이드카에만 투영한다. 사이드카는 `minimax-code`의 K3s MCP 프록시(AC-G5)를 헬퍼 파드 대신 **같은 파드의 loopback**(`127.0.0.1:8093`)에 띄운 것이다 — 같은 헤더 허용 목록, 같은 마켓플레이스 시드. 단 **도구 거부 목록은 걸지 않는다**(2026-11-06 사용자 결정): 사이드카가 `K3S_MCP_ALLOW_ALL_TOOLS=true`를 받아 쓰기·exec·`session_*`·`opensearch_*`를 포함한 K3s MCP 도구 전부를 그대로 넘긴다. 쓰기는 K3s MCP 자체의 승인 게이트가 막는다. 주 컨테이너는 그 주소만 받고 Secret 참조를 하나도 갖지 않는다. 워크로드 파드는 Kubernetes API 자격 증명도 받지 않는다(`automountServiceAccountToken: false`) — 다른 에이전트 타입은 셸로 클러스터를 조회하지만 이 타입에는 그 도구가 없다. Secret·ConfigMap 이름은 다른 에이전트 타입과 겹치면 control plane이 기동을 거부한다(키 이름이 같아 겹치면 다른 타입의 토큰이 조용히 넘어온다).
 - **달성 가치**: V1
 - **구체화 대상**: AC-A1/A2의 세션 격리 — AC-G5의 토큰 배치를 헬퍼 파드 없는 파드에 옮긴 것
-- **검증 방법**: 제출된 pod spec에서 주 컨테이너에 Secret 참조가 없고 `K3S_MCP_PROXY_URL`이 loopback이며, 사이드카만 이 타입 Secret의 선택 `k3s-mcp-token`을 읽고, 파드의 `automountServiceAccountToken`이 false임을 확인한다.
+- **검증 방법**: 제출된 pod spec에서 주 컨테이너에 Secret 참조가 없고 `K3S_MCP_PROXY_URL`이 loopback이며, 사이드카만 이 타입 Secret의 선택 `k3s-mcp-token`을 읽고, 사이드카가 `K3S_MCP_ALLOW_ALL_TOOLS=true`를 받으며, 파드의 `automountServiceAccountToken`이 false임을 확인한다. 그 값이 `true`일 때만 거부 목록이 빠지고 다른 값이면 그대로임을 프록시 단위 테스트로 확인한다.
 
 ### AC-J7: 수동 플러그인 새로고침 — 대화를 유지한 채 스킬을 다시 받는다
 - **설명**: 사이드카는 마켓플레이스를 파드가 뜰 때 한 번 받고, 스스로 다시 받지 않는다 — **자동 새로고침은 없다**(2026-11-05 사용자 결정). 운영자가 `POST /api/v1/sessions/{id}/plugins/refresh`(작업 화면의 `Refresh plugin skills`)를 부르면:
@@ -87,6 +87,7 @@
 - **로그인 단위는 세션**: 플랫폼 공용 계정·테넌트별 계정을 두지 않는다. ChatGPT의 refresh token이 사용 중 갱신되는 구조라 계정 하나를 여러 파드에 복사하면 서로를 무효화할 수 있다 — 세션 단위 로그인은 그 공유 자체를 없앤다.
 - **로그인은 아카이브에 포함**: 복원 후 다시 로그인하지 않는다. 대신 이 타입의 아카이브 게이트를 따로 둔다(AC-J4).
 - **도구 표면**: 대화 · 플러그인 스킬 · K3s MCP만 (AC-J5). 세션 MCP(파일·git·drop)는 주지 않는다.
+- **K3s MCP 도구는 전부 허용 (2026-11-06)**: `minimax-code`의 거부 목록(reconciler-local과 같은 목록)을 codex 사이드카에는 걸지 않는다(AC-J6). codex 세션이 `session_create`로 세션을 만들고 `opensearch_*`로 작업 기록을 쓸 수 있게 하기 위해서다. 대가: `session_*`은 K3s MCP 승인 게이트 밖이라, codex 세션이 게이트 없는 shell 세션을 만들어 그 egress 정책 안에서 일할 수 있다.
 - **플러그인 업데이트는 수동 새로고침만** (AC-J7): 장기 세션이 대화를 유지한 채 스킬을 다시 받는 길은 작업 화면의 버튼(API) 하나다. 주기적·자동 새로고침은 두지 않는다.
 
 ## 남은 일

@@ -24,6 +24,7 @@ const (
 	k3sMCPProxyPort    = 8093
 	k3sMCPTokenEnv     = "K3S_MCP_TOKEN"
 	k3sMCPURLEnv       = "K3S_MCP_URL"
+	k3sMCPAllowAllEnv  = "K3S_MCP_ALLOW_ALL_TOOLS"
 	defaultK3SMCPURL   = "https://homelab-k3s-mcp.llkm.nl/mcp"
 	k3sMCPProxyHealthz = "/healthz"
 
@@ -131,6 +132,9 @@ func newK3SMCPProxyWithTransport(rawURL, token, sessionID string, logger *slog.L
 		// Only what sessions send passes the deny filter; the seeder above
 		// calls the upstream directly for its marketplace token.
 		sessionFacing = denyK3SMCPTools(upstream)
+		if os.Getenv(k3sMCPAllowAllEnv) == "true" {
+			sessionFacing = upstream
+		}
 	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if sessionFacing == nil {
