@@ -20,7 +20,7 @@ const (
 	defaultCodexConfigConfigMap   = "codex-config"
 	// DefaultCodexPlugins is the marketplace plugin whose skills a codex
 	// session gets when the deployment names none (AC-J5).
-	DefaultCodexPlugins = "session-platform"
+	DefaultCodexPlugins = "codex-session"
 
 	// CodexModelEnvVar carries the session's model, or the ConfigMap's optional
 	// `model` key for platform-default sessions.
