@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -28,6 +29,27 @@ var k3sMCPDeniedTools = []string{
 	"session_*",
 	"dear_baby_reset_user",
 	"github_commit_status_create",
+}
+
+const (
+	k3sMCPToolPolicyDenyList = "deny-list"
+	k3sMCPToolPolicyAllowAll = "allow-all"
+)
+
+func k3sMCPSessionFacing(upstream http.Handler, policy string, logger *slog.Logger) http.Handler {
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	switch policy {
+	case k3sMCPToolPolicyAllowAll:
+		logger.Info("k3s mcp tool policy", "policy", k3sMCPToolPolicyAllowAll)
+		return upstream
+	case k3sMCPToolPolicyDenyList, "":
+	default:
+		logger.Warn("k3s mcp tool policy is unknown, using deny-list", "value", policy)
+	}
+	logger.Info("k3s mcp tool policy", "policy", k3sMCPToolPolicyDenyList)
+	return denyK3SMCPTools(upstream)
 }
 
 func k3sMCPToolDenied(name string) bool {

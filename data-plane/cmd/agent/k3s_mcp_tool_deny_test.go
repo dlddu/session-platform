@@ -122,8 +122,8 @@ func TestK3SMCPProxyRefusesWhatItCannotInspect(t *testing.T) {
 	}
 }
 
-func TestK3SMCPProxyForwardsDeniedToolsWhenAllToolsAreAllowed(t *testing.T) {
-	t.Setenv(k3sMCPAllowAllEnv, "true")
+func TestK3SMCPProxyForwardsDeniedToolsUnderAllowAllPolicy(t *testing.T) {
+	t.Setenv(k3sMCPToolPolicyEnv, "allow-all")
 	handler, forwarded := newDenyTestProxy(t)
 	for _, body := range []string{
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_create","arguments":{"name":"x"}}}`,
@@ -138,11 +138,15 @@ func TestK3SMCPProxyForwardsDeniedToolsWhenAllToolsAreAllowed(t *testing.T) {
 	}
 }
 
-func TestK3SMCPProxyKeepsTheDenyListUnlessAllToolsAreAllowed(t *testing.T) {
-	t.Setenv(k3sMCPAllowAllEnv, "1")
-	handler, forwarded := newDenyTestProxy(t)
-	postK3SMCP(handler, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_create","arguments":{}}}`)
-	if len(*forwarded) != 0 {
-		t.Fatalf("upstream received %q, want the deny list to hold for any value but true", *forwarded)
+func TestK3SMCPProxyFallsBackToDenyListForAnyOtherPolicy(t *testing.T) {
+	for _, policy := range []string{"", "deny-list", "true", "Allow-All", "allow-all "} {
+		t.Run(policy, func(t *testing.T) {
+			t.Setenv(k3sMCPToolPolicyEnv, policy)
+			handler, forwarded := newDenyTestProxy(t)
+			postK3SMCP(handler, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_create","arguments":{}}}`)
+			if len(*forwarded) != 0 {
+				t.Fatalf("policy %q forwarded %q, want the deny list", policy, *forwarded)
+			}
+		})
 	}
 }
