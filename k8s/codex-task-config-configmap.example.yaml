@@ -1,0 +1,30 @@
+# Example ConfigMap for the codex-task workload's non-credential settings
+# (docs/prd/codex-task-workload.md). Every key is optional.
+#
+#   model                   The model platform-default sessions run, projected
+#                           into the Codex container as CODEX_MODEL. Omit it to
+#                           let Codex pick its own default for the signed-in plan.
+#                           A model chosen on the session itself wins (AC-M4).
+#   models                  JSON string array, the UI picker catalog (advisory,
+#                           not an allowlist) — projected into the control plane
+#                           as CODEX_TASK_MODELS, with `model` as
+#                           CODEX_TASK_DEFAULT_MODEL.
+#   k3s-mcp-url             K3s MCP endpoint the sidecar forwards to (default
+#                           https://homelab-k3s-mcp.llkm.nl/mcp).
+#   plugin-marketplace-url  Git remote of the plugin marketplace whose skills
+#                           sessions get (default the dlddu plugin-marketplace).
+#                           Which plugins is the control plane's CODEX_TASK_PLUGINS.
+#
+# The reasoning effort is chosen per session, not here (AC-M4).
+#
+# Named by CODEX_TASK_CONFIG_CONFIGMAP (default `codex-task-config`), which must
+# differ from codex-chat's `codex-config`. EXAMPLE-ONLY, not in kustomization.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: codex-task-config
+  labels:
+    app: control-plane
+data:
+  model: "gpt-6-sol"
+  models: '["gpt-6-sol", "gpt-6-luna"]'

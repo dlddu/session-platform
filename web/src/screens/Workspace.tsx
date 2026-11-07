@@ -13,7 +13,11 @@ import { renderAgentTranscript } from "../app/agentTranscript";
 import { DeleteSessionDialog } from "../app/DeleteSessionDialog";
 import { StateBadge } from "../app/StateBadge";
 import { useToast } from "../app/Toast";
-import { isAgentWorkload, isGatedWorkload } from "../app/workloadKind";
+import {
+  isAgentWorkload,
+  isCodexWorkload,
+  isGatedWorkload,
+} from "../app/workloadKind";
 
 const SHELL_READ_DELAYS_MS = [250, 700] as const;
 const STREAM_RECONNECT_BASE_MS = 250;
@@ -739,7 +743,7 @@ export function Workspace() {
                   : isAgent
                     ? sess.workloadType === "minimax-code"
                       ? "send a prompt — runs mcode exec once in the session pod"
-                      : sess.workloadType === "codex"
+                      : isCodexWorkload(sess.workloadType)
                         ? "send a prompt — runs one Codex turn in the session pod"
                         : "send a prompt — streams one claude -p response"
                     : "run a command — executes in the session shell (bash)"
@@ -771,10 +775,11 @@ export function Workspace() {
               </button>
             ) : null}
           </form>
-          {sess.workloadType === "codex" && !frozen ? (
+          {isCodexWorkload(sess.workloadType) && !frozen ? (
             <div className="agent-hint" data-testid="ws-codex-login-hint">
-              First prompt signs this session in to ChatGPT — watch the
-              transcript for a link and code.
+              {sess.workloadType === "codex-task"
+                ? "If this session's login slot is empty, the first prompt signs it in to ChatGPT — watch the transcript for a link and code."
+                : "First prompt signs this session in to ChatGPT — watch the transcript for a link and code."}
             </div>
           ) : null}
         </div>
@@ -794,6 +799,14 @@ export function Workspace() {
                 <span>Model</span>
                 <strong>{modelLabel}</strong>
               </div>
+              {sess.reasoningEffort ? (
+                <div className="workload-kv">
+                  <span>Reasoning effort</span>
+                  <strong data-testid="ws-reasoning-effort">
+                    {sess.reasoningEffort}
+                  </strong>
+                </div>
+              ) : null}
               {gated ? (
                 <div className="workload-kv">
                   <span>Helper pod</span>
@@ -837,7 +850,7 @@ export function Workspace() {
           <div className="panel">
             <h4>Actions</h4>
             <div className="action-stack">
-              {sess.workloadType === "codex" ? (
+              {isCodexWorkload(sess.workloadType) ? (
                 <button
                   className="btn btn-ghost"
                   type="button"

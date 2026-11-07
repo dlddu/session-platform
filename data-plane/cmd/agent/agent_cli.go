@@ -27,12 +27,15 @@ type agentCLI interface {
 // claudeCLI is the Claude Code CLI shared by claude-code and approval-gated.
 // It is the default when a config names no CLI, so those two types run exactly
 // as they did before the seam existed.
-type claudeCLI struct{}
+type claudeCLI struct {
+	// effort is claude-code's session effort (AC-E8); approval-gated has none.
+	effort string
+}
 
 func (claudeCLI) workloadName() string { return workloadClaudeCode }
 
-func (claudeCLI) argv(binary, model, prompt string, resume bool) []string {
-	return claudeArgv(binary, model, prompt, resume)
+func (c claudeCLI) argv(binary, model, prompt string, resume bool) []string {
+	return claudeArgv(binary, model, c.effort, prompt, resume)
 }
 
 func (claudeCLI) newProjector(dst io.Writer) io.WriteCloser {

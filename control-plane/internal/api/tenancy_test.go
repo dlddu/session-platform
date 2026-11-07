@@ -40,7 +40,7 @@ func newTenantServer(t *testing.T) *httptest.Server {
 	}
 	srv := newServer(
 		api.WithTenancy(headerResolver{cfg}, cfg),
-		api.WithOfferedWorkloadTypes(session.WorkloadTypeShell, session.WorkloadTypeClaudeCode, session.WorkloadTypeCodex),
+		api.WithOfferedWorkloadTypes(session.WorkloadTypeShell, session.WorkloadTypeClaudeCode, session.WorkloadTypeCodexChat),
 	)
 	t.Cleanup(srv.Close)
 	return srv
@@ -226,8 +226,8 @@ func TestTenancyRuntimeConfig(t *testing.T) {
 	if alpha.Tenant == nil || alpha.Tenant.Name != "alpha" || len(alpha.Tenants) != 0 {
 		t.Fatalf("alpha config tenant=%+v tenants=%+v", alpha.Tenant, alpha.Tenants)
 	}
-	if len(alpha.WorkloadTypes) != 2 || alpha.WorkloadTypes[0].Type != "shell" || alpha.WorkloadTypes[1].Type != "codex" {
-		t.Errorf("alpha workloadTypes = %+v, want shell, codex", alpha.WorkloadTypes)
+	if len(alpha.WorkloadTypes) != 2 || alpha.WorkloadTypes[0].Type != "shell" || alpha.WorkloadTypes[1].Type != "codex-chat" {
+		t.Errorf("alpha workloadTypes = %+v, want shell, codex-chat", alpha.WorkloadTypes)
 	}
 	op := decode("")
 	if op.Tenant != nil || len(op.Tenants) != 3 || len(op.WorkloadTypes) != 3 {
@@ -237,8 +237,8 @@ func TestTenancyRuntimeConfig(t *testing.T) {
 		t.Errorf("operator tenants = %+v", op.Tenants)
 	}
 	// "*" is never echoed: both sides see the offered types it expands to.
-	if got := op.Tenants[2].WorkloadTypes; op.Tenants[2].Name != "omni" || len(got) != 3 || got[0] != "shell" || got[1] != "claude-code" || got[2] != "codex" {
-		t.Errorf("operator view of omni = %+v, want shell, claude-code, codex", op.Tenants[2])
+	if got := op.Tenants[2].WorkloadTypes; op.Tenants[2].Name != "omni" || len(got) != 3 || got[0] != "shell" || got[1] != "claude-code" || got[2] != "codex-chat" {
+		t.Errorf("operator view of omni = %+v, want shell, claude-code, codex-chat", op.Tenants[2])
 	}
 	omni := decode("omni")
 	if omni.Tenant == nil || len(omni.Tenant.WorkloadTypes) != 3 || len(omni.WorkloadTypes) != 3 {

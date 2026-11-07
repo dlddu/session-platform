@@ -9,8 +9,14 @@ export function isAgentWorkload(workloadType: WorkloadType): boolean {
     workloadType === "claude-code" ||
     workloadType === "approval-gated" ||
     workloadType === "minimax-code" ||
-    workloadType === "codex"
+    isCodexWorkload(workloadType)
   );
+}
+
+// AC-J1 · AC-M1. 채팅용과 작업용은 러너·플러그인 배선을 같이 쓰므로 로그인 안내와
+// 플러그인 새로고침을 함께 받는다.
+export function isCodexWorkload(workloadType: WorkloadType): boolean {
+  return workloadType === "codex-chat" || workloadType === "codex-task";
 }
 
 // AC-F2~F6 이 얹는 차이. 화면은 이것을 게이트 전용 표면에만 쓰고, 에이전트인지

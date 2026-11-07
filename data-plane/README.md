@@ -8,7 +8,7 @@ needs (AC-A2). The control plane provisions and reclaims these pods via the
 The runtime image includes `git`, `gh`, `curl`, `jq`, and `kubectl` for use by
 interactive shell and Claude Code workloads.
 
-## Status: shell, claude-code, approval-gated, minimax-code, codex, mcp, credential-proxy, and k3s-mcp-proxy agents built
+## Status: shell, claude-code, approval-gated, minimax-code, codex-chat, codex-task, mcp, credential-proxy, and k3s-mcp-proxy agents built
 
 `DATA_PLANE_WORKLOAD` selects one of these modes across a session's pods:
 
@@ -21,8 +21,10 @@ interactive shell and Claude Code workloads.
   environment, cwd and shell variables/functions/aliases are not carried over.
 - `claude-code` launches no resident shell. Write asynchronously queues a
   prompt for one serial worker; each job executes
-  `claude [--continue] [--model MODEL] --permission-mode auto
+  `claude [--continue] [--model MODEL] [--effort EFFORT] --permission-mode auto
   -p --output-format stream-json --verbose --include-partial-messages -- PROMPT`.
+  `CLAUDE_CODE_EFFORT` (`low`, `medium`, `high`, `xhigh` or `max`, AC-E8) adds
+  `--effort`; empty leaves the CLI default and any other value refuses start.
   The agent parses stdout JSONL and
   projects ordered `text_delta` values, while diagnostic stderr is retained as
   text. Both are incrementally redacted and appended through the same offset
@@ -36,7 +38,24 @@ interactive shell and Claude Code workloads.
   prompt is limited to 1 MiB; an oversized write is not queued and returns 413.
   The pending queue is bounded to 64 prompts and 8 MiB; a new write that would
   exceed either bound returns 429 while already accepted prompts keep draining.
-- `approval-gated` runs the same one-shot execution model as `claude-code` —
+  `CLAUDE_CODE_AUTH_MODE` picks the provider auth (AC-E7). Unset or `gateway`
+  is the loopback credential proxy above. `subscription` uses a Claude
+  subscription whose login lives in the session's auth slot: the agent refuses
+  to start if `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`
+  or `CLAUDE_CODE_OAUTH_TOKEN` is set or if `AGENT_AUTH_SLOT_DIR` is not a
+  mounted directory. Before every turn it copies the slot's `.credentials.json`
+  to `$HOME/.claude/.credentials.json` (and removes HOME's copy when the slot
+  has none), copies it back every second while the CLI runs and once more after
+  it exits (a file the CLI removed empties the slot), always by atomic 0600
+  replace rather than a symlink; the archive leaves that file out
+  (`docs/prd/agent-auth-pool.md`, AC-N4). If `claude auth status --json` does
+  not report `loggedIn`, the turn starts `claude auth login --claudeai`, shows
+  its URL as notice lines, holds the prompt and ends with `status=error`; the
+  next write is the pasted code — recorded as `[login code]`, never echoed —
+  fed to the waiting login, after which the held prompt runs in that turn. A
+  failed code drops the held prompt; a pending sign-in expires after 15
+  minutes and ends on a checkpoint or stop. `GET /auth-slot` answers
+  `{"signedIn": bool}` for a workload with a slot and 404 otherwise. runs the same one-shot execution model as `claude-code` —
   the queue, cursor, archive and model contracts are reused unchanged — with the
   tool surface AC-F6 prescribes for that type. It receives no `K3S_MCP_TOKEN`
   and enables no marketplace plugin; instead the managed `settings.json`
@@ -90,7 +109,8 @@ interactive shell and Claude Code workloads.
   removed, and any other server is dropped with a warning, since the pod cannot
   reach it. The K3s MCP tools are not behind the session gate because the K3s
   MCP gates its own writes.
-- `codex` runs the Codex SDK on the same one-shot runner as `claude-code`
+- `codex-chat` (formerly `codex`, still accepted as `DATA_PLANE_WORKLOAD`)
+  runs the Codex SDK on the same one-shot runner as `claude-code`
   (AC-J1/J2): queue, bounds, cursor, resume flag and archive are shared. Each
   job executes `codex-runner --model MODEL [--resume] -- PROMPT`
   (`CODEX_RUNNER_BIN`, default `/usr/local/bin/codex-runner`, a shim for
@@ -165,8 +185,27 @@ interactive shell and Claude Code workloads.
   managed instructions are missing. That rendering does not include MCP
   tools, because codex does not wait for MCP servers there, so the check
   covers what the config removes.
+- `codex-task` (`docs/prd/codex-task-workload.md`) is `codex-chat`'s pod and
+  runner with claude-code's tool level (AC-M1). Each job executes
+  `codex-runner --mode task --model MODEL [--effort EFFORT] [--resume] --
+  PROMPT`; `CODEX_REASONING_EFFORT` (`minimal`, `low`, `medium`, `high` or
+  `xhigh`, AC-M4) sets the SDK's `modelReasoningEffort`, and `codex-chat`
+  refuses to start with it set. Task mode runs with `sandboxMode:
+  danger-full-access`, `approvalPolicy: never`, sandbox network on and web
+  search off, and has no kill switch. Its managed `config.toml` leaves the
+  shell and `unified_exec` on, opens the sandbox, keeps every other
+  `codex-chat` switch, and carries its own developer instructions (marker
+  `session-platform codex task session`). The ChatGPT login is the auth
+  slot's `auth.json`, kept in sync with `$HOME/.codex/auth.json` exactly like
+  `claude-code`'s subscription login and left out of the archive (AC-M2,
+  AC-M3); an empty slot gets the same in-turn device-code sign-in as
+  `codex-chat`, and the end-of-turn copy keeps it for the next session. The
+  image build renders both modes (`/agent codex-render-config <home>
+  chat|task`) and runs `surface-check.mjs --mode chat|task`: task mode must
+  show a shell tool and its own marker, and no image or web tool or bundled
+  skill.
 - `k3s-mcp-proxy` is the `minimax-code` helper pod's K3s MCP proxy, and the
-  `codex` pod's loopback sidecar (`DATA_PLANE_PROXY_PLACEMENT=sidecar`,
+  `codex-chat` and `codex-task` pods' loopback sidecar (`DATA_PLANE_PROXY_PLACEMENT=sidecar`,
   `127.0.0.1:8093`): the
   credential-proxy implementation with the MCP Streamable HTTP header allowlist
   (`Accept`, `Content-Type`, `Mcp-Session-Id`, `Mcp-Protocol-Version`,

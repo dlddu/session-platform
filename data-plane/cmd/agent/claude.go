@@ -150,6 +150,12 @@ type claudeConfig struct {
 	// Tools is written into the session HOME on boot.
 	Tools toolSurface
 	CLI   agentCLI
+	// AuthSlot, when set, is the pool slot whose login this session's CLI
+	// uses (docs/prd/agent-auth-pool.md, AC-N4).
+	AuthSlot *authSlot
+	// Login, when set, signs a claude-code subscription session in on its
+	// first prompt (AC-E7). It needs AuthSlot.
+	Login claudeLogin
 }
 
 // toolSurface is what the platform lets a session's agent reach beyond its own
@@ -188,6 +194,9 @@ type claudeRuntimeState struct {
 
 type promptJob struct {
 	prompt string
+	// seq is the job's place in arrival order. AC-E7's sign-in reads only
+	// writes that arrived after its URL was shown as codes.
+	seq uint64
 }
 
 // claudeWorkload owns one session's one-shot Claude invocations. A single
@@ -204,6 +213,8 @@ type claudeWorkload struct {
 	tools    toolSurface
 	cli      agentCLI
 	out      scrollback
+	authSlot *authSlot
+	login    claudeLogin
 
 	// approvals is what AC-F3's idle exception is decided from.
 	approvals approvalWaits
@@ -221,7 +232,14 @@ type claudeWorkload struct {
 	restoring               bool
 	// refreshing holds the worker between turns while AC-J7's plugin refresh
 	// rewrites the session's skills.
-	refreshing      bool
+	refreshing bool
+	// pendingLogin is AC-E7's sign-in between its two writes.
+	pendingLogin *pendingClaudeLogin
+	// droppedLogin remembers a sign-in that ended before its code arrived,
+	// so a code sent for it is still never recorded or run.
+	droppedLogin *droppedClaudeLogin
+	// enqueued counts accepted writes; it stamps promptJob.seq.
+	enqueued        uint64
 	active          bool
 	hasRun          bool
 	turns           int
@@ -290,6 +308,9 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 	if cli == nil {
 		cli = claudeCLI{}
 	}
+	if cfg.Login != nil && cfg.AuthSlot == nil {
+		return nil, errors.New("a claude subscription sign-in needs an auth slot")
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &claudeWorkload{
@@ -303,6 +324,8 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 		redact:          normaliseRedactionLiterals(cfg.Redact),
 		tools:           cfg.Tools,
 		cli:             cli,
+		authSlot:        cfg.AuthSlot,
+		login:           cfg.Login,
 		runTimeout:      runTimeout,
 		runOutputLimit:  runOutputLimit,
 		scrollbackLimit: scrollbackLimit,
@@ -350,9 +373,17 @@ func (c *claudeWorkload) Close() {
 	}
 	c.stopping = true
 	c.accepting = false
+	pending := c.pendingLogin
+	c.pendingLogin = nil
+	if pending != nil && pending.timer != nil {
+		pending.timer.Stop()
+	}
 	c.cancel()
 	c.cond.Broadcast()
 	c.mu.Unlock()
+	if pending != nil {
+		pending.proc.kill()
+	}
 	<-c.workerDone
 }
 
@@ -371,7 +402,8 @@ func (c *claudeWorkload) enqueue(prompt string) error {
 	case c.queue.Len() >= maxClaudeQueuedPrompts || c.queuedBytes+len(prompt) > maxClaudeQueuedBytes:
 		return errClaudeQueueFull
 	}
-	c.queue.PushBack(promptJob{prompt: prompt})
+	c.enqueued++
+	c.queue.PushBack(promptJob{prompt: prompt, seq: c.enqueued})
 	c.queuedBytes += len(prompt)
 	c.cond.Signal()
 	return nil
@@ -461,10 +493,19 @@ func (c *claudeWorkload) runWorker() {
 		c.active = true
 		c.turns++
 		seq := c.turns
+		input := c.classifyInputLocked(job)
 		c.mu.Unlock()
 
-		c.beginTurn(seq, job.prompt)
-		prompt, noticed := c.withTurnNotice(job.prompt, resume)
+		prompt, ok := c.openTurn(seq, job.prompt, input)
+		if !ok {
+			c.endTurn(seq, "error")
+			c.mu.Lock()
+			c.active = false
+			c.cond.Broadcast()
+			c.mu.Unlock()
+			continue
+		}
+		prompt, noticed := c.withTurnNotice(prompt, resume)
 		output := newClaudeOutputSink(
 			&c.out,
 			c.redact,
@@ -476,6 +517,7 @@ func (c *claudeWorkload) runWorker() {
 		stdout := c.cli.newProjector(stdoutUTF8)
 		stderr := newUTF8NormalizingWriter(output)
 		runCtx, cancelRun := context.WithTimeout(c.ctx, c.runTimeout)
+		stopSlotWatch := c.watchAuthSlot()
 		err := c.runner.Run(runCtx, c.argv(prompt, resume), runnerOptions{
 			Dir:    c.workDir,
 			Env:    environmentWithHome(c.homeDir),
@@ -484,6 +526,8 @@ func (c *claudeWorkload) runWorker() {
 		})
 		timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
 		cancelRun()
+		stopSlotWatch()
+		c.pushAuthSlot()
 		// Flush projector/newline, per-fd UTF-8 tails, redaction tail and the
 		// invocation-limit tail before active becomes false. A checkpoint waiting
 		// on c.active therefore archives every byte produced by the drained run.
@@ -514,6 +558,72 @@ func (c *claudeWorkload) runWorker() {
 			c.logger.Error("persist claude runtime state", "err", c.redactString(persistErr.Error()))
 		}
 	}
+}
+
+// openTurn writes the turn's input record and settles what the turn runs. A
+// turn normally runs its own prompt. With a sign-in pending (AC-E7) the write
+// is the sign-in code instead: the record shows a placeholder, and the turn
+// runs the prompt that was held for the sign-in. ok is false when the turn
+// has nothing to run.
+func (c *claudeWorkload) openTurn(seq int, prompt string, input turnInput) (string, bool) {
+	switch {
+	case input.code != nil:
+		c.beginTurn(seq, claudeLoginCodeInput)
+		if !c.completeLogin(input.code, prompt) {
+			return "", false
+		}
+		return input.code.prompt, true
+	case input.staleCode:
+		c.beginTurn(seq, claudeLoginCodeInput)
+		c.appendPlatformNotice("[session-platform: the Claude sign-in this message was for had already ended, so it was taken as its code and not used. Send your prompt again to start a new sign-in.]\n")
+		return "", false
+	case input.beforeSignIn:
+		c.beginTurn(seq, prompt)
+		c.appendPlatformNotice("[session-platform: this prompt was sent before the Claude sign-in started, so it did not run. Send it again after signing in.]\n")
+		return "", false
+	}
+	c.beginTurn(seq, prompt)
+	c.pullAuthSlot()
+	if c.login != nil && !c.subscriptionGate(prompt) {
+		return "", false
+	}
+	return prompt, true
+}
+
+// pullAuthSlot gives the CLI the slot's login before it runs (AC-N4). A
+// failed copy is logged rather than failing the turn: the CLI then reports
+// for itself that it is not signed in.
+func (c *claudeWorkload) pullAuthSlot() {
+	if c.authSlot == nil {
+		return
+	}
+	if err := c.authSlot.pull(c.homeDir); err != nil {
+		c.logger.Error("copy the auth slot login into HOME", "err", c.redactString(err.Error()))
+	}
+}
+
+func (c *claudeWorkload) pushAuthSlot() {
+	if c.authSlot == nil {
+		return
+	}
+	if err := c.authSlot.push(c.homeDir); err != nil {
+		c.logger.Error("copy the login back to the auth slot", "err", c.redactString(err.Error()))
+	}
+}
+
+func (c *claudeWorkload) watchAuthSlot() func() {
+	if c.authSlot == nil {
+		return func() {}
+	}
+	return c.authSlot.watch(c.homeDir)
+}
+
+// archiveExclusions is what the session archive leaves out of the state tree.
+func (c *claudeWorkload) archiveExclusions() []string {
+	if c.authSlot == nil {
+		return nil
+	}
+	return []string{c.authSlot.archiveExclusion()}
 }
 
 // withTurnNotice prepends AC-J7's skill-change note to a resumed turn. A first
@@ -595,13 +705,18 @@ func (c *claudeWorkload) argv(prompt string, resume bool) []string {
 	return c.cli.argv(c.binary, c.model, prompt, resume)
 }
 
-func claudeArgv(binary, model, prompt string, resume bool) []string {
+// claudeArgv builds one Claude Code invocation. effort is AC-E8's session
+// effort, empty for the CLI default.
+func claudeArgv(binary, model, effort, prompt string, resume bool) []string {
 	argv := []string{binary}
 	if resume {
 		argv = append(argv, "--continue")
 	}
 	if model != "" && model != platformDefaultModel {
 		argv = append(argv, "--model", model)
+	}
+	if effort != "" {
+		argv = append(argv, "--effort", effort)
 	}
 	// The option delimiter prevents a prompt beginning with "--" from changing
 	// any platform-controlled flag.
@@ -656,7 +771,10 @@ func (c *claudeWorkload) beginCheckpoint(ctx context.Context, requestedID string
 		return nil, "", err
 	}
 	hasRun := c.hasRun
+	pending := c.pendingLogin
 	c.mu.Unlock()
+	// A sign-in cannot wait across an archive: its process belongs to this pod.
+	c.dropPendingLogin(pending, "[session-platform: the session was archived during the Claude sign-in; the held prompt was dropped. Send it again to start over.]\n")
 	if err := persistClaudeRuntimeState(c.stateDir, hasRun); err != nil {
 		c.abortCheckpoint()
 		return nil, "", err
@@ -1291,6 +1409,12 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 		serveApprovalWait(w, &c.approvals)
 	})
 
+	// AC-N4: whether this session's auth slot holds a login, asked by the
+	// control plane before it returns the slot to the pool.
+	mux.HandleFunc("GET "+authSlotPath, func(w http.ResponseWriter, _ *http.Request) {
+		serveAuthSlot(w, c.authSlot)
+	})
+
 	mux.HandleFunc("GET /attach", func(w http.ResponseWriter, r *http.Request) {
 		if !c.isReady() {
 			http.Error(w, "claude workload is awaiting restore", http.StatusServiceUnavailable)
@@ -1424,7 +1548,7 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 				c.abortCheckpoint()
 			}
 		}()
-		if err := writeStateArchive(archive, c.stateDir, c.tools.SharedDir, scrollbackBytes); err != nil {
+		if err := writeStateArchiveExcluding(archive, c.stateDir, c.tools.SharedDir, scrollbackBytes, c.archiveExclusions()); err != nil {
 			http.Error(w, "build checkpoint archive: "+c.redactString(err.Error()), http.StatusInternalServerError)
 			return
 		}

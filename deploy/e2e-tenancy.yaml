@@ -33,7 +33,7 @@ metadata:
 data:
   tenants.json: |
     {"tenants": [
-      {"name": "e2e-alpha", "serviceAccounts": ["default/tenant-alpha"], "workloadTypes": ["shell", "codex"]},
+      {"name": "e2e-alpha", "serviceAccounts": ["default/tenant-alpha"], "workloadTypes": ["shell", "codex-chat"]},
       {"name": "e2e-beta", "serviceAccounts": ["default/tenant-beta"], "workloadTypes": ["shell"]},
       {"name": "e2e-gamma", "serviceAccounts": ["default/tenant-gamma"], "workloadTypes": ["*"]}
     ]}

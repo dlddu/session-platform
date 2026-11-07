@@ -3,8 +3,17 @@
 # (claude-code-credentials-secret.example.yaml). The control plane names it
 # with CLAUDE_CODE_CONFIG_CONFIGMAP (default `claude-code-config`).
 #
-#   base-url  (required) The provider's HTTPS endpoint, projected only into the
-#             localhost credential-proxy sidecar beside auth-token.
+#   base-url  (required for approval-gated and for claude-code in
+#             CLAUDE_CODE_AUTH_MODE=gateway) The provider's HTTPS endpoint,
+#             projected only into a credential-proxy beside auth-token. A
+#             subscription-mode claude-code session reaches its provider
+#             directly and does not read it (AC-E7).
+#   model, models  The gateway's model ids. approval-gated and gateway-mode
+#             claude-code read them; a subscription-mode claude-code does not.
+#   subscription-model, subscription-models  (optional) The same pair for
+#             CLAUDE_CODE_AUTH_MODE=subscription: Claude subscription models
+#             (for example opus, sonnet). The control plane reads them as
+#             CLAUDE_CODE_SUBSCRIPTION_DEFAULT_MODEL / _MODELS (AC-E7).
 #   model     (optional) Projected into the tool-running container as
 #             CLAUDE_CODE_MODEL only for platform-default sessions, and into the
 #             control plane as CLAUDE_CODE_DEFAULT_MODEL for its UI snapshot.
@@ -55,5 +64,7 @@ metadata:
     app: control-plane
 data:
   base-url: "https://api.anthropic.com"
-  model: "sonnet"
-  models: '["sonnet","opus"]'
+  model: "~anthropic/claude-sonnet-latest"
+  models: '["~anthropic/claude-sonnet-latest","~anthropic/claude-opus-latest"]'
+  subscription-model: "sonnet"
+  subscription-models: '["opus","sonnet","haiku"]'

@@ -7,6 +7,8 @@
 - AC-E4: 대화 연속성 = pod에 지속되는 대화 기록 (PRD: 세션 워크로드 — 클로드 코드 CLI)
 - AC-E5: 파일시스템 아카이브 기반 동결·복원 (PRD: 세션 워크로드 — 클로드 코드 CLI)
 - AC-E6: 공급자 자격 증명은 sidecar Secret, 플러그인 토큰은 main Secret, 플랫폼 모델은 optional ConfigMap (PRD: 세션 워크로드 — 클로드 코드 CLI)
+- AC-E7: 공급자 인증 모드 — Claude 구독(인증 풀) 또는 게이트웨이 (PRD: 세션 워크로드 — 클로드 코드 CLI)
+- AC-E8: 세션 추론 수준(`reasoningEffort`) — 생성 시 고정 (PRD: 세션 워크로드 — 클로드 코드 CLI)
 ## 자동화 상태 (2026-08-09)
 
 - data plane fake runner 단위 테스트가 exact argv(`--permission-mode auto -p --output-format stream-json --verbose --include-partial-messages -- <prompt>`), concrete `CLAUDE_CODE_MODEL`의 단일 `--model` argv와 empty/`platform-default` fallback, 비블로킹 write, process 종료 전 `text_delta` append, 1 MiB prompt 제한, bounded serial queue, 첫 성공 뒤 `--continue`, 고정 HOME/workdir, managed tool settings을 검증한다. stream 테스트는 SSE event id와 `{offset,payloadBase64,nextOffset}`의 decoded byte invariant, 직접 agent와 public proxy 모두의 `Last-Event-ID` 우선 재접속, 서버 발급 UTF-8 경계, stale cursor reset, read reconcile, stdout/stderr write 사이에 걸친 incremental redaction을 검증한다. 축소한 deterministic limit로 live invocation truncation marker와 cumulative terminal marker·기존 cursor 불변을 같은 production 경계 로직에서 검증한다. credential-proxy 테스트는 loopback bind, **HTTPS-only** 고정 upstream, 인증·라우팅 헤더 제거/토큰 주입, 1xx·최종 응답 redaction, upstream EOF 전 safe SSE chunk 전달, response-read 경계 split-token redaction, 축소 limit를 주입한 raw-upstream 64 MiB SSE cap 로직과 주 컨테이너의 실제 credential 거부를 검증한다.
@@ -72,3 +74,15 @@
 - **실행 단계**: 각 상태에서 stream 연결 → active stream에 keepalive만 전달하며 시간 진행 → 연결 오류 발생 시 SPA 동작 관찰 → snapshot 상태에서 자동 read 호출 여부 확인
 - **기대 결과**: active/idle은 기존 pod output을 stream하되 상태 승격·restore·`lastAccess` touch가 없고, keepalive도 cursor/유휴 시간을 바꾸지 않음. snapshot stream은 invalid-state이며 pod를 만들지 않음. SPA는 EventSource를 즉시 닫고 GET session 후 active/idle만 마지막 cursor로 backoff 재연결하며 snapshot은 read fallback 없이 Restore 화면으로 이동
 - **검증 AC**: AC-E3, AC-E5 (보조 AC-B1/B2)
+
+### 시나리오 10: 구독 모드 — 프록시 없는 파드, 두 번의 write로 나눈 로그인
+- **사전 조건**: `CLAUDE_CODE_AUTH_MODE=subscription`, 빈 슬롯 하나뿐인 풀, Claude 구독 계정
+- **실행 단계**: (a) `claude-code` 세션을 만들어 파드를 조회한다 → (b) 프롬프트를 보낸다 → (c) 안내된 URL에서 로그인하고 화면의 코드를 다음 write로 보낸다 → (d) 세션을 지우고 새 `claude-code` 세션에 프롬프트를 보낸다
+- **기대 결과**: (a) 파드에 credential-proxy 컨테이너가 없고 주 컨테이너에 `ANTHROPIC_*` env가 없으며 슬롯 PVC와 `CLAUDE_CODE_AUTH_MODE=subscription`이 있다. (b) 출력에 로그인 URL과 「코드를 다음 메시지로 보내라」는 안내가 나오고 프롬프트는 실행되지 않는다. (c) 입력 기록에는 `[login code]`만 남고, 로그인 뒤 (b)의 프롬프트가 같은 턴에서 실행된다. (d) 로그인 안내 없이 실행된다
+- **검증 AC**: AC-E7
+
+### 시나리오 11: 추론 수준은 생성 시 정해지고 실행 argv까지 간다
+- **사전 조건**: SUT와 그 클러스터의 kube 접근
+- **실행 단계**: (a) `GET /config`를 읽는다 → (b) `reasoningEffort=max`로 `claude-code` 세션을 만든다 → (c) 같은 필드를 `shell`·`approval-gated`·`codex-chat` 생성에 준다
+- **기대 결과**: (a) `claude-code` 항목의 `reasoningEfforts`가 `low`·`medium`·`high`·`xhigh`·`max`이고, 받지 않는 타입은 빈 배열이다. (b) 조회 응답의 `reasoningEffort`가 `max`이고 주 컨테이너가 `CLAUDE_CODE_EFFORT=max`를 받는다. (c) 모두 400이고 파드가 없다
+- **검증 AC**: AC-E8

@@ -29,6 +29,9 @@ type Service struct {
 	agent              agent.Client
 	now                func() time.Time // injectable clock for tests
 	leaseRenewInterval time.Duration
+	// authPools are the login slot pools by the type that leases from them
+	// (AC-N2): codex-task, and claude-code in subscription mode.
+	authPools map[session.WorkloadType]k8s.AuthPool
 }
 
 const defaultLeaseRenewInterval = 5 * time.Second
@@ -52,6 +55,16 @@ func WithWorkloadCheckpointer(workload session.WorkloadType, ckpt archive.Checkp
 	return func(s *Service) {
 		if ckpt != nil {
 			s.ckpts[workload] = ckpt
+		}
+	}
+}
+
+// WithAuthPool makes sessions of the type lease a login slot from pool for
+// as long as they have a pod (AC-N2, AC-N3).
+func WithAuthPool(workload session.WorkloadType, pool k8s.AuthPool) Option {
+	return func(s *Service) {
+		if pool != nil {
+			s.authPools[workload] = pool
 		}
 	}
 }
@@ -82,6 +95,7 @@ func New(orch k8s.PodOrchestrator, store store.StateStore, ckpt archive.Checkpoi
 	s := &Service{
 		orch: orch, store: store, agent: agent,
 		ckpts:              map[session.WorkloadType]archive.Checkpointer{session.WorkloadTypeShell: ckpt},
+		authPools:          map[session.WorkloadType]k8s.AuthPool{},
 		now:                func() time.Time { return time.Now().UTC() },
 		leaseRenewInterval: defaultLeaseRenewInterval,
 	}
@@ -181,12 +195,28 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 	if err != nil {
 		return nil, err
 	}
+	effort, err := session.NormalizeReasoningEffort(workload, req.ReasoningEffort)
+	if err != nil {
+		return nil, err
+	}
 	id, err := newID()
 	if err != nil {
 		return nil, err
 	}
 
-	pods, err := s.orch.Start(ctx, id, k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins})
+	spec := k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins, ReasoningEffort: effort}
+	// The slot is leased before the pod exists and given back on every
+	// failure below, so an aborted create never strands one (AC-N2).
+	if spec.AuthSlot, err = s.acquireAuthSlot(ctx, workload, id); err != nil {
+		return nil, err
+	}
+	created := false
+	defer func() {
+		if !created {
+			s.releaseAuthSlotBestEffort(workload, id, nil)
+		}
+	}()
+	pods, err := s.orch.Start(ctx, id, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -200,23 +230,25 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 
 	now := s.now()
 	sess := &session.Session{
-		ID:            id,
-		WorkloadType:  workload,
-		Model:         model,
-		Plugins:       plugins,
-		Tenant:        req.Tenant,
-		Name:          name,
-		State:         session.StateActive,
-		Pod:           pods.Workload.Name,
-		AuxiliaryPods: pods.Names(),
-		CreatedAt:     now,
-		LastAccess:    now,
+		ID:              id,
+		WorkloadType:    workload,
+		Model:           model,
+		Plugins:         plugins,
+		ReasoningEffort: effort,
+		Tenant:          req.Tenant,
+		Name:            name,
+		State:           session.StateActive,
+		Pod:             pods.Workload.Name,
+		AuxiliaryPods:   pods.Names(),
+		CreatedAt:       now,
+		LastAccess:      now,
 	}
 	if err := s.store.Put(ctx, sess); err != nil {
 		// best-effort rollback of every pod we just started
 		_ = s.orch.Stop(ctx, pods.All()...)
 		return nil, err
 	}
+	created = true
 	return sess, nil
 }
 
@@ -251,8 +283,13 @@ func normalizeStoredSession(sess *session.Session) (*session.Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	effort, err := session.NormalizeReasoningEffort(workload, sess.ReasoningEffort)
+	if err != nil {
+		return nil, err
+	}
 	sess.WorkloadType = workload
 	sess.Model = model
+	sess.ReasoningEffort = effort
 	return sess, nil
 }
 
@@ -363,8 +400,8 @@ func (s *Service) RefreshPlugins(ctx context.Context, id string) (*session.Plugi
 	if err != nil {
 		return nil, err
 	}
-	if current.WorkloadType != session.WorkloadTypeCodex {
-		return nil, fmt.Errorf("%w: plugin refresh is offered for codex sessions only", session.ErrInvalidState)
+	if !current.WorkloadType.IsCodex() {
+		return nil, fmt.Errorf("%w: plugin refresh is offered for codex-chat and codex-task sessions only", session.ErrInvalidState)
 	}
 	sess, branch, err := s.activate(ctx, id)
 	if err != nil {
@@ -535,12 +572,18 @@ func (s *Service) snapshotWithTransactionLocked(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// Ask the slot's login state while the pod still answers (AC-N4).
+	signedIn := s.authSlotSignedIn(ctx, sess)
 	if err := s.orch.Stop(ctx, sessionPodRefs(sess)...); err != nil {
 		// DELETE errors are outcome-ambiguous. The durable commit record makes a
 		// retry safe, whereas aborting here could reopen a pod already terminating.
 		return nil, err
 	}
-	return s.finalizeSnapshotLocked(ctx, sess, generation)
+	frozen, err := s.finalizeSnapshotLocked(ctx, sess, generation)
+	if err == nil {
+		s.releaseAuthSlotBestEffort(frozen.WorkloadType, frozen.ID, signedIn)
+	}
+	return frozen, err
 }
 
 func (s *Service) recoverSnapshot(ctx context.Context, id string) (result *session.Session, retErr error) {
@@ -632,7 +675,12 @@ func (s *Service) recoverSnapshotLocked(ctx context.Context, sess *session.Sessi
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		return s.finalizeSnapshotLocked(ctx, sess, token)
+		frozen, err := s.finalizeSnapshotLocked(ctx, sess, token)
+		if err == nil {
+			// The pod may already be gone, so the login state stays unknown.
+			s.releaseAuthSlotBestEffort(frozen.WorkloadType, frozen.ID, nil)
+		}
+		return frozen, err
 	default:
 		return nil, session.ErrInvalidState
 	}
@@ -781,6 +829,10 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 	if err != nil {
 		return nil, err
 	}
+	effort, err := session.NormalizeReasoningEffort(workload, sess.ReasoningEffort)
+	if err != nil {
+		return nil, err
+	}
 	ckpt, err := s.checkpointerFor(workload)
 	if err != nil {
 		return nil, err
@@ -788,7 +840,19 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	pods, err := s.orch.RestoreInto(ctx, id, checkpointRef(sess.Checkpoint), k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins})
+	spec := k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins, ReasoningEffort: effort}
+	// Any free slot will do: the conversation is in the archive, the login in
+	// the slot (AC-N3). A full pool leaves the session frozen.
+	if spec.AuthSlot, err = s.acquireAuthSlot(ctx, workload, id); err != nil {
+		return nil, err
+	}
+	keepSlot := false
+	defer func() {
+		if !keepSlot {
+			s.releaseAuthSlotBestEffort(workload, id, nil)
+		}
+	}()
+	pods, err := s.orch.RestoreInto(ctx, id, checkpointRef(sess.Checkpoint), spec)
 	if err != nil {
 		return nil, err
 	}
@@ -835,6 +899,7 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 			fresh.SnapshotTransaction == nil {
 			// The API server committed the aggregate update but the response was
 			// lost. Deleting these pods here would corrupt an active session.
+			keepSlot = true
 			return fresh, nil
 		}
 		if getErr == nil ||
@@ -844,8 +909,14 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 			// the CAS was definitively rejected.
 			s.stopPodsBestEffort(pods.All())
 		}
+		if getErr != nil && !errors.Is(err, session.ErrConflict) && !errors.Is(getErr, session.ErrNotFound) {
+			// The pods may be live under a committed record; their slot must
+			// stay held. A stale lease is reclaimed later (AC-N2).
+			keepSlot = true
+		}
 		return nil, errors.Join(err, getErr)
 	}
+	keepSlot = true
 	return &next, nil
 }
 
@@ -946,6 +1017,7 @@ func (s *Service) Terminate(ctx context.Context, id string) (retErr error) {
 	if txn := sess.SnapshotTransaction; txn != nil {
 		sourcePod = txn.SourcePod
 	}
+	signedIn := s.authSlotSignedIn(ctx, sess)
 	for _, ref := range sessionReclaimRefs(sess, sourcePod) {
 		if ref.Name == "" {
 			continue
@@ -959,6 +1031,9 @@ func (s *Service) Terminate(ctx context.Context, id string) (retErr error) {
 	}
 	retErr = s.store.Delete(ctx, id, token)
 	deleteCommitted = retErr == nil
+	if deleteCommitted {
+		s.releaseAuthSlotBestEffort(sess.WorkloadType, id, signedIn)
+	}
 	return retErr
 }
 
@@ -1027,4 +1102,73 @@ func dispatchPath(branch, op string) string {
 		return "active"
 	}
 	return branch + "->" + op
+}
+
+// authSlotReporter reads a pod's slot login state (AC-N4); like
+// approvalWaitReporter it is an optional capability of the agent client.
+type authSlotReporter interface {
+	AuthSlotSignedIn(context.Context, string) (bool, error)
+}
+
+// acquireAuthSlot leases the session a login slot when its type has a pool,
+// and returns nil for every other type (AC-N2).
+func (s *Service) acquireAuthSlot(ctx context.Context, workload session.WorkloadType, id string) (*int, error) {
+	pool, ok := s.authPools[workload]
+	if !ok {
+		return nil, nil
+	}
+	slot, err := pool.Acquire(ctx, id, s.staleAuthHolder)
+	if err != nil {
+		return nil, err
+	}
+	return &slot, nil
+}
+
+// staleAuthHolder is AC-N2's holder half of the reclaim rule: a holder whose
+// record is gone or frozen runs no pod. The pool adds the age half.
+func (s *Service) staleAuthHolder(ctx context.Context, holder string) (bool, error) {
+	sess, err := s.store.Get(ctx, holder)
+	if errors.Is(err, session.ErrNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return sess.State == session.StateSnapshot && sess.Pod == "", nil
+}
+
+// authSlotSignedIn asks the session's pod whether its slot holds a login, so
+// the release can rank the slot for the next session (AC-N4). Unknown is nil:
+// no pool, no pod, or an agent that does not answer.
+func (s *Service) authSlotSignedIn(ctx context.Context, sess *session.Session) *bool {
+	if _, ok := s.authPools[sess.WorkloadType]; !ok || sess.Pod == "" {
+		return nil
+	}
+	reporter, ok := s.agent.(authSlotReporter)
+	if !ok {
+		return nil
+	}
+	askCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	signedIn, err := reporter.AuthSlotSignedIn(askCtx, sess.Pod)
+	if err != nil {
+		slog.Warn("auth slot state unreadable; releasing without it", "session", sess.ID, "err", err)
+		return nil
+	}
+	return &signedIn
+}
+
+// releaseAuthSlotBestEffort gives the session's slot back. A failure only
+// leaves a lease the next acquire reclaims (AC-N2, AC-N3), so it never fails
+// the freeze or delete that called it.
+func (s *Service) releaseAuthSlotBestEffort(workload session.WorkloadType, id string, signedIn *bool) {
+	pool, ok := s.authPools[workload]
+	if !ok {
+		return
+	}
+	releaseCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := pool.Release(releaseCtx, id, signedIn); err != nil {
+		slog.Warn("auth slot release failed; the next acquire reclaims it", "session", id, "err", err)
+	}
 }

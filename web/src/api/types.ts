@@ -10,7 +10,13 @@ export type WorkloadType =
   | "claude-code"
   | "approval-gated"
   | "minimax-code"
-  | "codex";
+  | "codex-chat"
+  | "codex-task";
+
+/**
+ * AC-E8 · AC-M4. 값 목록은 타입마다 다르다 — 정본은 `GET /config` 의 `reasoningEfforts`.
+ */
+export type ReasoningEffort = string;
 
 export interface ModelCatalog {
   defaultModel: string;
@@ -25,6 +31,8 @@ export interface WorkloadTypeConfig {
   input: "prompt" | "terminal";
   defaultModel: string | null;
   models: string[];
+  /** AC-E8. Empty means the type takes no reasoning effort. */
+  reasoningEfforts: ReasoningEffort[];
 }
 
 /** AC-K4 */
@@ -55,6 +63,8 @@ export interface Session {
   name: string;
   workloadType: WorkloadType;
   model?: string;
+  /** AC-E8. Absent means the CLI default. */
+  reasoningEffort?: ReasoningEffort;
   state: State;
   /** The session's dedicated workload pod — the 1:1 subject of AC-A2. */
   pod?: string;
@@ -75,6 +85,8 @@ export interface CreateSessionRequest {
   /** omitted means "shell" (AC-E1) */
   workloadType?: WorkloadType;
   model?: string;
+  /** AC-E8. Omitted means the CLI default; only types listing efforts take it. */
+  reasoningEffort?: ReasoningEffort;
   /** Operator only (AC-K2); omitted means untenanted. */
   tenant?: string;
 }
@@ -110,7 +122,7 @@ export interface WriteResult {
   path: string;
 }
 
-/** AC-J7 — what a codex session's plugin refresh changed. */
+/** AC-J7 — what a codex-chat or codex-task session's plugin refresh changed. */
 export interface PluginRefreshResult {
   session: Session;
   path: string;

@@ -28,6 +28,18 @@ const (
 // first and the shell agent pauses its process tree first, so the trees cannot
 // change while they are walked.
 func writeStateArchive(w io.Writer, stateDir, sharedDir string, scrollback []byte) error {
+	return writeStateArchiveExcluding(w, stateDir, sharedDir, scrollback, nil)
+}
+
+// writeStateArchiveExcluding is writeStateArchive leaving out the named
+// regular files of the state tree (slash paths relative to stateDir). The one
+// user is the auth slot's login file (AC-N4): it belongs to the slot, not to
+// the session, so it never travels in the session's archive.
+func writeStateArchiveExcluding(w io.Writer, stateDir, sharedDir string, scrollback []byte, exclude []string) error {
+	skip := make(map[string]bool, len(exclude))
+	for _, rel := range exclude {
+		skip[path.Clean(rel)] = true
+	}
 	if int64(len(scrollback)) > maxClaudeScrollbackBytes {
 		return fmt.Errorf("workload scrollback exceeds %d bytes", maxClaudeScrollbackBytes)
 	}
@@ -46,12 +58,12 @@ func writeStateArchive(w io.Writer, stateDir, sharedDir string, scrollback []byt
 	}
 
 	entryCount := 1 // scrollback
-	if err := archiveTree(tw, stateDir, claudeArchiveStateRoot, &entryCount); err != nil {
+	if err := archiveTree(tw, stateDir, claudeArchiveStateRoot, &entryCount, skip); err != nil {
 		_ = tw.Close()
 		return err
 	}
 	if sharedDir != "" {
-		if err := archiveTree(tw, sharedDir, stateArchiveSharedRoot, &entryCount); err != nil {
+		if err := archiveTree(tw, sharedDir, stateArchiveSharedRoot, &entryCount, nil); err != nil {
 			_ = tw.Close()
 			return err
 		}
@@ -60,8 +72,9 @@ func writeStateArchive(w io.Writer, stateDir, sharedDir string, scrollback []byt
 }
 
 // archiveTree writes dir into tw under prefix, refusing anything but regular
-// files, directories and symlinks that stay inside the tree.
-func archiveTree(tw *tar.Writer, dir, prefix string, entryCount *int) error {
+// files, directories and symlinks that stay inside the tree. Regular files
+// whose slash path relative to dir is in skip are left out.
+func archiveTree(tw *tar.Writer, dir, prefix string, entryCount *int, skip map[string]bool) error {
 	rootInfo, err := os.Lstat(dir)
 	if err != nil {
 		return fmt.Errorf("inspect %s root: %w", prefix, err)
@@ -93,6 +106,9 @@ func archiveTree(tw *tar.Writer, dir, prefix string, entryCount *int) error {
 		archiveName := prefix
 		if rel != "." {
 			archiveName += "/" + filepath.ToSlash(rel)
+		}
+		if skip[filepath.ToSlash(rel)] && entry.Type().IsRegular() {
+			return nil
 		}
 		*entryCount++
 		if *entryCount > maxClaudeArchiveEntries {
