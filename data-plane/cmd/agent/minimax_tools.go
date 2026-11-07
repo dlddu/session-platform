@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -157,10 +158,19 @@ func stageMiniMaxPlugins(seedDir, sessionMCPURL, k3sProxyURL string, bundle []mi
 			return nil, fmt.Errorf("seed plugin %s: %w", plugin.Name, err)
 		}
 		for name, server := range taken {
-			if _, ok := servers[name]; ok {
-				return nil, fmt.Errorf("seed plugin %s: MCP server %s is already registered", plugin.Name, name)
+			existing, ok := servers[name]
+			switch {
+			case !ok:
+				servers[name] = server
+			case name == sessionMCPServerName:
+				return nil, fmt.Errorf("seed plugin %s: MCP server %s is the platform's own", plugin.Name, name)
+			case reflect.DeepEqual(existing, server):
+				// A session that picks several plugins (AC-L1) commonly gets the
+				// same K3s server from each; one registration serves them all.
+			default:
+				logger.Warn("dropping a marketplace MCP server another selected plugin already registered differently",
+					"plugin", plugin.Name, "server", name)
 			}
-			servers[name] = server
 		}
 	}
 	return servers, nil

@@ -23,7 +23,10 @@ type WorkloadTypeInfo struct {
 	// TakesModel mirrors NormalizeModel: true exactly when a create request may
 	// carry a model for this type.
 	TakesModel bool
-	Input      InputMode
+	// TakesPlugins mirrors NormalizePlugins: true exactly when a create request
+	// may carry plugins for this type (AC-L1).
+	TakesPlugins bool
+	Input        InputMode
 }
 
 // workloadTypeCatalog lists every valid type once, in display order. Adding a
@@ -31,39 +34,44 @@ type WorkloadTypeInfo struct {
 // against this list by tests so the three cannot drift apart.
 var workloadTypeCatalog = []WorkloadTypeInfo{
 	{
-		Type:        WorkloadTypeShell,
-		Label:       "Shell",
-		Description: "Interactive bash. You type the commands.",
-		TakesModel:  false,
-		Input:       InputModeTerminal,
+		Type:         WorkloadTypeShell,
+		Label:        "Shell",
+		Description:  "Interactive bash. You type the commands.",
+		TakesModel:   false,
+		TakesPlugins: false,
+		Input:        InputModeTerminal,
 	},
 	{
-		Type:        WorkloadTypeClaudeCode,
-		Label:       "Claude Code",
-		Description: "Agent CLI. You send prompts, it does the work.",
-		TakesModel:  true,
-		Input:       InputModePrompt,
+		Type:         WorkloadTypeClaudeCode,
+		Label:        "Claude Code",
+		Description:  "Agent CLI. You send prompts, it does the work.",
+		TakesModel:   true,
+		TakesPlugins: true,
+		Input:        InputModePrompt,
 	},
 	{
-		Type:        WorkloadTypeMiniMaxCode,
-		Label:       "MiniMax Code",
-		Description: "MiniMax Code CLI behind the approval gate. K3s MCP tools use their own gate.",
-		TakesModel:  true,
-		Input:       InputModePrompt,
+		Type:         WorkloadTypeMiniMaxCode,
+		Label:        "MiniMax Code",
+		Description:  "MiniMax Code CLI behind the approval gate. K3s MCP tools use their own gate.",
+		TakesModel:   true,
+		TakesPlugins: true,
+		Input:        InputModePrompt,
 	},
 	{
-		Type:        WorkloadTypeCodex,
-		Label:       "Codex",
-		Description: "Codex SDK agent on your ChatGPT plan. Conversation, plugin skills and K3s MCP only.",
-		TakesModel:  true,
-		Input:       InputModePrompt,
+		Type:         WorkloadTypeCodex,
+		Label:        "Codex",
+		Description:  "Codex SDK agent on your ChatGPT plan. Conversation, plugin skills and K3s MCP only.",
+		TakesModel:   true,
+		TakesPlugins: true,
+		Input:        InputModePrompt,
 	},
 	{
-		Type:        WorkloadTypeApprovalGated,
-		Label:       "Approval-gated",
-		Description: "Same agent, but every outbound call waits for your approval.",
-		TakesModel:  true,
-		Input:       InputModePrompt,
+		Type:         WorkloadTypeApprovalGated,
+		Label:        "Approval-gated",
+		Description:  "Same agent, but every outbound call waits for your approval.",
+		TakesModel:   true,
+		TakesPlugins: false,
+		Input:        InputModePrompt,
 	},
 }
 

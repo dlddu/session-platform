@@ -530,6 +530,8 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 | `multitenancy.md#시나리오 3` | **Playwright 이관 미완료 — 토큰 발급 의존.** 테넌트 호출자는 kind 안 ServiceAccount 의 projected 토큰을 내야 하고, 그 토큰은 TokenRequest(kube API)로만 발급된다. 호출 자체는 control-plane HTTP API 뿐이다. | `control-plane/test/e2e_multitenancy_3_workload_grant_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_multitenancy_3_workload_grant_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. 토큰은 `kubectl create token` 을 셸로 부르거나 global setup 이 발급해 넘길 수 있다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다(실물 TokenRequest·TokenReview, 대역 없음). |
 | `multitenancy.md#시나리오 5` | **Playwright 이관 미완료 — 토큰 발급 의존.** 테넌트 호출자는 kind 안 ServiceAccount 의 projected 토큰을 내야 하고, 그 토큰은 TokenRequest(kube API)로만 발급된다. 호출 자체는 control-plane HTTP API 뿐이다. | `control-plane/test/e2e_multitenancy_5_refusals_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_multitenancy_5_refusals_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. 토큰은 `kubectl create token` 을 셸로 부르거나 global setup 이 발급해 넘길 수 있다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다(실물 TokenRequest·TokenReview, 대역 없음). |
 | `multitenancy.md#시나리오 6` | **SUT 재기동 의존.** 기대 결과가 control plane **기동** 실패·다른 설정으로의 재기동이라, 한 벌로 떠 있는 SUT 를 대상으로 하는 스위트가 밟을 수 없다. | 없음 | 이 모델 | 설정을 바꿔 control plane 을 다시 띄우는 하네스(별도 Deployment 또는 재기동 단계)가 서면 전용 spec 을 둔다. | 현재 검증은 단위 테스트(`internal/tenancy` 의 설정 파싱, `cmd/control-plane` 의 기동 설정)뿐이다 — 이 표의 대체 검증 칸은 매칭 공간 밖 선언만 적으므로 `없음`. |
+| `session-plugins.md#시나리오 1` | **Playwright 이관 미완료 — kube 관측 의존.** 기대 결과의 절반(설치 지점 컨테이너의 환경 변수, 관리형 설정이 켠 플러그인)이 pod spec·세션 HOME 이라 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 응답·복원·`GET /config` 절반만으로는 시나리오를 온전히 덮지 못한다. | 없음 | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환. 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 현재 검증은 매칭 공간 밖의 integration·단위 테스트다 — pod spec 은 `control-plane/test/plugins_orchestrator_test.go`(integration 태그, 시나리오 선언 없음), 응답·복원·config 는 `control-plane/internal/api/plugins_test.go`, 관리형 설정·진입점은 `data-plane/cmd/agent/claude_plugins_test.go`·`entrypoint_test.go`. 이 표의 대체 검증 칸은 시나리오를 선언한 Go 파일만 적으므로 `없음`. |
+| `session-plugins.md#시나리오 2` | **전용 spec 미저작.** 기능은 착지했고 예외 사유도 없으며 control-plane HTTP API 만으로 관측된다 — 파일이 아직 없을 뿐이다. | 없음 | 이 모델 | `web/e2e/session-plugins-2-refusals.spec.ts` 저작(지금 바로 할 수 있는 일). | 현재 검증은 단위 테스트 `control-plane/internal/api/plugins_test.go` 의 거부 표(pod 수 불변 포함)와 `internal/session/plugins_test.go` 다. |
 <!-- scenario-deferred:end -->
 
 > **이 표가 비는 날 완전 1:1이다.** 현재 잔여는 두 갈래다 — 이관 26(매칭 공간 축소가 만든 부채, 검증은
@@ -569,9 +571,9 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 ## 집계
 
 <!-- scenario-summary:begin -->
-- 시나리오 총계: 59
+- 시나리오 총계: 61
 - 예외: 6
-- 유예: 49
+- 유예: 51
 - 시나리오 매칭 파일: 4
 - 공백: 0
 <!-- scenario-summary:end -->

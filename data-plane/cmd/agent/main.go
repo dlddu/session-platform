@@ -696,7 +696,11 @@ func agentToolSurface(workload string) (toolSurface, error) {
 		if err := validateClaudeProxyClientEnv(); err != nil {
 			return toolSurface{}, err
 		}
-		return toolSurface{Plugin: true}, nil
+		plugins, err := claudePluginsFromEnv()
+		if err != nil {
+			return toolSurface{}, err
+		}
+		return toolSurface{Plugins: plugins}, nil
 	case workloadApprovalGated:
 		mcpURL, err := validateApprovalGatedClientEnv()
 		if err != nil {
