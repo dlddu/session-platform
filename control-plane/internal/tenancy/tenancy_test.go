@@ -16,7 +16,7 @@ import (
 )
 
 const sample = `{"tenants":[
- {"name":"pocket-aide","serviceAccounts":["pocket-aide/pocket-aide"],"workloadTypes":["codex","claude-code"]},
+ {"name":"pocket-aide","serviceAccounts":["pocket-aide/pocket-aide"],"workloadTypes":["codex-chat","claude-code"]},
  {"name":"lab","serviceAccounts":["lab/runner","lab/ci"],"workloadTypes":["shell"]}
 ]}`
 
@@ -35,7 +35,6 @@ func TestParse(t *testing.T) {
 	if _, ok := cfg.ForServiceAccount("lab", "other"); ok {
 		t.Fatal("unlisted ServiceAccount resolved to a tenant")
 	}
-	// The sample grants the legacy "codex"; it is stored as codex-chat (AC-J1).
 	if t2, ok := cfg.Lookup("pocket-aide"); !ok || !t2.Allows(session.WorkloadTypeCodexChat) ||
 		t2.WorkloadTypes[0] != session.WorkloadTypeCodexChat || t2.Allows(session.WorkloadTypeCodexTask) {
 		t.Fatalf("lookup pocket-aide = %+v, %v", t2, ok)
@@ -78,7 +77,7 @@ func TestParseRejects(t *testing.T) {
 		"shared account":     `{"tenants":[{"name":"a","serviceAccounts":["n/sa"]},{"name":"b","serviceAccounts":["n/sa"]}]}`,
 		"unknown type":       `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["vim"]}]}`,
 		"duplicate type":     `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["shell","shell"]}]}`,
-		"alias and new name": `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["codex","codex-chat"]}]}`,
+		"legacy codex":       `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["codex"]}]}`,
 		"empty type literal": `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":[""]}]}`,
 		"wildcard with type": `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["*","shell"]}]}`,
 		"wildcard twice":     `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["*","*"]}]}`,

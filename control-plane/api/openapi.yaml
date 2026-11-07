@@ -10,7 +10,7 @@ info:
     idle->active (AC-C1) or restore snapshot->active (AC-B2) before serving.
     A session picks a workload type at creation (AC-E1): `shell` (the default),
     `claude-code`, `approval-gated`, `minimax-code`, `codex-chat` or `codex-task`
-    (`codex` is accepted as codex-chat's legacy name). The type is immutable for the session's lifetime — no
+    (`codex-chat` was `codex` before 2026-11-07). The type is immutable for the session's lifetime — no
     endpoint changes it, and a restore keeps it — so switching workloads means
     creating a new session. For `shell`, write injects the payload into the PTY
     stdin (AC-D2); for `claude-code` (and the agent types that reuse its
@@ -911,8 +911,8 @@ components:
         behind the same credential proxy (AC-G1~G4); `codex-chat` runs the Codex SDK on
         the same execution model, signs each session in to ChatGPT with a
         device code on its first prompt, and is limited to conversation,
-        platform plugin skills and the K3s MCP (AC-J1~J7). A request may still
-        send its legacy name `codex`; responses always say `codex-chat`.
+        platform plugin skills and the K3s MCP (AC-J1~J7). Its old name `codex`
+        is refused in requests; sessions stored under it are answered as `codex-chat`.
         `codex-task` runs the same SDK with a shell, files and network like
         `claude-code`, signed in through a login slot of the `codex-task` auth
         pool (AC-M1~M4, AC-N1~N5). Each non-default type requires the control plane
@@ -996,9 +996,8 @@ components:
             - $ref: "#/components/schemas/WorkloadType"
           description: >
             Optional. Omitted means `shell`, so a request that predates the
-            workload type axis behaves unchanged. `codex` is accepted as the
-            legacy name of `codex-chat` (AC-J1). Any other value outside the
-            enum is rejected with 400 before any pod is provisioned.
+            workload type axis behaves unchanged. Any value outside the enum,
+            including `codex-chat`'s old name `codex` (AC-J1), is rejected with 400 before any pod is provisioned.
         model:
           type: string
           pattern: '^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$'

@@ -53,13 +53,15 @@ func TestCreateSessionReasoningEffort(t *testing.T) {
 	}
 }
 
-// AC-J1: the legacy name is accepted and answered as codex-chat.
-func TestCreateSessionLegacyCodexName(t *testing.T) {
+// AC-J1: every caller moved to codex-chat, so a create naming the old type is
+// refused before any pod exists.
+func TestCreateSessionLegacyCodexNameRefused(t *testing.T) {
 	srv, orch, _ := newServerWithOrchestrator()
 	defer srv.Close()
-	status, s := createRaw(t, srv.URL, map[string]any{"name": "old-client", "workloadType": "codex"})
-	if status != http.StatusCreated || s.WorkloadType != session.WorkloadTypeCodexChat || orch.WorkloadFor(s.ID) != session.WorkloadTypeCodexChat {
-		t.Fatalf("legacy codex: status %d, type %q, pod %q", status, s.WorkloadType, orch.WorkloadFor(s.ID))
+	before := orch.RunningCount()
+	status, _ := createRaw(t, srv.URL, map[string]any{"name": "old-client", "workloadType": "codex"})
+	if status != http.StatusBadRequest || orch.RunningCount() != before {
+		t.Fatalf("legacy codex: status %d, starts %d -> %d", status, before, orch.RunningCount())
 	}
 }
 

@@ -275,7 +275,7 @@ func (s *Service) List(ctx context.Context) ([]*session.Session, error) {
 }
 
 func normalizeStoredSession(sess *session.Session) (*session.Session, error) {
-	workload, err := session.NormalizeWorkloadType(sess.WorkloadType)
+	workload, err := session.NormalizeStoredWorkloadType(sess.WorkloadType)
 	if err != nil {
 		return nil, err
 	}
@@ -815,7 +815,7 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 	// The restore pod runs the session's own workload type: the type is fixed at
 	// creation and a restore never changes it (AC-E1). Sessions stored before
 	// the type axis existed carry no type, so normalize to the shell default.
-	workload, err := session.NormalizeWorkloadType(sess.WorkloadType)
+	workload, err := session.NormalizeStoredWorkloadType(sess.WorkloadType)
 	if err != nil {
 		return nil, err
 	}
@@ -1070,7 +1070,7 @@ func (s *Service) touchGet(ctx context.Context, id string) (*session.Session, er
 }
 
 func (s *Service) checkpointerFor(workload session.WorkloadType) (archive.Checkpointer, error) {
-	workload, err := session.NormalizeWorkloadType(workload)
+	workload, err := session.NormalizeStoredWorkloadType(workload)
 	if err != nil {
 		return nil, err
 	}

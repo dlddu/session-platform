@@ -87,18 +87,13 @@ func Parse(raw string) (*Config, error) {
 			return nil, fmt.Errorf("tenant config: tenant %q: %q must be the only workload type", t.Name, AnyWorkloadType)
 		}
 		seen := map[session.WorkloadType]bool{}
-		for j, w := range t.WorkloadTypes {
+		for _, w := range t.WorkloadTypes {
 			if w == AnyWorkloadType {
 				continue
 			}
-			// Grants written before the codex split name "codex"; storing the
-			// normalized name keeps Allows an exact match (AC-J1).
-			normalized, err := session.NormalizeWorkloadType(w)
-			if w == "" || err != nil {
+			if w == "" || !w.Valid() {
 				return nil, fmt.Errorf("tenant config: tenant %q: unknown workload type %q", t.Name, w)
 			}
-			w = normalized
-			file.Tenants[i].WorkloadTypes[j] = w
 			if seen[w] {
 				return nil, fmt.Errorf("tenant config: tenant %q lists workload type %q twice", t.Name, w)
 			}

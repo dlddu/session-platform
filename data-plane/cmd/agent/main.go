@@ -154,7 +154,7 @@ func main() {
 		logger.Info("agent workload started", "workload", workload, "addr", addr,
 			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode,
 			"auth_mode", auth.mode, "effort", auth.effort)
-	case workloadCodexChat, workloadCodexLegacy, workloadCodexTask:
+	case workloadCodexChat, workloadCodexTask:
 		claude, err := newCodexWorkloadFromEnv(workload, logger, restoreMode)
 		if err != nil {
 			logger.Error("failed to initialise agent workload", "workload", workload, "err", err)
