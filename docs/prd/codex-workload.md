@@ -3,7 +3,7 @@
 > 대상 요구사항: 세션 워크로드 타입에 **Codex SDK 에이전트** 추가
 > (`shell`·`claude-code`·`approval-gated`·`minimax-code`와 병존하는 다섯 번째 타입, `claude-code-workload.md`와 대응 관계)
 
-> 📌 **개정 (2026-11-07, 사용자 결정)**: Codex를 채팅용과 작업용으로 나눴다. 이 문서의 타입은 **채팅용 `codex-chat`** 이다 — 장기 단일 세션을 가정하고 도구를 대화·스킬·K3s MCP로 좁힌 그대로다. 타입 이름이 `codex`에서 `codex-chat`으로 바뀌었고 옛 이름은 별칭으로 남는다(AC-J1). 작업용 `codex-task`(셸·파일·네트워크, 인증 풀 로그인)는 `codex-task-workload.md`다. 아래 본문의 「`codex` 타입」·「`codex` 세션」은 `codex-chat`으로 읽는다. 설정 이름(`DATA_PLANE_CODEX_IMAGE`·`CODEX_*`·`codex-config`·`codex-credentials`)은 바꾸지 않았다.
+> 📌 **개정 (2026-11-07, 사용자 결정)**: Codex를 채팅용과 작업용으로 나눴다. 이 문서의 타입은 **채팅용 `codex-chat`** 이다 — 장기 단일 세션을 가정하고 도구를 대화·스킬·K3s MCP로 좁힌 그대로다. 타입 이름이 `codex`에서 `codex-chat`으로 바뀌었고 옛 이름은 저장된 레코드에서만 읽는다(AC-J1). 작업용 `codex-task`(셸·파일·네트워크, 인증 풀 로그인)는 `codex-task-workload.md`다. 아래 본문의 「`codex` 타입」·「`codex` 세션」은 `codex-chat`으로 읽는다. 설정 이름(`DATA_PLANE_CODEX_IMAGE`·`CODEX_*`·`codex-config`·`codex-credentials`)은 바꾸지 않았다.
 
 ## 달성 가치
 - **V8 목적에 맞는 작업 환경 선택** — 세션 생성 시 다섯 번째 작업 환경(ChatGPT 구독으로 도는 대화형 에이전트)을 고를 수 있게 하고, 선택과 무관하게 V1~V5 보장이 동일하게 성립함을 확정 (AC-J1)
@@ -26,7 +26,7 @@
 ## Acceptance Criteria
 
 ### AC-J1: 워크로드 타입 `codex-chat` 선택 (옛 이름 `codex`)
-- **설명**: 세션 생성 요청의 `workloadType` 허용값에 `codex-chat`이 추가된다. 옛 이름 `codex`는 **별칭**이다 — 생성 요청·저장된 세션 레코드·테넌트의 `workloadTypes` 어디서 와도 `codex-chat`으로 읽고, 응답·`GET /config`·파드 라벨·`DATA_PLANE_WORKLOAD`는 언제나 `codex-chat`을 쓴다(2026-11-07 이름 변경 전에 만든 세션과 설정이 그대로 돈다). 이 타입은 모델만 받고 `reasoningEffort`는 받지 않는다(AC-E8). 필드 생략만 `shell`로 해석하는 규칙, 허용값 밖 입력을 pod 생성 전에 400으로 거부하는 규칙, 타입 불변 규칙은 AC-E1과 같다. control plane은 이 타입에 대해 **워크로드 파드 하나**를 띄운다 — 주 컨테이너(Codex 러너)와 loopback K3s MCP 프록시 사이드카(AC-J6). 보조 파드는 없다. 이미지는 control plane 설정 `DATA_PLANE_CODEX_IMAGE`이고, 비어 있으면 `GET /config`가 이 타입을 내놓지 않고 생성은 pod 없이 실패한다(AC-E1과 같은 규칙). `model`은 AC-E6의 계약을 따른다 — 생략은 `platform-default`이며 이때 파드는 ConfigMap `codex-config`의 선택 `model` 키를 `CODEX_MODEL`로 받고, 키가 없으면 Codex가 로그인한 플랜의 기본 모델을 쓴다. UI 모델 카탈로그는 같은 ConfigMap의 `models`(control plane `CODEX_MODELS`)다.
+- **설명**: 세션 생성 요청의 `workloadType` 허용값에 `codex-chat`이 추가된다. 옛 이름 `codex`는 **저장된 세션 레코드에서만** `codex-chat`으로 읽는다 — 이름 변경 전에 만든 세션의 목록·조회·복원이 깨지지 않게 하고, 다음 쓰기가 새 이름으로 저장한다. 생성 요청과 테넌트의 `workloadTypes`에서 `codex`는 모르는 타입이다(생성 400, 테넌트 설정은 기동 실패). 응답·`GET /config`·파드 라벨·`DATA_PLANE_WORKLOAD`는 언제나 `codex-chat`을 쓴다. *2026-11-07*: 처음엔 생성 요청·테넌트 설정에서도 별칭으로 받았으나, 호출하는 쪽(pocket-aide #395, homelab-k3s-mcp #321, flux-cd-apps #115)이 모두 새 이름으로 옮겨 걷었다(사용자 결정). 이 타입은 모델만 받고 `reasoningEffort`는 받지 않는다(AC-E8). 필드 생략만 `shell`로 해석하는 규칙, 허용값 밖 입력을 pod 생성 전에 400으로 거부하는 규칙, 타입 불변 규칙은 AC-E1과 같다. control plane은 이 타입에 대해 **워크로드 파드 하나**를 띄운다 — 주 컨테이너(Codex 러너)와 loopback K3s MCP 프록시 사이드카(AC-J6). 보조 파드는 없다. 이미지는 control plane 설정 `DATA_PLANE_CODEX_IMAGE`이고, 비어 있으면 `GET /config`가 이 타입을 내놓지 않고 생성은 pod 없이 실패한다(AC-E1과 같은 규칙). `model`은 AC-E6의 계약을 따른다 — 생략은 `platform-default`이며 이때 파드는 ConfigMap `codex-config`의 선택 `model` 키를 `CODEX_MODEL`로 받고, 키가 없으면 Codex가 로그인한 플랜의 기본 모델을 쓴다. UI 모델 카탈로그는 같은 ConfigMap의 `models`(control plane `CODEX_MODELS`)다.
 - **달성 가치**: V8, V1
 - **구체화 대상**: AC-A1의 "실제 세션 워크로드" — 다섯 갈래로 분기한다 (… AC-G2~G6=`minimax-code`, AC-J2~J6=`codex`)
 - **검증 방법**: `workloadType=codex`로 세션을 생성하면 컨테이너 둘(주 컨테이너 + `k3s-mcp-proxy`)의 워크로드 파드 하나만 기동되고 조회 응답의 타입·모델이 기대값임을 확인한다. 이미지 미설정 배포에서는 `GET /config`에 타입이 없고 생성이 pod 없이 실패함을 확인한다.

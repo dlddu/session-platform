@@ -62,7 +62,7 @@ func TestOfferedWorkloadTypesIncludesCodexOnlyWithImage(t *testing.T) {
 }
 
 func TestLoadTenancyConfig(t *testing.T) {
-	t.Setenv("SESSION_PLATFORM_TENANTS", `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["codex"]}]}`)
+	t.Setenv("SESSION_PLATFORM_TENANTS", `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["codex-chat"]}]}`)
 	cfg, err := loadTenancyConfig()
 	if err != nil || len(cfg.tenants.Tenants()) != 1 || cfg.audience != "session-platform" {
 		t.Fatalf("cfg = %+v, %v", cfg, err)

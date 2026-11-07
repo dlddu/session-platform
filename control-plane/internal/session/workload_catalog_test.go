@@ -98,10 +98,14 @@ func TestReasoningEffortsPerType(t *testing.T) {
 	}
 }
 
-func TestLegacyCodexIsCodexChat(t *testing.T) {
-	got, err := NormalizeWorkloadType("codex")
+// AC-J1: a stored record may still say "codex"; a request may not.
+func TestLegacyCodexOnlyInStoredRecords(t *testing.T) {
+	got, err := NormalizeStoredWorkloadType("codex")
 	if err != nil || got != WorkloadTypeCodexChat {
-		t.Fatalf("NormalizeWorkloadType(codex) = %q, %v", got, err)
+		t.Fatalf("NormalizeStoredWorkloadType(codex) = %q, %v", got, err)
+	}
+	if _, err := NormalizeWorkloadType("codex"); err == nil {
+		t.Fatal("NormalizeWorkloadType accepted the legacy codex")
 	}
 	for _, info := range WorkloadTypes() {
 		if info.Type == "codex" {

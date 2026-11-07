@@ -13,13 +13,13 @@ import (
 func TestMultitenancy3_GrantBoundsCreateAndConfig(t *testing.T) {
 	beta := tenantToken(t, betaAccount, tenantAudience)
 
-	if resp, raw := doAs(t, beta, http.MethodPost, "/api/v1/sessions", map[string]any{"name": uniqueName(t), "workloadType": "codex"}); resp.StatusCode != http.StatusForbidden {
+	if resp, raw := doAs(t, beta, http.MethodPost, "/api/v1/sessions", map[string]any{"name": uniqueName(t), "workloadType": "codex-chat"}); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("beta creating codex: %d %s, want 403", resp.StatusCode, raw)
 	}
 	if resp, raw := doAs(t, beta, http.MethodPost, "/api/v1/sessions", map[string]any{"name": uniqueName(t), "tenant": tenantAlpha}); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("beta creating into alpha: %d %s, want 403", resp.StatusCode, raw)
 	}
-	if resp, raw := doAs(t, "", http.MethodPost, "/api/v1/sessions", map[string]any{"name": uniqueName(t), "tenant": tenantBeta, "workloadType": "codex"}); resp.StatusCode != http.StatusForbidden {
+	if resp, raw := doAs(t, "", http.MethodPost, "/api/v1/sessions", map[string]any{"name": uniqueName(t), "tenant": tenantBeta, "workloadType": "codex-chat"}); resp.StatusCode != http.StatusForbidden {
 		t.Errorf("operator creating codex for beta: %d %s, want 403", resp.StatusCode, raw)
 	}
 
