@@ -23,9 +23,13 @@ type Tenant struct {
 	WorkloadTypes   []session.WorkloadType `json:"workloadTypes"`
 }
 
+// AnyWorkloadType, as a tenant's only workload type, grants every type the
+// deployment offers — including types added after the tenant was configured.
+const AnyWorkloadType session.WorkloadType = "*"
+
 // Allows reports whether the tenant may create sessions of type w.
 func (t *Tenant) Allows(w session.WorkloadType) bool {
-	return slices.Contains(t.WorkloadTypes, w)
+	return slices.Contains(t.WorkloadTypes, AnyWorkloadType) || slices.Contains(t.WorkloadTypes, w)
 }
 
 // Config is the validated tenant set, indexed both ways.
@@ -79,8 +83,14 @@ func Parse(raw string) (*Config, error) {
 			}
 			cfg.byAccount[account] = &file.Tenants[i]
 		}
+		if slices.Contains(t.WorkloadTypes, AnyWorkloadType) && len(t.WorkloadTypes) != 1 {
+			return nil, fmt.Errorf("tenant config: tenant %q: %q must be the only workload type", t.Name, AnyWorkloadType)
+		}
 		seen := map[session.WorkloadType]bool{}
 		for _, w := range t.WorkloadTypes {
+			if w == AnyWorkloadType {
+				continue
+			}
 			if !w.Valid() {
 				return nil, fmt.Errorf("tenant config: tenant %q: unknown workload type %q", t.Name, w)
 			}

@@ -40,6 +40,22 @@ func TestParse(t *testing.T) {
 	}
 }
 
+func TestParseWildcardGrantsEveryType(t *testing.T) {
+	cfg, err := tenancy.Parse(`{"tenants":[{"name":"lab","serviceAccounts":["lab/a","other/b"],"workloadTypes":["*"]}]}`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	lab, _ := cfg.Lookup("lab")
+	for _, w := range []session.WorkloadType{session.WorkloadTypeShell, session.WorkloadTypeClaudeCode, session.WorkloadTypeMiniMaxCode, session.WorkloadTypeCodex, session.WorkloadTypeApprovalGated} {
+		if !lab.Allows(w) {
+			t.Errorf("wildcard tenant refuses %q", w)
+		}
+	}
+	if got, ok := cfg.ForServiceAccount("other", "b"); !ok || got != lab {
+		t.Errorf("second account of the tenant = %+v, %v", got, ok)
+	}
+}
+
 func TestParseEmptyMeansNoTenants(t *testing.T) {
 	for _, raw := range []string{"", "  \n"} {
 		cfg, err := tenancy.Parse(raw)
@@ -61,6 +77,8 @@ func TestParseRejects(t *testing.T) {
 		"unknown type":       `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["vim"]}]}`,
 		"duplicate type":     `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["shell","shell"]}]}`,
 		"empty type literal": `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":[""]}]}`,
+		"wildcard with type": `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["*","shell"]}]}`,
+		"wildcard twice":     `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["*","*"]}]}`,
 	} {
 		if _, err := tenancy.Parse(raw); err == nil {
 			t.Errorf("%s: Parse accepted %s", name, raw)

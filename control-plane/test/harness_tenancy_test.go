@@ -18,8 +18,10 @@ import (
 const (
 	tenantAlpha      = "e2e-alpha"
 	tenantBeta       = "e2e-beta"
+	tenantGamma      = "e2e-gamma"
 	alphaAccount     = "tenant-alpha"
 	betaAccount      = "tenant-beta"
+	gammaAccount     = "tenant-gamma"
 	outsiderAccount  = "tenant-outsider"
 	tenantAudience   = "session-platform"
 	tokenLifeSeconds = int64(600)
