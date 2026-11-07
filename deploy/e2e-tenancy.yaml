@@ -1,5 +1,5 @@
 # docs/test/multitenancy.md 의 SUT 설정. 테넌시는 ServiceAccount 로 식별되므로(AC-K1)
-# 테넌트 둘과 어느 테넌트도 주장하지 않는 계정 하나를 실물로 둔다. e2e 스위트는 이 계정들로
+# 테넌트 셋(그중 e2e-gamma 는 `"*"` — 타입 제한 없음)과 어느 테넌트도 주장하지 않는 계정 하나를 실물로 둔다. e2e 스위트는 이 계정들로
 # audience `session-platform` 의 projected 토큰을 TokenRequest 로 직접 발급받는다.
 apiVersion: v1
 kind: ServiceAccount
@@ -20,6 +20,12 @@ metadata:
   namespace: default
 ---
 apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tenant-gamma
+  namespace: default
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: session-platform-tenants
@@ -28,7 +34,8 @@ data:
   tenants.json: |
     {"tenants": [
       {"name": "e2e-alpha", "serviceAccounts": ["default/tenant-alpha"], "workloadTypes": ["shell", "codex"]},
-      {"name": "e2e-beta", "serviceAccounts": ["default/tenant-beta"], "workloadTypes": ["shell"]}
+      {"name": "e2e-beta", "serviceAccounts": ["default/tenant-beta"], "workloadTypes": ["shell"]},
+      {"name": "e2e-gamma", "serviceAccounts": ["default/tenant-gamma"], "workloadTypes": ["*"]}
     ]}
 ---
 # 토큰 검증(TokenReview)을 부를 권한. 클러스터 범위라 base 에 없고(k8s/rbac.yaml 머리말),

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -193,10 +192,10 @@ func (a *API) runtimeConfig(w http.ResponseWriter, r *http.Request) {
 		Tenants:       []tenantResp{},
 	}
 	if caller.Tenant != nil {
-		resp.Tenant = &tenantResp{Name: caller.Tenant.Name, WorkloadTypes: a.offeredOf(caller.Tenant.WorkloadTypes)}
+		resp.Tenant = &tenantResp{Name: caller.Tenant.Name, WorkloadTypes: a.offeredOf(caller.Tenant)}
 	} else {
 		for _, t := range a.tenants.Tenants() {
-			resp.Tenants = append(resp.Tenants, tenantResp{Name: t.Name, WorkloadTypes: a.offeredOf(t.WorkloadTypes)})
+			resp.Tenants = append(resp.Tenants, tenantResp{Name: t.Name, WorkloadTypes: a.offeredOf(t)})
 		}
 	}
 	for _, info := range session.WorkloadTypes() {
@@ -226,10 +225,10 @@ func (a *API) runtimeConfig(w http.ResponseWriter, r *http.Request) {
 
 // offeredOf keeps the types of a tenant's grant this deployment offers, in
 // catalog order, so a picker never shows a type whose create would fail.
-func (a *API) offeredOf(granted []session.WorkloadType) []session.WorkloadType {
+func (a *API) offeredOf(t *tenancy.Tenant) []session.WorkloadType {
 	out := []session.WorkloadType{}
 	for _, info := range session.WorkloadTypes() {
-		if (a.offered == nil || a.offered[info.Type]) && slices.Contains(granted, info.Type) {
+		if (a.offered == nil || a.offered[info.Type]) && t.Allows(info.Type) {
 			out = append(out, info.Type)
 		}
 	}

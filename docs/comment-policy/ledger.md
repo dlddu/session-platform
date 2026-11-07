@@ -132,10 +132,10 @@
 | 2026-11-05 | `control-plane/cmd/control-plane/codex.go` | 19 | `087810c21cec` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
 | 2026-11-05 | `control-plane/cmd/control-plane/tenancy.go` | 2 | `da18087fea6a` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
 | 2026-11-05 | `control-plane/internal/adapter/k8s/codex.go` | 27 | `63fbf863d26b` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
-| 2026-11-05 | `control-plane/internal/api/tenancy_test.go` | 12 | `4118d82a0f7b` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
+| 2026-11-05 | `control-plane/internal/api/tenancy_test.go` | 13 | `603e2c877a90` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. *2026-11-07 타입 제한 없는 테넌트(`"*"`) 슬라이스 재측정: 이 범위의 주석이 바뀌었다 — 12→13줄. 판정하지 않았다 — 판정 칸 `—` 유지.* |
 | 2026-11-05 | `control-plane/internal/session/codex.go` | 4 | `76881b02e0c4` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
 | 2026-11-05 | `control-plane/internal/tenancy/resolver.go` | 15 | `231c195cee42` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
-| 2026-11-05 | `control-plane/internal/tenancy/tenancy.go` | 20 | `f4f8782c16e3` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
+| 2026-11-05 | `control-plane/internal/tenancy/tenancy.go` | 22 | `581b403c5c60` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. *2026-11-07 타입 제한 없는 테넌트(`"*"`) 슬라이스 재측정: 이 범위의 주석이 바뀌었다 — 20→22줄. 판정하지 않았다 — 판정 칸 `—` 유지.* |
 | 2026-11-05 | `control-plane/test/codex_orchestrator_test.go` | 2 | `c1cc838b9d16` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
 | 2026-11-05 | `control-plane/test/e2e_codex_4_tool_surface_test.go` | 5 | `04e629a1b6c0` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
 | 2026-11-05 | `control-plane/test/harness_tenancy_test.go` | 5 | `70f4a59a1138` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
@@ -151,12 +151,12 @@
 | 2026-11-05 | `data-plane/codex-runner/runner.test.mjs` | 3 | `c4bb86e1da77` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
 | 2026-11-05 | `data-plane/codex-runner/surface-check.mjs` | 11 | `8fe15922fb0d` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
 | 2026-11-05 | `data-plane/codex-runner/surface.mjs` | 8 | `87f1f163e361` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
-| 2026-11-05 | `deploy/e2e-tenancy.yaml` | 5 | `24dd1272b10f` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
+| 2026-11-05 | `deploy/e2e-tenancy.yaml` | 5 | `81eb3adcbd50` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. *2026-11-07 타입 제한 없는 테넌트(`"*"`) 슬라이스 재측정: 이 범위의 주석이 바뀌었다(e2e-gamma 추가) — 5→5줄. 판정하지 않았다 — 판정 칸 `—` 유지.* |
 | 2026-11-05 | `k8s/codex-config-configmap.example.yaml` | 18 | `2f8ffe062ae9` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
 | 2026-11-05 | `k8s/codex-credentials-secret.example.yaml` | 18 | `55377887b194` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
-| 2026-11-05 | `k8s/session-platform-tenants-configmap.example.yaml` | 24 | `4a79226beaee` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
+| 2026-11-05 | `k8s/session-platform-tenants-configmap.example.yaml` | 25 | `9013a1eb80cc` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. *2026-11-07 타입 제한 없는 테넌트(`"*"`) 슬라이스 재측정: 이 범위의 주석이 바뀌었다 — 24→25줄. 판정하지 않았다 — 판정 칸 `—` 유지.* |
 | 2026-11-05 | `web/e2e/codex-workload-1-agent-type.spec.ts` | 3 | `4a872eb7d6d3` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
-| 2026-11-05 | `web/e2e/multitenancy-4-operator-ui.spec.ts` | 5 | `cce5a8806d44` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. |
+| 2026-11-05 | `web/e2e/multitenancy-4-operator-ui.spec.ts` | 5 | `a6fe6c93f82c` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 워크로드·멀티테넌시 슬라이스가 새로 둔 파일. *2026-11-07 타입 제한 없는 테넌트(`"*"`) 슬라이스 재측정: 이 범위의 주석이 바뀌었다(e2e-gamma 추가) — 5→5줄. 판정하지 않았다 — 판정 칸 `—` 유지.* |
 | 2026-11-05 | `control-plane/internal/api/plugin_refresh_test.go` | 4 | `3db42fa308cf` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 플러그인 새로고침(AC-J7) 슬라이스가 새로 둔 파일. |
 | 2026-11-05 | `control-plane/internal/service/plugin_refresh_test.go` | 3 | `e3e3d313cd9b` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 플러그인 새로고침(AC-J7) 슬라이스가 새로 둔 파일. |
 | 2026-11-05 | `data-plane/cmd/agent/codex_plugin_refresh.go` | 23 | `c92ac865ec71` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 플러그인 새로고침(AC-J7) 슬라이스가 새로 둔 파일. |

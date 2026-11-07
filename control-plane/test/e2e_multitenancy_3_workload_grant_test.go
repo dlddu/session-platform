@@ -6,6 +6,7 @@ package e2e_test
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"testing"
 )
 
@@ -45,7 +46,38 @@ func TestMultitenancy3_GrantBoundsCreateAndConfig(t *testing.T) {
 	if err := json.Unmarshal(raw, &cfg); err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("operator config: %d %s", resp.StatusCode, raw)
 	}
-	if cfg.Tenant != nil || len(cfg.Tenants) != 2 {
-		t.Errorf("operator config tenant=%+v tenants=%+v, want the two SUT tenants", cfg.Tenant, cfg.Tenants)
+	if cfg.Tenant != nil || len(cfg.Tenants) != 3 {
+		t.Errorf("operator config tenant=%+v tenants=%+v, want the three SUT tenants", cfg.Tenant, cfg.Tenants)
 	}
+	offered := typeNames(cfg.WorkloadTypes)
+
+	gamma := tenantToken(t, gammaAccount, tenantAudience)
+	resp, raw = doAs(t, gamma, http.MethodGet, "/api/v1/config", nil)
+	var gammaCfg struct {
+		WorkloadTypes []struct{ Type string } `json:"workloadTypes"`
+		Tenant        *struct {
+			Name          string   `json:"name"`
+			WorkloadTypes []string `json:"workloadTypes"`
+		} `json:"tenant"`
+	}
+	if err := json.Unmarshal(raw, &gammaCfg); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("gamma config: %d %s", resp.StatusCode, raw)
+	}
+	if got := typeNames(gammaCfg.WorkloadTypes); !slices.Equal(got, offered) {
+		t.Errorf("gamma workloadTypes = %v, want every offered type %v", got, offered)
+	}
+	if gammaCfg.Tenant == nil || gammaCfg.Tenant.Name != tenantGamma || !slices.Equal(gammaCfg.Tenant.WorkloadTypes, offered) {
+		t.Errorf("gamma tenant = %+v, want %s with %v", gammaCfg.Tenant, tenantGamma, offered)
+	}
+	if resp, raw := doAs(t, gamma, http.MethodPost, "/api/v1/sessions", map[string]any{"name": uniqueName(t), "workloadType": "no-such-type"}); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("gamma creating an unknown type: %d %s, want 400", resp.StatusCode, raw)
+	}
+}
+
+func typeNames(types []struct{ Type string }) []string {
+	out := []string{}
+	for _, w := range types {
+		out = append(out, w.Type)
+	}
+	return out
 }

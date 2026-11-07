@@ -7,8 +7,8 @@
 - AC-K4: 운영자 화면과 운영자 전용 경로 (PRD: 멀티테넌시)
 - AC-K5: 테넌트 설정과 하위 호환 (PRD: 멀티테넌시)
 
-> 📌 **SUT 설정**: kind e2e 오버레이(`deploy/e2e-tenancy.yaml`)가 테넌트 둘을 둔다 — `e2e-alpha`(계정 `default/tenant-alpha`,
-> 타입 `shell`·`codex`)와 `e2e-beta`(계정 `default/tenant-beta`, 타입 `shell`). 어느 테넌트도 주장하지 않는 계정
+> 📌 **SUT 설정**: kind e2e 오버레이(`deploy/e2e-tenancy.yaml`)가 테넌트 셋을 둔다 — `e2e-alpha`(계정 `default/tenant-alpha`,
+> 타입 `shell`·`codex`), `e2e-beta`(계정 `default/tenant-beta`, 타입 `shell`), `e2e-gamma`(계정 `default/tenant-gamma`, 타입 `"*"` — 제한 없음). 어느 테넌트도 주장하지 않는 계정
 > `default/tenant-outsider`도 있다. 스위트는 실물 TokenRequest로 audience `session-platform` 토큰을 발급받는다 —
 > 대역이 없다. control plane의 TokenReview 권한도 같은 파일이 붙인다.
 
@@ -27,9 +27,9 @@
 - **검증 AC**: AC-K2
 
 ### 시나리오 3: 허용 타입만 만들고, 설정 응답도 허용 타입만 보인다
-- **사전 조건**: beta 토큰(`shell`만 허용)
-- **실행 단계**: (a) beta 토큰으로 `workloadType: codex` 생성 → (b) beta 토큰으로 `tenant: e2e-alpha` 생성 → (c) 운영자로 `tenant: e2e-beta, workloadType: codex` 생성 → (d) beta 토큰으로 `GET /config` → (e) 운영자로 `GET /config`
-- **기대 결과**: (a)~(c) `403`, pod가 생기지 않는다. (d) `tenant.name`이 `e2e-beta`, `tenants`는 빈 배열, `workloadTypes`는 `shell` 하나. (e) `tenant`는 null, `tenants`는 두 테넌트
+- **사전 조건**: beta 토큰(`shell`만 허용), gamma 토큰(`"*"`)
+- **실행 단계**: (a) beta 토큰으로 `workloadType: codex` 생성 → (b) beta 토큰으로 `tenant: e2e-alpha` 생성 → (c) 운영자로 `tenant: e2e-beta, workloadType: codex` 생성 → (d) beta 토큰으로 `GET /config` → (e) 운영자로 `GET /config` → (f) gamma 토큰으로 `GET /config` → (g) gamma 토큰으로 알 수 없는 타입 생성
+- **기대 결과**: (a)~(c) `403`, pod가 생기지 않는다. (d) `tenant.name`이 `e2e-beta`, `tenants`는 빈 배열, `workloadTypes`는 `shell` 하나. (e) `tenant`는 null, `tenants`는 세 테넌트. (f) `workloadTypes`와 `tenant.workloadTypes`가 둘 다 (e)의 `workloadTypes`와 같다 — `"*"`는 펼쳐져 나온다. (g) `400`
 - **검증 AC**: AC-K3, AC-K4
 
 ### 시나리오 4: 운영자 화면 — 테넌트 필터·태그·테넌트로 생성
@@ -45,7 +45,7 @@
 - **검증 AC**: AC-K1, AC-K4
 
 ### 시나리오 6: 설정 검증과 하위 호환
-- **사전 조건**: control plane 기동 환경 셋 — `SESSION_PLATFORM_TENANTS`가 잘못된 것(대문자 이름·한 계정을 두 테넌트가 주장·알 수 없는 타입·알 수 없는 필드), 빈 것, 테넌시 이전에 만든 세션이 남아 있는 것
+- **사전 조건**: control plane 기동 환경 셋 — `SESSION_PLATFORM_TENANTS`가 잘못된 것(대문자 이름·한 계정을 두 테넌트가 주장·알 수 없는 타입·알 수 없는 필드·`"*"`와 다른 타입의 혼합), 빈 것, 테넌시 이전에 만든 세션이 남아 있는 것
 - **실행 단계**: (a) 잘못된 설정으로 기동 → (b) 빈 설정으로 기동해 운영자로 세션 API, Bearer로 `GET /sessions` → (c) 이전 세션을 운영자와 테넌트로 조회
 - **기대 결과**: (a) 기동 실패. (b) 운영자 동작은 테넌시 이전과 같고 Bearer 호출은 `403`. (c) 이전 세션은 `tenant`가 없고 운영자만 본다(테넌트는 `404`)
 - **검증 AC**: AC-K5

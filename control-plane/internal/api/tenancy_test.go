@@ -32,7 +32,8 @@ func newTenantServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	cfg, err := tenancy.Parse(`{"tenants":[
 		{"name":"alpha","serviceAccounts":["alpha/sa"],"workloadTypes":["shell","codex"]},
-		{"name":"beta","serviceAccounts":["beta/sa"],"workloadTypes":["claude-code"]}
+		{"name":"beta","serviceAccounts":["beta/sa"],"workloadTypes":["claude-code"]},
+		{"name":"omni","serviceAccounts":["omni/sa"],"workloadTypes":["*"]}
 	]}`)
 	if err != nil {
 		t.Fatal(err)
@@ -180,6 +181,10 @@ func TestTenancyCreateRules(t *testing.T) {
 		{"operator empty tenant", "", map[string]any{"name": "x", "tenant": ""}, http.StatusBadRequest},
 		{"operator tenant type not granted", "", map[string]any{"name": "x", "tenant": "beta", "workloadType": "shell"}, http.StatusForbidden},
 		{"operator untenanted any type", "", map[string]any{"name": "x", "workloadType": "claude-code"}, http.StatusCreated},
+		{"wildcard tenant default shell", "omni", map[string]any{"name": "x"}, http.StatusCreated},
+		{"wildcard tenant any type", "omni", map[string]any{"name": "x", "workloadType": "claude-code"}, http.StatusCreated},
+		{"wildcard tenant unknown type", "omni", map[string]any{"name": "x", "workloadType": "vim"}, http.StatusBadRequest},
+		{"operator into wildcard tenant", "", map[string]any{"name": "x", "tenant": "omni", "workloadType": "codex"}, http.StatusCreated},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -225,11 +230,19 @@ func TestTenancyRuntimeConfig(t *testing.T) {
 		t.Errorf("alpha workloadTypes = %+v, want shell, codex", alpha.WorkloadTypes)
 	}
 	op := decode("")
-	if op.Tenant != nil || len(op.Tenants) != 2 || len(op.WorkloadTypes) != 3 {
+	if op.Tenant != nil || len(op.Tenants) != 3 || len(op.WorkloadTypes) != 3 {
 		t.Fatalf("operator config tenant=%+v tenants=%+v types=%+v", op.Tenant, op.Tenants, op.WorkloadTypes)
 	}
 	if op.Tenants[1].Name != "beta" || len(op.Tenants[1].WorkloadTypes) != 1 || op.Tenants[1].WorkloadTypes[0] != "claude-code" {
 		t.Errorf("operator tenants = %+v", op.Tenants)
+	}
+	// "*" is never echoed: both sides see the offered types it expands to.
+	if got := op.Tenants[2].WorkloadTypes; op.Tenants[2].Name != "omni" || len(got) != 3 || got[0] != "shell" || got[1] != "claude-code" || got[2] != "codex" {
+		t.Errorf("operator view of omni = %+v, want shell, claude-code, codex", op.Tenants[2])
+	}
+	omni := decode("omni")
+	if omni.Tenant == nil || len(omni.Tenant.WorkloadTypes) != 3 || len(omni.WorkloadTypes) != 3 {
+		t.Errorf("omni config tenant=%+v types=%+v, want every offered type", omni.Tenant, omni.WorkloadTypes)
 	}
 }
 
