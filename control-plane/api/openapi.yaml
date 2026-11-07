@@ -990,8 +990,13 @@ components:
             Names are not checked against the marketplace here: a name it does
             not list fails the pod's plugin bootstrap, which for `claude-code`
             fails the create (its agent never becomes reachable) and for
-            `codex`/`minimax-code` leaves the session running without plugin
-            skills, as any marketplace failure already does. `null`, an empty list, a duplicate or an
+            `codex`/`minimax-code` leaves the session running without plugins,
+            as any marketplace failure already does. `minimax-code` registers
+            its K3s MCP server only from a selected plugin that declares it, so
+            a failed bundle, or a list without such a plugin (default
+            `mcp-servers`), leaves it without K3s tools too. The selection is
+            installed again on every restore: a `claude-code` session whose
+            plugin has since left the marketplace cannot be restored. `null`, an empty list, a duplicate or an
             invalid name → 400, as is a list on `shell` or `approval-gated`.
         tenant:
           type: string

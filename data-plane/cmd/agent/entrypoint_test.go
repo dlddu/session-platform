@@ -208,7 +208,7 @@ func TestEntrypointInstallsTheSessionsPluginSelection(t *testing.T) {
 // agent starts, rather than handing claude a name it would read as a flag or
 // a different marketplace.
 func TestEntrypointRefusesAnInvalidPluginSelection(t *testing.T) {
-	for _, plugins := range []string{"", "development,,dear-baby", "-x", "dev@other", "a b"} {
+	for _, plugins := range []string{"", "development,,dear-baby", "-x", "dev@other", "a b", "*", "dev*"} {
 		calls, output, err := runClaudeEntrypointWithPlugins(t, plugins)
 		if err == nil {
 			t.Errorf("CLAUDE_CODE_PLUGINS=%q: entrypoint succeeded, want failure\n%s", plugins, output)

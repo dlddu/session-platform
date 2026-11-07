@@ -17,6 +17,8 @@ if [ "$workload" = "claude-code" ]; then
   fi
   # Check every name before touching the network, so a bad selection mints
   # no token and leaves nothing half-installed behind it.
+  # Split on commas only, and never glob: a name is checked as written.
+  set -f
   old_ifs="$IFS"
   IFS=','
   for plugin in $plugins; do
@@ -27,6 +29,8 @@ if [ "$workload" = "claude-code" ]; then
         ;;
     esac
   done
+  IFS="$old_ifs"
+  set +f
 
   k3s_mcp_url="${K3S_MCP_URL:-https://homelab-k3s-mcp.llkm.nl/mcp}"
   # The marketplace is a plain git remote, so the platform can point this at any
@@ -86,6 +90,7 @@ if [ "$workload" = "claude-code" ]; then
   GIT_CONFIG_VALUE_0="Authorization: ${github_auth_header}" \
   GIT_TERMINAL_PROMPT=0 \
     claude plugin marketplace add "$marketplace_url"
+  set -f
   IFS=','
   for plugin in $plugins; do
     IFS="$old_ifs"
@@ -98,6 +103,7 @@ if [ "$workload" = "claude-code" ]; then
       claude plugin install "${plugin}@dlddu-plugins"
   done
   IFS="$old_ifs"
+  set +f
 
   unset github_auth_header github_token mcp_response mcp_request plugins plugin old_ifs
   # The agent must resolve the plugin from the very same cache the bootstrap

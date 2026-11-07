@@ -1,6 +1,8 @@
 package main
 
 import (
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -87,5 +89,41 @@ func TestClaudeManagedSettingsStillRejectOtherMarketplaces(t *testing.T) {
 		if err := validateClaudeManagedSettings(homeDir); err == nil {
 			t.Errorf("%s: archive with that plugin validated, want rejection", name)
 		}
+	}
+}
+
+// AC-L1 on minimax-code: a selection of several plugins that each declare the
+// K3s server registers it once instead of failing the boot; a plugin that
+// declares it differently loses to the first, with a warning, rather than
+// costing the session its agent.
+func TestMiniMaxStagingSharesAServerAcrossSelectedPlugins(t *testing.T) {
+	k3s := func(name, header string) miniMaxSeedPlugin {
+		return miniMaxSeedPlugin{Name: name, Files: seedFiles(map[string]string{
+			".claude-plugin/plugin.json": `{"name":"` + name + `","mcpServers":["./mcp/k3s.json"]}`,
+			"mcp/k3s.json":               `{"mcpServers":{"k3s":{"type":"http","url":"https://homelab-k3s-mcp.llkm.nl/mcp","headers":{"X-Trace":"` + header + `"}}}}`,
+		})}
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, tc := range []struct {
+		name   string
+		bundle []miniMaxSeedPlugin
+	}{
+		{"identical", []miniMaxSeedPlugin{k3s("mcp-servers", "1"), k3s("session-platform", "1")}},
+		{"different", []miniMaxSeedPlugin{k3s("mcp-servers", "1"), k3s("session-platform", "2")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			servers, err := stageMiniMaxPlugins(t.TempDir(), "http://10.1.2.3:8092/mcp", "http://10.1.2.3:8093", tc.bundle, logger)
+			if err != nil {
+				t.Fatalf("stageMiniMaxPlugins: %v", err)
+			}
+			got, ok := servers["k3s"]
+			if !ok {
+				t.Fatalf("servers = %v, want k3s registered", servers)
+			}
+			headers, _ := got["headers"].(map[string]any)
+			if headers["X-Trace"] != "1" {
+				t.Errorf("k3s headers = %v, want the first plugin's", headers)
+			}
+		})
 	}
 }
