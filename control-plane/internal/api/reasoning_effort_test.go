@@ -63,7 +63,7 @@ func TestCreateSessionLegacyCodexName(t *testing.T) {
 	}
 }
 
-// AC-L2: a full pool is 503 with only the error class on the wire.
+// AC-N2: a full pool is 503 with only the error class on the wire.
 func TestCreateSessionAuthPoolExhausted(t *testing.T) {
 	ckpt := archive.NewStubCheckpointer(true)
 	mgr := service.New(k8s.NewStubOrchestrator("sessions"),

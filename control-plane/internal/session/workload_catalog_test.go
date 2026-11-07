@@ -34,6 +34,10 @@ func TestWorkloadTypeCatalogMatchesValidation(t *testing.T) {
 		if accepts := err == nil; accepts != info.TakesModel {
 			t.Errorf("%q TakesModel = %v, but NormalizeModel accepts a model: %v", info.Type, info.TakesModel, accepts)
 		}
+		_, err = NormalizePlugins(info.Type, []string{"some-plugin"})
+		if accepts := err == nil; accepts != info.TakesPlugins || accepts != TakesPlugins(info.Type) {
+			t.Errorf("%q TakesPlugins = %v, but NormalizePlugins accepts plugins: %v", info.Type, info.TakesPlugins, accepts)
+		}
 	}
 	for _, w := range known {
 		info := infoFor(t, catalog, w)

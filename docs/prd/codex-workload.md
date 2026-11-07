@@ -66,6 +66,8 @@
 - **구체화 대상**: AC-A1의 격리 — 세션이 자기 파드 밖에 닿는 경로를 도구 수준에서 좁힌 것
 - **검증 방법**: 관리형 설정으로 렌더한 모델 도구 목록에 `exec_command`·`write_stdin`·`view_image`와 번들 스킬이 없음을 확인한다(이미지 빌드 검사 + 배포 파드 안 실측). 스킬 동기화(표식·오래된 관리 스킬 제거·사용자 스킬 보존)와 `read_skill`의 경로 경계·크기 상한을 확인한다. 금지 아이템 이벤트가 오면 러너가 턴을 중단함을 확인한다.
 
+> 📌 **2026-11-07 (AC-L1)**: 배포의 `CODEX_PLUGINS`는 이제 **타입 기본값**이다 — 세션이 생성 시 `plugins`를 고르면 사이드카 시더는 그 목록을 받는다(`session-plugins.md`).
+
 ### AC-J6: K3s MCP 토큰은 loopback 사이드카에만
 - **설명**: 선택 `k3s-mcp-token`은 Secret `codex-credentials`(control plane `CODEX_CREDENTIALS_SECRET`)에 두고, 세션 파드의 `k3s-mcp-proxy` 사이드카에만 투영한다. 사이드카는 `minimax-code`의 K3s MCP 프록시(AC-G5)를 헬퍼 파드 대신 **같은 파드의 loopback**(`127.0.0.1:8093`)에 띄운 것이다 — 같은 헤더 허용 목록, 같은 마켓플레이스 시드. 단 **도구 거부 목록은 걸지 않는다**(2026-11-06 사용자 결정): 사이드카가 도구 정책 `K3S_MCP_TOOL_POLICY=allow-all`을 받아 쓰기·exec·`session_*`·`opensearch_*`를 포함한 K3s MCP 도구 전부를 그대로 넘긴다. 정책 값은 `allow-all`·`deny-list` 둘이고, 비었거나 모르는 값은 `deny-list`다(다른 타입은 이 env 없이 `deny-list`). 쓰기는 K3s MCP 자체의 승인 게이트가 막는다. 주 컨테이너는 그 주소만 받고 Secret 참조를 하나도 갖지 않는다. 워크로드 파드는 Kubernetes API 자격 증명도 받지 않는다(`automountServiceAccountToken: false`) — 다른 에이전트 타입은 셸로 클러스터를 조회하지만 이 타입에는 그 도구가 없다. Secret·ConfigMap 이름은 다른 에이전트 타입과 겹치면 control plane이 기동을 거부한다(키 이름이 같아 겹치면 다른 타입의 토큰이 조용히 넘어온다).
 - **달성 가치**: V1

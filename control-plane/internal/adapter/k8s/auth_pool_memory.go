@@ -9,7 +9,7 @@ import (
 )
 
 // MemoryAuthPool is an in-memory AuthPool for isolated tests, the pool
-// counterpart of StubOrchestrator. It keeps AC-L2's exclusivity and ordering
+// counterpart of StubOrchestrator. It keeps AC-N2's exclusivity and ordering
 // but has no clock: a held slot is reclaimable as soon as its holder is stale.
 type MemoryAuthPool struct {
 	mu      sync.Mutex

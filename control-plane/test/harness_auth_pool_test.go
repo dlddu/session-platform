@@ -16,7 +16,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// Names and labels of docs/prd/agent-auth-pool.md (AC-L1, AC-L2), spelled out
+// Names and labels of docs/prd/agent-auth-pool.md (AC-N1, AC-N2), spelled out
 // here because this suite knows the wire and the cluster, not the domain types.
 const (
 	authPoolLabel    = "session-platform.dev/auth-pool"
@@ -29,7 +29,7 @@ const (
 
 // createCodexTask posts a codex-task create and returns the status and the
 // session it made, if any. Cleanup deletes what was made, which hands the slot
-// back for the next test (AC-L3).
+// back for the next test (AC-N3).
 func createCodexTask(t *testing.T, extra map[string]any) (int, tenantSession, []byte) {
 	t.Helper()
 	body := map[string]any{"name": uniqueName(t), "workloadType": codexTaskPool}
@@ -82,7 +82,7 @@ func heldSlotOf(t *testing.T, cs kubernetes.Interface, pool, sessionID string) i
 }
 
 // eventuallyUnheld waits for the slot's lease to drop its holder: release runs
-// after the delete has removed the pods (AC-L3).
+// after the delete has removed the pods (AC-N3).
 func eventuallyUnheld(t *testing.T, cs kubernetes.Interface, pool string, slot int) {
 	t.Helper()
 	name := pool + "-auth-" + strconv.Itoa(slot)

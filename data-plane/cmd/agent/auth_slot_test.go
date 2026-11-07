@@ -33,7 +33,7 @@ func readOptional(t *testing.T, path string) (string, bool) {
 	return string(content), true
 }
 
-// AC-L4 1·3: the slot is the authority before a turn, HOME after it, and a
+// AC-N4 1·3: the slot is the authority before a turn, HOME after it, and a
 // logout in HOME empties the slot.
 func TestAuthSlotPullPushAndLogout(t *testing.T) {
 	slot := newTestAuthSlot(t, codexAuthFile, codexAuthHomeRel)
@@ -100,7 +100,7 @@ func TestAuthSlotPullPushAndLogout(t *testing.T) {
 	}
 }
 
-// AC-L4 2: a login the CLI refreshes mid-turn reaches the slot before the
+// AC-N4 2: a login the CLI refreshes mid-turn reaches the slot before the
 // turn ends.
 func TestAuthSlotWatchCopiesRefreshMidTurn(t *testing.T) {
 	slot := newTestAuthSlot(t, claudeCredentialsFile, claudeCredentialsHomeRel)
@@ -159,7 +159,7 @@ func newSlotClaudeTestServer(t *testing.T, runner commandRunner, slot *authSlot,
 		Binary:   defaultClaudeBinary,
 		Runner:   runner,
 		Logger:   testLogger(),
-		Tools:    toolSurface{Plugin: true},
+		Tools:    toolSurface{Plugins: []string{claudeSessionPlatformPlugin}},
 		AuthSlot: slot,
 		Login:    login,
 	})
@@ -191,7 +191,7 @@ func archiveNames(t *testing.T, archive []byte) []string {
 	}
 }
 
-// AC-L4 end to end on the worker: the CLI sees the slot's login, its
+// AC-N4 end to end on the worker: the CLI sees the slot's login, its
 // refresh goes back to the slot, the archive leaves the login out, and
 // GET /auth-slot reports the slot.
 func TestClaudeWorkloadSyncsAuthSlotAroundTurns(t *testing.T) {
@@ -263,7 +263,7 @@ func TestAuthSlotRouteWithoutSlotIs404(t *testing.T) {
 }
 
 // A pull that fails leaves HOME without the login; the turn end must not read
-// that absence as a logout and wipe the slot (AC-L4).
+// that absence as a logout and wipe the slot (AC-N4).
 func TestAuthSlotFailedPullIsNotALogout(t *testing.T) {
 	slot := newTestAuthSlot(t, codexAuthFile, codexAuthHomeRel)
 	home := t.TempDir()

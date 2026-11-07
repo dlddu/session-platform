@@ -204,7 +204,7 @@ patches:
         path: /spec/template/spec/containers/0/env/19/value
         value: session-platform/data-plane:dev
       # codex-task 도 같은 이미지다(AC-M1). env/24 가 DATA_PLANE_CODEX_TASK_IMAGE. 풀 크기는 base 의
-      # 2 그대로 — 슬롯 PVC 는 kind 기본 StorageClass(local-path)로 묶인다(AC-L1).
+      # 2 그대로 — 슬롯 PVC 는 kind 기본 StorageClass(local-path)로 묶인다(AC-N1).
       - op: test
         path: /spec/template/spec/containers/0/env/24/name
         value: DATA_PLANE_CODEX_TASK_IMAGE
@@ -221,7 +221,7 @@ patches:
         path: /spec/template/spec/containers/0/env/29/value
         value: gateway
       # base 는 운영 클러스터의 efs 를 슬롯 클래스로 고정한다. kind 에는 efs 가 없으므로 비워
-      # 기본 StorageClass(local-path)로 묶는다(AC-L1). env/32 가 CODEX_TASK_AUTH_STORAGE_CLASS.
+      # 기본 StorageClass(local-path)로 묶는다(AC-N1). env/32 가 CODEX_TASK_AUTH_STORAGE_CLASS.
       - op: test
         path: /spec/template/spec/containers/0/env/32/name
         value: CODEX_TASK_AUTH_STORAGE_CLASS

@@ -111,6 +111,7 @@ paths:
                     label: Shell
                     description: Interactive bash. You type the commands.
                     takesModel: false
+                    takesPlugins: false
                     input: terminal
                     defaultModel: null
                     models: []
@@ -119,6 +120,7 @@ paths:
                     label: Claude Code
                     description: Agent CLI. You send prompts, it does the work.
                     takesModel: true
+                    takesPlugins: true
                     input: prompt
                     defaultModel: "~anthropic/claude-opus-latest"
                     models: [sonnet, opus]
@@ -719,7 +721,7 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     AuthPoolExhausted:
       description: >
-        Every login slot of the session type's auth pool is held (AC-L2), so no
+        Every login slot of the session type's auth pool is held (AC-N2), so no
         pod was made. A session that needed a restore stays `snapshot`. The
         body's `error` is exactly `auth pool exhausted`.
       content:
@@ -809,7 +811,7 @@ components:
     WorkloadTypeConfig:
       type: object
       additionalProperties: false
-      required: [type, label, description, takesModel, input, defaultModel, models, reasoningEfforts]
+      required: [type, label, description, takesModel, takesPlugins, input, defaultModel, models, reasoningEfforts]
       properties:
         type:
           type: string
@@ -823,6 +825,9 @@ components:
         takesModel:
           type: boolean
           description: Whether a create request for this type may carry `model`. A model on a type where this is false is rejected with 400.
+        takesPlugins:
+          type: boolean
+          description: Whether a create request for this type may carry `plugins` (AC-L1). A plugin list on a type where this is false is rejected with 400.
         input:
           type: string
           enum: [prompt, terminal]
@@ -910,7 +915,7 @@ components:
         send its legacy name `codex`; responses always say `codex-chat`.
         `codex-task` runs the same SDK with a shell, files and network like
         `claude-code`, signed in through a login slot of the `codex-task` auth
-        pool (AC-M1~M4, AC-L1~L5). Each non-default type requires the control plane
+        pool (AC-M1~M4, AC-N1~N5). Each non-default type requires the control plane
         to have an image configured for it, and creating a session of a type
         with no configured image fails rather than falling back to a shell.
     Checkpoint:
@@ -944,6 +949,13 @@ components:
             Whenever the primary container starts, including a restart, that
             alias resolves through the optional ConfigMap model and then the CLI
             fallback.
+        plugins:
+          type: array
+          items: { type: string }
+          description: >
+            The session's marketplace plugin selection, fixed at creation and
+            carried across snapshot/restore (AC-L1). Absent when the session was
+            created without one and runs its type's platform-default plugins.
         reasoningEffort:
           type: string
           description: >
@@ -996,6 +1008,34 @@ components:
             value is passed literally and takes precedence over the platform
             ConfigMap default. The catalog returned by GET /config is advisory,
             not an allowlist. Credentials are never accepted in this request.
+        plugins:
+          type: array
+          minItems: 1
+          maxItems: 16
+          uniqueItems: true
+          items:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+          description: >
+            Optional marketplace plugins for this session (AC-L1), by plugin name
+            in the platform marketplace (no `@marketplace` suffix). Valid when
+            workloadType is `claude-code`, `minimax-code`, `codex-chat` or
+            `codex-task`. Omitted, the session gets its type's platform default
+            (`session-platform` for claude-code, the deployment's `CODEX_PLUGINS`
+            for codex-chat and `CODEX_TASK_PLUGINS` for codex-task,
+            `mcp-servers` for minimax-code). Given, it replaces that default
+            outright — list the default too if the session should keep it.
+            Names are not checked against the marketplace here: a name it does
+            not list fails the pod's plugin bootstrap, which for `claude-code`
+            fails the create (its agent never becomes reachable) and for
+            `codex-chat`/`codex-task`/`minimax-code` leaves the session running without plugins,
+            as any marketplace failure already does. `minimax-code` registers
+            its K3s MCP server only from a selected plugin that declares it, so
+            a failed bundle, or a list without such a plugin (default
+            `mcp-servers`), leaves it without K3s tools too. The selection is
+            installed again on every restore: a `claude-code` session whose
+            plugin has since left the marketplace cannot be restored. `null`, an empty list, a duplicate or an
+            invalid name → 400, as is a list on `shell` or `approval-gated`.
         reasoningEffort:
           type: string
           minLength: 1

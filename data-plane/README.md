@@ -48,7 +48,7 @@ interactive shell and Claude Code workloads.
   has none), copies it back every second while the CLI runs and once more after
   it exits (a file the CLI removed empties the slot), always by atomic 0600
   replace rather than a symlink; the archive leaves that file out
-  (`docs/prd/agent-auth-pool.md`, AC-L4). If `claude auth status --json` does
+  (`docs/prd/agent-auth-pool.md`, AC-N4). If `claude auth status --json` does
   not report `loggedIn`, the turn starts `claude auth login --claudeai`, shows
   its URL as notice lines, holds the prompt and ends with `status=error`; the
   next write is the pasted code — recorded as `[login code]`, never echoed —

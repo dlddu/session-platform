@@ -87,7 +87,7 @@ func TestValidateCodexTaskConfigRefusesSharedObjects(t *testing.T) {
 	}
 }
 
-// AC-M1, AC-E7, AC-L1: a pooled type is offered only with a slot.
+// AC-M1, AC-E7, AC-N1: a pooled type is offered only with a slot.
 func TestOfferedWorkloadTypesNeedSlots(t *testing.T) {
 	offered := func(c config, w session.WorkloadType) bool { return slices.Contains(c.offeredWorkloadTypes(), w) }
 	task := config{codexTask: codexTaskConfig{image: "img"}}

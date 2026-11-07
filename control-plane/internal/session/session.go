@@ -135,6 +135,56 @@ func NormalizeModel(workload WorkloadType, model string) (string, error) {
 	}
 }
 
+// MaxSessionPlugins bounds a create request's plugin list (AC-L1). A plugin is
+// installed on every boot and restore, so the bound keeps one request from
+// turning pod start into an unbounded marketplace walk.
+const MaxSessionPlugins = 16
+
+// pluginNamePattern is a marketplace plugin name: one path segment the data
+// plane can use as a directory name and Claude Code as the left half of
+// "<plugin>@<marketplace>".
+var pluginNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// NormalizePlugins validates the session's marketplace plugin selection
+// (AC-L1). nil means unspecified: the session gets its workload type's
+// platform-default plugins, exactly as before the field existed. A non-nil list
+// replaces that default outright, so it must be non-empty, free of duplicates
+// and made of valid names. Only the types whose agent loads marketplace plugins
+// take one; shell and approval-gated reject it rather than storing a setting
+// nothing would honour. The returned slice is a copy in request order.
+func NormalizePlugins(workload WorkloadType, plugins []string) ([]string, error) {
+	if plugins == nil {
+		return nil, nil
+	}
+	if !TakesPlugins(workload) {
+		return nil, ErrInvalidInput
+	}
+	if len(plugins) == 0 || len(plugins) > MaxSessionPlugins {
+		return nil, ErrInvalidInput
+	}
+	seen := make(map[string]bool, len(plugins))
+	out := make([]string, 0, len(plugins))
+	for _, name := range plugins {
+		if !pluginNamePattern.MatchString(name) || seen[name] {
+			return nil, ErrInvalidInput
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out, nil
+}
+
+// TakesPlugins reports whether a create request may carry plugins for the
+// workload type (AC-L1).
+func TakesPlugins(workload WorkloadType) bool {
+	switch workload {
+	case WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode, WorkloadTypeCodexChat, WorkloadTypeCodexTask:
+		return true
+	default:
+		return false
+	}
+}
+
 // NormalizeReasoningEffort validates the session's reasoning effort (AC-E8).
 // Empty means unset — the CLI's own default — and is valid for every type; a
 // value is valid only when the type's catalog entry lists it, so the catalog
@@ -216,6 +266,10 @@ type Session struct {
 	// then the Claude Code installation fallback (AC-E6, reused verbatim by
 	// AC-F1).
 	Model string `json:"model,omitempty"`
+	// Plugins is the session's marketplace plugin selection (AC-L1), fixed at
+	// creation and carried across snapshot/restore. Absent means the workload
+	// type's platform default; present, it is the exact set the agent loads.
+	Plugins []string `json:"plugins,omitempty"`
 	// ReasoningEffort is the session's reasoning effort for the types whose
 	// catalog entry lists efforts (AC-E8, AC-M4). Empty leaves it to the CLI;
 	// like the model it is fixed at creation and carried across a restore.
@@ -302,7 +356,7 @@ var (
 	ErrPluginRefreshFailed = errors.New("plugin refresh failed")
 	// ErrAuthPoolExhausted reports that every login slot of the session type's
 	// auth pool is held, so no pod was made; a restore leaves the session
-	// frozen (AC-L2).
+	// frozen (AC-N2).
 	ErrAuthPoolExhausted = errors.New("auth pool exhausted")
 
 	ErrUnauthenticated = errors.New("unauthenticated")

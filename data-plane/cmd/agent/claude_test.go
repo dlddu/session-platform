@@ -105,7 +105,7 @@ func newClaudeTestServerAt(t *testing.T, runner commandRunner, model string, res
 		Runner:      runner,
 		Logger:      testLogger(),
 		Redact:      redact,
-		Tools:       toolSurface{Plugin: true},
+		Tools:       toolSurface{Plugins: []string{claudeSessionPlatformPlugin}},
 	})
 	if err != nil {
 		t.Fatalf("new claude workload: %v", err)
@@ -325,7 +325,7 @@ func TestClaudeManagedSettingsUpgradeEnablesSessionPlatformPlugin(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugin: true}); err != nil {
+	if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{claudeSessionPlatformPlugin}}); err != nil {
 		t.Fatalf("upgrade managed settings: %v", err)
 	}
 	if err := validateClaudeManagedSettings(homeDir); err != nil {
@@ -346,7 +346,7 @@ func TestClaudeManagedSettingsRejectsUnmanagedPlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugin: true})
+	err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{claudeSessionPlatformPlugin}})
 	if err == nil || !strings.Contains(err.Error(), "unmanaged plugin") {
 		t.Fatalf("ensure managed settings error = %v, want unmanaged plugin rejection", err)
 	}
@@ -641,7 +641,7 @@ func TestClaudeCloseIsIdempotent(t *testing.T) {
 		StateDir: filepath.Join(t.TempDir(), "state"),
 		Runner:   newFakeClaudeRunner(),
 		Logger:   testLogger(),
-		Tools:    toolSurface{Plugin: true},
+		Tools:    toolSurface{Plugins: []string{claudeSessionPlatformPlugin}},
 	})
 	if err != nil {
 		t.Fatal(err)

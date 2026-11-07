@@ -16,7 +16,7 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// authPoolEnv sizes one auth pool (docs/prd/agent-auth-pool.md, AC-L1).
+// authPoolEnv sizes one auth pool (docs/prd/agent-auth-pool.md, AC-N1).
 type authPoolEnv struct {
 	// slots is the pool size; 0 means no pool, and the type that needs one is
 	// then not offered.
@@ -173,7 +173,7 @@ func (c claudeAuthConfig) claudeCodeModelConfig(gatewayDefault string, gatewayMo
 }
 
 // offered reports whether claude-code can provision here given its auth:
-// the gateway needs nothing more, a subscription needs a slot (AC-E7, AC-L1).
+// the gateway needs nothing more, a subscription needs a slot (AC-E7, AC-N1).
 func (c claudeAuthConfig) offered() bool {
 	return c.mode != k8s.ClaudeCodeAuthSubscription || c.pool.slots > 0
 }

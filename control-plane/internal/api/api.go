@@ -105,6 +105,9 @@ type createReq struct {
 	// Model is raw for the same reason; its contract is AC-E6.
 	Model json.RawMessage `json:"model"`
 
+	// Plugins is raw so an omitted list (the type's default plugins) differs
+	// from an explicit null; its contract is AC-L1.
+	Plugins json.RawMessage `json:"plugins"`
 	// ReasoningEffort is raw for the same reason; its contract is AC-E8.
 	ReasoningEffort json.RawMessage `json:"reasoningEffort"`
 
@@ -159,7 +162,9 @@ type workloadTypeConfResp struct {
 	Label       string               `json:"label"`
 	Description string               `json:"description"`
 	TakesModel  bool                 `json:"takesModel"`
-	Input       session.InputMode    `json:"input"`
+	// TakesPlugins says whether a create request may carry plugins (AC-L1).
+	TakesPlugins bool              `json:"takesPlugins"`
+	Input        session.InputMode `json:"input"`
 	// DefaultModel is null exactly when TakesModel is false.
 	DefaultModel *string  `json:"defaultModel"`
 	Models       []string `json:"models"`
@@ -211,12 +216,13 @@ func (a *API) runtimeConfig(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		entry := workloadTypeConfResp{
-			Type:        info.Type,
-			Label:       info.Label,
-			Description: info.Description,
-			TakesModel:  info.TakesModel,
-			Input:       info.Input,
-			Models:      []string{},
+			Type:         info.Type,
+			Label:        info.Label,
+			Description:  info.Description,
+			TakesModel:   info.TakesModel,
+			TakesPlugins: info.TakesPlugins,
+			Input:        info.Input,
+			Models:       []string{},
 			// WorkloadTypes copies the list, so it is never the catalog's own.
 			ReasoningEfforts: info.ReasoningEfforts,
 		}
@@ -286,6 +292,15 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var plugins []string
+	if len(req.Plugins) != 0 {
+		// An explicit null decodes to a nil slice, which would silently mean
+		// "type default"; only a JSON array is a selection.
+		if err := json.Unmarshal(req.Plugins, &plugins); err != nil || plugins == nil {
+			writeErr(w, session.ErrInvalidInput)
+			return
+		}
+	}
 	var effort string
 	if len(req.ReasoningEffort) != 0 {
 		if err := json.Unmarshal(req.ReasoningEffort, &effort); err != nil || effort == "" {
@@ -299,7 +314,7 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, err := a.mgr.Create(r.Context(), session.CreateRequest{
-		Name: req.Name, WorkloadType: workload, Model: model, ReasoningEffort: effort, Tenant: tenant,
+		Name: req.Name, WorkloadType: workload, Model: model, Plugins: plugins, ReasoningEffort: effort, Tenant: tenant,
 	})
 	if err != nil {
 		writeErr(w, err)

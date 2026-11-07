@@ -733,7 +733,11 @@ func claudeAuthFromEnv(workload string, logger *slog.Logger) (claudeAuth, error)
 	if err != nil {
 		return claudeAuth{}, err
 	}
-	return claudeAuth{tools: toolSurface{Plugin: true}, mode: mode, slot: slot, effort: effort}, nil
+	plugins, err := claudePluginsFromEnv()
+	if err != nil {
+		return claudeAuth{}, err
+	}
+	return claudeAuth{tools: toolSurface{Plugins: plugins}, mode: mode, slot: slot, effort: effort}, nil
 }
 
 // agentToolSurface validates the credential wiring of a gateway-mode agent
@@ -745,7 +749,11 @@ func agentToolSurface(workload string) (toolSurface, error) {
 		if err := validateClaudeProxyClientEnv(); err != nil {
 			return toolSurface{}, err
 		}
-		return toolSurface{Plugin: true}, nil
+		plugins, err := claudePluginsFromEnv()
+		if err != nil {
+			return toolSurface{}, err
+		}
+		return toolSurface{Plugins: plugins}, nil
 	case workloadApprovalGated:
 		mcpURL, err := validateApprovalGatedClientEnv()
 		if err != nil {

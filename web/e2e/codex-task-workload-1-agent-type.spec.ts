@@ -2,7 +2,7 @@
 //
 // docs/prd/codex-task-workload.md AC-M1·AC-M4. 프롬프트는 보내지 않는다 — 빈 슬롯의 첫 프롬프트가 ChatGPT 기기 로그인을
 // 열기 때문이고, 이 시나리오가 사는 것은 「고를 수 있고, 추론 수준을 골라 만들면 에이전트 작업 화면으로 열린다」까지다.
-// 세션은 풀 슬롯 하나를 쥐므로(AC-L2) finally 에서 지워 다른 스위트에 슬롯을 돌려준다.
+// 세션은 풀 슬롯 하나를 쥐므로(AC-N2) finally 에서 지워 다른 스위트에 슬롯을 돌려준다.
 import { expect, test } from "@playwright/test";
 
 const POD_BOUND = 240_000;

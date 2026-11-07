@@ -321,7 +321,7 @@ func (c *HTTPClient) AwaitingApproval(ctx context.Context, pod string) (bool, er
 }
 
 // AuthSlotSignedIn reports whether the pod's auth pool slot holds a login
-// (AC-L4). Like AwaitingApproval it is an optional capability, not part of
+// (AC-N4). Like AwaitingApproval it is an optional capability, not part of
 // Client: only the release path asks, and only to rank the slot for the next
 // session.
 func (c *HTTPClient) AuthSlotSignedIn(ctx context.Context, pod string) (bool, error) {

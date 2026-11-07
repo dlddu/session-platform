@@ -1,6 +1,6 @@
 //go:build integration
 
-// AC-M1/AC-M4, AC-E7/AC-E8 and AC-L4/AC-L5 on the real client-go
+// AC-M1/AC-M4, AC-E7/AC-E8 and AC-N4/AC-N5 on the real client-go
 // orchestrator: the pods a codex-task session and a claude-code session in
 // either auth mode are submitted as.
 package integration_test
@@ -29,7 +29,7 @@ func onlyPod(t *testing.T, orch *k8s.ClientOrchestrator, pods func() []corev1.Po
 	return got[0]
 }
 
-// assertSlotMount checks AC-L4/L5: the slot PVC is the pod's only claim and
+// assertSlotMount checks AC-N4/L5: the slot PVC is the pod's only claim and
 // only the workload container mounts it.
 func assertSlotMount(t *testing.T, pod corev1.Pod, claim string) {
 	t.Helper()

@@ -33,7 +33,7 @@ func writeStateArchive(w io.Writer, stateDir, sharedDir string, scrollback []byt
 
 // writeStateArchiveExcluding is writeStateArchive leaving out the named
 // regular files of the state tree (slash paths relative to stateDir). The one
-// user is the auth slot's login file (AC-L4): it belongs to the slot, not to
+// user is the auth slot's login file (AC-N4): it belongs to the slot, not to
 // the session, so it never travels in the session's archive.
 func writeStateArchiveExcluding(w io.Writer, stateDir, sharedDir string, scrollback []byte, exclude []string) error {
 	skip := make(map[string]bool, len(exclude))

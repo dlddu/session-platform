@@ -99,7 +99,7 @@ func TestLeaseAuthPoolReleaseRecordsStateAndKeepsClaim(t *testing.T) {
 	if err := pool.Release(ctx, "s1", &signedOut); err != nil {
 		t.Fatal(err)
 	}
-	// A signed-in slot outranks a lower-numbered signed-out one (AC-L2).
+	// A signed-in slot outranks a lower-numbered signed-out one (AC-N2).
 	if s, err := pool.Acquire(ctx, "s3", nil); err != nil || s != 1 {
 		t.Fatalf("s3 = %d, %v, want the signed-in slot 1", s, err)
 	}
@@ -219,7 +219,7 @@ func TestMemoryAuthPoolMatchesLeasePoolRules(t *testing.T) {
 }
 
 // A slot kept by a failed release must not stay reclaimable while its holder
-// reuses it on restore: reuse renews the lease (AC-L2).
+// reuses it on restore: reuse renews the lease (AC-N2).
 func TestLeaseAuthPoolReusingHeldSlotRenewsIt(t *testing.T) {
 	pool, cs, clock := newTestPool(t, 1)
 	ctx := context.Background()

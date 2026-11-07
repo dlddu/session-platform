@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// The auth slot (docs/prd/agent-auth-pool.md, AC-L4): a pool PVC the control
+// The auth slot (docs/prd/agent-auth-pool.md, AC-N4): a pool PVC the control
 // plane leases to this session alone and mounts at authSlotDirEnv. It holds
 // one login file. The CLI reads and writes that login under HOME, so the agent
 // keeps the two places equal by copying — never by a symlink, because a CLI
@@ -295,7 +295,7 @@ func syncDir(dir string) error {
 }
 
 // serveAuthSlot answers the control plane's question before it returns the
-// lease, so the pool can hand out signed-in slots first (AC-L2, AC-L4).
+// lease, so the pool can hand out signed-in slots first (AC-N2, AC-N4).
 func serveAuthSlot(w http.ResponseWriter, slot *authSlot) {
 	if slot == nil {
 		http.Error(w, "this workload has no auth slot", http.StatusNotFound)

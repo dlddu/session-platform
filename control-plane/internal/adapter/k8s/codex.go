@@ -149,14 +149,19 @@ func (o *ClientOrchestrator) codexPod(container *corev1.Container, sessionID str
 	if workload.ReasoningEffort != "" {
 		container.Env = append(container.Env, corev1.EnvVar{Name: CodexReasoningEffortEnvVar, Value: workload.ReasoningEffort})
 	}
-	return []corev1.Container{o.codexK3SMCPProxy(sessionID, image, profile)}, volumes
+	return []corev1.Container{o.codexK3SMCPProxy(sessionID, image, profile, workload.Plugins)}, volumes
 }
 
 // codexK3SMCPProxy is minimax-code's K3s MCP proxy moved from the helper pod
 // into the session pod, bound to loopback (AC-J6). Its seeder clones the
-// marketplace for the plugin skills (AC-J5).
-func (o *ClientOrchestrator) codexK3SMCPProxy(sessionID, image string, profile codexProfile) corev1.Container {
+// marketplace for the plugin skills (AC-J5): the session's own selection when
+// it made one (AC-L1), otherwise the type's deployment default.
+func (o *ClientOrchestrator) codexK3SMCPProxy(sessionID, image string, profile codexProfile, plugins []string) corev1.Container {
 	port := strconv.Itoa(k3sMCPProxyPort)
+	selected := profile.plugins
+	if plugins != nil {
+		selected = strings.Join(plugins, ",")
+	}
 	proxy := o.credentialProxyContainer(CodexK3SMCPProxyContainerName, image, "127.0.0.1:"+port, proxyPlacementSidecar)
 	proxy.Env = []corev1.EnvVar{
 		{Name: workloadEnvVar, Value: k3sMCPProxyWorkload},
@@ -164,7 +169,7 @@ func (o *ClientOrchestrator) codexK3SMCPProxy(sessionID, image string, profile c
 		{Name: CredentialProxyPlacementEnvVar, Value: proxyPlacementSidecar},
 		{Name: SessionIDEnvVar, Value: sessionID},
 		{Name: MiniMaxMarketplaceDirEnvVar, Value: miniMaxMarketplacePath},
-		{Name: pluginSeedPluginsEnvVar, Value: profile.plugins},
+		{Name: pluginSeedPluginsEnvVar, Value: selected},
 		{Name: K3SMCPToolPolicyEnvVar, Value: "allow-all"},
 		optionalSecretEnv(K3SMCPTokenEnvVar, profile.credentialsSecret, MiniMaxK3SMCPTokenSecretKey),
 		optionalConfigMapEnv(K3SMCPURLEnvVar, profile.configConfigMap, ClaudeCodeK3SMCPURLConfigKey),

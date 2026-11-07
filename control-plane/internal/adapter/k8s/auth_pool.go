@@ -20,7 +20,7 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// Agent auth pool (docs/prd/agent-auth-pool.md, AC-L1~L5). A pool is a fixed
+// Agent auth pool (docs/prd/agent-auth-pool.md, AC-N1~N5). A pool is a fixed
 // row of login slots, each a PVC named like a StatefulSet's volume claim and
 // a Lease of the same name whose holder is the one session using it.
 const (
@@ -44,7 +44,7 @@ const (
 	DefaultAuthSlotStorageSize = "16Mi"
 	// DefaultAuthPoolReclaimGrace outlasts one create or restore, so a lease
 	// taken before the session record exists, or while it is still frozen, is
-	// never mistaken for a leftover (AC-L2).
+	// never mistaken for a leftover (AC-N2).
 	DefaultAuthPoolReclaimGrace = 10 * time.Minute
 )
 
@@ -57,7 +57,7 @@ func AuthSlotLeaseName(pool string, slot int) string {
 // namespace: a dynamic provisioner may key the volume on the claim name alone
 // (the homelab's EFS class maps `/${.PVC.name}` to one shared access point), so
 // a preview's slot of the same name would share — and on teardown delete —
-// production's login (AC-L1).
+// production's login (AC-N1).
 func AuthSlotClaimName(namespace, pool string, slot int) string {
 	return namespace + "-" + AuthSlotLeaseName(pool, slot)
 }
@@ -67,7 +67,7 @@ func AuthSlotClaimName(namespace, pool string, slot int) string {
 // asks about leases older than the reclaim grace.
 type StaleHolder func(ctx context.Context, holder string) (bool, error)
 
-// AuthPool leases login slots to sessions exclusively (AC-L2, AC-L3).
+// AuthPool leases login slots to sessions exclusively (AC-N2, AC-N3).
 type AuthPool interface {
 	// Acquire returns the slot the session holds, leasing a free one first if
 	// it holds none. A full pool is session.ErrAuthPoolExhausted.
@@ -146,7 +146,7 @@ func (p *LeaseAuthPool) Acquire(ctx context.Context, sessionID string, stale Sta
 		}
 		// Reusing a held slot renews it: a lease left behind by a failed
 		// release keeps its old renewTime, and a restore reusing it unrenewed
-		// would look reclaimable to every other path while it runs (AC-L2).
+		// would look reclaimable to every other path while it runs (AC-N2).
 		renewed, err := p.renew(ctx, leases[slot])
 		if err != nil {
 			return 0, err
@@ -229,7 +229,7 @@ func (p *LeaseAuthPool) renew(ctx context.Context, lease *coordinationv1.Lease) 
 	return true, nil
 }
 
-// free applies AC-L2: an empty holder is free; a held lease is reclaimable
+// free applies AC-N2: an empty holder is free; a held lease is reclaimable
 // only once it is older than the grace and its holder runs no pod.
 func (p *LeaseAuthPool) free(ctx context.Context, lease *coordinationv1.Lease, stale StaleHolder) (bool, error) {
 	holder := leaseHolder(lease)
@@ -298,7 +298,7 @@ func (p *LeaseAuthPool) foreignLease(ctx context.Context, slot int) error {
 }
 
 // ensureClaim makes the slot's PVC if it is missing. It is never deleted
-// (AC-L1): the login outlives every session that used it.
+// (AC-N1): the login outlives every session that used it.
 func (p *LeaseAuthPool) ensureClaim(ctx context.Context, slot int) error {
 	claims := p.client.CoreV1().PersistentVolumeClaims(p.namespace)
 	name := AuthSlotClaimName(p.namespace, p.cfg.Pool, slot)
@@ -414,7 +414,7 @@ func leaseHolder(lease *coordinationv1.Lease) string {
 	return strings.TrimSpace(*lease.Spec.HolderIdentity)
 }
 
-// authStateRank orders free slots signed-in, unknown, signed-out (AC-L2).
+// authStateRank orders free slots signed-in, unknown, signed-out (AC-N2).
 func authStateRank(lease *coordinationv1.Lease) int {
 	switch lease.Annotations[AnnotationAuthState] {
 	case AuthStateSignedIn:
@@ -477,7 +477,7 @@ func AuthPoolFor(workload session.WorkloadType, claudeMode ClaudeCodeAuthMode) (
 // attachAuthSlot mounts the session's slot PVC into the workload container
 // only — never a sidecar — and refuses a pod spec whose type needs a slot but
 // was given none, so a misconfigured service cannot start a pod that would
-// sign in somewhere the pool does not track (AC-L4, AC-L5).
+// sign in somewhere the pool does not track (AC-N4, AC-N5).
 func (o *ClientOrchestrator) attachAuthSlot(container *corev1.Container, workloadType session.WorkloadType, slot *int) ([]corev1.Volume, error) {
 	pool, uses := AuthPoolFor(workloadType, o.claudeAuthMode)
 	switch {

@@ -15,6 +15,10 @@ type CreateRequest struct {
 	// PlatformDefaultModel for claude-code and is invalid when supplied for a
 	// shell session. It is immutable after creation.
 	Model string
+	// Plugins selects the marketplace plugins (AC-L1). nil means the workload
+	// type's platform default; a non-nil list replaces it and is validated by
+	// NormalizePlugins. It is immutable after creation.
+	Plugins []string
 	// ReasoningEffort is the session's reasoning effort (AC-E8). Empty leaves
 	// it unset; NormalizeReasoningEffort decides which types take one.
 	ReasoningEffort string

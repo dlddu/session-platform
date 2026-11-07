@@ -257,7 +257,7 @@ func TestClaudeAuthFromEnv(t *testing.T) {
 	setClaudeGatewayEnv(t)
 	t.Setenv(claudeAuthModeEnv, "")
 	auth, err := claudeAuthFromEnv(workloadClaudeCode, testLogger())
-	if err != nil || auth.mode != claudeAuthModeGateway || auth.slot != nil || !auth.tools.Plugin {
+	if err != nil || auth.mode != claudeAuthModeGateway || auth.slot != nil || len(auth.tools.Plugins) == 0 {
 		t.Fatalf("gateway = %+v, %v", auth, err)
 	}
 
@@ -284,7 +284,7 @@ func TestClaudeAuthFromEnv(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
 	t.Setenv(claudeEffortEnv, "xhigh")
 	auth, err = claudeAuthFromEnv(workloadClaudeCode, testLogger())
-	if err != nil || auth.mode != claudeAuthModeSubscription || auth.slot == nil || auth.effort != "xhigh" || !auth.tools.Plugin {
+	if err != nil || auth.mode != claudeAuthModeSubscription || auth.slot == nil || auth.effort != "xhigh" || len(auth.tools.Plugins) == 0 {
 		t.Fatalf("subscription = %+v, %v", auth, err)
 	}
 	if auth.slot.archiveExclusion() != "home/.claude/.credentials.json" {
