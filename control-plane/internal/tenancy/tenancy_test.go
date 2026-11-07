@@ -29,13 +29,15 @@ func TestParse(t *testing.T) {
 		t.Fatalf("tenants = %d", n)
 	}
 	got, ok := cfg.ForServiceAccount("lab", "ci")
-	if !ok || got.Name != "lab" || !got.Allows(session.WorkloadTypeShell) || got.Allows(session.WorkloadTypeCodex) {
+	if !ok || got.Name != "lab" || !got.Allows(session.WorkloadTypeShell) || got.Allows(session.WorkloadTypeCodexChat) {
 		t.Fatalf("lab/ci = %+v, %v", got, ok)
 	}
 	if _, ok := cfg.ForServiceAccount("lab", "other"); ok {
 		t.Fatal("unlisted ServiceAccount resolved to a tenant")
 	}
-	if t2, ok := cfg.Lookup("pocket-aide"); !ok || !t2.Allows(session.WorkloadTypeCodex) {
+	// The sample grants the legacy "codex"; it is stored as codex-chat (AC-J1).
+	if t2, ok := cfg.Lookup("pocket-aide"); !ok || !t2.Allows(session.WorkloadTypeCodexChat) ||
+		t2.WorkloadTypes[0] != session.WorkloadTypeCodexChat || t2.Allows(session.WorkloadTypeCodexTask) {
 		t.Fatalf("lookup pocket-aide = %+v, %v", t2, ok)
 	}
 }
@@ -46,7 +48,7 @@ func TestParseWildcardGrantsEveryType(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 	lab, _ := cfg.Lookup("lab")
-	for _, w := range []session.WorkloadType{session.WorkloadTypeShell, session.WorkloadTypeClaudeCode, session.WorkloadTypeMiniMaxCode, session.WorkloadTypeCodex, session.WorkloadTypeApprovalGated} {
+	for _, w := range []session.WorkloadType{session.WorkloadTypeShell, session.WorkloadTypeClaudeCode, session.WorkloadTypeMiniMaxCode, session.WorkloadTypeCodexChat, session.WorkloadTypeCodexTask, session.WorkloadTypeApprovalGated} {
 		if !lab.Allows(w) {
 			t.Errorf("wildcard tenant refuses %q", w)
 		}
@@ -76,6 +78,7 @@ func TestParseRejects(t *testing.T) {
 		"shared account":     `{"tenants":[{"name":"a","serviceAccounts":["n/sa"]},{"name":"b","serviceAccounts":["n/sa"]}]}`,
 		"unknown type":       `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["vim"]}]}`,
 		"duplicate type":     `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["shell","shell"]}]}`,
+		"alias and new name": `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["codex","codex-chat"]}]}`,
 		"empty type literal": `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":[""]}]}`,
 		"wildcard with type": `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["*","shell"]}]}`,
 		"wildcard twice":     `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["*","*"]}]}`,

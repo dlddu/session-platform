@@ -222,6 +222,43 @@ spec:
                   name: session-platform-tenants
                   key: tenants.json
                   optional: true
+            # codex 작업용 워크로드(docs/prd/codex-task-workload.md, AC-M1~M4)와 에이전트 인증 풀
+            # (docs/prd/agent-auth-pool.md, AC-L1~L5), claude-code 구독 인증(AC-E7). 이 일곱 항목도
+            # env 목록 맨 끝에 둔다 — deploy/ 오버레이가 env/24(이미지)·env/29(인증 모드)를 인덱스로 잡는다.
+            # 이미지 문자열이 위와 같아서 CI `pin` job 의 sed 가 이 자리도 함께 SHA 로 고정한다.
+            - name: DATA_PLANE_CODEX_TASK_IMAGE
+              value: "ghcr.io/dlddu/session-platform-data-plane:cc4615f73c4db0df6151680d65ee6390a0e5ee52"
+            # codex-task 의 모델 카탈로그(AC-M4). Secret `codex-task-credentials` 는 선택 k3s-mcp-token
+            # 하나만, ConfigMap `codex-task-config` 는 선택 model·models·k3s-mcp-url·plugin-marketplace-url
+            # 만 담는다. 이름은 codex-chat 의 것과 겹치면 안 된다(AC-M1). k8s/codex-task-*.example.yaml 참고.
+            - name: CODEX_TASK_DEFAULT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: codex-task-config
+                  key: model
+                  optional: true
+            - name: CODEX_TASK_MODELS
+              valueFrom:
+                configMapKeyRef:
+                  name: codex-task-config
+                  key: models
+                  optional: true
+            # codex-task 전용 데이터 전송 게이트(AC-M3). 이 타입의 아카이브에는 로그인이 없다 —
+            # auth.json 은 풀 슬롯에만 있다(AC-L4). 대신 셸이 만든 작업 디렉터리 파일이 들어간다.
+            - name: CODEX_TASK_ARCHIVE_ENABLED
+              value: "true"
+            # 인증 풀 크기(AC-L1). 슬롯 i 는 PVC·Lease `codex-task-auth-<i>` 이고 control plane 이
+            # 처음 임대할 때 만들며 지우지 않는다. 0 이면 이 타입은 /config 에 나오지 않는다.
+            - name: CODEX_TASK_AUTH_SLOTS
+              value: "2"
+            # claude-code 공급자 인증 모드(AC-E7). subscription 은 풀 `claude-code` 의 슬롯
+            # (`claude-code-auth-<i>` 의 .credentials.json)으로 Claude 구독에 직접 붙고 credential-proxy
+            # 사이드카를 두지 않는다. gateway 는 AC-E6 의 base-url·auth-token 경로(kind e2e 가 쓴다).
+            # approval-gated 는 이 값과 무관하게 게이트웨이 자격 증명을 쓴다(AC-F6).
+            - name: CLAUDE_CODE_AUTH_MODE
+              value: "subscription"
+            - name: CLAUDE_CODE_AUTH_SLOTS
+              value: "2"
           readinessProbe:
             httpGet:
               path: /api/v1/healthz

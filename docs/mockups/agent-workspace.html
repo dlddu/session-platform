@@ -526,7 +526,7 @@ const CRED_TX_DEFAULT = document.getElementById('ws-cred-tx').innerHTML;
 const CRED_TX_CODEX = 'No provider key is stored on the platform. The session signs in to ChatGPT on its first prompt, and that login travels inside the session archive. Type and model are <b>immutable</b> for this session.';
 const INPUT_PH = {
   'minimax-code':'send a prompt — runs mcode exec once in the session pod',
-  'codex':'send a prompt — runs one Codex turn in the session pod'
+  'codex-chat':'send a prompt — runs one Codex turn in the session pod'
 };
 // 이 화면은 workloadType이 claude-code · minimax-code · codex인 에이전트 세션 전용이다 (shell 타입은 workspace.html)
 let sessions = [
@@ -539,7 +539,7 @@ let sessions = [
   {id:'b2d7', name:'changelog-autogen', type:'minimax-code', model:'platform default', state:'active',
    pod:'sess-b2d7-q4mf', region:'us-east-1', up:'38m', upMin:38, cpu:18, mem:341, memMax:2048, idleMin:0,
    turns:2, cwd:'/work', files:'CHANGELOG.md', cursor:'nextOffset=5120'},
-  {id:'e41c', name:'cluster-triage', type:'codex', model:'platform default', state:'active',
+  {id:'e41c', name:'cluster-triage', type:'codex-chat', model:'platform default', state:'active',
    pod:'sess-e41c-v9rn', region:'us-east-1', up:'12m', upMin:12, cpu:9, mem:226, memMax:2048, idleMin:0,
    turns:1, cwd:'/work', files:'—', cursor:'nextOffset=1730', firstLogin:true},
   {id:'c83d', name:'doc-migration', type:'claude-code', model:'platform default', state:'snapshot',
@@ -652,9 +652,9 @@ function populate(s){
   document.getElementById('ws-console-pod').textContent = s.state==='snapshot' ? 'pod reclaimed' : 'pod/'+s.pod;
   document.getElementById('ws-console-type').textContent = s.type + ' session';
   document.getElementById('ws-input-ph').innerHTML = INPUT_PH[s.type] || INPUT_PH_DEFAULT;
-  document.getElementById('ws-codex-hint').style.display = (s.type==='codex' && s.state!=='snapshot') ? '' : 'none';
+  document.getElementById('ws-codex-hint').style.display = (s.type==='codex-chat' && s.state!=='snapshot') ? '' : 'none';
   // codex 는 공급자 키가 없다 — 세션마다 ChatGPT 기기 로그인을 하고 그 로그인이 아카이브에 실린다 (AC-J3)
-  const isCodex = s.type==='codex';
+  const isCodex = s.type==='codex-chat';
   document.getElementById('ws-login-row').style.display = isCodex ? '' : 'none';
   document.getElementById('ws-baseurl-row').style.display = isCodex ? 'none' : '';
   document.getElementById('ws-token-row').style.display = isCodex ? 'none' : '';
@@ -707,7 +707,7 @@ function populate(s){
 }
 // STP-conversation-carry · 대화 문맥 패널 (AC-E4)
 function paintContext(s){
-  const turns = s.type==='codex' ? [
+  const turns = s.type==='codex-chat' ? [
     {n:'1', t:'which pods in the media namespace restarted today?'}
   ] : [
     {n:'1', t:'read invoice.go and tell me what the rounding bug is'},

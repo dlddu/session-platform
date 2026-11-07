@@ -27,14 +27,34 @@ export const FORBIDDEN_ITEM_TYPES = new Map([
   ["web_search", "search the web"],
 ]);
 
+// The two session kinds the runner serves. chat is codex-chat's narrowed
+// surface (AC-J5); task is codex-task's claude-code-level surface (AC-M1),
+// where commands and file changes are the point and nothing is stopped.
+export const MODE_CHAT = "chat";
+export const MODE_TASK = "task";
+export const MODES = new Set([MODE_CHAT, MODE_TASK]);
+
+// REASONING_EFFORTS is AC-M4's list. The SDK type admits more values, but the
+// platform offers only the ones its /config advertises for codex-task.
+export const REASONING_EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh"]);
+
 export class UsageError extends Error {}
 
-// parseArgs reads the agent's argv: --model <m> [--resume] -- <prompt>. The
+// parseArgs reads the agent's argv:
+// [--mode chat|task] --model <m> [--effort <e>] [--resume] -- <prompt>. The
 // prompt is the one argument after "--", so nothing in it is a flag.
 export function parseArgs(argv) {
   let model = PLATFORM_DEFAULT_MODEL;
+  let mode = MODE_CHAT;
+  let effort = null;
   let resume = false;
   let printCodexBin = false;
+  const value = (i, flag) => {
+    if (i + 1 >= argv.length || argv[i + 1] === "") {
+      throw new UsageError(`${flag} needs a value`);
+    }
+    return argv[i + 1];
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--") {
@@ -42,13 +62,20 @@ export function parseArgs(argv) {
       if (rest.length !== 1) {
         throw new UsageError("expected exactly one prompt argument after --");
       }
-      return { model, resume, prompt: rest[0], printCodexBin };
+      return { model, mode, effort, resume, prompt: rest[0], printCodexBin };
     }
     if (arg === "--model") {
-      if (i + 1 >= argv.length || argv[i + 1] === "") {
-        throw new UsageError("--model needs a value");
+      model = value(i++, "--model");
+    } else if (arg === "--mode") {
+      mode = value(i++, "--mode");
+      if (!MODES.has(mode)) {
+        throw new UsageError(`unknown mode ${JSON.stringify(mode)}`);
       }
-      model = argv[++i];
+    } else if (arg === "--effort") {
+      effort = value(i++, "--effort");
+      if (!REASONING_EFFORTS.has(effort)) {
+        throw new UsageError(`unknown reasoning effort ${JSON.stringify(effort)}`);
+      }
     } else if (arg === "--resume") {
       resume = true;
     } else if (arg === "--print-codex-bin") {
@@ -58,7 +85,7 @@ export function parseArgs(argv) {
     }
   }
   if (printCodexBin) {
-    return { model, resume, prompt: null, printCodexBin };
+    return { model, mode, effort, resume, prompt: null, printCodexBin };
   }
   throw new UsageError("missing -- <prompt>");
 }
@@ -90,17 +117,24 @@ export function codexHomeFor(env) {
   return path.join(env.HOME, ".codex");
 }
 
-export function threadOptions(model, cwd) {
+// threadOptions fixes the sandbox per mode. chat is read-only with no
+// network (AC-J2); task runs like claude-code, with the session pod as the
+// execution boundary (AC-M1). Web search is off in both.
+export function threadOptions(model, cwd, { mode = MODE_CHAT, effort = null } = {}) {
+  const task = mode === MODE_TASK;
   const options = {
-    sandboxMode: "read-only",
+    sandboxMode: task ? "danger-full-access" : "read-only",
     approvalPolicy: "never",
     workingDirectory: cwd,
     skipGitRepoCheck: true,
     webSearchMode: "disabled",
-    networkAccessEnabled: false,
+    networkAccessEnabled: task,
   };
   if (model && model !== PLATFORM_DEFAULT_MODEL) {
     options.model = model;
+  }
+  if (effort) {
+    options.modelReasoningEffort = effort;
   }
   return options;
 }
@@ -110,13 +144,14 @@ export function noticeLine(text) {
 }
 
 // classify says what one SDK event means for the run: a forbidden item to
-// stop on, the turn's outcome, or nothing.
-export function classify(event) {
+// stop on, the turn's outcome, or nothing. Only chat has forbidden items; the
+// kill switch is AC-J5's and codex-task does not run it (AC-M1).
+export function classify(event, mode = MODE_CHAT) {
   if (!event || typeof event !== "object") {
     return {};
   }
   if (event.type === "item.started" || event.type === "item.updated" || event.type === "item.completed") {
-    const kind = event.item && FORBIDDEN_ITEM_TYPES.get(event.item.type);
+    const kind = mode === MODE_CHAT && event.item && FORBIDDEN_ITEM_TYPES.get(event.item.type);
     if (kind) {
       return { forbidden: event.item.type, action: kind };
     }

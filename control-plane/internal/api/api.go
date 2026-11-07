@@ -105,6 +105,9 @@ type createReq struct {
 	// Model is raw for the same reason; its contract is AC-E6.
 	Model json.RawMessage `json:"model"`
 
+	// ReasoningEffort is raw for the same reason; its contract is AC-E8.
+	ReasoningEffort json.RawMessage `json:"reasoningEffort"`
+
 	Tenant json.RawMessage `json:"tenant"`
 }
 
@@ -160,6 +163,8 @@ type workloadTypeConfResp struct {
 	// DefaultModel is null exactly when TakesModel is false.
 	DefaultModel *string  `json:"defaultModel"`
 	Models       []string `json:"models"`
+	// ReasoningEfforts is never null; empty means the type takes none (AC-E8).
+	ReasoningEfforts []string `json:"reasoningEfforts"`
 }
 
 type claudeCodeConfigResp struct {
@@ -212,6 +217,8 @@ func (a *API) runtimeConfig(w http.ResponseWriter, r *http.Request) {
 			TakesModel:  info.TakesModel,
 			Input:       info.Input,
 			Models:      []string{},
+			// WorkloadTypes copies the list, so it is never the catalog's own.
+			ReasoningEfforts: info.ReasoningEfforts,
 		}
 		if info.TakesModel {
 			mc := a.modelConfig(info.Type)
@@ -260,14 +267,28 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	var workload session.WorkloadType
 	if len(req.WorkloadType) != 0 {
-		if err := json.Unmarshal(req.WorkloadType, &workload); err != nil || !workload.Valid() {
+		if err := json.Unmarshal(req.WorkloadType, &workload); err != nil || workload == "" {
 			writeErr(w, session.ErrInvalidInput)
 			return
 		}
+		// Folds the legacy "codex" to codex-chat before the tenant check (AC-J1).
+		normalized, err := session.NormalizeWorkloadType(workload)
+		if err != nil {
+			writeErr(w, session.ErrInvalidInput)
+			return
+		}
+		workload = normalized
 	}
 	var model string
 	if len(req.Model) != 0 {
 		if err := json.Unmarshal(req.Model, &model); err != nil || model == "" || model != strings.TrimSpace(model) {
+			writeErr(w, session.ErrInvalidInput)
+			return
+		}
+	}
+	var effort string
+	if len(req.ReasoningEffort) != 0 {
+		if err := json.Unmarshal(req.ReasoningEffort, &effort); err != nil || effort == "" {
 			writeErr(w, session.ErrInvalidInput)
 			return
 		}
@@ -278,7 +299,7 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, err := a.mgr.Create(r.Context(), session.CreateRequest{
-		Name: req.Name, WorkloadType: workload, Model: model, Tenant: tenant,
+		Name: req.Name, WorkloadType: workload, Model: model, ReasoningEffort: effort, Tenant: tenant,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -649,6 +670,10 @@ func writeErr(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	case errors.Is(err, session.ErrPluginRefreshFailed):
 		status = http.StatusBadGateway
+	case errors.Is(err, session.ErrAuthPoolExhausted):
+		// The wrapped cause names slots and holders; clients only get the class.
+		writeJSON(w, http.StatusServiceUnavailable, errResp{Error: session.ErrAuthPoolExhausted.Error()})
+		return
 	}
 	writeJSON(w, status, errResp{Error: err.Error()})
 }

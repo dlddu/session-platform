@@ -13,7 +13,8 @@ export function liveSessionPath(
   switch (session.workloadType) {
     case "claude-code":
     case "minimax-code":
-    case "codex":
+    case "codex-chat":
+    case "codex-task":
       return `/agent/${session.id}`;
     case "approval-gated":
       return `/gated/${session.id}`;

@@ -47,7 +47,7 @@ func TestCodexArchiveGateNeedsImage(t *testing.T) {
 func TestOfferedWorkloadTypesIncludesCodexOnlyWithImage(t *testing.T) {
 	has := func(c config) bool {
 		for _, w := range c.offeredWorkloadTypes() {
-			if w == session.WorkloadTypeCodex {
+			if w == session.WorkloadTypeCodexChat {
 				return true
 			}
 		}

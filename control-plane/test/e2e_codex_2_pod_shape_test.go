@@ -16,7 +16,7 @@ func TestCodex2_OnePodTokenOnlyInSidecar(t *testing.T) {
 	if !ok {
 		t.Skip("no kube credentials for the SUT")
 	}
-	s := createAs(t, "", map[string]any{"name": uniqueName(t), "workloadType": "codex"})
+	s := createAs(t, "", map[string]any{"name": uniqueName(t), "workloadType": "codex-chat"})
 	resp, raw := doAs(t, "", http.MethodGet, "/api/v1/sessions/"+s.ID, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("get: %d %s", resp.StatusCode, raw)

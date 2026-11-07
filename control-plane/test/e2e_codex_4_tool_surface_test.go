@@ -41,7 +41,7 @@ func TestCodex4_ModelSeesNoShellFileOrImageTool(t *testing.T) {
 	if !ok {
 		t.Skip("no kube credentials for the SUT")
 	}
-	s := createAs(t, "", map[string]any{"name": uniqueName(t), "workloadType": "codex"})
+	s := createAs(t, "", map[string]any{"name": uniqueName(t), "workloadType": "codex-chat"})
 	pods, err := cs.CoreV1().Pods(sessionNamespace()).List(context.Background(), metav1.ListOptions{LabelSelector: "session-id=" + s.ID})
 	if err != nil || len(pods.Items) != 1 {
 		t.Fatalf("codex pod: %v (%d pods)", err, len(pods.Items))

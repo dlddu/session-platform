@@ -111,7 +111,7 @@ func main() {
 			logger.Info("session shell started", "shell", a.shellPath, "pid", sh.pid, "addr", addr, "home", a.homeDir())
 		}
 	case workloadClaudeCode, workloadApprovalGated:
-		tools, err := agentToolSurface(workload)
+		auth, err := claudeAuthFromEnv(workload, logger)
 		if err != nil {
 			logger.Error("unsafe agent credential configuration", "workload", workload, "err", err)
 			os.Exit(1)
@@ -121,16 +121,24 @@ func main() {
 			logger.Error("invalid claude-code run timeout", "err", err)
 			os.Exit(1)
 		}
+		binary := env("CLAUDE_CODE_BIN", defaultClaudeBinary)
+		var login claudeLogin
+		if auth.slot != nil {
+			login = execClaudeLogin{binary: binary}
+		}
 		claude, err := newClaudeWorkload(claudeConfig{
 			StateDir:    env("CLAUDE_CODE_STATE_DIR", defaultClaudeStateDir),
 			Model:       env("CLAUDE_CODE_MODEL", platformDefaultModel),
-			Binary:      env("CLAUDE_CODE_BIN", defaultClaudeBinary),
+			Binary:      binary,
 			RestoreMode: restoreMode,
 			Runner:      execCommandRunner{},
 			Logger:      logger,
 			Redact:      credentialLiteralsFromEnv(),
 			RunTimeout:  runTimeout,
-			Tools:       tools,
+			Tools:       auth.tools,
+			CLI:         claudeCLI{effort: auth.effort},
+			AuthSlot:    auth.slot,
+			Login:       login,
 		})
 		if err != nil {
 			logger.Error("failed to initialise agent workload", "workload", workload, "err", err)
@@ -140,13 +148,14 @@ func main() {
 		if workload == workloadApprovalGated {
 			// AC-F3's wait marker (session_mcp_notice_tail.go). Only this type
 			// has a gate to report on and a helper pod to ask.
-			tailer := newNoticeTailer(tools.SessionMCP, claude, logger)
+			tailer := newNoticeTailer(auth.tools.SessionMCP, claude, logger)
 			go tailer.run(claude.ctx)
 		}
 		logger.Info("agent workload started", "workload", workload, "addr", addr,
-			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode)
-	case workloadCodex:
-		claude, err := newCodexWorkloadFromEnv(logger, restoreMode)
+			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode,
+			"auth_mode", auth.mode, "effort", auth.effort)
+	case workloadCodexChat, workloadCodexLegacy, workloadCodexTask:
+		claude, err := newCodexWorkloadFromEnv(workload, logger, restoreMode)
 		if err != nil {
 			logger.Error("failed to initialise agent workload", "workload", workload, "err", err)
 			os.Exit(1)
@@ -687,9 +696,49 @@ func durationEnv(k string, def time.Duration) (time.Duration, error) {
 	return duration, nil
 }
 
-// agentToolSurface validates the credential wiring of a one-shot agent workload
-// and reports the platform-managed tool surface it must run with. The two agent
-// types share an execution model and differ only here.
+// claudeAuth is how a Claude Code workload reaches its provider and what it
+// may use: the tool surface, AC-E7's auth mode with its slot, and AC-E8's
+// effort.
+type claudeAuth struct {
+	tools  toolSurface
+	mode   string
+	slot   *authSlot
+	effort string
+}
+
+// claudeAuthFromEnv validates a Claude Code workload's credential wiring.
+// approval-gated always uses its helper pod's gateway (AC-F6); claude-code
+// uses AC-E7's mode.
+func claudeAuthFromEnv(workload string, logger *slog.Logger) (claudeAuth, error) {
+	if workload != workloadClaudeCode {
+		tools, err := agentToolSurface(workload)
+		return claudeAuth{tools: tools, mode: claudeAuthModeGateway}, err
+	}
+	mode, err := claudeAuthModeFromEnv()
+	if err != nil {
+		return claudeAuth{}, err
+	}
+	effort, err := claudeEffortFromEnv()
+	if err != nil {
+		return claudeAuth{}, err
+	}
+	if mode == claudeAuthModeGateway {
+		tools, err := agentToolSurface(workload)
+		return claudeAuth{tools: tools, mode: mode, effort: effort}, err
+	}
+	if err := validateClaudeSubscriptionClientEnv(); err != nil {
+		return claudeAuth{}, err
+	}
+	slot, err := newAuthSlotFromEnv(claudeCredentialsFile, claudeCredentialsHomeRel, logger)
+	if err != nil {
+		return claudeAuth{}, err
+	}
+	return claudeAuth{tools: toolSurface{Plugin: true}, mode: mode, slot: slot, effort: effort}, nil
+}
+
+// agentToolSurface validates the credential wiring of a gateway-mode agent
+// workload and reports the platform-managed tool surface it must run with. The
+// two agent types share an execution model and differ only here.
 func agentToolSurface(workload string) (toolSurface, error) {
 	switch workload {
 	case workloadClaudeCode:

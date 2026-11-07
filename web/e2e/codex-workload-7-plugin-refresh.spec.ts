@@ -21,7 +21,7 @@ test("a codex session refreshes its plugin skills from the workspace", async ({ 
   const ids: string[] = [];
 
   try {
-    const codex = await create(request, `codex-7-${stamp}`, "codex");
+    const codex = await create(request, `codex-7-${stamp}`, "codex-chat");
     ids.push(codex.id);
     const shell = await create(request, `codex-7-shell-${stamp}`, "shell");
     ids.push(shell.id);

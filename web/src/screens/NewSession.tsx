@@ -31,7 +31,8 @@ const WORKLOAD_ORDER: WorkloadType[] = [
   "shell",
   "claude-code",
   "minimax-code",
-  "codex",
+  "codex-chat",
+  "codex-task",
   "approval-gated",
 ];
 
@@ -52,12 +53,19 @@ const WORKLOAD_CARDS: Record<
     description:
       "MiniMax Code CLI on the same prompt loop. Runs the platform's default MiniMax model.",
   },
-  codex: {
+  "codex-chat": {
     icon: "◇",
     iconClass: "agent",
     wide: true,
     description:
-      "Codex SDK agent on your ChatGPT plan. Conversation, plugin skills and K3s MCP only.",
+      "Long-running Codex chat on your ChatGPT plan. Conversation, plugin skills and K3s MCP only.",
+  },
+  "codex-task": {
+    icon: "◇",
+    iconClass: "agent",
+    wide: true,
+    description:
+      "Codex coding agent with a shell, file edits and network. Uses a login slot from the platform pool.",
   },
   "approval-gated": {
     icon: "⏸",
@@ -88,6 +96,20 @@ function catalogFor(
     return config.claudeCode;
   }
   return PLATFORM_DEFAULT_CATALOG;
+}
+
+// AC-E8: the allowed values come from /config; an older control plane lists
+// none, which hides the choice rather than guessing values it may reject.
+const NO_EFFORTS: string[] = [];
+
+function effortsFor(
+  config: PlatformConfig | null,
+  workloadType: WorkloadType,
+): string[] {
+  return (
+    config?.workloadTypes.find((t) => t.type === workloadType)
+      ?.reasoningEfforts ?? NO_EFFORTS
+  );
 }
 
 const STEP_GAP_MS = 450;
@@ -168,6 +190,8 @@ export function NewSession() {
   const [workloadType, setWorkloadType] = useState<WorkloadType>("shell");
   const [model, setModel] = useState("");
   const [submittedModel, setSubmittedModel] = useState("");
+  const [effort, setEffort] = useState("");
+  const [submittedEffort, setSubmittedEffort] = useState("");
   const [config, setConfig] = useState<PlatformConfig | null>(null);
   const [tenant, setTenant] = useState("");
   const [phase, setPhase] = useState<"input" | "provisioning">("input");
@@ -204,6 +228,7 @@ export function NewSession() {
     config,
     workloadType,
   );
+  const efforts = effortsFor(config, workloadType);
   const tenants = config?.tenants ?? [];
   const callerTenant = config?.tenant ?? null;
   const pickedTenant: TenantConfig | null = callerTenant
@@ -224,6 +249,11 @@ export function NewSession() {
         : "",
     );
   }, [configuredModels, defaultModel]);
+
+  // A choice the newly picked type does not list falls back to the CLI default.
+  useEffect(() => {
+    setEffort((current) => (efforts.includes(current) ? current : ""));
+  }, [efforts]);
 
   useEffect(() => {
     if (offeredTypes.length > 0 && !offeredTypes.includes(workloadType)) {
@@ -254,11 +284,14 @@ export function NewSession() {
           ? "platform default"
           : defaultModel),
     );
+    const chosenEffort = efforts.includes(effort) ? effort : "";
+    setSubmittedEffort(chosenEffort);
     api
       .createSession({
         name: trimmed,
         workloadType,
         ...(choosesModel && trimmedModel ? { model: trimmedModel } : {}),
+        ...(chosenEffort ? { reasoningEffort: chosenEffort } : {}),
         ...(!callerTenant && pickedTenant ? { tenant: pickedTenant.name } : {}),
       })
       .then((sess) => {
@@ -453,6 +486,27 @@ export function NewSession() {
                 </small>
               </label>
             ) : null}
+            {efforts.length > 0 ? (
+              <label className="field model-field">
+                <span>Reasoning effort</span>
+                <select
+                  data-testid="new-session-effort"
+                  value={effort}
+                  onChange={(e) => setEffort(e.target.value)}
+                  aria-describedby="new-session-effort-hint"
+                >
+                  <option value="">CLI default</option>
+                  {efforts.map((value) => (
+                    <option key={value} value={value}>
+                      {value}
+                    </option>
+                  ))}
+                </select>
+                <small className="field-hint" id="new-session-effort-hint">
+                  CLI default leaves the effort to the agent and its model.
+                </small>
+              </label>
+            ) : null}
             <div className="immutable-note">
               <LockIcon size={14} className="immutable-note-icon" />
               <span>
@@ -460,8 +514,10 @@ export function NewSession() {
                   ? "Workload type and model choice are fixed for this session. The session also gets a helper pod that holds the approval gate and the only route out."
                   : workloadType === "minimax-code"
                     ? "Workload type is fixed for this session. It runs the platform default MiniMax model, resolved at container start."
-                    : workloadType === "codex"
+                    : workloadType === "codex-chat"
                     ? "Workload type and model choice are fixed for this session. The first prompt signs the session in to ChatGPT, and the login is kept in its archive."
+                    : workloadType === "codex-task"
+                    ? "Workload type, model and reasoning effort are fixed for this session. It takes a login slot while it has a pod; an empty slot signs in on the first prompt."
                     : isAgentWorkload(workloadType)
                       ? "Workload type and model choice are fixed for this session. Platform default resolves to the configured default at container start."
                       : (
@@ -502,7 +558,8 @@ export function NewSession() {
           <>
             <div className="provision-workload" data-testid="prov-workload">
               {isAgentWorkload(workloadType)
-                ? `workloadType=${workloadType} · model=${submittedModel}`
+                ? `workloadType=${workloadType} · model=${submittedModel}` +
+                  (submittedEffort ? ` · effort=${submittedEffort}` : "")
                 : "workloadType=shell"}
             </div>
             <div className="steps" data-testid="prov-steps">

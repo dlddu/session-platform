@@ -25,9 +25,9 @@ func TestRefreshPlugins(t *testing.T) {
 		k8s.NewStubOrchestrator("sessions"),
 		configmap.NewStore(fake.NewSimpleClientset(), "sessions"),
 		ckpt, agent.NewStubClient(),
-		service.WithWorkloadCheckpointer(session.WorkloadTypeCodex, ckpt),
+		service.WithWorkloadCheckpointer(session.WorkloadTypeCodexChat, ckpt),
 	)
-	codex, err := svc.Create(ctx, session.CreateRequest{Name: "long", WorkloadType: session.WorkloadTypeCodex})
+	codex, err := svc.Create(ctx, session.CreateRequest{Name: "long", WorkloadType: session.WorkloadTypeCodexChat})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,7 +3,8 @@
 #
 # A tenant is the ServiceAccounts (`<namespace>/<name>`) that speak for it and
 # the workload types its sessions may run — ["*"] alone means every type the
-# deployment offers, including types added later. A request carrying
+# deployment offers, including types added later. `codex` is still read as
+# `codex-chat`, its name before 2026-11-07 (AC-J1). A request carrying
 #   Authorization: Bearer <projected token, audience "session-platform">
 # from one of those accounts sees and creates only that tenant's sessions. A
 # request with no Authorization header is the operator (the Authelia-fronted
@@ -32,6 +33,6 @@ metadata:
 data:
   tenants.json: |
     {"tenants": [
-      {"name": "pocket-aide", "serviceAccounts": ["pocket-aide/pocket-aide"], "workloadTypes": ["codex", "claude-code"]},
+      {"name": "pocket-aide", "serviceAccounts": ["pocket-aide/pocket-aide"], "workloadTypes": ["codex-chat", "claude-code"]},
       {"name": "homelab-k3s-mcp", "serviceAccounts": ["homelab-k3s-mcp/homelab-k3s-mcp", "pocket-aide/pocket-aide-sessions"], "workloadTypes": ["*"]}
     ]}

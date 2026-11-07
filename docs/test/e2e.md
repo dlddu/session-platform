@@ -451,6 +451,7 @@ ci.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 �
 | `codex-workload.md#시나리오 1` | `web/e2e/codex-workload-1-agent-type.spec.ts` | playwright | 새 세션 화면에 `Codex` 카드와 그 고정 안내가 있고, 그 타입으로 만든 세션이 `active` 의 `codex` 세션이며 에이전트 작업 화면(프롬프트 입력·ChatGPT 로그인 안내)으로 열리고, 목록 카드가 `◇ codex` 태그를 단다는 것. 프롬프트는 보내지 않는다 — 로그인은 시나리오 3(예외)의 몫이다. |
 | `codex-workload.md#시나리오 7` | `web/e2e/codex-workload-7-plugin-refresh.spec.ts` | playwright | `codex` 세션 작업 화면의 Actions 패널에만 `Refresh plugin skills` 가 있고, 누르면 세션이 `active` 로 남은 채 결과 알림(kind SUT 는 마켓플레이스 토큰이 없어 「새로 받을 마켓플레이스가 없다」)과 출력 안내 줄이 나타나며, `shell` 세션에 같은 API 를 부르면 422 라는 것. |
 | `multitenancy.md#시나리오 4` | `web/e2e/multitenancy-4-operator-ui.spec.ts` | playwright | 테넌트가 설정된 SUT 에서 운영자의 새 세션 화면에 테넌트 선택(기본 무소속)이 있고, `e2e-alpha` 를 고르면 타입 카드가 `shell`·`codex` 로 좁혀지며, 그렇게 만든 세션이 `tenant: e2e-alpha` 로 저장되고 목록에서 태그·필터(새로고침 뒤 포함)로 갈린다는 것. |
+| `codex-task-workload.md#시나리오 1` | `web/e2e/codex-task-workload-1-agent-type.spec.ts` | playwright | 새 세션 화면에 `Codex task` 카드와 추론 수준 선택지(`CLI default`·`minimal`~`xhigh`)가 있고, `high` 를 골라 만든 세션이 `active` 의 `codex-task` 세션이며 작업 화면의 Workload 패널과 조회 응답에 `reasoningEffort=high` 가 있다. 끝에 세션을 지워 풀 슬롯을 돌려준다. |
 <!-- scenario-mapping:end -->
 
 ## 시나리오 예외 목록
@@ -466,6 +467,10 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 | `codex-workload.md#시나리오 3` | 기대 결과가 **사람의 브라우저 승인과 실 ChatGPT 구독 계정**에 걸린다 — device code 는 사람이 계정으로 로그인한 브라우저에서 입력해야 승인되고, 그 계정의 보안 설정이 device code 로그인을 허용해야 한다. 승인 끝점은 OpenAI 의 것이라 kind 에 실물로 둘 수 없고, 대역을 세우면 로그인 뒤의 대화가 실 모델이 아니게 된다(`EXT` 대역이 서도 이 시나리오의 「같은 턴이 이어서 실행된다」는 관측되지 않는다). | data plane 단위 테스트 — 러너 안내 줄의 투영(`data-plane/cmd/agent` 의 codex 투영 테스트)과 러너의 로그인 분기(`data-plane/codex-runner` 테스트). 실계정 왕복은 운영 확인. |
 | `codex-workload.md#시나리오 5` | 시나리오 3 위에 서 있다 — 로그인된 세션이 있어야 동결·복원 뒤 「로그인 안내 없이 이어서 답한다」를 관측할 수 있다. 아카이브 왕복 자체는 다른 에이전트 타입과 같은 경로라 그쪽 시나리오(`claude-code-workload.md#시나리오 6`)가 SUT 에서 돈다. | 아카이브 대상 트리에 `~/.codex/auth.json` 과 스레드 파일이 들어가고 관리형 `config.toml` 이 복원 때 다시 쓰인다는 data plane 단위 테스트, 그리고 같은 아카이브 경로의 `claude-code-workload.md#시나리오 6` 대체 검증. |
 | `codex-workload.md#시나리오 6` | 금지 아이템(`command_execution`·`file_change`·`web_search`)은 **실 모델이 그 도구를 부를 때만** 생긴다. 셸·웹 도구는 설정이 꺼 두었으므로 SUT 에서 그 이벤트를 결정적으로 일으킬 경로가 원리적으로 없다 — 일으킬 수 있다면 그것이 곧 AC-J5 위반이다. | `data-plane/codex-runner` 의 `node --test` — 금지 아이템 이벤트 열을 받은 러너가 안내를 남기고 비영 코드로 끝나는지. |
+| `agent-auth-pool.md#시나리오 4` | 동기화는 **턴 앞뒤와 턴 중**에 돈다. SUT 에서 `codex-task` 턴을 돌리려면 실 ChatGPT 로그인이 필요하고(`codex-task-workload.md#시나리오 3` 과 같은 사유), `claude-code` 는 e2e 에서 `gateway` 모드라 슬롯이 없다. 슬롯에 가짜 파일을 넣어도 CLI 가 그것으로 공급자에 붙지 못해 턴이 로그인 단계에서 끝난다. | `data-plane/cmd/agent` 의 `go test` — `auth_slot_test.go`(턴 전·중·후 동기화, 반쯤 쓰인 파일을 로그아웃으로 읽지 않음, 원자적 쓰기, `GET /auth-slot`)와 아카이브에서 로그인 파일이 빠지는지. |
+| `codex-task-workload.md#시나리오 3` | `codex-workload.md#시나리오 3` 과 같다 — device code 승인은 사람의 브라우저와 실 ChatGPT 구독 계정이 필요하다. 그 뒤의 「다음 세션은 로그인하지 않는다」도 그 로그인 위에 서 있다. | `data-plane/cmd/agent` 의 `go test`(`codex_task_test.go` — 슬롯 파일이 있으면 턴 전에 HOME 으로 오고 턴 뒤 갱신이 슬롯으로 간다)와 `data-plane/codex-runner` 의 `node --test`(작업 모드 스레드 옵션). |
+| `codex-task-workload.md#시나리오 5` | 기대 결과 (c) 가 **로그인된 슬롯 위의 실 모델 응답**이다. 아카이브 왕복 자체는 다른 에이전트 타입과 같은 경로라 `claude-code-workload.md#시나리오 6` 이 SUT 에서 돈다. | `data-plane/cmd/agent` 의 `go test` — 아카이브에 `home/.codex/auth.json` 이 없음, 그리고 control plane 단위 테스트(`internal/service/auth_pool_test.go`)의 동결 커밋 뒤 반납·복원 전 재임대. |
+| `claude-code-workload.md#시나리오 10` | e2e 의 `claude-code` 는 공급자 대역(`deploy/e2e-anthropic-fake.yaml`)에 붙는 `gateway` 모드다(AC-E7) — 구독 모드는 실 Claude 계정의 브라우저 로그인과 실 공급자가 필요하다. 구독 모드의 파드 모양만 따로 띄우면 그 세션은 로그인 단계에서 멈춘다. | control plane `go test`(`test/auth_pool_orchestrator_test.go` — 구독 모드 pod spec 에 credential-proxy·`ANTHROPIC_*` 가 없고 슬롯 PVC 와 `CLAUDE_CODE_AUTH_MODE` 가 있음, 게이트웨이 모드는 그대로)와 data plane `go test`(`claude_subscription_test.go` — 로그인 URL 안내·프롬프트 보류, 다음 write 를 코드로 쓰고 출력에 남기지 않음, 성공 시 보류 프롬프트 실행, 만료·자격 증명 env 거부). |
 <!-- scenario-exceptions:end -->
 
 ## 유예
@@ -530,6 +535,12 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 | `multitenancy.md#시나리오 3` | **Playwright 이관 미완료 — 토큰 발급 의존.** 테넌트 호출자는 kind 안 ServiceAccount 의 projected 토큰을 내야 하고, 그 토큰은 TokenRequest(kube API)로만 발급된다. 호출 자체는 control-plane HTTP API 뿐이다. | `control-plane/test/e2e_multitenancy_3_workload_grant_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_multitenancy_3_workload_grant_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. 토큰은 `kubectl create token` 을 셸로 부르거나 global setup 이 발급해 넘길 수 있다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다(실물 TokenRequest·TokenReview, 대역 없음). |
 | `multitenancy.md#시나리오 5` | **Playwright 이관 미완료 — 토큰 발급 의존.** 테넌트 호출자는 kind 안 ServiceAccount 의 projected 토큰을 내야 하고, 그 토큰은 TokenRequest(kube API)로만 발급된다. 호출 자체는 control-plane HTTP API 뿐이다. | `control-plane/test/e2e_multitenancy_5_refusals_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 + **같은 PR 에서 `control-plane/test/e2e_multitenancy_5_refusals_test.go` 제거**. 두 스위트가 같은 시나리오를 동시에 들고 있는 창을 남기지 않는다. 토큰은 `kubectl create token` 을 셸로 부르거나 global setup 이 발급해 넘길 수 있다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다(실물 TokenRequest·TokenReview, 대역 없음). |
 | `multitenancy.md#시나리오 6` | **SUT 재기동 의존.** 기대 결과가 control plane **기동** 실패·다른 설정으로의 재기동이라, 한 벌로 떠 있는 SUT 를 대상으로 하는 스위트가 밟을 수 없다. | 없음 | 이 모델 | 설정을 바꿔 control plane 을 다시 띄우는 하네스(별도 Deployment 또는 재기동 단계)가 서면 전용 spec 을 둔다. | 현재 검증은 단위 테스트(`internal/tenancy` 의 설정 파싱, `cmd/control-plane` 의 기동 설정)뿐이다 — 이 표의 대체 검증 칸은 매칭 공간 밖 선언만 적으므로 `없음`. |
+| `agent-auth-pool.md#시나리오 1` | **Playwright 이관 미완료 — kube 관측 의존.** 기대 결과가 Lease·PVC·pod spec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**다. | `control-plane/test/e2e_auth_pool_1_lease_mount_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_auth_pool_1_lease_mount_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다. |
+| `agent-auth-pool.md#시나리오 2` | **Playwright 이관 미완료 — kube 관측 의존.** 기대 결과가 Lease·PVC·pod spec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**다. | `control-plane/test/e2e_auth_pool_2_exhausted_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_auth_pool_2_exhausted_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다. |
+| `agent-auth-pool.md#시나리오 3` | **Playwright 이관 미완료 — kube 관측 의존.** 기대 결과가 Lease·PVC·pod spec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**다. | `control-plane/test/e2e_auth_pool_3_release_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_auth_pool_3_release_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다. |
+| `codex-task-workload.md#시나리오 2` | **Playwright 이관 미완료 — kube 관측 의존.** 기대 결과가 Lease·PVC·pod spec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**다. | `control-plane/test/e2e_codex_task_2_pod_shape_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_codex_task_2_pod_shape_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다. |
+| `codex-task-workload.md#시나리오 4` | **Playwright 이관 미완료 — kube 관측 의존(일부).** `/config`·생성·조회는 HTTP API 로 보이지만 「파드까지 간다」는 주 컨테이너 env 로만 관측된다. | `control-plane/test/e2e_codex_task_4_effort_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지(파드 env 단언은 규칙 4 예외로 분리) **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_codex_task_4_effort_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다. |
+| `claude-code-workload.md#시나리오 11` | **Playwright 이관 미완료 — kube 관측 의존(일부).** `/config`·생성·조회는 HTTP API 로 보이지만 「파드까지 간다」는 주 컨테이너 env 로만 관측된다. | `control-plane/test/e2e_claude_code_11_effort_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지(파드 env 단언은 규칙 4 예외로 분리) **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_claude_code_11_effort_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다. |
 <!-- scenario-deferred:end -->
 
 > **이 표가 비는 날 완전 1:1이다.** 현재 잔여는 두 갈래다 — 이관 26(매칭 공간 축소가 만든 부채, 검증은
@@ -569,10 +580,10 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 ## 집계
 
 <!-- scenario-summary:begin -->
-- 시나리오 총계: 59
-- 예외: 6
-- 유예: 49
-- 시나리오 매칭 파일: 4
+- 시나리오 총계: 70
+- 예외: 10
+- 유예: 55
+- 시나리오 매칭 파일: 5
 - 공백: 0
 <!-- scenario-summary:end -->
 

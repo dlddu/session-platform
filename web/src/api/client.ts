@@ -8,8 +8,37 @@ import type {
   ReadResult,
   RepoAccessState,
   Session,
+  TenantConfig,
+  WorkloadType,
+  WorkloadTypeConfig,
   WriteResult,
 } from "./types";
+
+// AC-J1: `codex` 는 `codex-chat` 의 옛 이름이다. 서버는 늘 새 이름을 내지만, 이름 변경
+// 전의 제어면과 섞여 돌 때도 화면이 한 갈래로 읽게 여기서 한 번 접는다.
+function normalizeType(t: WorkloadType | "codex"): WorkloadType {
+  return t === "codex" ? "codex-chat" : t;
+}
+
+function normalizeSession<T extends Session | undefined>(s: T): T {
+  return s ? { ...s, workloadType: normalizeType(s.workloadType) } : s;
+}
+
+function withSession<T extends { session: Session }>(r: T): T {
+  return { ...r, session: normalizeSession(r.session) };
+}
+
+function normalizeTenant(t: TenantConfig): TenantConfig {
+  return { ...t, workloadTypes: (t.workloadTypes ?? []).map(normalizeType) };
+}
+
+function normalizeTypeConfig(t: WorkloadTypeConfig): WorkloadTypeConfig {
+  return {
+    ...t,
+    type: normalizeType(t.type),
+    reasoningEfforts: t.reasoningEfforts ?? [],
+  };
+}
 
 const BASE = "/api/v1";
 
@@ -51,19 +80,24 @@ export const api = {
     }).then(
       (r): PlatformConfig => ({
         claudeCode: r.claudeCode,
-        workloadTypes: r.workloadTypes ?? [],
-        tenant: r.tenant ?? null,
-        tenants: r.tenants ?? [],
+        workloadTypes: (r.workloadTypes ?? []).map(normalizeTypeConfig),
+        tenant: r.tenant ? normalizeTenant(r.tenant) : null,
+        tenants: (r.tenants ?? []).map(normalizeTenant),
       }),
     ),
 
   listSessions: () =>
-    req<{ sessions: Session[] }>("/sessions").then((r) => r.sessions ?? []),
+    req<{ sessions: Session[] }>("/sessions").then((r) =>
+      (r.sessions ?? []).map(normalizeSession),
+    ),
 
-  getSession: (id: string) => req<Session>(`/sessions/${id}`),
+  getSession: (id: string) =>
+    req<Session>(`/sessions/${id}`).then(normalizeSession),
 
   createSession: (body: CreateSessionRequest) =>
-    req<Session>("/sessions", { method: "POST", body: JSON.stringify(body) }),
+    req<Session>("/sessions", { method: "POST", body: JSON.stringify(body) }).then(
+      normalizeSession,
+    ),
 
   deleteSession: (id: string) =>
     req<void>(`/sessions/${id}`, { method: "DELETE" }),
@@ -81,24 +115,26 @@ export const api = {
     req<ReadResult>(`/sessions/${id}/read`, {
       method: "POST",
       body: JSON.stringify({ offset }),
-    }),
+    }).then(withSession),
 
   writeSession: (id: string, payload: string) =>
     req<WriteResult>(`/sessions/${id}/write`, {
       method: "POST",
       body: JSON.stringify({ payload }),
-    }),
+    }).then(withSession),
 
   switchSession: (id: string) =>
-    req<Session>(`/sessions/${id}/switch`, { method: "POST" }),
+    req<Session>(`/sessions/${id}/switch`, { method: "POST" }).then(normalizeSession),
 
   /** Archive immediately and reclaim the workload pod (every workload type). */
   archiveSession: (id: string) =>
-    req<Session>(`/sessions/${id}/snapshot`, { method: "POST" }),
+    req<Session>(`/sessions/${id}/snapshot`, { method: "POST" }).then(normalizeSession),
 
-  /** AC-J7 — codex only, between turns; the conversation is kept. */
+  /** AC-J7 — codex-chat and codex-task only, between turns; the conversation is kept. */
   refreshPlugins: (id: string) =>
-    req<PluginRefreshResult>(`/sessions/${id}/plugins/refresh`, { method: "POST" }),
+    req<PluginRefreshResult>(`/sessions/${id}/plugins/refresh`, { method: "POST" }).then(
+      withSession,
+    ),
 
   getRepoAccess: () =>
     req<RepoAccessState>("/repo-access", { cache: "no-store" }).then((r) => ({

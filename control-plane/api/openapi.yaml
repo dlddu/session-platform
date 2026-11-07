@@ -9,7 +9,8 @@ info:
     uniform "ensure active then serve": read, write and switch promote
     idle->active (AC-C1) or restore snapshot->active (AC-B2) before serving.
     A session picks a workload type at creation (AC-E1): `shell` (the default),
-    `claude-code`, `approval-gated`, `minimax-code` or `codex`. The type is immutable for the session's lifetime — no
+    `claude-code`, `approval-gated`, `minimax-code`, `codex-chat` or `codex-task`
+    (`codex` is accepted as codex-chat's legacy name). The type is immutable for the session's lifetime — no
     endpoint changes it, and a restore keeps it — so switching workloads means
     creating a new session. For `shell`, write injects the payload into the PTY
     stdin (AC-D2); for `claude-code` (and the agent types that reuse its
@@ -101,7 +102,7 @@ paths:
                 tenant: null
                 tenants:
                   - name: pocket-aide
-                    workloadTypes: [claude-code, codex]
+                    workloadTypes: [claude-code, codex-chat]
                 claudeCode:
                   defaultModel: "~anthropic/claude-opus-latest"
                   models: [sonnet, opus]
@@ -113,6 +114,7 @@ paths:
                     input: terminal
                     defaultModel: null
                     models: []
+                    reasoningEfforts: []
                   - type: claude-code
                     label: Claude Code
                     description: Agent CLI. You send prompts, it does the work.
@@ -120,6 +122,7 @@ paths:
                     input: prompt
                     defaultModel: "~anthropic/claude-opus-latest"
                     models: [sonnet, opus]
+                    reasoningEfforts: [low, medium, high, xhigh, max]
   /sessions:
     get:
       summary: List the sessions the caller sees
@@ -180,6 +183,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "413":
           $ref: "#/components/responses/RequestEntityTooLarge"
+        "503": { $ref: "#/components/responses/AuthPoolExhausted" }
   /sessions/{id}:
     get:
       summary: Get a single session
@@ -313,6 +317,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "413":
           $ref: "#/components/responses/RequestEntityTooLarge"
+        "503": { $ref: "#/components/responses/AuthPoolExhausted" }
   /sessions/{id}/write:
     post:
       summary: Write to a session (state-branched, AC-C3)
@@ -352,6 +357,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/AuthPoolExhausted" }
   /sessions/{id}/switch:
     post:
       summary: Switch to a session, restoring from snapshot if needed (AC-C4)
@@ -388,6 +394,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/AuthPoolExhausted" }
   /sessions/{id}/snapshot:
     post:
       summary: Archive a session on demand and reclaim its pod (AC-B1/AC-A3)
@@ -438,7 +445,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
   /sessions/{id}/plugins/refresh:
     post:
-      summary: Fetch a codex session's plugin skills again, keeping its conversation (AC-J7)
+      summary: Fetch a codex-chat or codex-task session's plugin skills again, keeping its conversation (AC-J7)
       operationId: refreshSessionPlugins
       description: >
         Codex sessions only. The session's K3s MCP sidecar clones the plugin
@@ -486,7 +493,7 @@ paths:
         "413":
           $ref: "#/components/responses/RequestEntityTooLarge"
         "422":
-          description: The session is not a codex session
+          description: The session is neither codex-chat nor codex-task
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -495,6 +502,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/AuthPoolExhausted" }
   /repo-access:
     get:
       summary: Allow list and pending requests (AC-H1/AC-H4)
@@ -709,6 +717,14 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
+    AuthPoolExhausted:
+      description: >
+        Every login slot of the session type's auth pool is held (AC-L2), so no
+        pod was made. A session that needed a restore stays `snapshot`. The
+        body's `error` is exactly `auth pool exhausted`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
     RequestEntityTooLarge:
       description: The JSON wire body exceeds 8 MiB, or an agent workload prompt (claude-code, approval-gated, minimax-code) exceeds the 1 MiB decoded payload limit
       content:
@@ -793,7 +809,7 @@ components:
     WorkloadTypeConfig:
       type: object
       additionalProperties: false
-      required: [type, label, description, takesModel, input, defaultModel, models]
+      required: [type, label, description, takesModel, input, defaultModel, models, reasoningEfforts]
       properties:
         type:
           type: string
@@ -826,6 +842,15 @@ components:
           type: array
           uniqueItems: true
           description: Same meaning as `ClaudeCodeConfig.models` for this type. Always empty when `takesModel` is false.
+          items:
+            type: string
+        reasoningEfforts:
+          type: array
+          uniqueItems: true
+          description: >
+            The values a create request's `reasoningEffort` may take for this
+            type, in display order (AC-E8). Empty when the type takes none — a
+            create request carrying one is then rejected with 400.
           items:
             type: string
     TenantConfig:
@@ -868,7 +893,7 @@ components:
       enum: [active, idle, snapshot]
     WorkloadType:
       type: string
-      enum: [shell, claude-code, approval-gated, minimax-code, codex]
+      enum: [shell, claude-code, approval-gated, minimax-code, codex-chat, codex-task]
       default: shell
       description: >
         Which data plane workload the session runs (AC-E1/AC-F1). Fixed at
@@ -878,10 +903,14 @@ components:
         approval gate, provisioned as a workload pod plus a session-scoped
         helper pod (AC-F1~F6); `minimax-code` is the MiniMax Code CLI
         (`mcode`) on that same execution model, with its own provider Secret and ConfigMap
-        behind the same credential proxy (AC-G1~G4); `codex` runs the Codex SDK on
+        behind the same credential proxy (AC-G1~G4); `codex-chat` runs the Codex SDK on
         the same execution model, signs each session in to ChatGPT with a
         device code on its first prompt, and is limited to conversation,
-        platform plugin skills and the K3s MCP (AC-J1~J6). Each non-default type requires the control plane
+        platform plugin skills and the K3s MCP (AC-J1~J7). A request may still
+        send its legacy name `codex`; responses always say `codex-chat`.
+        `codex-task` runs the same SDK with a shell, files and network like
+        `claude-code`, signed in through a login slot of the `codex-task` auth
+        pool (AC-M1~M4, AC-L1~L5). Each non-default type requires the control plane
         to have an image configured for it, and creating a session of a type
         with no configured image fails rather than falling back to a shell.
     Checkpoint:
@@ -909,12 +938,19 @@ components:
           type: string
           description: >
             Immutable model identifier for the agent workload types. Present
-            for `claude-code`, `approval-gated`, `minimax-code` and `codex`, which share
+            for `claude-code`, `approval-gated`, `minimax-code`, `codex-chat` and `codex-task`, which share
             this contract (AC-E6, reused by AC-F1 and AC-G1); omitted at creation resolves to
             `platform-default`.
             Whenever the primary container starts, including a restart, that
             alias resolves through the optional ConfigMap model and then the CLI
             fallback.
+        reasoningEffort:
+          type: string
+          description: >
+            Immutable reasoning effort, present only when the create request
+            named one (AC-E8). `claude-code` takes low, medium, high, xhigh or
+            max; `codex-task` takes minimal, low, medium, high or xhigh (AC-M4).
+            Absent means the CLI's own default. A restore keeps it.
         pod:
           type: string
           description: >
@@ -927,7 +963,7 @@ components:
             Session-scoped pods that serve the workload pod without running the
             workload themselves (AC-A2's auxiliary-pod clause). They share the
             workload pod's lifetime and are reclaimed with it, so this is absent
-            exactly when `pod` is. `shell`, `claude-code`, `minimax-code` and `codex`
+            exactly when `pod` is. `shell`, `claude-code`, `minimax-code`, `codex-chat` and `codex-task`
             sessions provision none; an `approval-gated` session lists its one helper pod here
             (AC-F4).
         createdAt: { type: string, format: date-time }
@@ -948,17 +984,26 @@ components:
             - $ref: "#/components/schemas/WorkloadType"
           description: >
             Optional. Omitted means `shell`, so a request that predates the
-            workload type axis behaves unchanged. A value outside the enum is
-            rejected with 400 before any pod is provisioned.
+            workload type axis behaves unchanged. `codex` is accepted as the
+            legacy name of `codex-chat` (AC-J1). Any other value outside the
+            enum is rejected with 400 before any pod is provisioned.
         model:
           type: string
           pattern: '^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$'
           description: >
             Model for this session. Valid when workloadType is `claude-code`,
-            `approval-gated`, `minimax-code` or `codex`; omitted resolves to `platform-default`. A concrete
+            `approval-gated`, `minimax-code`, `codex-chat` or `codex-task`; omitted resolves to `platform-default`. A concrete
             value is passed literally and takes precedence over the platform
             ConfigMap default. The catalog returned by GET /config is advisory,
             not an allowlist. Credentials are never accepted in this request.
+        reasoningEffort:
+          type: string
+          minLength: 1
+          description: >
+            Optional reasoning effort, fixed at creation (AC-E8). It must be one
+            of the type's `reasoningEfforts` from GET /config; a type with none,
+            an empty string, a non-string or an unlisted value is rejected with
+            400 before any pod is provisioned.
         tenant:
           type: string
           minLength: 1
@@ -975,7 +1020,7 @@ components:
           type: string
           description: >
             Raw workload input. Agent workload writes (claude-code,
-            approval-gated, minimax-code, codex) are limited to 1 MiB of UTF-8 bytes
+            approval-gated, minimax-code, codex-chat, codex-task) are limited to 1 MiB of UTF-8 bytes
             per prompt; larger writes return 413.
     ReadRequest:
       type: object

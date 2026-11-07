@@ -28,13 +28,21 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
   assert.deepEqual(parseArgs(["--model", "gpt-6", "--resume", "--", "--help me"]), {
     model: "gpt-6",
+    mode: "chat",
+    effort: null,
     resume: true,
     prompt: "--help me",
     printCodexBin: false,
   });
   assert.equal(parseArgs(["--", "hi"]).model, PLATFORM_DEFAULT_MODEL);
   assert.equal(parseArgs(["--model", "platform-default", "--", "hi"]).resume, false);
-  for (const bad of [[], ["hi"], ["--model"], ["--model", "", "--", "x"], ["--", "a", "b"], ["--bogus", "--", "x"]]) {
+  const task = parseArgs(["--mode", "task", "--model", "gpt-6", "--effort", "xhigh", "--", "go"]);
+  assert.equal(task.mode, "task");
+  assert.equal(task.effort, "xhigh");
+  for (const bad of [
+    [], ["hi"], ["--model"], ["--model", "", "--", "x"], ["--", "a", "b"], ["--bogus", "--", "x"],
+    ["--mode", "shell", "--", "x"], ["--mode", "--", "x"], ["--effort", "max", "--", "x"], ["--effort", "", "--", "x"],
+  ]) {
     assert.throws(() => parseArgs(bad), UsageError, JSON.stringify(bad));
   }
 });
@@ -58,6 +66,19 @@ test("threadOptions pins the read-only, never-ask, offline surface", () => {
     networkAccessEnabled: false,
   });
   assert.equal(threadOptions("gpt-6", "/w").model, "gpt-6");
+  assert.equal(threadOptions("gpt-6", "/w").modelReasoningEffort, undefined);
+});
+
+test("threadOptions gives codex-task the claude-code-level surface and its effort", () => {
+  assert.deepEqual(threadOptions(PLATFORM_DEFAULT_MODEL, "/w", { mode: "task", effort: "high" }), {
+    sandboxMode: "danger-full-access",
+    approvalPolicy: "never",
+    workingDirectory: "/w",
+    skipGitRepoCheck: true,
+    webSearchMode: "disabled",
+    networkAccessEnabled: true,
+    modelReasoningEffort: "high",
+  });
 });
 
 test("classify finds forbidden items, the thread id and the outcome", () => {
@@ -67,6 +88,9 @@ test("classify finds forbidden items, the thread id and the outcome", () => {
     }
   }
   assert.deepEqual(classify({ type: "item.completed", item: { type: "agent_message", text: "x" } }), {});
+  for (const type of ["command_execution", "file_change", "web_search"]) {
+    assert.deepEqual(classify({ type: "item.started", item: { type } }, "task"), {}, "task mode has no kill switch");
+  }
   assert.deepEqual(classify({ type: "item.started", item: { type: "mcp_tool_call" } }), {});
   assert.deepEqual(classify({ type: "thread.started", thread_id: "t-1" }), { threadId: "t-1" });
   assert.deepEqual(classify({ type: "turn.completed", usage: {} }), { outcome: "completed" });
@@ -119,6 +143,22 @@ test("inspectPromptInput flags shell tools, bundled skills and a missing config"
   ];
   assert.deepEqual(inspectPromptInput(clean).problems, []);
   assert.deepEqual(inspectPromptInput(clean).skills, ["p--s"]);
+  // The chat config fails the task check twice: no shell, wrong marker.
+  assert.equal(inspectPromptInput(clean, "task").problems.length, 2, inspectPromptInput(clean, "task").problems.join("\n"));
+});
+
+test("inspectPromptInput requires a shell and the task marker in task mode", () => {
+  const exec = { type: "function", name: "exec", description: "### `apply_patch`\n### `exec_command`\n" };
+  const task = [
+    { type: "additional_tools", tools: [{ type: "namespace", name: "functions", tools: [exec] }] },
+    { type: "message", role: "developer", content: [{ type: "input_text", text: "You are a session-platform codex task session." }] },
+  ];
+  assert.deepEqual(inspectPromptInput(task, "task").problems, []);
+  const leaky = structuredClone(task);
+  leaky[0].tools[0].tools.push({ name: "view_image" }, { name: "web_search" });
+  assert.equal(inspectPromptInput(leaky, "task").problems.length, 2);
+  // A task config must never pass the chat check.
+  assert.ok(inspectPromptInput(task).problems.length >= 2);
 });
 
 // The end-to-end cases drive runner.mjs, with the real SDK, against a fake
@@ -209,6 +249,25 @@ test("runner stops the turn on a forbidden item", { skip: !sdkInstalled }, () =>
     assert.equal(result.status, EXIT_KILLED, result.stderr);
     assert.ok(result.lines.some((l) => l.type === NOTICE_TYPE && /run a command/.test(l.text)));
     assert.ok(!result.lines.some((l) => l.item && l.item.text === "after"), "nothing after the kill switch is forwarded");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("runner in task mode runs commands, passes the effort and opens the sandbox", { skip: !sdkInstalled }, () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "codex-runner-"));
+  try {
+    mkdirSync(path.join(home, ".codex"), { recursive: true });
+    writeFileSync(path.join(home, ".codex", "auth.json"), "{}");
+    const result = runRunner(home, ["--mode", "task", "--effort", "high", "--", "ls"], turn("th-3", {
+      type: "item.completed",
+      item: { id: "c", type: "command_execution", command: "ls", status: "completed" },
+    }, { type: "item.completed", item: { id: "2", type: "agent_message", text: "after" } }));
+    assert.equal(result.status, EXIT_OK, result.stderr);
+    assert.ok(result.lines.some((l) => l.item && l.item.text === "after"));
+    const argv = readFileSync(path.join(result.codexHome, "argv.log"), "utf8").trim().split("\n").pop();
+    assert.match(argv, /--sandbox danger-full-access/);
+    assert.match(argv, /model_reasoning_effort="high"/);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

@@ -39,11 +39,17 @@ COPY data-plane/codex-runner/package.json data-plane/codex-runner/package-lock.j
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY data-plane/codex-runner/*.mjs ./
 COPY --from=build /out/agent /agent
+# Each Codex workload's managed config must give the model exactly its
+# surface: codex-chat no shell (AC-J5), codex-task a shell and still no image,
+# web or bundled-skill tools (AC-M1). A Codex upgrade that widens either fails
+# the build here.
 RUN node --test \
  && "$(node runner.mjs --print-codex-bin)" --version \
- && /agent codex-render-config /tmp/codex-surface \
- && node surface-check.mjs --home /tmp/codex-surface \
- && rm -rf /tmp/codex-surface
+ && /agent codex-render-config /tmp/codex-surface chat \
+ && node surface-check.mjs --home /tmp/codex-surface --mode chat \
+ && /agent codex-render-config /tmp/codex-task-surface task \
+ && node surface-check.mjs --home /tmp/codex-task-surface --mode task \
+ && rm -rf /tmp/codex-surface /tmp/codex-task-surface
 
 # ---- stage 3: install the official GitHub CLI release ----
 # Debian trixie's community gh 2.46 package uses retired GitHub APIs. Download
