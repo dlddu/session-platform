@@ -48,9 +48,18 @@ const (
 	DefaultAuthPoolReclaimGrace = 10 * time.Minute
 )
 
-// AuthSlotClaimName is slot i's PVC and Lease name.
-func AuthSlotClaimName(pool string, slot int) string {
+// AuthSlotLeaseName is slot i's Lease name.
+func AuthSlotLeaseName(pool string, slot int) string {
 	return pool + "-auth-" + strconv.Itoa(slot)
+}
+
+// AuthSlotClaimName is slot i's PVC name. Unlike the Lease it carries the
+// namespace: a dynamic provisioner may key the volume on the claim name alone
+// (the homelab's EFS class maps `/${.PVC.name}` to one shared access point), so
+// a preview's slot of the same name would share — and on teardown delete —
+// production's login (AC-L1).
+func AuthSlotClaimName(namespace, pool string, slot int) string {
+	return namespace + "-" + AuthSlotLeaseName(pool, slot)
 }
 
 // StaleHolder reports whether a lease holder no longer runs a pod: its session
@@ -247,7 +256,7 @@ func (p *LeaseAuthPool) claim(ctx context.Context, c slotCandidate, sessionID st
 	if c.lease == nil {
 		_, err := leases.Create(ctx, &coordinationv1.Lease{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      AuthSlotClaimName(p.cfg.Pool, c.slot),
+				Name:      AuthSlotLeaseName(p.cfg.Pool, c.slot),
 				Namespace: p.namespace,
 				Labels:    p.labels(c.slot),
 			},
@@ -274,7 +283,7 @@ func (p *LeaseAuthPool) claim(ctx context.Context, c slotCandidate, sessionID st
 // every create would lose to it forever and the slot would quietly never be
 // used. That is reported, not skipped silently.
 func (p *LeaseAuthPool) foreignLease(ctx context.Context, slot int) error {
-	name := AuthSlotClaimName(p.cfg.Pool, slot)
+	name := AuthSlotLeaseName(p.cfg.Pool, slot)
 	lease, err := p.client.CoordinationV1().Leases(p.namespace).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil
@@ -292,7 +301,7 @@ func (p *LeaseAuthPool) foreignLease(ctx context.Context, slot int) error {
 // (AC-L1): the login outlives every session that used it.
 func (p *LeaseAuthPool) ensureClaim(ctx context.Context, slot int) error {
 	claims := p.client.CoreV1().PersistentVolumeClaims(p.namespace)
-	name := AuthSlotClaimName(p.cfg.Pool, slot)
+	name := AuthSlotClaimName(p.namespace, p.cfg.Pool, slot)
 	if _, err := claims.Get(ctx, name, metav1.GetOptions{}); err == nil {
 		return nil
 	} else if !apierrors.IsNotFound(err) {
@@ -366,7 +375,7 @@ func (p *LeaseAuthPool) leases(ctx context.Context) (map[int]*coordinationv1.Lea
 	for i := range list.Items {
 		lease := &list.Items[i]
 		slot, err := strconv.Atoi(lease.Labels[LabelAuthSlot])
-		if err != nil || slot < 0 || lease.Name != AuthSlotClaimName(p.cfg.Pool, slot) {
+		if err != nil || slot < 0 || lease.Name != AuthSlotLeaseName(p.cfg.Pool, slot) {
 			continue // not ours to interpret
 		}
 		out[slot] = lease
@@ -486,7 +495,7 @@ func (o *ClientOrchestrator) attachAuthSlot(container *corev1.Container, workloa
 	return []corev1.Volume{{
 		Name: AuthSlotVolumeName,
 		VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-			ClaimName: AuthSlotClaimName(pool, *slot),
+			ClaimName: AuthSlotClaimName(o.namespace, pool, *slot),
 		}},
 	}}, nil
 }

@@ -37,7 +37,7 @@ func newTestPool(t *testing.T, slots int) (*LeaseAuthPool, *fake.Clientset, *poo
 
 func holderOf(t *testing.T, cs *fake.Clientset, slot int) string {
 	t.Helper()
-	lease, err := cs.CoordinationV1().Leases("sessions").Get(context.Background(), AuthSlotClaimName(AuthPoolCodexTask, slot), metav1.GetOptions{})
+	lease, err := cs.CoordinationV1().Leases("sessions").Get(context.Background(), AuthSlotLeaseName(AuthPoolCodexTask, slot), metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestLeaseAuthPoolAcquireCreatesLeaseAndClaim(t *testing.T) {
 	if got := holderOf(t, cs, 0); got != "s1" {
 		t.Fatalf("holder = %q", got)
 	}
-	claim, err := cs.CoreV1().PersistentVolumeClaims("sessions").Get(ctx, "codex-task-auth-0", metav1.GetOptions{})
+	claim, err := cs.CoreV1().PersistentVolumeClaims("sessions").Get(ctx, "sessions-codex-task-auth-0", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("slot claim not created: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestLeaseAuthPoolReleaseRecordsStateAndKeepsClaim(t *testing.T) {
 	if lease.Annotations[AnnotationAuthState] != AuthStateSignedOut {
 		t.Errorf("slot 0 state = %q", lease.Annotations[AnnotationAuthState])
 	}
-	if _, err := cs.CoreV1().PersistentVolumeClaims("sessions").Get(ctx, "codex-task-auth-0", metav1.GetOptions{}); err != nil {
+	if _, err := cs.CoreV1().PersistentVolumeClaims("sessions").Get(ctx, "sessions-codex-task-auth-0", metav1.GetOptions{}); err != nil {
 		t.Errorf("release deleted the slot claim: %v", err)
 	}
 	// Releasing a slot one does not hold leaves the holder alone.

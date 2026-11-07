@@ -25,7 +25,7 @@ func TestAuthPool1_SessionLeasesOneSlotAndMountsOnlyIt(t *testing.T) {
 	if slot < 0 {
 		t.Fatalf("no %s lease names session %s as holder", codexTaskPool, s.ID)
 	}
-	claim := codexTaskPool + "-auth-" + strconv.Itoa(slot)
+	claim := sessionNamespace() + "-" + codexTaskPool + "-auth-" + strconv.Itoa(slot)
 	pvc, err := cs.CoreV1().PersistentVolumeClaims(sessionNamespace()).Get(context.Background(), claim, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("slot PVC %s: %v", claim, err)

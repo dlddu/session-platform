@@ -133,6 +133,12 @@ func codexTaskArchiveOption(cfg codexTaskConfig, client *agent.HTTPClient, store
 type claudeAuthConfig struct {
 	mode k8s.ClaudeCodeAuthMode
 	pool authPoolEnv
+	// subscriptionDefaultModel and subscriptionModels are claude-code's picker
+	// in subscription mode. They come from their own ConfigMap keys because the
+	// gateway's model ids (OpenRouter) mean nothing to a Claude subscription, and
+	// approval-gated keeps reading the gateway's keys (AC-E7).
+	subscriptionDefaultModel string
+	subscriptionModels       []string
 }
 
 func loadClaudeAuthConfig() (claudeAuthConfig, error) {
@@ -144,7 +150,26 @@ func loadClaudeAuthConfig() (claudeAuthConfig, error) {
 	if err != nil {
 		return claudeAuthConfig{}, err
 	}
-	return claudeAuthConfig{mode: mode, pool: pool}, nil
+	defaultModel, err := parseClaudeCodeDefaultModel(os.Getenv("CLAUDE_CODE_SUBSCRIPTION_DEFAULT_MODEL"))
+	if err != nil {
+		return claudeAuthConfig{}, fmt.Errorf("CLAUDE_CODE_SUBSCRIPTION_DEFAULT_MODEL: %w", err)
+	}
+	models, err := parseClaudeCodeModels(os.Getenv("CLAUDE_CODE_SUBSCRIPTION_MODELS"))
+	if err != nil {
+		return claudeAuthConfig{}, fmt.Errorf("CLAUDE_CODE_SUBSCRIPTION_MODELS: %w", err)
+	}
+	return claudeAuthConfig{
+		mode: mode, pool: pool,
+		subscriptionDefaultModel: defaultModel, subscriptionModels: models,
+	}, nil
+}
+
+// claudeCodeModelConfig is the picker claude-code offers under this auth mode.
+func (c claudeAuthConfig) claudeCodeModelConfig(gatewayDefault string, gatewayModels []string) (string, []string) {
+	if c.mode == k8s.ClaudeCodeAuthSubscription {
+		return c.subscriptionDefaultModel, c.subscriptionModels
+	}
+	return gatewayDefault, gatewayModels
 }
 
 // offered reports whether claude-code can provision here given its auth:

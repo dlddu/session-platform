@@ -82,7 +82,7 @@ func TestCodexTask_PodShape(t *testing.T) {
 	if n := len(pod.Spec.Containers); n != 2 {
 		t.Fatalf("containers = %d, want agent + k3s-mcp-proxy", n)
 	}
-	assertSlotMount(t, pod, "codex-task-auth-1")
+	assertSlotMount(t, pod, testNS+"-codex-task-auth-1")
 	agent := container(t, pod, k8s.ContainerName)
 	for name, want := range map[string]string{
 		"DATA_PLANE_WORKLOAD":          "codex-task",
@@ -140,7 +140,7 @@ func TestClaudeCode_SubscriptionPodShape(t *testing.T) {
 	if n := len(pod.Spec.Containers); n != 1 {
 		t.Fatalf("containers = %s, want the workload container alone (no credential proxy, AC-E7)", containerNames(pod))
 	}
-	assertSlotMount(t, pod, "claude-code-auth-0")
+	assertSlotMount(t, pod, testNS+"-claude-code-auth-0")
 	agent := container(t, pod, k8s.ContainerName)
 	for _, name := range []string{k8s.AnthropicBaseURLEnvVar, k8s.AnthropicAuthTokenEnvVar} {
 		if _, ok := envValue(agent, name); ok {
@@ -202,5 +202,36 @@ func TestApprovalGated_RefusesEffort(t *testing.T) {
 	orch, _ := newReadyOrchestrator(t, k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, claudeCodeImage))
 	if _, err := orch.Start(context.Background(), "ag01", k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated, ReasoningEffort: "high"}); err == nil {
 		t.Fatal("approval-gated accepted a reasoning effort (AC-E8)")
+	}
+}
+
+// A platform-default subscription session reads the subscription key, not the
+// gateway's model id, which a Claude subscription would refuse (AC-E7).
+func TestClaudeCode_SubscriptionPlatformDefaultReadsSubscriptionKey(t *testing.T) {
+	for _, tc := range []struct {
+		mode k8s.ClaudeCodeAuthMode
+		slot *int
+		key  string
+	}{
+		{k8s.ClaudeCodeAuthSubscription, slot(0), k8s.ClaudeCodeSubscriptionModelConfigKey},
+		{k8s.ClaudeCodeAuthGateway, nil, k8s.ClaudeCodeModelConfigKey},
+	} {
+		orch, cs := newReadyOrchestrator(t,
+			k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, claudeCodeImage),
+			k8s.WithClaudeCodeAuthMode(tc.mode),
+		)
+		pod := onlyPod(t, orch, func() []corev1.Pod { return listPods(t, cs) }, "cd01", k8s.WorkloadSpec{
+			Type: session.WorkloadTypeClaudeCode, Model: session.PlatformDefaultModel, AuthSlot: tc.slot,
+		})
+		agent := container(t, pod, k8s.ContainerName)
+		var ref *corev1.ConfigMapKeySelector
+		for _, e := range agent.Env {
+			if e.Name == k8s.ClaudeCodeModelEnvVar && e.ValueFrom != nil {
+				ref = e.ValueFrom.ConfigMapKeyRef
+			}
+		}
+		if ref == nil || ref.Key != tc.key || ref.Optional == nil || !*ref.Optional {
+			t.Errorf("%s: %s ref = %+v, want optional key %q", tc.mode, k8s.ClaudeCodeModelEnvVar, ref, tc.key)
+		}
 	}
 }

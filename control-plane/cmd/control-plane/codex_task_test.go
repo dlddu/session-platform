@@ -54,6 +54,28 @@ func TestLoadClaudeAuthConfig(t *testing.T) {
 	}
 }
 
+// AC-E7: a subscription offers its own picker; the gateway keeps the shared one
+// approval-gated also reads.
+func TestClaudeCodeModelConfigFollowsAuthMode(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SUBSCRIPTION_DEFAULT_MODEL", "sonnet")
+	t.Setenv("CLAUDE_CODE_SUBSCRIPTION_MODELS", `["opus","sonnet"]`)
+	cfg, err := loadClaudeAuthConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, m := cfg.claudeCodeModelConfig("~gw/model", []string{"~gw/model"}); d != "~gw/model" || !slices.Equal(m, []string{"~gw/model"}) {
+		t.Fatalf("gateway picker = %q %v", d, m)
+	}
+	cfg.mode = k8s.ClaudeCodeAuthSubscription
+	if d, m := cfg.claudeCodeModelConfig("~gw/model", []string{"~gw/model"}); d != "sonnet" || !slices.Equal(m, []string{"opus", "sonnet"}) {
+		t.Fatalf("subscription picker = %q %v", d, m)
+	}
+	t.Setenv("CLAUDE_CODE_SUBSCRIPTION_MODELS", `not-json`)
+	if _, err := loadClaudeAuthConfig(); err == nil {
+		t.Fatal("malformed CLAUDE_CODE_SUBSCRIPTION_MODELS accepted")
+	}
+}
+
 func TestValidateCodexTaskConfigRefusesSharedObjects(t *testing.T) {
 	cfg, _ := loadCodexTaskConfig()
 	if err := validateCodexTaskConfig(cfg, map[string]string{"CODEX_CONFIG_CONFIGMAP": "codex-config"}); err != nil {

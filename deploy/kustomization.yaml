@@ -115,7 +115,8 @@ patches:
   # SHELL_ARCHIVE_ENABLED, env/3 is DATA_PLANE_CLAUDE_CODE_IMAGE, env/4 is
   # DATA_PLANE_APPROVAL_GATED_IMAGE, env/17 is APPROVAL_GATED_ARCHIVE_ENABLED,
   # env/18 is DROP_URL, env/19 is DATA_PLANE_CODEX_IMAGE, env/24 is
-  # DATA_PLANE_CODEX_TASK_IMAGE and env/29 is CLAUDE_CODE_AUTH_MODE. Each gate replace is preceded by a `test`
+  # DATA_PLANE_CODEX_TASK_IMAGE, env/29 is CLAUDE_CODE_AUTH_MODE and env/32 is
+  # CODEX_TASK_AUTH_STORAGE_CLASS. Each gate replace is preceded by a `test`
   # of the entry's name, so a reordered base fails the build instead of
   # silently flipping a different variable.
   #
@@ -219,6 +220,14 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/env/29/value
         value: gateway
+      # base 는 운영 클러스터의 efs 를 슬롯 클래스로 고정한다. kind 에는 efs 가 없으므로 비워
+      # 기본 StorageClass(local-path)로 묶는다(AC-L1). env/32 가 CODEX_TASK_AUTH_STORAGE_CLASS.
+      - op: test
+        path: /spec/template/spec/containers/0/env/32/name
+        value: CODEX_TASK_AUTH_STORAGE_CLASS
+      - op: replace
+        path: /spec/template/spec/containers/0/env/32/value
+        value: ""
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:

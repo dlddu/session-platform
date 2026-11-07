@@ -18,13 +18,13 @@
 ## Acceptance Criteria
 
 ### AC-L1: 슬롯 = 이름이 고정된 PVC, control plane이 만들고 지우지 않는다
-- **설명**: 풀은 타입마다 하나다. 풀 `<pool>`(`codex-task`·`claude-code`)의 슬롯 `i`(0 ≤ i < N)는 PVC `<pool>-auth-<i>`다. N은 control plane 설정(`CODEX_TASK_AUTH_SLOTS`·`CLAUDE_CODE_AUTH_SLOTS`)이고, 0이면 그 타입은 풀이 없어 `GET /config`에 나오지 않으며 생성은 pod 없이 실패한다. PVC는 처음 임대될 때 control plane이 만든다(`ReadWriteOnce`, 크기 `<POOL>_AUTH_STORAGE_SIZE` 기본 `16Mi`, 클래스 `<POOL>_AUTH_STORAGE_CLASS` 비면 클러스터 기본). 라벨은 `session-platform.dev/auth-pool=<pool>`, `session-platform.dev/auth-slot=<i>`다. control plane은 슬롯 PVC를 **지우지 않는다** — 세션이 지워져도, N을 줄여도 남는다(StatefulSet의 PVC 보존과 같다). N을 줄이면 범위 밖 슬롯은 더 임대하지 않을 뿐이다. 노드 국소 스토리지(local-path)에서는 PV의 노드 친화성 때문에 그 슬롯을 받은 세션 파드가 그 노드에 뜬다.
+- **설명**: 풀은 타입마다 하나다. 풀 `<pool>`(`codex-task`·`claude-code`)의 슬롯 `i`(0 ≤ i < N)는 PVC `<네임스페이스>-<pool>-auth-<i>`다. PVC 이름에 네임스페이스를 넣는 것은 동적 프로비저너가 PVC 이름만으로 볼륨을 정할 수 있어서다 — 운영 클러스터의 `efs` 클래스는 `/${.PVC.name}` 경로와 재사용 access point를 써, 이름이 같으면 프리뷰 네임스페이스의 슬롯이 운영 슬롯과 같은 디렉터리를 쓰고 프리뷰를 지울 때 운영 로그인까지 지운다(2026-11-07 프리뷰 점검에서 발견). N은 control plane 설정(`CODEX_TASK_AUTH_SLOTS`·`CLAUDE_CODE_AUTH_SLOTS`)이고, 0이면 그 타입은 풀이 없어 `GET /config`에 나오지 않으며 생성은 pod 없이 실패한다. PVC는 처음 임대될 때 control plane이 만든다(`ReadWriteOnce`, 크기 `<POOL>_AUTH_STORAGE_SIZE` 기본 `16Mi`, 클래스 `<POOL>_AUTH_STORAGE_CLASS` 비면 클러스터 기본 — 운영은 기본 클래스가 없어 `efs`를 지정한다). 라벨은 `session-platform.dev/auth-pool=<pool>`, `session-platform.dev/auth-slot=<i>`다. control plane은 슬롯 PVC를 **지우지 않는다** — 세션이 지워져도, N을 줄여도 남는다(StatefulSet의 PVC 보존과 같다). N을 줄이면 범위 밖 슬롯은 더 임대하지 않을 뿐이다. 노드 국소 스토리지(local-path, kind e2e)에서는 PV의 노드 친화성 때문에 그 슬롯을 받은 세션 파드가 그 노드에 뜬다. 운영의 `efs`는 RWX라 노드에 묶이지 않는다.
 - **달성 가치**: V3
 - **구체화 대상**: AC-B3(무결성) — 동결·복원·재생성을 건너 보존되는 상태에 「슬롯의 로그인」을 더한 것
-- **검증 방법**: 풀 크기 2의 배포에서 첫 세션 생성 뒤 PVC `<pool>-auth-0`이 라벨과 함께 생기고 세션 파드가 그것을 마운트함을 확인한다. 세션을 지운 뒤에도 PVC가 남음을 확인한다. 풀 크기 0이면 `GET /config`에 타입이 없고 생성이 pod 없이 실패함을 확인한다.
+- **검증 방법**: 풀 크기 2의 배포에서 첫 세션 생성 뒤 PVC `<네임스페이스>-<pool>-auth-0`이 라벨과 함께 생기고 세션 파드가 그것을 마운트함을 확인한다. 세션을 지운 뒤에도 PVC가 남음을 확인한다. 풀 크기 0이면 `GET /config`에 타입이 없고 생성이 pod 없이 실패함을 확인한다.
 
 ### AC-L2: 독점 임대 = 슬롯마다 Lease 하나, holder는 세션 id
-- **설명**: 슬롯 `i`의 임대는 `coordination.k8s.io` Lease `<pool>-auth-<i>`다(PVC와 같은 이름·라벨). `holderIdentity`가 세션 id이면 그 세션이 슬롯을 쥔 것이다. 임대·반납은 resourceVersion으로 CAS하므로 두 control plane 경로가 같은 슬롯을 동시에 잡지 못한다. 세션은 슬롯을 **파드가 있는 동안** 쥔다 — 생성(AC-A1)과 복원(AC-B2)이 파드를 만들기 **전에** 임대하고, 파드 생성이 실패하면 반납한다. 고를 슬롯은 비어 있는 슬롯 가운데 로그인 상태(AC-L4)가 `signed-in` → 모름 → `signed-out` 순, 같은 순위에서는 번호가 작은 것이다. 비어 있는 슬롯이 없으면 생성·복원은 파드 없이 **503**(`auth pool exhausted`)으로 실패한다 — 복원 실패는 세션을 `snapshot`에 남긴다.
+- **설명**: 슬롯 `i`의 임대는 `coordination.k8s.io` Lease `<pool>-auth-<i>`다(PVC와 같은 라벨, 이름은 네임스페이스 접두 없이 — Lease는 네임스페이스 안에서만 보인다). `holderIdentity`가 세션 id이면 그 세션이 슬롯을 쥔 것이다. 임대·반납은 resourceVersion으로 CAS하므로 두 control plane 경로가 같은 슬롯을 동시에 잡지 못한다. 세션은 슬롯을 **파드가 있는 동안** 쥔다 — 생성(AC-A1)과 복원(AC-B2)이 파드를 만들기 **전에** 임대하고, 파드 생성이 실패하면 반납한다. 고를 슬롯은 비어 있는 슬롯 가운데 로그인 상태(AC-L4)가 `signed-in` → 모름 → `signed-out` 순, 같은 순위에서는 번호가 작은 것이다. 비어 있는 슬롯이 없으면 생성·복원은 파드 없이 **503**(`auth pool exhausted`)으로 실패한다 — 복원 실패는 세션을 `snapshot`에 남긴다.
 
   holder가 남았지만 실제로는 쥐고 있지 않은 임대(control plane이 반납 전에 죽은 경우)는 다음 임대가 회수한다. 회수 조건은 **둘 다**다: ① holder 세션이 레코드에 없거나 `snapshot` 상태이고, ② 임대의 `renewTime`이 10분(생성·복원 한 번보다 긴 유예)보다 오래됐다. ②가 없으면 레코드를 쓰기 전인 생성이나 아직 `snapshot`인 복원의 임대를 다른 세션이 빼앗는다.
 - **달성 가치**: V1
@@ -59,7 +59,7 @@
 ## 결정 사항 (2026-11-07, 사용자)
 - **독점 임대**: 공유(슬롯 파드 하나가 혼자 갱신하고 세션은 프록시로 부름)는 로그인 파일을 세션 컨테이너에 두는 방식과 함께 쓸 수 없어 고르지 않았다.
 - **로그인 파일은 세션 컨테이너에 마운트**: 프록시로 숨기지 않는다(AC-L5의 대가).
-- **슬롯 저장소는 PVC**: Secret에 되쓰는 사이드카와 RBAC가 필요 없다. 대신 local-path에서 세션이 슬롯 노드에 고정된다.
+- **슬롯 저장소는 PVC**: Secret에 되쓰는 사이드카와 RBAC가 필요 없다. 운영은 `efs`(RWX)라 노드에 묶이지 않는다.
 - **빈 슬롯은 첫 세션이 로그인**: 운영자 전용 로그인 API를 두지 않는다.
 
 ## 남은 일

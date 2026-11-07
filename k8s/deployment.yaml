@@ -247,18 +247,41 @@ spec:
             # auth.json 은 풀 슬롯에만 있다(AC-L4). 대신 셸이 만든 작업 디렉터리 파일이 들어간다.
             - name: CODEX_TASK_ARCHIVE_ENABLED
               value: "true"
-            # 인증 풀 크기(AC-L1). 슬롯 i 는 PVC·Lease `codex-task-auth-<i>` 이고 control plane 이
+            # 인증 풀 크기(AC-L1). 슬롯 i 는 Lease `codex-task-auth-<i>` 와 PVC `<네임스페이스>-codex-task-auth-<i>` 이고 control plane 이
             # 처음 임대할 때 만들며 지우지 않는다. 0 이면 이 타입은 /config 에 나오지 않는다.
             - name: CODEX_TASK_AUTH_SLOTS
               value: "2"
             # claude-code 공급자 인증 모드(AC-E7). subscription 은 풀 `claude-code` 의 슬롯
-            # (`claude-code-auth-<i>` 의 .credentials.json)으로 Claude 구독에 직접 붙고 credential-proxy
+            # (PVC `<네임스페이스>-claude-code-auth-<i>` 의 .credentials.json)으로 Claude 구독에 직접 붙고 credential-proxy
             # 사이드카를 두지 않는다. gateway 는 AC-E6 의 base-url·auth-token 경로(kind e2e 가 쓴다).
             # approval-gated 는 이 값과 무관하게 게이트웨이 자격 증명을 쓴다(AC-F6).
             - name: CLAUDE_CODE_AUTH_MODE
               value: "subscription"
             - name: CLAUDE_CODE_AUTH_SLOTS
               value: "2"
+            # 두 풀의 슬롯 PVC 스토리지 클래스(AC-L1). 이 클러스터에는 기본 StorageClass 가 없어
+            # 비우면 PVC 가 Pending 에 머문다. efs 는 RWX 라 세션이 노드에 묶이지 않는다. efs 는
+            # PVC 이름으로 경로·access point 를 정하므로(`/${.PVC.name}`, reuseAccessPoint) PVC 이름에
+            # 네임스페이스가 들어간다 — 프리뷰 슬롯이 운영 슬롯과 같은 디렉터리를 쓰지 않게.
+            - name: CLAUDE_CODE_AUTH_STORAGE_CLASS
+              value: "efs"
+            - name: CODEX_TASK_AUTH_STORAGE_CLASS
+              value: "efs"
+            # 구독 모드 claude-code 의 모델 카탈로그(AC-E7). 게이트웨이의 model·models(OpenRouter id)는
+            # 구독에서 뜻이 없고 approval-gated 가 계속 읽으므로, 같은 ConfigMap 의 별도 선택 키에서 온다.
+            # platform-default 세션 파드도 `subscription-model` 키를 읽는다.
+            - name: CLAUDE_CODE_SUBSCRIPTION_DEFAULT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: claude-code-config
+                  key: subscription-model
+                  optional: true
+            - name: CLAUDE_CODE_SUBSCRIPTION_MODELS
+              valueFrom:
+                configMapKeyRef:
+                  name: claude-code-config
+                  key: subscription-models
+                  optional: true
           readinessProbe:
             httpGet:
               path: /api/v1/healthz

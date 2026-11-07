@@ -96,7 +96,10 @@ const (
 	ClaudeCodeAuthTokenSecretKey   = "auth-token"
 	ClaudeCodeK3SMCPTokenSecretKey = "k3s-mcp-token"
 	ClaudeCodeModelConfigKey       = "model"
-	ClaudeCodeBaseURLConfigKey     = "base-url"
+	// ClaudeCodeSubscriptionModelConfigKey is platform-default's model for a
+	// claude-code session in subscription mode (AC-E7).
+	ClaudeCodeSubscriptionModelConfigKey = "subscription-model"
+	ClaudeCodeBaseURLConfigKey           = "base-url"
 	// AnthropicCACertEnvVar carries an optional PEM bundle the credential proxy
 	// must trust *in addition to* the system roots, for a deployment whose
 	// provider `base-url` is a private gateway issued by a CA no public store
@@ -601,12 +604,14 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 	case session.WorkloadTypeClaudeCode:
 		modelEnv := corev1.EnvVar{Name: ClaudeCodeModelEnvVar, Value: model}
 		if model == session.PlatformDefaultModel {
-			// platform-default resolves at pod start from the optional key (AC-E6).
-			modelEnv = optionalConfigMapEnv(
-				ClaudeCodeModelEnvVar,
-				o.claudeConfigConfigMap,
-				ClaudeCodeModelConfigKey,
-			)
+			// platform-default resolves at pod start from the optional key (AC-E6);
+			// a subscription reads its own key, since the gateway's model ids are
+			// not subscription models (AC-E7).
+			key := ClaudeCodeModelConfigKey
+			if o.claudeAuthMode == ClaudeCodeAuthSubscription {
+				key = ClaudeCodeSubscriptionModelConfigKey
+			}
+			modelEnv = optionalConfigMapEnv(ClaudeCodeModelEnvVar, o.claudeConfigConfigMap, key)
 		}
 		container.Env = append(container.Env,
 			modelEnv,

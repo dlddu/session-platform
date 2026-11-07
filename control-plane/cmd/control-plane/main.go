@@ -212,8 +212,9 @@ func main() {
 	reaper := service.NewIdleReaper(mgr, session.MaxIdle, cfg.idleScanInterval, nil, logger)
 
 	mux := http.NewServeMux()
+	claudeDefaultModel, claudeModels := cfg.claudeAuth.claudeCodeModelConfig(cfg.claudeCodeDefaultModel, cfg.claudeCodeModels)
 	api.New(mgr,
-		api.WithClaudeCodeModelConfig(cfg.claudeCodeDefaultModel, cfg.claudeCodeModels),
+		api.WithClaudeCodeModelConfig(claudeDefaultModel, claudeModels),
 		// approval-gated reads the same ConfigMap's model keys (AC-F6 → AC-E6).
 		api.WithWorkloadModelConfig(session.WorkloadTypeApprovalGated, cfg.claudeCodeDefaultModel, cfg.claudeCodeModels),
 		api.WithWorkloadModelConfig(session.WorkloadTypeCodexChat, cfg.codex.defaultModel, cfg.codex.models),

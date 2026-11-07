@@ -29,7 +29,7 @@ func TestAuthPool3_DeleteReleasesTheSlotAndKeepsThePVC(t *testing.T) {
 
 	deleteSessionNow(t, victim.ID)
 	eventuallyUnheld(t, cs, codexTaskPool, slot)
-	claim := codexTaskPool + "-auth-" + strconv.Itoa(slot)
+	claim := sessionNamespace() + "-" + codexTaskPool + "-auth-" + strconv.Itoa(slot)
 	if _, err := cs.CoreV1().PersistentVolumeClaims(sessionNamespace()).Get(context.Background(), claim, metav1.GetOptions{}); err != nil {
 		t.Fatalf("slot PVC %s after delete: %v, want it kept", claim, err)
 	}
