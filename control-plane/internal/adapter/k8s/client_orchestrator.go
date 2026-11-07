@@ -112,6 +112,11 @@ const (
 	ClaudeCodePluginMarketplaceURLEnvVar    = "CLAUDE_CODE_PLUGIN_MARKETPLACE_URL"
 	ClaudeCodeK3SMCPURLConfigKey            = "k3s-mcp-url"
 	ClaudeCodePluginMarketplaceURLConfigKey = "plugin-marketplace-url"
+	// ClaudeCodePluginsEnvVar carries a session's own plugin selection
+	// (AC-L1), comma-separated, and is set only when the session chose one.
+	// Keep in sync with data-plane/entrypoint.sh and data-plane/cmd/agent
+	// (claudePluginsEnv).
+	ClaudeCodePluginsEnvVar = "CLAUDE_CODE_PLUGINS"
 	// ClaudeCredentialsContainerName identifies the isolated Secret holder.
 	ClaudeCredentialsContainerName = "claude-credentials"
 	// ClaudeCredentialProxyURL is the loopback-only endpoint visible to the
@@ -394,6 +399,12 @@ func (o *ClientOrchestrator) startSet(ctx context.Context, sessionID, checkpoint
 	if err != nil {
 		return SessionPods{}, err
 	}
+	// Validate the plugin selection before any pod exists: the helper pod below
+	// carries it too, and must not be provisioned for a request buildPod would
+	// refuse (AC-L1).
+	if workload.Plugins, err = session.NormalizePlugins(workloadType, workload.Plugins); err != nil {
+		return SessionPods{}, err
+	}
 	suffix := ""
 	if checkpointRef != "" {
 		if suffix, err = restoreSuffix(); err != nil {
@@ -404,7 +415,7 @@ func (o *ClientOrchestrator) startSet(ctx context.Context, sessionID, checkpoint
 	var auxiliary []PodRef
 	var helper helperEndpoints
 	if workloadType.HasApprovalGate() {
-		spec, err := o.helperPodSpec(sessionID, suffix, workloadType)
+		spec, err := o.helperPodSpec(sessionID, suffix, workloadType, workload.Plugins)
 		if err != nil {
 			return SessionPods{}, err
 		}
@@ -540,6 +551,10 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 	if err != nil {
 		return nil, err
 	}
+	plugins, err := session.NormalizePlugins(workloadType, workload.Plugins)
+	if err != nil {
+		return nil, err
+	}
 	image, err := o.imageFor(workloadType)
 	if err != nil {
 		return nil, err
@@ -607,6 +622,12 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			corev1.EnvVar{Name: AnthropicBaseURLEnvVar, Value: ClaudeCredentialProxyURL},
 			corev1.EnvVar{Name: AnthropicAuthTokenEnvVar, Value: credentialProxyPlaceholderToken},
 		)
+		// Only a session that chose its plugins carries the variable; without it
+		// the entrypoint and agent fall back to the platform plugin (AC-L1).
+		if plugins != nil {
+			container.Env = append(container.Env,
+				corev1.EnvVar{Name: ClaudeCodePluginsEnvVar, Value: strings.Join(plugins, ",")})
+		}
 		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
 			Name: claudeCodeStateVolumeName, MountPath: workloadStateVolumePath,
 		})
@@ -655,7 +676,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 	case session.WorkloadTypeMiniMaxCode:
 		sidecars, volumes = o.miniMaxCodePod(&container, model, helper, helperPodNameFor(sessionID, suffix))
 	case session.WorkloadTypeCodex:
-		sidecars, volumes = o.codexPod(&container, sessionID, model, image)
+		sidecars, volumes = o.codexPod(&container, sessionID, model, image, plugins)
 	}
 	name := podName(sessionID)
 	var annotations map[string]string
@@ -703,7 +724,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 //
 // Unlike the workload pod it gets no apiserver credential — nothing in it needs
 // the API server, and the pod holds both of the platform's external secrets.
-func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadType session.WorkloadType) (*corev1.Pod, error) {
+func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadType session.WorkloadType, plugins []string) (*corev1.Pod, error) {
 	image, err := o.imageFor(workloadType)
 	if err != nil {
 		return nil, err
@@ -780,7 +801,7 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 			RestartPolicy:                corev1.RestartPolicyAlways,
 			ServiceAccountName:           SessionMCPServiceAccountName,
 			AutomountServiceAccountToken: &automountServiceAccountToken,
-			Containers:                   append([]corev1.Container{mcp}, o.helperProxyContainers(sessionID, workloadType, image)...),
+			Containers:                   append([]corev1.Container{mcp}, o.helperProxyContainers(sessionID, workloadType, image, plugins)...),
 			Volumes:                      append(helperVolumes, helperProxyVolumes(workloadType)...),
 		},
 	}, nil

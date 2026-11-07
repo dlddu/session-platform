@@ -37,6 +37,14 @@ const (
 	claudeSettingsDir           = ".claude"
 	claudeSettingsFile          = "settings.json"
 	claudeSessionPlatformPlugin = "session-platform@dlddu-plugins"
+	// claudePluginMarketplace is the marketplace every managed plugin comes
+	// from; entrypoint.sh installs from it under this name.
+	claudePluginMarketplace = "dlddu-plugins"
+	// claudePluginsEnv is a session's own plugin selection (AC-L1), bare
+	// names, comma-separated. Unset means the platform plugin alone.
+	// Keep in sync with control-plane/internal/adapter/k8s
+	// (ClaudeCodePluginsEnvVar) and entrypoint.sh.
+	claudePluginsEnv = "CLAUDE_CODE_PLUGINS"
 	// sessionMCPPermission names every tool of the session MCP server.
 	sessionMCPPermission       = "mcp__" + sessionMCPServerName
 	maxClaudePromptBytes       = 1 << 20
@@ -148,8 +156,9 @@ type claudeConfig struct {
 // filesystem tools. Exactly one form is sanctioned per workload type (AC-E6 for
 // claude-code, AC-F6's 2026-09-03 decision for approval-gated).
 type toolSurface struct {
-	// Plugin enables the managed session-platform marketplace plugin.
-	Plugin bool
+	// Plugins are the managed marketplace plugins to enable, as
+	// "<name>@dlddu-plugins" (AC-E6; the session's own selection, AC-L1).
+	Plugins []string
 	// SessionMCP, when set, is the URL of this session's MCP server.
 	SessionMCP string
 	// SharedDir, when set, is the shared volume this session's MCP writes large
@@ -954,8 +963,8 @@ func managedSettingsFor(tools toolSurface) claudeManagedSettings {
 	settings := claudeManagedSettings{}
 	settings.Permissions.Allow = append([]string(nil), claudeManagedTools...)
 	settings.EnabledPlugins = map[string]bool{}
-	if tools.Plugin {
-		settings.EnabledPlugins[claudeSessionPlatformPlugin] = true
+	for _, plugin := range tools.Plugins {
+		settings.EnabledPlugins[plugin] = true
 	}
 	if tools.SessionMCP != "" {
 		settings.Permissions.Allow = append(settings.Permissions.Allow, sessionMCPPermission)
@@ -1092,7 +1101,7 @@ func storeClaudeManagedSettings(settingsDir, settingsPath string, settings claud
 }
 
 // validateClaudeManagedSettings insists the session HOME declares exactly one of
-// the two sanctioned tool surfaces — the marketplace plugin (AC-E6) or a session
+// the two sanctioned tool surfaces — marketplace plugins (AC-E6, AC-L1) or a session
 // MCP (AC-F6). Archive validation runs it before the workload type of the pod
 // doing the restore is relevant, and the pod normalises to its own surface right
 // afterwards (ensureClaudeManagedSettings).
@@ -1110,7 +1119,14 @@ func validateClaudeManagedSettings(homeDir string) error {
 
 // validateClaudeToolSurface is the exactly-one rule over the two halves.
 func validateClaudeToolSurface(settings claudeManagedSettings, registered map[string]claudeMCPServer) error {
-	plugin := len(settings.EnabledPlugins) == 1 && settings.EnabledPlugins[claudeSessionPlatformPlugin]
+	// Which plugins is the pod's to say (ensureClaudeManagedSettings); here any
+	// non-empty set of enabled marketplace plugins is the plugin surface.
+	plugin := len(settings.EnabledPlugins) != 0
+	for name, enabled := range settings.EnabledPlugins {
+		if !enabled || !managedClaudePlugin(name) {
+			plugin = false
+		}
+	}
 	// An archive taken while the registration was written into settings.json
 	// still names the surface there, so either location counts as registered —
 	// ensureClaudeMCPRegistration moves it on the boot right after this.
@@ -1123,14 +1139,49 @@ func validateClaudeToolSurface(settings claudeManagedSettings, registered map[st
 		return errors.New("claude managed settings permits the session MCP without registering it")
 	case plugin == mcp:
 		return fmt.Errorf(
-			"claude managed settings must declare exactly one platform tool surface: %s or the %s server",
-			claudeSessionPlatformPlugin, sessionMCPServerName)
+			"claude managed settings must declare exactly one platform tool surface: %s plugins or the %s server",
+			claudePluginMarketplace, sessionMCPServerName)
 	case plugin && (len(settings.MCPServers) != 0 || len(registered) != 0):
 		return errors.New("claude managed settings must not mix the managed plugin with an MCP server")
 	case mcp && len(settings.EnabledPlugins) != 0:
 		return errors.New("claude managed settings must not mix a session MCP with an enabled plugin")
 	}
 	return nil
+}
+
+// claudePluginNamePattern mirrors the control plane's session plugin names
+// (session.NormalizePlugins) so a selection it accepted is one this pod can
+// install and an archive can carry.
+var claudePluginNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// managedClaudePlugin reports whether name is a plugin the platform installs:
+// one from its own marketplace. Which ones a given session runs is decided by
+// the pod (claudePluginsFromEnv), never by an archive.
+func managedClaudePlugin(name string) bool {
+	plugin, ok := strings.CutSuffix(name, "@"+claudePluginMarketplace)
+	return ok && claudePluginNamePattern.MatchString(plugin)
+}
+
+// claudePluginsFromEnv resolves the plugins a claude-code pod enables: the
+// session's own selection when the control plane passed one (AC-L1),
+// otherwise the platform plugin alone (AC-E6). entrypoint.sh installs the same
+// list before the agent starts, so the two must agree on the default.
+func claudePluginsFromEnv() ([]string, error) {
+	raw, set := os.LookupEnv(claudePluginsEnv)
+	if !set {
+		return []string{claudeSessionPlatformPlugin}, nil
+	}
+	names := strings.Split(raw, ",")
+	plugins := make([]string, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		if !claudePluginNamePattern.MatchString(name) || seen[name] {
+			return nil, fmt.Errorf("%s must be a comma-separated list of distinct plugin names, got %q", claudePluginsEnv, raw)
+		}
+		seen[name] = true
+		plugins = append(plugins, name+"@"+claudePluginMarketplace)
+	}
+	return plugins, nil
 }
 
 // registersSessionMCP reports whether servers carry the platform's own entry.
@@ -1210,7 +1261,7 @@ func loadClaudeManagedSettings(homeDir string) (claudeManagedSettings, error) {
 	// this pod is not — is acceptable: the caller rewrites them right after.
 	// Something the platform never installs is not.
 	for name := range settings.EnabledPlugins {
-		if name != claudeSessionPlatformPlugin {
+		if !managedClaudePlugin(name) {
 			return settings, fmt.Errorf("claude managed settings enables unmanaged plugin %s", name)
 		}
 	}
