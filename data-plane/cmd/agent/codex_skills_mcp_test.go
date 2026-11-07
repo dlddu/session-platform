@@ -4,8 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -59,8 +63,13 @@ func writeSkillTree(t *testing.T) string {
 
 func runSkillsMCP(t *testing.T, root string, frames ...string) []map[string]any {
 	t.Helper()
+	return runSkillsMCPWithAgent(t, root, "", frames...)
+}
+
+func runSkillsMCPWithAgent(t *testing.T, root, agentURL string, frames ...string) []map[string]any {
+	t.Helper()
 	var stdout bytes.Buffer
-	if err := serveCodexSkillsMCP(strings.NewReader(strings.Join(frames, "\n")), &stdout, root, testLogger()); err != nil {
+	if err := serveCodexSkillsMCP(strings.NewReader(strings.Join(frames, "\n")), &stdout, root, agentURL, testLogger()); err != nil {
 		t.Fatalf("serve: %v", err)
 	}
 	var responses []map[string]any
@@ -241,5 +250,69 @@ func TestCodexSkillsMCPFrameLimit(t *testing.T) {
 	responses := runSkillsMCP(t, root, huge, `{"jsonrpc":"2.0","id":2,"method":"ping"}`)
 	if len(responses) != 2 || responses[0]["error"] == nil || responses[1]["result"] == nil {
 		t.Fatalf("responses = %v, want an error for the oversized frame and a reply after it", responses)
+	}
+}
+
+// AC-J7: refresh_skills is offered only with an agent to call, posts to the
+// in-turn route, and words the agent's answer — a result or a refusal — for
+// the model without failing the MCP.
+func TestCodexSkillsMCPRefreshSkills(t *testing.T) {
+	root := writeSkillTree(t)
+	listFrame := `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
+	names := func(response map[string]any) []string {
+		var out []string
+		for _, tool := range response["result"].(map[string]any)["tools"].([]any) {
+			out = append(out, tool.(map[string]any)["name"].(string))
+		}
+		return out
+	}
+	if got := names(runSkillsMCP(t, root, listFrame)[0]); !reflect.DeepEqual(got, []string{"list_skills", "read_skill"}) {
+		t.Errorf("tools without an agent = %v", got)
+	}
+	if response := runSkillsMCP(t, root, callFrame(2, "refresh_skills", map[string]any{}))[0]; response["error"] == nil {
+		t.Errorf("refresh_skills without an agent = %v, want unknown tool", response)
+	}
+
+	var status int
+	var body string
+	var paths []string
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, body)
+	}))
+	defer agent.Close()
+	if got := names(runSkillsMCPWithAgent(t, root, agent.URL+"/", listFrame)[0]); !reflect.DeepEqual(got, []string{"list_skills", "read_skill", "refresh_skills"}) {
+		t.Errorf("tools with an agent = %v", got)
+	}
+	call := func() (string, bool) {
+		t.Helper()
+		return toolText(t, runSkillsMCPWithAgent(t, root, agent.URL, callFrame(2, "refresh_skills", map[string]any{}))[0])
+	}
+
+	status, body = http.StatusOK, `{"state":"ready","revision":"0123456789abcdef","added":["p--new"],"updated":["p--alpha"],"removed":[]}`
+	text, isError := call()
+	if isError || !strings.Contains(text, "revision 0123456789ab") || !strings.Contains(text, "added: `p--new`; updated: `p--alpha`") ||
+		!strings.Contains(text, "read_skill") {
+		t.Errorf("refresh result = %q (error %v)", text, isError)
+	}
+	if !reflect.DeepEqual(paths, []string{"POST " + pluginRefreshTurnPath}) {
+		t.Errorf("agent calls = %v", paths)
+	}
+	status, body = http.StatusOK, `{"state":"ready","added":[],"updated":[],"removed":[]}`
+	if text, _ := call(); !strings.Contains(text, "nothing changed") {
+		t.Errorf("no-change result = %q", text)
+	}
+	status, body = http.StatusOK, `{"state":"unconfigured","added":[],"updated":[],"removed":[]}`
+	if text, _ := call(); !strings.Contains(text, "no plugin marketplace") {
+		t.Errorf("unconfigured result = %q", text)
+	}
+	status, body = http.StatusTooManyRequests, errPluginRefreshTurnLimit.Error()+"\n"
+	if text, isError := call(); !isError || !strings.Contains(text, "429") || !strings.Contains(text, "already refreshed") {
+		t.Errorf("refused refresh = %q (error %v)", text, isError)
+	}
+	agent.Close()
+	if text, isError := call(); !isError || !strings.Contains(text, "did not answer") {
+		t.Errorf("unreachable agent = %q (error %v)", text, isError)
 	}
 }

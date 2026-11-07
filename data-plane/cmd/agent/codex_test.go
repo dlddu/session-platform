@@ -269,6 +269,7 @@ func TestRenderCodexConfig(t *testing.T) {
 		k3sMCPURL:   "http://127.0.0.1:8093/mcp",
 		agentBinary: "/agent",
 		skillsDir:   "/session/state/home/.agents/skills",
+		agentURL:    "http://127.0.0.1:8090",
 	})))
 	for key, want := range map[string]any{
 		"approval_policy":                                "never",
@@ -283,6 +284,7 @@ func TestRenderCodexConfig(t *testing.T) {
 		"mcp_servers.k3s.tool_timeout_sec":               "900",
 		"mcp_servers.skills.command":                     "/agent",
 		"mcp_servers.skills.default_tools_approval_mode": "approve",
+		"mcp_servers.skills.tool_timeout_sec":            "180",
 	} {
 		if got := withK3S[key]; !reflect.DeepEqual(got, want) {
 			t.Errorf("%s = %#v, want %#v", key, got, want)
@@ -291,7 +293,8 @@ func TestRenderCodexConfig(t *testing.T) {
 	if got := withK3S["mcp_servers.skills.args"]; !reflect.DeepEqual(got, []string{"skills-mcp"}) {
 		t.Errorf("skills args = %#v", got)
 	}
-	if got := withK3S["mcp_servers.skills.env"]; !reflect.DeepEqual(got, map[string]string{codexSkillsDirEnv: "/session/state/home/.agents/skills"}) {
+	if got := withK3S["mcp_servers.skills.env"]; !reflect.DeepEqual(got, map[string]string{
+		codexSkillsDirEnv: "/session/state/home/.agents/skills", codexAgentURLEnv: "http://127.0.0.1:8090"}) {
 		t.Errorf("skills env = %#v", got)
 	}
 	for _, feature := range []string{"shell_tool", "unified_exec", "view_image", "image_generation", "apps", "plugins",
@@ -302,8 +305,9 @@ func TestRenderCodexConfig(t *testing.T) {
 		}
 	}
 	instructions, _ := withK3S["developer_instructions"].(string)
-	if !strings.Contains(instructions, codexInstructionsMarker) || !strings.Contains(instructions, "read_skill") {
-		t.Errorf("developer_instructions = %q, want the marker and the read_skill guidance", instructions)
+	if !strings.Contains(instructions, codexInstructionsMarker) || !strings.Contains(instructions, "read_skill") ||
+		!strings.Contains(instructions, "refresh_skills") {
+		t.Errorf("developer_instructions = %q, want the marker and the read_skill and refresh_skills guidance", instructions)
 	}
 
 	without := tomlCheck(t, string(renderCodexConfig(codexConfig{agentBinary: "/agent", skillsDir: "/s"})))
@@ -314,6 +318,9 @@ func TestRenderCodexConfig(t *testing.T) {
 	}
 	if without["mcp_servers.skills.command"] != "/agent" {
 		t.Error("the skills MCP must be registered without a K3s MCP too")
+	}
+	if _, ok := without["mcp_servers.skills.env"].(map[string]string)[codexAgentURLEnv]; ok {
+		t.Error("without an agent URL the skills MCP must not be told one (AC-J7)")
 	}
 }
 
@@ -587,6 +594,7 @@ func TestCodexEnsureHome(t *testing.T) {
 	configPath := filepath.Join(home, ".codex", "config.toml")
 
 	cli := newCodexTestCLI(t, codexSidecar{configured: true, plugins: testCodexSeed}, nil)
+	cli.agentURL = "http://127.0.0.1:8090"
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -600,8 +608,9 @@ func TestCodexEnsureHome(t *testing.T) {
 	if doc["sandbox_mode"] != "read-only" || doc["mcp_servers.k3s.url"] != "http://127.0.0.1:8093/mcp" {
 		t.Fatalf("config = %v, want the managed read-only config with the K3s MCP", doc)
 	}
-	if doc["mcp_servers.skills.env"].(map[string]string)[codexSkillsDirEnv] != codexSkillsDir(home) {
-		t.Errorf("skills MCP dir = %v", doc["mcp_servers.skills.env"])
+	if env := doc["mcp_servers.skills.env"].(map[string]string); env[codexSkillsDirEnv] != codexSkillsDir(home) ||
+		env[codexAgentURLEnv] != "http://127.0.0.1:8090" {
+		t.Errorf("skills MCP env = %v, want its dir and the agent for refresh_skills", env)
 	}
 	if _, err := os.Stat(filepath.Join(codexSkillsDir(home), "session-platform--git-repo-cloner", "SKILL.md")); err != nil {
 		t.Fatalf("seeded skill missing: %v", err)
@@ -619,11 +628,14 @@ func TestCodexEnsureHome(t *testing.T) {
 	}
 
 	unconfigured := newCodexTestCLI(t, codexSidecar{}, errors.New("unreachable"))
+	unconfigured.agentURL = "http://127.0.0.1:8090"
 	if err := unconfigured.ensureHome(home, toolSurface{}); err != nil {
 		t.Fatal(err)
 	}
 	if doc := tomlCheck(t, readFile(t, configPath)); doc["mcp_servers.k3s.url"] != nil {
 		t.Error("an unreachable or unconfigured sidecar must not register the K3s MCP")
+	} else if _, ok := doc["mcp_servers.skills.env"].(map[string]string)[codexAgentURLEnv]; ok {
+		t.Error("with no marketplace there is nothing to refresh, so no refresh_skills (AC-J7)")
 	}
 
 	noProxy := codexCLI{agentBinary: "/agent", logger: testLogger()}

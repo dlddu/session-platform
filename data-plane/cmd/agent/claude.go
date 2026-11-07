@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -233,6 +234,11 @@ type claudeWorkload struct {
 	// refreshing holds the worker between turns while AC-J7's plugin refresh
 	// rewrites the session's skills.
 	refreshing bool
+	// turnRefreshed is set once the running turn asked for its one refresh
+	// (AC-J7); turnRefreshNotice is the transcript line that refresh left,
+	// written after the turn's end marker rather than inside its output.
+	turnRefreshed     bool
+	turnRefreshNotice string
 	// pendingLogin is AC-E7's sign-in between its two writes.
 	pendingLogin *pendingClaudeLogin
 	// droppedLogin remembers a sign-in that ended before its code arrived,
@@ -491,6 +497,8 @@ func (c *claudeWorkload) runWorker() {
 		c.queuedBytes -= len(job.prompt)
 		resume := c.hasRun
 		c.active = true
+		c.turnRefreshed = false
+		c.turnRefreshNotice = ""
 		c.turns++
 		seq := c.turns
 		input := c.classifyInputLocked(job)
@@ -536,13 +544,22 @@ func (c *claudeWorkload) runWorker() {
 		err = errors.Join(err, stderr.Close())
 		err = errors.Join(err, output.Close())
 		c.endTurn(seq, claudeTurnStatus(err, timedOut))
+		c.mu.Lock()
+		refreshNotice := c.turnRefreshNotice
+		c.turnRefreshNotice = ""
+		c.mu.Unlock()
+		if refreshNotice != "" {
+			c.appendPlatformNotice(refreshNotice)
+		}
 
 		// Resume state follows AC-E4. Persist before reporting idle, so a
 		// checkpoint cannot archive a stale flag.
 		succeeded := err == nil || errors.Is(err, exec.ErrWaitDelay)
 		nextHasRun := resume || succeeded
 		persistErr := persistClaudeRuntimeState(c.stateDir, nextHasRun)
-		if succeeded && noticed {
+		// A turn that refreshed its own skills was told what changed in the
+		// tool result, so its success settles the note as a told turn does.
+		if succeeded && (noticed || refreshNotice != "") {
 			c.clearTurnNotice()
 		}
 		c.mu.Lock()
@@ -699,6 +716,94 @@ func (c *claudeWorkload) refreshPlugins() (pluginRefresh, error) {
 	}
 	c.appendPlatformNotice(pluginRefreshNotice(result))
 	return result, nil
+}
+
+// refreshPluginsInTurn is AC-J7: the running turn's own `refresh_skills` call.
+// The turn is the caller, so it is the one thing that may be running; it is
+// refused while a freeze waits on the turn, under another refresh, and after
+// the turn's first attempt, so a model cannot loop the marketplace clone.
+func (c *claudeWorkload) refreshPluginsInTurn() (pluginRefresh, error) {
+	refresher, ok := c.cli.(pluginRefresher)
+	if !ok {
+		return pluginRefresh{}, errPluginRefreshUnsupported
+	}
+	c.mu.Lock()
+	switch {
+	case c.stopping:
+		c.mu.Unlock()
+		return pluginRefresh{}, errClaudeStopping
+	case !c.ready:
+		c.mu.Unlock()
+		return pluginRefresh{}, errClaudeAwaitingRestore
+	case !c.active:
+		c.mu.Unlock()
+		return pluginRefresh{}, errPluginRefreshNoTurn
+	case c.checkpointing:
+		c.mu.Unlock()
+		return pluginRefresh{}, errClaudeAdmissionClosed
+	case c.refreshing:
+		c.mu.Unlock()
+		return pluginRefresh{}, errPluginRefreshRunning
+	case c.turnRefreshed:
+		c.mu.Unlock()
+		return pluginRefresh{}, errPluginRefreshTurnLimit
+	}
+	c.refreshing = true
+	c.turnRefreshed = true
+	seq := c.turns
+	c.mu.Unlock()
+
+	result, err := refresher.refreshPlugins(c.homeDir)
+
+	c.mu.Lock()
+	c.refreshing = false
+	// A turn that ended while its refresh ran (a timeout) is no longer there to
+	// carry the line, and never saw the result, so the note stays pending.
+	sameTurn := c.active && c.turns == seq
+	if err == nil && sameTurn {
+		c.turnRefreshNotice = pluginRefreshNotice(result)
+	}
+	c.cond.Broadcast()
+	c.mu.Unlock()
+	if err != nil {
+		c.logger.Warn("in-turn plugin refresh failed", "err", c.redactString(err.Error()))
+		return pluginRefresh{}, err
+	}
+	if !sameTurn {
+		c.appendPlatformNotice(pluginRefreshNotice(result))
+	}
+	return result, nil
+}
+
+// pluginRefreshStatus maps a refresh error to the agent route's status.
+func pluginRefreshStatus(err error) int {
+	switch {
+	case errors.Is(err, errPluginRefreshUnsupported):
+		return http.StatusNotFound
+	case errors.Is(err, errClaudeAwaitingRestore), errors.Is(err, errClaudeStopping):
+		return http.StatusServiceUnavailable
+	case errors.Is(err, errClaudeAdmissionClosed), errors.Is(err, errPluginRefreshBusy),
+		errors.Is(err, errPluginRefreshRunning), errors.Is(err, errPluginRefreshNoTurn):
+		return http.StatusConflict
+	case errors.Is(err, errPluginRefreshTurnLimit):
+		return http.StatusTooManyRequests
+	case errors.Is(err, errPluginRefreshFailed):
+		return http.StatusBadGateway
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+// fromLoopback reports whether a request came from inside the pod. The control
+// plane and the kubelet reach the agent on the pod IP; only a process sharing
+// the pod's network namespace — the skills MCP codex spawns — reaches loopback.
+func fromLoopback(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (c *claudeWorkload) argv(prompt string, resume bool) []string {
@@ -1496,18 +1601,22 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 	mux.HandleFunc("POST "+pluginRefreshPath, func(w http.ResponseWriter, _ *http.Request) {
 		result, err := c.refreshPlugins()
 		if err != nil {
-			status := http.StatusInternalServerError
-			switch {
-			case errors.Is(err, errPluginRefreshUnsupported):
-				status = http.StatusNotFound
-			case errors.Is(err, errClaudeAwaitingRestore), errors.Is(err, errClaudeStopping):
-				status = http.StatusServiceUnavailable
-			case errors.Is(err, errClaudeAdmissionClosed), errors.Is(err, errPluginRefreshBusy), errors.Is(err, errPluginRefreshRunning):
-				status = http.StatusConflict
-			case errors.Is(err, errPluginRefreshFailed):
-				status = http.StatusBadGateway
-			}
-			http.Error(w, c.redactString(err.Error()), status)
+			http.Error(w, c.redactString(err.Error()), pluginRefreshStatus(err))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(result)
+	})
+
+	// AC-J7: the skills MCP's refresh_skills, from inside the running turn.
+	mux.HandleFunc("POST "+pluginRefreshTurnPath, func(w http.ResponseWriter, r *http.Request) {
+		if !fromLoopback(r) {
+			http.Error(w, "the in-turn refresh is only for the session's own skills MCP", http.StatusForbidden)
+			return
+		}
+		result, err := c.refreshPluginsInTurn()
+		if err != nil {
+			http.Error(w, c.redactString(err.Error()), pluginRefreshStatus(err))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
