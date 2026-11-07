@@ -31,7 +31,7 @@ func (h headerResolver) Resolve(r *http.Request) (tenancy.Caller, error) {
 func newTenantServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	cfg, err := tenancy.Parse(`{"tenants":[
-		{"name":"alpha","serviceAccounts":["alpha/sa"],"workloadTypes":["shell","codex"]},
+		{"name":"alpha","serviceAccounts":["alpha/sa"],"workloadTypes":["shell","codex-chat"]},
 		{"name":"beta","serviceAccounts":["beta/sa"],"workloadTypes":["claude-code"]},
 		{"name":"omni","serviceAccounts":["omni/sa"],"workloadTypes":["*"]}
 	]}`)
@@ -184,7 +184,7 @@ func TestTenancyCreateRules(t *testing.T) {
 		{"wildcard tenant default shell", "omni", map[string]any{"name": "x"}, http.StatusCreated},
 		{"wildcard tenant any type", "omni", map[string]any{"name": "x", "workloadType": "claude-code"}, http.StatusCreated},
 		{"wildcard tenant unknown type", "omni", map[string]any{"name": "x", "workloadType": "vim"}, http.StatusBadRequest},
-		{"operator into wildcard tenant", "", map[string]any{"name": "x", "tenant": "omni", "workloadType": "codex"}, http.StatusCreated},
+		{"operator into wildcard tenant", "", map[string]any{"name": "x", "tenant": "omni", "workloadType": "codex-chat"}, http.StatusCreated},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

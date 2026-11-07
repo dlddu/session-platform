@@ -12,8 +12,8 @@ const (
 	WorkloadTypeCodexTask WorkloadType = "codex-task"
 
 	// legacyWorkloadTypeCodex is codex-chat's name before the 2026-11-07 split.
-	// Stored records, tenant grants and clients still carry it, so it is read as
-	// codex-chat everywhere and never written (AC-J1).
+	// Only session records written before it still carry the name; they are
+	// read as codex-chat and the next write stores the new name (AC-J1).
 	legacyWorkloadTypeCodex WorkloadType = "codex"
 )
 

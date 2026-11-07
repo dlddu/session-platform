@@ -14,7 +14,7 @@ import (
 func TestPluginRefreshEndpoint(t *testing.T) {
 	srv := newTenantServer(t)
 
-	resp, body := tenantCall(t, srv, http.MethodPost, "/api/v1/sessions", "alpha", map[string]string{"name": "long", "workloadType": "codex"})
+	resp, body := tenantCall(t, srv, http.MethodPost, "/api/v1/sessions", "alpha", map[string]string{"name": "long", "workloadType": "codex-chat"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create codex = %d %s", resp.StatusCode, body)
 	}

@@ -33,10 +33,6 @@ import (
 const (
 	workloadCodexChat = "codex-chat"
 	workloadCodexTask = "codex-task"
-	// workloadCodexLegacy is codex-chat's name before the 2026-11-07 split
-	// (AC-J1). The control plane writes the new name; this keeps a pod built
-	// from an older spec starting.
-	workloadCodexLegacy = "codex"
 
 	// Keep in sync with control-plane/internal/adapter/k8s (CodexModelEnvVar).
 	codexModelEnv            = "CODEX_MODEL"

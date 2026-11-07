@@ -277,7 +277,6 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, session.ErrInvalidInput)
 			return
 		}
-		// Folds the legacy "codex" to codex-chat before the tenant check (AC-J1).
 		normalized, err := session.NormalizeWorkloadType(workload)
 		if err != nil {
 			writeErr(w, session.ErrInvalidInput)

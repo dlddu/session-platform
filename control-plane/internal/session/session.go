@@ -91,19 +91,27 @@ func (w WorkloadType) Valid() bool {
 // It doubles as the read path for stored sessions: records written before the
 // type axis existed carry no workloadType, so decoding them yields "" — which
 // this resolves to shell, the only type those sessions could have been.
-// Records and requests from before the codex split carry "codex", which is
-// codex-chat (AC-J1).
+// A request or tenant grant naming "codex" is refused: every caller moved to
+// codex-chat (AC-J1); only stored records keep the old name, read through
+// NormalizeStoredWorkloadType.
 func NormalizeWorkloadType(w WorkloadType) (WorkloadType, error) {
-	switch w {
-	case "":
+	if w == "" {
 		return WorkloadTypeShell, nil
-	case legacyWorkloadTypeCodex:
-		return WorkloadTypeCodexChat, nil
 	}
 	if !w.Valid() {
 		return "", ErrInvalidInput
 	}
 	return w, nil
+}
+
+// NormalizeStoredWorkloadType is NormalizeWorkloadType for a decoded session
+// record. Records written before the codex split carry "codex", which is
+// codex-chat (AC-J1); refusing it would fail every List that meets one.
+func NormalizeStoredWorkloadType(w WorkloadType) (WorkloadType, error) {
+	if w == legacyWorkloadTypeCodex {
+		return WorkloadTypeCodexChat, nil
+	}
+	return NormalizeWorkloadType(w)
 }
 
 // NormalizeModel validates the workload-specific model setting (AC-E6).

@@ -391,10 +391,8 @@ func TestNewCodexWorkloadFromEnv(t *testing.T) {
 	t.Setenv(codexRunnerBinaryEnv, "/opt/runner")
 	t.Setenv(authSlotDirEnv, "")
 	t.Setenv(codexReasoningEffortEnv, "")
-	for _, workload := range []string{workloadCodexChat, workloadCodexLegacy} {
-		if _, err := newCodexWorkloadFromEnv(workload, testLogger(), true); err != nil {
-			t.Fatalf("restore-mode %s workload: %v", workload, err)
-		}
+	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err != nil {
+		t.Fatalf("restore-mode codex-chat workload: %v", err)
 	}
 	t.Setenv(codexReasoningEffortEnv, "high")
 	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
