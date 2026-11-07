@@ -1,7 +1,9 @@
-// codex-runner: one Codex SDK turn per invocation, for the codex workload
-// (docs/prd/codex-workload.md, AC-J2/J3/J5). The agent runs
+// codex-runner: one Codex SDK turn per invocation, for the codex-chat
+// (docs/prd/codex-workload.md, AC-J2/J3/J5) and codex-task
+// (docs/prd/codex-task-workload.md, AC-M1/M2/M4) workloads. The agent runs
 //
-//   codex-runner --model <model|platform-default> [--resume] -- <prompt>
+//   codex-runner [--mode chat|task] --model <model|platform-default>
+//                [--effort <effort>] [--resume] -- <prompt>
 //
 // in the session workspace with HOME set to the session HOME, and projects the
 // JSON lines written here (data-plane/cmd/agent/codex_stream.go). Every SDK
@@ -147,15 +149,15 @@ async function main(argv) {
   }
 
   const codex = new Codex({ codexPathOverride: bin, env });
-  const options = threadOptions(args.model, process.cwd());
+  const options = threadOptions(args.model, process.cwd(), { mode: args.mode, effort: args.effort });
   const previous = args.resume ? readThreadId(codexHome) : null;
   const thread = previous ? codex.resumeThread(previous, options) : codex.startThread(options);
-  return runTurn(thread, args.prompt, codexHome);
+  return runTurn(thread, args.prompt, codexHome, args.mode);
 }
 
 // runTurn streams one turn, recording the thread id as soon as codex reports
-// it and stopping at the first forbidden item (AC-J5).
-async function runTurn(thread, prompt, codexHome) {
+// it and, in chat mode, stopping at the first forbidden item (AC-J5).
+async function runTurn(thread, prompt, codexHome, mode) {
   const controller = new AbortController();
   let outcome = null;
   let killed = false;
@@ -163,7 +165,7 @@ async function runTurn(thread, prompt, codexHome) {
     const { events } = await thread.runStreamed(prompt, { signal: controller.signal });
     for await (const event of events) {
       await emit(JSON.stringify(event) + "\n");
-      const verdict = classify(event);
+      const verdict = classify(event, mode);
       if (verdict.threadId) {
         writeThreadId(codexHome, verdict.threadId);
       }

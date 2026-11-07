@@ -8,7 +8,7 @@
 - AC-K5: 테넌트 설정과 하위 호환 (PRD: 멀티테넌시)
 
 > 📌 **SUT 설정**: kind e2e 오버레이(`deploy/e2e-tenancy.yaml`)가 테넌트 셋을 둔다 — `e2e-alpha`(계정 `default/tenant-alpha`,
-> 타입 `shell`·`codex`), `e2e-beta`(계정 `default/tenant-beta`, 타입 `shell`), `e2e-gamma`(계정 `default/tenant-gamma`, 타입 `"*"` — 제한 없음). 어느 테넌트도 주장하지 않는 계정
+> 타입 `shell`·`codex-chat`), `e2e-beta`(계정 `default/tenant-beta`, 타입 `shell`), `e2e-gamma`(계정 `default/tenant-gamma`, 타입 `"*"` — 제한 없음). 어느 테넌트도 주장하지 않는 계정
 > `default/tenant-outsider`도 있다. 스위트는 실물 TokenRequest로 audience `session-platform` 토큰을 발급받는다 —
 > 대역이 없다. control plane의 TokenReview 권한도 같은 파일이 붙인다.
 
@@ -34,8 +34,8 @@
 
 ### 시나리오 4: 운영자 화면 — 테넌트 필터·태그·테넌트로 생성
 - **사전 조건**: 테넌트가 설정된 SUT를 운영자(토큰 없음)로 연 브라우저
-- **실행 단계**: (a) 새 세션 화면을 연다 → (b) 테넌트 `e2e-alpha`를 고른다 → (c) `codex`를 골라 세션을 만든다 → (d) 세션 목록에서 필터를 `e2e-alpha`로, 다시 `e2e-beta`로 바꾼다
-- **기대 결과**: (a) 테넌트 선택이 있고 기본은 무소속이다. (b) 타입 카드가 `shell`·`codex` 둘로 좁혀진다. (c) 만든 세션 카드에 `e2e-alpha` 태그가 붙는다. (d) `e2e-alpha`에서는 그 세션이 보이고 `e2e-beta`에서는 보이지 않는다
+- **실행 단계**: (a) 새 세션 화면을 연다 → (b) 테넌트 `e2e-alpha`를 고른다 → (c) `codex-chat`를 골라 세션을 만든다 → (d) 세션 목록에서 필터를 `e2e-alpha`로, 다시 `e2e-beta`로 바꾼다
+- **기대 결과**: (a) 테넌트 선택이 있고 기본은 무소속이다. (b) 타입 카드가 `shell`·`codex-chat` 둘로 좁혀진다. (c) 만든 세션 카드에 `e2e-alpha` 태그가 붙는다. (d) `e2e-alpha`에서는 그 세션이 보이고 `e2e-beta`에서는 보이지 않는다
 - **검증 AC**: AC-K4
 
 ### 시나리오 5: 거절된 호출자는 운영자가 되지 않는다

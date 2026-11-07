@@ -134,12 +134,12 @@ func TestPlugins_CodexSidecarSeeder(t *testing.T) {
 		t.Helper()
 		orch, cs := newReadyOrchestrator(t,
 			k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
-			k8s.WithWorkloadImage(session.WorkloadTypeCodex, codexImage),
+			k8s.WithWorkloadImage(session.WorkloadTypeCodexChat, codexImage),
 			k8s.WithCodexCredentialsSecret("codex-k3s"),
 			k8s.WithCodexConfigConfigMap("codex-cfg"),
 			k8s.WithCodexPlugins("codex-session,extra"),
 		)
-		if _, err := orch.Start(context.Background(), id, k8s.WorkloadSpec{Type: session.WorkloadTypeCodex, Plugins: plugins}); err != nil {
+		if _, err := orch.Start(context.Background(), id, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexChat, Plugins: plugins}); err != nil {
 			t.Fatalf("start: %v", err)
 		}
 		got, _ := envOf(container(t, listPods(t, cs)[0], k8s.CodexK3SMCPProxyContainerName), "MINIMAX_CODE_PLUGINS")
@@ -150,5 +150,31 @@ func TestPlugins_CodexSidecarSeeder(t *testing.T) {
 	}
 	if got := start(t, "pl-cx-default", nil); got != "codex-session,extra" {
 		t.Errorf("omitted: MINIMAX_CODE_PLUGINS = %q, want the deployment's codex-session,extra", got)
+	}
+}
+
+// codex-task seeds from its own sidecar the same way, falling back to its own
+// CODEX_TASK_PLUGINS rather than codex-chat's (AC-L1, AC-M1).
+func TestPlugins_CodexTaskSidecarSeeder(t *testing.T) {
+	start := func(t *testing.T, id string, plugins []string) string {
+		t.Helper()
+		orch, cs := newReadyOrchestrator(t,
+			k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
+			k8s.WithWorkloadImage(session.WorkloadTypeCodexTask, codexImage),
+			k8s.WithCodexPlugins("codex-session,extra"),
+			k8s.WithCodexTaskPlugins("task-bundle"),
+		)
+		slot := 0
+		if _, err := orch.Start(context.Background(), id, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexTask, Plugins: plugins, AuthSlot: &slot}); err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		got, _ := envOf(container(t, listPods(t, cs)[0], k8s.CodexK3SMCPProxyContainerName), "MINIMAX_CODE_PLUGINS")
+		return got
+	}
+	if got := start(t, "pl-ct", []string{"learning"}); got != "learning" {
+		t.Errorf("selection: MINIMAX_CODE_PLUGINS = %q, want learning", got)
+	}
+	if got := start(t, "pl-ct-default", nil); got != "task-bundle" {
+		t.Errorf("omitted: MINIMAX_CODE_PLUGINS = %q, want codex-task's own task-bundle", got)
 	}
 }

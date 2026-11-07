@@ -20,12 +20,12 @@ func startCodex(t *testing.T, sessionID, model string) (corev1.Pod, k8s.SessionP
 	t.Helper()
 	orch, cs := newReadyOrchestrator(t,
 		k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
-		k8s.WithWorkloadImage(session.WorkloadTypeCodex, codexImage),
+		k8s.WithWorkloadImage(session.WorkloadTypeCodexChat, codexImage),
 		k8s.WithCodexCredentialsSecret("codex-k3s"),
 		k8s.WithCodexConfigConfigMap("codex-cfg"),
 		k8s.WithCodexPlugins("session-platform,extra"),
 	)
-	started, err := orch.Start(context.Background(), sessionID, k8s.WorkloadSpec{Type: session.WorkloadTypeCodex, Model: model})
+	started, err := orch.Start(context.Background(), sessionID, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexChat, Model: model})
 	if err != nil {
 		t.Fatalf("start codex session: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestCodex_OnePodWithLoopbackK3SProxy(t *testing.T) {
 	if len(started.Auxiliary) != 0 {
 		t.Fatalf("auxiliary pods = %+v, want none", started.Auxiliary)
 	}
-	if got := pod.Labels[k8s.LabelWorkloadType]; got != string(session.WorkloadTypeCodex) {
+	if got := pod.Labels[k8s.LabelWorkloadType]; got != string(session.WorkloadTypeCodexChat) {
 		t.Errorf("workload label = %q", got)
 	}
 	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
@@ -51,7 +51,7 @@ func TestCodex_OnePodWithLoopbackK3SProxy(t *testing.T) {
 		t.Fatalf("containers = %d, want agent + k3s-mcp-proxy", n)
 	}
 	agent := container(t, pod, k8s.ContainerName)
-	if v, _ := envValue(agent, "DATA_PLANE_WORKLOAD"); v != "codex" {
+	if v, _ := envValue(agent, "DATA_PLANE_WORKLOAD"); v != "codex-chat" {
 		t.Errorf("agent workload = %q", v)
 	}
 	if v, _ := envValue(agent, k8s.K3SMCPProxyURLEnvVar); v != "http://127.0.0.1:8093" {

@@ -389,17 +389,65 @@ func TestNewCodexWorkloadFromEnv(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_STATE_DIR", filepath.Join(t.TempDir(), "state"))
 	t.Setenv(codexModelEnv, "gpt-6")
 	t.Setenv(codexRunnerBinaryEnv, "/opt/runner")
-	if _, err := newCodexWorkloadFromEnv(testLogger(), true); err != nil {
-		t.Fatalf("restore-mode codex workload: %v", err)
+	t.Setenv(authSlotDirEnv, "")
+	t.Setenv(codexReasoningEffortEnv, "")
+	for _, workload := range []string{workloadCodexChat, workloadCodexLegacy} {
+		if _, err := newCodexWorkloadFromEnv(workload, testLogger(), true); err != nil {
+			t.Fatalf("restore-mode %s workload: %v", workload, err)
+		}
 	}
+	t.Setenv(codexReasoningEffortEnv, "high")
+	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
+		t.Fatal("codex-chat takes no reasoning effort (AC-E8)")
+	}
+	t.Setenv(codexReasoningEffortEnv, "")
 	t.Setenv(codexModelEnv, "bad model")
-	if _, err := newCodexWorkloadFromEnv(testLogger(), true); err == nil {
+	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
 		t.Fatal("an invalid model must be refused at start")
 	}
 	t.Setenv(codexModelEnv, "")
 	t.Setenv("OPENAI_API_KEY", "sk")
-	if _, err := newCodexWorkloadFromEnv(testLogger(), true); err == nil {
+	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
 		t.Fatal("a credential must be refused at start")
+	}
+}
+
+// TestNewCodexTaskWorkloadFromEnv is AC-M2/M4's start rules: codex-task needs
+// its auth slot and takes only AC-M4's efforts.
+func TestNewCodexTaskWorkloadFromEnv(t *testing.T) {
+	for _, name := range codexCredentialEnv {
+		t.Setenv(name, "")
+	}
+	t.Setenv(k3sMCPProxyURLEnv, "http://127.0.0.1:8093")
+	t.Setenv("CLAUDE_CODE_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+	t.Setenv(codexModelEnv, "gpt-6")
+	t.Setenv(codexRunnerBinaryEnv, "/opt/runner")
+	t.Setenv(codexReasoningEffortEnv, "")
+	t.Setenv(authSlotDirEnv, "")
+	if _, err := newCodexWorkloadFromEnv(workloadCodexTask, testLogger(), true); err == nil {
+		t.Fatal("codex-task without an auth slot must be refused")
+	}
+	t.Setenv(authSlotDirEnv, t.TempDir())
+	t.Setenv(codexReasoningEffortEnv, "max")
+	if _, err := newCodexWorkloadFromEnv(workloadCodexTask, testLogger(), true); err == nil {
+		t.Fatal("max is not a codex-task effort")
+	}
+	t.Setenv(codexReasoningEffortEnv, "xhigh")
+	w, err := newCodexWorkloadFromEnv(workloadCodexTask, testLogger(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if w.authSlot == nil || w.cli.workloadName() != workloadCodexTask {
+		t.Fatalf("slot = %v, workload = %s", w.authSlot, w.cli.workloadName())
+	}
+	got := w.argv("p", true)
+	want := []string{"/opt/runner", "--mode", "task", "--model", "gpt-6", "--effort", "xhigh", "--resume", "--", "p"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv = %q, want %q", got, want)
+	}
+	if ex := w.archiveExclusions(); !reflect.DeepEqual(ex, []string{"home/.codex/auth.json"}) {
+		t.Fatalf("archive exclusions = %q", ex)
 	}
 }
 
@@ -844,7 +892,7 @@ func TestCodexHealthzNamesWorkload(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if body["workload"] != workloadCodex {
-		t.Fatalf("healthz = %v, want workload %s", body, workloadCodex)
+	if body["workload"] != workloadCodexChat {
+		t.Fatalf("healthz = %v, want workload %s", body, workloadCodexChat)
 	}
 }

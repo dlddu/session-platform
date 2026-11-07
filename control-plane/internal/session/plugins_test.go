@@ -25,7 +25,7 @@ func TestNormalizePlugins(t *testing.T) {
 		{name: "omitted on claude-code is the default", workload: WorkloadTypeClaudeCode, in: nil, want: nil},
 		{name: "omitted on shell is fine", workload: WorkloadTypeShell, in: nil, want: nil},
 		{name: "claude-code list kept in order", workload: WorkloadTypeClaudeCode, in: []string{"development", "session-platform"}, want: []string{"development", "session-platform"}},
-		{name: "codex list", workload: WorkloadTypeCodex, in: []string{"codex-session", "learning"}, want: []string{"codex-session", "learning"}},
+		{name: "codex list", workload: WorkloadTypeCodexChat, in: []string{"codex-session", "learning"}, want: []string{"codex-session", "learning"}},
 		{name: "minimax list", workload: WorkloadTypeMiniMaxCode, in: []string{"mcp-servers"}, want: []string{"mcp-servers"}},
 		{name: "dots underscores hyphens", workload: WorkloadTypeClaudeCode, in: []string{"a.b_c-d"}, want: []string{"a.b_c-d"}},
 		{name: "shell refuses a list", workload: WorkloadTypeShell, in: []string{"development"}, wantErr: true},
@@ -35,11 +35,11 @@ func TestNormalizePlugins(t *testing.T) {
 		{name: "blank name", workload: WorkloadTypeClaudeCode, in: []string{""}, wantErr: true},
 		{name: "padded name", workload: WorkloadTypeClaudeCode, in: []string{" dev"}, wantErr: true},
 		{name: "marketplace suffix", workload: WorkloadTypeClaudeCode, in: []string{"dev@dlddu-plugins"}, wantErr: true},
-		{name: "path", workload: WorkloadTypeCodex, in: []string{"../etc"}, wantErr: true},
-		{name: "comma would split the env list", workload: WorkloadTypeCodex, in: []string{"a,b"}, wantErr: true},
-		{name: "leading dot", workload: WorkloadTypeCodex, in: []string{".hidden"}, wantErr: true},
-		{name: "too long", workload: WorkloadTypeCodex, in: []string{"a" + strings.Repeat("b", 64)}, wantErr: true},
-		{name: "too many", workload: WorkloadTypeCodex, in: tooMany, wantErr: true},
+		{name: "path", workload: WorkloadTypeCodexChat, in: []string{"../etc"}, wantErr: true},
+		{name: "comma would split the env list", workload: WorkloadTypeCodexChat, in: []string{"a,b"}, wantErr: true},
+		{name: "leading dot", workload: WorkloadTypeCodexChat, in: []string{".hidden"}, wantErr: true},
+		{name: "too long", workload: WorkloadTypeCodexChat, in: []string{"a" + strings.Repeat("b", 64)}, wantErr: true},
+		{name: "too many", workload: WorkloadTypeCodexChat, in: tooMany, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

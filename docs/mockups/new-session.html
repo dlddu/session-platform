@@ -503,12 +503,19 @@
             <span class="t-n">minimax-code</span>
             <span class="t-d">MiniMax Code CLI on the same prompt loop. Runs the platform's default MiniMax model.</span>
           </button>
-          <button class="type wide" data-type="codex" onclick="pickType('codex')">
+          <button class="type wide" data-type="codex-chat" onclick="pickType('codex-chat')">
             <span class="t-ic">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3.2"/></svg>
             </span>
-            <span class="t-n">codex</span>
-            <span class="t-d">Codex SDK agent on your ChatGPT plan. Conversation, plugin skills and K3s MCP only.</span>
+            <span class="t-n">codex-chat</span>
+            <span class="t-d">Long-running Codex chat on your ChatGPT plan. Conversation, plugin skills and K3s MCP only.</span>
+          </button>
+          <button class="type wide" data-type="codex-task" onclick="pickType('codex-task')">
+            <span class="t-ic">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3.2"/></svg>
+            </span>
+            <span class="t-n">codex-task</span>
+            <span class="t-d">Codex coding agent with a shell, file edits and network. Uses a login slot from the platform pool.</span>
           </button>
           <button class="type wide" data-type="approval-gated" onclick="pickType('approval-gated')">
             <span class="t-ic">
@@ -525,6 +532,11 @@
             <button class="sel" data-model="platform-default" onclick="pickModel('platform-default')">platform default<span class="def">tbd</span></button>
             <button data-model="model-a" onclick="pickModel('model-a')">model-a</button>
             <button data-model="model-b" onclick="pickModel('model-b')">model-b</button>
+          </div>
+          <!-- AC-E8 · AC-M4: 추론 수준은 /config 의 reasoningEfforts 가 빈 타입에서는 보이지 않는다 -->
+          <div id="effort-field" style="display:none">
+            <label style="display:block;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-faint);margin:16px 0 9px">Reasoning effort</label>
+            <div class="seg" id="effort-seg"></div>
           </div>
           <div class="immutable">
             <span class="ic">
@@ -585,13 +597,13 @@ let sessions = [
   {id:'c83d', name:'doc-migration', type:'claude-code', model:'platform default', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'18m ago', checkpoint:'38 MB archive', reclaim:'1 vCPU · 2 GB'}
 ];
 // workloadType은 세션 수명 동안 불변 (AC-E1/AC-F1) · 링크 대상이 타입에 따라 갈린다
-const WS_PAGE = {'claude-code':'agent-workspace.html', 'minimax-code':'agent-workspace.html', 'codex':'agent-workspace.html', 'approval-gated':'gated-workspace.html', 'shell':'workspace.html'};
+const WS_PAGE = {'claude-code':'agent-workspace.html', 'minimax-code':'agent-workspace.html', 'codex-chat':'agent-workspace.html', 'codex-task':'agent-workspace.html', 'approval-gated':'gated-workspace.html', 'shell':'workspace.html'};
 function wsHref(s){
   if(s.state==='snapshot') return `restore.html?id=${s.id}`;
   return `${WS_PAGE[s.type]||'workspace.html'}?id=${s.id}`;
 }
 function typeTag(s){
-  if(s.type==='claude-code' || s.type==='minimax-code' || s.type==='codex')
+  if(s.type==='claude-code' || s.type==='minimax-code' || s.type==='codex-chat' || s.type==='codex-task')
     return `<span class="pod" style="color:#b79ae0" title="workloadType=${s.type}">◇ ${s.type}</span>`;
   if(s.type==='approval-gated')
     return `<span class="pod" style="color:var(--idle)" title="workloadType=approval-gated">⏸ approval-gated</span>`;
@@ -687,19 +699,25 @@ function startGridTick(){
 
 /* ---------- STP-workload-choice · workload type selection (AC-E1 / AC-E6 · V8) ---------- */
 let provBusy=false;
-let draft = { type:'shell', model:'platform-default', tenant:'' };
+let draft = { type:'shell', model:'platform-default', effort:'', tenant:'' };
 
-// 에이전트 계열 타입(claude-code · approval-gated · minimax-code · codex) (AC-E6 · AC-F1 · AC-G1 · AC-J1)
-const AGENT_TYPES = ['claude-code','approval-gated','minimax-code','codex'];
+// 에이전트 계열 타입(claude-code · approval-gated · minimax-code · codex-chat · codex-task) (AC-E6 · AC-F1 · AC-G1 · AC-J1 · AC-M1)
+const AGENT_TYPES = ['claude-code','approval-gated','minimax-code','codex-chat','codex-task'];
 // minimax-code는 model을 고르지 않는다 — 항상 플랫폼 기본 MiniMax 모델 (AC-G1)
-const MODEL_CHOICE_TYPES = ['claude-code','approval-gated','codex'];
+const MODEL_CHOICE_TYPES = ['claude-code','approval-gated','codex-chat','codex-task'];
+// 추론 수준은 claude-code · codex-task 만 받는다 (AC-E8 · AC-M4). 첫 칸은 CLI 기본값 = 필드 생략.
+const EFFORTS = {
+  'claude-code': ['low','medium','high','xhigh','max'],
+  'codex-task': ['minimal','low','medium','high','xhigh']
+};
 // 고정 안내문은 워크로드별 플랫폼 사실을 말한다 — 모델을 고르는 타입만 'model choice'를 언급하고,
 // minimax-code는 항상 플랫폼 기본 MiniMax 모델, approval-gated는 헬퍼 파드(승인 게이트·유일한 외부 경로)를 덧붙인다.
 const IMMUTABLE_NOTE = {
   'shell': 'Workload type is <b>fixed for the lifetime</b> of the session. To use a different one, create a new session.',
   'claude-code': 'Workload type and model choice are fixed for this session. Platform default resolves to the configured default at container start.',
   'minimax-code': 'Workload type is fixed for this session. It runs the platform default MiniMax model, resolved at container start.',
-  'codex': 'Workload type and model choice are fixed for this session. The first prompt signs the session in to ChatGPT, and the login is kept in its archive.',
+  'codex-chat': 'Workload type and model choice are fixed for this session. The first prompt signs the session in to ChatGPT, and the login is kept in its archive.',
+  'codex-task': 'Workload type, model and reasoning effort are fixed for this session. It takes a login slot while it has a pod; an empty slot signs in on the first prompt.',
   'approval-gated': 'Workload type and model choice are fixed for this session. The session also gets a helper pod that holds the approval gate and the only route out.'
 };
 function pickType(t){
@@ -708,17 +726,30 @@ function pickType(t){
   document.getElementById('immutable-tx').innerHTML = IMMUTABLE_NOTE[t];
   document.querySelectorAll('.type').forEach(b=>b.classList.toggle('sel', b.dataset.type===t));
   document.getElementById('model-field').classList.toggle('on', MODEL_CHOICE_TYPES.includes(t));
+  renderEfforts(t);
+}
+function renderEfforts(t){
+  const list = EFFORTS[t] || [];
+  draft.effort = '';
+  document.getElementById('effort-field').style.display = list.length ? '' : 'none';
+  document.getElementById('effort-seg').innerHTML = ['', ...list].map(e =>
+    `<button class="${e===''?'sel':''}" data-effort="${e}" onclick="pickEffort('${e}')">${e===''?'CLI default':e}</button>`).join('');
+}
+function pickEffort(e){
+  if(provBusy) return;
+  draft.effort = e;
+  document.querySelectorAll('#effort-seg button').forEach(b=>b.classList.toggle('sel', b.dataset.effort===e));
 }
 /* ---------- AC-K2 · AC-K4 · 테넌트 선택 ----------
    ?tenancy=none     테넌트 설정 없음 — 오늘과 똑같은 화면(칸 자체가 없다)
    ?tenancy=tenant   호출자가 테넌트 — 고정 한 줄, 타입 카드는 그 테넌트가 받은 것만
    (기본)            운영자 + 테넌트 둘 — 고르는 칸, 기본값 No tenant */
 const TENANTS = [
-  {name:'pocket-aide', workloadTypes:['shell','codex','claude-code']},
+  {name:'pocket-aide', workloadTypes:['shell','codex-chat','claude-code']},
   {name:'ops-bot', workloadTypes:['shell']}
 ];
 const TENANCY = new URLSearchParams(location.search).get('tenancy') || 'operator';
-const ALL_TYPES = ['shell','claude-code','minimax-code','codex','approval-gated'];
+const ALL_TYPES = ['shell','claude-code','minimax-code','codex-chat','codex-task','approval-gated'];
 function showTypes(allowed){
   document.querySelectorAll('.type').forEach(b=>{ b.style.display = allowed.includes(b.dataset.type) ? '' : 'none'; });
   if(!allowed.includes(draft.type)) pickType(allowed[0]);
@@ -768,7 +799,7 @@ function startProvision(){
   document.getElementById('phase-config').classList.remove('on');
   document.getElementById('phase-prov').classList.add('on');
   document.getElementById('prov-type').textContent =
-    isAgent ? `workloadType=${draft.type} · model=${MODEL_CHOICE_TYPES.includes(draft.type) ? MODEL_LABEL[draft.model] : 'platform default'}` : 'workloadType=shell';
+    isAgent ? `workloadType=${draft.type} · model=${MODEL_CHOICE_TYPES.includes(draft.type) ? MODEL_LABEL[draft.model] : 'platform default'}${draft.effort ? ' · effort='+draft.effort : ''}` : 'workloadType=shell';
   // control plane은 타입에 따라 서로 다른 워크로드로 pod를 프로비저닝한다 (AC-E1/AC-F1)
   // approval-gated는 워크로드 파드와 함께 세션 전용 MCP 보조 파드를 세운다 (AC-F4)
   document.getElementById('prov-step-2').textContent =

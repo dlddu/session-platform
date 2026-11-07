@@ -7,6 +7,7 @@ package session
 import (
 	"errors"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -75,7 +76,8 @@ var modelNamePattern = regexp.MustCompile(`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}
 // default. Use that on the way in and this to reject explicit garbage.
 func (w WorkloadType) Valid() bool {
 	switch w {
-	case WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeApprovalGated, WorkloadTypeMiniMaxCode, WorkloadTypeCodex:
+	case WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeApprovalGated, WorkloadTypeMiniMaxCode,
+		WorkloadTypeCodexChat, WorkloadTypeCodexTask:
 		return true
 	default:
 		return false
@@ -89,9 +91,14 @@ func (w WorkloadType) Valid() bool {
 // It doubles as the read path for stored sessions: records written before the
 // type axis existed carry no workloadType, so decoding them yields "" — which
 // this resolves to shell, the only type those sessions could have been.
+// Records and requests from before the codex split carry "codex", which is
+// codex-chat (AC-J1).
 func NormalizeWorkloadType(w WorkloadType) (WorkloadType, error) {
-	if w == "" {
+	switch w {
+	case "":
 		return WorkloadTypeShell, nil
+	case legacyWorkloadTypeCodex:
+		return WorkloadTypeCodexChat, nil
 	}
 	if !w.Valid() {
 		return "", ErrInvalidInput
@@ -114,7 +121,8 @@ func NormalizeModel(workload WorkloadType, model string) (string, error) {
 			return "", ErrInvalidInput
 		}
 		return "", nil
-	case WorkloadTypeClaudeCode, WorkloadTypeApprovalGated, WorkloadTypeMiniMaxCode, WorkloadTypeCodex:
+	case WorkloadTypeClaudeCode, WorkloadTypeApprovalGated, WorkloadTypeMiniMaxCode,
+		WorkloadTypeCodexChat, WorkloadTypeCodexTask:
 		if model == "" {
 			return PlatformDefaultModel, nil
 		}
@@ -170,11 +178,28 @@ func NormalizePlugins(workload WorkloadType, plugins []string) ([]string, error)
 // workload type (AC-L1).
 func TakesPlugins(workload WorkloadType) bool {
 	switch workload {
-	case WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode, WorkloadTypeCodex:
+	case WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode, WorkloadTypeCodexChat, WorkloadTypeCodexTask:
 		return true
 	default:
 		return false
 	}
+}
+
+// NormalizeReasoningEffort validates the session's reasoning effort (AC-E8).
+// Empty means unset — the CLI's own default — and is valid for every type; a
+// value is valid only when the type's catalog entry lists it, so the catalog
+// is the one place a type's efforts are declared. Callers that must reject an
+// explicitly empty value (the create API) do so before calling this.
+func NormalizeReasoningEffort(workload WorkloadType, effort string) (string, error) {
+	if effort == "" {
+		return "", nil
+	}
+	for _, info := range workloadTypeCatalog {
+		if info.Type == workload && slices.Contains(info.ReasoningEfforts, effort) {
+			return effort, nil
+		}
+	}
+	return "", ErrInvalidInput
 }
 
 // MaxIdle is the maximum idle duration before a session is snapshotted.
@@ -245,6 +270,10 @@ type Session struct {
 	// creation and carried across snapshot/restore. Absent means the workload
 	// type's platform default; present, it is the exact set the agent loads.
 	Plugins []string `json:"plugins,omitempty"`
+	// ReasoningEffort is the session's reasoning effort for the types whose
+	// catalog entry lists efforts (AC-E8, AC-M4). Empty leaves it to the CLI;
+	// like the model it is fixed at creation and carried across a restore.
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 	// Tenant is the tenant that owns the session (docs/prd/multitenancy.md,
 	// AC-K2), fixed at creation. Empty means operator-owned: sessions created
 	// before tenancy existed, or by the operator without naming a tenant.
@@ -325,6 +354,10 @@ var (
 	// ErrPluginRefreshFailed reports a plugin marketplace the session could not
 	// fetch again; the skills it had are kept (AC-J7).
 	ErrPluginRefreshFailed = errors.New("plugin refresh failed")
+	// ErrAuthPoolExhausted reports that every login slot of the session type's
+	// auth pool is held, so no pod was made; a restore leaves the session
+	// frozen (AC-N2).
+	ErrAuthPoolExhausted = errors.New("auth pool exhausted")
 
 	ErrUnauthenticated = errors.New("unauthenticated")
 	ErrForbidden       = errors.New("forbidden")

@@ -27,6 +27,8 @@ type workloadTypeEntry struct {
 	Input        string   `json:"input"`
 	DefaultModel *string  `json:"defaultModel"`
 	Models       []string `json:"models"`
+	// ReasoningEfforts is AC-E8's per-type list.
+	ReasoningEfforts []string `json:"reasoningEfforts"`
 }
 
 func getRuntimeConfig(t *testing.T, url string) (runtimeConfigResponse, map[string]any) {
@@ -126,7 +128,7 @@ func TestRuntimeConfigListsWorkloadTypes(t *testing.T) {
 		order = append(order, e.Type)
 		byType[e.Type] = e
 	}
-	if want := []string{"shell", "claude-code", "minimax-code", "codex", "approval-gated"}; !reflect.DeepEqual(order, want) {
+	if want := []string{"shell", "claude-code", "minimax-code", "codex-chat", "codex-task", "approval-gated"}; !reflect.DeepEqual(order, want) {
 		t.Fatalf("workload type order = %v, want %v", order, want)
 	}
 	for _, e := range got.WorkloadTypes {
@@ -135,6 +137,22 @@ func TestRuntimeConfigListsWorkloadTypes(t *testing.T) {
 		}
 		if e.Models == nil {
 			t.Errorf("%s: models must be a non-null array", e.Type)
+		}
+		if e.ReasoningEfforts == nil {
+			t.Errorf("%s: reasoningEfforts must be a non-null array", e.Type)
+		}
+	}
+	wantEfforts := map[string][]string{
+		"claude-code": {"low", "medium", "high", "xhigh", "max"},
+		"codex-task":  {"minimal", "low", "medium", "high", "xhigh"},
+	}
+	for typ, e := range byType {
+		want := wantEfforts[typ]
+		if want == nil {
+			want = []string{}
+		}
+		if !reflect.DeepEqual(e.ReasoningEfforts, want) {
+			t.Errorf("%s reasoningEfforts = %v, want %v", typ, e.ReasoningEfforts, want)
 		}
 	}
 

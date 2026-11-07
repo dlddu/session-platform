@@ -9,28 +9,38 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// The codex workload (docs/prd/codex-workload.md, AC-J1~J6) runs the Codex SDK
-// through a small Node runner, codex-runner (data-plane/codex-runner), on the
-// claude-code runner (AC-E2~E5): queue, bounds, cursor, archive and resume flag
-// are claudeWorkload's. This file is the CLI-specific half; the managed config
-// is codex_config.go's, the plugin skills codex_skills.go's, the skills MCP
+// The two Codex workloads run the Codex SDK through a small Node runner,
+// codex-runner (data-plane/codex-runner), on the claude-code runner
+// (AC-E2~E5): queue, bounds, cursor, archive and resume flag are
+// claudeWorkload's. This file is the CLI-specific half; the managed config is
+// codex_config.go's, the plugin skills codex_skills.go's, the skills MCP
 // codex_skills_mcp.go's and the output projection codex_stream.go's.
 //
-// There is no provider credential to keep out of this pod: the session signs
-// in to ChatGPT itself, through a device code the runner forwards (AC-J3), and
-// that login lives in $HOME/.codex, which is archived with the rest of HOME.
-// The only platform secret in the pod is the K3s MCP token, and it stays in
-// the loopback k3s-mcp-proxy sidecar (AC-J6).
+// codex-chat (docs/prd/codex-workload.md, AC-J1~J7) is the long-lived chat
+// session: no shell, and a ChatGPT login the session makes itself through a
+// device code the runner forwards (AC-J3), kept in $HOME/.codex and archived
+// with the rest of HOME. codex-task (docs/prd/codex-task-workload.md,
+// AC-M1~M4) is the coding session: claude-code's tool level, and a login that
+// lives in the pool slot this pod mounts (AC-M2, docs/prd/agent-auth-pool.md).
+// In both, the only platform secret in the pod is the K3s MCP token, and it
+// stays in the loopback k3s-mcp-proxy sidecar (AC-J6).
 const (
-	workloadCodex = "codex"
+	workloadCodexChat = "codex-chat"
+	workloadCodexTask = "codex-task"
+	// workloadCodexLegacy is codex-chat's name before the 2026-11-07 split
+	// (AC-J1). The control plane writes the new name; this keeps a pod built
+	// from an older spec starting.
+	workloadCodexLegacy = "codex"
 
 	// Keep in sync with control-plane/internal/adapter/k8s (CodexModelEnvVar).
 	codexModelEnv            = "CODEX_MODEL"
+	codexReasoningEffortEnv  = "CODEX_REASONING_EFFORT"
 	codexRunnerBinaryEnv     = "CODEX_RUNNER_BIN"
 	defaultCodexRunnerBinary = "/usr/local/bin/codex-runner"
 
@@ -46,16 +56,28 @@ const (
 	codexK3SServerName    = "k3s"
 	codexSkillsServerName = "skills"
 
+	// codex-task's slot login file and its HOME place (AC-M2).
+	codexAuthFile    = "auth.json"
+	codexAuthHomeRel = codexConfigDirName + "/" + codexAuthFile
+
 	// The sidecar starts with this container, not before it, and its
 	// marketplace clone may still be running; the wait covers both. Past it
 	// the session runs without what the sidecar did not deliver (AC-J5).
 	codexSidecarWait = 90 * time.Second
 )
 
+// codexReasoningEfforts is AC-M4's list.
+var codexReasoningEfforts = []string{"minimal", "low", "medium", "high", "xhigh"}
+
 // codexCLI is the agentCLI for codex-runner. It takes no provider address and
-// no key: the runner's codex child signs in with the session's own ChatGPT
-// account (AC-J3).
+// no key: the runner's codex child signs in with a ChatGPT account — the
+// session's own (AC-J3) or its slot's (AC-M2).
 type codexCLI struct {
+	// task selects codex-task's surface (AC-M1) over codex-chat's (AC-J5).
+	task bool
+	// effort is codex-task's session reasoning effort (AC-M4), empty for the
+	// model's default.
+	effort string
 	// k3sProxyURL is the loopback k3s-mcp-proxy sidecar (AC-J6).
 	k3sProxyURL string
 	// agentBinary is what codex spawns as the skills MCP.
@@ -77,18 +99,31 @@ func newCodexCLI(k3sProxyURL string, logger *slog.Logger) codexCLI {
 	return codexCLI{k3sProxyURL: k3sProxyURL, agentBinary: agentBinary, logger: logger}
 }
 
-func (codexCLI) workloadName() string { return workloadCodex }
+func (c codexCLI) workloadName() string {
+	if c.task {
+		return workloadCodexTask
+	}
+	return workloadCodexChat
+}
 
 // argv is one runner invocation (AC-J2). The model is always passed, the
 // platform-default sentinel included, so the runner — not this side — decides
 // what an unset model means. The prompt follows "--", so a prompt that starts
 // with "--" can never change a platform-controlled flag. --resume follows
-// AC-E4: only after the first successful run.
-func (codexCLI) argv(binary, model, prompt string, resume bool) []string {
+// AC-E4: only after the first successful run. codex-chat's argv carries no
+// mode, so the runner's default is the narrow surface.
+func (c codexCLI) argv(binary, model, prompt string, resume bool) []string {
 	if model == "" {
 		model = platformDefaultModel
 	}
-	argv := []string{binary, "--model", model}
+	argv := []string{binary}
+	if c.task {
+		argv = append(argv, "--mode", "task")
+	}
+	argv = append(argv, "--model", model)
+	if c.effort != "" {
+		argv = append(argv, "--effort", c.effort)
+	}
 	if resume {
 		argv = append(argv, "--resume")
 	}
@@ -118,6 +153,7 @@ func (c codexCLI) ensureHome(homeDir string, _ toolSurface) error {
 		return err
 	}
 	cfg := codexConfig{
+		task:        c.task,
 		agentBinary: c.agentBinary,
 		skillsDir:   skillsDir,
 	}
@@ -230,9 +266,9 @@ func validateLoopbackSidecarEndpoint(raw string, wantPort int) error {
 	return nil
 }
 
-// newCodexWorkloadFromEnv builds the codex agent from the pod environment the
-// control plane injects (AC-J1, AC-J6).
-func newCodexWorkloadFromEnv(logger *slog.Logger, restoreMode bool) (*claudeWorkload, error) {
+// newCodexWorkloadFromEnv builds a codex agent from the pod environment the
+// control plane injects (AC-J1, AC-J6; AC-M1, AC-M2, AC-M4).
+func newCodexWorkloadFromEnv(workload string, logger *slog.Logger, restoreMode bool) (*claudeWorkload, error) {
 	proxy, err := validateCodexClientEnv()
 	if err != nil {
 		return nil, err
@@ -242,6 +278,23 @@ func newCodexWorkloadFromEnv(logger *slog.Logger, restoreMode bool) (*claudeWork
 		return nil, err
 	}
 	cli := newCodexCLI(proxy, logger)
+	effort := os.Getenv(codexReasoningEffortEnv)
+	var slot *authSlot
+	if workload == workloadCodexTask {
+		if effort != "" && !slices.Contains(codexReasoningEfforts, effort) {
+			return nil, fmt.Errorf("%s must be one of %s, got %q", codexReasoningEffortEnv, strings.Join(codexReasoningEfforts, ", "), effort)
+		}
+		slot, err = newAuthSlotFromEnv(codexAuthFile, codexAuthHomeRel, logger)
+		if err != nil {
+			return nil, err
+		}
+		cli.task = true
+		cli.effort = effort
+	} else if effort != "" {
+		// AC-E8: codex-chat takes no effort, so one here is a spec this
+		// agent was not built for.
+		return nil, fmt.Errorf("codex-chat does not take %s", codexReasoningEffortEnv)
+	}
 	return newClaudeWorkload(claudeConfig{
 		StateDir:    env("CLAUDE_CODE_STATE_DIR", defaultClaudeStateDir),
 		Model:       env(codexModelEnv, platformDefaultModel),
@@ -252,6 +305,7 @@ func newCodexWorkloadFromEnv(logger *slog.Logger, restoreMode bool) (*claudeWork
 		Redact:      codexRedactionLiterals(),
 		RunTimeout:  runTimeout,
 		CLI:         cli,
+		AuthSlot:    slot,
 	})
 }
 
@@ -278,11 +332,13 @@ func runAgentSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer
 		}
 		return 0, true
 	case codexRenderConfigCommand:
-		if len(args) != 2 || strings.TrimSpace(args[1]) == "" {
-			fmt.Fprintln(stderr, "usage: agent codex-render-config <home>")
+		if len(args) < 2 || len(args) > 3 || strings.TrimSpace(args[1]) == "" ||
+			(len(args) == 3 && args[2] != "chat" && args[2] != "task") {
+			fmt.Fprintln(stderr, "usage: agent codex-render-config <home> [chat|task]")
 			return 2, true
 		}
-		if err := renderCodexConfigForHome(args[1]); err != nil {
+		task := len(args) == 3 && args[2] == "task"
+		if err := renderCodexConfigForHome(args[1], task); err != nil {
 			fmt.Fprintln(stderr, "codex-render-config:", err)
 			return 1, true
 		}
@@ -291,10 +347,11 @@ func runAgentSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer
 	return 0, false
 }
 
-// renderCodexConfigForHome writes the config a session with a configured K3s
-// MCP sidecar gets, for the image build's surface check: the widest tool
-// surface a codex session can have is the one that has to pass it.
-func renderCodexConfigForHome(home string) error {
+// renderCodexConfigForHome writes the config a session of the given mode with
+// a configured K3s MCP sidecar gets, for the image build's surface check: the
+// widest tool surface a session of that mode can have is the one that has to
+// pass it.
+func renderCodexConfigForHome(home string, task bool) error {
 	home, err := filepath.Abs(home)
 	if err != nil {
 		return err
@@ -311,6 +368,6 @@ func renderCodexConfigForHome(home string) error {
 	if exe, err := os.Executable(); err == nil && exe != "" {
 		agentBinary = exe
 	}
-	cfg := codexConfig{k3sMCPURL: mcpURL, agentBinary: agentBinary, skillsDir: skillsDir}
+	cfg := codexConfig{task: task, k3sMCPURL: mcpURL, agentBinary: agentBinary, skillsDir: skillsDir}
 	return writeCodexConfig(filepath.Join(home, codexConfigDirName, codexConfigFileName), renderCodexConfig(cfg))
 }

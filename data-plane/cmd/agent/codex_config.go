@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,11 @@ import (
 // because the remote model catalog forces code mode and multi-agent on; the
 // read-only sandbox, the never-ask approval policy and codex-runner's kill
 // switch are what stop a file edit or a command from happening.
+//
+// codex-task's config (docs/prd/codex-task-workload.md, AC-M1) is the same
+// document with the shell left on and the sandbox opened: the session pod is
+// the execution boundary, as it is for claude-code. Everything else that
+// codex-chat turns off stays off.
 const (
 	codexConfigDirName  = ".codex"
 	codexConfigFileName = "config.toml"
@@ -28,15 +34,25 @@ const (
 	// default per-call timeout would cut off.
 	codexK3SToolTimeout = 15 * time.Minute
 
-	// codexInstructionsMarker is what the image's surface check looks for to
-	// prove the managed config was the one codex loaded.
-	codexInstructionsMarker = "session-platform codex session"
+	// codexInstructionsMarker and codexTaskInstructionsMarker are what the
+	// image's surface check looks for to prove the managed config of the
+	// mode it checks was the one codex loaded. Neither contains the other.
+	// Keep in sync with codex-runner/surface.mjs.
+	codexInstructionsMarker     = "session-platform codex session"
+	codexTaskInstructionsMarker = "session-platform codex task session"
 )
 
 // codexDisabledFeatures are the codex features that would give the model a
 // tool or a side channel outside conversation, plugin skills and the K3s MCP.
-var codexDisabledFeatures = []string{
-	"shell_tool", "unified_exec", "view_image", "image_generation",
+var codexDisabledFeatures = append(slices.Clone(codexTaskEnabledFeatures), codexTaskDisabledFeatures...)
+
+// codexTaskEnabledFeatures are the shell features codex-task sets on rather
+// than leaving to Codex's defaults, which a version bump can change (AC-M1).
+var codexTaskEnabledFeatures = []string{"shell_tool", "unified_exec"}
+
+// codexTaskDisabledFeatures are codex-chat's minus the shell (AC-M1).
+var codexTaskDisabledFeatures = []string{
+	"view_image", "image_generation",
 	"apps", "plugins", "remote_plugin", "computer_use", "browser_use", "in_app_browser",
 	"sleep_tool", "goals", "hooks", "memories", "tool_suggest", "skill_mcp_dependency_install",
 }
@@ -50,8 +66,16 @@ const codexDeveloperInstructions = "You are a " + codexInstructionsMarker + ". "
 	"inside that directory as `file` when the skill refers to one. `list_skills` lists them. " +
 	"When the `k3s` MCP server is present, its tools act on the homelab cluster; it asks a human before any write."
 
+const codexTaskDeveloperInstructions = "You are a " + codexTaskInstructionsMarker + ": a coding agent with a shell " +
+	"and file editing in this session's own workspace, which is a dedicated pod. Web search and image tools are off. " +
+	"Skills are listed with a file path; open SKILL.md there, or read it with the `read_skill` tool of the `skills` " +
+	"MCP server (`list_skills` lists them). " +
+	"When the `k3s` MCP server is present, its tools act on the homelab cluster; it asks a human before any write."
+
 // codexConfig is what varies between pods.
 type codexConfig struct {
+	// task renders codex-task's surface (AC-M1) instead of codex-chat's.
+	task bool
 	// k3sMCPURL is the sidecar's MCP endpoint, or empty when it holds no token.
 	k3sMCPURL string
 	// agentBinary is this binary, which codex spawns as the skills MCP.
@@ -62,18 +86,27 @@ type codexConfig struct {
 func renderCodexConfig(cfg codexConfig) []byte {
 	doc := &tomlDocument{}
 	doc.comment("Managed by session-platform and rewritten on every start; local edits do not persist.")
+	sandbox, instructions, disabled := "read-only", codexDeveloperInstructions, codexDisabledFeatures
+	if cfg.task {
+		sandbox, instructions, disabled = "danger-full-access", codexTaskDeveloperInstructions, codexTaskDisabledFeatures
+	}
 	doc.set("approval_policy", tomlString("never"))
-	doc.set("sandbox_mode", tomlString("read-only"))
+	doc.set("sandbox_mode", tomlString(sandbox))
 	doc.set("web_search", tomlString("disabled"))
 	// The login is the session's own and is archived with HOME (AC-J3), so it
 	// has to be a file, never an OS keyring the next pod does not have.
 	doc.set("cli_auth_credentials_store", tomlString("file"))
 	doc.set("forced_login_method", tomlString("chatgpt"))
 	doc.set("check_for_update_on_startup", tomlBool(false))
-	doc.set("developer_instructions", tomlString(codexDeveloperInstructions))
+	doc.set("developer_instructions", tomlString(instructions))
 
 	doc.table("features")
-	for _, feature := range codexDisabledFeatures {
+	if cfg.task {
+		for _, feature := range codexTaskEnabledFeatures {
+			doc.set(feature, tomlBool(true))
+		}
+	}
+	for _, feature := range disabled {
 		doc.set(feature, tomlBool(false))
 	}
 	doc.table("skills", "bundled")

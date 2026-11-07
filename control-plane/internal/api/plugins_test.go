@@ -26,7 +26,7 @@ func TestCreateSessionPlugins(t *testing.T) {
 		}
 	})
 
-	for _, workload := range []string{"claude-code", "codex", "minimax-code"} {
+	for _, workload := range []string{"claude-code", "codex-chat", "minimax-code"} {
 		t.Run(workload+" selection", func(t *testing.T) {
 			want := []string{"development", "session-platform"}
 			status, s := createRaw(t, srv.URL, map[string]any{
@@ -52,8 +52,8 @@ func TestCreateSessionPlugins(t *testing.T) {
 		{"empty", map[string]any{"name": "x", "workloadType": "claude-code", "plugins": []string{}}},
 		{"string", map[string]any{"name": "x", "workloadType": "claude-code", "plugins": "development"}},
 		{"non-string item", map[string]any{"name": "x", "workloadType": "claude-code", "plugins": []any{1}}},
-		{"duplicate", map[string]any{"name": "x", "workloadType": "codex", "plugins": []string{"a", "a"}}},
-		{"bad name", map[string]any{"name": "x", "workloadType": "codex", "plugins": []string{"a/b"}}},
+		{"duplicate", map[string]any{"name": "x", "workloadType": "codex-chat", "plugins": []string{"a", "a"}}},
+		{"bad name", map[string]any{"name": "x", "workloadType": "codex-chat", "plugins": []string{"a/b"}}},
 		{"shell", map[string]any{"name": "x", "plugins": []string{"development"}}},
 		{"approval-gated", map[string]any{"name": "x", "workloadType": "approval-gated", "plugins": []string{"development"}}},
 	}

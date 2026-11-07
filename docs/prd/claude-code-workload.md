@@ -138,3 +138,28 @@
 > ✅ **구현 결정 (설정·자격 증명 분리, 2026-11-02)**: 운영의 플랫폼 Secret은 external-secrets 가 SSM 에서 렌더한다(flux-cd-apps). 그 Secret에서 자격 증명이 아닌 키를 ConfigMap `claude-code-config`(`CLAUDE_CODE_CONFIG_CONFIGMAP`)로 옮겨, Secret `claude-code-credentials`에는 `auth-token`·`k3s-mcp-token`만 남겼다. 키 이름, 필수/선택 여부, 어느 컨테이너에 들어가는지는 하나도 바뀌지 않았다 — 바뀐 것은 pod spec이 그 키를 `secretKeyRef` 대신 `configMapKeyRef`로 읽는다는 것뿐이다. control plane은 두 객체를 Kubernetes API로 읽지 않고 pod spec과 자기 Deployment env에서 이름으로만 참조하므로 RBAC은 변하지 않는다. 세션 pod의 `data-plane` 서비스 어카운트는 `view`로 ConfigMap을 읽을 수 있지만 그 안에는 자격 증명이 없다.
 
 > ✅ **구현 결정 (이미지/모드, 2026-08-08)**: 하나의 data-plane 이미지에 PTY shell과 Claude Code CLI를 포함하고(*2026-11-01*: CRIU 바이너리는 제거됐다) `DATA_PLANE_WORKLOAD`로 시작 모드를 분기한다. Kubernetes pod label/env와 control-plane의 immutable workload spec이 선택한 모드를 끝까지 전달한다.
+
+### AC-E7: 공급자 인증 모드 — Claude 구독(인증 풀) 또는 게이트웨이
+- **설명**: `claude-code`의 공급자 인증은 control plane 설정 `CLAUDE_CODE_AUTH_MODE`가 고른다 (2026-11-07 사용자 결정: 운영은 OpenRouter 게이트웨이에서 Claude 구독으로 옮긴다).
+  - **`subscription`** (운영 기본, `k8s/deployment.yaml`): 풀 `claude-code`(`agent-auth-pool.md` AC-N1~N5, `CLAUDE_CODE_AUTH_SLOTS`)의 슬롯을 쓴다. 파드에는 credential-proxy 사이드카가 **없고**, 주 컨테이너는 `ANTHROPIC_BASE_URL`·`ANTHROPIC_AUTH_TOKEN`·`ANTHROPIC_API_KEY`·`CLAUDE_CODE_OAUTH_TOKEN`을 받지 않으며 하나라도 있으면 에이전트가 기동을 거부한다. CLI는 공급자에 직접 붙는다. 슬롯 파일은 `.credentials.json`이고 HOME 쪽 자리는 `$HOME/.claude/.credentials.json`이다(AC-N4). 주 컨테이너는 이 모드를 `CLAUDE_CODE_AUTH_MODE=subscription`으로 받는다. 모델은 게이트웨이와 따로 고른다 — 게이트웨이의 `model`·`models`(OpenRouter id)는 구독에서 뜻이 없고 `approval-gated`가 계속 읽으므로, 같은 ConfigMap의 선택 키 `subscription-model`·`subscription-models`(control plane `CLAUDE_CODE_SUBSCRIPTION_DEFAULT_MODEL`·`CLAUDE_CODE_SUBSCRIPTION_MODELS`)가 이 모드의 UI 카탈로그이고, `platform-default` 파드는 `subscription-model`을 읽는다(없으면 CLI 기본).
+  - **`gateway`**: AC-E6 그대로 — loopback credential-proxy가 ConfigMap `base-url`과 Secret `auth-token`을 들고 주 컨테이너는 placeholder만 본다. 풀을 쓰지 않는다. e2e(공급자 대역)와 되돌리기용으로 남긴다.
+
+  값이 비면 `gateway`, 그 밖의 값은 control plane 기동 실패다. `subscription`인데 풀 크기가 0이면 이 타입은 `GET /config`에 나오지 않는다(AC-N1). `approval-gated`는 이 설정과 무관하게 AC-F6의 게이트웨이 자격 증명을 쓴다 — 그 타입의 egress 허용 목록에 공급자가 없다.
+
+  **빈 슬롯의 로그인** (`subscription`): Claude Code의 `claude auth login --claudeai`는 URL을 출력한 뒤 붙여 넣을 코드를 stdin에서 기다린다(device code가 아니다, 2.1.220에서 확인). 그래서 로그인을 두 번의 write로 나눈다.
+  1. 턴 시작 시 `claude auth status --json`이 로그인 안 됨을 알리면, 에이전트가 `claude auth login --claudeai`를 띄우고 그 로그인 URL을 플랫폼 안내 줄로 내보낸다 — 「브라우저에서 열어 로그인하고, 화면에 나온 코드를 다음 메시지로 보내라」. 이 프롬프트는 실행하지 않고 보류하며, 턴은 `status=error`로 끝난다.
+  2. 다음 write의 payload는 프롬프트가 아니라 **코드**다. 입력 기록에는 `[login code]`만 남기고 코드 자체는 출력에 쓰지 않는다. 에이전트가 코드를 로그인 프로세스의 stdin에 넣고, 성공하면 슬롯에 동기화한 뒤(AC-N4) 같은 턴에서 보류한 프롬프트를 실행한다. 실패하면 안내 한 줄을 남기고 보류한 프롬프트를 버린다 — 다음 프롬프트가 다시 1번부터 한다.
+  3. 보류는 15분 뒤, 또는 동결·종료 시 로그인 프로세스를 끝내고 안내 한 줄과 함께 사라진다. 만료·동결로 사라진 뒤 30분 안의 첫 write는 늦게 온 코드로 보고 `[login code]`로만 기록하며 실행하지 않는다 — 코드가 프롬프트로 출력·모델에 새지 않게 한다.
+  4. 코드로 읽는 것은 URL 안내 **뒤에** 받은 write뿐이다. 그 전에 이미 큐에 있던 프롬프트는 그대로 기록하되 실행하지 않고 「로그인 후 다시 보내라」는 안내를 남긴다.
+  5. `claude auth status`가 시간 초과·실행 실패·읽을 수 없는 결과면 로그인을 시작하지 않는다 — 그 턴만 안내와 함께 실패하고 아무것도 보류하지 않는다.
+
+  슬롯 동기화(AC-N4)는 그 턴의 시작 복사가 성공해 HOME에 파일을 놓았을 때만 턴 끝의 「HOME에 없음」을 로그아웃으로 읽고, 턴 끝 복사가 실패하면 다음 턴 시작은 HOME의 새 사본을 먼저 슬롯에 저장한다. HOME → 슬롯 복사는 내용이 JSON일 때만 한다.
+- **달성 가치**: V3, V1
+- **구체화 대상**: AC-E6(공급자 자격 증명 배치)를 구독 계정에 맞춘 것, AC-N4의 `claude-code` 슬롯 파일과 로그인 흐름
+- **검증 방법**: `subscription`에서 제출된 pod spec에 credential-proxy 컨테이너·`ANTHROPIC_*` env가 없고 슬롯 PVC와 `CLAUDE_CODE_AUTH_MODE=subscription`이 있음을 확인한다. `gateway`에서는 AC-E6의 모양 그대로임을 확인한다. 에이전트 단위 테스트로 로그인 안 됨 → URL 안내·프롬프트 보류 → 다음 write가 코드로 쓰이고 출력에 코드가 없으며 성공 시 보류한 프롬프트가 실행됨을 확인한다. `subscription` 모드 주 컨테이너가 `ANTHROPIC_AUTH_TOKEN`이 있으면 기동을 거부함을 확인한다.
+
+### AC-E8: 세션 추론 수준(`reasoningEffort`) — 생성 시 고정
+- **설명**: 생성 요청은 선택 필드 `reasoningEffort`를 받는다. 이 필드를 받는 타입은 `claude-code`와 `codex-task`(AC-M4)뿐이고, 다른 타입에 주면 pod 생성 전 400이다. 값은 타입마다 정해진 목록 중 하나이고(`claude-code`: `low`·`medium`·`high`·`xhigh`·`max` — CLI의 `--effort`), 빈 문자열·비문자열·목록 밖은 400이다. 생략하면 세션에 저장하지 않고 CLI의 기본값을 쓴다. 값은 모델·타입처럼 **생성 시 고정**이다 — 세션 레코드의 `reasoningEffort`로 조회 응답에 나오고, 동결·복원을 건너 유지되며, 바꾸려면 새 세션을 만든다. `GET /config`의 각 타입 항목은 `reasoningEfforts` 배열을 내놓는다(받지 않는 타입은 빈 배열). `claude-code` 파드는 `CLAUDE_CODE_EFFORT`로 받고 모든 실행 argv에 `--effort <값>`을 붙인다. `approval-gated`는 받지 않는다.
+- **달성 가치**: V8
+- **구체화 대상**: AC-E1(타입 선택)과 같은 축 — 세션 생성 시 고르는 작업 환경에 추론 수준을 더한 것
+- **검증 방법**: `reasoningEffort=max`로 만든 `claude-code` 세션의 조회 응답·파드 env·실행 argv에 그 값이 있음을 확인한다. `shell`·`approval-gated`·`codex-chat`에 주면 400이고 파드가 없음을 확인한다. `GET /config`가 타입별 목록을 내놓고, 세션 생성 화면이 그 목록이 빈 타입에서는 선택지를 숨김을 확인한다.

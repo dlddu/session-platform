@@ -19,6 +19,9 @@ type CreateRequest struct {
 	// type's platform default; a non-nil list replaces it and is validated by
 	// NormalizePlugins. It is immutable after creation.
 	Plugins []string
+	// ReasoningEffort is the session's reasoning effort (AC-E8). Empty leaves
+	// it unset; NormalizeReasoningEffort decides which types take one.
+	ReasoningEffort string
 	// Tenant names the owning tenant (AC-K2). The API fills it from the
 	// caller; the manager stores it verbatim.
 	Tenant string
@@ -77,7 +80,7 @@ type PluginRefreshResult struct {
 //   - Snapshot  → AC-B1 (workload archive + reclaim on idle).
 //   - Restore   → AC-B2 (restore the workload into a new pod).
 //   - Terminate → AC-A3 (reclaim resources).
-//   - RefreshPlugins → AC-J7 (fetch a codex session's plugin skills again,
+//   - RefreshPlugins → AC-J7 (fetch a codex-chat or codex-task session's plugin skills again,
 //     between turns, keeping its conversation).
 type Manager interface {
 	Create(ctx context.Context, req CreateRequest) (*Session, error)

@@ -114,7 +114,9 @@ patches:
   # references the ghcr-published tag). env/1 is DATA_PLANE_IMAGE, env/2 is
   # SHELL_ARCHIVE_ENABLED, env/3 is DATA_PLANE_CLAUDE_CODE_IMAGE, env/4 is
   # DATA_PLANE_APPROVAL_GATED_IMAGE, env/17 is APPROVAL_GATED_ARCHIVE_ENABLED,
-  # env/18 is DROP_URL and env/19 is DATA_PLANE_CODEX_IMAGE. Each gate replace is preceded by a `test`
+  # env/18 is DROP_URL, env/19 is DATA_PLANE_CODEX_IMAGE, env/24 is
+  # DATA_PLANE_CODEX_TASK_IMAGE, env/29 is CLAUDE_CODE_AUTH_MODE and env/32 is
+  # CODEX_TASK_AUTH_STORAGE_CLASS. Each gate replace is preceded by a `test`
   # of the entry's name, so a reordered base fails the build instead of
   # silently flipping a different variable.
   #
@@ -201,6 +203,31 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/env/19/value
         value: session-platform/data-plane:dev
+      # codex-task 도 같은 이미지다(AC-M1). env/24 가 DATA_PLANE_CODEX_TASK_IMAGE. 풀 크기는 base 의
+      # 2 그대로 — 슬롯 PVC 는 kind 기본 StorageClass(local-path)로 묶인다(AC-N1).
+      - op: test
+        path: /spec/template/spec/containers/0/env/24/name
+        value: DATA_PLANE_CODEX_TASK_IMAGE
+      - op: replace
+        path: /spec/template/spec/containers/0/env/24/value
+        value: session-platform/data-plane:dev
+      # claude-code 는 이 SUT 에서 게이트웨이 모드다(AC-E7) — 기존 claude-code e2e 는 공급자 대역
+      # (deploy/e2e-anthropic-fake.yaml)을 credential-proxy 로 부른다. 실 구독 로그인은 e2e 밖이다.
+      # env/29 가 CLAUDE_CODE_AUTH_MODE.
+      - op: test
+        path: /spec/template/spec/containers/0/env/29/name
+        value: CLAUDE_CODE_AUTH_MODE
+      - op: replace
+        path: /spec/template/spec/containers/0/env/29/value
+        value: gateway
+      # base 는 운영 클러스터의 efs 를 슬롯 클래스로 고정한다. kind 에는 efs 가 없으므로 비워
+      # 기본 StorageClass(local-path)로 묶는다(AC-N1). env/32 가 CODEX_TASK_AUTH_STORAGE_CLASS.
+      - op: test
+        path: /spec/template/spec/containers/0/env/32/name
+        value: CODEX_TASK_AUTH_STORAGE_CLASS
+      - op: replace
+        path: /spec/template/spec/containers/0/env/32/value
+        value: ""
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
