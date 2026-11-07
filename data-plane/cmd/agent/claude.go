@@ -185,6 +185,9 @@ type claudeRuntimeState struct {
 
 type promptJob struct {
 	prompt string
+	// seq is the job's place in arrival order. AC-E7's sign-in reads only
+	// writes that arrived after its URL was shown as codes.
+	seq uint64
 }
 
 // claudeWorkload owns one session's one-shot Claude invocations. A single
@@ -222,7 +225,12 @@ type claudeWorkload struct {
 	// rewrites the session's skills.
 	refreshing bool
 	// pendingLogin is AC-E7's sign-in between its two writes.
-	pendingLogin    *pendingClaudeLogin
+	pendingLogin *pendingClaudeLogin
+	// droppedLogin remembers a sign-in that ended before its code arrived,
+	// so a code sent for it is still never recorded or run.
+	droppedLogin *droppedClaudeLogin
+	// enqueued counts accepted writes; it stamps promptJob.seq.
+	enqueued        uint64
 	active          bool
 	hasRun          bool
 	turns           int
@@ -356,7 +364,11 @@ func (c *claudeWorkload) Close() {
 	}
 	c.stopping = true
 	c.accepting = false
-	pending := c.takePendingLoginLocked()
+	pending := c.pendingLogin
+	c.pendingLogin = nil
+	if pending != nil && pending.timer != nil {
+		pending.timer.Stop()
+	}
 	c.cancel()
 	c.cond.Broadcast()
 	c.mu.Unlock()
@@ -381,7 +393,8 @@ func (c *claudeWorkload) enqueue(prompt string) error {
 	case c.queue.Len() >= maxClaudeQueuedPrompts || c.queuedBytes+len(prompt) > maxClaudeQueuedBytes:
 		return errClaudeQueueFull
 	}
-	c.queue.PushBack(promptJob{prompt: prompt})
+	c.enqueued++
+	c.queue.PushBack(promptJob{prompt: prompt, seq: c.enqueued})
 	c.queuedBytes += len(prompt)
 	c.cond.Signal()
 	return nil
@@ -471,10 +484,10 @@ func (c *claudeWorkload) runWorker() {
 		c.active = true
 		c.turns++
 		seq := c.turns
-		pending := c.takePendingLoginLocked()
+		input := c.classifyInputLocked(job)
 		c.mu.Unlock()
 
-		prompt, ok := c.openTurn(seq, job.prompt, pending)
+		prompt, ok := c.openTurn(seq, job.prompt, input)
 		if !ok {
 			c.endTurn(seq, "error")
 			c.mu.Lock()
@@ -543,13 +556,22 @@ func (c *claudeWorkload) runWorker() {
 // is the sign-in code instead: the record shows a placeholder, and the turn
 // runs the prompt that was held for the sign-in. ok is false when the turn
 // has nothing to run.
-func (c *claudeWorkload) openTurn(seq int, prompt string, pending *pendingClaudeLogin) (string, bool) {
-	if pending != nil {
+func (c *claudeWorkload) openTurn(seq int, prompt string, input turnInput) (string, bool) {
+	switch {
+	case input.code != nil:
 		c.beginTurn(seq, claudeLoginCodeInput)
-		if !c.completeLogin(pending, prompt) {
+		if !c.completeLogin(input.code, prompt) {
 			return "", false
 		}
-		return pending.prompt, true
+		return input.code.prompt, true
+	case input.staleCode:
+		c.beginTurn(seq, claudeLoginCodeInput)
+		c.appendPlatformNotice("[session-platform: the Claude sign-in this message was for had already ended, so it was taken as its code and not used. Send your prompt again to start a new sign-in.]\n")
+		return "", false
+	case input.beforeSignIn:
+		c.beginTurn(seq, prompt)
+		c.appendPlatformNotice("[session-platform: this prompt was sent before the Claude sign-in started, so it did not run. Send it again after signing in.]\n")
+		return "", false
 	}
 	c.beginTurn(seq, prompt)
 	c.pullAuthSlot()

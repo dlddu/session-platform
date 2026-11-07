@@ -32,10 +32,13 @@ func TestRenderCodexTaskConfig(t *testing.T) {
 			t.Errorf("%s = %#v, want %#v", key, got, want)
 		}
 	}
-	for _, feature := range []string{"shell_tool", "unified_exec"} {
-		if _, set := doc["features."+feature]; set {
-			t.Errorf("features.%s must stay on in codex-task", feature)
+	for _, feature := range codexTaskEnabledFeatures {
+		if doc["features."+feature] != true {
+			t.Errorf("features.%s = %#v, want true: codex-task turns the shell on explicitly", feature, doc["features."+feature])
 		}
+	}
+	if !reflect.DeepEqual(codexTaskEnabledFeatures, []string{"shell_tool", "unified_exec"}) {
+		t.Errorf("codexTaskEnabledFeatures = %v", codexTaskEnabledFeatures)
 	}
 	for _, feature := range codexTaskDisabledFeatures {
 		if doc["features."+feature] != false {

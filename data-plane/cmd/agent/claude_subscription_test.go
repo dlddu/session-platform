@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -19,22 +20,34 @@ type fakeClaudeLogin struct {
 	loggedIn  bool
 	startErr  error
 	submitErr error
-	starts    int
-	codes     []string
-	procs     []*fakeClaudeLoginProcess
+	statusErr error
+	// startEntered/startRelease, when set, hold start until the test lets
+	// it print the URL.
+	startEntered chan struct{}
+	startRelease chan struct{}
+	starts       int
+	codes        []string
+	procs        []*fakeClaudeLoginProcess
 }
 
-func (f *fakeClaudeLogin) signedIn(_ context.Context, home string) bool {
+func (f *fakeClaudeLogin) signedIn(_ context.Context, home string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.statusErr != nil {
+		return false, f.statusErr
+	}
 	if f.loggedIn {
-		return true
+		return true, nil
 	}
 	_, err := os.Stat(filepath.Join(home, claudeCredentialsHomeRel))
-	return err == nil
+	return err == nil, nil
 }
 
 func (f *fakeClaudeLogin) start(_ context.Context, home string) (claudeLoginProcess, error) {
+	if f.startEntered != nil {
+		f.startEntered <- struct{}{}
+		<-f.startRelease
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.starts++
@@ -64,7 +77,7 @@ func (p *fakeClaudeLoginProcess) submit(_ context.Context, code string) error {
 	if err != nil {
 		return err
 	}
-	return writeLoginFile(filepath.Join(p.home, claudeCredentialsHomeRel), []byte("signed-in:"+code))
+	return writeLoginFile(filepath.Join(p.home, claudeCredentialsHomeRel), []byte(`{"signedIn":"`+code+`"}`))
 }
 
 func (p *fakeClaudeLoginProcess) kill() {
@@ -122,7 +135,7 @@ func TestClaudeSubscriptionSignInTakesTwoWrites(t *testing.T) {
 	if !reflect.DeepEqual(login.codes, []string{"SECRET-CODE-42"}) {
 		t.Fatalf("submitted codes = %q", login.codes)
 	}
-	if got, _ := readOptional(t, slot.slotPath()); got != "signed-in:SECRET-CODE-42" {
+	if got, _ := readOptional(t, slot.slotPath()); got != `{"signedIn":"SECRET-CODE-42"}` {
 		t.Fatalf("slot = %q, want the new login", got)
 	}
 
@@ -280,5 +293,128 @@ func TestClaudeAuthFromEnv(t *testing.T) {
 	t.Setenv(claudeEffortEnv, "minimal")
 	if _, err := claudeAuthFromEnv(workloadClaudeCode, testLogger()); err == nil {
 		t.Fatal("minimal is not a claude-code effort")
+	}
+}
+
+// A sign-in that ended before its code arrived still never records or runs
+// that code; the write after it starts over (AC-E7).
+func TestClaudeSubscriptionCodeForEndedSignInIsNotRun(t *testing.T) {
+	slot := newTestAuthSlot(t, claudeCredentialsFile, claudeCredentialsHomeRel)
+	runner := newFakeClaudeRunner()
+	login := &fakeClaudeLogin{}
+	c, srv := newSlotClaudeTestServer(t, runner, slot, login)
+
+	writeViaHTTP(t, srv, "fix the bug", http.StatusOK)
+	waitOutput(t, c, turnClose(1, "error"))
+	// The same path the 15-minute timer takes.
+	c.dropPendingLogin(c.currentPendingLogin(), "[session-platform: the Claude sign-in expired.]\n")
+
+	writeViaHTTP(t, srv, "CODE-77", http.StatusOK)
+	out := waitOutput(t, c, turnClose(2, "error"))
+	if strings.Contains(out, "CODE-77") {
+		t.Fatalf("a code for an ended sign-in reached the output:\n%s", out)
+	}
+	if !strings.Contains(out, turnOpen(2, claudeLoginCodeInput)) || !strings.Contains(out, "had already ended") {
+		t.Fatalf("the late code turn must record the placeholder and say why:\n%s", out)
+	}
+	if runs, _ := runner.snapshot(); len(runs) != 0 || len(login.codes) != 0 || login.starts != 1 {
+		t.Fatalf("a late code must not run, be submitted or start a sign-in: runs=%v codes=%q starts=%d", runs, login.codes, login.starts)
+	}
+
+	// The marker is spent: the next write is a prompt again.
+	writeViaHTTP(t, srv, "fix the bug", http.StatusOK)
+	out = waitOutput(t, c, turnClose(3, "error"))
+	if !strings.Contains(out, turnOpen(3, "fix the bug")) || login.starts != 2 {
+		t.Fatalf("the write after the late code must start a new sign-in (starts=%d):\n%s", login.starts, out)
+	}
+}
+
+// The marker lapses: long after an ended sign-in, a write is a prompt.
+func TestClaudeSubscriptionEndedSignInMarkerLapses(t *testing.T) {
+	slot := newTestAuthSlot(t, claudeCredentialsFile, claudeCredentialsHomeRel)
+	login := &fakeClaudeLogin{}
+	c, srv := newSlotClaudeTestServer(t, newFakeClaudeRunner(), slot, login)
+	writeViaHTTP(t, srv, "first", http.StatusOK)
+	waitOutput(t, c, turnClose(1, "error"))
+	c.dropPendingLogin(c.currentPendingLogin(), "")
+	c.mu.Lock()
+	c.droppedLogin.until = c.now().Add(-time.Second)
+	c.mu.Unlock()
+	writeViaHTTP(t, srv, "later prompt", http.StatusOK)
+	out := waitOutput(t, c, turnClose(2, "error"))
+	if !strings.Contains(out, turnOpen(2, "later prompt")) || login.starts != 2 {
+		t.Fatalf("a write past the window must be a prompt (starts=%d):\n%s", login.starts, out)
+	}
+}
+
+// A prompt that was queued before the sign-in URL was shown is not the code.
+func TestClaudeSubscriptionPromptQueuedBeforeSignInIsNotTheCode(t *testing.T) {
+	slot := newTestAuthSlot(t, claudeCredentialsFile, claudeCredentialsHomeRel)
+	runner := newFakeClaudeRunner()
+	login := &fakeClaudeLogin{startEntered: make(chan struct{}), startRelease: make(chan struct{})}
+	c, srv := newSlotClaudeTestServer(t, runner, slot, login)
+
+	writeViaHTTP(t, srv, "first", http.StatusOK)
+	<-login.startEntered
+	writeViaHTTP(t, srv, "second prompt", http.StatusOK)
+	close(login.startRelease)
+	waitOutput(t, c, turnClose(1, "error"))
+
+	out := waitOutput(t, c, turnClose(2, "error"))
+	if !strings.Contains(out, turnOpen(2, "second prompt")) || !strings.Contains(out, "before the Claude sign-in started") {
+		t.Fatalf("the early prompt must be recorded as itself and refused:\n%s", out)
+	}
+	if len(login.codes) != 0 || c.currentPendingLogin() == nil {
+		t.Fatalf("the early prompt must not consume the sign-in: codes=%q", login.codes)
+	}
+
+	writeViaHTTP(t, srv, "THE-CODE", http.StatusOK)
+	run := receiveClaudeRun(t, runner.started)
+	if got := run.argv[len(run.argv)-1]; got != "first" {
+		t.Fatalf("ran %q, want the held prompt", got)
+	}
+	waitClaudeIdle(t, c)
+	if !reflect.DeepEqual(login.codes, []string{"THE-CODE"}) {
+		t.Fatalf("codes = %q", login.codes)
+	}
+}
+
+// A status check that never answered is not "signed out": nothing is held
+// and no sign-in starts.
+func TestClaudeSubscriptionStatusFailureStartsNoSignIn(t *testing.T) {
+	slot := newTestAuthSlot(t, claudeCredentialsFile, claudeCredentialsHomeRel)
+	login := &fakeClaudeLogin{statusErr: errors.New("timed out")}
+	c, srv := newSlotClaudeTestServer(t, newFakeClaudeRunner(), slot, login)
+	writeViaHTTP(t, srv, "x", http.StatusOK)
+	out := waitOutput(t, c, turnClose(1, "error"))
+	if !strings.Contains(out, "could not check the Claude sign-in") {
+		t.Fatalf("output:\n%s", out)
+	}
+	if login.starts != 0 || c.currentPendingLogin() != nil {
+		t.Fatalf("starts=%d pending=%v, want no sign-in", login.starts, c.currentPendingLogin())
+	}
+}
+
+func TestParseClaudeAuthStatus(t *testing.T) {
+	exit1 := exec.Command("sh", "-c", "exit 1").Run()
+	for _, tc := range []struct {
+		name    string
+		out     string
+		runErr  error
+		ctxErr  error
+		want    bool
+		wantErr bool
+	}{
+		{"logged in", `{"loggedIn":true}`, nil, nil, true, false},
+		{"logged out json", `{"loggedIn":false}`, exit1, nil, false, false},
+		{"non-zero no json", ``, exit1, nil, false, false},
+		{"timed out", ``, nil, context.DeadlineExceeded, false, true},
+		{"could not run", ``, errors.New("exec: not found"), nil, false, true},
+		{"exit 0 unreadable", `hello`, nil, nil, false, true},
+	} {
+		got, err := parseClaudeAuthStatus([]byte(tc.out), tc.runErr, tc.ctxErr)
+		if got != tc.want || (err != nil) != tc.wantErr {
+			t.Errorf("%s: = %v, %v", tc.name, got, err)
+		}
 	}
 }

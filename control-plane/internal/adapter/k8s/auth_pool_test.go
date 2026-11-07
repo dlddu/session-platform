@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -214,5 +215,73 @@ func TestMemoryAuthPoolMatchesLeasePoolRules(t *testing.T) {
 	_ = pool.Release(ctx, "a", nil)
 	if s, err := pool.Acquire(ctx, "b", nil); err != nil || s != 0 {
 		t.Fatalf("b after release = %d, %v", s, err)
+	}
+}
+
+// A slot kept by a failed release must not stay reclaimable while its holder
+// reuses it on restore: reuse renews the lease (AC-L2).
+func TestLeaseAuthPoolReusingHeldSlotRenewsIt(t *testing.T) {
+	pool, cs, clock := newTestPool(t, 1)
+	ctx := context.Background()
+	if _, err := pool.Acquire(ctx, "a", nil); err != nil {
+		t.Fatal(err)
+	}
+	// Hours pass with the release lost; the holder is frozen.
+	clock.t = clock.t.Add(3 * time.Hour)
+	frozen := func(_ context.Context, holder string) (bool, error) { return holder == "a", nil }
+
+	if s, err := pool.Acquire(ctx, "a", frozen); err != nil || s != 0 {
+		t.Fatalf("restore reuse = %d, %v", s, err)
+	}
+	lease, err := cs.CoordinationV1().Leases("sessions").Get(ctx, "codex-task-auth-0", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Spec.RenewTime == nil || !lease.Spec.RenewTime.Time.Equal(clock.t) {
+		t.Fatalf("renewTime = %v, want %v", lease.Spec.RenewTime, clock.t)
+	}
+	// While A's restore runs (A still frozen in the store), B must not win.
+	if _, err := pool.Acquire(ctx, "b", frozen); !errors.Is(err, session.ErrAuthPoolExhausted) {
+		t.Fatalf("B during A's restore: %v, want exhausted", err)
+	}
+	if got := holderOf(t, cs, 0); got != "a" {
+		t.Fatalf("holder = %q, want a", got)
+	}
+}
+
+// One slot whose holder cannot be judged does not keep the session out of a
+// free one; the error surfaces only when nothing could be claimed.
+func TestLeaseAuthPoolSkipsSlotItCannotJudge(t *testing.T) {
+	pool, _, clock := newTestPool(t, 2)
+	ctx := context.Background()
+	if _, err := pool.Acquire(ctx, "old", nil); err != nil {
+		t.Fatal(err)
+	}
+	clock.t = clock.t.Add(time.Hour)
+	broken := func(context.Context, string) (bool, error) { return false, errors.New("store down") }
+	if s, err := pool.Acquire(ctx, "new", broken); err != nil || s != 1 {
+		t.Fatalf("Acquire = %d, %v, want the free slot 1", s, err)
+	}
+	if _, err := pool.Acquire(ctx, "third", broken); err == nil || errors.Is(err, session.ErrAuthPoolExhausted) || !strings.Contains(err.Error(), "store down") {
+		t.Fatalf("Acquire with nothing claimable = %v, want the judging error", err)
+	}
+}
+
+// A same-named lease without the pool labels is reported, and the next slot
+// is still used.
+func TestLeaseAuthPoolReportsUnlabelledLease(t *testing.T) {
+	pool, cs, _ := newTestPool(t, 2)
+	ctx := context.Background()
+	if _, err := cs.CoordinationV1().Leases("sessions").Create(ctx, &coordinationv1.Lease{
+		ObjectMeta: metav1.ObjectMeta{Name: "codex-task-auth-0", Namespace: "sessions"},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := pool.Acquire(ctx, "s1", nil); err != nil || s != 1 {
+		t.Fatalf("Acquire = %d, %v, want slot 1 past the foreign lease", s, err)
+	}
+	_, err := pool.Acquire(ctx, "s2", nil)
+	if err == nil || errors.Is(err, session.ErrAuthPoolExhausted) || !strings.Contains(err.Error(), "without the codex-task auth pool labels") {
+		t.Fatalf("Acquire = %v, want the unlabelled-lease error", err)
 	}
 }

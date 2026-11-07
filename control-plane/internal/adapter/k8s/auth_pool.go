@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -120,14 +121,41 @@ type slotCandidate struct {
 	lease *coordinationv1.Lease // nil: the slot was never leased
 }
 
+// acquireAttempts bounds re-listing when a concurrent write moves the held
+// lease between our read and our renew.
+const acquireAttempts = 5
+
 func (p *LeaseAuthPool) Acquire(ctx context.Context, sessionID string, stale StaleHolder) (int, error) {
 	leases, err := p.leases(ctx)
 	if err != nil {
 		return 0, err
 	}
-	if slot, ok := heldSlot(leases, sessionID); ok {
-		return slot, p.ensureClaim(ctx, slot)
+	for attempt := 0; ; attempt++ {
+		slot, ok := heldSlot(leases, sessionID)
+		if !ok {
+			break
+		}
+		// Reusing a held slot renews it: a lease left behind by a failed
+		// release keeps its old renewTime, and a restore reusing it unrenewed
+		// would look reclaimable to every other path while it runs (AC-L2).
+		renewed, err := p.renew(ctx, leases[slot])
+		if err != nil {
+			return 0, err
+		}
+		if renewed {
+			return slot, p.ensureClaim(ctx, slot)
+		}
+		if attempt+1 >= acquireAttempts {
+			return 0, fmt.Errorf("renew %s auth slot %d of session %s: lease kept changing", p.cfg.Pool, slot, sessionID)
+		}
+		if leases, err = p.leases(ctx); err != nil {
+			return 0, err
+		}
 	}
+	// A slot that cannot be judged or claimed is skipped, not fatal: one bad
+	// lease must not keep a session out of the others. Its error is reported
+	// only when nothing else could be claimed.
+	var skipped []error
 	var candidates []slotCandidate
 	for slot := 0; slot < p.cfg.Slots; slot++ {
 		lease, ok := leases[slot]
@@ -138,7 +166,8 @@ func (p *LeaseAuthPool) Acquire(ctx context.Context, sessionID string, stale Sta
 		}
 		free, err := p.free(ctx, lease, stale)
 		if err != nil {
-			return 0, err
+			skipped = append(skipped, fmt.Errorf("judge %s: %w", lease.Name, err))
+			continue
 		}
 		if free {
 			candidates = append(candidates, slotCandidate{slot: slot, rank: authStateRank(lease), lease: lease})
@@ -153,7 +182,8 @@ func (p *LeaseAuthPool) Acquire(ctx context.Context, sessionID string, stale Sta
 	for _, c := range candidates {
 		won, err := p.claim(ctx, c, sessionID)
 		if err != nil {
-			return 0, err
+			skipped = append(skipped, err)
+			continue
 		}
 		if !won {
 			continue // another path took it between our list and our write
@@ -161,9 +191,33 @@ func (p *LeaseAuthPool) Acquire(ctx context.Context, sessionID string, stale Sta
 		if err := p.ensureClaim(ctx, c.slot); err != nil {
 			return 0, errors.Join(err, p.Release(context.WithoutCancel(ctx), sessionID, nil))
 		}
+		if len(skipped) > 0 {
+			slog.Warn("auth pool skipped slots it could not judge or claim",
+				"pool", p.cfg.Pool, "session", sessionID, "slot", c.slot, "err", errors.Join(skipped...))
+		}
 		return c.slot, nil
 	}
+	if len(skipped) > 0 {
+		return 0, fmt.Errorf("no %s auth slot could be leased: %w", p.cfg.Pool, errors.Join(skipped...))
+	}
 	return 0, fmt.Errorf("%w: all %d %s slots are held", session.ErrAuthPoolExhausted, p.cfg.Slots, p.cfg.Pool)
+}
+
+// renew CAS-writes a fresh renewTime on the session's own lease. false means
+// the lease moved under us and the caller re-reads.
+func (p *LeaseAuthPool) renew(ctx context.Context, lease *coordinationv1.Lease) (bool, error) {
+	now := metav1.NewMicroTime(p.cfg.Now())
+	next := lease.DeepCopy()
+	next.Spec.AcquireTime = &now
+	next.Spec.RenewTime = &now
+	_, err := p.client.CoordinationV1().Leases(p.namespace).Update(ctx, next, metav1.UpdateOptions{})
+	if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("renew %s: %w", lease.Name, err)
+	}
+	return true, nil
 }
 
 // free applies AC-L2: an empty holder is free; a held lease is reclaimable
@@ -200,7 +254,7 @@ func (p *LeaseAuthPool) claim(ctx context.Context, c slotCandidate, sessionID st
 			Spec: coordinationv1.LeaseSpec{HolderIdentity: &holder, AcquireTime: &now, RenewTime: &now},
 		}, metav1.CreateOptions{})
 		if apierrors.IsAlreadyExists(err) {
-			return false, nil
+			return false, p.foreignLease(ctx, c.slot)
 		}
 		return err == nil, err
 	}
@@ -213,6 +267,25 @@ func (p *LeaseAuthPool) claim(ctx context.Context, c slotCandidate, sessionID st
 		return false, nil
 	}
 	return err == nil, err
+}
+
+// foreignLease tells a lost create race from a lease of the slot's name that
+// the pool cannot see: one without its labels is invisible to the list, so
+// every create would lose to it forever and the slot would quietly never be
+// used. That is reported, not skipped silently.
+func (p *LeaseAuthPool) foreignLease(ctx context.Context, slot int) error {
+	name := AuthSlotClaimName(p.cfg.Pool, slot)
+	lease, err := p.client.CoordinationV1().Leases(p.namespace).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read lease %s: %w", name, err)
+	}
+	if lease.Labels[LabelAuthPool] != p.cfg.Pool || lease.Labels[LabelAuthSlot] != strconv.Itoa(slot) {
+		return fmt.Errorf("lease %s exists without the %s auth pool labels; slot %d is unusable until it is relabelled or removed", name, p.cfg.Pool, slot)
+	}
+	return nil
 }
 
 // ensureClaim makes the slot's PVC if it is missing. It is never deleted

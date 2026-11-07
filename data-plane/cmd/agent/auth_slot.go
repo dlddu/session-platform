@@ -46,8 +46,17 @@ type authSlot struct {
 	logger *slog.Logger
 
 	// mu serialises copies: the in-turn poll and the end-of-turn copy must not
-	// interleave their renames.
+	// interleave their renames. It also guards the turn state below.
 	mu sync.Mutex
+	// placed is true when this turn's pull succeeded and left the slot's file
+	// in HOME. Only then does a file missing at turn end mean the CLI logged
+	// out; a failed pull also leaves HOME without the file, and reading that
+	// as a logout would wipe the slot's valid login.
+	placed bool
+	// unpushed is true when the last turn-end copy to the slot failed: HOME
+	// holds a login newer than the slot's, so the next pull must not
+	// overwrite it with the older copy.
+	unpushed bool
 }
 
 // newAuthSlotFromEnv returns the slot this pod mounts, or an error when the
@@ -98,15 +107,26 @@ func (s *authSlot) signedIn() bool {
 
 // pull runs before a turn: the slot is the authority, so HOME takes its file,
 // and takes its absence too — a login another session left behind in an
-// archive must not outlive the slot it came from.
+// archive must not outlive the slot it came from. The one exception is a
+// login the last turn could not save: it is saved first, and if that still
+// fails HOME keeps it rather than taking the slot's older copy.
 func (s *authSlot) pull(home string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.placed = false
+	target := s.homePath(home)
+	if s.unpushed {
+		if err := s.copyBackLocked(home, false); err != nil {
+			_, have, _ := readLoginFile(target)
+			s.placed = have
+			return fmt.Errorf("save the unsaved login before the turn: %w", err)
+		}
+		s.unpushed = false
+	}
 	content, ok, err := readLoginFile(s.slotPath())
 	if err != nil {
 		return err
 	}
-	target := s.homePath(home)
 	if !ok {
 		if err := os.Remove(target); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("remove stale login: %w", err)
@@ -114,27 +134,42 @@ func (s *authSlot) pull(home string) error {
 		return nil
 	}
 	current, have, err := readLoginFile(target)
-	if err == nil && have && bytes.Equal(current, content) {
-		return nil
+	if !(err == nil && have && bytes.Equal(current, content)) {
+		if err := writeLoginFile(target, content); err != nil {
+			return err
+		}
 	}
-	return writeLoginFile(target, content)
+	s.placed = true
+	return nil
 }
 
 // push runs after a turn: whatever the CLI left in HOME is the login now. A
-// missing file means the CLI logged out, and the slot follows.
+// file missing after this turn's pull put it there means the CLI logged out,
+// and the slot follows. A copy that fails is retried by the next pull.
 func (s *authSlot) push(home string) error {
-	return s.copyBack(home, true)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err := s.copyBackLocked(home, s.placed)
+	if err != nil && !errors.Is(err, errLoginNotJSON) {
+		s.unpushed = true
+	}
+	return err
 }
 
 // pushIfPresent is the in-turn poll's copy. A file that is momentarily gone
 // mid-rewrite is not a logout, so it never removes the slot's file.
 func (s *authSlot) pushIfPresent(home string) error {
-	return s.copyBack(home, false)
-}
-
-func (s *authSlot) copyBack(home string, removeWhenAbsent bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.copyBackLocked(home, false)
+}
+
+// errLoginNotJSON is a HOME file caught mid-rewrite, or not a login at all:
+// both slot files are JSON, and copying a truncated one would leave the slot
+// with no usable login if the pod died before the next copy.
+var errLoginNotJSON = errors.New("the login file in HOME is not valid JSON; the slot keeps its copy")
+
+func (s *authSlot) copyBackLocked(home string, removeWhenAbsent bool) error {
 	content, ok, err := readLoginFile(s.homePath(home))
 	if err != nil {
 		return err
@@ -148,6 +183,9 @@ func (s *authSlot) copyBack(home string, removeWhenAbsent bool) error {
 			return fmt.Errorf("remove slot login: %w", err)
 		}
 		return syncDir(s.dir)
+	}
+	if !json.Valid(content) {
+		return errLoginNotJSON
 	}
 	current, have, err := readLoginFile(slot)
 	if err == nil && have && bytes.Equal(current, content) {
@@ -175,7 +213,9 @@ func (s *authSlot) watch(home string) (stop func()) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if err := s.pushIfPresent(home); err != nil {
+				// A half-written file is the CLI mid-rewrite; the next tick or
+				// the turn-end copy picks up the finished one.
+				if err := s.pushIfPresent(home); err != nil && !errors.Is(err, errLoginNotJSON) {
 					s.log().Warn("copy the refreshed login to the auth slot", "err", err)
 				}
 			}

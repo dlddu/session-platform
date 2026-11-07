@@ -41,6 +41,9 @@ const (
 	claudeLoginSubmitTimeout  = 2 * time.Minute
 	claudeLoginURLTimeout     = time.Minute
 	claudeLoginStatusTimeout  = 30 * time.Second
+	// claudeLoginDroppedWindow is how long a code sent for an ended sign-in is
+	// still recognised as one rather than run as a prompt.
+	claudeLoginDroppedWindow = 30 * time.Minute
 )
 
 // claudeEfforts is AC-E8's list for claude-code: the values the CLI's
@@ -90,8 +93,10 @@ func claudeEffortFromEnv() (string, error) {
 
 // claudeLogin is the subscription sign-in seam, so tests need no CLI.
 type claudeLogin interface {
-	// signedIn reports whether the CLI in this HOME has a usable login.
-	signedIn(ctx context.Context, home string) bool
+	// signedIn reports whether the CLI in this HOME has a usable login. An
+	// error means the check itself did not run to an answer — not "signed
+	// out", which would start a sign-in nobody needs.
+	signedIn(ctx context.Context, home string) (bool, error)
 	// start begins `claude auth login` and returns once it has printed the
 	// URL the user must open.
 	start(ctx context.Context, home string) (claudeLoginProcess, error)
@@ -111,6 +116,28 @@ type pendingClaudeLogin struct {
 	proc   claudeLoginProcess
 	prompt string
 	timer  *time.Timer
+	// after is the arrival count when the URL was shown: only writes that
+	// came after it can be the code the user copied from that page.
+	after uint64
+}
+
+// droppedClaudeLogin is a sign-in that ended — it expired or the session was
+// archived — while its code may still be on its way. The first write after
+// its URL is still read as that code, so the code never reaches the record
+// or the model.
+type droppedClaudeLogin struct {
+	after uint64
+	until time.Time
+}
+
+// turnInput is what the worker decided a dequeued write is (AC-E7).
+type turnInput struct {
+	// code is the pending sign-in this write completes.
+	code *pendingClaudeLogin
+	// staleCode is a write for a sign-in that already ended.
+	staleCode bool
+	// beforeSignIn is a prompt queued before the sign-in's URL was shown.
+	beforeSignIn bool
 }
 
 // execClaudeLogin runs the real CLI.
@@ -118,21 +145,37 @@ type execClaudeLogin struct {
 	binary string
 }
 
-func (l execClaudeLogin) signedIn(ctx context.Context, home string) bool {
+func (l execClaudeLogin) signedIn(ctx context.Context, home string) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, claudeLoginStatusTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, l.binary, "auth", "status", "--json")
 	cmd.Dir = home
 	cmd.Env = environmentWithHome(home)
 	out, err := cmd.Output()
-	if err != nil {
-		// A non-zero exit is the CLI's own "not logged in".
-		return false
+	return parseClaudeAuthStatus(out, err, ctx.Err())
+}
+
+// parseClaudeAuthStatus separates the CLI's answer from a check that never
+// produced one. A non-zero exit is the CLI's own "not logged in"; a status
+// that could not run, timed out, or printed no readable answer is an error.
+func parseClaudeAuthStatus(out []byte, runErr, ctxErr error) (bool, error) {
+	if ctxErr != nil {
+		return false, fmt.Errorf("claude auth status: %w", ctxErr)
+	}
+	var exitErr *exec.ExitError
+	if runErr != nil && !errors.As(runErr, &exitErr) {
+		return false, fmt.Errorf("run claude auth status: %w", runErr)
 	}
 	var status struct {
-		LoggedIn bool `json:"loggedIn"`
+		LoggedIn *bool `json:"loggedIn"`
 	}
-	return json.Unmarshal(out, &status) == nil && status.LoggedIn
+	if json.Unmarshal(out, &status) == nil && status.LoggedIn != nil {
+		return *status.LoggedIn, nil
+	}
+	if runErr != nil {
+		return false, nil
+	}
+	return false, errors.New("claude auth status printed no loggedIn answer")
 }
 
 func (l execClaudeLogin) start(ctx context.Context, home string) (claudeLoginProcess, error) {
@@ -231,7 +274,13 @@ func (p *execClaudeLoginProcess) kill() {
 // signed in it starts the sign-in, holds the prompt and tells the user what
 // to do, and the turn ends without running it.
 func (c *claudeWorkload) subscriptionGate(prompt string) bool {
-	if c.login.signedIn(c.ctx, c.homeDir) {
+	signedIn, err := c.login.signedIn(c.ctx, c.homeDir)
+	if err != nil {
+		c.logger.Warn("check claude sign-in", "err", c.redactString(err.Error()))
+		c.appendPlatformNotice("[session-platform: could not check the Claude sign-in; the prompt did not run. Try again.]\n")
+		return false
+	}
+	if signedIn {
 		return true
 	}
 	proc, err := c.login.start(c.ctx, c.homeDir)
@@ -242,9 +291,11 @@ func (c *claudeWorkload) subscriptionGate(prompt string) bool {
 	}
 	pending := &pendingClaudeLogin{proc: proc, prompt: prompt}
 	c.mu.Lock()
+	pending.after = c.enqueued
 	c.pendingLogin = pending
+	c.droppedLogin = nil
 	pending.timer = time.AfterFunc(claudeLoginPendingTimeout, func() {
-		c.dropPendingLogin(pending, "[session-platform: the Claude sign-in expired; the held prompt was dropped. Send it again to start over.]\n")
+		c.dropPendingLogin(pending, "[session-platform: the Claude sign-in expired; the held prompt was dropped. A code sent now is discarded — send the prompt again to start over.]\n")
 	})
 	c.mu.Unlock()
 	c.appendPlatformNotice("[session-platform: this session's auth slot is not signed in to a Claude subscription yet.]\n" +
@@ -271,15 +322,31 @@ func (c *claudeWorkload) completeLogin(pending *pendingClaudeLogin, code string)
 	return true
 }
 
-// takePendingLogin hands the worker the pending sign-in, if any, so the next
-// write is read as its code.
-func (c *claudeWorkload) takePendingLoginLocked() *pendingClaudeLogin {
-	pending := c.pendingLogin
-	c.pendingLogin = nil
-	if pending != nil && pending.timer != nil {
-		pending.timer.Stop()
+// classifyInputLocked decides what a dequeued write is (AC-E7). With a
+// sign-in pending, a write that arrived after its URL was shown is the code
+// and takes the pending sign-in; one queued before is a prompt that cannot
+// run yet. With a sign-in that just ended, the first write after its URL is
+// still its code. Everything else is a prompt.
+func (c *claudeWorkload) classifyInputLocked(job promptJob) turnInput {
+	if pending := c.pendingLogin; pending != nil {
+		if job.seq <= pending.after {
+			return turnInput{beforeSignIn: true}
+		}
+		c.pendingLogin = nil
+		if pending.timer != nil {
+			pending.timer.Stop()
+		}
+		return turnInput{code: pending}
 	}
-	return pending
+	if dropped := c.droppedLogin; dropped != nil {
+		if c.now().After(dropped.until) {
+			c.droppedLogin = nil
+		} else if job.seq > dropped.after {
+			c.droppedLogin = nil
+			return turnInput{staleCode: true}
+		}
+	}
+	return turnInput{}
 }
 
 // dropPendingLogin ends a sign-in that will not be completed: it expired, the
@@ -293,6 +360,9 @@ func (c *claudeWorkload) dropPendingLogin(pending *pendingClaudeLogin, notice st
 	c.pendingLogin = nil
 	if pending.timer != nil {
 		pending.timer.Stop()
+	}
+	if !c.stopping {
+		c.droppedLogin = &droppedClaudeLogin{after: pending.after, until: c.now().Add(claudeLoginDroppedWindow)}
 	}
 	c.mu.Unlock()
 	pending.proc.kill()

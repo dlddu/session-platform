@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -43,7 +44,11 @@ const (
 
 // codexDisabledFeatures are the codex features that would give the model a
 // tool or a side channel outside conversation, plugin skills and the K3s MCP.
-var codexDisabledFeatures = append([]string{"shell_tool", "unified_exec"}, codexTaskDisabledFeatures...)
+var codexDisabledFeatures = append(slices.Clone(codexTaskEnabledFeatures), codexTaskDisabledFeatures...)
+
+// codexTaskEnabledFeatures are the shell features codex-task sets on rather
+// than leaving to Codex's defaults, which a version bump can change (AC-M1).
+var codexTaskEnabledFeatures = []string{"shell_tool", "unified_exec"}
 
 // codexTaskDisabledFeatures are codex-chat's minus the shell (AC-M1).
 var codexTaskDisabledFeatures = []string{
@@ -96,6 +101,11 @@ func renderCodexConfig(cfg codexConfig) []byte {
 	doc.set("developer_instructions", tomlString(instructions))
 
 	doc.table("features")
+	if cfg.task {
+		for _, feature := range codexTaskEnabledFeatures {
+			doc.set(feature, tomlBool(true))
+		}
+	}
 	for _, feature := range disabled {
 		doc.set(feature, tomlBool(false))
 	}
