@@ -15,6 +15,10 @@ type CreateRequest struct {
 	// PlatformDefaultModel for claude-code and is invalid when supplied for a
 	// shell session. It is immutable after creation.
 	Model string
+	// Plugins selects the marketplace plugins (AC-L1). nil means the workload
+	// type's platform default; a non-nil list replaces it and is validated by
+	// NormalizePlugins. It is immutable after creation.
+	Plugins []string
 	// Tenant names the owning tenant (AC-K2). The API fills it from the
 	// caller; the manager stores it verbatim.
 	Tenant string

@@ -105,6 +105,10 @@ type createReq struct {
 	// Model is raw for the same reason; its contract is AC-E6.
 	Model json.RawMessage `json:"model"`
 
+	// Plugins is raw so an omitted list (the type's default plugins) differs
+	// from an explicit null; its contract is AC-L1.
+	Plugins json.RawMessage `json:"plugins"`
+
 	Tenant json.RawMessage `json:"tenant"`
 }
 
@@ -156,7 +160,9 @@ type workloadTypeConfResp struct {
 	Label       string               `json:"label"`
 	Description string               `json:"description"`
 	TakesModel  bool                 `json:"takesModel"`
-	Input       session.InputMode    `json:"input"`
+	// TakesPlugins says whether a create request may carry plugins (AC-L1).
+	TakesPlugins bool              `json:"takesPlugins"`
+	Input        session.InputMode `json:"input"`
 	// DefaultModel is null exactly when TakesModel is false.
 	DefaultModel *string  `json:"defaultModel"`
 	Models       []string `json:"models"`
@@ -206,12 +212,13 @@ func (a *API) runtimeConfig(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		entry := workloadTypeConfResp{
-			Type:        info.Type,
-			Label:       info.Label,
-			Description: info.Description,
-			TakesModel:  info.TakesModel,
-			Input:       info.Input,
-			Models:      []string{},
+			Type:         info.Type,
+			Label:        info.Label,
+			Description:  info.Description,
+			TakesModel:   info.TakesModel,
+			TakesPlugins: info.TakesPlugins,
+			Input:        info.Input,
+			Models:       []string{},
 		}
 		if info.TakesModel {
 			mc := a.modelConfig(info.Type)
@@ -272,13 +279,22 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var plugins []string
+	if len(req.Plugins) != 0 {
+		// An explicit null decodes to a nil slice, which would silently mean
+		// "type default"; only a JSON array is a selection.
+		if err := json.Unmarshal(req.Plugins, &plugins); err != nil || plugins == nil {
+			writeErr(w, session.ErrInvalidInput)
+			return
+		}
+	}
 	tenant, err := a.createTenant(caller, req.Tenant, workload)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
 	sess, err := a.mgr.Create(r.Context(), session.CreateRequest{
-		Name: req.Name, WorkloadType: workload, Model: model, Tenant: tenant,
+		Name: req.Name, WorkloadType: workload, Model: model, Plugins: plugins, Tenant: tenant,
 	})
 	if err != nil {
 		writeErr(w, err)

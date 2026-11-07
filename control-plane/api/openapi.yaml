@@ -110,6 +110,7 @@ paths:
                     label: Shell
                     description: Interactive bash. You type the commands.
                     takesModel: false
+                    takesPlugins: false
                     input: terminal
                     defaultModel: null
                     models: []
@@ -117,6 +118,7 @@ paths:
                     label: Claude Code
                     description: Agent CLI. You send prompts, it does the work.
                     takesModel: true
+                    takesPlugins: true
                     input: prompt
                     defaultModel: "~anthropic/claude-opus-latest"
                     models: [sonnet, opus]
@@ -793,7 +795,7 @@ components:
     WorkloadTypeConfig:
       type: object
       additionalProperties: false
-      required: [type, label, description, takesModel, input, defaultModel, models]
+      required: [type, label, description, takesModel, takesPlugins, input, defaultModel, models]
       properties:
         type:
           type: string
@@ -807,6 +809,9 @@ components:
         takesModel:
           type: boolean
           description: Whether a create request for this type may carry `model`. A model on a type where this is false is rejected with 400.
+        takesPlugins:
+          type: boolean
+          description: Whether a create request for this type may carry `plugins` (AC-L1). A plugin list on a type where this is false is rejected with 400.
         input:
           type: string
           enum: [prompt, terminal]
@@ -915,6 +920,13 @@ components:
             Whenever the primary container starts, including a restart, that
             alias resolves through the optional ConfigMap model and then the CLI
             fallback.
+        plugins:
+          type: array
+          items: { type: string }
+          description: >
+            The session's marketplace plugin selection, fixed at creation and
+            carried across snapshot/restore (AC-L1). Absent when the session was
+            created without one and runs its type's platform-default plugins.
         pod:
           type: string
           description: >
@@ -959,6 +971,28 @@ components:
             value is passed literally and takes precedence over the platform
             ConfigMap default. The catalog returned by GET /config is advisory,
             not an allowlist. Credentials are never accepted in this request.
+        plugins:
+          type: array
+          minItems: 1
+          maxItems: 16
+          uniqueItems: true
+          items:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+          description: >
+            Optional marketplace plugins for this session (AC-L1), by plugin name
+            in the platform marketplace (no `@marketplace` suffix). Valid when
+            workloadType is `claude-code`, `minimax-code` or `codex`. Omitted, the
+            session gets its type's platform default (`session-platform` for
+            claude-code, the deployment's `CODEX_PLUGINS` for codex,
+            `mcp-servers` for minimax-code). Given, it replaces that default
+            outright — list the default too if the session should keep it.
+            Names are not checked against the marketplace here: a name it does
+            not list fails the pod's plugin bootstrap, which for `claude-code`
+            fails the create (its agent never becomes reachable) and for
+            `codex`/`minimax-code` leaves the session running without plugin
+            skills, as any marketplace failure already does. `null`, an empty list, a duplicate or an
+            invalid name → 400, as is a list on `shell` or `approval-gated`.
         tenant:
           type: string
           minLength: 1

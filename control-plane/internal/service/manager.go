@@ -177,12 +177,16 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 	if err != nil {
 		return nil, err
 	}
+	plugins, err := session.NormalizePlugins(workload, req.Plugins)
+	if err != nil {
+		return nil, err
+	}
 	id, err := newID()
 	if err != nil {
 		return nil, err
 	}
 
-	pods, err := s.orch.Start(ctx, id, k8s.WorkloadSpec{Type: workload, Model: model})
+	pods, err := s.orch.Start(ctx, id, k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins})
 	if err != nil {
 		return nil, err
 	}
@@ -199,6 +203,7 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 		ID:            id,
 		WorkloadType:  workload,
 		Model:         model,
+		Plugins:       plugins,
 		Tenant:        req.Tenant,
 		Name:          name,
 		State:         session.StateActive,
@@ -770,6 +775,12 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 	if err != nil {
 		return nil, err
 	}
+	// The plugin selection is as fixed as the model: a restore pod installs the
+	// set the session was created with, never the type default (AC-L1).
+	plugins, err := session.NormalizePlugins(workload, sess.Plugins)
+	if err != nil {
+		return nil, err
+	}
 	ckpt, err := s.checkpointerFor(workload)
 	if err != nil {
 		return nil, err
@@ -777,7 +788,7 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	pods, err := s.orch.RestoreInto(ctx, id, checkpointRef(sess.Checkpoint), k8s.WorkloadSpec{Type: workload, Model: model})
+	pods, err := s.orch.RestoreInto(ctx, id, checkpointRef(sess.Checkpoint), k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins})
 	if err != nil {
 		return nil, err
 	}

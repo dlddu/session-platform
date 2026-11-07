@@ -116,16 +116,16 @@ func (o *ClientOrchestrator) miniMaxCodePod(container *corev1.Container, model s
 // marketplace: its only caller is the session MCP beside it, which mints
 // per-repository clone tokens through it. helperPolicyPorts keeps its port
 // closed to the workload pod.
-func (o *ClientOrchestrator) helperProxyContainers(sessionID string, workloadType session.WorkloadType, image string) []corev1.Container {
+func (o *ClientOrchestrator) helperProxyContainers(sessionID string, workloadType session.WorkloadType, image string, plugins []string) []corev1.Container {
 	provider := o.credentialProxyContainer(HelperCredentialProxyContainerName, image, helperProxyListenAddr, proxyPlacementHelper)
 	if workloadType != session.WorkloadTypeMiniMaxCode {
 		if o.repoAccessEnabled() {
-			return []corev1.Container{provider, o.k3sMCPProxy(sessionID, image, o.claudeCredentialsSecret, false)}
+			return []corev1.Container{provider, o.k3sMCPProxy(sessionID, image, o.claudeCredentialsSecret, false, nil)}
 		}
 		return []corev1.Container{provider}
 	}
 	o.repointToMiniMax(&provider)
-	return []corev1.Container{provider, o.k3sMCPProxy(sessionID, image, o.miniMaxCredentialsSecret, true)}
+	return []corev1.Container{provider, o.k3sMCPProxy(sessionID, image, o.miniMaxCredentialsSecret, true, plugins)}
 }
 
 // repointToMiniMax moves every Secret and ConfigMap reference of a credential
@@ -150,7 +150,10 @@ func (o *ClientOrchestrator) repointToMiniMax(proxy *corev1.Container) {
 // probe; its workload, port, the one Secret key it reads, the session id it
 // names upstream calls with and — for the type whose CLI loads plugins — the
 // scratch volume its marketplace clone needs differ.
-func (o *ClientOrchestrator) k3sMCPProxy(sessionID, image, secret string, marketplace bool) corev1.Container {
+//
+// plugins is the session's own selection (AC-L1); nil leaves the seeder on its
+// built-in default.
+func (o *ClientOrchestrator) k3sMCPProxy(sessionID, image, secret string, marketplace bool, plugins []string) corev1.Container {
 	port := strconv.Itoa(k3sMCPProxyPort)
 	proxy := o.credentialProxyContainer(MiniMaxK3SMCPProxyContainerName, image, ":"+port, proxyPlacementHelper)
 	proxy.Env = []corev1.EnvVar{
@@ -162,6 +165,9 @@ func (o *ClientOrchestrator) k3sMCPProxy(sessionID, image, secret string, market
 	proxy.VolumeMounts = nil
 	if marketplace {
 		proxy.Env = append(proxy.Env, corev1.EnvVar{Name: MiniMaxMarketplaceDirEnvVar, Value: miniMaxMarketplacePath})
+		if plugins != nil {
+			proxy.Env = append(proxy.Env, corev1.EnvVar{Name: pluginSeedPluginsEnvVar, Value: strings.Join(plugins, ",")})
+		}
 		proxy.VolumeMounts = []corev1.VolumeMount{{Name: miniMaxMarketplaceVolume, MountPath: miniMaxMarketplacePath}}
 	}
 	proxy.Env = append(proxy.Env, optionalSecretEnv(K3SMCPTokenEnvVar, secret, MiniMaxK3SMCPTokenSecretKey))

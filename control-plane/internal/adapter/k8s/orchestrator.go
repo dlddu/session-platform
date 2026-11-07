@@ -61,10 +61,12 @@ func (s SessionPods) Names() []string {
 }
 
 // WorkloadSpec is the immutable runtime configuration copied from a session
-// into every fresh or restored pod (Model: see session.NormalizeModel).
+// into every fresh or restored pod (Model: see session.NormalizeModel;
+// Plugins: see session.NormalizePlugins — nil means the type's default).
 type WorkloadSpec struct {
-	Type  session.WorkloadType
-	Model string
+	Type    session.WorkloadType
+	Model   string
+	Plugins []string
 }
 
 // PodOrchestrator provisions and reclaims the pods that back a session — its
@@ -100,6 +102,7 @@ type StubOrchestrator struct {
 	running   map[string]SessionPods          // sessionID -> the session's pod set
 	workload  map[string]session.WorkloadType // sessionID -> the type it was started with
 	models    map[string]string               // sessionID -> immutable model setting
+	plugins   map[string][]string             // sessionID -> immutable plugin selection
 }
 
 // NewStubOrchestrator returns a stub bound to the given namespace.
@@ -112,6 +115,7 @@ func NewStubOrchestrator(namespace string) *StubOrchestrator {
 		running:   map[string]SessionPods{},
 		workload:  map[string]session.WorkloadType{},
 		models:    map[string]string{},
+		plugins:   map[string][]string{},
 	}
 }
 
@@ -137,6 +141,7 @@ func (o *StubOrchestrator) Start(_ context.Context, sessionID string, workload W
 	o.running[sessionID] = pods
 	o.workload[sessionID] = workload.Type
 	o.models[sessionID] = workload.Model
+	o.plugins[sessionID] = append([]string(nil), workload.Plugins...)
 	return pods, nil
 }
 
@@ -158,6 +163,14 @@ func (o *StubOrchestrator) ModelFor(sessionID string) string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.models[sessionID]
+}
+
+// PluginsFor reports the plugin selection last copied into a session pod in
+// tests (AC-L1); nil means the type default.
+func (o *StubOrchestrator) PluginsFor(sessionID string) []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.plugins[sessionID]...)
 }
 
 // RunningCount reports how many pods the stub believes are running. It counts

@@ -127,6 +127,56 @@ func NormalizeModel(workload WorkloadType, model string) (string, error) {
 	}
 }
 
+// MaxSessionPlugins bounds a create request's plugin list (AC-L1). A plugin is
+// installed on every boot and restore, so the bound keeps one request from
+// turning pod start into an unbounded marketplace walk.
+const MaxSessionPlugins = 16
+
+// pluginNamePattern is a marketplace plugin name: one path segment the data
+// plane can use as a directory name and Claude Code as the left half of
+// "<plugin>@<marketplace>".
+var pluginNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// NormalizePlugins validates the session's marketplace plugin selection
+// (AC-L1). nil means unspecified: the session gets its workload type's
+// platform-default plugins, exactly as before the field existed. A non-nil list
+// replaces that default outright, so it must be non-empty, free of duplicates
+// and made of valid names. Only the types whose agent loads marketplace plugins
+// take one; shell and approval-gated reject it rather than storing a setting
+// nothing would honour. The returned slice is a copy in request order.
+func NormalizePlugins(workload WorkloadType, plugins []string) ([]string, error) {
+	if plugins == nil {
+		return nil, nil
+	}
+	if !TakesPlugins(workload) {
+		return nil, ErrInvalidInput
+	}
+	if len(plugins) == 0 || len(plugins) > MaxSessionPlugins {
+		return nil, ErrInvalidInput
+	}
+	seen := make(map[string]bool, len(plugins))
+	out := make([]string, 0, len(plugins))
+	for _, name := range plugins {
+		if !pluginNamePattern.MatchString(name) || seen[name] {
+			return nil, ErrInvalidInput
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out, nil
+}
+
+// TakesPlugins reports whether a create request may carry plugins for the
+// workload type (AC-L1).
+func TakesPlugins(workload WorkloadType) bool {
+	switch workload {
+	case WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode, WorkloadTypeCodex:
+		return true
+	default:
+		return false
+	}
+}
+
 // MaxIdle is the maximum idle duration before a session is snapshotted.
 // The operational trigger that enforces it is service.IdleReaper (AC-B1).
 //
@@ -191,6 +241,10 @@ type Session struct {
 	// then the Claude Code installation fallback (AC-E6, reused verbatim by
 	// AC-F1).
 	Model string `json:"model,omitempty"`
+	// Plugins is the session's marketplace plugin selection (AC-L1), fixed at
+	// creation and carried across snapshot/restore. Absent means the workload
+	// type's platform default; present, it is the exact set the agent loads.
+	Plugins []string `json:"plugins,omitempty"`
 	// Tenant is the tenant that owns the session (docs/prd/multitenancy.md,
 	// AC-K2), fixed at creation. Empty means operator-owned: sessions created
 	// before tenancy existed, or by the operator without naming a tenant.
