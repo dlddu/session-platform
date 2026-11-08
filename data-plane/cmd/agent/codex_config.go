@@ -71,7 +71,7 @@ const codexDeveloperInstructions = "You are a " + codexInstructionsMarker + ". "
 	"When the `k3s` MCP server is present, its tools act on the homelab cluster; it asks a human before any write."
 
 const codexTaskDeveloperInstructions = "You are a " + codexTaskInstructionsMarker + ": a coding agent with a shell " +
-	"and file editing in this session's own workspace, which is a dedicated pod. Web search and image tools are off. " +
+	"and file editing in this session's own workspace, which is a dedicated pod. You can search the web; image tools are off. " +
 	"Skills are listed with a file path; open SKILL.md there, or read it with the `read_skill` tool of the `skills` " +
 	"MCP server (`list_skills` lists them). " +
 	codexRefreshInstructions +
@@ -98,13 +98,13 @@ type codexConfig struct {
 func renderCodexConfig(cfg codexConfig) []byte {
 	doc := &tomlDocument{}
 	doc.comment("Managed by session-platform and rewritten on every start; local edits do not persist.")
-	sandbox, instructions, disabled := "read-only", codexDeveloperInstructions, codexDisabledFeatures
+	sandbox, webSearch, instructions, disabled := "read-only", "disabled", codexDeveloperInstructions, codexDisabledFeatures
 	if cfg.task {
-		sandbox, instructions, disabled = "danger-full-access", codexTaskDeveloperInstructions, codexTaskDisabledFeatures
+		sandbox, webSearch, instructions, disabled = "danger-full-access", "live", codexTaskDeveloperInstructions, codexTaskDisabledFeatures
 	}
 	doc.set("approval_policy", tomlString("never"))
 	doc.set("sandbox_mode", tomlString(sandbox))
-	doc.set("web_search", tomlString("disabled"))
+	doc.set("web_search", tomlString(webSearch))
 	// The login is the session's own and is archived with HOME (AC-J3), so it
 	// has to be a file, never an OS keyring the next pod does not have.
 	doc.set("cli_auth_credentials_store", tomlString("file"))

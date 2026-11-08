@@ -119,7 +119,7 @@ export function codexHomeFor(env) {
 
 // threadOptions fixes the sandbox per mode. chat is read-only with no
 // network (AC-J2); task runs like claude-code, with the session pod as the
-// execution boundary (AC-M1). Web search is off in both.
+// execution boundary (AC-M1). Only task searches the web, live (AC-M1).
 export function threadOptions(model, cwd, { mode = MODE_CHAT, effort = null } = {}) {
   const task = mode === MODE_TASK;
   const options = {
@@ -127,7 +127,7 @@ export function threadOptions(model, cwd, { mode = MODE_CHAT, effort = null } = 
     approvalPolicy: "never",
     workingDirectory: cwd,
     skipGitRepoCheck: true,
-    webSearchMode: "disabled",
+    webSearchMode: task ? "live" : "disabled",
     networkAccessEnabled: task,
   };
   if (model && model !== PLATFORM_DEFAULT_MODEL) {

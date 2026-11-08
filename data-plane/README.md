@@ -198,9 +198,10 @@ interactive shell and Claude Code workloads.
   PROMPT`; `CODEX_REASONING_EFFORT` (`minimal`, `low`, `medium`, `high` or
   `xhigh`, AC-M4) sets the SDK's `modelReasoningEffort`, and `codex-chat`
   refuses to start with it set. Task mode runs with `sandboxMode:
-  danger-full-access`, `approvalPolicy: never`, sandbox network on and web
-  search off, and has no kill switch. Its managed `config.toml` leaves the
-  shell and `unified_exec` on, opens the sandbox, keeps every other
+  danger-full-access`, `approvalPolicy: never`, sandbox network on and live
+  web search (`webSearchMode: live`), and has no kill switch. Its managed `config.toml` leaves the
+  shell and `unified_exec` on, opens the sandbox, sets `web_search = "live"`,
+  keeps every other
   `codex-chat` switch, and carries its own developer instructions (marker
   `session-platform codex task session`). The ChatGPT login is the auth
   slot's `auth.json`, kept in sync with `$HOME/.codex/auth.json` exactly like
@@ -209,8 +210,8 @@ interactive shell and Claude Code workloads.
   `codex-chat`, and the end-of-turn copy keeps it for the next session. The
   image build renders both modes (`/agent codex-render-config <home>
   chat|task`) and runs `surface-check.mjs --mode chat|task`: task mode must
-  show a shell tool and its own marker, and no image or web tool or bundled
-  skill.
+  show a shell tool and its own marker, and no image tool or bundled skill
+  (a web tool is allowed there; chat mode still rejects it).
 - `k3s-mcp-proxy` is the `minimax-code` helper pod's K3s MCP proxy, and the
   `codex-chat` and `codex-task` pods' loopback sidecar (`DATA_PLANE_PROXY_PLACEMENT=sidecar`,
   `127.0.0.1:8093`): the
