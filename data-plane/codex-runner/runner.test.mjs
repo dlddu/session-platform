@@ -75,7 +75,7 @@ test("threadOptions gives codex-task the claude-code-level surface and its effor
     approvalPolicy: "never",
     workingDirectory: "/w",
     skipGitRepoCheck: true,
-    webSearchMode: "disabled",
+    webSearchMode: "live",
     networkAccessEnabled: true,
     modelReasoningEffort: "high",
   });
@@ -155,8 +155,11 @@ test("inspectPromptInput requires a shell and the task marker in task mode", () 
   ];
   assert.deepEqual(inspectPromptInput(task, "task").problems, []);
   const leaky = structuredClone(task);
-  leaky[0].tools[0].tools.push({ name: "view_image" }, { name: "web_search" });
+  leaky[0].tools[0].tools.push({ name: "view_image" }, { name: "image_generation" });
   assert.equal(inspectPromptInput(leaky, "task").problems.length, 2);
+  const searching = structuredClone(task);
+  searching[0].tools.push({ type: "web_search" });
+  assert.deepEqual(inspectPromptInput(searching, "task").problems, [], "codex-task searches the web (AC-M1)");
   // A task config must never pass the chat check.
   assert.ok(inspectPromptInput(task).problems.length >= 2);
 });

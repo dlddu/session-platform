@@ -9,8 +9,8 @@ import (
 	"testing"
 )
 
-// AC-M1: codex-task's config opens the sandbox and keeps the shell, and turns
-// off everything else codex-chat turns off.
+// AC-M1: codex-task's config opens the sandbox, keeps the shell and searches
+// the web live, and turns off everything else codex-chat turns off.
 func TestRenderCodexTaskConfig(t *testing.T) {
 	doc := tomlCheck(t, string(renderCodexConfig(codexConfig{
 		task:        true,
@@ -21,7 +21,7 @@ func TestRenderCodexTaskConfig(t *testing.T) {
 	for key, want := range map[string]any{
 		"approval_policy":            "never",
 		"sandbox_mode":               "danger-full-access",
-		"web_search":                 "disabled",
+		"web_search":                 "live",
 		"cli_auth_credentials_store": "file",
 		"forced_login_method":        "chatgpt",
 		"skills.bundled.enabled":     false,

@@ -1,8 +1,8 @@
 // surface-check: proves a codex HOME offers the model exactly its mode's
 // surface — codex-chat's (docs/prd/codex-workload.md, AC-J5) or codex-task's
 // (docs/prd/codex-task-workload.md, AC-M1). It renders what the model would be
-// sent with `codex debug prompt-input` and fails on an image or web tool, on a
-// shell tool in chat or a missing one in task, on a bundled system skill, or
+// sent with `codex debug prompt-input` and fails on an image tool, on a shell
+// or web tool in chat or a missing shell in task, on a bundled system skill, or
 // when the mode's managed instructions are missing (which would mean codex did
 // not load the managed config).
 //
