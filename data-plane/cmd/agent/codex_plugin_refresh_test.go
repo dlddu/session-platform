@@ -299,3 +299,123 @@ func TestPluginRefreshUnsupported(t *testing.T) {
 		t.Fatalf("claude-code refresh = %d, want 404", resp.StatusCode)
 	}
 }
+
+// AC-J7 on the agent: the running turn may refresh once, from loopback; the
+// transcript line lands after the turn's end marker, and a successful turn
+// that refreshed settles the note, while one that failed leaves it pending.
+func TestCodexPluginRefreshInTurn(t *testing.T) {
+	sidecar := &refreshableCodexCLI{}
+	sidecar.set(skillSeed(map[string]string{"s": "v1\n"}), "rev-1")
+	runner := newFakeClaudeRunner()
+	c, srv := newCodexTestServer(t, runner, platformDefaultModel, false, filepath.Join(t.TempDir(), "state"), sidecar.cli(t))
+
+	post := func(path string, wantStatus int) pluginRefresh {
+		t.Helper()
+		resp, err := http.Post(srv.URL+path, "application/json", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != wantStatus {
+			t.Fatalf("POST %s = %d %s, want %d", path, resp.StatusCode, body, wantStatus)
+		}
+		var result pluginRefresh
+		if wantStatus == http.StatusOK {
+			if err := json.Unmarshal(body, &result); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return result
+	}
+	lastPrompt := func(run recordedClaudeRun) string { return run.argv[len(run.argv)-1] }
+
+	// Outside a turn there is no caller to serve.
+	post(pluginRefreshTurnPath, http.StatusConflict)
+
+	writeViaHTTP(t, srv, "first", http.StatusOK)
+	receiveClaudeRun(t, runner.started)
+	waitClaudeIdle(t, c)
+
+	// A turn that refreshes and succeeds: one refresh, then the limit; the
+	// operator's route still waits for the turn.
+	sidecar.set(skillSeed(map[string]string{"s": "v2\n"}), "rev-2")
+	runner.release = make(chan struct{})
+	writeViaHTTP(t, srv, "please refresh", http.StatusOK)
+	receiveClaudeRun(t, runner.started)
+	if result := post(pluginRefreshTurnPath, http.StatusOK); !reflect.DeepEqual(result.Updated, []string{"p--s"}) {
+		t.Fatalf("in-turn refresh = %+v", result)
+	}
+	post(pluginRefreshTurnPath, http.StatusTooManyRequests)
+	post(pluginRefreshPath, http.StatusConflict)
+	if payload, _ := c.out.Since(0); strings.Contains(string(payload), "plugin skills refreshed") {
+		t.Errorf("the refresh line must wait for the turn's end, got %q", payload)
+	}
+	close(runner.release)
+	waitClaudeIdle(t, c)
+	payload, _ := c.out.Since(0)
+	end := strings.LastIndex(string(payload), claudeTurnMarkerLead+"end seq=2")
+	line := strings.Index(string(payload), "plugin skills refreshed at rev-2 — updated p--s")
+	if end < 0 || line < end {
+		t.Errorf("refresh line (%d) must follow the turn's end marker (%d): %q", line, end, payload)
+	}
+	runner.release = nil
+	writeViaHTTP(t, srv, "after", http.StatusOK)
+	if got := lastPrompt(receiveClaudeRun(t, runner.started)); got != "after" {
+		t.Fatalf("a turn that refreshed and succeeded was told already, got %q", got)
+	}
+	waitClaudeIdle(t, c)
+
+	// A turn that refreshes and then fails leaves the note for the next.
+	sidecar.set(skillSeed(map[string]string{"s": "v3\n"}), "rev-3")
+	runner.release = make(chan struct{})
+	runner.runErr = func(index int) error {
+		if index == 3 {
+			return errors.New("turn failed")
+		}
+		return nil
+	}
+	writeViaHTTP(t, srv, "refresh then fail", http.StatusOK)
+	receiveClaudeRun(t, runner.started)
+	post(pluginRefreshTurnPath, http.StatusOK)
+	close(runner.release)
+	waitClaudeIdle(t, c)
+	runner.release = nil
+	writeViaHTTP(t, srv, "next", http.StatusOK)
+	if got := lastPrompt(receiveClaudeRun(t, runner.started)); !strings.Contains(got, "updated: `p--s`") || !strings.HasSuffix(got, "\n\nnext") {
+		t.Fatalf("after a failed turn the note must be carried, got %q", got)
+	}
+	waitClaudeIdle(t, c)
+
+	sidecar.mu.Lock()
+	refreshes := sidecar.refreshes
+	sidecar.mu.Unlock()
+	if refreshes != 2 {
+		t.Errorf("sidecar refreshes = %d, want 2: refused calls must not reach it", refreshes)
+	}
+}
+
+// Only a process in the pod reaches the in-turn route.
+func TestFromLoopback(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"127.0.0.1:50000": true, "[::1]:50000": true, "10.42.0.7:50000": false, "bogus": false,
+	} {
+		r := httptest.NewRequest(http.MethodPost, pluginRefreshTurnPath, nil)
+		r.RemoteAddr = addr
+		if got := fromLoopback(r); got != want {
+			t.Errorf("fromLoopback(%q) = %v, want %v", addr, got, want)
+		}
+	}
+}
+
+func TestLoopbackAgentURL(t *testing.T) {
+	for addr, want := range map[string]string{
+		":8090": "http://127.0.0.1:8090", "0.0.0.0:8090": "http://127.0.0.1:8090", "[::]:8090": "http://127.0.0.1:8090",
+		"127.0.0.1:9000": "http://127.0.0.1:9000", "localhost:9000": "http://127.0.0.1:9000",
+		"10.0.0.5:8090": "", "8090": "",
+	} {
+		if got := loopbackAgentURL(addr); got != want {
+			t.Errorf("loopbackAgentURL(%q) = %q, want %q", addr, got, want)
+		}
+	}
+}

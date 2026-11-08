@@ -142,7 +142,9 @@ interactive shell and Claude Code workloads.
   model to read skills through the skills MCP. It registers two MCP servers:
   `skills` (`/agent skills-mcp`, a stdio MCP serving `list_skills` and
   `read_skill{name, file?}` from `CODEX_SKILLS_DIR`, with regular files only,
-  no symlinks, nothing outside the directory and a 256 KiB cap per file) and,
+  no symlinks, nothing outside the directory and a 256 KiB cap per file, plus
+  `refresh_skills` when the sidecar has a marketplace and
+  `SESSION_PLATFORM_AGENT_URL` names this agent on loopback) and,
   only when the sidecar's `/healthz` reports `configured: true`, `k3s` at
   `K3S_MCP_PROXY_URL/mcp`. Codex is left with conversation, plugin skills and
   the K3s MCP (AC-J5). `apply_patch` and the collaboration tools stay
@@ -165,7 +167,12 @@ interactive shell and Claude Code workloads.
   `$HOME/.codex/session-platform-skill-changes.json`; the next resumed turn's
   prompt opens with a note naming those skills and asking the model to re-read
   them, and the record is cleared once a turn succeeds. Nothing refreshes on
-  its own.
+  its own. The model's `refresh_skills` posts to the loopback-only
+  `POST /plugins/refresh/turn`, which does the same refresh from inside the
+  running turn: once per turn (429 after), 409 outside a turn or while a
+  checkpoint waits, 403 from anything but loopback. The tool result names the
+  changes, so a turn that refreshed and succeeded clears the record; the
+  transcript line is written after that turn's end marker.
   The pod has no provider credential: `K3S_MCP_PROXY_URL` must be
   `http://<loopback IP>:8093` (the `k3s-mcp-proxy` sidecar, AC-J6), and the
   agent refuses to start if `OPENAI_API_KEY`, `CODEX_API_KEY`,
