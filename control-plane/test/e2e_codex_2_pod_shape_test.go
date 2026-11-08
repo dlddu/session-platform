@@ -6,6 +6,7 @@ package e2e_test
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -36,6 +37,28 @@ func TestCodex2_OnePodTokenOnlyInSidecar(t *testing.T) {
 	}
 	if len(pod.Spec.Containers) != 2 {
 		t.Fatalf("containers = %d, want the agent and k3s-mcp-proxy", len(pod.Spec.Containers))
+	}
+	// AC-N6: the one claim is the session's codex-chat slot, split by subPath
+	// so the agent sees only the login and the sidecar only the database.
+	var claims []string
+	for _, v := range pod.Spec.Volumes {
+		if v.PersistentVolumeClaim != nil {
+			claims = append(claims, v.PersistentVolumeClaim.ClaimName)
+		}
+	}
+	if len(claims) != 1 || !strings.HasPrefix(claims[0], sessionNamespace()+"-codex-chat-auth-") {
+		t.Errorf("pod claims = %v, want one codex-chat slot", claims)
+	}
+	wantSubPath := map[string]string{"session": "auth", "k3s-mcp-proxy": "db"}
+	for _, c := range pod.Spec.Containers {
+		for _, m := range c.VolumeMounts {
+			if m.Name == "auth-slot" && m.SubPath != wantSubPath[c.Name] {
+				t.Errorf("container %s mounts the slot from subPath %q, want %q", c.Name, m.SubPath, wantSubPath[c.Name])
+			}
+		}
+	}
+	if len(pod.Spec.InitContainers) != 1 || pod.Spec.InitContainers[0].Name != "slot-init" {
+		t.Errorf("init containers = %+v, want slot-init", pod.Spec.InitContainers)
 	}
 	for _, c := range pod.Spec.Containers {
 		for _, e := range c.Env {

@@ -26,12 +26,13 @@ type authPoolEnv struct {
 }
 
 // loadAuthPoolEnv reads <PREFIX>_AUTH_SLOTS, _AUTH_STORAGE_CLASS and
-// _AUTH_STORAGE_SIZE. A malformed size or count fails startup: a pool that
-// silently shrank to zero would turn a typo into an unoffered type.
-func loadAuthPoolEnv(prefix string) (authPoolEnv, error) {
+// _AUTH_STORAGE_SIZE, the size defaulting to defaultSize. A malformed size or
+// count fails startup: a pool that silently shrank to zero would turn a typo
+// into an unoffered type.
+func loadAuthPoolEnv(prefix, defaultSize string) (authPoolEnv, error) {
 	cfg := authPoolEnv{
 		storageClass: strings.TrimSpace(os.Getenv(prefix + "_AUTH_STORAGE_CLASS")),
-		storageSize:  env(prefix+"_AUTH_STORAGE_SIZE", k8s.DefaultAuthSlotStorageSize),
+		storageSize:  env(prefix+"_AUTH_STORAGE_SIZE", defaultSize),
 	}
 	if raw := strings.TrimSpace(os.Getenv(prefix + "_AUTH_SLOTS")); raw != "" {
 		n, err := strconv.Atoi(raw)
@@ -77,7 +78,7 @@ func loadCodexTaskConfig() (codexTaskConfig, error) {
 	if err != nil {
 		return codexTaskConfig{}, fmt.Errorf("CODEX_TASK_MODELS: %w", err)
 	}
-	pool, err := loadAuthPoolEnv("CODEX_TASK")
+	pool, err := loadAuthPoolEnv("CODEX_TASK", k8s.DefaultAuthSlotStorageSize)
 	if err != nil {
 		return codexTaskConfig{}, err
 	}
@@ -146,7 +147,7 @@ func loadClaudeAuthConfig() (claudeAuthConfig, error) {
 	if err != nil {
 		return claudeAuthConfig{}, fmt.Errorf("CLAUDE_CODE_AUTH_MODE: %w", err)
 	}
-	pool, err := loadAuthPoolEnv("CLAUDE_CODE")
+	pool, err := loadAuthPoolEnv("CLAUDE_CODE", k8s.DefaultAuthSlotStorageSize)
 	if err != nil {
 		return claudeAuthConfig{}, err
 	}
@@ -183,6 +184,15 @@ func (c claudeAuthConfig) offered() bool {
 // would never be mounted, so leasing them would only lock sessions out.
 func authPoolOptions(cfg config, client kubernetes.Interface, namespace string) ([]service.Option, error) {
 	var opts []service.Option
+	if cfg.codex.image != "" {
+		pool, err := cfg.codex.pool.pool(client, namespace, k8s.AuthPoolCodexChat)
+		if err != nil {
+			return nil, err
+		}
+		if pool != nil {
+			opts = append(opts, service.WithAuthPool(session.WorkloadTypeCodexChat, pool))
+		}
+	}
 	if cfg.codexTask.image != "" {
 		pool, err := cfg.codexTask.pool.pool(client, namespace, k8s.AuthPoolCodexTask)
 		if err != nil {

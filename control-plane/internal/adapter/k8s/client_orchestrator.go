@@ -715,6 +715,10 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		return nil, err
 	}
 	volumes = append(volumes, slotVolumes...)
+	initContainers, err := attachSessionDB(&container, sidecars, workloadType, image)
+	if err != nil {
+		return nil, err
+	}
 	name := podName(sessionID)
 	var annotations map[string]string
 	if checkpointRef != "" {
@@ -751,6 +755,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			ServiceAccountName:           DataPlaneServiceAccountName,
 			AutomountServiceAccountToken: &automountServiceAccountToken,
 			SecurityContext:              workloadPodSecurityContext(workloadType),
+			InitContainers:               initContainers,
 			Containers:                   containers,
 			Volumes:                      volumes,
 		},

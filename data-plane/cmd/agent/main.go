@@ -241,6 +241,17 @@ func main() {
 		if proxy.seeder != nil {
 			go proxy.seeder.run(context.Background())
 		}
+		// A codex-chat sidecar also serves the session DB from its slot (AC-N6).
+		if dir := os.Getenv(sessionDBDirEnv); dir != "" {
+			db, err := newSessionDB(dir, logger)
+			if err != nil {
+				logger.Error("invalid session database directory", "err", err)
+				os.Exit(1)
+			}
+			defer db.Close()
+			handler = withSessionDBMCP(proxy, db)
+			logger.Info("session db mcp enabled", "path", sessionDBMCPPath)
+		}
 		logger.Info("k3s mcp proxy started", "addr", addr, "configured", token != "",
 			"session_id_header", k3sMCPFixedHeaders(os.Getenv(sessionIDEnv)) != nil)
 	default:

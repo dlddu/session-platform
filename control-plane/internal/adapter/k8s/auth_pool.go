@@ -24,9 +24,11 @@ import (
 // row of login slots, each a PVC named like a StatefulSet's volume claim and
 // a Lease of the same name whose holder is the one session using it.
 const (
-	// AuthPoolCodexTask and AuthPoolClaudeCode name the two pools.
+	// AuthPoolCodexTask, AuthPoolClaudeCode and AuthPoolCodexChat name the
+	// pools.
 	AuthPoolCodexTask  = "codex-task"
 	AuthPoolClaudeCode = "claude-code"
+	AuthPoolCodexChat  = "codex-chat"
 
 	LabelAuthPool       = "session-platform.dev/auth-pool"
 	LabelAuthSlot       = "session-platform.dev/auth-slot"
@@ -42,6 +44,9 @@ const (
 
 	// DefaultAuthSlotStorageSize holds one login file with room to spare.
 	DefaultAuthSlotStorageSize = "16Mi"
+	// DefaultCodexChatSlotStorageSize also holds the session database
+	// (docs/prd/agent-auth-pool.md AC-N6).
+	DefaultCodexChatSlotStorageSize = "1Gi"
 	// DefaultAuthPoolReclaimGrace outlasts one create or restore, so a lease
 	// taken before the session record exists, or while it is still frozen, is
 	// never mistaken for a leftover (AC-N2).
@@ -462,11 +467,14 @@ func WithClaudeCodeAuthMode(mode ClaudeCodeAuthMode) Option {
 }
 
 // AuthPoolFor names the pool a session of this type leases from, if any:
-// codex-task always, claude-code in subscription mode (AC-M2, AC-E7).
+// codex-task and codex-chat always, claude-code in subscription mode (AC-M2,
+// AC-E7, AC-N6).
 func AuthPoolFor(workload session.WorkloadType, claudeMode ClaudeCodeAuthMode) (string, bool) {
 	switch {
 	case workload == session.WorkloadTypeCodexTask:
 		return AuthPoolCodexTask, true
+	case workload == session.WorkloadTypeCodexChat:
+		return AuthPoolCodexChat, true
 	case workload == session.WorkloadTypeClaudeCode && claudeMode == ClaudeCodeAuthSubscription:
 		return AuthPoolClaudeCode, true
 	default:
@@ -474,10 +482,45 @@ func AuthPoolFor(workload session.WorkloadType, claudeMode ClaudeCodeAuthMode) (
 	}
 }
 
-// attachAuthSlot mounts the session's slot PVC into the workload container
-// only — never a sidecar — and refuses a pod spec whose type needs a slot but
-// was given none, so a misconfigured service cannot start a pod that would
-// sign in somewhere the pool does not track (AC-N4, AC-N5).
+// The codex-chat slot layout (AC-N6): the slot is split into a login
+// directory and a database directory, and each container mounts only its own
+// one through a subPath, so the sidecar that serves the database never sees
+// the login and the workload container never sees the database file.
+const (
+	codexChatSlotAuthDir = "auth"
+	codexChatSlotDBDir   = "db"
+	// slotInitContainerName prepares both directories: a subPath the kubelet
+	// creates is root-owned 0750, which the non-root sidecar cannot write.
+	slotInitContainerName = "slot-init"
+	slotInitMountPath     = "/slot"
+
+	// SessionDBMountPath and SessionDBDirEnvVar are where the sidecar sees the
+	// database directory. Keep in sync with data-plane/cmd/agent.
+	SessionDBMountPath = "/var/run/session-platform/session-db"
+	SessionDBDirEnvVar = "SESSION_DB_DIR"
+	// SessionDBMCPURLEnvVar tells the workload agent to register the
+	// sidecar's database MCP. Keep in sync with data-plane/cmd/agent.
+	SessionDBMCPURLEnvVar = "SESSION_DB_MCP_URL"
+	sessionDBMCPPath      = "/session-db/mcp"
+)
+
+// CodexChatSessionDBMCPURL is the database MCP on the loopback sidecar.
+var CodexChatSessionDBMCPURL = CodexK3SMCPProxyURL + sessionDBMCPPath
+
+// authSlotSubPath is where the login lives inside a pool's slot: the root
+// for the login-only pools, its own directory for codex-chat's.
+func authSlotSubPath(pool string) string {
+	if pool == AuthPoolCodexChat {
+		return codexChatSlotAuthDir
+	}
+	return ""
+}
+
+// attachAuthSlot mounts the session's slot PVC — its login part — into the
+// workload container only — never a sidecar — and refuses a pod spec whose
+// type needs a slot but was given none, so a misconfigured service cannot
+// start a pod that would sign in somewhere the pool does not track (AC-N4,
+// AC-N5).
 func (o *ClientOrchestrator) attachAuthSlot(container *corev1.Container, workloadType session.WorkloadType, slot *int) ([]corev1.Volume, error) {
 	pool, uses := AuthPoolFor(workloadType, o.claudeAuthMode)
 	switch {
@@ -490,7 +533,7 @@ func (o *ClientOrchestrator) attachAuthSlot(container *corev1.Container, workloa
 	}
 	container.Env = append(container.Env, corev1.EnvVar{Name: AuthSlotDirEnvVar, Value: AuthSlotMountPath})
 	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-		Name: AuthSlotVolumeName, MountPath: AuthSlotMountPath,
+		Name: AuthSlotVolumeName, MountPath: AuthSlotMountPath, SubPath: authSlotSubPath(pool),
 	})
 	return []corev1.Volume{{
 		Name: AuthSlotVolumeName,
@@ -498,4 +541,66 @@ func (o *ClientOrchestrator) attachAuthSlot(container *corev1.Container, workloa
 			ClaimName: AuthSlotClaimName(o.namespace, pool, *slot),
 		}},
 	}}, nil
+}
+
+// attachSessionDB gives a codex-chat pod the database part of its slot
+// (AC-N6): the slot-init container that prepares both directories, and a
+// mount of the database directory in the k3s-mcp-proxy sidecar, which serves
+// it as the session DB MCP. The workload container only learns the MCP's
+// address. Other types get nothing.
+func attachSessionDB(container *corev1.Container, sidecars []corev1.Container, workloadType session.WorkloadType, image string) ([]corev1.Container, error) {
+	if workloadType != session.WorkloadTypeCodexChat {
+		return nil, nil
+	}
+	proxy := -1
+	for i := range sidecars {
+		if sidecars[i].Name == CodexK3SMCPProxyContainerName {
+			proxy = i
+		}
+	}
+	if proxy < 0 {
+		return nil, fmt.Errorf("workload type %q has no %s sidecar to serve its session database", workloadType, CodexK3SMCPProxyContainerName)
+	}
+	sidecars[proxy].VolumeMounts = append(sidecars[proxy].VolumeMounts, corev1.VolumeMount{
+		Name: AuthSlotVolumeName, MountPath: SessionDBMountPath, SubPath: codexChatSlotDBDir,
+	})
+	sidecars[proxy].Env = append(sidecars[proxy].Env, corev1.EnvVar{Name: SessionDBDirEnvVar, Value: SessionDBMountPath})
+	container.Env = append(container.Env, corev1.EnvVar{Name: SessionDBMCPURLEnvVar, Value: CodexChatSessionDBMCPURL})
+	return []corev1.Container{slotInitContainer(image)}, nil
+}
+
+// slotInitContainer creates the slot's two directories and hands the
+// database one to the sidecar's user. chown fails on a volume that maps every
+// client to one owner (an EFS access point), which is also a volume the
+// sidecar can already write, so a failed chown is not an error.
+func slotInitContainer(image string) corev1.Container {
+	root := int64(0)
+	runAsNonRoot := false
+	allowPrivilegeEscalation := false
+	readOnlyRootFilesystem := true
+	sidecarUser := strconv.FormatInt(*hardenedSecurityContext().RunAsUser, 10)
+	auth := slotInitMountPath + "/" + codexChatSlotAuthDir
+	db := slotInitMountPath + "/" + codexChatSlotDBDir
+	script := "set -e; mkdir -p " + auth + " " + db + "; chmod 0700 " + auth + "; " +
+		"chown " + sidecarUser + ":" + sidecarUser + " " + db + " 2>/dev/null || true; " +
+		"chmod 0700 " + db + " 2>/dev/null || true"
+	return corev1.Container{
+		Name:            slotInitContainerName,
+		Image:           image,
+		ImagePullPolicy: pullPolicyForImage(image),
+		Command:         []string{"/bin/bash", "-c", script},
+		VolumeMounts:    []corev1.VolumeMount{{Name: AuthSlotVolumeName, MountPath: slotInitMountPath}},
+		SecurityContext: &corev1.SecurityContext{
+			RunAsUser:                &root,
+			RunAsGroup:               &root,
+			RunAsNonRoot:             &runAsNonRoot,
+			AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+			ReadOnlyRootFilesystem:   &readOnlyRootFilesystem,
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+				Add:  []corev1.Capability{"CHOWN", "FOWNER"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+		},
+	}
 }

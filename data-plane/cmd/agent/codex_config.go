@@ -33,6 +33,9 @@ const (
 	// A K3s MCP write waits for the K3s MCP's own human approval, which codex's
 	// default per-call timeout would cut off.
 	codexK3SToolTimeout = 15 * time.Minute
+	// A session DB statement is bounded by the sidecar (sessionDBCallTimeout);
+	// this only has to outlast it.
+	codexSessionDBToolTimeout = sessionDBCallTimeout + 15*time.Second
 	// refresh_skills waits for a marketplace clone (AC-J7), which codex's
 	// default per-call timeout would cut off.
 	codexSkillsToolTimeout = codexSkillsRefreshTimeout + 15*time.Second
@@ -68,7 +71,9 @@ const codexDeveloperInstructions = "You are a " + codexInstructionsMarker + ". "
 	"(the path segment before /SKILL.md, for example `session-platform--example`), as `name`, and a file " +
 	"inside that directory as `file` when the skill refers to one. `list_skills` lists them. " +
 	codexRefreshInstructions +
-	"When the `k3s` MCP server is present, its tools act on the homelab cluster; it asks a human before any write."
+	"When the `k3s` MCP server is present, its tools act on the homelab cluster; it asks a human before any write. " +
+	"When the `db` MCP server is present, it is this session's own SQLite database, kept across restarts: " +
+	"`raw_query` runs a statement that returns rows, `raw_exec` one that changes data."
 
 const codexTaskDeveloperInstructions = "You are a " + codexTaskInstructionsMarker + ": a coding agent with a shell " +
 	"and file editing in this session's own workspace, which is a dedicated pod. Web search and image tools are off. " +
@@ -87,6 +92,8 @@ type codexConfig struct {
 	task bool
 	// k3sMCPURL is the sidecar's MCP endpoint, or empty when it holds no token.
 	k3sMCPURL string
+	// sessionDBURL is the sidecar's session DB MCP (AC-N6), or empty.
+	sessionDBURL string
 	// agentBinary is this binary, which codex spawns as the skills MCP.
 	agentBinary string
 	skillsDir   string
@@ -124,14 +131,21 @@ func renderCodexConfig(cfg codexConfig) []byte {
 	doc.table("skills", "bundled")
 	doc.set("enabled", tomlBool(false))
 
-	// Both servers run their tools without asking: approval_policy=never has
-	// no one to ask, the skills server only reads, and the K3s MCP gates its
-	// own writes behind the sidecar's deny filter.
+	// Every server runs its tools without asking: approval_policy=never has
+	// no one to ask, the skills server only reads, the K3s MCP gates its own
+	// writes behind the sidecar's deny filter, and the session DB is the
+	// session's own (AC-N6).
 	if cfg.k3sMCPURL != "" {
 		doc.table("mcp_servers", codexK3SServerName)
 		doc.set("url", tomlString(cfg.k3sMCPURL))
 		doc.set("default_tools_approval_mode", tomlString("approve"))
 		doc.set("tool_timeout_sec", tomlInt(int64(codexK3SToolTimeout/time.Second)))
+	}
+	if cfg.sessionDBURL != "" {
+		doc.table("mcp_servers", codexSessionDBServerName)
+		doc.set("url", tomlString(cfg.sessionDBURL))
+		doc.set("default_tools_approval_mode", tomlString("approve"))
+		doc.set("tool_timeout_sec", tomlInt(int64(codexSessionDBToolTimeout/time.Second)))
 	}
 	doc.table("mcp_servers", codexSkillsServerName)
 	doc.set("command", tomlString(cfg.agentBinary))
