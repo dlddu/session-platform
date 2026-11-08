@@ -9,11 +9,13 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // The skills MCP (AC-J5): codex lists every skill with a SKILL.md path, and
@@ -33,18 +35,24 @@ const (
 )
 
 type codexSkillsServer struct {
-	root   string
+	root string
+	// agentURL is the agent's loopback base URL; refresh_skills is offered
+	// only when it is set (AC-J7).
+	agentURL string
+	// client posts the refresh; a field so tests can bound it.
+	client *http.Client
 	logger *slog.Logger
 }
 
 // serveCodexSkillsMCP answers requests until stdin closes. A frame it cannot
 // parse is answered with a parse error rather than ending the session, since
 // codex keeps one server process for the whole turn.
-func serveCodexSkillsMCP(stdin io.Reader, stdout io.Writer, root string, logger *slog.Logger) error {
+func serveCodexSkillsMCP(stdin io.Reader, stdout io.Writer, root, agentURL string, logger *slog.Logger) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	server := codexSkillsServer{root: root, logger: logger}
+	server := codexSkillsServer{root: root, agentURL: strings.TrimRight(strings.TrimSpace(agentURL), "/"),
+		client: &http.Client{Timeout: codexSkillsRefreshTimeout}, logger: logger}
 	reader := bufio.NewReaderSize(stdin, 64<<10)
 	out := bufio.NewWriter(stdout)
 	for {
@@ -150,7 +158,7 @@ func (s codexSkillsServer) handle(line []byte) (jsonRPCResponse, bool) {
 	case "ping":
 		return reply(map[string]any{})
 	case "tools/list":
-		return reply(map[string]any{"tools": codexSkillsToolDefinitions()})
+		return reply(map[string]any{"tools": codexSkillsToolDefinitions(s.agentURL != "")})
 	case "tools/call":
 		var params struct {
 			Name      string          `json:"name"`
@@ -179,8 +187,8 @@ func codexToolResult(text string, isError bool) map[string]any {
 	}
 }
 
-func codexSkillsToolDefinitions() []map[string]any {
-	return []map[string]any{
+func codexSkillsToolDefinitions(refresh bool) []map[string]any {
+	tools := []map[string]any{
 		{
 			"name":        "list_skills",
 			"description": "List the skills available in this session, each with its name, description and files.",
@@ -201,6 +209,17 @@ func codexSkillsToolDefinitions() []map[string]any {
 			},
 		},
 	}
+	if refresh {
+		tools = append(tools, map[string]any{
+			"name": "refresh_skills",
+			"description": "Fetch the platform's plugin marketplace again and update this session's skills, keeping " +
+				"the conversation. Use it when the user asks to refresh or update the plugins or skills, or a skill " +
+				"looks out of date. It can take up to two minutes, and runs at most once per turn. It reports which " +
+				"skills were added, updated or removed; read a changed skill again with read_skill before following it.",
+			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
+		})
+	}
+	return tools
 }
 
 var errCodexUnknownTool = errors.New("unknown tool")
@@ -220,6 +239,11 @@ func (s codexSkillsServer) call(name string, raw json.RawMessage) (string, error
 			}
 		}
 		return s.readSkill(args.Name, args.File)
+	case "refresh_skills":
+		if s.agentURL == "" {
+			return "", errCodexUnknownTool
+		}
+		return s.refreshSkills()
 	default:
 		return "", errCodexUnknownTool
 	}
@@ -478,4 +502,67 @@ func skillFrontMatter(content []byte, field string) string {
 		}
 	}
 	return ""
+}
+
+// codexSkillsRefreshTimeout covers the agent's refresh, which is bounded by
+// the sidecar's clone, plus the round trip.
+const codexSkillsRefreshTimeout = codexPluginRefreshTimeout + 15*time.Second
+
+// refreshSkills asks the agent to refresh the plugin skills for the running
+// turn (AC-J7) and words the result for the model.
+func (s codexSkillsServer) refreshSkills() (string, error) {
+	client := s.client
+	if client == nil {
+		client = &http.Client{Timeout: codexSkillsRefreshTimeout}
+	}
+	resp, err := client.Post(s.agentURL+pluginRefreshTurnPath, "application/json", nil)
+	if err != nil {
+		s.logger.Warn("refresh_skills: the agent did not answer", "err", err)
+		return "", errors.New("the session agent did not answer the refresh; the skills are unchanged")
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode != http.StatusOK {
+		reason := strings.TrimSpace(string(bytes.ToValidUTF8(body, []byte("\uFFFD"))))
+		if reason == "" {
+			reason = http.StatusText(resp.StatusCode)
+		}
+		return "", fmt.Errorf("refresh refused (%d): %s; the skills are unchanged", resp.StatusCode, reason)
+	}
+	var result pluginRefresh
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", errors.New("the session agent answered the refresh without a result")
+	}
+	return renderCodexRefreshResult(result), nil
+}
+
+func renderCodexRefreshResult(result pluginRefresh) string {
+	if result.State == miniMaxSeedStateUnconfigured {
+		return "This session has no plugin marketplace to refresh; its skills are unchanged."
+	}
+	revision := ""
+	if result.Revision != "" {
+		revision = " at marketplace revision " + shortRevision(result.Revision)
+	}
+	var parts []string
+	for _, group := range []struct {
+		kind  string
+		names []string
+	}{{codexSkillChangeAdded, result.Added}, {codexSkillChangeUpdated, result.Updated}, {codexSkillChangeRemoved, result.Removed}} {
+		if len(group.names) == 0 {
+			continue
+		}
+		quoted := make([]string, len(group.names))
+		for i, name := range group.names {
+			quoted[i] = "`" + name + "`"
+		}
+		parts = append(parts, group.kind+": "+strings.Join(quoted, ", "))
+	}
+	if len(parts) == 0 {
+		return "Plugin skills refreshed" + revision + "; nothing changed."
+	}
+	return "Plugin skills refreshed" + revision + " — " + strings.Join(parts, "; ") + ". " +
+		"Anything read from these skills earlier in this conversation may be out of date: read a skill again with " +
+		"`read_skill` before following it, and do not use a removed one. The skill list given at the start of this " +
+		"turn is not updated until the next turn; `list_skills` shows the current set."
 }

@@ -33,6 +33,9 @@ const (
 	// A K3s MCP write waits for the K3s MCP's own human approval, which codex's
 	// default per-call timeout would cut off.
 	codexK3SToolTimeout = 15 * time.Minute
+	// refresh_skills waits for a marketplace clone (AC-J7), which codex's
+	// default per-call timeout would cut off.
+	codexSkillsToolTimeout = codexSkillsRefreshTimeout + 15*time.Second
 
 	// codexInstructionsMarker and codexTaskInstructionsMarker are what the
 	// image's surface check looks for to prove the managed config of the
@@ -64,13 +67,19 @@ const codexDeveloperInstructions = "You are a " + codexInstructionsMarker + ". "
 	"Read a skill with the `read_skill` tool of the `skills` MCP server: pass the skill's name, or its directory " +
 	"(the path segment before /SKILL.md, for example `session-platform--example`), as `name`, and a file " +
 	"inside that directory as `file` when the skill refers to one. `list_skills` lists them. " +
+	codexRefreshInstructions +
 	"When the `k3s` MCP server is present, its tools act on the homelab cluster; it asks a human before any write."
 
 const codexTaskDeveloperInstructions = "You are a " + codexTaskInstructionsMarker + ": a coding agent with a shell " +
 	"and file editing in this session's own workspace, which is a dedicated pod. Web search and image tools are off. " +
 	"Skills are listed with a file path; open SKILL.md there, or read it with the `read_skill` tool of the `skills` " +
 	"MCP server (`list_skills` lists them). " +
+	codexRefreshInstructions +
 	"When the `k3s` MCP server is present, its tools act on the homelab cluster; it asks a human before any write."
+
+// codexRefreshInstructions is shared by both modes (AC-J7).
+const codexRefreshInstructions = "When the user asks to refresh or update the plugins or skills, call `refresh_skills` " +
+	"of the `skills` MCP server, when it is offered, and read again any changed skill you rely on. "
 
 // codexConfig is what varies between pods.
 type codexConfig struct {
@@ -81,6 +90,9 @@ type codexConfig struct {
 	// agentBinary is this binary, which codex spawns as the skills MCP.
 	agentBinary string
 	skillsDir   string
+	// agentURL is the agent on loopback; set, the skills MCP offers
+	// refresh_skills (AC-J7).
+	agentURL string
 }
 
 func renderCodexConfig(cfg codexConfig) []byte {
@@ -124,8 +136,13 @@ func renderCodexConfig(cfg codexConfig) []byte {
 	doc.table("mcp_servers", codexSkillsServerName)
 	doc.set("command", tomlString(cfg.agentBinary))
 	doc.set("args", tomlStringArray([]string{codexSkillsMCPCommand}))
-	doc.set("env", tomlInlineStringTable([][2]string{{codexSkillsDirEnv, cfg.skillsDir}}))
+	skillsEnv := [][2]string{{codexSkillsDirEnv, cfg.skillsDir}}
+	if cfg.agentURL != "" {
+		skillsEnv = append(skillsEnv, [2]string{codexAgentURLEnv, cfg.agentURL})
+	}
+	doc.set("env", tomlInlineStringTable(skillsEnv))
 	doc.set("default_tools_approval_mode", tomlString("approve"))
+	doc.set("tool_timeout_sec", tomlInt(int64(codexSkillsToolTimeout/time.Second)))
 	return doc.bytes()
 }
 

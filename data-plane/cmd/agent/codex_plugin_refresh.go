@@ -21,7 +21,10 @@ import (
 // the skills MCP serves.
 const (
 	// pluginRefreshPath is the agent route the control plane calls.
-	pluginRefreshPath     = "/plugins/refresh"
+	pluginRefreshPath = "/plugins/refresh"
+	// pluginRefreshTurnPath is the loopback route the skills MCP's
+	// refresh_skills calls from inside a running turn (AC-J7).
+	pluginRefreshTurnPath = "/plugins/refresh/turn"
 	codexSkillChangesFile = "session-platform-skill-changes.json"
 	// The sidecar's refresh is one clone, bounded by its own clone timeout.
 	codexPluginRefreshTimeout = miniMaxCloneTimeout + 30*time.Second
@@ -56,6 +59,8 @@ var (
 	errPluginRefreshBusy        = errors.New("a turn is running or queued; refresh plugins between turns")
 	errPluginRefreshRunning     = errors.New("a plugin refresh is already running")
 	errPluginRefreshFailed      = errors.New("plugin marketplace refresh failed")
+	errPluginRefreshNoTurn      = errors.New("no turn is running; the in-turn refresh is for the running turn's own call")
+	errPluginRefreshTurnLimit   = errors.New("this turn already refreshed the plugin skills; refresh again in a later turn")
 )
 
 var _ pluginRefresher = codexCLI{}

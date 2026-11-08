@@ -42,6 +42,9 @@ const (
 
 	// codexSkillsDirEnv tells the skills MCP which directory it serves.
 	codexSkillsDirEnv = "CODEX_SKILLS_DIR"
+	// codexAgentURLEnv tells the skills MCP where the agent listens on
+	// loopback, for refresh_skills (AC-J7).
+	codexAgentURLEnv = "SESSION_PLATFORM_AGENT_URL"
 	// The agent binary doubles as two helpers, selected by its first argument
 	// (runAgentSubcommand): the stdio skills MCP that codex spawns, and the
 	// config renderer the image build runs its surface check against.
@@ -78,6 +81,9 @@ type codexCLI struct {
 	k3sProxyURL string
 	// agentBinary is what codex spawns as the skills MCP.
 	agentBinary string
+	// agentURL is this agent on loopback, which the skills MCP's
+	// refresh_skills calls (AC-J7); empty offers no refresh tool.
+	agentURL string
 	// probeSidecar reads what the sidecar offers; a field so tests need no
 	// server. It reports what it learned even when it also returns an error.
 	probeSidecar func(proxyURL string) (codexSidecar, error)
@@ -159,6 +165,8 @@ func (c codexCLI) ensureHome(homeDir string, _ toolSurface) error {
 			return err
 		}
 		cfg.k3sMCPURL = mcpURL
+		// Only a sidecar holding a token has a marketplace to refresh.
+		cfg.agentURL = c.agentURL
 	}
 	return writeCodexConfig(filepath.Join(homeDir, codexConfigDirName, codexConfigFileName), renderCodexConfig(cfg))
 }
@@ -274,6 +282,7 @@ func newCodexWorkloadFromEnv(workload string, logger *slog.Logger, restoreMode b
 		return nil, err
 	}
 	cli := newCodexCLI(proxy, logger)
+	cli.agentURL = loopbackAgentURL(env("DATA_PLANE_AGENT_ADDR", defaultAddr))
 	effort := os.Getenv(codexReasoningEffortEnv)
 	var slot *authSlot
 	if workload == workloadCodexTask {
@@ -322,7 +331,7 @@ func runAgentSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer
 	switch args[0] {
 	case codexSkillsMCPCommand:
 		logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-		if err := serveCodexSkillsMCP(stdin, stdout, os.Getenv(codexSkillsDirEnv), logger); err != nil {
+		if err := serveCodexSkillsMCP(stdin, stdout, os.Getenv(codexSkillsDirEnv), os.Getenv(codexAgentURLEnv), logger); err != nil {
 			fmt.Fprintln(stderr, "skills-mcp:", err)
 			return 1, true
 		}
@@ -364,6 +373,23 @@ func renderCodexConfigForHome(home string, task bool) error {
 	if exe, err := os.Executable(); err == nil && exe != "" {
 		agentBinary = exe
 	}
-	cfg := codexConfig{task: task, k3sMCPURL: mcpURL, agentBinary: agentBinary, skillsDir: skillsDir}
+	cfg := codexConfig{task: task, k3sMCPURL: mcpURL, agentBinary: agentBinary, skillsDir: skillsDir,
+		agentURL: loopbackAgentURL(defaultAddr)}
 	return writeCodexConfig(filepath.Join(home, codexConfigDirName, codexConfigFileName), renderCodexConfig(cfg))
+}
+
+// loopbackAgentURL is the agent's own listen address as the skills MCP reaches
+// it on loopback, or "" when the agent does not listen there.
+func loopbackAgentURL(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return ""
+	}
+	if host != "" {
+		ip := net.ParseIP(host)
+		if host != "localhost" && (ip == nil || !(ip.IsLoopback() || ip.IsUnspecified())) {
+			return ""
+		}
+	}
+	return "http://" + net.JoinHostPort("127.0.0.1", port)
 }
