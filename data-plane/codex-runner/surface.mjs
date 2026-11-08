@@ -4,11 +4,13 @@
 // codex-task must have one, or it is not the coding session AC-M1 promises.
 export const SHELL_TOOLS = new Set(["exec_command", "write_stdin", "shell", "local_shell", "container.exec"]);
 
-// Tools that would give the model an image or the web — off in both modes.
-export const MEDIA_AND_WEB_TOOLS = new Set(["view_image", "image_generation", "web_search", "web_search_preview"]);
+// Image tools are off in both modes; web tools only in codex-chat, since
+// codex-task searches the web (AC-M1).
+export const MEDIA_TOOLS = new Set(["view_image", "image_generation"]);
+export const WEB_TOOLS = new Set(["web_search", "web_search_preview"]);
 
 // FORBIDDEN_TOOLS is codex-chat's whole exclusion list (AC-J5).
-export const FORBIDDEN_TOOLS = new Set([...SHELL_TOOLS, ...MEDIA_AND_WEB_TOOLS]);
+export const FORBIDDEN_TOOLS = new Set([...SHELL_TOOLS, ...MEDIA_TOOLS, ...WEB_TOOLS]);
 
 // The text each mode's developer_instructions carry
 // (data-plane/cmd/agent/codex_config.go, codexInstructionsMarker and
@@ -82,7 +84,7 @@ export function inspectPromptInput(items, mode = "chat") {
       toolNames(item.tools, "", tools);
     }
   }
-  const forbidden = task ? MEDIA_AND_WEB_TOOLS : FORBIDDEN_TOOLS;
+  const forbidden = task ? MEDIA_TOOLS : FORBIDDEN_TOOLS;
   let shell = false;
   for (const tool of tools) {
     const leaf = tool.split(/[.>]/).pop();
