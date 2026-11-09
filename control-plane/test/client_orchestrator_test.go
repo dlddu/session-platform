@@ -134,6 +134,13 @@ func TestClientOrchestrator_DoubleMemoryOptionDoublesRequestAndLimit(t *testing.
 	if got := c.Resources.Limits.Memory().String(); got != k8s.WorkloadMemoryLimitDouble {
 		t.Fatalf("memory limit=%q want %q", got, k8s.WorkloadMemoryLimitDouble)
 	}
+	// DoubleMemory scales memory only; CPU is out of scope and must stay unset.
+	if got := c.Resources.Requests.Cpu().String(); got != "0" {
+		t.Fatalf("cpu request=%q want unset (0)", got)
+	}
+	if got := c.Resources.Limits.Cpu().String(); got != "0" {
+		t.Fatalf("cpu limit=%q want unset (0)", got)
+	}
 }
 
 func TestClientOrchestrator_NSessionsNUniquePods(t *testing.T) {
