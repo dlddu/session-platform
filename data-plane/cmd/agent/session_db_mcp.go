@@ -4,9 +4,7 @@
 // mounts that directory; it reaches the database only through this endpoint,
 // which the managed config.toml registers as the `db` MCP server.
 //
-// The two tools are deliberately raw — a statement and its parameters in, rows
-// or a change count out — so that what a session keeps in its database is
-// decided by its skills and conversation, not by this endpoint.
+// Raw SQL remains available alongside the versioned task ledger.
 package main
 
 import (
@@ -130,7 +128,13 @@ func (s *sessionDB) query(ctx context.Context, stmt sessionDBStatement) (session
 	if err != nil {
 		return sessionDBQueryResult{}, err
 	}
-	rows, err := db.QueryContext(ctx, stmt.SQL, stmt.Params...)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return sessionDBQueryResult{}, err
+	}
+	defer conn.Close()
+	defer conn.ExecContext(context.Background(), "ROLLBACK")
+	rows, err := conn.QueryContext(ctx, stmt.SQL, stmt.Params...)
 	if err != nil {
 		return sessionDBQueryResult{}, err
 	}
@@ -170,7 +174,13 @@ func (s *sessionDB) exec(ctx context.Context, stmt sessionDBStatement) (sessionD
 	if err != nil {
 		return sessionDBExecResult{}, err
 	}
-	res, err := db.ExecContext(ctx, stmt.SQL, stmt.Params...)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return sessionDBExecResult{}, err
+	}
+	defer conn.Close()
+	defer conn.ExecContext(context.Background(), "ROLLBACK")
+	res, err := conn.ExecContext(ctx, stmt.SQL, stmt.Params...)
 	if err != nil {
 		return sessionDBExecResult{}, err
 	}
@@ -213,7 +223,7 @@ func sessionDBToolDefinitions() []map[string]any {
 			"additionalProperties": false,
 		}
 	}
-	return []map[string]any{
+	return append([]map[string]any{
 		{
 			"name": "raw_query",
 			"description": fmt.Sprintf("Run one SQL statement on this session's SQLite database and return its columns and rows "+
@@ -223,10 +233,10 @@ func sessionDBToolDefinitions() []map[string]any {
 		{
 			"name": "raw_exec",
 			"description": "Run SQL that changes this session's SQLite database (CREATE, INSERT, UPDATE, DELETE, ...) and " +
-				"return the rows affected and the last insert rowid. Without params, several statements separated by ; run in order.",
+				"return the rows affected and the last insert rowid. These are SQLite connection counters, NOT committed change totals (DDL/ROLLBACK can retain old values). Without params, several statements separated by ; run in order. Open transactions are rolled back at call end; use BEGIN/COMMIT in one call.",
 			"inputSchema": statement("The SQLite statement or statements to run."),
 		},
-	}
+	}, ledgerToolDefinitions()...)
 }
 
 // callTool runs one tool. A statement that fails is a tool result with
@@ -239,6 +249,9 @@ func (s *sessionDB) callTool(ctx context.Context, params json.RawMessage) (any, 
 	}
 	if err := json.Unmarshal(params, &call); err != nil || call.Name == "" {
 		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: "tools/call needs a name and arguments"}
+	}
+	if strings.HasPrefix(call.Name, "ledger_") {
+		return s.callLedger(ctx, call.Name, call.Arguments)
 	}
 	var stmt sessionDBStatement
 	if len(call.Arguments) > 0 {

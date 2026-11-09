@@ -11,7 +11,7 @@
 ## 달성 가치
 - **V3 끊김 없는 세션 연속성** — 작업 세션이 동결·복원되거나 새로 만들어져도 다시 로그인하지 않는다. 로그인은 세션이 아니라 슬롯에 남는다 (AC-N1·L4)
 - **V1 세션 격리** — 한 슬롯을 동시에 두 파드가 쓰지 않는다. 구독 계정의 refresh token은 쓸 때마다 바뀌어, 두 파드가 같은 계정을 갱신하면 한쪽 로그인이 깨진다 (AC-N2)
-- **V2 유휴 자원 회수** — 동결된 세션은 슬롯을 반납해 다른 세션이 쓴다 (AC-N3)
+- **V2 유휴 자원 회수** — 로그인 전용 작업 세션은 동결 시 슬롯을 반납한다. DB가 있는 codex-chat은 삭제까지 유지한다 (AC-N3·N6)
 - **V3 끊김 없는 세션 연속성(장기 세션)** — 채팅 세션이 쌓은 데이터가 동결·복원과 파드 재시작을 건너 슬롯에 남는다 (AC-N6)
 
 > 📌 **가치 연결 규칙**: 다른 PRD와 같이 각 AC는 자신이 구체화하는 상위 AC의 가치를 상속한다.
@@ -29,15 +29,15 @@
 - **검증 방법**: 풀 크기 2의 배포에서 첫 세션 생성 뒤 PVC `<네임스페이스>-<pool>-auth-0`이 라벨과 함께 생기고 세션 파드가 그것을 마운트함을 확인한다. 세션을 지운 뒤에도 PVC가 남음을 확인한다. 풀 크기 0이면 `GET /config`에 타입이 없고 생성이 pod 없이 실패함을 확인한다.
 
 ### AC-N2: 독점 임대 = 슬롯마다 Lease 하나, holder는 세션 id
-- **설명**: 슬롯 `i`의 임대는 `coordination.k8s.io` Lease `<pool>-auth-<i>`다(PVC와 같은 라벨, 이름은 네임스페이스 접두 없이 — Lease는 네임스페이스 안에서만 보인다). `holderIdentity`가 세션 id이면 그 세션이 슬롯을 쥔 것이다. 임대·반납은 resourceVersion으로 CAS하므로 두 control plane 경로가 같은 슬롯을 동시에 잡지 못한다. 세션은 슬롯을 **파드가 있는 동안** 쥔다 — 생성(AC-A1)과 복원(AC-B2)이 파드를 만들기 **전에** 임대하고, 파드 생성이 실패하면 반납한다. 고를 슬롯은 비어 있는 슬롯 가운데 로그인 상태(AC-N4)가 `signed-in` → 모름 → `signed-out` 순, 같은 순위에서는 번호가 작은 것이다. 비어 있는 슬롯이 없으면 생성·복원은 파드 없이 **503**(`auth pool exhausted`)으로 실패한다 — 복원 실패는 세션을 `snapshot`에 남긴다.
+- **설명**: 슬롯 `i`의 임대는 `coordination.k8s.io` Lease `<pool>-auth-<i>`다(PVC와 같은 라벨, 이름은 네임스페이스 접두 없이 — Lease는 네임스페이스 안에서만 보인다). `holderIdentity`가 세션 id이면 그 세션이 슬롯을 쥔 것이다. 임대·반납은 resourceVersion으로 CAS하므로 두 control plane 경로가 같은 슬롯을 동시에 잡지 못한다. 로그인 전용 작업 세션은 슬롯을 **파드가 있는 동안** 쥔다(codex-chat은 AC-N6에 따라 삭제까지 유지) — 생성(AC-A1)과 복원(AC-B2)이 파드를 만들기 **전에** 임대하고, 파드 생성이 실패하면 반납한다. 고를 슬롯은 비어 있는 슬롯 가운데 로그인 상태(AC-N4)가 `signed-in` → 모름 → `signed-out` 순, 같은 순위에서는 번호가 작은 것이다. 비어 있는 슬롯이 없으면 생성·복원은 파드 없이 **503**(`auth pool exhausted`)으로 실패한다 — 복원 실패는 세션을 `snapshot`에 남긴다.
 
-  holder가 남았지만 실제로는 쥐고 있지 않은 임대(control plane이 반납 전에 죽은 경우)는 다음 임대가 회수한다. 회수 조건은 **둘 다**다: ① holder 세션이 레코드에 없거나 `snapshot` 상태이고, ② 임대의 `renewTime`이 10분(생성·복원 한 번보다 긴 유예)보다 오래됐다. ②가 없으면 레코드를 쓰기 전인 생성이나 아직 `snapshot`인 복원의 임대를 다른 세션이 빼앗는다.
+  holder가 남았지만 실제로는 쥐고 있지 않은 임대(control plane이 반납 전에 죽은 경우)는 다음 임대가 회수한다. 회수 조건은 **둘 다**다: ① holder 세션이 레코드에 없거나 DB 없는 타입의 `snapshot` 상태이고, ② 임대의 `renewTime`이 10분(생성·복원 한 번보다 긴 유예)보다 오래됐다. ②가 없으면 레코드를 쓰기 전인 생성이나 아직 `snapshot`인 복원의 임대를 다른 세션이 빼앗는다.
 - **달성 가치**: V1
 - **구체화 대상**: AC-A1/A2의 세션 격리 — 세션 전용 자원에 「세션 전용 로그인 슬롯」을 더한 것
 - **검증 방법**: 풀 크기 1에서 첫 세션이 슬롯을 쥔 동안 두 번째 생성이 pod 없이 503임을 확인한다. holder가 지워진 세션이고 `renewTime`이 오래된 임대는 다음 생성이 회수하고, 유예 안의 임대는 회수하지 않음을 단위 테스트로 확인한다. 로그인된 슬롯이 먼저 배정됨을 확인한다.
 
-### AC-N3: 반납 = 동결 완료·삭제 시
-- **설명**: 동결이 커밋되어 파드가 지워진 뒤(AC-B1) 세션은 슬롯을 반납하고, 삭제(`DELETE /sessions/{id}`)도 파드를 지운 뒤 반납한다. 반납은 holder가 자기 세션일 때만 지운다(CAS) — 이미 회수된 슬롯을 남의 것까지 풀지 않는다. 반납 실패는 동결·삭제를 실패시키지 않는다; 남은 임대는 AC-N2의 회수 조건이 처리한다. 복원은 이전 슬롯을 고집하지 않는다 — 대화 기록은 세션 아카이브에 있고 로그인은 슬롯에 있으므로, 다른 계정의 슬롯으로 복원해도 대화가 이어진다.
+### AC-N3: 반납 = 로그인 전용 타입 동결 완료·모든 타입 삭제 시
+- **설명**: codex-chat은 AC-N6의 DB 보존을 위해 삭제까지 슬롯을 유지한다. 나머지 타입은 동결이 커밋되어 파드가 지워진 뒤(AC-B1) 슬롯을 반납하고, 삭제(`DELETE /sessions/{id}`)도 파드를 지운 뒤 반납한다. 반납은 holder가 자기 세션일 때만 지운다(CAS) — 이미 회수된 슬롯을 남의 것까지 풀지 않는다. 반납 실패는 동결·삭제를 실패시키지 않는다; 남은 임대는 AC-N2의 회수 조건이 처리한다. 복원은 이전 슬롯을 고집하지 않는다 — 대화 기록은 세션 아카이브에 있고 로그인은 슬롯에 있으므로, 다른 계정의 슬롯으로 복원해도 대화가 이어진다.
 - **달성 가치**: V2
 - **구체화 대상**: AC-B1(동결)·AC-A3(자원 회수)
 - **검증 방법**: 풀 크기 1에서 세션 A를 동결하면 슬롯이 풀리고 세션 B 생성이 성공함을 확인한다. 이어서 A에 접근하면 B가 슬롯을 쥔 동안 503이고 A는 `snapshot`에 남음을 확인한다. 삭제한 세션의 슬롯이 풀림을 확인한다.
@@ -56,15 +56,16 @@
 - **검증 방법**: 에이전트 단위 테스트로 턴 전·중·후 동기화(슬롯 없음 → HOME 삭제, HOME 갱신 → 슬롯 갱신, HOME 삭제 → 슬롯 삭제)와 아카이브에 로그인 파일이 없음을 확인한다. `GET /auth-slot`이 슬롯 상태를 돌려주고 반납이 Lease 주석에 적음을 확인한다.
 
 ### AC-N6: `codex-chat` 슬롯 = 로그인 + 세션 DB, 컨테이너마다 제 몫만 마운트
-- **설명**: `codex-chat` 풀(`CODEX_CHAT_AUTH_SLOTS`·`_STORAGE_CLASS`·`_STORAGE_SIZE` 기본 `1Gi`)의 슬롯은 두 디렉터리로 나뉜다 — `auth/`(로그인 파일 `auth.json`)와 `db/`(세션 DB `session.db`). 같은 PVC를 subPath로 나눠 마운트한다:
+- **설명**: `codex-chat` 풀(`CODEX_CHAT_AUTH_SLOTS`·`_STORAGE_CLASS`·`_STORAGE_SIZE` 기본 `1Gi`)의 슬롯은 두 디렉터리로 나뉜다 — `auth/`(로그인 파일 `auth.json`)와 `db/<sessionID>/`(세션 DB `session.db`). 같은 PVC를 subPath로 나눠 마운트한다:
   1. 주 컨테이너는 `auth/`만 `/var/run/session-platform/auth-slot`에 받는다. 로그인 동기화·아카이브 제외는 AC-N4 그대로다.
-  2. `k3s-mcp-proxy` 사이드카는 `db/`만 `/var/run/session-platform/session-db`에 받고(`SESSION_DB_DIR`), 같은 포트의 `/session-db/mcp`에서 **세션 DB MCP**를 서빙한다. 주 컨테이너는 그 주소만 받는다(`SESSION_DB_MCP_URL`). 사이드카는 로그인 파일에, 주 컨테이너는 DB 파일에 닿지 않는다 — 그래서 AC-N4의 「사이드카에 슬롯을 마운트하지 않는다」는 「사이드카에 로그인을 마운트하지 않는다」로 읽는다.
-  3. 초기화 컨테이너 `slot-init`(root, `CHOWN`·`FOWNER`만)이 슬롯 전체를 마운트해 두 디렉터리를 만들고 `db/`를 사이드카 사용자(65532)에게 넘긴다 — kubelet이 만드는 subPath는 root 소유 0750이라 non-root 사이드카가 쓰지 못한다. `efs` access point처럼 소유자를 하나로 매핑하는 볼륨에서는 chown이 실패하지만, 그 볼륨은 이미 사이드카가 쓸 수 있으므로 실패를 무시한다.
+  2. `k3s-mcp-proxy` 사이드카는 `db/<sessionID>/`만 `/var/run/session-platform/session-db`에 받고(`SESSION_DB_DIR`), 같은 포트의 `/session-db/mcp`에서 **세션 DB MCP**를 서빙한다. 주 컨테이너는 그 주소만 받는다(`SESSION_DB_MCP_URL`). 사이드카는 로그인 파일에, 주 컨테이너는 DB 파일에 닿지 않는다 — 그래서 AC-N4의 「사이드카에 슬롯을 마운트하지 않는다」는 「사이드카에 로그인을 마운트하지 않는다」로 읽는다.
+  3. 초기화 컨테이너 `slot-init`(root, `CHOWN`·`FOWNER`만)이 슬롯 전체를 마운트해 두 디렉터리를 만들고 `db/<sessionID>/`를 사이드카 사용자(65532)에게 넘긴다 — kubelet이 만드는 subPath는 root 소유 0750이라 non-root 사이드카가 쓰지 못한다. `efs` access point처럼 소유자를 하나로 매핑하는 볼륨에서는 chown이 실패하지만, 그 볼륨은 이미 사이드카가 쓸 수 있으므로 실패를 무시한다.
 
-  세션 DB MCP의 도구는 둘이다: `raw_query`(행을 돌려주는 문장, 최대 1000행·약 1MiB, 넘으면 `truncated`)와 `raw_exec`(바꾸는 문장, `rowsAffected`·`lastInsertId`; 매개변수가 없으면 `;`로 이은 여러 문장). 둘 다 `{sql, params?}`를 받고 `params`는 `?` 자리에 순서대로 묶인다. SQLite가 거부한 문장은 `isError` 도구 결과로 메시지를 돌려준다. 한 문장은 30초로 끊는다. DB는 `journal_mode=DELETE`로 연다 — 운영 `efs`는 NFS라 WAL의 공유 메모리가 동작하지 않고, 파일을 여는 프로세스는 사이드카 하나다. 사이드카가 뜰 때 디렉터리가 준비되지 않았으면 그 호출만 실패하고 다음 호출이 다시 연다(사이드카는 K3s MCP도 맡으므로 죽지 않는다). DB는 아카이브에 들어가지 않는다 — 슬롯에 있으므로 동결·복원·재생성을 건너 남는다.
+  세션 DB MCP의 raw 도구는 둘이다: `raw_query`(행을 돌려주는 문장, 최대 1000행·약 1MiB, 넘으면 `truncated`)와 `raw_exec`(바꾸는 문장, `rowsAffected`·`lastInsertId`; 매개변수가 없으면 `;`로 이은 여러 문장). 둘 다 `{sql, params?}`를 받고 `params`는 `?` 자리에 순서대로 묶인다. SQLite가 거부한 문장은 `isError` 도구 결과로 메시지를 돌려준다. 한 문장은 30초로 끊는다. DB는 `journal_mode=DELETE`로 연다 — 운영 `efs`는 NFS라 WAL의 공유 메모리가 동작하지 않고, 파일을 여는 프로세스는 사이드카 하나다. 사이드카가 뜰 때 디렉터리가 준비되지 않았으면 그 호출만 실패하고 다음 호출이 다시 연다(사이드카는 K3s MCP도 맡으므로 죽지 않는다). DB는 아카이브에 들어가지 않는다 — 슬롯에 있으므로 동결·복원·재생성을 건너 남는다.
+  DB가 있는 codex-chat은 스냅샷/복구/복원 실패에도 슬롯을 유지하며 frozen holder 재회수 대상이 아니다. 삭제 시 반납하고, 동결 중에도 풀 용량을 차지한다. 다른 타입의 스냅샷 반납 규칙은 유지한다. 상위 작업 관리 도구와 raw 트랜잭션 경계·슬롯 재사용 격리·기존 DB 이관 제약은 [세션 원장 계약](../session-ledger.md)을 따른다. 슬롯 공용 `db/session.db`는 자동 이관하지 않고 보존한다.
 - **달성 가치**: V3(장기 세션), V1
 - **구체화 대상**: AC-N1(슬롯)·AC-N4(로그인 배치) — 슬롯에 세션 DB를 더하고 컨테이너별로 나눠 마운트한 것, `codex-workload.md` AC-J5(도구 표면)·AC-J6(사이드카)
-- **검증 방법**: 제출된 `codex-chat` pod spec에서 PVC가 자기 슬롯 하나이고, 주 컨테이너는 subPath `auth`, 사이드카는 subPath `db`, `slot-init`만 슬롯 전체를 마운트함을 확인한다(`control-plane/test/codex_orchestrator_test.go`). 세션 DB MCP 단위 테스트로 `raw_exec` → `raw_query` 왕복, SQLite 오류가 `isError`, 행 상한과 `truncated`, 늦게 생긴 디렉터리를 다음 호출이 여는 것, `/session-db/mcp` 밖의 요청은 K3s MCP 프록시로 가는 것을 확인한다(`data-plane/cmd/agent/session_db_mcp_test.go`).
+- **검증 방법**: 제출된 `codex-chat` pod spec에서 PVC가 자기 슬롯 하나이고, 주 컨테이너는 subPath `auth`, 사이드카는 subPath `db/<sessionID>`, `slot-init`만 슬롯 전체를 마운트함을 확인한다(`control-plane/test/codex_orchestrator_test.go`). 세션 DB MCP 단위 테스트로 `raw_exec` → `raw_query` 왕복, SQLite 오류가 `isError`, 행 상한과 `truncated`, 늦게 생긴 디렉터리를 다음 호출이 여는 것, `/session-db/mcp` 밖의 요청은 K3s MCP 프록시로 가는 것을 확인한다(`data-plane/cmd/agent/session_db_mcp_test.go`).
 
 ### AC-N5: 권한 — control plane은 PVC·Lease만, 세션은 자기 슬롯만
 - **설명**: control plane Role은 이미 가진 `persistentvolumeclaims` create/get/list/watch와 `leases` 전체 동사로 풀을 다룬다 — 새 권한이 없다. 세션 파드는 자기 슬롯 PVC 하나만 마운트하고, 다른 슬롯에 닿는 Kubernetes 자격 증명을 받지 않는다(타입별 SA 권한은 바뀌지 않는다). 슬롯 파일은 셸이 있는 주 컨테이너가 읽을 수 있다 — 프록시로 숨기지 않기로 했다(2026-11-07 사용자 결정): 세션 안 에이전트가 그 계정의 토큰을 읽을 수 있다는 것이 이 풀의 알려진 대가다.

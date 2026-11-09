@@ -75,7 +75,7 @@ const codexDeveloperInstructions = "You are a " + codexInstructionsMarker + ". "
 	codexRefreshInstructions + codexSchedulerInstructions +
 	"When the `k3s` MCP server is present, its tools act on the homelab cluster; it asks a human before any write. " +
 	"When the `db` MCP server is present, it is this session's own SQLite database, kept across restarts: " +
-	"`raw_query` runs a statement that returns rows, `raw_exec` one that changes data."
+	"`raw_query` runs a statement that returns rows, `raw_exec` one that changes data. Discover `ledger_get/list/put/delete` for session-local task bookkeeping; never share this DB with workers. Raw counters are not committed totals; open raw transactions roll back at call end."
 
 const codexTaskDeveloperInstructions = "You are a " + codexTaskInstructionsMarker + ": a coding agent with a shell " +
 	"and file editing in this session's own workspace, which is a dedicated pod. Web search and image tools are off. " +

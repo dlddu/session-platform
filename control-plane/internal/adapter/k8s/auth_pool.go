@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -548,9 +549,12 @@ func (o *ClientOrchestrator) attachAuthSlot(container *corev1.Container, workloa
 // mount of the database directory in the k3s-mcp-proxy sidecar, which serves
 // it as the session DB MCP. The workload container only learns the MCP's
 // address. Other types get nothing.
-func attachSessionDB(container *corev1.Container, sidecars []corev1.Container, workloadType session.WorkloadType, image string) ([]corev1.Container, error) {
+func attachSessionDB(container *corev1.Container, sidecars []corev1.Container, workloadType session.WorkloadType, image, sessionID string) ([]corev1.Container, error) {
 	if workloadType != session.WorkloadTypeCodexChat {
 		return nil, nil
+	}
+	if !regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`).MatchString(sessionID) {
+		return nil, fmt.Errorf("invalid session ID for database directory")
 	}
 	proxy := -1
 	for i := range sidecars {
@@ -562,25 +566,25 @@ func attachSessionDB(container *corev1.Container, sidecars []corev1.Container, w
 		return nil, fmt.Errorf("workload type %q has no %s sidecar to serve its session database", workloadType, CodexK3SMCPProxyContainerName)
 	}
 	sidecars[proxy].VolumeMounts = append(sidecars[proxy].VolumeMounts, corev1.VolumeMount{
-		Name: AuthSlotVolumeName, MountPath: SessionDBMountPath, SubPath: codexChatSlotDBDir,
+		Name: AuthSlotVolumeName, MountPath: SessionDBMountPath, SubPath: codexChatSlotDBDir + "/" + sessionID,
 	})
 	sidecars[proxy].Env = append(sidecars[proxy].Env, corev1.EnvVar{Name: SessionDBDirEnvVar, Value: SessionDBMountPath})
 	container.Env = append(container.Env, corev1.EnvVar{Name: SessionDBMCPURLEnvVar, Value: CodexChatSessionDBMCPURL})
-	return []corev1.Container{slotInitContainer(image)}, nil
+	return []corev1.Container{slotInitContainer(image, sessionID)}, nil
 }
 
 // slotInitContainer creates the slot's two directories and hands the
 // database one to the sidecar's user. chown fails on a volume that maps every
 // client to one owner (an EFS access point), which is also a volume the
 // sidecar can already write, so a failed chown is not an error.
-func slotInitContainer(image string) corev1.Container {
+func slotInitContainer(image, sessionID string) corev1.Container {
 	root := int64(0)
 	runAsNonRoot := false
 	allowPrivilegeEscalation := false
 	readOnlyRootFilesystem := true
 	sidecarUser := strconv.FormatInt(*hardenedSecurityContext().RunAsUser, 10)
 	auth := slotInitMountPath + "/" + codexChatSlotAuthDir
-	db := slotInitMountPath + "/" + codexChatSlotDBDir
+	db := slotInitMountPath + "/" + codexChatSlotDBDir + "/" + sessionID
 	script := "set -e; mkdir -p " + auth + " " + db + "; chmod 0700 " + auth + "; " +
 		"chown " + sidecarUser + ":" + sidecarUser + " " + db + " 2>/dev/null || true; " +
 		"chmod 0700 " + db + " 2>/dev/null || true"
