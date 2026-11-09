@@ -149,7 +149,7 @@
 
   프록시의 **동작 계약은 AC-E6을 그대로 재사용한다** — 시작 시 HTTPS upstream origin 고정(평문 HTTP upstream은 시작 거부), 허용 목록 밖 요청 헤더 제거와 플랫폼 토큰 단일 주입, CONNECT·Upgrade·trailer 거부, 중간 1xx를 포함한 응답의 토큰 redaction, raw upstream 64 MiB 상한 안에서의 SSE 증분 전달, response-read 경계를 넘는 tail-safe redaction, optional `ca-cert`로 시스템 루트에 사설 발급자를 **추가**하는 신뢰 확대가 모두 동일하다. **다른 것은 배치와 바인딩뿐이다**: 워크로드 파드의 사이드카가 아니라 헬퍼 파드의 컨테이너이므로 loopback이 아니라 파드 IP에 바인딩하고, 대신 **자기 세션의 워크로드 파드에서 오는 연결만 받도록 ingress를 제한한다**(AC-F2). 같은 헬퍼 파드의 MCP 컨테이너는 이 프록시에 loopback으로 닿을 수 있으나 공급자 토큰은 여전히 프록시 컨테이너의 환경에만 있다. optional `model`/`models`의 기본값·soft catalog와 runner 출력의 증분 redaction도 AC-E6 그대로다.
 
-  아래 두 문단의 세부(관리형 설정의 도구 허용 목록, marketplace plugin 비활성)는 **Claude CLI가 게이트 뒤에 설 때의 형태**다 — 지금 그런 타입은 없고, `minimax-code`의 형태(`~/.minimax/mcp.json` 등록, K3s MCP 도구 예외)는 AC-G6이 갖는다. 워크로드 파드에 외부 자격 증명이 없다는 보장과 세션 MCP가 밖에 닿는 도구 표면이라는 구조는 모든 게이트 타입에 같다.
+  아래 두 문단의 세부(관리형 설정의 도구 허용 목록, marketplace plugin 비활성)는 **Claude CLI가 게이트 뒤에 설 때의 형태**다 — 지금 그런 타입은 없고 그 구현도 2026-11-09에 걷었다(다음 Claude 기반 게이트 타입이 오면 이 계약대로 다시 만든다), `minimax-code`의 형태(`~/.minimax/mcp.json` 등록, K3s MCP 도구 예외)는 AC-G6이 갖는다. 워크로드 파드에 외부 자격 증명이 없다는 보장과 세션 MCP가 밖에 닿는 도구 표면이라는 구조는 모든 게이트 타입에 같다.
 
   **런타임 plugin 부트스트랩은 이 타입에 두지 않고, `k3s-mcp-token`은 워크로드 파드에 두지 않는다**(아래 2026-09-03 확정 항목). **그 금지의 축은 파드이지 타입 전체가 아니다** — 헬퍼 파드의 MCP 컨테이너가 승인 게이트를 지나는 도구를 위해 게이트웨이 주소·호출자 토큰 밖의 자격 증명을 받는 일은 아래 **2026-09-21 확정 항목의 네 조건(C1~C4)** 아래에서 열려 있다. 대신 주 컨테이너의 에이전트는 시작할 때 **그 세션 헬퍼 파드의 MCP를 MCP 서버로 등록**하고, 세션 HOME의 플랫폼 관리 설정은 AC-E2의 도구 허용 목록(`Read`·`Write`·`Edit`·`Glob`·`Grep`·`Bash`)에 그 MCP만 더한다 — marketplace plugin은 활성화하지 않는다. 즉 이 타입에서 **에이전트가 파드 밖에 닿는 유일한 도구 표면은 세션 MCP**이고, 그 표면에서 **파드 밖에 닿는 도구는** R1 의 명시적 예외를 빼고 전부 AC-F3의 승인 게이트를 지난다(예외와 그 조건, 표면에 그 밖의 도구가 서는 조건은 `../session-mcp-tool-surface.md`의 R1·R2가 갖는다 — 2026-11-01 에 `drop_*` 둘이 사용자 결정으로 예외에 더해졌다, [`drop-file-share.md`](./drop-file-share.md) AC-I3).
 
@@ -251,3 +251,6 @@
 - **2026-11-05** — 타입에서 능력으로. `approval-gated` 워크로드 타입을 제거하고 이 문서를 게이트를 쓰는 타입들의 공통 계약으로
   고쳤다(파일명 `approval-gated-workload.md` → `approval-gate.md`). AC-F1 폐기, AC-F2~F6 번호·본문 유지, 「적용 타입」 절 신설.
   사용자 결정.
+- **2026-11-09** — Claude CLI 쪽 게이트 배선 제거. 게이트를 쓰는 Claude 기반 타입이 없어 휴면이던 구현 — data plane의 세션 MCP
+  등록(`~/.claude.json`)·관리형 설정의 세션 MCP 허용과 공유 볼륨 디렉터리, control plane의 marketplace 없는 K3s MCP 프록시 갈래 —
+  을 걷었다. AC-F6의 계약 문면은 그대로 두고, Claude CLI가 다시 게이트 뒤에 서면 그때 구현한다. 사용자 결정.
