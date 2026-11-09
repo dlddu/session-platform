@@ -21,8 +21,7 @@ func startWithDrop(t *testing.T, sessionID string, workloadType session.Workload
 	if on {
 		opts = append(opts, k8s.WithDropURL(" "+dropURL+"/ "))
 	}
-	orch, cs := newMiniMaxOrchestrator(t, append(opts,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))...)
+	orch, cs := newMiniMaxOrchestrator(t, opts...)
 	started, err := orch.Start(context.Background(), sessionID, k8s.WorkloadSpec{Type: workloadType})
 	if err != nil {
 		t.Fatalf("start %s session: %v", workloadType, err)
@@ -45,7 +44,7 @@ func dropTokenVolume(pod corev1.Pod) (string, *corev1.ServiceAccountTokenProject
 }
 
 func TestDrop_OffLeavesHelperPodsAsTheyWere(t *testing.T) {
-	for _, wt := range []session.WorkloadType{session.WorkloadTypeApprovalGated, session.WorkloadTypeMiniMaxCode} {
+	for _, wt := range gatedTypes {
 		set := startWithDrop(t, "dr0"+string(wt[0]), wt, false)
 		if name, _ := dropTokenVolume(set.helper); name != "" {
 			t.Errorf("%s: drop token projected while DROP_URL is unset", wt)
@@ -60,7 +59,7 @@ func TestDrop_OffLeavesHelperPodsAsTheyWere(t *testing.T) {
 }
 
 func TestDrop_SessionMCPAloneHoldsTheDropToken(t *testing.T) {
-	for _, wt := range []session.WorkloadType{session.WorkloadTypeApprovalGated, session.WorkloadTypeMiniMaxCode} {
+	for _, wt := range gatedTypes {
 		set := startWithDrop(t, "dr1"+string(wt[0]), wt, true)
 		mcp := container(t, set.helper, k8s.SessionMCPContainerName)
 		if got, _ := envValue(mcp, k8s.DropURLEnvVar); got != dropURL {
@@ -110,10 +109,8 @@ func TestDrop_SessionMCPAloneHoldsTheDropToken(t *testing.T) {
 
 // drop 은 헬퍼 파드가 나가는 곳이라 워크로드 파드의 경계는 움직이지 않는다(AC-F2 그대로).
 func TestDrop_WorkloadBoundaryIsUnchanged(t *testing.T) {
-	orch, cs := newMiniMaxOrchestrator(t,
-		k8s.WithDropURL(dropURL),
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))
-	started, err := orch.Start(context.Background(), "dr2", k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated})
+	orch, cs := newMiniMaxOrchestrator(t, k8s.WithDropURL(dropURL))
+	started, err := orch.Start(context.Background(), "dr2", k8s.WorkloadSpec{Type: gatedType})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,5 +120,5 @@ func TestDrop_WorkloadBoundaryIsUnchanged(t *testing.T) {
 	if len(egress.Spec.Egress) != 2 {
 		t.Fatalf("egress rules = %d, want 2", len(egress.Spec.Egress))
 	}
-	assertPorts(t, "workload egress to helper", egress.Spec.Egress[1].Ports, 8091, 8092)
+	assertPorts(t, "workload egress to helper", egress.Spec.Egress[1].Ports, gatedHelperPorts...)
 }

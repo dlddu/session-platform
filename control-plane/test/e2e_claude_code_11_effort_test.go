@@ -18,7 +18,7 @@ func TestClaudeCode11_EffortIsFixedAtCreateAndReachesThePod(t *testing.T) {
 	if got := configEfforts(t, "claude-code"); !slices.Equal(got, []string{"low", "medium", "high", "xhigh", "max"}) {
 		t.Fatalf("/config claude-code reasoningEfforts = %v", got)
 	}
-	for _, other := range []string{"shell", "approval-gated", "codex-chat"} {
+	for _, other := range []string{"shell", "minimax-code", "codex-chat"} {
 		if got := configEfforts(t, other); len(got) != 0 {
 			t.Errorf("/config %s reasoningEfforts = %v, want []", other, got)
 		}
@@ -37,7 +37,7 @@ func TestClaudeCode11_EffortIsFixedAtCreateAndReachesThePod(t *testing.T) {
 		t.Errorf("CLAUDE_CODE_EFFORT = %+v, want max", e)
 	}
 
-	for _, other := range []string{"shell", "approval-gated", "codex-chat"} {
+	for _, other := range []string{"shell", "minimax-code", "codex-chat"} {
 		name := uniqueName(t)
 		resp, raw := doAs(t, "", http.MethodPost, "/api/v1/sessions", map[string]any{
 			"name": name, "workloadType": other, "reasoningEffort": "high",

@@ -21,8 +21,7 @@ func startWithRepoAccess(t *testing.T, sessionID string, workloadType session.Wo
 	if on {
 		opts = append(opts, k8s.WithRepoAccess(repoAccessURL+"/"))
 	}
-	orch, cs := newMiniMaxOrchestrator(t, append(opts,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))...)
+	orch, cs := newMiniMaxOrchestrator(t, opts...)
 	started, err := orch.Start(context.Background(), sessionID, k8s.WorkloadSpec{Type: workloadType})
 	if err != nil {
 		t.Fatalf("start %s session: %v", workloadType, err)
@@ -47,7 +46,7 @@ func repoAccessTokenVolume(pod corev1.Pod) (string, *corev1.ServiceAccountTokenP
 }
 
 func TestRepoAccess_OffLeavesHelperPodsAsTheyWere(t *testing.T) {
-	for _, wt := range []session.WorkloadType{session.WorkloadTypeApprovalGated, session.WorkloadTypeMiniMaxCode} {
+	for _, wt := range gatedTypes {
 		set := startWithRepoAccess(t, "ra0"+string(wt[0]), wt, false)
 		if name, _ := repoAccessTokenVolume(set.helper); name != "" {
 			t.Errorf("%s: repo access token projected while the feature is off", wt)
@@ -59,14 +58,10 @@ func TestRepoAccess_OffLeavesHelperPodsAsTheyWere(t *testing.T) {
 			}
 		}
 	}
-	set := startWithRepoAccess(t, "ra0x", session.WorkloadTypeApprovalGated, false)
-	if got := containerNames(set.helper); got != k8s.SessionMCPContainerName+","+k8s.HelperCredentialProxyContainerName {
-		t.Errorf("approval-gated helper containers = %s, want the session MCP and provider proxy only", got)
-	}
 }
 
 func TestRepoAccess_SessionMCPAloneHoldsTheControlPlaneToken(t *testing.T) {
-	for _, wt := range []session.WorkloadType{session.WorkloadTypeApprovalGated, session.WorkloadTypeMiniMaxCode} {
+	for _, wt := range gatedTypes {
 		set := startWithRepoAccess(t, "ra1"+string(wt[0]), wt, true)
 		mcp := container(t, set.helper, k8s.SessionMCPContainerName)
 		if got, _ := envValue(mcp, k8s.RepoAccessURLEnvVar); got != repoAccessURL {
@@ -106,58 +101,10 @@ func TestRepoAccess_SessionMCPAloneHoldsTheControlPlaneToken(t *testing.T) {
 	}
 }
 
-// AC-H5: approval-gated's helper gains the K3s MCP proxy, on its own Secret's
-// token and without minimax-code's marketplace scratch.
-func TestRepoAccess_ApprovalGatedHelperRunsAK3SMCPProxy(t *testing.T) {
-	set := startWithRepoAccess(t, "ra2", session.WorkloadTypeApprovalGated, true)
-	proxy := container(t, set.helper, k8s.MiniMaxK3SMCPProxyContainerName)
-	if got, _ := envValue(proxy, "DATA_PLANE_WORKLOAD"); got != "k3s-mcp-proxy" {
-		t.Errorf("workload = %q, want k3s-mcp-proxy", got)
-	}
-	secret, key, ok := secretKey(proxy, k8s.K3SMCPTokenEnvVar)
-	if !ok || secret != "claude-provider" || key != "k3s-mcp-token" {
-		t.Errorf("token selector = %s/%s (%v), want claude-provider/k3s-mcp-token", secret, key, ok)
-	}
-	if got, _ := envValue(proxy, k8s.SessionIDEnvVar); got != "ra2" {
-		t.Errorf("k3s mcp proxy %s = %q, want ra2", k8s.SessionIDEnvVar, got)
-	}
-	if _, ok := envValue(proxy, k8s.MiniMaxMarketplaceDirEnvVar); ok || len(proxy.VolumeMounts) != 0 {
-		t.Errorf("approval-gated k3s proxy got a marketplace: mounts %+v", proxy.VolumeMounts)
-	}
-	if name, _ := repoAccessTokenVolume(set.helper); name == "" {
-		t.Fatal("no control plane token")
-	}
-	for _, c := range set.workload.Spec.Containers {
-		if _, ok := envValue(c, k8s.K3SMCPProxyURLEnvVar); ok {
-			t.Errorf("approval-gated workload container %s learns the K3s MCP proxy address", c.Name)
-		}
-	}
-}
-
-// The proxy is for the session MCP beside it: the boundary stays exactly
-// approval-gated's two ports.
-func TestRepoAccess_ApprovalGatedBoundaryIsUnchanged(t *testing.T) {
-	orch, cs := newMiniMaxOrchestrator(t,
-		k8s.WithRepoAccess(repoAccessURL),
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))
-	started, err := orch.Start(context.Background(), "ra3", k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated})
-	if err != nil {
-		t.Fatal(err)
-	}
-	set := newPodSet(t, listPods(t, cs), started)
-	policies := listNetworkPolicies(t, cs)
-	egress := policies[set.helper.Name+"-workload-egress"]
-	if len(egress.Spec.Egress) != 2 {
-		t.Fatalf("egress rules = %d, want 2", len(egress.Spec.Egress))
-	}
-	assertPorts(t, "workload egress to helper", egress.Spec.Egress[1].Ports, 8091, 8092)
-	assertPorts(t, "helper ingress", policies[set.helper.Name+"-helper-ingress"].Spec.Ingress[0].Ports, 8091, 8092)
-}
-
 // AC-H6: git_push builds its scratch repository under the session MCP's temp
 // directory, which a read-only root filesystem would otherwise refuse.
 func TestRepoAccess_SessionMCPHasAPrivateWritableTmp(t *testing.T) {
-	for _, wt := range []session.WorkloadType{session.WorkloadTypeApprovalGated, session.WorkloadTypeMiniMaxCode} {
+	for _, wt := range gatedTypes {
 		set := startWithRepoAccess(t, "ra4"+string(wt[0]), wt, true)
 		mcp := container(t, set.helper, k8s.SessionMCPContainerName)
 		volume := ""

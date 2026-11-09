@@ -33,7 +33,6 @@ const WORKLOAD_ORDER: WorkloadType[] = [
   "minimax-code",
   "codex-chat",
   "codex-task",
-  "approval-gated",
 ];
 
 const WORKLOAD_CARDS: Record<
@@ -47,11 +46,11 @@ const WORKLOAD_CARDS: Record<
     description: "Agent CLI. You send prompts, it does the work.",
   },
   "minimax-code": {
-    icon: "◇",
-    iconClass: "agent",
+    icon: "⏸",
+    iconClass: "gated",
     wide: true,
     description:
-      "MiniMax Code CLI on the same prompt loop. Runs the platform's default MiniMax model.",
+      "MiniMax Code CLI behind the approval gate — it cannot reach the outside on its own; external calls wait for approval.",
   },
   "codex-chat": {
     icon: "◇",
@@ -67,13 +66,6 @@ const WORKLOAD_CARDS: Record<
     description:
       "Codex coding agent with a shell, file edits and network. Uses a login slot from the platform pool.",
   },
-  "approval-gated": {
-    icon: "⏸",
-    iconClass: "gated",
-    wide: true,
-    description:
-      "Same agent, but it cannot reach the outside on its own — every outbound call waits for your approval.",
-  },
 };
 
 const PLATFORM_DEFAULT_CATALOG: ModelCatalog = {
@@ -81,8 +73,8 @@ const PLATFORM_DEFAULT_CATALOG: ModelCatalog = {
   models: [],
 };
 
-// claude-code's catalog is the only one an older control plane reports, and
-// approval-gated runs the same agent; any other type falls back to free text.
+// claude-code's catalog is the only one an older control plane reports; any
+// other type falls back to free text.
 function catalogFor(
   config: PlatformConfig | null,
   workloadType: WorkloadType,
@@ -92,7 +84,7 @@ function catalogFor(
   if (entry && entry.defaultModel !== null) {
     return { defaultModel: entry.defaultModel, models: entry.models };
   }
-  if (workloadType === "claude-code" || workloadType === "approval-gated") {
+  if (workloadType === "claude-code") {
     return config.claudeCode;
   }
   return PLATFORM_DEFAULT_CATALOG;
@@ -511,14 +503,15 @@ export function NewSession() {
               <LockIcon size={14} className="immutable-note-icon" />
               <span>
                 {isGatedWorkload(workloadType)
-                  ? "Workload type and model choice are fixed for this session. The session also gets a helper pod that holds the approval gate and the only route out."
-                  : workloadType === "minimax-code"
-                    ? "Workload type is fixed for this session. It runs the platform default MiniMax model, resolved at container start."
-                    : workloadType === "codex-chat"
+                  ? hasModelChoice(workloadType)
+                    ? "Workload type and model choice are fixed for this session. The session also gets a helper pod that holds the approval gate and the only route out."
+                    : "Workload type is fixed for this session. It runs the platform default model, resolved at container start, and gets a helper pod that holds the approval gate and the only route out."
+                  : workloadType === "codex-chat"
                     ? "Workload type and model choice are fixed for this session. The first prompt signs the session in to ChatGPT, and the login is kept in its archive."
                     : workloadType === "codex-task"
                     ? "Workload type, model and reasoning effort are fixed for this session. It takes a login slot while it has a pod; an empty slot signs in on the first prompt."
                     : isAgentWorkload(workloadType)
+
                       ? "Workload type and model choice are fixed for this session. Platform default resolves to the configured default at container start."
                       : (
                         <>

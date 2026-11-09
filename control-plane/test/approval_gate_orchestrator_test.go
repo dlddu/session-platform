@@ -1,7 +1,10 @@
 //go:build integration
 
-// approval-gated pod shapes. Which parts of the F series this file owns and
-// which need the deployed SUT are in docs/test/e2e.md.
+// The approval gate's pod shapes (docs/prd/approval-gate.md AC-F2~F6), checked
+// on minimax-code, today the only type behind the gate (session.HasApprovalGate).
+// The type-specific half of that type's pods is minimax_code_orchestrator_test.go's.
+// Which parts of the F series this file owns and which need the deployed SUT are
+// in docs/test/e2e.md.
 package integration_test
 
 import (
@@ -15,22 +18,20 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-const (
-	approvalGatedImage = "ghcr.io/dlddu/session-platform-data-plane:approval-gated"
-	approvalGatewayURL = "http://pocket-aide.pocket-aide.svc.cluster.local:8080"
-)
+const approvalGatewayURL = "http://pocket-aide.pocket-aide.svc.cluster.local:8080"
 
-func newApprovalGatedOrchestrator(t *testing.T) (*k8s.ClientOrchestrator, podSet) {
+// gatedType is the type these tests provision. The contracts here are the
+// gate's, so they hold for any type HasApprovalGate admits.
+const gatedType = session.WorkloadTypeMiniMaxCode
+
+// gatedTypes is every type behind the gate, for the suites (repo access, drop)
+// whose contract is the helper pod's and so holds for each of them.
+var gatedTypes = []session.WorkloadType{gatedType}
+
+func newGatedSession(t *testing.T) podSet {
 	t.Helper()
-	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
-		k8s.WithApprovalGatewayURL(approvalGatewayURL))
-	started, err := orch.Start(context.Background(), "f1f2",
-		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated})
-	if err != nil {
-		t.Fatalf("start approval-gated session: %v", err)
-	}
-	return orch, newPodSet(t, listPods(t, cs), started)
+	_, set := startMiniMax(t, "f1f2")
+	return set
 }
 
 type podSet struct {
@@ -115,9 +116,9 @@ func configMapKey(c corev1.Container, name string) (configMap, key string, ok bo
 	return "", "", false
 }
 
-// AC-F1/AC-F4.
-func TestApprovalGated_ProvisionsWorkloadAndHelperPod(t *testing.T) {
-	_, set := newApprovalGatedOrchestrator(t)
+// AC-F4.
+func TestApprovalGate_ProvisionsWorkloadAndHelperPod(t *testing.T) {
+	set := newGatedSession(t)
 
 	if n := len(set.started.Auxiliary); n != 1 {
 		t.Fatalf("auxiliary pods = %d, want 1 (the session helper pod, AC-F4)", n)
@@ -133,8 +134,8 @@ func TestApprovalGated_ProvisionsWorkloadAndHelperPod(t *testing.T) {
 			t.Errorf("pod %s: %s = %q, want the session id (AC-F4: the helper pod is session-exclusive)",
 				p.Name, k8s.LabelSessionID, got)
 		}
-		if got := p.Labels[k8s.LabelWorkloadType]; got != string(session.WorkloadTypeApprovalGated) {
-			t.Errorf("pod %s: %s = %q, want %q", p.Name, k8s.LabelWorkloadType, got, session.WorkloadTypeApprovalGated)
+		if got := p.Labels[k8s.LabelWorkloadType]; got != string(gatedType) {
+			t.Errorf("pod %s: %s = %q, want %q", p.Name, k8s.LabelWorkloadType, got, gatedType)
 		}
 		if len(p.Name) > 63 {
 			t.Errorf("pod name %q is %d chars, over the 63-char DNS label limit", p.Name, len(p.Name))
@@ -144,13 +145,12 @@ func TestApprovalGated_ProvisionsWorkloadAndHelperPod(t *testing.T) {
 		t.Error("workload and helper pod share a name")
 	}
 
-	if n := len(set.helper.Spec.Containers); n != 2 {
-		t.Fatalf("helper containers = %d (%s), want 2", n, containerNames(set.helper))
-	}
+	// The session MCP and the provider proxy are the gate's; anything beside
+	// them is the type's own (minimax-code's K3s MCP proxy, AC-G5).
 	mcp := container(t, set.helper, k8s.SessionMCPContainerName)
 	proxy := container(t, set.helper, k8s.HelperCredentialProxyContainerName)
-	if mcp.Image != approvalGatedImage || proxy.Image != approvalGatedImage {
-		t.Errorf("helper images = %q/%q, want the configured type image %q", mcp.Image, proxy.Image, approvalGatedImage)
+	if mcp.Image != miniMaxCodeImage || proxy.Image != miniMaxCodeImage {
+		t.Errorf("helper images = %q/%q, want the configured type image %q", mcp.Image, proxy.Image, miniMaxCodeImage)
 	}
 	// The helper pod calls no Kubernetes API: its identity is the gateway
 	// caller's, never the workload pod's view role, and no apiserver token is
@@ -164,8 +164,8 @@ func TestApprovalGated_ProvisionsWorkloadAndHelperPod(t *testing.T) {
 }
 
 // AC-F6.
-func TestApprovalGated_CredentialsAreSplitAcrossHelperContainers(t *testing.T) {
-	_, set := newApprovalGatedOrchestrator(t)
+func TestApprovalGate_CredentialsAreSplitAcrossHelperContainers(t *testing.T) {
+	set := newGatedSession(t)
 	mcp := container(t, set.helper, k8s.SessionMCPContainerName)
 	proxy := container(t, set.helper, k8s.HelperCredentialProxyContainerName)
 	workload := container(t, set.workload, k8s.ContainerName)
@@ -211,9 +211,9 @@ func TestApprovalGated_CredentialsAreSplitAcrossHelperContainers(t *testing.T) {
 				e.ValueFrom.ConfigMapKeyRef.Key, e.Name)
 		}
 	}
-	// AC-F6's ✅ 2026-09-03 decision.
+	// AC-F6's ✅ 2026-09-03 decision: the K3s MCP token stays in the helper pod.
 	if _, _, ok := secretKey(workload, k8s.K3SMCPTokenEnvVar); ok {
-		t.Error("workload container gets the K3s MCP token; approval-gated has no plugin bootstrap (AC-F6)")
+		t.Error("workload container gets the K3s MCP token; it belongs to the helper pod only (AC-F6, AC-G5)")
 	}
 
 	helperIP := set.started.Auxiliary[0].IP
@@ -245,8 +245,8 @@ func TestApprovalGated_CredentialsAreSplitAcrossHelperContainers(t *testing.T) {
 
 // AC-F3's external request identifier needs the session half, and only the
 // control plane can hand it to the container that talks to the gateway.
-func TestApprovalGated_MCPContainerKnowsItsSession(t *testing.T) {
-	_, set := newApprovalGatedOrchestrator(t)
+func TestApprovalGate_MCPContainerKnowsItsSession(t *testing.T) {
+	set := newGatedSession(t)
 	mcp := container(t, set.helper, k8s.SessionMCPContainerName)
 	proxy := container(t, set.helper, k8s.HelperCredentialProxyContainerName)
 
@@ -269,8 +269,8 @@ func TestApprovalGated_MCPContainerKnowsItsSession(t *testing.T) {
 	}
 }
 
-func TestApprovalGated_WorkloadPodHasNoCredentialSidecar(t *testing.T) {
-	_, set := newApprovalGatedOrchestrator(t)
+func TestApprovalGate_WorkloadPodHasNoCredentialSidecar(t *testing.T) {
+	set := newGatedSession(t)
 	if n := len(set.workload.Spec.Containers); n != 1 {
 		t.Fatalf("workload containers = %d (%s), want 1 — the proxy belongs to the helper pod (AC-F2/F4)",
 			n, containerNames(set.workload))
@@ -282,12 +282,12 @@ func TestApprovalGated_WorkloadPodHasNoCredentialSidecar(t *testing.T) {
 
 // An unconfigured image makes a pod spec fail to build, which is the cheapest
 // way to reach the failure paths AC-A3 hygiene covers.
-func TestApprovalGated_HelperPodIsReclaimedWhenTheWorkloadPodFails(t *testing.T) {
+func TestApprovalGate_HelperPodIsReclaimedWhenTheWorkloadPodFails(t *testing.T) {
 	// No WithWorkloadImage for the type: the helper pod spec fails first, so
 	// nothing is created at all.
 	orch, cs := newReadyOrchestrator(t)
 	if _, err := orch.Start(context.Background(), "f4f4",
-		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated}); err == nil {
+		k8s.WorkloadSpec{Type: gatedType}); err == nil {
 		t.Fatal("start with no configured image: want an error, got nil")
 	}
 	if pods := listPods(t, cs); len(pods) != 0 {
@@ -296,11 +296,9 @@ func TestApprovalGated_HelperPodIsReclaimedWhenTheWorkloadPodFails(t *testing.T)
 
 	// Now the workload pod fails *after* the helper pod is Ready: an invalid
 	// model is rejected when its spec is built.
-	orch, cs = newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
-		k8s.WithApprovalGatewayURL(approvalGatewayURL))
+	orch, cs = newMiniMaxOrchestrator(t)
 	_, err := orch.Start(context.Background(), "f5f5", k8s.WorkloadSpec{
-		Type:  session.WorkloadTypeApprovalGated,
+		Type:  gatedType,
 		Model: "not a valid model name",
 	})
 	if err == nil {
@@ -311,13 +309,11 @@ func TestApprovalGated_HelperPodIsReclaimedWhenTheWorkloadPodFails(t *testing.T)
 	}
 }
 
-// AC-B2 for this type, with AC-F4's helper pod.
-func TestApprovalGated_RestoreProvisionsAFreshPair(t *testing.T) {
-	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
-		k8s.WithApprovalGatewayURL(approvalGatewayURL))
+// AC-B2 for a gated type, with AC-F4's helper pod.
+func TestApprovalGate_RestoreProvisionsAFreshPair(t *testing.T) {
+	orch, cs := newMiniMaxOrchestrator(t)
 	restored, err := orch.RestoreInto(context.Background(), "f6f6", "s3://bucket/archive.tar",
-		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated})
+		k8s.WorkloadSpec{Type: gatedType})
 	if err != nil {
 		t.Fatalf("restore: %v", err)
 	}
@@ -346,7 +342,8 @@ func TestApprovalGated_RestoreProvisionsAFreshPair(t *testing.T) {
 	}
 }
 
-func TestApprovalGated_ExistingTypesUnchanged(t *testing.T) {
+// The types outside the gate keep their own pod shapes.
+func TestApprovalGate_UngatedTypesUnchanged(t *testing.T) {
 	const claudeImage = "ghcr.io/dlddu/session-platform-data-plane:claude"
 	for _, tc := range []struct {
 		workload   session.WorkloadType
@@ -394,8 +391,8 @@ func TestApprovalGated_ExistingTypesUnchanged(t *testing.T) {
 	}
 }
 
-func TestApprovalGatedHelperContainersAreStartableUnderTheirOwnBoundary(t *testing.T) {
-	_, pods := newApprovalGatedOrchestrator(t)
+func TestApprovalGateHelperContainersAreStartableUnderTheirOwnBoundary(t *testing.T) {
+	pods := newGatedSession(t)
 
 	proxy := container(t, pods.helper, k8s.HelperCredentialProxyContainerName)
 	if placement, ok := envValue(proxy, k8s.CredentialProxyPlacementEnvVar); !ok || placement != "helper" {

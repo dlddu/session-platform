@@ -3,13 +3,13 @@
 # (claude-code-credentials-secret.example.yaml). The control plane names it
 # with CLAUDE_CODE_CONFIG_CONFIGMAP (default `claude-code-config`).
 #
-#   base-url  (required for approval-gated and for claude-code in
-#             CLAUDE_CODE_AUTH_MODE=gateway) The provider's HTTPS endpoint,
+#   base-url  (required for claude-code in CLAUDE_CODE_AUTH_MODE=gateway)
+#             The provider's HTTPS endpoint,
 #             projected only into a credential-proxy beside auth-token. A
 #             subscription-mode claude-code session reaches its provider
 #             directly and does not read it (AC-E7).
-#   model, models  The gateway's model ids. approval-gated and gateway-mode
-#             claude-code read them; a subscription-mode claude-code does not.
+#   model, models  The gateway's model ids. Gateway-mode claude-code reads
+#             them; a subscription-mode claude-code does not.
 #   subscription-model, subscription-models  (optional) The same pair for
 #             CLAUDE_CODE_AUTH_MODE=subscription: Claude subscription models
 #             (for example opus, sonnet). The control plane reads them as

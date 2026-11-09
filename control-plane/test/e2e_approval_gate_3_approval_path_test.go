@@ -1,8 +1,9 @@
 //go:build e2e
 
-// 검증 시나리오: approval-gated-workload.md#시나리오 3
+// 검증 시나리오: approval-gate.md#시나리오 3
 //
-// AC-F3 (docs/prd/approval-gated-workload.md), asserted on the deployed SUT.
+// AC-F3 (docs/prd/approval-gate.md), asserted on the deployed SUT with a session
+// of the gated type (harness_approval_gate_test.go).
 // What this file buys — and the one branch it still leaves unbought — is
 // docs/test/e2e.md: the mapping row the line above names, and its
 // §「남은 미검증 분기」.
@@ -22,7 +23,7 @@ import (
 
 const (
 	// The marker texts are session_mcp_notice_tail.go's renderApprovalNotice,
-	// written out rather than imported for the reason e2e_f1 gives.
+	// written out rather than imported for the reason harness_approval_gate_test.go gives.
 	f3AwaitingPrefix = "[session-platform: awaiting approval — "
 	f3ApprovedPrefix = "[session-platform: approval approved — "
 	// The origin deploy/fetch-origin.yaml stands, addressed by its Service name.
@@ -31,8 +32,9 @@ const (
 	f3MarkerToolName = "web_fetch_get"
 	// data-plane/cmd/agent/session_mcp_tools.go requestIDPrefix, same reason.
 	f3RequestIDPrefix = "req-"
-	// 60s is the CLI's ceiling on one MCP tool call — it cancels there rather
-	// than waiting longer, and that number lives only in its behaviour.
+	// The wait marker needs a CLI start-up, one MCP round trip and the request
+	// reaching the gateway — none of them waits on the decision, so this is a
+	// bound on plumbing, not on the gate.
 	f3MarkerBudget = 90 * time.Second
 	// The decision notice is published *before* the outbound call is made, so
 	// the approval marker is not evidence that the GET already happened. This
@@ -79,10 +81,10 @@ func newF3Session(t *testing.T) f3Session {
 	// request is never refused for want of a caller.
 	approver := newPocketAideApprover(t, cs, cfg)
 	status, s := createTyped(t, map[string]any{
-		"name": uniqueName(t), "workloadType": "approval-gated",
+		"name": uniqueName(t), "workloadType": gatedWorkloadType,
 	})
 	if status != http.StatusCreated {
-		t.Fatalf("create approval-gated session: status=%d", status)
+		t.Fatalf("create %s session: status=%d", gatedWorkloadType, status)
 	}
 	t.Cleanup(func() {
 		if resp, raw := do(t, http.MethodDelete, "/api/v1/sessions/"+s.ID, nil); resp.StatusCode >= 400 {
@@ -117,7 +119,7 @@ func (f f3Session) originHits(t *testing.T) []f3OriginEntry {
 	t.Helper()
 	helpers := helperPodsFor(t, f.cs, f.ns, f.ID)
 	if len(helpers) != 1 {
-		t.Fatalf("approval-gated session %s has %d helper pods, want exactly 1", f.ID, len(helpers))
+		t.Fatalf("gated session %s has %d helper pods, want exactly 1", f.ID, len(helpers))
 	}
 	script := `curl -sS --fail-with-body --max-time 20 "$1"`
 	raw := f4Sh(t, f.cs, f.cfg, f.ns, helpers[0].Name, sessionMCPContainer, script, f3OriginBase+"/access-log")
@@ -170,7 +172,7 @@ func f3Marker(t *testing.T, buf, prefix string) (tool, externalID string) {
 	return tool, externalID
 }
 
-func TestApprovalGatedApprovalPath_WriteReturnsBeforeTheGateAndTheWaitIsAnnounced(t *testing.T) {
+func TestApprovalGateApprovalPath_WriteReturnsBeforeTheGateAndTheWaitIsAnnounced(t *testing.T) {
 	f := newF3Session(t)
 
 	// Opened before the write, not after: the stream has to be attached before

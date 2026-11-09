@@ -1,19 +1,10 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
-	"k8s.io/client-go/kubernetes/fake"
-
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/archive"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
-	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
-	"github.com/dlddu/session-platform/control-plane/internal/service"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
@@ -180,13 +171,11 @@ func TestOfferedWorkloadTypesFollowConfiguredImages(t *testing.T) {
 		t.Fatalf("no images: offered = %v, want shell only", got)
 	}
 	got := offered(config{
-		dataPlaneClaudeCodeImage:    "img",
-		dataPlaneApprovalGatedImage: "img",
-		miniMax:                     miniMaxConfig{image: "img"},
+		dataPlaneClaudeCodeImage: "img",
+		miniMax:                  miniMaxConfig{image: "img"},
 	})
 	for _, w := range []session.WorkloadType{
-		session.WorkloadTypeShell, session.WorkloadTypeClaudeCode,
-		session.WorkloadTypeApprovalGated, session.WorkloadTypeMiniMaxCode,
+		session.WorkloadTypeShell, session.WorkloadTypeClaudeCode, session.WorkloadTypeMiniMaxCode,
 	} {
 		if !got[w] {
 			t.Errorf("all images set: %q not offered", w)
@@ -198,35 +187,34 @@ func TestOfferedWorkloadTypesFollowConfiguredImages(t *testing.T) {
 }
 
 func TestLoadConfigReadsArchiveGates(t *testing.T) {
-	for _, k := range []string{"SHELL_ARCHIVE_ENABLED", "APPROVAL_GATED_ARCHIVE_ENABLED", "CLAUDE_CODE_ARCHIVE_ENABLED", "MINIMAX_CODE_ARCHIVE_ENABLED"} {
+	for _, k := range []string{"SHELL_ARCHIVE_ENABLED", "CLAUDE_CODE_ARCHIVE_ENABLED", "MINIMAX_CODE_ARCHIVE_ENABLED"} {
 		t.Setenv(k, "")
 	}
 	cfg, err := loadConfig()
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
-	if cfg.shellArchiveEnabled || cfg.approvalGatedArchiveEnabled || cfg.anyArchiveEnabled() {
+	if cfg.shellArchiveEnabled || cfg.claudeArchiveEnabled || cfg.anyArchiveEnabled() {
 		t.Fatalf("archive gates default on: %+v", cfg)
 	}
 
 	t.Setenv("SHELL_ARCHIVE_ENABLED", "true")
-	t.Setenv("APPROVAL_GATED_ARCHIVE_ENABLED", "true")
+	t.Setenv("CLAUDE_CODE_ARCHIVE_ENABLED", "true")
 	cfg, err = loadConfig()
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
-	if !cfg.shellArchiveEnabled || !cfg.approvalGatedArchiveEnabled {
-		t.Fatalf("archive gates not read: shell=%v approval-gated=%v", cfg.shellArchiveEnabled, cfg.approvalGatedArchiveEnabled)
+	if !cfg.shellArchiveEnabled || !cfg.claudeArchiveEnabled {
+		t.Fatalf("archive gates not read: shell=%v claude-code=%v", cfg.shellArchiveEnabled, cfg.claudeArchiveEnabled)
 	}
 }
 
 // Any single gate makes the checkpoint store (and the idle reaper) necessary.
 func TestAnyArchiveEnabled(t *testing.T) {
 	for name, cfg := range map[string]config{
-		"shell":          {shellArchiveEnabled: true},
-		"claude-code":    {claudeArchiveEnabled: true},
-		"approval-gated": {approvalGatedArchiveEnabled: true},
-		"minimax-code":   {miniMax: miniMaxConfig{archiveEnabled: true}},
+		"shell":        {shellArchiveEnabled: true},
+		"claude-code":  {claudeArchiveEnabled: true},
+		"minimax-code": {miniMax: miniMaxConfig{archiveEnabled: true}},
 	} {
 		if !cfg.anyArchiveEnabled() {
 			t.Errorf("%s gate on: anyArchiveEnabled() = false", name)
@@ -234,46 +222,5 @@ func TestAnyArchiveEnabled(t *testing.T) {
 	}
 	if (config{}).anyArchiveEnabled() {
 		t.Error("all gates off: anyArchiveEnabled() = true")
-	}
-}
-
-// The approval-gated archive gate is off by default, and turning it on for a
-// type with no image is a startup error rather than a silently dead gate.
-func TestApprovalGatedArchiveOption(t *testing.T) {
-	client := agent.NewHTTPClient(fake.NewSimpleClientset(), "sessions")
-
-	if opt, err := approvalGatedArchiveOption(config{}, client, nil); err != nil || opt != nil {
-		t.Fatalf("gate off: option %v, err %v; want neither", opt != nil, err)
-	}
-	if _, err := approvalGatedArchiveOption(config{approvalGatedArchiveEnabled: true}, client, nil); err == nil ||
-		!strings.Contains(err.Error(), "DATA_PLANE_APPROVAL_GATED_IMAGE") {
-		t.Fatalf("gate on without an image: err %v, want a DATA_PLANE_APPROVAL_GATED_IMAGE error", err)
-	}
-	opt, err := approvalGatedArchiveOption(config{approvalGatedArchiveEnabled: true, dataPlaneApprovalGatedImage: "img"}, client, nil)
-	if err != nil || opt == nil {
-		t.Fatalf("gate on with an image: option %v, err %v; want an option", opt != nil, err)
-	}
-
-	// The option registers the strategy for approval-gated itself: a snapshot
-	// gets past checkpointerFor and fails only at the (absent) store.
-	ctx := context.Background()
-	svc := service.New(
-		k8s.NewStubOrchestrator("sessions"),
-		configmap.NewStore(fake.NewSimpleClientset(), "sessions"),
-		archive.NewStubCheckpointer(false), agent.NewStubClient(), opt,
-	)
-	sess, err := svc.Create(ctx, session.CreateRequest{Name: "ag", WorkloadType: session.WorkloadTypeApprovalGated})
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if _, err := svc.Snapshot(ctx, sess.ID); err == nil || errors.Is(err, session.ErrCheckpointDisabled) {
-		t.Fatalf("approval-gated snapshot err = %v, want the registered archive strategy to run", err)
-	}
-	shell, err := svc.Create(ctx, session.CreateRequest{Name: "sh"})
-	if err != nil {
-		t.Fatalf("create shell: %v", err)
-	}
-	if _, err := svc.Snapshot(ctx, shell.ID); !errors.Is(err, session.ErrCheckpointDisabled) {
-		t.Fatalf("shell snapshot err = %v, want ErrCheckpointDisabled (its own gate is off)", err)
 	}
 }

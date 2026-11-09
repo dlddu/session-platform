@@ -3,12 +3,12 @@
 export type State = "active" | "idle" | "snapshot";
 
 /**
- * AC-E1/AC-F1. 화면은 리터럴이 아니라 계열로 갈린다 — `app/workloadKind.ts`.
+ * AC-E1/AC-G1. 화면은 리터럴이 아니라 계열로 갈린다 — `app/workloadKind.ts`.
+ * 승인 게이트는 타입이 아니라 타입의 능력이다(`WorkloadTypeConfig.approvalGate`).
  */
 export type WorkloadType =
   | "shell"
   | "claude-code"
-  | "approval-gated"
   | "minimax-code"
   | "codex-chat"
   | "codex-task";
@@ -29,6 +29,11 @@ export interface WorkloadTypeConfig {
   description: string;
   takesModel: boolean;
   input: "prompt" | "terminal";
+  /**
+   * docs/prd/approval-gate.md AC-F2~F6. 이 타입의 세션이 승인 게이트 뒤에서 도는가.
+   * 이 필드가 생기기 전의 control plane 은 보내지 않는다.
+   */
+  approvalGate?: boolean;
   defaultModel: string | null;
   models: string[];
   /** AC-E8. Empty means the type takes no reasoning effort. */
@@ -48,6 +53,7 @@ export interface PlatformConfig {
   tenant: TenantConfig | null;
   /** What the operator may create into and filter by; empty for a tenant caller. */
   tenants: TenantConfig[];
+
 }
 
 // 와이어 필드 이름은 `checkpoint` 그대로다(OpenAPI 계약). 가리키는 것은 모든 타입에서 파일시스템 아카이브다.

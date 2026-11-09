@@ -29,7 +29,6 @@ func TestNormalizePlugins(t *testing.T) {
 		{name: "minimax list", workload: WorkloadTypeMiniMaxCode, in: []string{"mcp-servers"}, want: []string{"mcp-servers"}},
 		{name: "dots underscores hyphens", workload: WorkloadTypeClaudeCode, in: []string{"a.b_c-d"}, want: []string{"a.b_c-d"}},
 		{name: "shell refuses a list", workload: WorkloadTypeShell, in: []string{"development"}, wantErr: true},
-		{name: "approval-gated refuses a list", workload: WorkloadTypeApprovalGated, in: []string{"development"}, wantErr: true},
 		{name: "empty list", workload: WorkloadTypeClaudeCode, in: []string{}, wantErr: true},
 		{name: "duplicate", workload: WorkloadTypeClaudeCode, in: []string{"dev", "dev"}, wantErr: true},
 		{name: "blank name", workload: WorkloadTypeClaudeCode, in: []string{""}, wantErr: true},

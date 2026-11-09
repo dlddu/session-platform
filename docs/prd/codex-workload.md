@@ -1,7 +1,7 @@
 # PRD: 세션 워크로드 — Codex SDK 채팅용 (codex-chat)
 
 > 대상 요구사항: 세션 워크로드 타입에 **Codex SDK 에이전트** 추가
-> (`shell`·`claude-code`·`approval-gated`·`minimax-code`와 병존하는 다섯 번째 타입, `claude-code-workload.md`와 대응 관계)
+> (`shell`·`claude-code`·`minimax-code`와 병존하는 타입 — 신설 당시는 `approval-gated`(2026-11-05 제거)까지 다섯 번째였다, `claude-code-workload.md`와 대응 관계)
 
 > 📌 **개정 (2026-11-07, 사용자 결정)**: Codex를 채팅용과 작업용으로 나눴다. 이 문서의 타입은 **채팅용 `codex-chat`** 이다 — 장기 단일 세션을 가정하고 도구를 대화·스킬·K3s MCP로 좁힌 그대로다. 타입 이름이 `codex`에서 `codex-chat`으로 바뀌었고 옛 이름은 저장된 레코드에서만 읽는다(AC-J1). 작업용 `codex-task`(셸·파일·네트워크, 인증 풀 로그인)는 `codex-task-workload.md`다. 아래 본문의 「`codex` 타입」·「`codex` 세션」은 `codex-chat`으로 읽는다. 설정 이름(`DATA_PLANE_CODEX_IMAGE`·`CODEX_*`·`codex-config`·`codex-credentials`)은 바꾸지 않았다.
 
@@ -24,7 +24,7 @@
 > 실행 모델(원샷 프롬프트·직렬 큐·커서 규약·대화 연속성·아카이브)은 `claude-code`와 같으므로 **AC-E2~E5를 참조**하고,
 > 이 문서는 그 위에 얹히는 차이만 적는다. 차이는 다섯이다 — 실행하는 러너(Codex SDK)와 출력 투영(AC-J2),
 > 세션마다 하는 ChatGPT 로그인과 그 보존(AC-J3), 아카이브 게이트(AC-J4), 도구 표면(AC-J5), K3s MCP 토큰의 배치(AC-J6).
-> `approval-gated`·`minimax-code`와 달리 **헬퍼 파드도 승인 게이트도 없다** — 셸·파일·네트워크 도구 자체가 없으므로
+> 승인 게이트를 쓰는 `minimax-code`(`approval-gate.md` 「적용 타입」)와 달리 **헬퍼 파드도 승인 게이트도 없다** — 셸·파일·네트워크 도구 자체가 없으므로
 > 게이트가 지킬 경로가 K3s MCP 하나뿐이고, K3s MCP는 자기 쓰기를 스스로 게이트한다(AC-G5와 같은 판단).
 
 ## Acceptance Criteria

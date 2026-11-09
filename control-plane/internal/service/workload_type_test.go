@@ -62,19 +62,6 @@ func TestCreateAppliesWorkloadType(t *testing.T) {
 			want:      session.WorkloadTypeClaudeCode,
 			wantModel: "claude-sonnet-4-5",
 		},
-		{
-			name:      "approval-gated defaults to platform model",
-			requested: session.WorkloadTypeApprovalGated,
-			want:      session.WorkloadTypeApprovalGated,
-			wantModel: session.PlatformDefaultModel,
-		},
-		{
-			name:      "explicit approval-gated model",
-			requested: session.WorkloadTypeApprovalGated,
-			model:     "claude-sonnet-4-5",
-			want:      session.WorkloadTypeApprovalGated,
-			wantModel: "claude-sonnet-4-5",
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, orch, store := newServiceWithOrch()
@@ -297,37 +284,6 @@ func TestLegacySessionRecordRestoresAsShell(t *testing.T) {
 	}
 }
 
-// With APPROVAL_GATED_ARCHIVE_ENABLED off, an approval-gated session has no
-// archive strategy. It must refuse to freeze rather than fall through to the
-// shell's checkpointer: that would reclaim the pod pair behind an archive that
-// cannot restore the workload — the exact data-loss shape checkpointerFor
-// exists to prevent.
-func TestSnapshotIsRefusedForApprovalGated(t *testing.T) {
-	ctx := context.Background()
-	svc, orch, _ := newServiceWithOrch()
-
-	sess, err := svc.Create(ctx, session.CreateRequest{
-		Name: "ag-no-archive", WorkloadType: session.WorkloadTypeApprovalGated,
-	})
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if _, err := svc.Snapshot(ctx, sess.ID); !errors.Is(err, session.ErrCheckpointDisabled) {
-		t.Fatalf("snapshot err = %v, want ErrCheckpointDisabled", err)
-	}
-	// The session keeps its pods: a refused freeze reclaims nothing.
-	if n := orch.RunningCount(); n == 0 {
-		t.Error("refused snapshot reclaimed the session pods")
-	}
-	after, err := svc.Get(ctx, sess.ID)
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if after.State == session.StateSnapshot {
-		t.Errorf("state = %q after a refused snapshot, want it unchanged", after.State)
-	}
-}
-
 // generationCountingCheckpointer records each generation-fenced checkpoint
 // so a test can prove a workload type reached its own strategy through the
 // durable snapshot transaction.
@@ -341,14 +297,13 @@ func (g *generationCountingCheckpointer) CheckpointWithGeneration(ctx context.Co
 	return g.StubCheckpointer.CheckpointWithGeneration(ctx, ref, generation)
 }
 
-// Every workload type — shell and approval-gated included — freezes through the
+// Every workload type — shell included — freezes through the
 // same generation-fenced archive transaction and restores with its own type.
 func TestEveryWorkloadSnapshotsThroughTheArchiveTransaction(t *testing.T) {
 	ctx := context.Background()
 	for _, workload := range []session.WorkloadType{
 		session.WorkloadTypeShell,
 		session.WorkloadTypeClaudeCode,
-		session.WorkloadTypeApprovalGated,
 		session.WorkloadTypeMiniMaxCode,
 	} {
 		workload := workload
@@ -394,31 +349,6 @@ func TestEveryWorkloadSnapshotsThroughTheArchiveTransaction(t *testing.T) {
 				t.Fatalf("restore provisioned for %q, want %q", got, workload)
 			}
 		})
-	}
-}
-
-// approval-gated now carries the same control-plane prompt bound as the other
-// agent workloads, so an oversized prompt never thaws its snapshot.
-func TestOversizedApprovalGatedPromptIsRejectedBeforeRestore(t *testing.T) {
-	ctx := context.Background()
-	orch := k8s.NewStubOrchestrator("sessions")
-	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
-	ckpt := archive.NewStubCheckpointer(true)
-	svc := service.New(orch, store, ckpt, agent.NewStubClient(),
-		service.WithWorkloadCheckpointer(session.WorkloadTypeApprovalGated, ckpt))
-
-	sess, err := svc.Create(ctx, session.CreateRequest{Name: "ag-limited", WorkloadType: session.WorkloadTypeApprovalGated})
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
-		t.Fatalf("snapshot: %v", err)
-	}
-	if _, err := svc.Write(ctx, sess.ID, strings.Repeat("x", session.MaxClaudePromptBytes+1)); !errors.Is(err, session.ErrWorkloadPromptTooLarge) {
-		t.Fatalf("write error = %v, want %v", err, session.ErrWorkloadPromptTooLarge)
-	}
-	if got := orch.RunningCount(); got != 0 {
-		t.Fatalf("oversized write restored %d pods, want 0", got)
 	}
 }
 

@@ -60,18 +60,19 @@ PRD가 바뀔 때마다 조용히 낡습니다.
 | `JRN-agent-prompt-loop` | 작업 환경을 골라 에이전트에게 일을 시킨다 | P1 | V8, V3 | 5 | [문서](./JRN-agent-prompt-loop.md) |
 | `JRN-manual-freeze` | 다 쓴 세션을 직접 접어두기 | P1 | V2, V3 | 3 | [문서](./JRN-manual-freeze.md) |
 | `JRN-session-deletion` | 끝난 세션을 정리하기 | P1 | V2 (부분) | 3 | [문서](./JRN-session-deletion.md) |
-| `JRN-approval-gated-work` | 밖으로 나가는 일마다 내가 승인하고 맡긴다 | P1 | V8, V3 | 4 | [문서](./JRN-approval-gated-work.md) |
+| `JRN-approval-gated-work` | 밖으로 나가는 일마다 내가 승인하고 맡긴다 | P1 | V1, V3 | 4 | [문서](./JRN-approval-gated-work.md) |
 | `JRN-repo-access` | 에이전트가 비공개 레포를 쓰도록 내가 허락한다 | P1 | V8, V1 | 4 | [문서](./JRN-repo-access.md) |
 
 **총 10개 여정 · 37개 단계.**
 
 여정 사이 관계는 두 축으로 읽습니다.
 
-- **타입 축**: `JRN-shell-interaction`(`shell`) · `JRN-agent-prompt-loop`(`claude-code`) ·
-  `JRN-approval-gated-work`(`approval-gated`)는 같은 자리의 타입별 세 갈래입니다.
-  타입을 고르는 순간은 (타입이 셋으로 늘어난 뒤에도) `STP-workload-choice` 하나가 담고, 그것이 V8입니다.
+- **타입 축**: `JRN-shell-interaction`(`shell`) · `JRN-agent-prompt-loop`(에이전트 타입) ·
+  `JRN-approval-gated-work`(승인 게이트가 걸린 세션 — 지금은 `minimax-code`)는 같은 자리의 세 갈래입니다.
+  타입을 고르는 순간은 `STP-workload-choice` 하나가 담고, 그것이 V8입니다. *(2026-11-05: 승인 게이트는
+  타입이 아니라 타입의 능력이 되었다 — `../prd/approval-gate.md`. 여정 식별자는 그대로 둔다.)*
   세 여정은 "무엇을 맡기고 무엇을 보는가"만 다르고, 생성·동결·복원·전환·삭제 경험은 공유합니다.
-  `JRN-repo-access`는 `approval-gated`(와 같은 경계의 `minimax-code`) 갈래에 붙는 곁가지로, 호출 승인 위에
+  `JRN-repo-access`는 게이트가 걸린 세션 갈래에 붙는 곁가지로, 호출 승인 위에
   "어느 비공개 레포를 열어 줄지"라는 레포 단위의 오래 남는 허락을 더합니다.
 - **수명 축**: 생성(`JRN-session-creation`) → 사용(위 세 여정) → 접기(`JRN-idle-resume` 자동 · `JRN-manual-freeze` 수동)
   → 되살리기(`STP-restore-resume`) → 정리(`JRN-session-deletion`).
@@ -107,12 +108,12 @@ PRD가 바뀔 때마다 조용히 낡습니다.
 
 | 가치 | 달성하는 여정 | 상태 |
 |---|---|---|
-| V1 세션 격리 | `JRN-session-creation`, `JRN-repo-access` | ✅ |
+| V1 세션 격리 | `JRN-session-creation`, `JRN-repo-access`, `JRN-approval-gated-work` | ✅ |
 | V2 유휴 자원 회수 | `JRN-idle-resume`, `JRN-manual-freeze`, `JRN-session-deletion`(부분) | ✅ |
 | V3 끊김 없는 세션 연속성 | `JRN-idle-resume`, `JRN-multi-session-switch`, `JRN-concurrent-access`, `JRN-shell-interaction`, `JRN-agent-prompt-loop`, `JRN-manual-freeze`, `JRN-approval-gated-work` | ✅ |
 | V4 자유로운 멀티세션 전환 | `JRN-multi-session-switch` | ✅ |
 | V5 일관된 세션 상태 | `JRN-session-creation`, `JRN-concurrent-access` | ✅ |
-| V8 목적에 맞는 작업 환경 선택 | `JRN-agent-prompt-loop`, `JRN-approval-gated-work`, `JRN-repo-access` | ✅ |
+| V8 목적에 맞는 작업 환경 선택 | `JRN-agent-prompt-loop`, `JRN-repo-access` | ✅ |
 
 **고아 여정 없음 · 여정 없는 가치 없음.** 단, `JRN-session-deletion`의 가치 연결은 부분적입니다(아래 미해결 항목).
 

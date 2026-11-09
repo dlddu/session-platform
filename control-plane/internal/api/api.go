@@ -165,6 +165,8 @@ type workloadTypeConfResp struct {
 	// TakesPlugins says whether a create request may carry plugins (AC-L1).
 	TakesPlugins bool              `json:"takesPlugins"`
 	Input        session.InputMode `json:"input"`
+	// ApprovalGate tells the client to render the gated workspace (AC-F2~F6).
+	ApprovalGate bool `json:"approvalGate"`
 	// DefaultModel is null exactly when TakesModel is false.
 	DefaultModel *string  `json:"defaultModel"`
 	Models       []string `json:"models"`
@@ -222,6 +224,7 @@ func (a *API) runtimeConfig(w http.ResponseWriter, r *http.Request) {
 			TakesModel:   info.TakesModel,
 			TakesPlugins: info.TakesPlugins,
 			Input:        info.Input,
+			ApprovalGate: info.ApprovalGate,
 			Models:       []string{},
 			// WorkloadTypes copies the list, so it is never the catalog's own.
 			ReasoningEfforts: info.ReasoningEfforts,

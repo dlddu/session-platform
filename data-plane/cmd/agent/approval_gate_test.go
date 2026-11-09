@@ -51,62 +51,9 @@ func TestCredentialProxyPlacementFailsClosed(t *testing.T) {
 	}
 }
 
-func setApprovalGatedEnv(t *testing.T) {
-	t.Helper()
-	t.Setenv("ANTHROPIC_BASE_URL", "http://10.42.0.9:8091")
-	t.Setenv("ANTHROPIC_AUTH_TOKEN", claudeProxyPlaceholderToken)
-	t.Setenv("ANTHROPIC_API_KEY", "")
-	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
-	t.Setenv("K3S_MCP_TOKEN", "")
-	t.Setenv(sessionMCPURLEnv, "http://10.42.0.9:8092")
-}
-
-func TestApprovalGatedWorkloadAcceptsItsHelperEndpoints(t *testing.T) {
-	setApprovalGatedEnv(t)
-	tools, err := agentToolSurface(workloadApprovalGated)
-	if err != nil {
-		t.Fatalf("approval-gated environment rejected: %v", err)
-	}
-	if tools.SessionMCP != "http://10.42.0.9:8092" {
-		t.Fatalf("session MCP = %q, want the injected helper address", tools.SessionMCP)
-	}
-	// AC-F6's 2026-09-03 decision: no marketplace plugin in this type.
-	if len(tools.Plugins) != 0 {
-		t.Fatal("approval-gated enabled the marketplace plugin")
-	}
-}
-
-func TestApprovalGatedWorkloadRejectsUnsafeCredentialWiring(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		env  map[string]string
-	}{
-		{"loopback provider endpoint", map[string]string{"ANTHROPIC_BASE_URL": "http://127.0.0.1:8091"}},
-		{"provider endpoint on the wrong port", map[string]string{"ANTHROPIC_BASE_URL": "http://10.42.0.9:8092"}},
-		{"missing provider endpoint", map[string]string{"ANTHROPIC_BASE_URL": ""}},
-		{"real provider token", map[string]string{"ANTHROPIC_AUTH_TOKEN": "sk-real"}},
-		{"direct api key", map[string]string{"ANTHROPIC_API_KEY": "sk-real"}},
-		{"oauth token", map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "oauth"}},
-		{"k3s mcp token", map[string]string{"K3S_MCP_TOKEN": "k3s"}},
-		{"missing session mcp", map[string]string{sessionMCPURLEnv: ""}},
-		{"loopback session mcp", map[string]string{sessionMCPURLEnv: "http://127.0.0.1:8092"}},
-		{"session mcp carrying a path", map[string]string{sessionMCPURLEnv: "http://10.42.0.9:8092/mcp"}},
-		{"session mcp with a trailing slash", map[string]string{sessionMCPURLEnv: "http://10.42.0.9:8092/"}},
-		{"provider endpoint carrying a path", map[string]string{"ANTHROPIC_BASE_URL": "http://10.42.0.9:8091/v1"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			setApprovalGatedEnv(t)
-			for k, v := range tc.env {
-				t.Setenv(k, v)
-			}
-			if _, err := agentToolSurface(workloadApprovalGated); err == nil {
-				t.Fatalf("approval-gated accepted %s", tc.name)
-			}
-		})
-	}
-}
-
-// claude-code keeps its own wiring: same function, different branch.
+// claude-code's tool surface is the marketplace plugin. No Claude-CLI type sits
+// behind the gate now (minimax-code is the gated type and has its own surface,
+// minimax_tools.go), so agentToolSurface knows no other Claude workload.
 func TestClaudeCodeToolSurfaceIsUnchanged(t *testing.T) {
 	t.Setenv("ANTHROPIC_BASE_URL", claudeProxyBaseURL)
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", claudeProxyPlaceholderToken)
@@ -152,11 +99,13 @@ func registeredSessionMCP(t *testing.T, homeDir string) claudeMCPServer {
 	return servers[sessionMCPServerName]
 }
 
-// AC-F6: the session MCP is registered as the agent's only outward tool
-// surface, and the marketplace plugin is not enabled. *Where* it is registered
+// The Claude CLI's half of the gate (docs/prd/approval-gate.md AC-F6): the
+// session MCP is registered as the agent's only outward tool surface, and the
+// marketplace plugin is not enabled. No type drives the Claude CLI behind the
+// gate today; these pin the mechanism a Claude-based gated type would use. *Where* it is registered
 // is the load-bearing part (claude_mcp_registration.go) — nothing else here
 // fails when it is wrong, which is how it shipped wrong.
-func TestApprovalGatedManagedSettingsRegisterOnlyTheSessionMCP(t *testing.T) {
+func TestGatedManagedSettingsRegisterOnlyTheSessionMCP(t *testing.T) {
 	homeDir := t.TempDir()
 	const mcpURL = "http://10.42.0.9:8092"
 	if err := ensureClaudeManagedSettings(homeDir, toolSurface{SessionMCP: mcpURL}); err != nil {
@@ -186,7 +135,7 @@ func TestApprovalGatedManagedSettingsRegisterOnlyTheSessionMCP(t *testing.T) {
 		t.Fatalf("permissions = %v, want the session MCP permitted", settings.Permissions.Allow)
 	}
 	if err := validateClaudeManagedSettings(homeDir); err != nil {
-		t.Fatalf("approval-gated managed settings are invalid: %v", err)
+		t.Fatalf("gated managed settings are invalid: %v", err)
 	}
 }
 
@@ -357,7 +306,7 @@ func TestManagedSettingsRejectMixedToolSurfaces(t *testing.T) {
 // AC-F5's reading half: the path the MCP hands back is only useful if the
 // agent's file tools may open it, and they are scoped to its own state tree
 // otherwise.
-func TestApprovalGatedManagedSettingsOpenTheSharedVolumeToTheAgent(t *testing.T) {
+func TestGatedManagedSettingsOpenTheSharedVolumeToTheAgent(t *testing.T) {
 	homeDir := t.TempDir()
 	if err := ensureClaudeManagedSettings(homeDir,
 		toolSurface{SessionMCP: "http://10.42.0.9:8092", SharedDir: "/shared"}); err != nil {

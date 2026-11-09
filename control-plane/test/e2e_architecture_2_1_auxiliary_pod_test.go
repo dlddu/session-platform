@@ -18,7 +18,7 @@ import (
 )
 
 // PodRoleWorkload as the deployed pod spec spells it. Written out rather than
-// imported for the reason e2e_f1 gives for the other three.
+// imported for the reason harness_approval_gate_test.go gives for the other three.
 const podRoleWorkload = "workload"
 
 // helperPodsFor cannot serve here: it always narrows to the helper role, and
@@ -92,7 +92,7 @@ func TestAuxiliaryPod_OneToOneStatementHoldsOnWorkloadPods(t *testing.T) {
 		}
 	}
 	if len(seen) != 4 {
-		t.Fatalf("two approval-gated sessions account for %d distinct pods %v, want 4", len(seen), seen)
+		t.Fatalf("two gated sessions account for %d distinct pods %v, want 4", len(seen), seen)
 	}
 
 	plain := createSession(t, uniqueName(t))
