@@ -105,6 +105,23 @@ func TestClientOrchestrator_StartCreatesOnePodWithLabel(t *testing.T) {
 	}
 }
 
+func TestClientOrchestrator_WorkloadContainerHasMemoryRequestAndLimit(t *testing.T) {
+	orch, cs := newReadyOrchestrator(t)
+	if _, err := orch.Start(context.Background(), "mem1", k8s.WorkloadSpec{Type: session.WorkloadTypeShell}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	c := listPods(t, cs)[0].Spec.Containers[0]
+	if c.Name != k8s.ContainerName {
+		t.Fatalf("first container=%q want %q", c.Name, k8s.ContainerName)
+	}
+	if got := c.Resources.Requests.Memory().String(); got != k8s.WorkloadMemoryRequest {
+		t.Fatalf("memory request=%q want %q", got, k8s.WorkloadMemoryRequest)
+	}
+	if got := c.Resources.Limits.Memory().String(); got != k8s.WorkloadMemoryLimit {
+		t.Fatalf("memory limit=%q want %q", got, k8s.WorkloadMemoryLimit)
+	}
+}
+
 func TestClientOrchestrator_NSessionsNUniquePods(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t)
 	ids := []string{"aa01", "bb02", "cc03", "dd04"}
