@@ -12,13 +12,13 @@
 # Why a second local-path provisioner rather than an NFS stack: local-path in
 # sharedFileSystemPath mode skips the ReadWriteOnce-only check and emits a
 # PersistentVolume with no node affinity, on the premise that every node sees
-# the same filesystem at that path. deploy/kind-config.yaml makes that premise
+# the same filesystem at that path. deploy/overlays/e2e/kind-config.yaml makes that premise
 # true by bind-mounting one host directory into both nodes. Both images below
 # are already baked into the kind node image, so this pulls nothing, needs no
 # privileged NFS daemon, and adds one failure surface (a config) instead of
 # five. It is a real deployment, like MinIO — not a stand-in for one.
 #
-# Production is untouched: k8s/ names no class, and this file lives in the kind
+# Production is untouched: deploy/base/ names no class, and this file lives in the kind
 # overlay only. Which class serves ReadWriteMany is a property of the target
 # cluster, which is why the control plane takes it as configuration.
 #

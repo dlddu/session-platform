@@ -1,0 +1,9 @@
+# 운영 overlay. Flux(flux-cd-apps/cluster/session-platform.yaml 의 session-platform-app)가
+# `deploy` 브랜치에서 이 경로를 적용한다. Namespace 객체는 flux-cd-apps 쪽이 소유하므로 여기엔 없다.
+# 운영 전용 차이 중 클러스터 사정에 묶인 것(efs 공유 볼륨 클래스·레포 접근 허용목록 PVC·
+# Sablier 라벨)은 flux-cd-apps 의 Kustomization patches 에 있다 — 이 레포는 그 클러스터를 모른다.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: session-platform
+resources:
+  - ../../base

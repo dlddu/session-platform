@@ -1,7 +1,7 @@
 // 검증 시나리오: multitenancy.md#시나리오 4
 //
 // docs/prd/multitenancy.md AC-K4. 브라우저는 bearer 없이 오므로 운영자다. 테넌트 셋은
-// deploy/ 오버레이의 ConfigMap `session-platform-tenants` 가 심는다 — e2e-alpha(shell·codex-chat),
+// deploy/overlays/e2e/ 오버레이의 ConfigMap `session-platform-tenants` 가 심는다 — e2e-alpha(shell·codex-chat),
 // e2e-beta(shell), e2e-gamma("*"). codex-chat 세션에 프롬프트는 보내지 않는다(첫 프롬프트가 ChatGPT 로그인을 연다).
 import { expect, test } from "@playwright/test";
 

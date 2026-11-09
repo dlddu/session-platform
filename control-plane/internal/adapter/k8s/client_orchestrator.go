@@ -64,7 +64,7 @@ const (
 	// defaultDataPlaneImage is the in-code fallback when no DATA_PLANE_IMAGE
 	// is injected. It cannot pass the shell readiness probe (no session agent
 	// inside), so real deployments MUST inject the published data plane agent
-	// image (data-plane/Dockerfile) — k8s/deployment.yaml and the e2e overlay
+	// image (data-plane/Dockerfile) — deploy/base/deployment.yaml and the e2e overlay
 	// both do.
 	defaultDataPlaneImage = "alpine:3.20"
 
@@ -114,7 +114,7 @@ const (
 	ClaudeCodeCACertConfigKey = "ca-cert"
 
 	// The plugin bootstrap's two endpoints, as optional keys: absent, the
-	// entrypoint keeps its built-in defaults, so k8s/ needs no change
+	// entrypoint keeps its built-in defaults, so deploy/base/ needs no change
 	// (docs/test/e2e.md's PLUGIN-CRED row is why they are overridable).
 	K3SMCPURLEnvVar                         = "K3S_MCP_URL"
 	ClaudeCodePluginMarketplaceURLEnvVar    = "CLAUDE_CODE_PLUGIN_MARKETPLACE_URL"
@@ -139,7 +139,7 @@ const (
 
 	// Approval-gate runtime configuration (docs/prd/approval-gate.md AC-F4/AC-F6).
 	// SessionMCPServiceAccountName is the helper pod's identity — see
-	// k8s/session-mcp-serviceaccount.yaml for why it exists.
+	// deploy/base/session-mcp-serviceaccount.yaml for why it exists.
 	SessionMCPServiceAccountName = "session-mcp"
 	// SessionMCPContainerName is the helper pod container that exposes the
 	// session's external tools behind the approval gate (AC-F3).

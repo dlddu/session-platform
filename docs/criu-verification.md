@@ -31,7 +31,7 @@
 
 > 상태: **agent-driven in-pod CRIU 구현 + kind 배포 e2e 왕복 검증** — *2026-08-08 갱신*.
 > `shell` snapshot은 pod 에이전트가 CRIU dump/restore를 실행하고 control plane이 archive를
-> durable S3로 중계한다. `deploy/` overlay는 `CRIU_ENABLED=1`과 MinIO를 켜며 제품 snapshot
+> durable S3로 중계한다. `deploy/overlays/e2e/` overlay는 `CRIU_ENABLED=1`과 MinIO를 켜며 제품 snapshot
 > endpoint를 호출하는 AC별 e2e 파일(`web/e2e/lifecycle-2-snapshot-restore.spec.ts`·
 > `e2e_b3_restore_integrity_test.go`·`e2e_d4_process_tree_test.go`)이 실제 dump→pod 회수→새 pod restore와 cursor
 > 연속성을 단언한다(B2 는 2026-09-14 시나리오 ↔ e2e 이관으로 Playwright 스위트에 있고, 셋 다
@@ -115,7 +115,7 @@
 - **on**: `criu.AgentCheckpointer`(에이전트 주도 in-pod CRIU)가 pod 에이전트의 `/checkpoint`·`/restore`를
   구동하고 아카이브를 S3로 중계한다. `main.go`가 게이트로 실 어댑터/스텁을 분기하고 세션 pod에 criu
   권한을 붙인다. standalone `TestScenario4_CRIUIntegrity`는 필요한 env/cluster가 없으면 skip하지만,
-  `deploy/` e2e는 게이트·S3-compatible store·trigger를 제공하므로 실제 왕복을 단언하고 실패를 표면화한다.
+  `deploy/overlays/e2e/` e2e는 게이트·S3-compatible store·trigger를 제공하므로 실제 왕복을 단언하고 실패를 표면화한다.
 
 ## 실구현 요약 (코드)
 - `control-plane/internal/adapter/criu/checkpointer.go` — `Checkpointer` 포트 + 게이트 off 스텁.
@@ -228,7 +228,7 @@ e2e 워크플로에 `criu check` 프로브 스텝을 추가해(비차단, `conti
   함께 사용하며, 60분 idle reaper는 자동 동결 경로로 그대로 유지된다. 복원은 별도 endpoint가 필요
   없다(접근 시 자동 복원).
 - ② **AWS 없는 저장소**: 클러스터 안에 **MinIO**를 띄우고 `CHECKPOINT_S3_ENDPOINT`로 가리킨다
-  (`deploy/minio.yaml`). 테스트 전용 저장 백엔드를 따로 만드는 대신 **프로덕션과 동일한 S3 코드 경로**
+  (`deploy/overlays/e2e/minio.yaml`). 테스트 전용 저장 백엔드를 따로 만드는 대신 **프로덕션과 동일한 S3 코드 경로**
   (`checkpointstore`)를 그대로 태우는 것이 핵심이며, 2개 replica가 같은 저장소를 보는 문제도 자연히
   해결된다(스냅샷과 복원이 서로 다른 replica로 갈 수 있음). e2e SUT는 role을 비워 두고 static key로
   인증한다(=MinIO root) — 프로덕션은 role ARN을 설정해 인스턴스 프로파일 위에서 assume-role 한다.
@@ -274,7 +274,7 @@ kind/MinIO 경로는 자동 검증된다. production에서 게이트를 켜려�
 CRIU_ENABLED=1 DATA_PLANE_IMAGE=<criu-포함 agent-image> \
   go test -tags=integration ./test/... -run TestScenario4_CRIUIntegrity -v
 ```
-- **skip**: standalone integration 실행에 cluster/image/env가 미준비(정상). `deploy/` e2e에서는
+- **skip**: standalone integration 실행에 cluster/image/env가 미준비(정상). `deploy/overlays/e2e/` e2e에서는
   overlay가 cluster/image/store 선결조건을 제공하고 제품 snapshot endpoint를 호출해 실단언한다.
 - **fail**: standalone integration은 CRIU 호출/PTY 재부착/복원 중 하나가 계약과 맞지 않음. deploy e2e는
   여기에 S3-compatible MinIO 중계까지 포함한다.
@@ -298,4 +298,4 @@ CRIU_ENABLED=1 DATA_PLANE_IMAGE=<criu-포함 agent-image> \
 ## 관련 문서
 - `docs/prd/shell-workload.md` — AC-D4(보존 상태), offset·복원 설계 노트(커서 유효).
 - `docs/test/shell-workload.md` 시나리오 4 / `docs/test/lifecycle.md` 시나리오 3 — 마커 왕복.
-- `deploy/kustomization.yaml` — kind overlay는 CRIU·MinIO를 활성화하고 제품 snapshot endpoint를 검증한다.
+- `deploy/overlays/e2e/kustomization.yaml` — kind overlay는 CRIU·MinIO를 활성화하고 제품 snapshot endpoint를 검증한다.

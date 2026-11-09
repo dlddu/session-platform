@@ -7,7 +7,7 @@
 - AC-K4: 운영자 화면과 운영자 전용 경로 (PRD: 멀티테넌시)
 - AC-K5: 테넌트 설정과 하위 호환 (PRD: 멀티테넌시)
 
-> 📌 **SUT 설정**: kind e2e 오버레이(`deploy/e2e-tenancy.yaml`)가 테넌트 셋을 둔다 — `e2e-alpha`(계정 `default/tenant-alpha`,
+> 📌 **SUT 설정**: kind e2e 오버레이(`deploy/overlays/e2e/e2e-tenancy.yaml`)가 테넌트 셋을 둔다 — `e2e-alpha`(계정 `default/tenant-alpha`,
 > 타입 `shell`·`codex-chat`), `e2e-beta`(계정 `default/tenant-beta`, 타입 `shell`), `e2e-gamma`(계정 `default/tenant-gamma`, 타입 `"*"` — 제한 없음). 어느 테넌트도 주장하지 않는 계정
 > `default/tenant-outsider`도 있다. 스위트는 실물 TokenRequest로 audience `session-platform` 토큰을 발급받는다 —
 > 대역이 없다. control plane의 TokenReview 권한도 같은 파일이 붙인다.

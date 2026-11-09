@@ -1,7 +1,7 @@
 # kind e2e ONLY: an in-cluster git remote that serves a `dlddu-plugins`
 # marketplace over the **smart HTTP** protocol.
 #
-# 이것은 모킹이 **아니다** — deploy/minio.yaml 과 같은 자리에 있다. `claude plugin
+# 이것은 모킹이 **아니다** — deploy/overlays/e2e/minio.yaml 과 같은 자리에 있다. `claude plugin
 # marketplace add <url>` 은 호스트를 가리지 않고 그냥 git 원격을 클론하므로, 원격을
 # 클러스터 안에 실물로 세우면 프로덕션과 **같은 코드 경로**가 그대로 돈다. 모델 정의의
 # EXT 배제 조항("kind에 실물로 배포 가능하면 EXT를 쓸 수 없다", MinIO 선례)이 바로 이

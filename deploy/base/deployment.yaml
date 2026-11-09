@@ -4,11 +4,10 @@
 # rbac.yaml) and provisions session pods in this same namespace, resolving the
 # namespace from the mounted service account (no SESSION_NAMESPACE env needed).
 #
-# 이미지는 .github/workflows/ci.yml 의 이미지 job 들이 커밋 SHA 태그로 발행하고,
-# 같은 워크플로의 `pin` job 이 main 푸시마다 아래 세 자리(컨테이너 image 1곳 +
-# DATA_PLANE_IMAGE / DATA_PLANE_CLAUDE_CODE_IMAGE env 2곳)를 그 커밋의 SHA 로 바꿔
-# main 에 되커밋한다. 그래서 이 파일이 곧 "운영이 지금 어느 커밋을 돌리는가"의 단일
-# 출처다 — 롤링 태그도 :latest 도 없다.
+# 이미지는 .github/workflows/image.yml 이 커밋 SHA 태그로 발행하고, 같은 워크플로의
+# `pin` job 이 main 푸시마다 아래 ghcr 참조(컨테이너 image + DATA_PLANE_*_IMAGE env)를
+# 그 커밋의 SHA 로 바꿔 `deploy` 브랜치로 발행한다(main 은 그대로). 그래서 deploy 브랜치의
+# 이 파일이 곧 "운영이 지금 어느 커밋을 돌리는가"의 단일 출처다 — 롤링 태그도 :latest 도 없다.
 #
 # 손으로 고칠 일은 롤백뿐이고, 그때는 되돌릴 커밋의 SHA 를 세 자리에 모두 적는다.
 # 태그가 불변이라 imagePullPolicy 는 기본값(IfNotPresent)이 그대로 옳다.
@@ -38,7 +37,7 @@ spec:
       serviceAccountName: control-plane
       containers:
         - name: control-plane
-          # ⚙️ CI가 관리하는 줄입니다(ci.yml 의 `pin` job).
+          # ⚙️ CI가 관리하는 줄입니다(image.yml 의 `pin` job).
           image: ghcr.io/dlddu/session-platform:cc4615f73c4db0df6151680d65ee6390a0e5ee52
           ports:
             - containerPort: 8080
@@ -56,7 +55,7 @@ spec:
             # on snapshot; off, a shell refuses to freeze and keeps its pod.
             # ⚠️ PR 프리뷰 오버레이(flux-cd-apps apps/session-platform-preview)는 S3 를
             # 주입하지 않으므로 이 이름을 false 로 덮어쓴다(flux-cd-apps #100).
-            # This entry must stay at env index 2: deploy/ patches by index.
+            # This entry must stay at env index 2: deploy/overlays/e2e/ patches by index.
             - name: SHELL_ARCHIVE_ENABLED
               value: "true"
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다.
@@ -105,8 +104,8 @@ spec:
             # `checkpoint-s3` ConfigMap rather than inlined here. The ConfigMap is
             # REQUIRED (no `optional`), so the pod will not start until it exists:
             # in production external-secrets renders it from SSM; the kind e2e
-            # overlay (deploy/) points it at MinIO; for a manual archive round trip
-            # create it directly (k8s/checkpoint-s3-configmap.example.yaml).
+            # overlay (deploy/overlays/e2e/) points it at MinIO; for a manual archive round trip
+            # create it directly (deploy/base/checkpoint-s3-configmap.example.yaml).
             # These are config, not credentials — S3 access is by assume-role over
             # the node instance profile, so there are no static keys here, and
             # that is why this is a ConfigMap rather than a Secret.
@@ -131,7 +130,7 @@ spec:
                   name: checkpoint-s3
                   key: prefix
             # minimax-code 워크로드(AC-G1~G4). 이 세 항목은 env 목록 **맨 끝**에 둔다 —
-            # deploy/ 오버레이가 env 를 인덱스로 잡고 있어서, 앞에 끼워 넣으면 그쪽 패치가
+            # deploy/overlays/e2e/ 오버레이가 env 를 인덱스로 잡고 있어서, 앞에 끼워 넣으면 그쪽 패치가
             # 엉뚱한 항목을 덮어쓴다.
             #
             # 이미지는 같은 멀티 워크로드 data plane 이미지다(DATA_PLANE_WORKLOAD 로 분기).
@@ -143,7 +142,7 @@ spec:
             # 와 선택 model(platform-default 세션의 주 컨테이너)은 ConfigMap `minimax-code-config`
             # (MINIMAX_CODE_CONFIG_CONFIGMAP 기본값)에 있다. 둘 다 claude-code 쪽과 섞이지 않는다 —
             # 이름이 겹치면 control plane 이 기동을 거부한다.
-            # k8s/minimax-code-credentials-secret.example.yaml · minimax-code-config-configmap.example.yaml 참고.
+            # deploy/base/minimax-code-credentials-secret.example.yaml · minimax-code-config-configmap.example.yaml 참고.
             # 둘이 없으면 이 타입의 세션 생성만 실패하고 다른 타입은 영향이 없다.
             - name: MINIMAX_CODE_CREDENTIALS_SECRET
               value: "minimax-code-credentials"
@@ -170,18 +169,18 @@ spec:
             # 없으면(PR 프리뷰 네임스페이스처럼) 두 도구는 403 으로 실패한다(fail-closed).
             # ExternalName → Traefik → Sablier 를 지나므로 첫 요청은 drop 을 깨우느라 늦을 수 있다.
             # 비우면 drop 도구가 목록에 오르지 않는다. 이 항목도 env 목록 맨 끝에 둔다(위와 같은 이유) —
-            # deploy/ 오버레이가 이 자리를 env/16 으로 잡아 kind 안 drop 주소로 바꾼다.
+            # deploy/overlays/e2e/ 오버레이가 이 자리를 env/16 으로 잡아 kind 안 drop 주소로 바꾼다.
             - name: DROP_URL
               value: http://drop-external.drop.svc.cluster.local
             # codex 워크로드(docs/prd/codex-workload.md, AC-J1~J6)와 멀티테넌시(docs/prd/multitenancy.md).
-            # 이 다섯 항목도 env 목록 맨 끝에 둔다 — deploy/ 오버레이가 env/19(이미지)를 인덱스로 잡는다.
+            # 이 다섯 항목도 env 목록 맨 끝에 둔다 — deploy/overlays/e2e/ 오버레이가 env/19(이미지)를 인덱스로 잡는다.
             # 이미지 문자열이 위와 같아서 CI `pin` job 의 sed 가 이 자리도 함께 SHA 로 고정한다.
             - name: DATA_PLANE_CODEX_IMAGE
               value: "ghcr.io/dlddu/session-platform-data-plane:cc4615f73c4db0df6151680d65ee6390a0e5ee52"
             # codex 세션은 ChatGPT 로그인을 세션마다 스스로 한다(AC-J3) — 공급자 Secret 이 없다.
             # Secret `codex-credentials` 는 선택 k3s-mcp-token 하나만, ConfigMap `codex-config` 는
             # 선택 model·models·k3s-mcp-url·plugin-marketplace-url 만 담는다. 둘 다 없어도 세션은
-            # 뜬다(K3s MCP 도구와 플러그인 스킬 없이). k8s/codex-*.example.yaml 참고.
+            # 뜬다(K3s MCP 도구와 플러그인 스킬 없이). deploy/base/codex-*.example.yaml 참고.
             - name: CODEX_DEFAULT_MODEL
               valueFrom:
                 configMapKeyRef:
@@ -201,7 +200,7 @@ spec:
             # 테넌시 설정(AC-K3). 없으면 테넌시가 없다 — 토큰 없는 호출(운영자)은 지금과 같고,
             # Bearer 토큰 호출은 모두 403 이다. 토큰 검증(TokenReview)에는 control-plane SA 의
             # system:auth-delegator 바인딩이 필요하다(rbac.yaml 머리말과 같은 이유로 base 밖, flux-cd-apps).
-            # k8s/session-platform-tenants-configmap.example.yaml 참고.
+            # deploy/base/session-platform-tenants-configmap.example.yaml 참고.
             - name: SESSION_PLATFORM_TENANTS
               valueFrom:
                 configMapKeyRef:
@@ -210,13 +209,13 @@ spec:
                   optional: true
             # codex 작업용 워크로드(docs/prd/codex-task-workload.md, AC-M1~M4)와 에이전트 인증 풀
             # (docs/prd/agent-auth-pool.md, AC-N1~N5), claude-code 구독 인증(AC-E7). 이 일곱 항목도
-            # env 목록 맨 끝에 둔다 — deploy/ 오버레이가 env/24(이미지)·env/29(인증 모드)를 인덱스로 잡는다.
+            # env 목록 맨 끝에 둔다 — deploy/overlays/e2e/ 오버레이가 env/24(이미지)·env/29(인증 모드)를 인덱스로 잡는다.
             # 이미지 문자열이 위와 같아서 CI `pin` job 의 sed 가 이 자리도 함께 SHA 로 고정한다.
             - name: DATA_PLANE_CODEX_TASK_IMAGE
               value: "ghcr.io/dlddu/session-platform-data-plane:cc4615f73c4db0df6151680d65ee6390a0e5ee52"
             # codex-task 의 모델 카탈로그(AC-M4). Secret `codex-task-credentials` 는 선택 k3s-mcp-token
             # 하나만, ConfigMap `codex-task-config` 는 선택 model·models·k3s-mcp-url·plugin-marketplace-url
-            # 만 담는다. 이름은 codex-chat 의 것과 겹치면 안 된다(AC-M1). k8s/codex-task-*.example.yaml 참고.
+            # 만 담는다. 이름은 codex-chat 의 것과 겹치면 안 된다(AC-M1). deploy/base/codex-task-*.example.yaml 참고.
             - name: CODEX_TASK_DEFAULT_MODEL
               valueFrom:
                 configMapKeyRef:

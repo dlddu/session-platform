@@ -35,7 +35,7 @@ if [ "$workload" = "claude-code" ]; then
   k3s_mcp_url="${K3S_MCP_URL:-https://homelab-k3s-mcp.llkm.nl/mcp}"
   # The marketplace is a plain git remote, so the platform can point this at any
   # host that serves the same repository shape — production keeps github.com and
-  # the kind e2e SUT points it at an in-cluster remote (deploy/). Both run the
+  # the kind e2e SUT points it at an in-cluster remote (deploy/overlays/e2e/). Both run the
   # identical `claude plugin marketplace add` code path.
   marketplace_url="${CLAUDE_CODE_PLUGIN_MARKETPLACE_URL:-https://github.com/dlddu/plugin-marketplace.git}"
   plugin_cache_dir="${CLAUDE_CODE_PLUGIN_CACHE_DIR:-/tmp/session-platform-claude-plugin-seed}"

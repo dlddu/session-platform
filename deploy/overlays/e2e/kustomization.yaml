@@ -1,9 +1,9 @@
-# Overlay for the kind-based e2e SUT. Reuses the production base (../k8s) and
+# Overlay for the kind-based e2e SUT. Reuses the production base (../../base) and
 # applies only the kind-specific differences:
 #   - the locally built control-plane image (loaded via `kind load`, not pulled
 #     from ghcr),
 #   - a NodePort Service so the e2e suites reach the SUT at host :8080 through the
-#     kind extraPortMapping (deploy/kind-config.yaml),
+#     kind extraPortMapping (deploy/overlays/e2e/kind-config.yaml),
 #   - 2 control-plane replicas so the e2e suite exercises cross-replica state
 #     sharing through the ConfigMap/Lease store (AC-C1). The production base
 #     keeps replicas: 1; scaling production is a separate operational decision.
@@ -13,10 +13,10 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - ../k8s
+  - ../../base
   # The `checkpoint-s3` ConfigMap the control plane requires, pointed at the
   # in-cluster MinIO below, plus the MinIO root credentials Secret
-  # (production uses the k8s/ base + external-secrets, and no credentials).
+  # (production uses the deploy/base/ base + external-secrets, and no credentials).
   - checkpoint-s3.yaml
   # Throwaway claude-code configuration (ConfigMap) and credentials (Secret)
   # for creating claude-code pods in local e2e.
@@ -196,7 +196,7 @@ patches:
             secretKeyRef:
               name: checkpoint-s3-credentials
               key: access-key
-      # drop's in-cluster address here (deploy/e2e-drop.yaml). env/16 is DROP_URL;
+      # drop's in-cluster address here (deploy/overlays/e2e/e2e-drop.yaml). env/16 is DROP_URL;
       # production goes through an ExternalName and
       # Traefik, neither of which kind has.
       - op: test
@@ -229,7 +229,7 @@ patches:
         path: /spec/template/spec/containers/0/env/26/value
         value: "2"
       # claude-code 는 이 SUT 에서 게이트웨이 모드다(AC-E7) — 기존 claude-code e2e 는 공급자 대역
-      # (deploy/e2e-anthropic-fake.yaml)을 credential-proxy 로 부른다. 실 구독 로그인은 e2e 밖이다.
+      # (deploy/overlays/e2e/e2e-anthropic-fake.yaml)을 credential-proxy 로 부른다. 실 구독 로그인은 e2e 밖이다.
       # env/27 가 CLAUDE_CODE_AUTH_MODE.
       - op: test
         path: /spec/template/spec/containers/0/env/27/name
@@ -268,7 +268,7 @@ patches:
             secretKeyRef:
               name: checkpoint-s3-credentials
               key: secret-key
-  # The base's two static NetworkPolicies (k8s/network-policy.yaml) are a
+  # The base's two static NetworkPolicies (deploy/base/network-policy.yaml) are a
   # production boundary and do not fit this SUT: the suites reach the control
   # plane from the host through the NodePort (no traefik here), and shell
   # sessions use in-cluster MinIO for CRIU checkpoints. kind's kindnet does

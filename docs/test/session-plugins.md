@@ -3,7 +3,7 @@
 ## 검증 대상 AC
 - AC-L1: 생성 시 플러그인 선택 — 타입 기본값을 대체하고, 세션 수명 동안 고정 (PRD: 세션별 플러그인 선택)
 
-> 📌 **SUT 설정**: kind e2e의 in-cluster 마켓플레이스(`deploy/plugin-marketplace-git.yaml`)가 내놓는 플러그인 이름을 쓴다.
+> 📌 **SUT 설정**: kind e2e의 in-cluster 마켓플레이스(`deploy/overlays/e2e/plugin-marketplace-git.yaml`)가 내놓는 플러그인 이름을 쓴다.
 > 이름이 마켓플레이스에 있는지는 AC-L1이 control plane의 검사 대상에서 뺐으므로, 시나리오 2는 마켓플레이스 없이도 돈다.
 
 ## 테스트 시나리오

@@ -1,11 +1,11 @@
 # kind e2e only: the minimax-code platform configuration, split the way
-# production splits it (k8s/minimax-code-*.example.yaml) — non-credential keys
+# production splits it (deploy/base/minimax-code-*.example.yaml) — non-credential keys
 # in the `minimax-code-config` ConfigMap, the credential in the
 # `minimax-code-credentials` Secret. minimax-code is the type the approval
 # gate's e2e files provision (control-plane/test/harness_approval_gate_test.go),
 # so its helper pod's provider proxy has to reach a provider in this cluster.
 #
-# That provider is the claude-code stand-in (deploy/e2e-anthropic-fake.yaml,
+# That provider is the claude-code stand-in (deploy/overlays/e2e/e2e-anthropic-fake.yaml,
 # CLAUDE-PROVIDER): mcode speaks the same Anthropic Messages API through the
 # same credential proxy. Hence the same base-url and issuer, and an auth-token
 # equal to claude-code's — the stand-in checks the bearer against that one

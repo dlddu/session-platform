@@ -4,7 +4,7 @@
 //
 // docs/prd/approval-gate.md AC-F4, asserted on the deployed SUT with a session of
 // the gated type (harness_approval_gate_test.go). The freeze and restore
-// branches need the deploy/ overlay's MINIMAX_CODE_ARCHIVE_ENABLED, which
+// branches need the deploy/overlays/e2e/ overlay's MINIMAX_CODE_ARCHIVE_ENABLED, which
 // registers that type's archive strategy.
 package e2e_test
 

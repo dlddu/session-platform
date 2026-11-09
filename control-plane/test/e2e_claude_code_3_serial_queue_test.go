@@ -4,7 +4,7 @@
 //
 // 이 파일이 사는 것과 시나리오 2·4 에 남기는 경계, 그리고 겹침 창을 크기가 아니라
 // 델타 간격으로 만든 경위는 docs/test/e2e.md 의 매핑 행이 갖는다. 지시자의 문법과
-// 그 상한(MAX_DELTAS·MAX_DELAY_MS)은 deploy/e2e-anthropic-fake.yaml 의 헤더가 갖는다.
+// 그 상한(MAX_DELTAS·MAX_DELAY_MS)은 deploy/overlays/e2e/e2e-anthropic-fake.yaml 의 헤더가 갖는다.
 package e2e_test
 
 import (
@@ -66,7 +66,7 @@ func cc3IssueOverlapped(t *testing.T, id string) readResp {
 			"the second write returned — the two writes never overlapped, so nothing below would be "+
 			"measuring serialisation. The stand-in was asked to spend at least %dms on it, so either "+
 			"the delta gap stopped being honoured or this SUT got dramatically faster; raise "+
-			"cc3SlowDelayMs (MAX_DELAY_MS in deploy/e2e-anthropic-fake.yaml is the ceiling). Note "+
+			"cc3SlowDelayMs (MAX_DELAY_MS in deploy/overlays/e2e/e2e-anthropic-fake.yaml is the ceiling). Note "+
 			"that raising the *size* does not help — 600013 bytes was measured landing inside one "+
 			"write's round trip, which is why the gap exists.",
 			cc3SlowBytes, mid.NextOffset-cc3SlowOpenLen, cc3SlowFloorMs)

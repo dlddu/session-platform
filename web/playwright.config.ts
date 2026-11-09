@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// Playwright drives the *deployed* SUT (kind, deploy/) — or any control-plane
+// Playwright drives the *deployed* SUT (kind, deploy/overlays/e2e/) — or any control-plane
 // reachable at E2E_BASE_URL (default http://localhost:8080, where the embedded
 // SPA and the /api/v1 surface are served on one port). The suites assume the
 // SUT is already up (`make e2e-up`), so there is no managed webServer here.

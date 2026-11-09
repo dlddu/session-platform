@@ -8,10 +8,10 @@ import { expect, test } from "@playwright/test";
 // 넉넉한 타임아웃의 containment 다 — 정확 일치가 아니다.
 
 // 트리 어디에도 이 문자열이 없으므로, 콘솔에 뜨면 그 바이트는 배포된 대역에서 온 것이다
-// (deploy/e2e-anthropic-fake.yaml).
+// (deploy/overlays/e2e/e2e-anthropic-fake.yaml).
 const PROVIDER_REPLY = "session-platform-e2e-provider-ok";
 
-// 배포 오버레이가 심는 카탈로그의 둘째 항목(deploy/claude-code.yaml).
+// 배포 오버레이가 심는 카탈로그의 둘째 항목(deploy/overlays/e2e/claude-code.yaml).
 const ALTERNATE_MODEL = "claude-e2e-alternate";
 
 type CreatedSession = {

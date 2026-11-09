@@ -26,7 +26,7 @@ const (
 	// written out rather than imported for the reason harness_approval_gate_test.go gives.
 	f3AwaitingPrefix = "[session-platform: awaiting approval — "
 	f3ApprovedPrefix = "[session-platform: approval approved — "
-	// The origin deploy/fetch-origin.yaml stands, addressed by its Service name.
+	// The origin deploy/overlays/e2e/fetch-origin.yaml stands, addressed by its Service name.
 	// Its header owns why that address is plain http.
 	f3OriginBase     = "http://fetch-origin:8080"
 	f3MarkerToolName = "web_fetch_get"
@@ -51,7 +51,7 @@ const (
 // 32-hex session id carries nothing that anything on that trip would expand.
 func f3DocPath(sessionID string) string { return "/doc/" + sessionID }
 
-// The directive grammar is deploy/e2e-anthropic-fake.yaml's.
+// The directive grammar is deploy/overlays/e2e/e2e-anthropic-fake.yaml's.
 func f3PromptFor(sessionID string) string {
 	return "e2e-tool:" + providerToolName +
 		`:{"url":"` + f3OriginBase + f3DocPath(sessionID) + `"}`

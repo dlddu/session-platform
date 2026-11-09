@@ -1,7 +1,7 @@
 //go:build e2e
 
 // The approver's side of the approval gate, played against the real PocketAide
-// that deploy/e2e-pocket-aide.yaml stands. Everything here goes through the
+// that deploy/overlays/e2e/e2e-pocket-aide.yaml stands. Everything here goes through the
 // same user API the app calls; nothing reaches into PocketAide's store.
 package e2e_test
 

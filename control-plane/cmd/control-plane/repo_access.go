@@ -42,7 +42,7 @@ func loadRepoAccessConfig() repoAccessConfig {
 	}
 }
 
-// helperURL defaults to this namespace's control-plane Service (k8s/service.yaml).
+// helperURL defaults to this namespace's control-plane Service (deploy/base/service.yaml).
 func (c repoAccessConfig) helperURL(namespace string) string {
 	if !c.enabled {
 		return ""

@@ -42,13 +42,13 @@
 # 그 시나리오의 전제는 「첫 실행이 끝나기 전에 둘째 write」이므로, 겹칠 창을 만들 수단이 없으면
 # 저작해도 그 전제를 살 수 없다. 델타 사이에만 쉬므로 프레임의 모양은 바뀌지 않는다.
 #
-# test-only 라는 말이 붙는 것은 이 대역 자체다. `deploy/minio.yaml` 이나
-# `deploy/plugin-marketplace-git.yaml` 과 달리 프로덕션과 같은 코드 경로가 도는 실물이 아니다.
+# test-only 라는 말이 붙는 것은 이 대역 자체다. `deploy/overlays/e2e/minio.yaml` 이나
+# `deploy/overlays/e2e/plugin-marketplace-git.yaml` 과 달리 프로덕션과 같은 코드 경로가 도는 실물이 아니다.
 #
 # 왜 HTTPS 인가: 선택이 아니다. credential-proxy 는 upstream 스킴을 https 로 강제한다
 # (data-plane/cmd/agent/credential_proxy.go 의 parseCredentialProxyUpstream). 그래서 대역은
 # 사설 CA 로 서명한 인증서로 TLS 를 종단하고, 그 CA 를 플랫폼 ConfigMap 의 optional `ca-cert`
-# 키로 프록시 컨테이너에만 넘긴다. 프로덕션 base(k8s/)는 그 키가 없어 시스템 풀 그대로다.
+# 키로 프록시 컨테이너에만 넘긴다. 프로덕션 base(deploy/base/)는 그 키가 없어 시스템 풀 그대로다.
 #
 # 아래 키 자료는 이 레포 전용 일회용이다 — 실 자격 증명이 아니고, 실 호스트를 위한 것도
 # 아니며(SAN 은 인클러스터 이름과 loopback 뿐), 외부에서 신뢰되지 않는다.
@@ -367,7 +367,7 @@ spec:
         app: anthropic-fake
     spec:
       containers:
-        # Same reasoning as deploy/e2e-k3s-mcp-fake.yaml: the data-plane image
+        # Same reasoning as deploy/overlays/e2e/e2e-k3s-mcp-fake.yaml: the data-plane image
         # already carries the Node 22 runtime and scripts/e2e/up.sh has already
         # loaded it into kind, so the stand-in costs no extra build and no pull.
         - name: server

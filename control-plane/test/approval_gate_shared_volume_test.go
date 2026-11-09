@@ -172,7 +172,7 @@ func TestApprovalGate_WorkloadAndMCPShareTheClaimAtOnePath(t *testing.T) {
 }
 
 // Reclamation is garbage collection following this reference, which is why
-// k8s/rbac.yaml grants no delete right on claims. Asserting the reference is
+// deploy/base/rbac.yaml grants no delete right on claims. Asserting the reference is
 // the only place that dependency is checkable.
 func TestApprovalGate_ClaimIsOwnedByItsHelperPod(t *testing.T) {
 	orch, cs := newMiniMaxOrchestrator(t,
