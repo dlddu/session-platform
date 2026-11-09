@@ -56,6 +56,8 @@ const (
 	codexSkillsServerName = "skills"
 	// codexSessionDBServerName is the sidecar's session DB MCP (AC-N6).
 	codexSessionDBServerName = "db"
+	// codexSchedulerServerName is the sidecar's scheduler MCP (AC-P1).
+	codexSchedulerServerName = "scheduler"
 
 	// The slot login file of both codex types and its HOME place (AC-M2,
 	// AC-N6).
@@ -90,6 +92,9 @@ type codexCLI struct {
 	// sessionDBURL is the sidecar's session DB MCP (AC-N6), codex-chat only;
 	// empty registers no `db` server.
 	sessionDBURL string
+	// schedulerURL is the sidecar's scheduler MCP (AC-P1); empty registers no
+	// `scheduler` server.
+	schedulerURL string
 	// probeSidecar reads what the sidecar offers; a field so tests need no
 	// server. It reports what it learned even when it also returns an error.
 	probeSidecar func(proxyURL string) (codexSidecar, error)
@@ -138,6 +143,10 @@ func (c codexCLI) argv(binary, model, prompt string, resume bool) []string {
 	return append(argv, "--", prompt)
 }
 
+func (c codexCLI) schedulerStateURL() string {
+	return schedulerStateURLFor(c.schedulerURL)
+}
+
 func (codexCLI) newProjector(dst io.Writer) io.WriteCloser {
 	return newCodexStreamProjector(dst)
 }
@@ -165,6 +174,7 @@ func (c codexCLI) ensureHome(homeDir string, _ toolSurface) error {
 		agentBinary:  c.agentBinary,
 		skillsDir:    skillsDir,
 		sessionDBURL: c.sessionDBURL,
+		schedulerURL: c.schedulerURL,
 	}
 	if sidecar.configured {
 		mcpURL, err := k3sProxyMCPURL(c.k3sProxyURL)
@@ -296,6 +306,9 @@ func newCodexWorkloadFromEnv(workload string, logger *slog.Logger, restoreMode b
 	if err != nil {
 		return nil, err
 	}
+	if cli.schedulerURL, err = schedulerMCPURLFromEnv(os.Getenv); err != nil {
+		return nil, err
+	}
 	if workload == workloadCodexTask {
 		if effort != "" && !slices.Contains(codexReasoningEfforts, effort) {
 			return nil, fmt.Errorf("%s must be one of %s, got %q", codexReasoningEffortEnv, strings.Join(codexReasoningEfforts, ", "), effort)
@@ -386,7 +399,8 @@ func renderCodexConfigForHome(home string, task bool) error {
 		agentBinary = exe
 	}
 	cfg := codexConfig{task: task, k3sMCPURL: mcpURL, agentBinary: agentBinary, skillsDir: skillsDir,
-		agentURL: loopbackAgentURL(defaultAddr)}
+		agentURL:     loopbackAgentURL(defaultAddr),
+		schedulerURL: "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(k3sMCPProxyPort)) + schedulerMCPPath}
 	if !task {
 		cfg.sessionDBURL = "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(k3sMCPProxyPort)) + sessionDBMCPPath
 	}

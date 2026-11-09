@@ -45,6 +45,12 @@ type approvalWaitReporter interface {
 	AwaitingApproval(context.Context, string) (bool, error)
 }
 
+// scheduleReporter answers how many schedules a codex session's scheduler
+// holds (docs/prd/session-scheduler.md AC-P3).
+type scheduleReporter interface {
+	ActiveSchedules(context.Context, string) (int, error)
+}
+
 // Option customises workload-specific service behaviour.
 type Option func(*Service)
 
@@ -487,9 +493,9 @@ func (s *Service) snapshot(ctx context.Context, id string, idleCutoff *time.Time
 		if sess.LastAccess.After(*idleCutoff) {
 			return sess, nil
 		}
-		if s.holdingForApproval(ctx, sess) {
-			// AC-F3's exception to AC-B1: the one place the platform
-			// advances lastAccess with no client access behind it.
+		if s.holdingForApproval(ctx, sess) || s.holdingForSchedules(ctx, sess) {
+			// AC-F3's and AC-P3's exceptions to AC-B1: the only places the
+			// platform advances lastAccess with no client access behind it.
 			return s.touchGet(ctx, id)
 		}
 	}
@@ -1057,6 +1063,27 @@ func (s *Service) holdingForApproval(ctx context.Context, sess *session.Session)
 		return false
 	}
 	return awaiting
+}
+
+// holdingForSchedules reports whether a codex session's idle count must be
+// held because its scheduler still has schedules (AC-P3). Like
+// holdingForApproval it is asked only on the reaper path, and an unreadable
+// answer applies the ordinary idle rule.
+func (s *Service) holdingForSchedules(ctx context.Context, sess *session.Session) bool {
+	if !sess.WorkloadType.IsCodex() || sess.Pod == "" {
+		return false
+	}
+	reporter, ok := s.agent.(scheduleReporter)
+	if !ok {
+		return false
+	}
+	active, err := reporter.ActiveSchedules(ctx, sess.Pod)
+	if err != nil {
+		slog.Warn("scheduler state unreadable; applying the ordinary idle rule",
+			"session", sess.ID, "pod", sess.Pod, "err", err)
+		return false
+	}
+	return active > 0
 }
 
 // touch updates LastAccess without changing state.
