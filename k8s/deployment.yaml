@@ -282,6 +282,14 @@ spec:
                   name: claude-code-config
                   key: subscription-models
                   optional: true
+            # codex-chat 슬롯 풀(AC-N6). 슬롯 i 는 Lease `codex-chat-auth-<i>` 와 PVC
+            # `<네임스페이스>-codex-chat-auth-<i>` 이고, 안에 ChatGPT 로그인(auth/)과 세션 DB(db/)를
+            # 함께 둔다. 채팅은 장기 단일 세션이라 1 — 0 이면 이 타입은 /config 에 나오지 않는다.
+            # 클래스는 다른 풀과 같은 이유로 efs. efs 는 NFS 라 세션 DB 는 WAL 을 쓰지 않는다.
+            - name: CODEX_CHAT_AUTH_SLOTS
+              value: "1"
+            - name: CODEX_CHAT_AUTH_STORAGE_CLASS
+              value: "efs"
           readinessProbe:
             httpGet:
               path: /api/v1/healthz

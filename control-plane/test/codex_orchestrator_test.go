@@ -25,7 +25,8 @@ func startCodex(t *testing.T, sessionID, model string) (corev1.Pod, k8s.SessionP
 		k8s.WithCodexConfigConfigMap("codex-cfg"),
 		k8s.WithCodexPlugins("session-platform,extra"),
 	)
-	started, err := orch.Start(context.Background(), sessionID, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexChat, Model: model})
+	slot := 0
+	started, err := orch.Start(context.Background(), sessionID, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexChat, Model: model, AuthSlot: &slot})
 	if err != nil {
 		t.Fatalf("start codex session: %v", err)
 	}
@@ -100,5 +101,80 @@ func TestCodex_ConcreteModelIsLiteral(t *testing.T) {
 	agent := container(t, pod, k8s.ContainerName)
 	if v, ok := envValue(agent, k8s.CodexModelEnvVar); !ok || v != "gpt-6-sol" {
 		t.Errorf("%s = %q, want the literal session model", k8s.CodexModelEnvVar, v)
+	}
+}
+
+// AC-N6: the codex-chat slot is split by subPath. The workload container
+// mounts only the login directory, the sidecar only the database directory,
+// and the root slot-init container that prepares both is the one place the
+// whole slot is mounted.
+func TestCodexChat_SlotSplitsLoginAndDatabase(t *testing.T) {
+	pod, _ := startCodex(t, "cx03", session.PlatformDefaultModel)
+	claim := k8s.AuthSlotClaimName(pod.Namespace, k8s.AuthPoolCodexChat, 0)
+	var claims []string
+	for _, v := range pod.Spec.Volumes {
+		if v.PersistentVolumeClaim != nil {
+			claims = append(claims, v.PersistentVolumeClaim.ClaimName)
+		}
+	}
+	if len(claims) != 1 || claims[0] != claim {
+		t.Fatalf("pod claims = %v, want only %s", claims, claim)
+	}
+	slotMount := func(c corev1.Container) (corev1.VolumeMount, bool) {
+		for _, m := range c.VolumeMounts {
+			if m.Name == k8s.AuthSlotVolumeName {
+				return m, true
+			}
+		}
+		return corev1.VolumeMount{}, false
+	}
+
+	agent := container(t, pod, k8s.ContainerName)
+	if m, ok := slotMount(agent); !ok || m.MountPath != k8s.AuthSlotMountPath || m.SubPath != "auth" {
+		t.Errorf("agent slot mount = %+v, want %s from subPath auth", m, k8s.AuthSlotMountPath)
+	}
+	if v, _ := envValue(agent, k8s.AuthSlotDirEnvVar); v != k8s.AuthSlotMountPath {
+		t.Errorf("agent %s = %q", k8s.AuthSlotDirEnvVar, v)
+	}
+	if v, _ := envValue(agent, k8s.SessionDBMCPURLEnvVar); v != "http://127.0.0.1:8093/session-db/mcp" {
+		t.Errorf("agent %s = %q, want the sidecar's database MCP", k8s.SessionDBMCPURLEnvVar, v)
+	}
+	if _, ok := envValue(agent, k8s.SessionDBDirEnvVar); ok {
+		t.Errorf("agent has %s: the workload container must not see the database", k8s.SessionDBDirEnvVar)
+	}
+
+	proxy := container(t, pod, k8s.CodexK3SMCPProxyContainerName)
+	if m, ok := slotMount(proxy); !ok || m.MountPath != k8s.SessionDBMountPath || m.SubPath != "db" {
+		t.Errorf("proxy slot mount = %+v, want %s from subPath db", m, k8s.SessionDBMountPath)
+	}
+	if v, _ := envValue(proxy, k8s.SessionDBDirEnvVar); v != k8s.SessionDBMountPath {
+		t.Errorf("proxy %s = %q", k8s.SessionDBDirEnvVar, v)
+	}
+
+	if n := len(pod.Spec.InitContainers); n != 1 {
+		t.Fatalf("init containers = %d, want slot-init", n)
+	}
+	init := pod.Spec.InitContainers[0]
+	if m, ok := slotMount(init); !ok || m.SubPath != "" {
+		t.Errorf("slot-init mount = %+v, want the whole slot", m)
+	}
+	if sc := init.SecurityContext; sc == nil || sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation ||
+		sc.ReadOnlyRootFilesystem == nil || !*sc.ReadOnlyRootFilesystem || sc.Capabilities == nil || len(sc.Capabilities.Drop) != 1 {
+		t.Errorf("slot-init security context = %+v, want no escalation, read-only root and ALL dropped", sc)
+	}
+}
+
+// codex-chat now needs a slot like codex-task (AC-N6): a spec without one is
+// refused before any pod exists.
+func TestCodexChat_RefusesWithoutSlot(t *testing.T) {
+	orch, cs := newReadyOrchestrator(t,
+		k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
+		k8s.WithWorkloadImage(session.WorkloadTypeCodexChat, codexImage),
+	)
+	if _, err := orch.Start(context.Background(), "cx04", k8s.WorkloadSpec{Type: session.WorkloadTypeCodexChat}); err == nil {
+		t.Fatal("codex-chat started without an auth slot")
+	}
+	if n := len(listPods(t, cs)); n != 0 {
+		t.Fatalf("pods = %d, want none", n)
 	}
 }

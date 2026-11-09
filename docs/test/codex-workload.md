@@ -5,16 +5,16 @@
 ## 검증 대상 AC
 - AC-J1: 워크로드 타입 `codex-chat` 선택 (옛 이름 `codex`) (PRD: Codex 워크로드)
 - AC-J2: write = Codex SDK 턴 1회, read = 에이전트 메시지 텍스트 (PRD: Codex 워크로드)
-- AC-J3: 세션마다 ChatGPT 로그인(device code), 로그인은 세션 상태의 일부 (PRD: Codex 워크로드)
+- AC-J3: ChatGPT 로그인(device code), 로그인은 슬롯에 남는다 (PRD: Codex 워크로드)
 - AC-J4: 파일시스템 아카이브, 전용 게이트 (PRD: Codex 워크로드)
-- AC-J5: 도구 표면 — 대화, 플랫폼 플러그인 스킬, K3s MCP뿐 (PRD: Codex 워크로드)
+- AC-J5: 도구 표면 — 대화, 플랫폼 플러그인 스킬, K3s MCP, 세션 DB뿐 (PRD: Codex 워크로드)
 - AC-J6: K3s MCP 토큰은 loopback 사이드카에만 (PRD: Codex 워크로드)
 - AC-J7: 수동 플러그인 새로고침 — 대화를 유지한 채 스킬을 다시 받는다 (PRD: Codex 워크로드)
 
 > ⚠️ **e2e 범위 주의**: kind SUT는 codex 세션 파드를 실물로 띄울 수 있지만(같은 로컬 빌드 data plane 이미지,
 > 오버레이가 `DATA_PLANE_CODEX_IMAGE`를 그 이미지로 바꾼다) **ChatGPT 로그인은 할 수 없다** — device code 승인은
 > 사람의 브라우저와 실 ChatGPT 계정이 필요하다. 그래서 로그인 뒤의 대화 왕복·복원 후 로그인 유지(시나리오 3·5)는
-> `e2e.md`의 예외이고, 그 부분의 현재 검증은 data plane 단위 테스트(러너 투영·킬 스위치·아카이브 대상 트리)다.
+> `e2e.md`의 예외이고, 그 부분의 현재 검증은 data plane 단위 테스트(러너 투영·킬 스위치·아카이브 대상 트리·슬롯 동기화)다.
 
 ## 테스트 시나리오
 
@@ -27,7 +27,7 @@
 ### 시나리오 2: 파드 모양 — 사이드카 하나, 자격 증명은 사이드카에만
 - **사전 조건**: SUT와 그 클러스터의 kube 접근
 - **실행 단계**: `codex` 세션을 만들고 그 워크로드 파드를 조회한다
-- **기대 결과**: 세션의 보조 파드가 없다. 파드에 컨테이너가 둘(주 컨테이너, `k3s-mcp-proxy`)이고 `automountServiceAccountToken`이 false다. 주 컨테이너의 `K3S_MCP_PROXY_URL`은 `http://127.0.0.1:8093`이고 Secret 참조가 없다. `k3s-mcp-proxy`만 `codex-credentials`의 선택 `k3s-mcp-token`을 읽고, `K3S_MCP_TOOL_POLICY=allow-all`을 받는다(거부 목록 없음)
+- **기대 결과**: 세션의 보조 파드가 없다. 파드에 컨테이너가 둘(주 컨테이너, `k3s-mcp-proxy`)이고 `automountServiceAccountToken`이 false다. 주 컨테이너의 `K3S_MCP_PROXY_URL`은 `http://127.0.0.1:8093`이고 Secret 참조가 없다. `k3s-mcp-proxy`만 `codex-credentials`의 선택 `k3s-mcp-token`을 읽고, `K3S_MCP_TOOL_POLICY=allow-all`을 받는다(거부 목록 없음). *2026-11-09*: 파드의 PVC는 `codex-chat` 풀의 슬롯 하나이고, 주 컨테이너는 그 `auth`만, 사이드카는 `db`만 마운트한다(`agent-auth-pool.md` AC-N6 — 상세는 `agent-auth-pool.md#시나리오 5`)
 - **검증 AC**: AC-J1, AC-J6
 
 ### 시나리오 3: 첫 프롬프트가 device code 로그인을 띄우고, 승인하면 턴이 이어진다
