@@ -122,6 +122,20 @@ func TestClientOrchestrator_WorkloadContainerHasMemoryRequestAndLimit(t *testing
 	}
 }
 
+func TestClientOrchestrator_DoubleMemoryOptionDoublesRequestAndLimit(t *testing.T) {
+	orch, cs := newReadyOrchestrator(t)
+	if _, err := orch.Start(context.Background(), "mem2", k8s.WorkloadSpec{Type: session.WorkloadTypeShell, DoubleMemory: true}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	c := listPods(t, cs)[0].Spec.Containers[0]
+	if got := c.Resources.Requests.Memory().String(); got != k8s.WorkloadMemoryRequestDouble {
+		t.Fatalf("memory request=%q want %q", got, k8s.WorkloadMemoryRequestDouble)
+	}
+	if got := c.Resources.Limits.Memory().String(); got != k8s.WorkloadMemoryLimitDouble {
+		t.Fatalf("memory limit=%q want %q", got, k8s.WorkloadMemoryLimitDouble)
+	}
+}
+
 func TestClientOrchestrator_NSessionsNUniquePods(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t)
 	ids := []string{"aa01", "bb02", "cc03", "dd04"}

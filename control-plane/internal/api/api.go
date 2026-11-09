@@ -111,6 +111,10 @@ type createReq struct {
 	// ReasoningEffort is raw for the same reason; its contract is AC-E8.
 	ReasoningEffort json.RawMessage `json:"reasoningEffort"`
 
+	// DoubleMemory has no omitted/false ambiguity to preserve, so it decodes
+	// directly: both omitted and false mean the platform default memory.
+	DoubleMemory bool `json:"doubleMemory"`
+
 	Tenant json.RawMessage `json:"tenant"`
 }
 
@@ -316,7 +320,8 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, err := a.mgr.Create(r.Context(), session.CreateRequest{
-		Name: req.Name, WorkloadType: workload, Model: model, Plugins: plugins, ReasoningEffort: effort, Tenant: tenant,
+		Name: req.Name, WorkloadType: workload, Model: model, Plugins: plugins, ReasoningEffort: effort,
+		DoubleMemory: req.DoubleMemory, Tenant: tenant,
 	})
 	if err != nil {
 		writeErr(w, err)

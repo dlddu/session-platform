@@ -978,6 +978,13 @@ components:
             named one (AC-E8). `claude-code` takes low, medium, high, xhigh or
             max; `codex-task` takes minimal, low, medium, high or xhigh (AC-M4).
             Absent means the CLI's own default. A restore keeps it.
+        doubleMemory:
+          type: boolean
+          description: >
+            Whether the workload container runs with doubled memory
+            request/limit over the platform default, fixed at creation and
+            carried across snapshot/restore. Absent or false means the
+            platform default; applies to every workload type.
         pod:
           type: string
           description: >
@@ -1052,6 +1059,15 @@ components:
             installed again on every restore: a `claude-code` session whose
             plugin has since left the marketplace cannot be restored. `null`, an empty list, a duplicate or an
             invalid name → 400, as is a list on `shell`.
+        doubleMemory:
+          type: boolean
+          description: >
+            Optional. Doubles the workload container's memory request/limit
+            over the platform default (currently 512Mi/1Gi -> 1Gi/2Gi),
+            fixed at creation and carried across snapshot/restore. Omitted or
+            false keeps every existing client's behavior unchanged; applies
+            to every workload type. A non-boolean value is rejected with 400
+            before any pod is provisioned.
         reasoningEffort:
           type: string
           minLength: 1
