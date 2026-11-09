@@ -36,6 +36,11 @@ type Service struct {
 
 const defaultLeaseRenewInterval = 5 * time.Second
 
+// createRoundTimeout backstops a Create detached from its caller: a helper pod
+// and a workload pod at the orchestrator's 2-minute ready bound each, plus the
+// reachability check, fit well inside it.
+const createRoundTimeout = 10 * time.Minute
+
 type agentCheckpointAborter interface {
 	AbortCheckpoint(context.Context, string, string) error
 }
@@ -184,6 +189,17 @@ func (s *Service) renewLeaseContext(parent context.Context, id, token string) (c
 // agent must pass the control-plane reachability check before the session is
 // stored (AC-D1/E1).
 func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*session.Session, error) {
+	// Provisioning outlives the caller's connection. A pod that waits for a
+	// node to scale up can take minutes to become Ready, longer than a proxy
+	// between the caller and this API keeps a silent request open; tying the
+	// round to that request meant the caller's timeout cancelled waitReady,
+	// which reclaimed the pod, so each retry triggered a scale-up and kept
+	// nothing. Detached, the session lands in the store once Ready and the
+	// caller finds it with List. The orchestrator's own ready bound still ends
+	// a round that cannot succeed; createRoundTimeout is only a backstop.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), createRoundTimeout)
+	defer cancel()
+
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		return nil, session.ErrInvalidInput

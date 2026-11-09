@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -16,6 +17,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
 const maxCredentialProxyResponseBytes = int64(64 << 20)
@@ -173,9 +176,21 @@ func newHeaderScopedProxy(
 	}
 	reverseProxy.Transport = transport
 	reverseProxy.ErrorLog = log.New(io.Discard, "", 0)
-	reverseProxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
-		logger.Warn("credential proxy upstream request failed")
-		http.Error(w, "credential proxy upstream unavailable", http.StatusBadGateway)
+	reverseProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		failure := classifyCredentialProxyFailure(r, err)
+		elapsed := failure.elapsed.Round(100 * time.Millisecond)
+		if failure.kind == proxyFailureCallerGone {
+			// Nobody is left to read a status; the line is for the operator.
+			logger.Info("credential proxy caller went away before upstream answered", "elapsed", elapsed.String())
+			return
+		}
+		// Only the class and the elapsed time are logged, never err itself: a
+		// transport error can echo request metadata, and this proxy holds a
+		// credential. The class plus the time are what tell an intermediate
+		// proxy's idle timeout (a cut at a round number of seconds) from a
+		// dead upstream.
+		logger.Warn("credential proxy upstream request failed", "failure", string(failure.kind), "elapsed", elapsed.String())
+		http.Error(w, failure.message(elapsed), failure.status())
 	}
 	reverseProxy.ModifyResponse = func(response *http.Response) error {
 		// An unsolicited protocol upgrade is never part of the Claude HTTP API.
@@ -236,9 +251,84 @@ func newHeaderScopedProxy(
 			http.Error(w, "credential proxy does not support tunnels or protocol upgrades", http.StatusMethodNotAllowed)
 			return
 		}
+		r = r.WithContext(context.WithValue(r.Context(), credentialProxyStartKey{}, time.Now()))
 		reverseProxy.ServeHTTP(&credentialProxyResponseWriter{ResponseWriter: w}, r)
 	})
 	return &credentialProxy{handler: mux}, nil
+}
+
+// credentialProxyStartKey carries when the proxy received a request, so its
+// error handler can say how long the upstream had it.
+type credentialProxyStartKey struct{}
+
+// proxyFailureKind names why an upstream round trip failed. It replaces a
+// single "upstream unavailable" that read the same for a proxy idle timeout
+// between here and the upstream, an unreachable upstream and a caller that
+// hung up — three failures with three different fixes.
+type proxyFailureKind string
+
+const (
+	proxyFailureCallerGone proxyFailureKind = "caller_gone"
+	proxyFailureTimeout    proxyFailureKind = "timeout"
+	proxyFailureConnect    proxyFailureKind = "connect"
+	proxyFailureClosed     proxyFailureKind = "connection_closed"
+	proxyFailureOther      proxyFailureKind = "other"
+)
+
+type credentialProxyFailure struct {
+	kind    proxyFailureKind
+	elapsed time.Duration
+}
+
+func (f credentialProxyFailure) status() int {
+	if f.kind == proxyFailureTimeout {
+		return http.StatusGatewayTimeout
+	}
+	return http.StatusBadGateway
+}
+
+// message is what the caller reads. Every variant keeps the old "credential
+// proxy upstream" prefix so a client matching on it still does.
+func (f credentialProxyFailure) message(elapsed time.Duration) string {
+	switch f.kind {
+	case proxyFailureTimeout:
+		return fmt.Sprintf("credential proxy upstream timed out after %s", elapsed)
+	case proxyFailureConnect:
+		return fmt.Sprintf("credential proxy upstream unreachable: could not connect (after %s)", elapsed)
+	case proxyFailureClosed:
+		return fmt.Sprintf("credential proxy upstream closed the connection after %s without a response "+
+			"(a proxy on the way may have timed the request out)", elapsed)
+	default:
+		return fmt.Sprintf("credential proxy upstream unavailable (after %s)", elapsed)
+	}
+}
+
+func classifyCredentialProxyFailure(r *http.Request, err error) credentialProxyFailure {
+	failure := credentialProxyFailure{kind: proxyFailureOther}
+	if started, ok := r.Context().Value(credentialProxyStartKey{}).(time.Time); ok {
+		failure.elapsed = time.Since(started)
+	}
+	var netErr net.Error
+	var opErr *net.OpError
+	switch {
+	case r.Context().Err() != nil && errors.Is(err, context.Canceled):
+		failure.kind = proxyFailureCallerGone
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+		failure.kind = proxyFailureTimeout
+	case errors.As(err, &opErr) && opErr.Op == "dial":
+		failure.kind = proxyFailureConnect
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF),
+		errors.Is(err, syscall.ECONNRESET), errors.Is(err, syscall.EPIPE),
+		strings.Contains(err.Error(), "stream error"),
+		strings.Contains(err.Error(), "GOAWAY"),
+		strings.Contains(err.Error(), "connection lost"):
+		// HTTP/2 reports a peer's RST_STREAM, GOAWAY or a dropped connection
+		// only as text ("stream error", "server sent GOAWAY and closed the
+		// connection", "client connection lost"); the stdlib exports no
+		// sentinel for them.
+		failure.kind = proxyFailureClosed
+	}
+	return failure
 }
 
 // credentialProxyRequestHeaderAllowed is deliberately a positive, immutable
