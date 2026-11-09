@@ -322,6 +322,32 @@ func TestRenderCodexConfig(t *testing.T) {
 	if _, ok := without["mcp_servers.skills.env"].(map[string]string)[codexAgentURLEnv]; ok {
 		t.Error("without an agent URL the skills MCP must not be told one (AC-J7)")
 	}
+	for key := range without {
+		if strings.HasPrefix(key, "mcp_servers.db.") {
+			t.Errorf("a pod without a session DB still registers %s", key)
+		}
+	}
+}
+
+// AC-N6: a codex-chat pod with a session DB registers the sidecar's endpoint
+// as the `db` server, run without asking like the others.
+func TestRenderCodexConfigRegistersSessionDB(t *testing.T) {
+	doc := tomlCheck(t, string(renderCodexConfig(codexConfig{
+		agentBinary: "/agent", skillsDir: "/s", sessionDBURL: "http://127.0.0.1:8093/session-db/mcp",
+	})))
+	want := map[string]string{
+		"mcp_servers.db.url":                         "http://127.0.0.1:8093/session-db/mcp",
+		"mcp_servers.db.default_tools_approval_mode": "approve",
+		"mcp_servers.db.tool_timeout_sec":            "45",
+	}
+	for key, value := range want {
+		if doc[key] != value {
+			t.Errorf("%s = %v, want %q", key, doc[key], value)
+		}
+	}
+	if instructions, _ := doc["developer_instructions"].(string); !strings.Contains(instructions, "raw_query") {
+		t.Errorf("developer_instructions = %q, want the db guidance", instructions)
+	}
 }
 
 // Every value goes through the encoder, so a hostile path cannot add a key.
@@ -398,9 +424,26 @@ func TestNewCodexWorkloadFromEnv(t *testing.T) {
 	t.Setenv(codexRunnerBinaryEnv, "/opt/runner")
 	t.Setenv(authSlotDirEnv, "")
 	t.Setenv(codexReasoningEffortEnv, "")
+	t.Setenv(sessionDBMCPURLEnv, "")
+	// AC-N6: codex-chat keeps its login in a slot too.
+	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
+		t.Fatal("codex-chat without an auth slot must be refused")
+	}
+	t.Setenv(authSlotDirEnv, t.TempDir())
 	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err != nil {
 		t.Fatalf("restore-mode codex-chat workload: %v", err)
 	}
+	t.Setenv(sessionDBMCPURLEnv, "http://127.0.0.1:8093/session-db/mcp")
+	if w, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err != nil {
+		t.Fatalf("codex-chat with a session DB: %v", err)
+	} else if cli, ok := w.cli.(codexCLI); !ok || cli.sessionDBURL != "http://127.0.0.1:8093/session-db/mcp" {
+		t.Fatalf("session DB URL not carried to the CLI: %+v", w.cli)
+	}
+	t.Setenv(sessionDBMCPURLEnv, "http://db.example:8093/session-db/mcp")
+	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
+		t.Fatal("a session DB MCP off loopback must be refused")
+	}
+	t.Setenv(sessionDBMCPURLEnv, "")
 	t.Setenv(codexReasoningEffortEnv, "high")
 	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
 		t.Fatal("codex-chat takes no reasoning effort (AC-E8)")

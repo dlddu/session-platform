@@ -21,20 +21,24 @@ type codexConfig struct {
 	// type is not offered and creating one fails (AC-J1, same rule as AC-E1).
 	image string
 	// credentialsSecret holds the optional k3s-mcp-token the sidecar reads.
-	// There is no provider key: each session logs in to ChatGPT itself (AC-J3).
+	// There is no provider key: the first session on a slot logs in to ChatGPT
+	// itself and the login stays in the slot (AC-J3, AC-N6).
 	credentialsSecret string
 	// configConfigMap holds model, models, k3s-mcp-url and
 	// plugin-marketplace-url, all optional.
 	configConfigMap string
 	// plugins names the marketplace plugins whose skills sessions get (AC-J5).
 	plugins string
-	// archiveEnabled is this type's own data-transfer gate. Its archive carries
-	// the session's ChatGPT login (AC-J3, AC-J4).
+	// archiveEnabled is this type's own data-transfer gate. Its archive no
+	// longer carries the ChatGPT login, which lives in the slot (AC-J3, AC-N6).
 	archiveEnabled bool
 	// defaultModel and models are the UI picker snapshot, projected from the
 	// ConfigMap like claude-code's (AC-E6).
 	defaultModel string
 	models       []string
+	// pool holds the session's login and database (AC-N6); the type is not
+	// offered without a slot.
+	pool authPoolEnv
 }
 
 func loadCodexConfig() (codexConfig, error) {
@@ -46,6 +50,10 @@ func loadCodexConfig() (codexConfig, error) {
 	if err != nil {
 		return codexConfig{}, fmt.Errorf("CODEX_MODELS: %w", err)
 	}
+	pool, err := loadAuthPoolEnv("CODEX_CHAT", k8s.DefaultCodexChatSlotStorageSize)
+	if err != nil {
+		return codexConfig{}, err
+	}
 	return codexConfig{
 		image:             env("DATA_PLANE_CODEX_IMAGE", ""),
 		credentialsSecret: env("CODEX_CREDENTIALS_SECRET", "codex-credentials"),
@@ -54,7 +62,13 @@ func loadCodexConfig() (codexConfig, error) {
 		archiveEnabled:    envBool("CODEX_ARCHIVE_ENABLED", false),
 		defaultModel:      defaultModel,
 		models:            models,
+		pool:              pool,
 	}, nil
+}
+
+// offered is AC-J1's rule with AC-N6's slot: an image and at least one slot.
+func (c codexConfig) offered() bool {
+	return c.image != "" && c.pool.slots > 0
 }
 
 // validateCodexConfig refuses to share a Secret or ConfigMap with another

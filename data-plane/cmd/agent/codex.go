@@ -23,9 +23,9 @@ import (
 // codex_skills_mcp.go's and the output projection codex_stream.go's.
 //
 // codex-chat (docs/prd/codex-workload.md, AC-J1~J7) is the long-lived chat
-// session: no shell, and a ChatGPT login the session makes itself through a
-// device code the runner forwards (AC-J3), kept in $HOME/.codex and archived
-// with the rest of HOME. codex-task (docs/prd/codex-task-workload.md,
+// session: no shell, a ChatGPT login made through a device code the runner
+// forwards (AC-J3) and kept in the pool slot this pod mounts, and a session
+// database the sidecar serves from the same slot (AC-N6). codex-task (docs/prd/codex-task-workload.md,
 // AC-M1~M4) is the coding session: claude-code's tool level, and a login that
 // lives in the pool slot this pod mounts (AC-M2, docs/prd/agent-auth-pool.md).
 // In both, the only platform secret in the pod is the K3s MCP token, and it
@@ -54,8 +54,11 @@ const (
 
 	codexK3SServerName    = "k3s"
 	codexSkillsServerName = "skills"
+	// codexSessionDBServerName is the sidecar's session DB MCP (AC-N6).
+	codexSessionDBServerName = "db"
 
-	// codex-task's slot login file and its HOME place (AC-M2).
+	// The slot login file of both codex types and its HOME place (AC-M2,
+	// AC-N6).
 	codexAuthFile    = "auth.json"
 	codexAuthHomeRel = codexConfigDirName + "/" + codexAuthFile
 
@@ -84,6 +87,9 @@ type codexCLI struct {
 	// agentURL is this agent on loopback, which the skills MCP's
 	// refresh_skills calls (AC-J7); empty offers no refresh tool.
 	agentURL string
+	// sessionDBURL is the sidecar's session DB MCP (AC-N6), codex-chat only;
+	// empty registers no `db` server.
+	sessionDBURL string
 	// probeSidecar reads what the sidecar offers; a field so tests need no
 	// server. It reports what it learned even when it also returns an error.
 	probeSidecar func(proxyURL string) (codexSidecar, error)
@@ -155,9 +161,10 @@ func (c codexCLI) ensureHome(homeDir string, _ toolSurface) error {
 		return err
 	}
 	cfg := codexConfig{
-		task:        c.task,
-		agentBinary: c.agentBinary,
-		skillsDir:   skillsDir,
+		task:         c.task,
+		agentBinary:  c.agentBinary,
+		skillsDir:    skillsDir,
+		sessionDBURL: c.sessionDBURL,
 	}
 	if sidecar.configured {
 		mcpURL, err := k3sProxyMCPURL(c.k3sProxyURL)
@@ -284,21 +291,26 @@ func newCodexWorkloadFromEnv(workload string, logger *slog.Logger, restoreMode b
 	cli := newCodexCLI(proxy, logger)
 	cli.agentURL = loopbackAgentURL(env("DATA_PLANE_AGENT_ADDR", defaultAddr))
 	effort := os.Getenv(codexReasoningEffortEnv)
-	var slot *authSlot
+	// Both types keep their ChatGPT login in a pool slot (AC-M2, AC-N6).
+	slot, err := newAuthSlotFromEnv(codexAuthFile, codexAuthHomeRel, logger)
+	if err != nil {
+		return nil, err
+	}
 	if workload == workloadCodexTask {
 		if effort != "" && !slices.Contains(codexReasoningEfforts, effort) {
 			return nil, fmt.Errorf("%s must be one of %s, got %q", codexReasoningEffortEnv, strings.Join(codexReasoningEfforts, ", "), effort)
 		}
-		slot, err = newAuthSlotFromEnv(codexAuthFile, codexAuthHomeRel, logger)
-		if err != nil {
-			return nil, err
-		}
 		cli.task = true
 		cli.effort = effort
-	} else if effort != "" {
-		// AC-E8: codex-chat takes no effort, so one here is a spec this
-		// agent was not built for.
-		return nil, fmt.Errorf("codex-chat does not take %s", codexReasoningEffortEnv)
+	} else {
+		if effort != "" {
+			// AC-E8: codex-chat takes no effort, so one here is a spec this
+			// agent was not built for.
+			return nil, fmt.Errorf("codex-chat does not take %s", codexReasoningEffortEnv)
+		}
+		if cli.sessionDBURL, err = sessionDBMCPURLFromEnv(); err != nil {
+			return nil, err
+		}
 	}
 	return newClaudeWorkload(claudeConfig{
 		StateDir:    env("CLAUDE_CODE_STATE_DIR", defaultClaudeStateDir),
@@ -375,6 +387,9 @@ func renderCodexConfigForHome(home string, task bool) error {
 	}
 	cfg := codexConfig{task: task, k3sMCPURL: mcpURL, agentBinary: agentBinary, skillsDir: skillsDir,
 		agentURL: loopbackAgentURL(defaultAddr)}
+	if !task {
+		cfg.sessionDBURL = "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(k3sMCPProxyPort)) + sessionDBMCPPath
+	}
 	return writeCodexConfig(filepath.Join(home, codexConfigDirName, codexConfigFileName), renderCodexConfig(cfg))
 }
 

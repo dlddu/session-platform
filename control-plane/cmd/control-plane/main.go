@@ -82,6 +82,7 @@ func main() {
 		"data_plane_minimax_code_image", cfg.miniMax.image,
 		"data_plane_codex_image", cfg.codex.image,
 		"data_plane_codex_task_image", cfg.codexTask.image,
+		"codex_chat_auth_slots", cfg.codex.pool.slots,
 		"codex_task_auth_slots", cfg.codexTask.pool.slots,
 		"claude_code_auth_mode", cfg.claudeAuth.mode,
 		"claude_code_auth_slots", cfg.claudeAuth.pool.slots,
@@ -332,7 +333,7 @@ func (c config) offeredWorkloadTypes() []session.WorkloadType {
 		session.WorkloadTypeClaudeCode:    c.dataPlaneClaudeCodeImage != "" && c.claudeAuth.offered(),
 		session.WorkloadTypeApprovalGated: c.dataPlaneApprovalGatedImage != "",
 		session.WorkloadTypeMiniMaxCode:   c.miniMax.image != "",
-		session.WorkloadTypeCodexChat:     c.codex.image != "",
+		session.WorkloadTypeCodexChat:     c.codex.offered(),
 		session.WorkloadTypeCodexTask:     c.codexTask.offered(),
 	} {
 		if offered {

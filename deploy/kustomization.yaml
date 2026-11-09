@@ -115,8 +115,9 @@ patches:
   # SHELL_ARCHIVE_ENABLED, env/3 is DATA_PLANE_CLAUDE_CODE_IMAGE, env/4 is
   # DATA_PLANE_APPROVAL_GATED_IMAGE, env/17 is APPROVAL_GATED_ARCHIVE_ENABLED,
   # env/18 is DROP_URL, env/19 is DATA_PLANE_CODEX_IMAGE, env/24 is
-  # DATA_PLANE_CODEX_TASK_IMAGE, env/29 is CLAUDE_CODE_AUTH_MODE and env/32 is
-  # CODEX_TASK_AUTH_STORAGE_CLASS. Each gate replace is preceded by a `test`
+  # DATA_PLANE_CODEX_TASK_IMAGE, env/29 is CLAUDE_CODE_AUTH_MODE, env/32 is
+  # CODEX_TASK_AUTH_STORAGE_CLASS, env/35 is CODEX_CHAT_AUTH_SLOTS and env/36 is
+  # CODEX_CHAT_AUTH_STORAGE_CLASS. Each gate replace is preceded by a `test`
   # of the entry's name, so a reordered base fails the build instead of
   # silently flipping a different variable.
   #
@@ -227,6 +228,21 @@ patches:
         value: CODEX_TASK_AUTH_STORAGE_CLASS
       - op: replace
         path: /spec/template/spec/containers/0/env/32/value
+        value: ""
+      # codex-chat 슬롯 풀(AC-N6)도 같은 이유로 클래스를 비우고, codex 시나리오가 세션을 차례로
+      # 만들고 지우는 동안 반납이 늦어도 막히지 않게 2 슬롯을 둔다. env/35 가 CODEX_CHAT_AUTH_SLOTS,
+      # env/36 이 CODEX_CHAT_AUTH_STORAGE_CLASS.
+      - op: test
+        path: /spec/template/spec/containers/0/env/35/name
+        value: CODEX_CHAT_AUTH_SLOTS
+      - op: replace
+        path: /spec/template/spec/containers/0/env/35/value
+        value: "2"
+      - op: test
+        path: /spec/template/spec/containers/0/env/36/name
+        value: CODEX_CHAT_AUTH_STORAGE_CLASS
+      - op: replace
+        path: /spec/template/spec/containers/0/env/36/value
         value: ""
       - op: add
         path: /spec/template/spec/containers/0/env/-

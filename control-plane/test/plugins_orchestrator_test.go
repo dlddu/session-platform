@@ -139,7 +139,8 @@ func TestPlugins_CodexSidecarSeeder(t *testing.T) {
 			k8s.WithCodexConfigConfigMap("codex-cfg"),
 			k8s.WithCodexPlugins("codex-session,extra"),
 		)
-		if _, err := orch.Start(context.Background(), id, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexChat, Plugins: plugins}); err != nil {
+		slot := 0
+		if _, err := orch.Start(context.Background(), id, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexChat, Plugins: plugins, AuthSlot: &slot}); err != nil {
 			t.Fatalf("start: %v", err)
 		}
 		got, _ := envOf(container(t, listPods(t, cs)[0], k8s.CodexK3SMCPProxyContainerName), "MINIMAX_CODE_PLUGINS")
