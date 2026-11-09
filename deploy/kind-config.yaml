@@ -15,7 +15,7 @@
 # with no node affinity, and the identical mount on every node is exactly the
 # premise it makes. The default `standard` class cannot stand in — it is
 # node-local and refuses a ReadWriteMany claim outright, leaving the claim
-# Pending and an approval-gated session unable to finish provisioning.
+# Pending and a gated session unable to finish provisioning.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: session-platform

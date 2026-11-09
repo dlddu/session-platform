@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	// webFetchGetTool was the first external tool an approval-gated session had.
+	// webFetchGetTool was the first external tool a gated session had.
 	// The second one (gitCloneTool) arrived as a second gated handler, which is
 	// the only way another one ever arrives — never as a bypass.
 	webFetchGetTool = "web_fetch_get"

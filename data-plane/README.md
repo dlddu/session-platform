@@ -8,7 +8,8 @@ needs (AC-A2). The control plane provisions and reclaims these pods via the
 The runtime image includes `git`, `gh`, `curl`, `jq`, and `kubectl` for use by
 interactive shell and Claude Code workloads.
 
-## Status: shell, claude-code, approval-gated, minimax-code, codex-chat, codex-task, mcp, credential-proxy, and k3s-mcp-proxy agents built
+## Status: shell, claude-code, minimax-code, codex-chat, codex-task, mcp, credential-proxy, and k3s-mcp-proxy agents built
+
 
 `DATA_PLANE_WORKLOAD` selects one of these modes across a session's pods:
 
@@ -55,18 +56,8 @@ interactive shell and Claude Code workloads.
   fed to the waiting login, after which the held prompt runs in that turn. A
   failed code drops the held prompt; a pending sign-in expires after 15
   minutes and ends on a checkpoint or stop. `GET /auth-slot` answers
-  `{"signedIn": bool}` for a workload with a slot and 404 otherwise. runs the same one-shot execution model as `claude-code` —
-  the queue, cursor, archive and model contracts are reused unchanged — with the
-  tool surface AC-F6 prescribes for that type. It receives no `K3S_MCP_TOKEN`
-  and enables no marketplace plugin; instead the managed `settings.json`
-  registers the session MCP at `SESSION_MCP_URL` as an `http` server and permits
-  it alongside the same six file tools. Its `ANTHROPIC_BASE_URL` points at the
-  session helper pod's proxy (port 8091) rather than loopback, and the agent
-  refuses to start if that endpoint is loopback, is on the wrong port, or if any
-  real provider credential or the K3s MCP token is present. Because the helper
-  pod is rebuilt with a new address on every restore, the registered MCP URL is
-  rewritten from the environment at startup rather than trusted from the
-  archive.
+  `{"signedIn": bool}` for a workload with a slot and 404 otherwise.
+
 - `minimax-code` runs the MiniMax Code CLI on the same one-shot runner as
   `claude-code` — queue, bounds, cursor, resume flag and archive are shared
   (AC-G2/G4). Each job executes
@@ -88,12 +79,12 @@ interactive shell and Claude Code workloads.
   installation default to fall back to. The container gets no Claude bootstrap
   and refuses to start if any provider key (`ANTHROPIC_API_KEY`,
   `MINIMAX_API_KEY`, `MCODE_PROVIDER_API_KEY`, …) or `K3S_MCP_TOKEN` is set
-  (AC-G3). Like `approval-gated`, the pod has no sidecar and its egress reaches
+  (AC-G3). As a type behind the approval gate (`docs/prd/approval-gate.md`), the pod has no sidecar and its egress reaches
   only its session's helper pod (AC-G6), so every address it gets is a helper
   pod address that must not be loopback: the provider proxy (`:8091`), the
   session MCP (`SESSION_MCP_URL`, `:8092`) and the K3s MCP proxy
   (`K3S_MCP_PROXY_URL`, `:8093`). The helper's provider proxy is the
-  `approval-gated` one pointed at the `minimax-code-credentials` Secret and
+  gate's helper proxy (AC-F6) pointed at the `minimax-code-credentials` Secret and
   `minimax-code-config` ConfigMap: the ConfigMap's `base-url` is MiniMax's
   Anthropic-compatible endpoint (for example
   `https://api.minimax.io/anthropic`) and the Secret's `auth-token` may be a Token Plan
@@ -276,7 +267,7 @@ interactive shell and Claude Code workloads.
   `DATA_PLANE_AGENT_ADDR` to match its placement, declared by
   `DATA_PLANE_PROXY_PLACEMENT`: `sidecar` (the default when unset) is the
   `claude-code` arrangement and accepts loopback binds only, while `helper` is
-  the `approval-gated` arrangement in the session helper pod and requires a
+  the approval gate's arrangement in the session helper pod and requires a
   pod-network bind because its client is a pod away (AC-F6). Each placement
   rejects the other's address, so opening the wider bind for the helper cannot
   reach the sidecar. What keeps the wider bind safe is AC-F2's ingress policy,
@@ -290,7 +281,7 @@ below the mount point so restore can atomically swap it without trying to
 rename an active mount. Its checkpoint closes prompt admission, drains accepted
 work, and archives that state tree plus the redacted scrollback; restore safely
 installs the archive before reopening writes. When the workload mounts the
-session's shared volume (`SESSION_SHARED_DIR`, approval-gated and minimax-code),
+session's shared volume (`SESSION_SHARED_DIR`, a type behind the approval gate — minimax-code),
 the archive also carries that volume under `shared/` and restore copies it into
 the next round's freshly mounted volume; an archive with shared files refuses to
 restore into a pod without one rather than dropping them (AC-F5).
@@ -309,7 +300,7 @@ token only through a process-scoped Git HTTPS Authorization header while running
 `claude plugin marketplace add https://github.com/dlddu/plugin-marketplace.git`
 and `claude plugin install session-platform@dlddu-plugins`, then exports the
 runtime plugin seed and execs the agent. The GitHub token is unset before the
-agent starts; every other workload — `shell`, `approval-gated`, `mcp` and
+agent starts; every other workload — `shell`, `minimax-code` (its marketplace path is the K3s MCP proxy, above), `mcp` and
 `credential-proxy` — skips this bootstrap.
 Provider authentication credentials are not present in the Claude container or
 inherited by its Bash tools. That container receives
@@ -420,5 +411,6 @@ cluster).
 Every workload type's archive round trip is exercised by the kind e2e overlay.
 Each type has its own control-plane data-transfer gate because archives move
 session files to the checkpoint store: `SHELL_ARCHIVE_ENABLED`,
-`CLAUDE_CODE_ARCHIVE_ENABLED`, `APPROVAL_GATED_ARCHIVE_ENABLED`,
-`MINIMAX_CODE_ARCHIVE_ENABLED` and `CODEX_ARCHIVE_ENABLED`. Session pods need no privilege for any of them.
+`CLAUDE_CODE_ARCHIVE_ENABLED`, `MINIMAX_CODE_ARCHIVE_ENABLED` and
+`CODEX_ARCHIVE_ENABLED`. Session pods need no privilege for any of them.
+

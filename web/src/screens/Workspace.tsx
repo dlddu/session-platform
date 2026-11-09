@@ -72,7 +72,7 @@ function displayModel(model?: string): string {
 }
 
 // 한 화면이 workloadType 으로 상호작용 모델을 갈라 쓴다 — shell 은 커서 read 루프,
-// 에이전트 계열은 SSE 다(AC-E3). approval-gated 가 claude-code 와 갈리는 것은 실행을
+// 에이전트 계열은 SSE 다(AC-E3). 승인 게이트 뒤의 타입이 갈리는 것은 실행을
 // 「모는 방식」이 아니라 그 둘레뿐이라(AC-F3), 커서 규약은 손대지 않는다.
 export function Workspace() {
   const { id = "" } = useParams();
@@ -653,7 +653,7 @@ export function Workspace() {
           <div className="console-bar">
             <span>
               {gated
-                ? "approval-gated session"
+                ? `${sess.workloadType} session · approval gate`
                 : isAgent
                   ? `${sess.workloadType} session`
                   : "session shell"}
@@ -712,7 +712,7 @@ export function Workspace() {
             {term === "" ? (
               <span className="term-empty">
                 {gated
-                  ? "// ready — responses stream here; anything leaving the pod waits for your approval"
+                  ? "// ready — responses stream here; external calls wait for approval"
                   : isAgent
                     ? "// ready — agent responses stream here automatically"
                     : "// attached — the shell's output since session start appears here"}
@@ -739,7 +739,7 @@ export function Workspace() {
               onChange={(event) => setCmd(event.target.value)}
               placeholder={
                 gated
-                  ? "send a prompt — anything that leaves the pod waits for your approval"
+                  ? "send a prompt — external calls wait for approval"
                   : isAgent
                     ? sess.workloadType === "minimax-code"
                       ? "send a prompt — runs mcode exec once in the session pod"

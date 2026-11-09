@@ -8,8 +8,8 @@
 > 구↔신 매핑표는 [`user-journeys/README.md`](./user-journeys/README.md#구-식별자-매핑-2026-08-30-전환)에 있습니다.
 > 아래 "변경 이력"의 과거 항목은 당시 기록이므로 옛 식별자를 그대로 둡니다.
 
-- **마지막 검증 시점**: 2026-11-05 (`codex` 타입·멀티테넌시 반영 — 여정·단계·mockup 수 불변, 여정 10 · 단계 37 · mockup 7 · `docs/journeys/` **9 / 9**)
-- **직전 검증 시점**: 2026-09-03 (12) (여정 mockup agent 클러스터 3종 신설 — `docs/journeys/` 5 → **8 / 8**)
+- **마지막 검증 시점**: 2026-11-05 (`approval-gated` 타입 제거 — 승인 게이트를 타입의 능력으로. 수치 변화 없음: 여정 10 · 단계 37 · mockup 7 · `docs/journeys/` 9 / 9. `JRN-approval-gated-work`의 달성 가치 V8 → V1)
+- **직전 검증 시점**: 2026-11-05 (`codex` 타입·멀티테넌시 반영 — 여정·단계·mockup 수 불변, 여정 10 · 단계 37 · mockup 7 · `docs/journeys/` **9 / 9**)
 - **검증 범위**: 상류(product-doc 사슬)에서 세 번째 워크로드 타입(AC-F1~F6)이 확정되어, 여정
   `JRN-approval-gated-work`(4단계)와 mockup `gated-workspace.html`을 신설하고 `new-session.html`·`index.html`의
   타입 분기를 3종으로 확장했다. 여정 8→9, 단계 29→33, mockup 5→6. **가치는 변하지 않았다**(V8 상속).
@@ -40,12 +40,12 @@
 ### 가치 ↔ 여정
 | 가치 | 여정 | 상태 |
 |------|------|------|
-| V1 세션 격리 | `JRN-session-creation`, `JRN-repo-access` | ✅ |
+| V1 세션 격리 | `JRN-session-creation`, `JRN-repo-access`, `JRN-approval-gated-work` | ✅ |
 | V2 유휴 자원 회수 | `JRN-idle-resume`, `JRN-manual-freeze`, `JRN-session-deletion`(부분) | ✅ |
 | V3 끊김 없는 세션 연속성 | `JRN-idle-resume`, `JRN-multi-session-switch`, `JRN-concurrent-access`, `JRN-shell-interaction`, `JRN-agent-prompt-loop`, `JRN-manual-freeze`, `JRN-approval-gated-work` | ✅ |
 | V4 자유로운 멀티세션 전환 | `JRN-multi-session-switch` | ✅ |
 | V5 일관된 세션 상태 | `JRN-session-creation`, `JRN-concurrent-access` | ✅ |
-| V8 목적에 맞는 작업 환경 선택 | `JRN-agent-prompt-loop`, `JRN-approval-gated-work`, `JRN-repo-access` | ✅ |
+| V8 목적에 맞는 작업 환경 선택 | `JRN-agent-prompt-loop`, `JRN-repo-access` | ✅ |
 
 ### 여정 단계 ↔ mockup
 표기: ✅ 전용 화면 · ⚠️ 부분/암시 · ❌ 없음 · ⚪ 의도적 비시각화
@@ -189,6 +189,7 @@
 
 | 시점 | 변경 내용 | 이전 상태 | 이후 상태 |
 |------|-----------|-----------|-----------|
+| 2026-11-05 | **`approval-gated` 타입 제거의 하류 반영 — 승인 게이트는 타입의 능력**. 상류 PRD가 `approval-gate.md`(AC-F1 폐기, AC-F2~F6 유지, 적용 타입 `minimax-code`)로 바뀐 것을 하류에 맞췄다. 여정 `JRN-approval-gated-work`는 식별자를 유지한 채 「게이트가 걸린 세션」의 여정 v0.2로 재작성(달성 가치 V8 → V1 — 타입 선택은 `JRN-agent-prompt-loop`의 `STP-workload-choice`가 계속 담는다), `JRN-agent-prompt-loop`·`JRN-repo-access`는 갈래 서술만 고쳤다. mockup은 `new-session.html`의 `approval-gated` 카드를 걷고 `minimax-code` 카드를 게이트 타입으로, `index.html`·`gated-workspace.html`·`repo-access.html`의 예시 세션을 `minimax-code`로 바꿨다. 여정 페이지 3종(`JRN-approval-gated-work`·`JRN-agent-prompt-loop`·`JRN-session-creation`)의 타입 선택지도 같다. 구현(SPA)은 같은 변경에서 `GET /config`의 `approvalGate`를 따르게 됐다. | 여정 10 · 단계 37 · mockup 7 · 페이지 9/9 | 같음(수치 변화 없음) |
 | 2026-11-01 | **CRIU 퇴역의 하류 반영 (AC-D4 개정)**. 상류에서 모든 타입의 동결이 파일시스템 아카이브로 통일되고 쉘의 보존 대상이 「홈 디렉터리 파일 + 출력 이력, 복원은 새 쉘」로 좁아져, 그 계약을 말하던 하류 표면을 맞췄다: 여정 문서 `JRN-shell-interaction`(v0.3 — `STP-shell-state-carry`·분기표·지표)·`JRN-idle-resume`(v0.3 — 완료 기준·`STP-restore-resume`)·`JRN-multi-session-switch`(v0.3 — 완료 기준 단서)와 README 열린 결정(바쁜 쉘 동결은 이제 작업 중단을 뜻함), 여정 mockup 페이지 넷(`JRN-idle-resume`·`JRN-manual-freeze`·`JRN-multi-session-switch`·`JRN-shell-interaction`의 보존/비보존 카피), 화면 mockup 여섯의 CRIU·「exactly where it froze」 카피(`mockups/README.md` 2026-11-01 항목), SPA `Restore.tsx`·`SessionCard.tsx`. **단계 식별자·분기 행 수·여정·단계·mockup 수와 커버리지 합계는 변하지 않는다** — 바뀐 것은 무엇이 보존되는가의 서술뿐이다. 가치도 변하지 않는다. | 여정 10 · 단계 37 · mockup 7 · 여정 페이지 9/9 | 동일 (내용만 갱신) |
 | 2026-11-05 | **`codex` 수동 플러그인 새로고침(AC-J7)의 하류 반영**. 새 여정·단계 없이 `JRN-agent-prompt-loop`(v0.4)의 `STP-conversation-carry`에 분기 1행 — 오래 쓰는 Codex 세션에서 플랫폼 스킬이 바뀌면 `Refresh plugin skills`로 대화를 유지한 채 받는다 — 을 더했다. 여정 페이지 `journeys/JRN-agent-prompt-loop/`에 같은 분기와 안내 배너(`info`)를, 화면 구현 `Workspace`의 Actions 패널에 `codex` 세션 전용 버튼을 두었다(기존 `.btn-ghost`). **가치는 변하지 않았다** — V3 상속. | 여정 10, 단계 37, mockup 7, 여정 페이지 9/9 | 같음 (분기 +1) |
 | 2026-11-05 | **`codex` 워크로드(AC-J1~J6)·멀티테넌시(AC-K1~K5)의 하류 반영**. 새 여정·단계 없이 기존 단계에 얹었다 — `STP-workload-choice`에 Codex 선택지와 운영자의 테넌트 선택, `STP-response-watch`에 첫 프롬프트의 ChatGPT device code 로그인 분기, `STP-session-list`에 테넌트 필터·태그. mockup `new-session.html`·`index.html`·`agent-workspace.html`과 여정 페이지 `journeys/JRN-agent-prompt-loop/`(분기 2행)를 함께 고쳤고, 화면 구현(`NewSession`·`Sessions`·`Workspace`)과 문구를 맞췄다. **가치는 변하지 않았다** — V8·V1 상속. 하네스의 폐기 식별자 검사가 새 AC 식별자 `AC-J1`을 옛 여정 `J1`로 잡던 것을 `AC-` 접두를 빼고 보도록 고쳤다. | 여정 10, 단계 37, mockup 7, 여정 페이지 9/9 | 같음 (분기 +2 · 터치포인트 갱신) |

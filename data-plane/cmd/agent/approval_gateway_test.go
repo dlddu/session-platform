@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// fakeGateway is the decision-controlling stand-in docs/test/approval-gated-workload.md
+// fakeGateway is the decision-controlling stand-in docs/test/approval-gate.md
 // asks for in scenarios 3 and 4 ("결정을 제어할 수 있는 승인 게이트웨이 ... 테스트 대역").
 // It records what was asked so the tests can assert on the approval context a
 // human would have seen.

@@ -55,7 +55,6 @@ func TestCreateSessionPlugins(t *testing.T) {
 		{"duplicate", map[string]any{"name": "x", "workloadType": "codex-chat", "plugins": []string{"a", "a"}}},
 		{"bad name", map[string]any{"name": "x", "workloadType": "codex-chat", "plugins": []string{"a/b"}}},
 		{"shell", map[string]any{"name": "x", "plugins": []string{"development"}}},
-		{"approval-gated", map[string]any{"name": "x", "workloadType": "approval-gated", "plugins": []string{"development"}}},
 	}
 	for _, tc := range rejected {
 		t.Run("rejects "+tc.name, func(t *testing.T) {

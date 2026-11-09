@@ -1,4 +1,4 @@
-// Session MCP (AC-F4): the helper pod container an approval-gated session's
+// Session MCP (AC-F4): the helper pod container a gated session's
 // workload pod talks to for anything that leaves its own pod (AC-F6).
 //
 // This file is the endpoint itself: the readiness probe, the handshake, and the

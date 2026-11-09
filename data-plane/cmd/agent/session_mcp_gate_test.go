@@ -205,7 +205,7 @@ func TestSessionMCPAcceptsPlaintextTarget(t *testing.T) {
 	}
 }
 
-// Scenario 3 of docs/test/approval-gated-workload.md, minus the parts that need
+// Scenario 3 of docs/test/approval-gate.md, minus the parts that need
 // a cluster: the outbound call happens once, and only after the decision.
 func TestSessionMCPFetchesOnlyAfterApproval(t *testing.T) {
 	g := newGatedMCP(t, "PENDING", "PENDING", "APPROVED")

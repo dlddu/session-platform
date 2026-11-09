@@ -196,7 +196,10 @@ func TestWorkloadType_InvalidValuesRejectedBeforeProvisioning(t *testing.T) {
 	ns := sessionNamespace()
 	before := podCount(t, cs, ns, hasCluster)
 
-	for _, bad := range []any{"", nil, 42, "SHELL", "claude_code", " claude-code", "foo"} {
+	// approval-gated was a type until the approval gate became a capability of
+	// other types (docs/prd/approval-gate.md); a deployed control plane must
+	// now refuse it like any other unknown value.
+	for _, bad := range []any{"", nil, 42, "SHELL", "claude_code", " claude-code", "foo", "approval-gated"} {
 		status, _ := createTyped(t, map[string]any{"name": uniqueName(t), "workloadType": bad})
 		if status != http.StatusBadRequest {
 			t.Fatalf("workloadType=%#v status=%d, want 400", bad, status)

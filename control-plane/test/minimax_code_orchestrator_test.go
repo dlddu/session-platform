@@ -2,7 +2,8 @@
 
 // AC-G1/AC-G3~G6 on the real client-go orchestrator: the submitted pod specs
 // and network policies of a minimax-code session. Same fake clientset and
-// helpers as workload_type_orchestrator_test.go and the approval-gated suite.
+// helpers as workload_type_orchestrator_test.go and the approval-gate suite
+// (approval_gate_*_test.go), which checks the gate's own contracts on this type.
 package integration_test
 
 import (
@@ -131,7 +132,7 @@ func TestMiniMaxCode_MainContainerHoldsNoCredential(t *testing.T) {
 	}
 }
 
-// AC-G3/AC-G6: the provider proxy is approval-gated's helper proxy (same
+// AC-G3/AC-G6: the provider proxy is the gate's helper proxy (AC-F6; same
 // placement, probe and hardening) reading this type's Secret — never the
 // claude-code one, in any container of either pod.
 func TestMiniMaxCode_ProviderProxyReadsItsOwnSecret(t *testing.T) {
@@ -262,7 +263,7 @@ func TestMiniMaxCode_K3SMCPProxyHoldsTheToken(t *testing.T) {
 	}
 }
 
-// AC-G6: the session MCP is approval-gated's, gateway address and caller token
+// AC-G6: the session MCP is the gate's (AC-F3/F6), gateway address and caller token
 // included.
 func TestMiniMaxCode_SessionMCPHoldsTheGateway(t *testing.T) {
 	_, set := startMiniMax(t, "mm08")
@@ -292,7 +293,7 @@ func TestMiniMaxCode_SessionMCPHoldsTheGateway(t *testing.T) {
 	}
 }
 
-// AC-G6: approval-gated's boundary, widened by exactly the K3s MCP proxy port.
+// AC-G6: the gate's boundary (AC-F2), widened by exactly the K3s MCP proxy port.
 func TestMiniMaxCode_BoundaryAdmitsTheHelperPortsOnly(t *testing.T) {
 	cs, set := startMiniMax(t, "mm09")
 	policies := listNetworkPolicies(t, cs)

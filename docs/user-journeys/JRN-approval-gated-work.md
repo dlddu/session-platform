@@ -6,18 +6,19 @@
 |---|---|
 | 여정 식별자 | `JRN-approval-gated-work` |
 | 여정명 | 밖으로 나가는 일마다 내가 승인하고 맡긴다 |
-| 상태 | 초안 (v0.1) |
+| 상태 | 초안 (v0.2) |
 | 담당자 | 미지정 |
-| 최종 수정일 | 2026-09-03 |
-| 달성 가치 | V8 목적에 맞는 작업 환경 선택 · V3 끊김 없는 세션 연속성 |
-| 연결 문서 | PRD [`approval-gated-workload`](../prd/approval-gated-workload.md)(AC-F1~F6) · [`lifecycle`](../prd/lifecycle.md)(AC-B1~B3) · mockup `new-session.html`·`gated-workspace.html` ([매핑](../mockups/README.md)) |
+| 최종 수정일 | 2026-11-05 |
+| 달성 가치 | V1 세션 격리 · V3 끊김 없는 세션 연속성 |
+| 연결 문서 | PRD [`approval-gate`](../prd/approval-gate.md)(AC-F2~F6) · [`minimax-code-workload`](../prd/minimax-code-workload.md)(AC-G6) · [`lifecycle`](../prd/lifecycle.md)(AC-B1~B3) · mockup `new-session.html`·`gated-workspace.html` ([매핑](../mockups/README.md)) |
 
-> 이 여정은 `approval-gated` 타입의 **사용 루프**를 담는다. 타입을 고르는 순간은
-> [`JRN-agent-prompt-loop`](./JRN-agent-prompt-loop.md)의 `STP-workload-choice`가 계속 담당하며,
-> 그 화면에 세 번째 선택지가 생긴 것이 이 여정의 진입점이다.
-> 같은 자리의 다른 타입은 `JRN-shell-interaction`(`shell`)과 `JRN-agent-prompt-loop`(`claude-code`)다.
-> **타입이 달라도 플랫폼 보장은 같다**는 것이 V8의 핵심이고, 이 여정은 거기에
-> "밖으로 나가는 순간만 사람이 끊는다"를 더한다.
+> 이 여정은 **승인 게이트가 걸린 세션의 사용 루프**를 담는다. 게이트는 워크로드 타입이 아니라 타입이 갖추는
+> 능력이고([`approval-gate`](../prd/approval-gate.md) 「적용 타입」), 지금 그것을 쓰는 타입은 `minimax-code`다.
+> 타입을 고르는 순간은 [`JRN-agent-prompt-loop`](./JRN-agent-prompt-loop.md)의 `STP-workload-choice`가 계속 담당하며,
+> 그 화면에서 게이트가 걸린 타입을 고른 것이 이 여정의 진입점이다.
+> 같은 자리의 다른 여정은 `JRN-shell-interaction`(`shell`)과 `JRN-agent-prompt-loop`(에이전트 타입 공통)이다.
+> **타입이 달라도 플랫폼 보장은 같다**는 것 위에, 이 여정은 "밖으로 나가는 순간만 사람이 끊는다"를 더한다.
+> 여정 식별자는 2026-11-05 에 `approval-gated` 타입이 제거된 뒤에도 그대로 둔다(식별자 안정 규칙, [README](./README.md)).
 
 ## 1. 서비스 개요 (참고)
 
@@ -58,10 +59,10 @@ P1 멀티세션 작업자 ([README](./README.md#p1-멀티세션-작업자)).
 - **터치포인트**: 승인 게이트 워크스페이스의 프롬프트 입력 행과 "외부 접근은 승인 필요" 표시 (mockup `gated-workspace.html`) · 프롬프트 write API
 - **생각·감정**: "보낸 게 접수는 된 건가?" — 즉시 반환되므로 접수 표시가 없으면 두 번 보낸다.
   동시에 "얘가 몰래 밖에 나가진 않겠지?"라는 확인 욕구가 있다.
-- **페인포인트 / 이탈 위험**: 게이트가 걸려 있다는 사실이 화면에 없으면, 작업자는 이 타입을 고른 이유를 잊고
+- **페인포인트 / 이탈 위험**: 게이트가 걸려 있다는 사실이 화면에 없으면, 작업자는 게이트 타입을 고른 이유를 잊고
   일반 에이전트 세션과 구분하지 못한다 → 워크스페이스에 **이 세션은 밖으로 나갈 때 승인을 받는다**는 사실을
   상시 표시하고, 접수 여부는 즉시 보여준다. 거절(너무 큼·대기열 포화)은 사유와 다음 행동을 함께 알린다.
-- **관련 AC**: AC-F3, AC-F2 (보조 AC-F1)
+- **관련 AC**: AC-F3, AC-F2 (보조 AC-G6)
 
 ### `STP-approval-wait` 승인을 기다리는 것이 보인다
 
@@ -96,9 +97,9 @@ P1 멀티세션 작업자 ([README](./README.md#p1-멀티세션-작업자)).
   한동안 두었다 돌아와도 그 파일과 대화 맥락이 남아 있다.
 - **터치포인트**: 승인 게이트 워크스페이스의 출력 콘솔과 공유 작업물 패널 (mockup `gated-workspace.html`) · 세션 목록의 `snapshot` 배지 → 복원 후 같은 화면
 - **생각·감정**: "거절했다고 세션이 죽지는 않네." — 거절이 세션을 끝내면 작업자는 애초에 거절하지 않게 된다.
-  "쉘·에이전트 세션이랑 똑같이 돌아오네"라는 확인이 V8의 약속이다.
+  "다른 세션이랑 똑같이 돌아오네"라는 확인이 V3의 약속이다.
 - **페인포인트 / 이탈 위험**: 거절이 세션 전체를 실패로 만들면 게이트가 위험 장치가 아니라 **작업 중단 장치**가 되어
-  아무도 이 타입을 고르지 않는다 → 거절·만료는 그 도구 호출만 실패시키고 세션과 대기열은 유지한다.
+  아무도 게이트 타입을 고르지 않는다 → 거절·만료는 그 도구 호출만 실패시키고 세션과 대기열은 유지한다.
   동결·복원 뒤 결과물이 사라지면 승인의 의미가 없어지므로, 승인으로 얻은 파일은 접었다 펴도 그대로 남긴다.
 - **관련 AC**: AC-F5, AC-F3 (상위 AC-B1·B2·B3, 보조 AC-F4)
 
@@ -114,7 +115,8 @@ P1 멀티세션 작업자 ([README](./README.md#p1-멀티세션-작업자)).
 | 대기 중 직접 접거나 지움 | 대기 중인 호출을 취소하고 실패로 마감 | `JRN-manual-freeze` · `JRN-session-deletion` |
 | 프롬프트가 너무 큼 · 대기열 포화 · 누적 출력 한계 | `JRN-agent-prompt-loop`과 동일하게 사유와 함께 거절 | `STP-gated-prompt-submit` |
 | 보고 있는 중 세션이 접힘 | 자동 복원하지 않고 복원 화면으로 안내 | `JRN-idle-resume`의 `STP-reaccess` |
-| 게이트 없이 빠르게 쓰고 싶어짐 | 기존 세션을 바꾸지 않고 새 세션을 만든다 | `JRN-agent-prompt-loop`의 `STP-workload-choice` |
+| 게이트 없이 빠르게 쓰고 싶어짐 | 기존 세션을 바꾸지 않고 게이트 없는 타입으로 새 세션을 만든다 | `JRN-agent-prompt-loop`의 `STP-workload-choice` |
+| 타입이 열거한 예외 도구를 부름 (`minimax-code`의 K3s MCP 도구) | 세션 게이트가 아니라 그 서비스의 자체 승인 게이트를 지나고(결정은 그 서비스의 화면에서), 이 화면에는 대기 표시 없이 결과만 이어 붙는다 | `STP-gated-result` |
 
 ## 5. 측정 지표
 
@@ -126,10 +128,11 @@ P1 멀티세션 작업자 ([README](./README.md#p1-멀티세션-작업자)).
 | 대기 중 중복 제출률 | 대기 표시 중에 같은 내용이 재제출된 비율 | TBD (대기≠실패 표시 실패 신호) |
 | 대기 중 동결 발생 | 승인 대기 중에 동결된 세션 수 | TBD (0 유지 — AC-F3 위반 신호) |
 | 게이트 우회 시도 | 네트워크 경계에서 차단된 워크로드 파드의 외부 연결 시도 수 | TBD (0이 아니어도 정상 — 차단 자체가 성공) |
-| 타입 선택 분포 | `approval-gated` 선택 세션 수 / 전체 생성 세션 수 | TBD (V8 채택 신호) |
+| 게이트 타입 선택 분포 | 게이트를 쓰는 타입(`GET /config`의 `approvalGate=true`) 세션 수 / 전체 생성 세션 수 | TBD (게이트 채택 신호) |
 
 ## 6. 변경 이력
 
 | 버전 | 날짜 | 변경 내용 | 작성자 |
 |---|---|---|---|
 | v0.1 | 2026-09-03 | 최초 작성 — `approval-gated` 워크로드 타입(AC-F1~F6) 신설에 따라 신설. 계약 서술은 AC로 위임하고 사용자 관측 경험만 남김 | Claude |
+| v0.2 | 2026-11-05 | `approval-gated` 타입 제거, 승인 게이트를 타입의 능력으로 재정의(`approval-gate.md`, AC-F1 폐기)에 따라 「게이트가 걸린 세션」의 여정으로 재작성. 단계 식별자 유지. 달성 가치 V8 → V1(타입 선택은 `JRN-agent-prompt-loop`의 몫). 예외 도구 분기(`minimax-code` K3s MCP)와 게이트 타입 선택 분포 지표로 교체 | Claude |

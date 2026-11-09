@@ -21,12 +21,12 @@ between sessions.
 > (`/session/state/home`) plus its scrollback — a restored shell is a fresh shell
 > started in that home, so running processes, environment and shell variables,
 > cwd and open descriptors are not kept (AC-D4); `claude-code` and
-> `minimax-code` keep workspace, CLI home, conversation and output;
-> `approval-gated` keeps the same plus the contents of the session's shared RWX
-> volume (`/shared`, AC-F5). Each type sits behind its own data-transfer gate
+> `minimax-code` keep workspace, CLI home, conversation and output, and a type
+> behind the approval gate (`minimax-code`) also keeps the contents of the
+> session's shared RWX volume (`/shared`, AC-F5 in `docs/prd/approval-gate.md`).
+> Each type sits behind its own data-transfer gate
 > because the archive leaves the cluster: `SHELL_ARCHIVE_ENABLED`,
-> `CLAUDE_CODE_ARCHIVE_ENABLED`, `MINIMAX_CODE_ARCHIVE_ENABLED` and
-> `APPROVAL_GATED_ARCHIVE_ENABLED`. All four default off in code and are turned
+> `CLAUDE_CODE_ARCHIVE_ENABLED` and `MINIMAX_CODE_ARCHIVE_ENABLED`. All three default off in code and are turned
 > on in the production manifest and the kind e2e overlay. A reaper candidate whose workload gate is off
 > stays live and an explicit snapshot returns service unavailable: the platform
 > never deletes a pod behind synthetic checkpoint metadata. The plain 60-minute reaper exists;
@@ -163,7 +163,7 @@ docs/                 value / PRD·AC / journeys / mockups / retired CRIU verifi
   access → restore into a new pod (AC-B2). Every type uses the agent's
   filesystem archive behind its own explicit data-transfer gate
   (`SHELL_ARCHIVE_ENABLED`, `CLAUDE_CODE_ARCHIVE_ENABLED`,
-  `MINIMAX_CODE_ARCHIVE_ENABLED`, `APPROVAL_GATED_ARCHIVE_ENABLED`); the restore
+  `MINIMAX_CODE_ARCHIVE_ENABLED`); the restore
   target pod carries the `session-platform.dev/restore-archive` annotation. A
   disabled gate returns a service-unavailable snapshot error and preserves the
   live pod. Archives use a CP-owned generation and durable owner-fenced

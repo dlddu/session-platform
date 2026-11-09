@@ -1,13 +1,13 @@
 //go:build integration
 
 // AC-F5's volume topology and lifetime, against the same fake clientset as the
-// rest of the approval-gated pod-shape suite. What a fake cannot show — a file
+// rest of the approval-gate pod-shape suite (on minimax-code, the gated type). What a fake cannot show — a file
 // the MCP container wrote being read by the workload, and the volume surviving
 // a freeze/restore round — is not implemented yet either; docs/doc-tracker.md
 // carries the remainder.
 //
 // The volume is opt-in, so every case that expects a claim configures a class;
-// TestApprovalGated_UnconfiguredStorageClassMakesNoClaim covers the other side.
+// TestApprovalGate_UnconfiguredStorageClassMakesNoClaim covers the other side.
 //
 // Deliberately not named e2e_*_test.go: that glob is the AC ↔ e2e mapping's
 // matching unit, and a dedicated e2e file for AC-F5 comes with a registry row
@@ -79,13 +79,12 @@ func onlyClaim(t *testing.T, cs *fake.Clientset) corev1.PersistentVolumeClaim {
 
 // ReadWriteMany is the property itself — it is what lets two pods hold the
 // volume at once — so it is asserted rather than assumed.
-func TestApprovalGated_SessionGetsItsOwnReadWriteManyClaim(t *testing.T) {
-	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
+func TestApprovalGate_SessionGetsItsOwnReadWriteManyClaim(t *testing.T) {
+	orch, cs := newMiniMaxOrchestrator(t,
 		withSharedVolume())
 	if _, err := orch.Start(context.Background(), "f5a1",
-		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated}); err != nil {
-		t.Fatalf("start approval-gated session: %v", err)
+		k8s.WorkloadSpec{Type: gatedType}); err != nil {
+		t.Fatalf("start gated session: %v", err)
 	}
 
 	claim := onlyClaim(t, cs)
@@ -110,14 +109,13 @@ func TestApprovalGated_SessionGetsItsOwnReadWriteManyClaim(t *testing.T) {
 
 // The cluster that has a ReadWriteMany class rarely has it under the default
 // name, so the configured one must reach the claim.
-func TestApprovalGated_ClaimUsesTheConfiguredStorageClass(t *testing.T) {
+func TestApprovalGate_ClaimUsesTheConfiguredStorageClass(t *testing.T) {
 	const class = "nfs-rwx"
-	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
+	orch, cs := newMiniMaxOrchestrator(t,
 		k8s.WithSharedVolume(class, resource.MustParse("4Gi")))
 	if _, err := orch.Start(context.Background(), "f5a2",
-		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated}); err != nil {
-		t.Fatalf("start approval-gated session: %v", err)
+		k8s.WorkloadSpec{Type: gatedType}); err != nil {
+		t.Fatalf("start gated session: %v", err)
 	}
 
 	claim := onlyClaim(t, cs)
@@ -131,14 +129,13 @@ func TestApprovalGated_ClaimUsesTheConfiguredStorageClass(t *testing.T) {
 
 // AC-F5's central property, and the one a wrong refactor is likeliest to break:
 // same claim, same path, and not in the proxy container beside it.
-func TestApprovalGated_WorkloadAndMCPShareTheClaimAtOnePath(t *testing.T) {
-	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
+func TestApprovalGate_WorkloadAndMCPShareTheClaimAtOnePath(t *testing.T) {
+	orch, cs := newMiniMaxOrchestrator(t,
 		withSharedVolume())
 	started, err := orch.Start(context.Background(), "f5b1",
-		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated})
+		k8s.WorkloadSpec{Type: gatedType})
 	if err != nil {
-		t.Fatalf("start approval-gated session: %v", err)
+		t.Fatalf("start gated session: %v", err)
 	}
 	set := newPodSet(t, listPods(t, cs), started)
 	claim := onlyClaim(t, cs)
@@ -177,14 +174,13 @@ func TestApprovalGated_WorkloadAndMCPShareTheClaimAtOnePath(t *testing.T) {
 // Reclamation is garbage collection following this reference, which is why
 // k8s/rbac.yaml grants no delete right on claims. Asserting the reference is
 // the only place that dependency is checkable.
-func TestApprovalGated_ClaimIsOwnedByItsHelperPod(t *testing.T) {
-	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
+func TestApprovalGate_ClaimIsOwnedByItsHelperPod(t *testing.T) {
+	orch, cs := newMiniMaxOrchestrator(t,
 		withSharedVolume())
 	started, err := orch.Start(context.Background(), "f5c1",
-		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated})
+		k8s.WorkloadSpec{Type: gatedType})
 	if err != nil {
-		t.Fatalf("start approval-gated session: %v", err)
+		t.Fatalf("start gated session: %v", err)
 	}
 	set := newPodSet(t, listPods(t, cs), started)
 	if set.helper.UID == "" {
@@ -207,20 +203,19 @@ func TestApprovalGated_ClaimIsOwnedByItsHelperPod(t *testing.T) {
 
 // Reusing the outgoing round's claim would tie the incoming pods' volume to a
 // pod that is being reclaimed.
-func TestApprovalGated_RestoreRoundGetsItsOwnClaim(t *testing.T) {
-	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
+func TestApprovalGate_RestoreRoundGetsItsOwnClaim(t *testing.T) {
+	orch, cs := newMiniMaxOrchestrator(t,
 		withSharedVolume())
 	if _, err := orch.Start(context.Background(), "f5d1",
-		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated}); err != nil {
-		t.Fatalf("start approval-gated session: %v", err)
+		k8s.WorkloadSpec{Type: gatedType}); err != nil {
+		t.Fatalf("start gated session: %v", err)
 	}
 	first := onlyClaim(t, cs).Name
 
 	restored, err := orch.RestoreInto(context.Background(), "f5d1", "archive-ref",
-		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated})
+		k8s.WorkloadSpec{Type: gatedType})
 	if err != nil {
-		t.Fatalf("restore approval-gated session: %v", err)
+		t.Fatalf("restore gated session: %v", err)
 	}
 	if len(restored.Auxiliary) != 1 {
 		t.Fatalf("restore produced %d auxiliary pods, want 1", len(restored.Auxiliary))
@@ -276,15 +271,14 @@ func TestOtherWorkloadTypesGetNoSharedClaim(t *testing.T) {
 }
 
 // The opt-in's own case. A cluster whose classes are all node-local has no
-// answer to a ReadWriteMany claim, and an approval-gated session there must
+// answer to a ReadWriteMany claim, and a gated session there must
 // still stand up — so unconfigured means no claim and pods of the shape they
 // had before AC-F5, not a claim left Pending with two pods waiting behind it.
-func TestApprovalGated_UnconfiguredStorageClassMakesNoClaim(t *testing.T) {
-	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))
+func TestApprovalGate_UnconfiguredStorageClassMakesNoClaim(t *testing.T) {
+	orch, cs := newMiniMaxOrchestrator(t)
 	if _, err := orch.Start(context.Background(), "f5f1",
-		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated}); err != nil {
-		t.Fatalf("start approval-gated session: %v", err)
+		k8s.WorkloadSpec{Type: gatedType}); err != nil {
+		t.Fatalf("start gated session: %v", err)
 	}
 
 	if claims := listClaims(t, cs); len(claims) != 0 {
@@ -303,14 +297,13 @@ func TestApprovalGated_UnconfiguredStorageClassMakesNoClaim(t *testing.T) {
 // the constant: what the data plane needs is not "some directory" but the one
 // its own pod holds the claim at. A change that moved the mount and forgot the
 // env would leave the MCP writing where nothing is mounted.
-func TestApprovalGated_BothMountingContainersAreToldTheSharedPath(t *testing.T) {
-	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage),
+func TestApprovalGate_BothMountingContainersAreToldTheSharedPath(t *testing.T) {
+	orch, cs := newMiniMaxOrchestrator(t,
 		withSharedVolume())
 	started, err := orch.Start(context.Background(), "f5g1",
-		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated})
+		k8s.WorkloadSpec{Type: gatedType})
 	if err != nil {
-		t.Fatalf("start approval-gated session: %v", err)
+		t.Fatalf("start gated session: %v", err)
 	}
 	set := newPodSet(t, listPods(t, cs), started)
 	claim := onlyClaim(t, cs)
@@ -350,12 +343,11 @@ func TestApprovalGated_BothMountingContainersAreToldTheSharedPath(t *testing.T) 
 // The opt-in's other side for the env: no claim means no path, so the data
 // plane falls back to the shape it had before AC-F5 rather than writing into a
 // directory the pod does not have.
-func TestApprovalGated_UnconfiguredStorageClassTellsNoOneAPath(t *testing.T) {
-	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))
+func TestApprovalGate_UnconfiguredStorageClassTellsNoOneAPath(t *testing.T) {
+	orch, cs := newMiniMaxOrchestrator(t)
 	if _, err := orch.Start(context.Background(), "f5g2",
-		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated}); err != nil {
-		t.Fatalf("start approval-gated session: %v", err)
+		k8s.WorkloadSpec{Type: gatedType}); err != nil {
+		t.Fatalf("start gated session: %v", err)
 	}
 	for _, pod := range listPods(t, cs) {
 		for _, c := range pod.Spec.Containers {
@@ -387,7 +379,7 @@ func TestOtherWorkloadTypesAreToldNoSharedPath(t *testing.T) {
 			for _, pod := range listPods(t, cs) {
 				for _, c := range pod.Spec.Containers {
 					if dir, ok := envValue(c, k8s.SharedVolumeDirEnvVar); ok {
-						t.Fatalf("%s pod %s container %s is told %s=%q; only approval-gated has the volume",
+						t.Fatalf("%s pod %s container %s is told %s=%q; only a gated type has the volume",
 							tc.name, pod.Name, c.Name, k8s.SharedVolumeDirEnvVar, dir)
 					}
 				}

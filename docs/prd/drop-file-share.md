@@ -1,6 +1,6 @@
 # PRD: drop 파일 전달 — 세션 MCP 의 `drop_upload`·`drop_download` (drop-file-share)
 
-> 대상 요구사항: 승인 게이트가 걸린 세션(`approval-gated`·`minimax-code`)의 에이전트가 **공유 볼륨에 둔 파일을**
+> 대상 요구사항: 승인 게이트가 걸린 세션(게이트를 쓰는 타입 — 지금은 `minimax-code`, `approval-gate.md`)의 에이전트가 **공유 볼륨에 둔 파일을**
 > 같은 운영자의 클러스터 안 파일 전달 서비스 drop(`dlddu/drop`, 공개 주소 `https://drop.llkm.nl`, 최대 30일 보관,
 > 받는 사람은 아이디 + 비밀번호로 받는다)으로 **내보내고**, drop 에 있는 보관함을 **공유 볼륨으로 받아 올** 수 있게 한다.
 > 워크로드 파드에는 egress 가 없으므로(AC-F2) 이 일은 헬퍼 파드의 세션 MCP 가 **자기 서비스 어카운트로** 한다.

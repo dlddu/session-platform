@@ -1,16 +1,16 @@
-// AC-F5's file-exchange volume for an approval-gated session, as Kubernetes
+// AC-F5's file-exchange volume for a gated session (session.HasApprovalGate), as Kubernetes
 // objects — one claim per provisioning round, shared by the workload container
 // and the helper pod's MCP container.
 //
 // Why a claim: the two containers that share it live in *different pods*, which
 // an EmptyDir cannot span. Why not a hostPath, which also spans them: opening
 // the node filesystem to a session workload is the opposite of the isolation
-// this workload type is built around (AC-F2, V1).
+// the approval gate is built around (AC-F2, V1).
 //
 // The volume is opt-in: a cluster only gets it once it has been told which
 // class serves ReadWriteMany. A default-on arrangement asked every cluster for
 // a claim its default class may not be able to serve, and a cluster whose only
-// class is node-local (kind's, for one) then holds an approval-gated session
+// class is node-local (kind's, for one) then holds a gated session
 // Pending rather than refusing it outright.
 //
 // What writes to it lives in the data plane; this package's share is naming the

@@ -40,7 +40,7 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
-  # approval-gated sessions only: the egress allowlist for the workload pod and
+  # Gated sessions only (session.HasApprovalGate): the egress allowlist for the workload pod and
   # the ingress restriction on its helper pod (AC-F2). No update/patch — a
   # session's boundary is written once with its pods and never edited — and no
   # delete either: the policies carry an owner reference to that session's
@@ -49,7 +49,7 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["create", "get", "list", "watch"]
-  # approval-gated sessions only: the ReadWriteMany claim the session's workload
+  # Gated sessions only: the ReadWriteMany claim the session's workload
   # pod and its helper pod's MCP container share (AC-F5). Create only, for the
   # same reason as the policies above — the claim carries an owner reference to
   # that session's helper pod, so garbage collection reclaims it with the pod.

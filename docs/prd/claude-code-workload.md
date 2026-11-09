@@ -17,14 +17,15 @@
 > 이 PRD는 세션 워크로드가 **단수(인터랙티브 쉘)에서 복수(타입)로 확장**되는 변경을 다룬다.
 > AC-E1이 타입 선택이라는 새 축을 도입하고, AC-E2~E6은 `claude-code` 타입에서 기존 AC들
 > (AC-A1·B1·B2·B3·C2·C3)이 어떻게 구체화되는지를 못박는다. 다른 타입의 대응 명세는
-> `shell-workload.md`(AC-D1~D5)와 `approval-gated-workload.md`(AC-F1~F6)이며, 세 문서는 같은 상위 AC에
-> 대한 **타입별 구체화**로 나란히 존재한다.
+> `shell-workload.md`(AC-D1~D5)와 `minimax-code-workload.md`(AC-G1~G6)이며, 같은 상위 AC에
+> 대한 **타입별 구체화**로 나란히 존재한다. 승인 게이트는 타입이 갖추는 능력으로 `approval-gate.md`(AC-F2~F6)가 정의한다.
 >
-> 📌 **역참조 (2026-09-03)**: `approval-gated` 타입은 이 문서의 배선을 **복제하지 않고 재사용한다** —
+> 📌 **역참조 (2026-09-03; 2026-11-05 갱신)**: 당시의 `approval-gated` 타입은 이 문서의 배선을 **복제하지 않고 재사용했다**. 그 타입은
+> 2026-11-05 에 제거되었고, 지금 같은 재사용은 `minimax-code`(AC-G1~G4)가 하며, 아래의 「그 타입」은 게이트를 쓰는 타입(`approval-gate.md`)으로 읽는다 —
 > 원샷 실행·직렬 큐·offset 커서·파일시스템 아카이브(AC-E2/E3/E5), credential-proxy의 **동작 계약**과
 > optional `model`/`models` 기본값·soft catalog, 출력 증분 redaction(AC-E6)이 그대로 적용된다.
 > 그 위에 얹히는 차이(egress 제한·승인 게이트·보조 파드·공유 볼륨·게이트웨이 자격 증명)만
-> AC-F2~F6이 정의한다. **따라서 AC-E2·E3·E5·E6을 고칠 때는 `approval-gated`도 함께 바뀐다.**
+> AC-F2~F6이 정의한다. **따라서 AC-E2·E3·E5·E6을 고칠 때는 그것을 재사용하는 타입도 함께 바뀐다.**
 >
 > ⚠️ **두 가지는 재사용하지 않는다 (2026-09-03 확정)**: ① credential-proxy의 **배치** — 이 문서는 워크로드
 > 파드 안의 loopback 사이드카이고, `approval-gated`는 같은 계약의 프록시를 **세션 헬퍼 보조 파드의 컨테이너**로
@@ -38,7 +39,7 @@
 ## Acceptance Criteria
 
 ### AC-E1: 세션 워크로드 타입 선택
-- **설명**: 세션 생성 요청은 워크로드 타입 `workloadType`을 받는다. 허용값은 `shell`·`claude-code`·`approval-gated`(AC-F1)이며, **필드 생략만** `shell` 기본값으로 해석한다(explicit empty/null/비문자열은 400). 타입은 세션 수명 동안 **불변**이다(타입을 바꾸려면 새 세션을 만든다). 하나의 세션은 정확히 하나의 워크로드 타입을 가지고, control plane은 타입에 따라 서로 다른 data plane 워크로드(에이전트 모드/이미지)로 pod를 프로비저닝한다. 타입이 늘어나도 AC-A1(control plane은 워크로드를 직접 실행하지 않음)과 AC-A2(1 세션 = 1 전용 워크로드 파드)는 그대로 유지된다.
+- **설명**: 세션 생성 요청은 워크로드 타입 `workloadType`을 받는다. 허용값은 `shell`·`claude-code`·`minimax-code`(AC-G1)·`codex-chat`(AC-J1)·`codex-task`(AC-M1)이며 *(2026-11-05: `approval-gated`(옛 AC-F1)는 제거되어 허용값이 아니다)*, **필드 생략만** `shell` 기본값으로 해석한다(explicit empty/null/비문자열은 400). 타입은 세션 수명 동안 **불변**이다(타입을 바꾸려면 새 세션을 만든다). 하나의 세션은 정확히 하나의 워크로드 타입을 가지고, control plane은 타입에 따라 서로 다른 data plane 워크로드(에이전트 모드/이미지)로 pod를 프로비저닝한다. 타입이 늘어나도 AC-A1(control plane은 워크로드를 직접 실행하지 않음)과 AC-A2(1 세션 = 1 전용 워크로드 파드)는 그대로 유지된다.
 - **달성 가치**: V8, V1
 - **구체화 대상**: AC-A1의 "실제 세션 워크로드" — 이제 **타입별로 분기**한다 (AC-D1은 `shell` 타입의 구체화, AC-E1~E6은 `claude-code` 타입의 구체화)
 - **검증 방법**: `workloadType=claude-code`로 세션을 생성하면 해당 pod에서 클로드 코드 CLI 실행이 가능하고, `workloadType` 미지정 생성은 기존과 동일하게 `shell` 세션으로 동작함을 확인한다. explicit `""`/`null`/비문자열과 허용값 외 타입은 pod 생성 전 400으로 거부됨을 확인한다. 기존 세션 route에 workload/model 변경 필드를 보내면 400이고 원래 값이 유지됨을 확인한다.
@@ -90,7 +91,7 @@
 - **구체화 대상**: AC-C2의 JSON read와 같은 보존 cursor를 사용하는 `claude-code` live output 구체화
 - **검증 방법**: write 후 process가 종료되기 전에 둘 이상의 SSE output delta가 순서대로 도착하고, event id/data cursor와 decoded byte 수가 일치하며 모든 cursor가 UTF-8 code-point 경계임을 확인한다. 중간에 연결을 끊은 뒤 `Last-Event-ID`로 재접속해 누락·중복 없이 이어 받고, 동일 cursor의 POST read가 같은 저장 bytes를 valid UTF-8로 반환하며 `offset=0`은 전체 이력을 반환함을 확인한다. current length보다 큰 cursor에는 reset이 발급되고 SPA가 decoder state 폐기→read(0) 화면 교체→새 cursor stream 순으로 복구해야 한다. runner write가 UTF-8 rune이나 credential 중간에서 갈려도 잘못된 문자나 secret이 한 번도 노출되지 않아야 한다. 각 실행이 input·output·end 마커로 실행 순서대로 감싸이고 seq가 1부터 늘며 복원 후 이어지고, 프롬프트에 든 credential literal도 치환되며, 프롬프트·출력에 섞인 RS가 제거되고, 실패한 실행의 end가 `status=error`, 개행 없이 끝난 출력 뒤에 개행이 붙음을 확인한다. 축소한 결정적 limit로 기존 커서를 발급한 뒤 256 MiB와 같은 경계 로직을 넘겨 live terminal marker·커서 불변·accepted queue drain·후속 507을 검증한다.
 
-> ✅ **구현 결정 (turn 마커, 2026-10-25 — 같은 날 앞선 `▸` echo를 대체)**: 입력 기록은 CLI가 HOME에 남기는 대화 기록 파일을 읽어 오지 않고 agent가 같은 scrollback에 직접 append한다. 대화 기록 파일은 CLI마다 형식이 다르고 문서화되지 않았으며, offset 공간이 출력과 달라 순서를 맞추려면 별도 병합이 필요하다. 같은 scrollback에 두면 커서·SSE·`offset=0` replay·256 MiB 한도·아카이브가 그대로 적용되고 `claude-code`·`approval-gated`·`minimax-code`가 같은 worker 경로로 함께 얻는다. 처음 넣은 `▸ <프롬프트>` 줄은 사람이 읽기엔 충분했지만 입력과 출력의 경계를 기계가 가를 수 없어(프롬프트·응답이 같은 모양의 줄을 담을 수 있다), PocketAide가 write마다 입력/출력을 접어 보이려면 경계가 필요했다. 그래서 출력에 나오지 않는 RS 센티널을 쓰는 마커로 바꿨다. 사람이 읽는 표현은 클라이언트가 만든다 — SPA는 마커를 `▸ <프롬프트>`로 바꿔 그리고 실패한 turn에 `◆ turn ended: <status>`를 덧붙인다.
+> ✅ **구현 결정 (turn 마커, 2026-10-25 — 같은 날 앞선 `▸` echo를 대체)**: 입력 기록은 CLI가 HOME에 남기는 대화 기록 파일을 읽어 오지 않고 agent가 같은 scrollback에 직접 append한다. 대화 기록 파일은 CLI마다 형식이 다르고 문서화되지 않았으며, offset 공간이 출력과 달라 순서를 맞추려면 별도 병합이 필요하다. 같은 scrollback에 두면 커서·SSE·`offset=0` replay·256 MiB 한도·아카이브가 그대로 적용되고 `claude-code`·`minimax-code`가 같은 worker 경로로 함께 얻는다. 처음 넣은 `▸ <프롬프트>` 줄은 사람이 읽기엔 충분했지만 입력과 출력의 경계를 기계가 가를 수 없어(프롬프트·응답이 같은 모양의 줄을 담을 수 있다), PocketAide가 write마다 입력/출력을 접어 보이려면 경계가 필요했다. 그래서 출력에 나오지 않는 RS 센티널을 쓰는 마커로 바꿨다. 사람이 읽는 표현은 클라이언트가 만든다 — SPA는 마커를 `▸ <프롬프트>`로 바꿔 그리고 실패한 turn에 `◆ turn ended: <status>`를 덧붙인다.
 
 ### AC-E4: 대화 연속성 = pod에 지속되는 대화 기록
 - **설명**: 같은 세션에 대한 연속된 write는 **하나의 이어지는 대화**로 처리된다. 각 실행은 원샷이지만, 클로드 코드 CLI가 pod 파일시스템에 남기는 대화 기록을 다음 실행이 이어받으므로, N번째 프롬프트는 앞서 **성공한** 프롬프트·응답을 문맥으로 갖는다. 성공한 첫 실행까지는 새 대화 모드이고 그 이후 write부터 재개(resume) 모드다(첫 실행 실패·timeout은 resume 상태를 만들지 않는다). 세션의 작업 디렉터리도 실행 간 유지되어, 이전 실행이 만든 파일을 다음 실행이 그대로 본다.
@@ -100,10 +101,10 @@
 > ✅ **구현 결정 (재개 방식, 2026-08-08)**: 첫 실행은 새 대화를 시작하고, 성공한 첫 실행 이후부터 `--continue`로 해당 세션 pod의 최근 대화를 잇는다. 세션별 고정 HOME과 작업 디렉터리를 사용하며, 별도 대화 ID를 control-plane 메타데이터에 저장하지 않는다. resume 플래그와 CLI 기록은 파일시스템 아카이브에 함께 보존된다.
 
 ### AC-E5: 파일시스템 아카이브 기반 동결·복원
-> 📌 **개정 (2026-11-01)**: 초판 제목은 「CRIU 비대상 — …」였고, 쉘 타입만 CRIU로 프로세스 트리를 보존한다는 대비 위에 서 있었다. CRIU가 모든 워크로드에서 퇴역하면서 이 AC가 정의한 아카이브가 **모든 타입의 공통 동결 경로**가 됐다(`shell`의 보존 대상은 AC-D4, `approval-gated`의 공유 볼륨은 AC-F5). 아래 계약 자체는 바뀌지 않는다.
+> 📌 **개정 (2026-11-01)**: 초판 제목은 「CRIU 비대상 — …」였고, 쉘 타입만 CRIU로 프로세스 트리를 보존한다는 대비 위에 서 있었다. CRIU가 모든 워크로드에서 퇴역하면서 이 AC가 정의한 아카이브가 **모든 타입의 공통 동결 경로**가 됐다(`shell`의 보존 대상은 AC-D4, 게이트 타입의 공유 볼륨은 AC-F5). 아래 계약 자체는 바뀌지 않는다.
 - **설명**: `claude-code` 세션은 원샷 실행 모델이라 동결 시점에 보존해야 할 상주 프로세스 트리가 존재하지 않는다. 유휴 한계 도달 시(AC-B1) 시스템은 세션의 **작업 디렉터리·대화 기록·누적 출력 버퍼를 아카이브하여 외부 스토리지에 저장**하고 pod를 회수한다. 재접근 시(AC-B2)에는 새 pod에 아카이브를 복원한 뒤 `active`로 전이하며, 복원 후의 write는 동결 이전 대화 문맥과 작업 디렉터리 위에서 이어진다. 누적 출력 버퍼(256 MiB terminal marker와 output-full 상태 포함)가 아카이브에 포함되므로 **복원 전 발급된 `nextOffset` 커서는 복원 후에도 유효**하고, 이미 output-full이었다면 복원 후 새 write도 계속 507이다(AC-E3의 커서 연속성 — 모든 타입이 scrollback을 같은 filesystem archive에 직렬화한다).
 - **달성 가치**: V2, V3
-- **구체화 대상**: AC-B1(동결)·AC-B2(복원)·AC-B3(무결성) — 메커니즘은 모든 타입이 이 아카이브이고, 타입별로 다른 것은 보존 대상이다(`shell`=홈 디렉터리 파일+scrollback, AC-D4 · `claude-code`=이 AC · `approval-gated`=이 AC+공유 볼륨, AC-F5)
+- **구체화 대상**: AC-B1(동결)·AC-B2(복원)·AC-B3(무결성) — 메커니즘은 모든 타입이 이 아카이브이고, 타입별로 다른 것은 보존 대상이다(`shell`=홈 디렉터리 파일+scrollback, AC-D4 · `claude-code`=이 AC · 게이트를 쓰는 타입=이 AC+공유 볼륨, AC-F5)
 - **검증 방법**: `claude-code` 세션이 유휴 한계에 도달하면 아카이브가 생성되고 pod가 회수됨을 확인한다(AC-A3의 자원 회복도 동일하게 성립). 재접근 시 새 pod로 복원되어 `active`가 되고, 동결 전 대화를 참조하는 프롬프트가 정상 응답하며 동결 전에 만든 파일이 작업 디렉터리에 남아 있음을 확인한다. 동결 직전 확보한 `nextOffset`으로 복원 후 read하면 델타만 반환되고, `offset=0`은 동결 전·후 전체 이력을 반환함을 확인한다.
 > 🔐 작업 디렉터리·대화·출력을 외부 저장소로 전송하므로 이 경로는 `CLAUDE_CODE_ARCHIVE_ENABLED=true`로 명시적으로 허용해야 한다(기본값 `false`). 비활성 상태에서는 pod를 회수하지 않고 snapshot 요청을 거부한다.
 
@@ -133,7 +134,7 @@
 
 > ✅ **구현 결정 (모델 카탈로그, 2026-08-09)**: optional `model`과 `models`는 control-plane rollout 단위의 UI default와 soft catalog다. `GET /api/v1/config`가 concrete default 또는 fallback alias와 catalog를 공개하되 Create Session API의 allowlist로 사용하지 않으며, 빈 catalog는 기존 free-text 입력을 보존한다.
 
-> ✅ **구현 결정 (워크로드 타입 목록, 2026-10-23)**: `GET /api/v1/config`가 `workloadTypes` 배열로 이 배포가 생성할 수 있는 타입(셸은 항상, 나머지는 이미지가 설정된 것만)을 표시 순서대로 공개한다. 각 항목은 `type`·`label`·`description`·`takesModel`·`input`(`prompt`|`terminal`)·`defaultModel`·`models`이고, `defaultModel`·`models`의 의미는 위 모델 카탈로그 결정과 같다(`takesModel=false`면 `defaultModel`은 `null`, `models`는 빈 배열). approval-gated는 claude-code ConfigMap의 `model`/`models`를 그대로 보이고, minimax-code는 control plane이 그 ConfigMap을 읽지 않으므로 `platform-default`와 빈 catalog다. 외부 클라이언트는 이 목록으로 타입 선택과 생성 요청 검증을 하므로 타입 추가에 클라이언트 배포가 필요 없다. 기존 `claudeCode` 필드는 하위 호환을 위해 유지한다. 목록은 표시용이며 Create Session API의 검증 범위를 바꾸지 않는다.
+> ✅ **구현 결정 (워크로드 타입 목록, 2026-10-23)**: `GET /api/v1/config`가 `workloadTypes` 배열로 이 배포가 생성할 수 있는 타입(셸은 항상, 나머지는 이미지가 설정된 것만)을 표시 순서대로 공개한다. 각 항목은 `type`·`label`·`description`·`takesModel`·`input`(`prompt`|`terminal`)·`defaultModel`·`models`이고, `defaultModel`·`models`의 의미는 위 모델 카탈로그 결정과 같다(`takesModel=false`면 `defaultModel`은 `null`, `models`는 빈 배열). minimax-code는 control plane이 그 ConfigMap을 읽지 않으므로 `platform-default`와 빈 catalog다. 외부 클라이언트는 이 목록으로 타입 선택과 생성 요청 검증을 하므로 타입 추가에 클라이언트 배포가 필요 없다. 기존 `claudeCode` 필드는 하위 호환을 위해 유지한다. 목록은 표시용이며 Create Session API의 검증 범위를 바꾸지 않는다.
 
 > ✅ **구현 결정 (설정·자격 증명 분리, 2026-11-02)**: 운영의 플랫폼 Secret은 external-secrets 가 SSM 에서 렌더한다(flux-cd-apps). 그 Secret에서 자격 증명이 아닌 키를 ConfigMap `claude-code-config`(`CLAUDE_CODE_CONFIG_CONFIGMAP`)로 옮겨, Secret `claude-code-credentials`에는 `auth-token`·`k3s-mcp-token`만 남겼다. 키 이름, 필수/선택 여부, 어느 컨테이너에 들어가는지는 하나도 바뀌지 않았다 — 바뀐 것은 pod spec이 그 키를 `secretKeyRef` 대신 `configMapKeyRef`로 읽는다는 것뿐이다. control plane은 두 객체를 Kubernetes API로 읽지 않고 pod spec과 자기 Deployment env에서 이름으로만 참조하므로 RBAC은 변하지 않는다. 세션 pod의 `data-plane` 서비스 어카운트는 `view`로 ConfigMap을 읽을 수 있지만 그 안에는 자격 증명이 없다.
 
@@ -144,7 +145,7 @@
   - **`subscription`** (운영 기본, `k8s/deployment.yaml`): 풀 `claude-code`(`agent-auth-pool.md` AC-N1~N5, `CLAUDE_CODE_AUTH_SLOTS`)의 슬롯을 쓴다. 파드에는 credential-proxy 사이드카가 **없고**, 주 컨테이너는 `ANTHROPIC_BASE_URL`·`ANTHROPIC_AUTH_TOKEN`·`ANTHROPIC_API_KEY`·`CLAUDE_CODE_OAUTH_TOKEN`을 받지 않으며 하나라도 있으면 에이전트가 기동을 거부한다. CLI는 공급자에 직접 붙는다. 슬롯 파일은 `.credentials.json`이고 HOME 쪽 자리는 `$HOME/.claude/.credentials.json`이다(AC-N4). 주 컨테이너는 이 모드를 `CLAUDE_CODE_AUTH_MODE=subscription`으로 받는다. 모델은 게이트웨이와 따로 고른다 — 게이트웨이의 `model`·`models`(OpenRouter id)는 구독에서 뜻이 없고 `approval-gated`가 계속 읽으므로, 같은 ConfigMap의 선택 키 `subscription-model`·`subscription-models`(control plane `CLAUDE_CODE_SUBSCRIPTION_DEFAULT_MODEL`·`CLAUDE_CODE_SUBSCRIPTION_MODELS`)가 이 모드의 UI 카탈로그이고, `platform-default` 파드는 `subscription-model`을 읽는다(없으면 CLI 기본).
   - **`gateway`**: AC-E6 그대로 — loopback credential-proxy가 ConfigMap `base-url`과 Secret `auth-token`을 들고 주 컨테이너는 placeholder만 본다. 풀을 쓰지 않는다. e2e(공급자 대역)와 되돌리기용으로 남긴다.
 
-  값이 비면 `gateway`, 그 밖의 값은 control plane 기동 실패다. `subscription`인데 풀 크기가 0이면 이 타입은 `GET /config`에 나오지 않는다(AC-N1). `approval-gated`는 이 설정과 무관하게 AC-F6의 게이트웨이 자격 증명을 쓴다 — 그 타입의 egress 허용 목록에 공급자가 없다.
+  값이 비면 `gateway`, 그 밖의 값은 control plane 기동 실패다. `subscription`인데 풀 크기가 0이면 이 타입은 `GET /config`에 나오지 않는다(AC-N1).
 
   **빈 슬롯의 로그인** (`subscription`): Claude Code의 `claude auth login --claudeai`는 URL을 출력한 뒤 붙여 넣을 코드를 stdin에서 기다린다(device code가 아니다, 2.1.220에서 확인). 그래서 로그인을 두 번의 write로 나눈다.
   1. 턴 시작 시 `claude auth status --json`이 로그인 안 됨을 알리면, 에이전트가 `claude auth login --claudeai`를 띄우고 그 로그인 URL을 플랫폼 안내 줄로 내보낸다 — 「브라우저에서 열어 로그인하고, 화면에 나온 코드를 다음 메시지로 보내라」. 이 프롬프트는 실행하지 않고 보류하며, 턴은 `status=error`로 끝난다.
@@ -159,7 +160,7 @@
 - **검증 방법**: `subscription`에서 제출된 pod spec에 credential-proxy 컨테이너·`ANTHROPIC_*` env가 없고 슬롯 PVC와 `CLAUDE_CODE_AUTH_MODE=subscription`이 있음을 확인한다. `gateway`에서는 AC-E6의 모양 그대로임을 확인한다. 에이전트 단위 테스트로 로그인 안 됨 → URL 안내·프롬프트 보류 → 다음 write가 코드로 쓰이고 출력에 코드가 없으며 성공 시 보류한 프롬프트가 실행됨을 확인한다. `subscription` 모드 주 컨테이너가 `ANTHROPIC_AUTH_TOKEN`이 있으면 기동을 거부함을 확인한다.
 
 ### AC-E8: 세션 추론 수준(`reasoningEffort`) — 생성 시 고정
-- **설명**: 생성 요청은 선택 필드 `reasoningEffort`를 받는다. 이 필드를 받는 타입은 `claude-code`와 `codex-task`(AC-M4)뿐이고, 다른 타입에 주면 pod 생성 전 400이다. 값은 타입마다 정해진 목록 중 하나이고(`claude-code`: `low`·`medium`·`high`·`xhigh`·`max` — CLI의 `--effort`), 빈 문자열·비문자열·목록 밖은 400이다. 생략하면 세션에 저장하지 않고 CLI의 기본값을 쓴다. 값은 모델·타입처럼 **생성 시 고정**이다 — 세션 레코드의 `reasoningEffort`로 조회 응답에 나오고, 동결·복원을 건너 유지되며, 바꾸려면 새 세션을 만든다. `GET /config`의 각 타입 항목은 `reasoningEfforts` 배열을 내놓는다(받지 않는 타입은 빈 배열). `claude-code` 파드는 `CLAUDE_CODE_EFFORT`로 받고 모든 실행 argv에 `--effort <값>`을 붙인다. `approval-gated`는 받지 않는다.
+- **설명**: 생성 요청은 선택 필드 `reasoningEffort`를 받는다. 이 필드를 받는 타입은 `claude-code`와 `codex-task`(AC-M4)뿐이고, 다른 타입에 주면 pod 생성 전 400이다. 값은 타입마다 정해진 목록 중 하나이고(`claude-code`: `low`·`medium`·`high`·`xhigh`·`max` — CLI의 `--effort`), 빈 문자열·비문자열·목록 밖은 400이다. 생략하면 세션에 저장하지 않고 CLI의 기본값을 쓴다. 값은 모델·타입처럼 **생성 시 고정**이다 — 세션 레코드의 `reasoningEffort`로 조회 응답에 나오고, 동결·복원을 건너 유지되며, 바꾸려면 새 세션을 만든다. `GET /config`의 각 타입 항목은 `reasoningEfforts` 배열을 내놓는다(받지 않는 타입은 빈 배열). `claude-code` 파드는 `CLAUDE_CODE_EFFORT`로 받고 모든 실행 argv에 `--effort <값>`을 붙인다. 승인 게이트 타입 `minimax-code`는 받지 않는다.
 - **달성 가치**: V8
 - **구체화 대상**: AC-E1(타입 선택)과 같은 축 — 세션 생성 시 고르는 작업 환경에 추론 수준을 더한 것
-- **검증 방법**: `reasoningEffort=max`로 만든 `claude-code` 세션의 조회 응답·파드 env·실행 argv에 그 값이 있음을 확인한다. `shell`·`approval-gated`·`codex-chat`에 주면 400이고 파드가 없음을 확인한다. `GET /config`가 타입별 목록을 내놓고, 세션 생성 화면이 그 목록이 빈 타입에서는 선택지를 숨김을 확인한다.
+- **검증 방법**: `reasoningEffort=max`로 만든 `claude-code` 세션의 조회 응답·파드 env·실행 argv에 그 값이 있음을 확인한다. `shell`·`minimax-code`·`codex-chat`에 주면 400이고 파드가 없음을 확인한다. `GET /config`가 타입별 목록을 내놓고, 세션 생성 화면이 그 목록이 빈 타입에서는 선택지를 숨김을 확인한다.

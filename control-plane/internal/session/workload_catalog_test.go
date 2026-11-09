@@ -7,8 +7,7 @@ import (
 
 func TestWorkloadTypeCatalogMatchesValidation(t *testing.T) {
 	known := []WorkloadType{
-		WorkloadTypeShell, WorkloadTypeClaudeCode,
-		WorkloadTypeApprovalGated, WorkloadTypeMiniMaxCode,
+		WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode,
 		WorkloadTypeCodexChat, WorkloadTypeCodexTask,
 	}
 	catalog := WorkloadTypes()
@@ -37,6 +36,9 @@ func TestWorkloadTypeCatalogMatchesValidation(t *testing.T) {
 		_, err = NormalizePlugins(info.Type, []string{"some-plugin"})
 		if accepts := err == nil; accepts != info.TakesPlugins || accepts != TakesPlugins(info.Type) {
 			t.Errorf("%q TakesPlugins = %v, but NormalizePlugins accepts plugins: %v", info.Type, info.TakesPlugins, accepts)
+		}
+		if info.ApprovalGate != info.Type.HasApprovalGate() {
+			t.Errorf("%q ApprovalGate = %v, but HasApprovalGate() = %v", info.Type, info.ApprovalGate, info.Type.HasApprovalGate())
 		}
 	}
 	for _, w := range known {

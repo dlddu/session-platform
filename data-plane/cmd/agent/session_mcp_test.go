@@ -38,7 +38,7 @@ func newSessionMCPServerWith(t *testing.T, config sessionMCPConfig) *httptest.Se
 }
 
 // The helper pod cannot reach Ready without this, which is the whole reason an
-// approval-gated session could not be created at all.
+// gated session could not be created at all.
 func TestSessionMCPReportsReady(t *testing.T) {
 	srv := newSessionMCPServer(t)
 	resp, err := http.Get(srv.URL + "/healthz")

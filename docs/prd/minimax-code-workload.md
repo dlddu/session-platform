@@ -1,7 +1,7 @@
 # PRD: 세션 워크로드 — MiniMax Code CLI (minimax-code)
 
 > 대상 요구사항: 세션 워크로드 타입에 **MiniMax Code CLI(`mcode`) 에이전트** 추가
-> (`shell`·`claude-code`·`approval-gated`와 병존하는 네 번째 타입, `claude-code-workload.md`와 대응 관계)
+> (`shell`·`claude-code`와 병존하는 타입, `claude-code-workload.md`와 대응 관계. 승인 게이트를 쓰는 타입 — [`approval-gate.md`](./approval-gate.md) 「적용 타입」)
 
 ## 달성 가치
 - **V8 목적에 맞는 작업 환경 선택** — 세션 생성 시 네 번째 작업 환경(MiniMax 모델로 도는 코딩 에이전트)을 고를 수 있게 하고, 선택과 무관하게 V1~V5 보장이 동일하게 성립함을 확정 (AC-G1)
@@ -10,16 +10,16 @@
 - **V3 끊김 없는 세션 연속성** — 대화 문맥·작업 디렉터리·누적 출력이 동결·복원을 건너 보존됨 (AC-B2/B3 구체화), write/read를 프롬프트·실행 출력 시맨틱으로 확정 (AC-C2/C3 구체화)
 - **V4 자유로운 멀티세션 전환** — 전환 후에도 동일한 offset 커서 규약으로 출력을 이어 읽음 (AC-C2 구체화)
 - **V1 세션 격리 (도구 표면)** — `claude-code`가 플러그인으로 받는 홈랩 K3s MCP 도구를 이 타입에도 주되, 그 토큰은 워크로드 파드와 아카이브 밖에 둠 (AC-G5)
-- **V1 세션 격리 (네트워크 경계)** — 워크로드 파드의 나가는 트래픽을 그 세션 헬퍼 파드로만 묶고, 외부에 닿는 세션 MCP 도구는 사람의 승인을 거침 — 예외는 도구 표면 R1 이 명시한 것뿐 (AC-G6 — `approval-gated`의 AC-F2~F5 재사용)
+- **V1 세션 격리 (네트워크 경계)** — 워크로드 파드의 나가는 트래픽을 그 세션 헬퍼 파드로만 묶고, 외부에 닿는 세션 MCP 도구는 사람의 승인을 거침 — 예외는 도구 표면 R1 이 명시한 것뿐 (AC-G6 — 승인 게이트의 AC-F2~F6 적용)
 
-> 📌 **가치 연결 규칙**: `claude-code-workload.md`·`approval-gated-workload.md`와 동일하게, 각 AC의 달성 가치는
+> 📌 **가치 연결 규칙**: `claude-code-workload.md`·`approval-gate.md`와 동일하게, 각 AC의 달성 가치는
 > 자신이 구체화하는 상위 AC의 가치를 상속한다. **AC-G1(타입 선택)만 예외**로 추상 가치 **V8**에 직접 연결한다
-> — AC-E1·AC-F1과 같은 이유이며, 타입이 늘어도 `../values.md`는 변하지 않는다. 새 가치는 신설하지 않는다.
+> — AC-E1과 같은 이유이며(폐기된 AC-F1도 그랬다), 타입이 늘어도 `../values.md`는 변하지 않는다. 새 가치는 신설하지 않는다.
 
 > 이 PRD는 **"같은 실행 모델 위에서 공급자와 CLI만 바꾼다"** 는 한 가지 성질을 세션 워크로드 타입으로 못박는다.
 > 실행 모델(원샷 프롬프트·직렬 큐·커서 규약·대화 연속성·아카이브)은 `claude-code`와 같으므로 **복제하지 않고
-> AC-E2~E5를 참조**하고, 파드 배치(헬퍼 파드·egress 경계·승인 게이트·공유 볼륨)는 `approval-gated`와 같으므로
-> **AC-F2~F5를 참조**하며(AC-G6), 이 문서는 그 위에 얹히는 차이만 적는다. 차이는 다섯이다 — 실행하는 CLI와 그
+> AC-E2~E5를 참조**하고, 파드 배치(헬퍼 파드·egress 경계·승인 게이트·공유 볼륨)는 승인 게이트의 계약이므로
+> **AC-F2~F6을 참조**하며(AC-G6, [`approval-gate.md`](./approval-gate.md) — 이 타입은 그 문서의 「적용 타입」에 올라 있다), 이 문서는 그 위에 얹히는 차이만 적는다. 차이는 다섯이다 — 실행하는 CLI와 그
 > 출력의 투영(AC-G2), 자격 증명을 담는 Secret(AC-G3), 아카이브 게이트(AC-G4), K3s MCP 도구의 배선(AC-G5),
 > 그리고 K3s MCP 도구가 세션 승인 게이트를 지나지 않는다는 것(AC-G6). credential-proxy는 **동작 계약은 AC-E6,
 > 배치는 AC-F6 그대로**(헬퍼 파드의 컨테이너)이고, 읽는 Secret·ConfigMap만 이 타입 전용이다.
@@ -27,9 +27,9 @@
 ## Acceptance Criteria
 
 ### AC-G1: 워크로드 타입 `minimax-code` 선택
-- **설명**: 세션 생성 요청의 `workloadType` 허용값에 `minimax-code`가 추가되어 `shell`·`claude-code`·`approval-gated`·`minimax-code` 네 가지가 된다. 필드 생략만 `shell`로 해석하는 규칙, explicit empty/null/비문자열·허용값 밖 입력을 pod 생성 전에 400으로 거부하는 규칙, 타입 불변 규칙은 AC-E1과 같다. control plane은 이 타입에 대해 **워크로드 파드**(주 컨테이너 하나, 사이드카 없음)와 **그 세션 전용 헬퍼 파드 하나**(세션 MCP·credential-proxy·K3s MCP 프록시 컨테이너 셋, AC-G6)를 함께 프로비저닝한다. 배포가 이 타입의 이미지를 설정하지 않았으면 생성은 셸로 되돌아가지 않고 실패한다. `model` 필드 계약(생략=`platform-default` 별칭, 불변, pattern 검증, 구체 값은 ConfigMap 기본값보다 우선)은 AC-E6을 그대로 따른다. 다만 Claude Code와 달리 `mcode`는 공급자 항목을 통해서만 모델을 고르므로, `platform-default`이면서 ConfigMap에 `model` 키가 없거나 비어 있을 때는 `--model` 생략 대신 data plane 내장 기본값 `MiniMax-M3.1-Flash`를 쓴다.
+- **설명**: 세션 생성 요청의 `workloadType` 허용값에 `minimax-code`가 추가되어 `shell`·`claude-code`·`minimax-code`가 된다 *(2026-11-05: 추가 당시에는 `approval-gated`까지 네 가지였으나 그 타입은 제거되었다)*. 필드 생략만 `shell`로 해석하는 규칙, explicit empty/null/비문자열·허용값 밖 입력을 pod 생성 전에 400으로 거부하는 규칙, 타입 불변 규칙은 AC-E1과 같다. control plane은 이 타입에 대해 **워크로드 파드**(주 컨테이너 하나, 사이드카 없음)와 **그 세션 전용 헬퍼 파드 하나**(세션 MCP·credential-proxy·K3s MCP 프록시 컨테이너 셋, AC-G6)를 함께 프로비저닝한다. 배포가 이 타입의 이미지를 설정하지 않았으면 생성은 셸로 되돌아가지 않고 실패한다. `model` 필드 계약(생략=`platform-default` 별칭, 불변, pattern 검증, 구체 값은 ConfigMap 기본값보다 우선)은 AC-E6을 그대로 따른다. 다만 Claude Code와 달리 `mcode`는 공급자 항목을 통해서만 모델을 고르므로, `platform-default`이면서 ConfigMap에 `model` 키가 없거나 비어 있을 때는 `--model` 생략 대신 data plane 내장 기본값 `MiniMax-M3.1-Flash`를 쓴다.
 - **달성 가치**: V8, V1
-- **구체화 대상**: AC-A1의 "실제 세션 워크로드" — 이제 네 갈래로 분기한다 (AC-D1=`shell`, AC-E2~E6=`claude-code`, AC-F2~F6=`approval-gated`, AC-G2~G6=`minimax-code`)
+- **구체화 대상**: AC-A1의 "실제 세션 워크로드" — 이제 네 갈래로 분기한다 (AC-D1=`shell`, AC-E2~E6=`claude-code`, AC-G2~G6=`minimax-code` — 그 위에 승인 게이트 AC-F2~F6)
 - **검증 방법**: `workloadType=minimax-code`로 세션을 생성하면 워크로드 파드(컨테이너 하나)와 헬퍼 파드(컨테이너 셋)가 함께 기동되고 조회 응답의 타입·모델이 기대값임을 확인한다. 이미지 미설정 배포에서는 pod 없이 실패함을 확인한다. 잘못된 model은 400임을 확인한다.
 
 ### AC-G2: write = `mcode exec` 1회 실행, read = assistant 메시지 텍스트
@@ -88,19 +88,19 @@
 
 > 📌 **2026-11-07 (AC-L1)**: `MINIMAX_CODE_PLUGINS`의 기본 `mcp-servers`는 이제 **타입 기본값**이다 — 세션이 생성 시 `plugins`를 고르면 헬퍼 파드의 시더는 그 목록을 받는다(`session-plugins.md`).
 
-### AC-G6: 헬퍼 파드·egress 경계·승인 게이트 — `approval-gated`의 AC-F2~F5를 그대로, K3s MCP만 예외
-- **설명**: 이 타입의 파드 배치는 `approval-gated`와 같다. **AC-F2**(워크로드 파드 egress는 kube-dns와 자기 세션 헬퍼 파드의 포트로만, 헬퍼 파드 ingress는 자기 세션 워크로드 파드로부터만 — 둘 다 헬퍼 파드가 소유하는 세션별 네트워크 정책), **AC-F3**(세션 MCP의 외부 도구는 호출마다 승인 게이트를 지나고, 대기·결정은 같은 출력 바이트열에 in-band 마커로 남으며, 승인 대기 중에는 유휴 카운트가 진행되지 않는다), **AC-F4**(헬퍼 파드는 세션 전속 보조 파드이고 동결·삭제 때 워크로드 파드와 함께 회수되며 복원 때 새로 선다), **AC-F5**(배포가 클래스를 지정하면 워크로드 파드와 세션 MCP 컨테이너가 세션 전용 RWX 볼륨을 같은 경로에 마운트한다 — 아카이브 포함 여부는 AC-G4)를 문면 그대로 따른다. 게이트웨이 3종은 AC-F6대로 세션 MCP 컨테이너에만 들어간다. 다른 것은 셋이다.
+### AC-G6: 헬퍼 파드·egress 경계·승인 게이트 — 승인 게이트의 AC-F2~F6을 그대로, K3s MCP만 예외
+- **설명**: 이 타입은 승인 게이트를 쓴다([`approval-gate.md`](./approval-gate.md) 「적용 타입」) — 파드 배치는 그 계약이다 *(2026-11-05 전에는 「`approval-gated`와 같다」로 적혀 있었다; 그 타입은 제거되고 계약은 남았다)*. **AC-F2**(워크로드 파드 egress는 kube-dns와 자기 세션 헬퍼 파드의 포트로만, 헬퍼 파드 ingress는 자기 세션 워크로드 파드로부터만 — 둘 다 헬퍼 파드가 소유하는 세션별 네트워크 정책), **AC-F3**(세션 MCP의 외부 도구는 호출마다 승인 게이트를 지나고, 대기·결정은 같은 출력 바이트열에 in-band 마커로 남으며, 승인 대기 중에는 유휴 카운트가 진행되지 않는다), **AC-F4**(헬퍼 파드는 세션 전속 보조 파드이고 동결·삭제 때 워크로드 파드와 함께 회수되며 복원 때 새로 선다), **AC-F5**(배포가 클래스를 지정하면 워크로드 파드와 세션 MCP 컨테이너가 세션 전용 RWX 볼륨을 같은 경로에 마운트한다 — 아카이브 포함 여부는 AC-G4)를 문면 그대로 따른다. 게이트웨이 3종은 AC-F6대로 세션 MCP 컨테이너에만 들어간다. 다른 것은 셋이다.
 
-  1. **헬퍼 파드의 컨테이너가 셋이다** — 세션 MCP, credential-proxy(이 타입 Secret, AC-G3), K3s MCP 프록시(AC-G5). 그래서 네트워크 정책의 헬퍼 포트도 `8091`·`8092`에 **`8093` 하나가 더해진다.** `approval-gated`의 경계는 두 포트 그대로다.
+  1. **헬퍼 파드의 컨테이너가 셋이다** — 세션 MCP, credential-proxy(이 타입 Secret, AC-G3), K3s MCP 프록시(AC-G5). 그래서 네트워크 정책의 헬퍼 포트도 `8091`·`8092`에 **`8093` 하나가 더해진다.** 게이트의 경계 자체는 두 포트이고, 셋째는 이 타입이 더한 것이다.
   2. **에이전트가 세션 MCP를 등록하는 방식** — `claude-code` CLI의 관리형 설정이 아니라 AC-G5의 `~/.minimax/mcp.json` 등록(서버 이름 `session-platform-session-mcp`)으로 한다. 승인 대기 마커는 같은 notice 피드를 같은 방식으로 읽어 쓴다.
-  3. **K3s MCP 도구는 세션 승인 게이트를 지나지 않는다.** 워크로드 파드는 헬퍼 파드의 K3s MCP 프록시를 거쳐 K3s MCP에 직접 MCP 요청을 보낸다. 근거: K3s MCP는 자체 승인 게이트(`dlddu/homelab-k3s-mcp`의 `prd-approval-gate`)로 쓰기 도구를 이미 사람의 승인 뒤에 둔다 — 같은 행동을 두 게이트가 연달아 묻는 것은 승인 피로만 늘리고 판정 정보는 늘리지 않는다(2026-10-23 사용자 결정). 이것은 `approval-gated`의 **AC-F6 2026-09-21 확정 항목의 C2(에이전트가 게이트 밖에서 그 자격 증명의 힘에 닿지 못함)를 이 타입에서는 적용하지 않는다는 뜻**이며, 범위는 K3s MCP 프록시 하나다. C1(헬퍼 파드의 그 컨테이너에만)·C3(상시 권한을 넓히지 않음 — 토큰은 `claude-code`가 이미 쓰는 것과 같은 범위)·C4(노출 금지)는 그대로 성립한다. 프록시의 상류는 시작할 때 고정된 K3s MCP origin 하나뿐이라, 이 예외가 「임의 외부 목적지」로 번지지는 않는다 — AC-F2가 지키는 「에이전트가 스스로 밖에 닿을 경로가 없다」는 성질에서 빠지는 것은 **K3s MCP라는 목적지 하나**이고, 그 목적지의 쓰기는 자체 게이트가 막는다. `approval-gated`의 AC-F6·`../session-mcp-tool-surface.md`의 「K3s MCP 재노출」(세션 게이트를 씌운 도구별 위임)은 그 타입의 계약으로 그대로 남는다.
+  3. **K3s MCP 도구는 세션 승인 게이트를 지나지 않는다.** 워크로드 파드는 헬퍼 파드의 K3s MCP 프록시를 거쳐 K3s MCP에 직접 MCP 요청을 보낸다. 근거: K3s MCP는 자체 승인 게이트(`dlddu/homelab-k3s-mcp`의 `prd-approval-gate`)로 쓰기 도구를 이미 사람의 승인 뒤에 둔다 — 같은 행동을 두 게이트가 연달아 묻는 것은 승인 피로만 늘리고 판정 정보는 늘리지 않는다(2026-10-23 사용자 결정). 이것은 **AC-F6 2026-09-21 확정 항목의 C2(에이전트가 게이트 밖에서 그 자격 증명의 힘에 닿지 못함)를 이 타입에서는 적용하지 않는다는 뜻**이며, 범위는 K3s MCP 프록시 하나다. C1(헬퍼 파드의 그 컨테이너에만)·C3(상시 권한을 넓히지 않음 — 토큰은 `claude-code`가 이미 쓰는 것과 같은 범위)·C4(노출 금지)는 그대로 성립한다. 프록시의 상류는 시작할 때 고정된 K3s MCP origin 하나뿐이라, 이 예외가 「임의 외부 목적지」로 번지지는 않는다 — AC-F2가 지키는 「에이전트가 스스로 밖에 닿을 경로가 없다」는 성질에서 빠지는 것은 **K3s MCP라는 목적지 하나**이고, 그 목적지의 쓰기는 자체 게이트가 막는다. AC-F6의 기본 형태와 `../session-mcp-tool-surface.md`의 「K3s MCP 재노출」(세션 게이트를 씌운 도구별 위임)은 이 예외를 두지 않는 게이트 타입의 기본 계약으로 그대로 남는다.
 - **달성 가치**: V1, V2
-- **구체화 대상**: AC-A1의 "실제 세션 워크로드"가 가질 수 있는 네트워크 경계·보조 파드(AC-A2)·유휴 기준(AC-B1) — AC-F2~F5의 재사용
+- **구체화 대상**: AC-A1의 "실제 세션 워크로드"가 가질 수 있는 네트워크 경계·보조 파드(AC-A2)·유휴 기준(AC-B1) — 승인 게이트 AC-F2~F6의 적용
 - **검증 방법**: 제출된 오브젝트에서 헬퍼 파드가 세션 라벨·`minimax-code` 타입 라벨을 갖고 컨테이너 셋(세션 MCP·credential-proxy·k3s-mcp-proxy)을 가지며 서비스 어카운트 토큰을 마운트하지 않음, 워크로드 파드에 사이드카가 없고 세 헬퍼 주소(`:8091`·`:8092`·`:8093`)를 env로 받음, 워크로드 egress·헬퍼 ingress 정책이 헬퍼 포트 셋을 정확히 허용하고 `approval-gated`의 정책은 두 포트 그대로임, 게이트웨이 3종이 세션 MCP 컨테이너에만 있음, 공유 볼륨 클래스가 있으면 워크로드 파드와 세션 MCP가 같은 claim을 같은 경로에 마운트함을 확인한다. 승인 대기를 보고하는 agent에 대해 유휴 회수가 세션을 동결하지 않고 `lastAccess`를 갱신하며, 대기가 끝나면 갱신이 멈춤을 확인한다. AC-F2의 실클러스터 egress 실측(외부 목적지 차단, K3s MCP 프록시 경유만 성립)은 `approval-gated`와 같은 미검증 상태를 공유한다.
 
 ## 남은 일
 - ~~**공유 볼륨 아카이브**~~ — *2026-11-01 해소*: AC-F5의 「공유 볼륨 내용의 아카이브 포함」이 구현되어 이 타입의 아카이브도 공유 디렉터리를 담는다(AC-G4). 승인된 `git_clone`·큰 `web_fetch_get` 결과물이 동결을 건너 남는다.
-- **웹 화면** — SPA의 게이트 전용 표면(`isGatedWorkload`)과 새 세션 카드 설명은 아직 `approval-gated`만 게이트로 그린다. 승인 대기 마커는 출력 스트림에 그대로 보인다.
+- ~~**웹 화면**~~ — *2026-11-05 해소*: SPA의 게이트 전용 표면(`isGatedWorkload`)이 타입 이름이 아니라 `GET /config`의 `approvalGate`를 따르게 되어 이 타입의 세션이 게이트 워크스페이스(`/gated/:id`)로 열리고, 새 세션 카드도 게이트 타입으로 그린다.
 - **marketplace 스킬 로드 실측** — 핀된 `mcode`가 MCP 서버를 뺀 marketplace 플러그인의 스킬을 읽는지는 운영 반영 뒤 세션에서 확인한다.
 - **K3s MCP 조회 2초 한도** — `mcp.json`의 http 서버는 turn마다 `initialize`·`tools/list`가 2초 안에 끝나야 그 turn에 실린다(`mcode`에 조정 수단 없음). K3s MCP는 헬퍼 파드 프록시를 거쳐 외부 origin까지 가므로, 상류가 느린 turn에는 K3s 도구만 빠질 수 있다(세션 MCP는 별개로 조회된다).
 - `docs/test/minimax-code-workload.md`(테스트 시나리오)와 그 e2e 매핑. 지금 검증은 단위·통합 테스트(`control-plane/test/minimax_code_orchestrator_test.go` 등)까지이며, 시나리오를 만들면 `scripts/e2e/check-scenario-mapping.sh`의 규칙에 따라 e2e 파일이나 유예 행이 함께 필요하다.

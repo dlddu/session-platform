@@ -40,7 +40,7 @@ func TestCreateSessionReasoningEffort(t *testing.T) {
 		{"name": "x", "workloadType": "claude-code", "reasoningEffort": 3},
 		{"name": "x", "workloadType": "claude-code", "reasoningEffort": "minimal"},
 		{"name": "x", "workloadType": "codex-task", "reasoningEffort": "max"},
-		{"name": "x", "workloadType": "approval-gated", "reasoningEffort": "high"},
+		{"name": "x", "workloadType": "minimax-code", "reasoningEffort": "high"},
 		{"name": "x", "workloadType": "codex-chat", "reasoningEffort": "high"},
 		{"name": "x", "reasoningEffort": "high"},
 	} {
