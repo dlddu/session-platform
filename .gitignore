@@ -1,7 +1,9 @@
 # --- Go ---
 control-plane/bin/
-# `go build ./...` in data-plane/ drops the agent binary in the module root
+# `go build ./...` in data-plane/ drops the agent binary in the module root,
+# and `go build` inside cmd/agent/ drops it there
 data-plane/agent
+data-plane/cmd/agent/agent
 
 # --- Node / web ---
 web/node_modules/
