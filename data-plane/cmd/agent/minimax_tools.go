@@ -124,6 +124,10 @@ func k3sProxyMCPURL(proxyBase string) (string, error) {
 	return strings.TrimRight(proxyBase, "/") + path, nil
 }
 
+// sessionMCPToolTimeout outlasts the longest gated call: the approval wait plus
+// the slowest approved operation, with a minute for the round trips around them.
+const sessionMCPToolTimeout = defaultApprovalTimeout + cloneTimeout + time.Minute
+
 // stageMiniMaxPlugins writes the proxy's bundle into seedDir, replacing
 // whatever an earlier boot left there, and returns the MCP servers the session
 // registers with mcode: the session MCP, then every bundled server re-pointed
