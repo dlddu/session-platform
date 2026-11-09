@@ -252,6 +252,18 @@ func main() {
 			handler = withSessionDBMCP(proxy, db)
 			logger.Info("session db mcp enabled", "path", sessionDBMCPPath)
 		}
+		// A codex sidecar also keeps the session's schedules (AC-P1~P3).
+		if raw := os.Getenv(schedulerAgentURLEnv); raw != "" {
+			agent, err := newHTTPSchedulerAgent(raw)
+			if err != nil {
+				logger.Error("invalid scheduler agent URL", "err", err)
+				os.Exit(1)
+			}
+			sched := newScheduler(agent, logger)
+			go sched.run(context.Background())
+			handler = withScheduler(handler, sched)
+			logger.Info("scheduler mcp enabled", "path", schedulerMCPPath)
+		}
 		logger.Info("k3s mcp proxy started", "addr", addr, "configured", token != "",
 			"session_id_header", k3sMCPFixedHeaders(os.Getenv(sessionIDEnv)) != nil)
 	default:

@@ -246,6 +246,7 @@ type claudeWorkload struct {
 	droppedLogin *droppedClaudeLogin
 	// enqueued counts accepted writes; it stamps promptJob.seq.
 	enqueued        uint64
+	finished        uint64
 	active          bool
 	hasRun          bool
 	turns           int
@@ -509,6 +510,7 @@ func (c *claudeWorkload) runWorker() {
 			c.endTurn(seq, "error")
 			c.mu.Lock()
 			c.active = false
+			c.finished++
 			c.cond.Broadcast()
 			c.mu.Unlock()
 			continue
@@ -565,6 +567,7 @@ func (c *claudeWorkload) runWorker() {
 		c.mu.Lock()
 		c.hasRun = nextHasRun
 		c.active = false
+		c.finished++
 		c.cond.Broadcast()
 		c.mu.Unlock()
 
@@ -1518,6 +1521,13 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 	// control plane before it returns the slot to the pool.
 	mux.HandleFunc("GET "+authSlotPath, func(w http.ResponseWriter, _ *http.Request) {
 		serveAuthSlot(w, c.authSlot)
+	})
+
+	mux.HandleFunc("GET "+agentQueuePath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentQueue(w, r, c)
+	})
+	mux.HandleFunc("GET "+agentSchedulerPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentScheduler(w, r, c)
 	})
 
 	mux.HandleFunc("GET /attach", func(w http.ResponseWriter, r *http.Request) {

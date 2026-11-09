@@ -173,6 +173,18 @@ interactive shell and Claude Code workloads.
   checkpoint waits, 403 from anything but loopback. The tool result names the
   changes, so a turn that refreshed and succeeded clears the record; the
   transcript line is written after that turn's end marker.
+  Both codex types also get `scheduler` at `SESSION_SCHEDULER_MCP_URL`
+  (the sidecar's `/scheduler/mcp`, docs/prd/session-scheduler.md AC-P1~P3):
+  `schedule_once`, `loop_create` (fixed `interval`, or self-paced with
+  `fallback_interval`), `loop_next`, `schedule_list` and `schedule_cancel`.
+  Times are ISO 8601 durations or RFC 3339 times only; limits are 20
+  schedules, 16 KiB prompts, 1 minute to 24 hours between runs and 7 days of
+  life. The sidecar (enabled by `SESSION_SCHEDULER_AGENT_URL`, this agent on
+  loopback) keeps the schedules in memory and, when the loopback-only
+  `GET /queue` reports the agent idle, puts one run at a time on the queue
+  with `POST /write`, its first line `[session-platform scheduler] <id> …`.
+  `GET /scheduler` relays the sidecar's schedule count; the control plane's
+  idle reaper holds a codex session while it is above zero (AC-P3).
   The pod has no provider credential: `K3S_MCP_PROXY_URL` must be
   `http://<loopback IP>:8093` (the `k3s-mcp-proxy` sidecar, AC-J6), and the
   agent refuses to start if `OPENAI_API_KEY`, `CODEX_API_KEY`,
