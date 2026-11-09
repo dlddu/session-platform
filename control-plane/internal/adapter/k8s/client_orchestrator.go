@@ -54,7 +54,9 @@ const (
 	defaultClaudeCredentialsSecret = "claude-code-credentials"
 	defaultClaudeConfigConfigMap   = "claude-code-config"
 	// ContainerName is the workload container in each data plane pod.
-	ContainerName = "session"
+	ContainerName         = "session"
+	WorkloadMemoryRequest = "512Mi"
+	WorkloadMemoryLimit   = "1Gi"
 	// DataPlaneServiceAccountName is the dedicated identity mounted into every
 	// fresh and restored session pod (AC-E6).
 	DataPlaneServiceAccountName = "data-plane"
@@ -597,6 +599,10 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			},
 			InitialDelaySeconds: 1,
 			PeriodSeconds:       2,
+		},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse(WorkloadMemoryRequest)},
+			Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse(WorkloadMemoryLimit)},
 		},
 	}
 	container.Env = append(container.Env, corev1.EnvVar{Name: workloadEnvVar, Value: string(workloadType)})
