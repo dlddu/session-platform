@@ -544,6 +544,9 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 | `codex-task-workload.md#시나리오 2` | **Playwright 이관 미완료 — kube 관측 의존.** 기대 결과가 Lease·PVC·pod spec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**다. | `control-plane/test/e2e_codex_task_2_pod_shape_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_codex_task_2_pod_shape_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다. |
 | `codex-task-workload.md#시나리오 4` | **Playwright 이관 미완료 — kube 관측 의존(일부).** `/config`·생성·조회는 HTTP API 로 보이지만 「파드까지 간다」는 주 컨테이너 env 로만 관측된다. | `control-plane/test/e2e_codex_task_4_effort_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지(파드 env 단언은 규칙 4 예외로 분리) **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_codex_task_4_effort_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다. |
 | `claude-code-workload.md#시나리오 11` | **Playwright 이관 미완료 — kube 관측 의존(일부).** `/config`·생성·조회는 HTTP API 로 보이지만 「파드까지 간다」는 주 컨테이너 env 로만 관측된다. | `control-plane/test/e2e_claude_code_11_effort_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지(파드 env 단언은 규칙 4 예외로 분리) **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_claude_code_11_effort_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다. |
+| `session-scheduler.md#시나리오 1` | **전용 spec 미저작 — 세션 파드 loopback 관측.** 스케줄러 MCP는 세션 파드의 loopback 사이드카에만 열려 있어 브라우저로도 control-plane HTTP API 로도 닿지 않는다. 규칙 4의 **예외 전환 후보**다. | 없음 | 이 모델 | 세션 파드 안에서 JSON-RPC 를 보내는 단계(예: `codex-task` 세션 셸 경유)를 하네스에 두고 전용 spec 착지 **또는** 규칙 4 예외로 전환. 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 현재 검증은 매칭 공간 밖의 단위 테스트다 — 도구·한계는 `data-plane/cmd/agent/scheduler_test.go`, 관리형 설정 등록은 같은 파일의 `TestRenderCodexConfigRegistersScheduler`, 파드 env 는 `control-plane/test/codex_orchestrator_test.go`(integration 태그, 시나리오 선언 없음). |
+| `session-scheduler.md#시나리오 2` | **차단 — codex 러너 대역 없음.** 회차가 턴으로 도는 것을 보려면 codex 러너가 실제로 돌아야 하고, 그 러너는 세션의 ChatGPT 로그인을 요구한다. kind SUT 에는 codex 공급자 대역이 없다. | 없음 | 이 모델 | codex 공급자 대역(`CLAUDE-PROVIDER` 와 같은 EXT 등재)이 서면 전용 spec 을 둔다. | 현재 검증은 단위 테스트 `data-plane/cmd/agent/scheduler_test.go` — 실제 `claudeWorkload` 큐를 지나는 `TestSchedulerRunsThroughTheAgentQueue` 와 한가할 때만 시작·밀린 칸 건너뛰기·자체 페이싱 규칙의 표 테스트. |
+| `session-scheduler.md#시나리오 3` | **SUT 설정 의존 — 짧은 유휴 기준.** 기대 결과가 유휴 회수 스캔이라 운영 기준(60분)으로는 스위트 시간 안에 밟을 수 없고, 사이드카 정지는 kube 관측(exec)이 필요하다. | 없음 | 이 모델 | 유휴 기준을 줄인 SUT 와 세션 파드 exec 단계가 하네스에 서면 전용 spec 을 둔다. | 현재 검증은 단위 테스트 `control-plane/internal/service/schedule_idle_test.go`(회수 경로의 보류·해제, 다른 타입 미질의, 사용자 동결, 읽기 실패 시 일반 규칙)와 `internal/adapter/agent/client_test.go` 의 `TestHTTPClientActiveSchedules`. |
 <!-- scenario-deferred:end -->
 
 > **이 표가 비는 날 완전 1:1이다.** 현재 잔여는 두 갈래다 — 이관 26(매칭 공간 축소가 만든 부채, 검증은
@@ -583,9 +586,9 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 ## 집계
 
 <!-- scenario-summary:begin -->
-- 시나리오 총계: 73
+- 시나리오 총계: 76
 - 예외: 11
-- 유예: 57
+- 유예: 60
 - 시나리오 매칭 파일: 5
 - 공백: 0
 <!-- scenario-summary:end -->

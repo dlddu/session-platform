@@ -41,7 +41,18 @@ const (
 	pluginSeedPluginsEnvVar        = "MINIMAX_CODE_PLUGINS"
 	pluginSeedMarketplaceURLEnvVar = "MINIMAX_CODE_PLUGIN_MARKETPLACE_URL"
 	K3SMCPToolPolicyEnvVar         = "K3S_MCP_TOOL_POLICY"
+
+	// The sidecar keeps the session's schedules and queues their runs on the
+	// agent (docs/prd/session-scheduler.md AC-P1, AC-P2). Keep in sync with
+	// data-plane/cmd/agent (schedulerAgentURLEnv, schedulerMCPURLEnv,
+	// schedulerMCPPath).
+	SchedulerAgentURLEnvVar = "SESSION_SCHEDULER_AGENT_URL"
+	SchedulerMCPURLEnvVar   = "SESSION_SCHEDULER_MCP_URL"
+	schedulerMCPPath        = "/scheduler/mcp"
 )
+
+// CodexSchedulerMCPURL is the scheduler MCP on the loopback sidecar.
+var CodexSchedulerMCPURL = CodexK3SMCPProxyURL + schedulerMCPPath
 
 // CodexK3SMCPProxyURL is where the workload container reaches its sidecar.
 var CodexK3SMCPProxyURL = "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(k3sMCPProxyPort))
@@ -138,6 +149,7 @@ func (o *ClientOrchestrator) codexPod(container *corev1.Container, sessionID str
 		modelEnv,
 		corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: workloadStateDir},
 		corev1.EnvVar{Name: K3SMCPProxyURLEnvVar, Value: CodexK3SMCPProxyURL},
+		corev1.EnvVar{Name: SchedulerMCPURLEnvVar, Value: CodexSchedulerMCPURL},
 	)
 	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
 		Name: claudeCodeStateVolumeName, MountPath: workloadStateVolumePath,
@@ -171,6 +183,7 @@ func (o *ClientOrchestrator) codexK3SMCPProxy(sessionID, image string, profile c
 		{Name: MiniMaxMarketplaceDirEnvVar, Value: miniMaxMarketplacePath},
 		{Name: pluginSeedPluginsEnvVar, Value: selected},
 		{Name: K3SMCPToolPolicyEnvVar, Value: "allow-all"},
+		{Name: SchedulerAgentURLEnvVar, Value: "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(o.agentPort))},
 		optionalSecretEnv(K3SMCPTokenEnvVar, profile.credentialsSecret, MiniMaxK3SMCPTokenSecretKey),
 		optionalConfigMapEnv(K3SMCPURLEnvVar, profile.configConfigMap, ClaudeCodeK3SMCPURLConfigKey),
 		optionalConfigMapEnv(pluginSeedMarketplaceURLEnvVar, profile.configConfigMap, ClaudeCodePluginMarketplaceURLConfigKey),
