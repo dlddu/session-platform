@@ -6,7 +6,7 @@
 - AC-I3: 승인 게이트를 지나지 않는다 — 사용자 결정 (2026-11-01) (PRD: drop 파일 전달)
 - AC-I4: 실패는 사유별 도구 결과 (PRD: drop 파일 전달)
 
-> 📌 **e2e 범위**: kind SUT 에는 **실물 drop** 이 선다(`deploy/e2e-drop.yaml` — 같은 커밋을 소스에서 빌드, 서비스 어카운트
+> 📌 **e2e 범위**: kind SUT 에는 **실물 drop** 이 선다(`deploy/overlays/e2e/e2e-drop.yaml` — 같은 커밋을 소스에서 빌드, 서비스 어카운트
 > 교환도 이 클러스터의 TokenReview 그대로). 그래서 시나리오 1 은 대역 없이 배포 SUT 에서 돈다. 다만 이 레포의 매칭 단위는
 > `web/e2e/` 최상위 Playwright 파일이라, Go e2e 는 `e2e.md` 「유예」 표의 **현행 대체 검증**으로 등재된다(다른 승인 게이트
 > 시나리오와 같은 자리). 운영 주소의 깨우기 경로(시나리오 3)는 kind 에 Traefik·Sablier 가 없어 운영 확인이다.

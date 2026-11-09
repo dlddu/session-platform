@@ -12,7 +12,7 @@
 //
 // The path this exercises exists here because the kind overlay deploys a
 // ReadWriteMany class and names it to the control plane
-// (deploy/shared-volume-provisioner.yaml, deploy/kustomization.yaml). Remove
+// (deploy/overlays/e2e/shared-volume-provisioner.yaml, deploy/overlays/e2e/kustomization.yaml). Remove
 // either and these tests fail at the first claim, which is the intent — a
 // silently unconfigured SUT would otherwise let AC-F5 pass unobserved.
 package e2e_test

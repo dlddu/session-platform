@@ -43,7 +43,7 @@
 - **검증 방법**: 테넌트가 설정된 SUT에서 운영자 화면에 필터·태그·선택이 보이고, 테넌트를 골라 만든 세션이 그 테넌트 태그를 달고 필터에 걸림을 확인한다. Bearer 호출의 레포 접근 관리 API가 403임을 확인한다.
 
 ### AC-K5: 테넌트 설정과 하위 호환
-- **설명**: 테넌트 집합은 ConfigMap `session-platform-tenants`의 `tenants.json`을 control plane 환경 변수 `SESSION_PLATFORM_TENANTS`로 투영한 기동 시점 스냅숏이다(형식: `{"tenants":[{"name","serviceAccounts","workloadTypes"}]}`). 이름 형식·중복, 계정 형식·여러 테넌트의 같은 계정, 알 수 없는 타입·중복 타입, `"*"`를 다른 타입과 함께 적은 목록, 알 수 없는 필드는 **기동 실패**다 — 조용히 넓은 권한으로 뜨지 않는다. 설정이 없거나 비면 테넌트가 없다: 운영자 경로는 지금과 같고 Bearer 호출은 모두 403이다. 기존 세션은 무소속으로 남아 운영자만 본다. 토큰 검증에는 control plane ServiceAccount의 `system:auth-delegator` 바인딩이 필요하다(클러스터 범위라 base 밖 — 운영은 flux-cd-apps, kind e2e는 `deploy/e2e-tenancy.yaml`).
+- **설명**: 테넌트 집합은 ConfigMap `session-platform-tenants`의 `tenants.json`을 control plane 환경 변수 `SESSION_PLATFORM_TENANTS`로 투영한 기동 시점 스냅숏이다(형식: `{"tenants":[{"name","serviceAccounts","workloadTypes"}]}`). 이름 형식·중복, 계정 형식·여러 테넌트의 같은 계정, 알 수 없는 타입·중복 타입, `"*"`를 다른 타입과 함께 적은 목록, 알 수 없는 필드는 **기동 실패**다 — 조용히 넓은 권한으로 뜨지 않는다. 설정이 없거나 비면 테넌트가 없다: 운영자 경로는 지금과 같고 Bearer 호출은 모두 403이다. 기존 세션은 무소속으로 남아 운영자만 본다. 토큰 검증에는 control plane ServiceAccount의 `system:auth-delegator` 바인딩이 필요하다(클러스터 범위라 base 밖 — 운영은 flux-cd-apps, kind e2e는 `deploy/overlays/e2e/e2e-tenancy.yaml`).
 - **달성 가치**: V5, V1
 - **구체화 대상**: AC-K1~K4의 입력
 - **검증 방법**: 잘못된 설정이 기동을 실패시키고, 빈 설정에서 운영자 동작이 그대로이며 Bearer 호출이 403임을 확인한다.
@@ -57,7 +57,7 @@
 - **한 테넌트에 여러 호출자** — 같은 테넌트의 `serviceAccounts`에 둘 이상을 둬 서로 다른 앱이 같은 세션 목록을 본다(운영: K3s MCP 서버와 PocketAide 세션 탭). 기존 형식 그대로다.
 
 ## 알려 둘 경계
-- 운영자 경로는 "토큰이 없다"로 정해진다. control plane 앞의 NetworkPolicy(`k8s/network-policy.yaml`)는 traefik과 헬퍼 파드만 들이므로, 클러스터 안 테넌트 호출자가 토큰을 빼고 traefik 게이트웨이로 들어오면 운영자가 된다 — 지금의 내부 호출자 구조(AC-H2: "인그레스를 거치지 않는 호출자는 세션 API와 같은 범위")를 그대로 둔 결과다. 테넌시가 **보안 경계**가 되어야 하면 게이트웨이 경로에서 토큰을 필수로 하거나 운영자도 신원을 내게 하는 후속 결정이 필요하다.
+- 운영자 경로는 "토큰이 없다"로 정해진다. control plane 앞의 NetworkPolicy(`deploy/base/network-policy.yaml`)는 traefik과 헬퍼 파드만 들이므로, 클러스터 안 테넌트 호출자가 토큰을 빼고 traefik 게이트웨이로 들어오면 운영자가 된다 — 지금의 내부 호출자 구조(AC-H2: "인그레스를 거치지 않는 호출자는 세션 API와 같은 범위")를 그대로 둔 결과다. 테넌시가 **보안 경계**가 되어야 하면 게이트웨이 경로에서 토큰을 필수로 하거나 운영자도 신원을 내게 하는 후속 결정이 필요하다.
 - 세션 파드·아카이브·네임스페이스는 테넌트별로 나뉘지 않는다(모두 같은 네임스페이스). 이 PRD의 격리는 API 표면의 가시성·생성 권한이다.
 
 ## 남은 일

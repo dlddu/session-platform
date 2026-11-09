@@ -22,7 +22,7 @@ const (
 
 	// That type's provider Secret and ConfigMap (AC-G3), which the helper
 	// pod's provider proxy reads in place of claude-code's pair. The kind
-	// overlay provisions both (deploy/minimax-code.yaml).
+	// overlay provisions both (deploy/overlays/e2e/minimax-code.yaml).
 	gatedCredentialsSecret = "minimax-code-credentials"
 	gatedConfigConfigMap   = "minimax-code-config"
 	// The workload container's model variable for that type (AC-G1).

@@ -1,14 +1,14 @@
 # kind cluster for local / CI integration of the happy path.
-#   kind create cluster --config deploy/kind-config.yaml
+#   kind create cluster --config deploy/overlays/e2e/kind-config.yaml
 #
-# SUT reachability (e2e): the deploy/ overlay patches the control-plane Service
-# to a NodePort on 30080 (see deploy/kustomization.yaml). The extraPortMapping
+# SUT reachability (e2e): the deploy/overlays/e2e/ overlay patches the control-plane Service
+# to a NodePort on 30080 (see deploy/overlays/e2e/kustomization.yaml). The extraPortMapping
 # below forwards host :8080 -> node :30080 so the e2e suites reach the deployed
 # SUT at http://localhost:8080 without a background port-forward. The NodePort
-# lives in the overlay only; the production base (k8s/) keeps a ClusterIP Service.
+# lives in the overlay only; the production base (deploy/base/) keeps a ClusterIP Service.
 #
 # NOTE(AC-F5): both nodes bind-mount the *same* host directory at
-# /var/session-shared. deploy/shared-volume-provisioner.yaml runs a local-path
+# /var/session-shared. deploy/overlays/e2e/shared-volume-provisioner.yaml runs a local-path
 # provisioner in sharedFileSystemPath mode over that directory, which is how
 # this cluster serves ReadWriteMany at all: that mode is the one where the
 # provisioner skips the ReadWriteOnce-only check and issues a PersistentVolume

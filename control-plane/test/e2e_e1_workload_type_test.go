@@ -154,7 +154,7 @@ func TestWorkloadType_ClaudeCodePluginBootstrapUsedTheInClusterMarketplace(t *te
 	const (
 		pluginCacheDir = "/tmp/session-platform-claude-plugin-seed"
 		bootstrapHome  = "/tmp/session-platform-claude-plugin-home"
-		// Present only in deploy/plugin-marketplace-git.yaml's fixture.
+		// Present only in deploy/overlays/e2e/plugin-marketplace-git.yaml's fixture.
 		fixtureMarker = "kind e2e fixture"
 	)
 

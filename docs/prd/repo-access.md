@@ -62,5 +62,5 @@
 - **화면은 mockup 먼저** — `docs/mockups/repo-access.html`과 여정 `JRN-repo-access`를 먼저 세우고 구현은 그 뒤에 한다.
 
 ## 남은 일
-- 배포 레포(flux-cd-apps): SQLite 영속 볼륨, control plane replica 1·`Recreate`·env, TokenReview 바인딩(`system:auth-delegator` — 클러스터 범위라 base `k8s/`에 두지 않는다). 앱 자체 로그인을 걷어낸 뒤에는 Authelia OIDC 클라이언트 `session-platform`·쿠키 키·`OIDC_*` env를 지운다(이 변경이 배포된 뒤 — 옛 이미지는 `OIDC_*` 없이 기동하지 않는다).
+- 배포 레포(flux-cd-apps): SQLite 영속 볼륨, control plane replica 1·`Recreate`·env, TokenReview 바인딩(`system:auth-delegator` — 클러스터 범위라 base `deploy/base/`에 두지 않는다). 앱 자체 로그인을 걷어낸 뒤에는 Authelia OIDC 클라이언트 `session-platform`·쿠키 키·`OIDC_*` env를 지운다(이 변경이 배포된 뒤 — 옛 이미지는 `OIDC_*` 없이 기동하지 않는다).
 - 운영 확인: `docs/test/repo-access.md`의 여섯 시나리오(kind e2e에서는 유예 — `docs/test/e2e.md`)

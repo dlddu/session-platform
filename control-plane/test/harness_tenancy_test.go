@@ -14,7 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// The tenants deploy/e2e-tenancy.yaml configures in the SUT.
+// The tenants deploy/overlays/e2e/e2e-tenancy.yaml configures in the SUT.
 const (
 	tenantAlpha      = "e2e-alpha"
 	tenantBeta       = "e2e-beta"

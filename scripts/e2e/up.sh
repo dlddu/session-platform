@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bring up the kind-based e2e SUT: a *deployed* control-plane, reachable at
 # http://localhost:8080 through the NodePort extraPortMapping (host :8080 ->
-# node :30080, see deploy/kind-config.yaml). Session state lives in ConfigMaps +
+# node :30080, see deploy/overlays/e2e/kind-config.yaml). Session state lives in ConfigMaps +
 # Leases in the cluster, so there is no separate state-store deployment to wait
 # on.
 #
@@ -18,7 +18,7 @@ IMAGE="${CP_IMAGE:-session-platform/control-plane:dev}"
 # Data plane session agent image (PTY shell + attach/healthz, AC-D1) the
 # control plane provisions per session. Built locally and loaded into kind so
 # pods come up without a per-pod registry pull (pullPolicy IfNotPresent). Keep
-# in sync with the deploy/ overlay's DATA_PLANE_IMAGE patch.
+# in sync with the deploy/overlays/e2e/ overlay's DATA_PLANE_IMAGE patch.
 DP_IMAGE="${DATA_PLANE_IMAGE:-session-platform/data-plane:dev}"
 BASE_URL="${E2E_BASE_URL:-http://localhost:8080}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -39,7 +39,7 @@ if kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
   echo "e2e: kind cluster '$CLUSTER' already exists — skipping create"
 else
   echo "e2e: creating kind cluster '$CLUSTER'"
-  kind create cluster --config deploy/kind-config.yaml
+  kind create cluster --config deploy/overlays/e2e/kind-config.yaml
 fi
 
 # SKIP_IMAGE_BUILD=1: both images are already in the local docker image store
@@ -72,7 +72,7 @@ fi
 echo "e2e: loading data plane image into kind cluster '$CLUSTER'"
 kind load docker-image "$DP_IMAGE" --name "$CLUSTER"
 
-# The approval gateway is the real PocketAide (deploy/e2e-pocket-aide.yaml).
+# The approval gateway is the real PocketAide (deploy/overlays/e2e/e2e-pocket-aide.yaml).
 # Its published image carries the server only, not the IdP the harness logs in
 # through, so both are built here from one commit. POCKET_AIDE_SHA is the only
 # pin of that dependency: move it when PocketAide's external approval API or
@@ -100,8 +100,8 @@ docker build -q -f scripts/e2e/pocket-aide.Dockerfile --build-arg BINARY=oidcmoc
 kind load docker-image pocket-aide:e2e oidc-mock:e2e --name "$CLUSTER"
 
 # The file-share service a session MCP's drop_* tools reach is the real drop
-# (deploy/e2e-drop.yaml). Its published image is arm64 only and this runner is
-# amd64, so it is built here from the pinned commit like PocketAide. DROP_SHA is
+# (deploy/overlays/e2e/e2e-drop.yaml). Its published image is arm64 only, so an amd64 machine
+# cannot run it; it is built here from the pinned commit like PocketAide, on any arch. DROP_SHA is
 # the only pin: move it when drop's ServiceAccount exchange, upload or get API
 # changes. The distroless packer is the same one, since both are one static
 # binary run as nonroot.
@@ -122,8 +122,8 @@ docker build -q -f scripts/e2e/pocket-aide.Dockerfile --build-arg BINARY=drop \
   -t drop:e2e "$DROP_CTX" >/dev/null
 kind load docker-image drop:e2e --name "$CLUSTER"
 
-echo "e2e: applying deploy/ overlay (kustomize: base k8s/ + kind patches)"
-kubectl apply -k deploy/
+echo "e2e: applying deploy/overlays/e2e/ overlay (kustomize: base deploy/base/ + kind patches)"
+kubectl apply -k deploy/overlays/e2e/
 
 echo "e2e: verifying data-plane read-only RBAC excludes Secrets"
 DATA_PLANE_USER="system:serviceaccount:default:data-plane"
@@ -134,7 +134,7 @@ if kubectl auth can-i get secrets --all-namespaces --as="$DATA_PLANE_USER" >/dev
 fi
 
 echo "e2e: waiting for rollouts"
-# MinIO backs the workload snapshot archives (deploy/minio.yaml). Wait for it too,
+# MinIO backs the workload snapshot archives (deploy/overlays/e2e/minio.yaml). Wait for it too,
 # so the first snapshot cannot race its startup or bucket creation.
 kubectl rollout status deploy/minio --timeout=180s
 # The two endpoints a claude-code session pod contacts during its plugin
@@ -152,16 +152,16 @@ kubectl rollout status deploy/anthropic-fake --timeout=120s
 # start and exits if it cannot, so it may restart once before going Ready.
 kubectl -n oidc-mock rollout status deploy/oidc-mock --timeout=120s
 kubectl -n pocket-aide rollout status deploy/pocket-aide --timeout=180s
-# The origin an approved external tool call fetches (deploy/fetch-origin.yaml).
+# The origin an approved external tool call fetches (deploy/overlays/e2e/fetch-origin.yaml).
 # Same reason once more: the approval round trip ends in a real GET, and the
 # first one must not race this listener — a refused connection there would look
 # like the tool failing rather than the origin still starting.
 kubectl rollout status deploy/fetch-origin --timeout=120s
-# drop, which drop_upload/drop_download reach (deploy/e2e-drop.yaml). Same
+# drop, which drop_upload/drop_download reach (deploy/overlays/e2e/e2e-drop.yaml). Same
 # reason: the first exchange must not race its listener.
 kubectl -n drop rollout status deploy/drop --timeout=120s
 # The ReadWriteMany provisioner behind AC-F5's session-shared volume
-# (deploy/shared-volume-provisioner.yaml). Same reason as the fixtures above:
+# (deploy/overlays/e2e/shared-volume-provisioner.yaml). Same reason as the fixtures above:
 # the first gated session must not race it. Without the class its
 # claim never binds and the session hangs instead of failing, so the existence
 # check below turns a 90-second mystery into one line.

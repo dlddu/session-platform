@@ -42,7 +42,7 @@ test("accessing a snapshot session restores it into a new pod", async ({ request
   expect(created.pod).not.toBe("");
 
   // 옮겨 오기 전 Go 파일은 여기서 404 를 만나면 skip 했다(제품 snapshot endpoint 이전의 SUT 를
-  // 가리킬 수 있어서다). 배포 SUT 는 그 endpoint 를 항상 갖고 deploy/ 오버레이가 쉘 아카이브 게이트(SHELL_ARCHIVE_ENABLED)를
+  // 가리킬 수 있어서다). 배포 SUT 는 그 endpoint 를 항상 갖고 deploy/overlays/e2e/ 오버레이가 쉘 아카이브 게이트(SHELL_ARCHIVE_ENABLED)를
   // 켜므로, 이관하면서 그 분기를 **단언으로 바꾼다** — skip 은 초록으로 보이지만 아무것도 사지
   // 않는다.
   const snapshotResponse = await request.post(

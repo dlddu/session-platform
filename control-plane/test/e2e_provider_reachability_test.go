@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-// providerReplyMarker comes from deploy/e2e-anthropic-fake.yaml and appears
+// providerReplyMarker comes from deploy/overlays/e2e/e2e-anthropic-fake.yaml and appears
 // nowhere else in the tree, so finding it inside a session pod says the bytes
 // came from that deployment rather than from a cache or a default somewhere
 // along the way.
@@ -101,7 +101,7 @@ func TestProviderStreamingResponseSurvivesTheCredentialProxy(t *testing.T) {
 }
 
 // The name is illustrative and the directive is the stand-in's, both documented
-// where they live (deploy/e2e-anthropic-fake.yaml).
+// where they live (deploy/overlays/e2e/e2e-anthropic-fake.yaml).
 const providerToolName = "mcp__session-platform-session-mcp__web_fetch_get"
 const providerToolPrompt = `e2e-tool:` + providerToolName + `:{\"url\":\"https://example.test/doc\"}`
 

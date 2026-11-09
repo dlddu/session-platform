@@ -1,0 +1,7 @@
+# PR 프리뷰 overlay. flux-cd-apps/apps/session-platform-preview 의 ResourceSet 이 PR 마다
+# 이 경로를 적용하고, PR head SHA 이미지·네임스페이스·ingress·env 차이는 그쪽 patches 가 주입한다.
+# base 를 그대로 둔다 — 프리뷰 전용 차이가 레포에 생기면 여기에 둔다.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base

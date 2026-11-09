@@ -1,0 +1,184 @@
+# 이미지 발행(ghcr) → 운영 매니페스트 pin(`deploy` 브랜치로 발행).
+#
+# 이미지는 **커밋 SHA 태그 하나로만** 발행한다. `latest` 도 브랜치 롤링 태그도 없다 — 운영이
+# 어느 커밋을 돌리는지는 deploy 브랜치의 deploy/ (와 끝 커밋의 Source-Commit 트레일러)만
+# 보면 되고, 태그가 불변이라 imagePullPolicy 기본값(IfNotPresent)이 그대로 옳다.
+#
+#   ghcr.io/dlddu/session-platform:<sha>             control-plane (Go API + 내장 SPA, control-plane/Dockerfile)
+#   ghcr.io/dlddu/session-platform-data-plane:<sha>  data plane agent (data-plane/Dockerfile)
+#
+# 트리거:
+#   - main push: 단독 실행. 테스트는 PR(pr.yml)에서 이미 통과했다는 전제로 발행 + pin.
+#   - PR: pr.yml 이 workflow_call 로 부른다. e2e(e2e.yml)가 이 이미지를 pull 해 kind 에 싣고,
+#     PR 프리뷰(flux-cd-apps apps/session-platform-preview)도 같은 태그를 쓴다. 발행만 하고 pin 은
+#     건너뛴다. 호출된 워크플로도 호출자의 github 컨텍스트를 보므로 아래 event/ref 조건은 어느
+#     쪽이든 같게 동작한다.
+#   - workflow_dispatch: 단독 재실행용.
+#
+# 경로 필터는 main push 에만 건다 — 이미지 내용(web·control-plane·data-plane)과 운영 매니페스트
+# (deploy/base·deploy/overlays/prod)에 닿는 머지만 새 SHA 태그 → deploy pin → 파드 재시작으로
+# 이어진다. 문서·e2e 하네스·워크플로만 바뀐 머지는 운영을 건드리지 않는다. 건너뛴 커밋은 deploy 에
+# 반영되지 않으므로 운영 커밋은 deploy 끝 커밋의 Source-Commit 트레일러가 정본이다.
+# PR 쪽(workflow_call)에는 필터가 없다 — 프리뷰는 PR head SHA 태그를 참조하므로 문서만 고친
+# PR 에 `deploy/preview` 라벨이 붙어도 그 SHA 에 이미지가 있어야 한다. 소스가 그대로면 buildx
+# gha 캐시가 통째로 히트해 비용이 작다.
+name: Image
+
+on:
+  push:
+    branches: [main]
+    # 순서가 의미를 갖는다: 마지막으로 매칭된 패턴이 이긴다.
+    paths:
+      - 'web/**'
+      - 'control-plane/**'
+      - 'data-plane/**'
+      - '!web/e2e/**'
+      - '!control-plane/test/**'
+      - '!**/*_test.go'
+      - '!**/*.md'
+      - 'deploy/base/**'
+      - 'deploy/overlays/prod/**'
+      - '.dockerignore'
+      - '.github/workflows/image.yml'
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# 호출될 때는 pr.yml 의 동시성 그룹 안에서 돈다. 같은 이름을 쓰면 호출자와 서로 잡아먹으므로
+# 접두사를 달리한다. main 에서도 이전 실행을 취소하는 것은 의도다 — 늦게 끝난 옛 실행의 pin 은
+# 아래 조상 판정이 막지만, 굳이 끝까지 돌릴 이유가 없다.
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # PR 에서는 기본 체크아웃이 refs/pull/N/merge(임시 머지 커밋)라 이미지 내용이 태그와
+  # 어긋난다. 태그가 가리키는 커밋을 그대로 빌드한다.
+  SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  publish:
+    name: publish (${{ matrix.name }})
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        include:
+          # cache-scope 는 예전 ci.yml 의 이름을 잇는다 — 바꾸면 첫 실행이 캐시 없이 빌드한다.
+          - name: session-platform
+            dockerfile: control-plane/Dockerfile
+            cache-scope: control-plane
+          - name: session-platform-data-plane
+            dockerfile: data-plane/Dockerfile
+            cache-scope: data-plane
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SHA }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ghcr.io/dlddu/${{ matrix.name }}:${{ env.SHA }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.name }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.SHA }}
+          cache-from: type=gha,scope=${{ matrix.cache-scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache-scope }}
+          # 단일 플랫폼(arm64) 이미지를 그대로 발행한다. provenance 를 켜면 manifest list 가
+          # 붙어 e2e 의 pull → `kind load docker-image` 경로와 노드 pull 경로가 갈린다.
+          provenance: false
+
+  pin:
+    name: pin deploy images (main only)
+    # matrix 의 모든 leg 를 기다린다: 모든 이미지가 존재해야 어느 하나라도 고정한다.
+    needs: [publish]
+    # main 푸시에서만. PR 은 이미지를 <head sha> 로 올려두기만 하고(e2e·프리뷰가 그 태그를
+    # 쓴다) 운영 매니페스트는 건드리지 않는다.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 5
+    permissions:
+      # 이 job 만 `deploy` 브랜치에 push 한다. 워크플로 기본값은 contents: read 유지.
+      contents: write
+    steps:
+      # main 의 HEAD 가 아니라 방금 빌드한 커밋 그대로를 deploy 의 부모로 삼는다.
+      # 전체 히스토리는 아래 「더 새 커밋이 이미 발행됐는가」 조상 판정에 쓴다.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Pin deploy/ images to ${{ github.sha }}
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # 고칠 자리는 deploy/base/deployment.yaml 의 컨테이너 image: 줄(control-plane)과
+          # DATA_PLANE_*_IMAGE env 값(data-plane — image 필드가 아니라 kustomize images 변환이
+          # 닿지 않는 자리)이다. 파일을 나열하지 않고 deploy/ 전체에서 참조를 찾는다 — 매니페스트가
+          # 늘거나 참조가 새 자리에 생겨도 빠짐없이 고정된다. 패턴이 이름 바로 뒤에 콜론을
+          # 요구하므로 `session-platform:` 이 `session-platform-data-plane:` 을 잡지 않는다.
+          images=("session-platform" "session-platform-data-plane")
+          for name in "${images[@]}"; do
+            ref="ghcr\.io/dlddu/${name}:[A-Za-z0-9._-]+"
+            files=$(grep -rlE "$ref" deploy/ || true)
+            if [ -z "$files" ]; then
+              echo "::error::deploy/: ghcr.io/dlddu/${name} 를 참조하는 매니페스트가 없다"
+              exit 1
+            fi
+            # shellcheck disable=SC2086
+            sed -i -E "s#(ghcr\.io/dlddu/${name}):[A-Za-z0-9._-]+#\1:${SHA}#g" $files
+
+            # sed 가 조용히 빗나가지 않았는지: 개수를 못박지 않고 「고정되지 않은 참조 0개」를 본다.
+            leftover=$(grep -rhoE "$ref" deploy/ | grep -v ":${SHA}\$" || true)
+            if [ -n "$leftover" ]; then
+              echo "::error::deploy/: 고정되지 않은 ${name} 참조가 남았다:"
+              echo "$leftover"
+              exit 1
+            fi
+          done
+
+          # ── deploy 브랜치로 발행 ─────────────────────────────────────────────
+          # main 은 ruleset(required status check)으로 보호되어 봇이 직접 커밋할 수 없다.
+          # 대신 「main@SHA + 고정 커밋 하나」를 deploy 브랜치로 force-push 하고, Flux 는
+          # deploy 를 추적한다. 기본 GITHUB_TOKEN 의 push 는 새 워크플로를 트리거하지 않고,
+          # 어떤 워크플로도 deploy 푸시에 걸려 있지 않으므로 재귀가 없다.
+          git fetch --no-tags origin +refs/heads/deploy:refs/remotes/origin/deploy 2>/dev/null || true
+          old=$(git rev-parse -q --verify refs/remotes/origin/deploy || true)
+
+          # 늦게 끝난 옛 실행이 더 새 배포를 덮지 않게 한다. deploy 끝 커밋의 Source-Commit
+          # 트레일러가 이 SHA 의 후손이면 이미 앞서 있으니 건너뛴다.
+          # (롤백은 main 에 revert PR 을 올리는 것 — 그 머지가 새 SHA 로 다시 여기를 탄다.)
+          if [ -n "$old" ]; then
+            cur=$(git log -1 --format='%(trailers:key=Source-Commit,valueonly)' "$old" | tr -d '[:space:]')
+            if [ -n "$cur" ] && [ "$cur" != "$SHA" ] && git merge-base --is-ancestor "$SHA" "$cur" 2>/dev/null; then
+              echo "deploy 는 이미 더 새로운 main 커밋(${cur})을 가리킨다 — 건너뜀."
+              exit 0
+            fi
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -a --allow-empty \
+            -m "deploy: session-platform 이미지를 ${SHA} 로 고정" \
+            -m "Source-Commit: ${SHA}"
+
+          # lease 로 「읽은 뒤 누가 먼저 밀었으면」 실패시킨다(old 가 비면 = 브랜치가 없어야 함).
+          git push --force-with-lease="refs/heads/deploy:${old}" origin HEAD:refs/heads/deploy

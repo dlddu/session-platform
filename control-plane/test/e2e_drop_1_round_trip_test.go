@@ -3,7 +3,7 @@
 // 검증 시나리오: drop-file-share.md#시나리오 1
 //
 // docs/prd/drop-file-share.md AC-I1~I3 를 배포된 SUT 에서: 에이전트가 공유 볼륨에 둔 파일이
-// 실물 drop(deploy/e2e-drop.yaml)으로 올라가고, 같은 보관함이 다시 공유 볼륨으로 내려온다.
+// 실물 drop(deploy/overlays/e2e/e2e-drop.yaml)으로 올라가고, 같은 보관함이 다시 공유 볼륨으로 내려온다.
 // 도구 호출은 공급자 대역의 e2e-tool 지시자로 실 CLI 가 세션 MCP 에 낸다(f3 과 같은 진입).
 package e2e_test
 

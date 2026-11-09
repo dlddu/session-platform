@@ -28,7 +28,7 @@ const (
 	// session pod — the only container that may hold provider credentials.
 	credentialsContainer = "claude-credentials"
 	// credentialsSecretName is the platform-global Secret the orchestrator
-	// references; the deployment provisions it (deploy/, k8s/ example).
+	// references; the deployment provisions it (deploy/overlays/e2e/, deploy/base/ example).
 	credentialsSecretName = "claude-code-credentials"
 	configConfigMapName   = "claude-code-config"
 	// What the main container gets in place of the provider's address and token.
@@ -295,7 +295,7 @@ func TestCredentialPlacementOnTheDeployedSUT(t *testing.T) {
 		// Required: the plugin bootstrap cannot run without it.
 		e6RequireSecretRef(t, main, "K3S_MCP_TOKEN", "k3s-mcp-token", false)
 		// Optional address-class keys: absent, entrypoint.sh keeps its
-		// production defaults, which is why k8s/ needs no change for them.
+		// production defaults, which is why deploy/base/ needs no change for them.
 		e6RequireConfigMapRef(t, main, "K3S_MCP_URL", "k3s-mcp-url", true)
 		e6RequireConfigMapRef(t, main, "CLAUDE_CODE_PLUGIN_MARKETPLACE_URL", "plugin-marketplace-url", true)
 

@@ -17,7 +17,7 @@ metadata:
     app: control-plane
 data:
   # The in-cluster provider stand-in the overlay deploys
-  # (deploy/e2e-anthropic-fake.yaml, approved mock exception CLAUDE-PROVIDER).
+  # (deploy/overlays/e2e/e2e-anthropic-fake.yaml, approved mock exception CLAUDE-PROVIDER).
   # Until 2026-09-04 this was a deliberately unroutable loopback address, so a
   # session could be created but never receive a reply — docs/test/e2e.md carried
   # that as 「차단 요인」 ③. The old value is not repeated here on purpose: the
@@ -27,12 +27,12 @@ data:
   base-url: "https://anthropic-fake:8443"
   # The two bootstrap endpoints the session pod reaches before the agent starts.
   # Both keys are optional in production; when absent the data plane
-  # entrypoint falls back to the real organisation endpoints, so `k8s/` is
+  # entrypoint falls back to the real organisation endpoints, so `deploy/base/` is
   # unaffected. Here they point at the in-cluster stand-ins the overlay deploys:
-  #   - k3s-mcp-url          -> deploy/e2e-k3s-mcp-fake.yaml (approved mock
+  #   - k3s-mcp-url          -> deploy/overlays/e2e/e2e-k3s-mcp-fake.yaml (approved mock
   #                             exception PLUGIN-CRED; the real service holds a
   #                             GitHub App private key that cannot be cloned)
-  #   - plugin-marketplace-url -> deploy/plugin-marketplace-git.yaml (a real git
+  #   - plugin-marketplace-url -> deploy/overlays/e2e/plugin-marketplace-git.yaml (a real git
   #                             remote, not a mock — same code path as github.com)
   k3s-mcp-url: "http://k3s-mcp-fake:8080/mcp"
   plugin-marketplace-url: "http://plugin-marketplace-git:8080/plugin-marketplace.git"
@@ -43,7 +43,7 @@ data:
   # the proxy reaches an https endpoint no public store knows about while every
   # other part of AC-E6's round trip stays real — header allowlist, platform
   # token injection, and certificate verification. Production omits this key and
-  # keeps the system pool, so k8s/ is unaffected.
+  # keeps the system pool, so deploy/base/ is unaffected.
   ca-cert: |
     -----BEGIN CERTIFICATE-----
     MIIByTCCAW+gAwIBAgIIU1BFMkVDQTEwCgYIKoZIzj0EAwIwRjEpMCcGA1UEAwwg

@@ -399,11 +399,11 @@ upstream responses.
 
 The control plane's client-go orchestrator
 (`control-plane/internal/adapter/k8s`) provisions each session pod from this
-image (`DATA_PLANE_IMAGE`; published by the image jobs in `.github/workflows/ci.yml`
+image (`DATA_PLANE_IMAGE`; published by `.github/workflows/image.yml`
 as `…-data-plane`) with no command override — and refuses to mark a session
 `active` until the attach stream opens. The in-code fallback image remains a
 generic `alpine:3.20`, which cannot pass the shell readiness probe: real
-deployments must inject `DATA_PLANE_IMAGE` (k8s/deployment.yaml and the e2e
+deployments must inject `DATA_PLANE_IMAGE` (deploy/base/deployment.yaml and the e2e
 overlay both do). The control plane talks to a cluster either via its in-cluster
 config (as a pod) or the ambient kubeconfig (local development against a kind
 cluster).

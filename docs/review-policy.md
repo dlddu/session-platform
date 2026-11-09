@@ -5,7 +5,7 @@
 
 이 레포의 PR 수동 승인은 **하나의 프로세스**다. 판정기 하나가 PR 이 아래 케이스 어디에도 닿지 않았다고 확인될 때만 head 커밋에 `review/manual-approval` = success 를 붙이고, 기본 브랜치 ruleset 이 그 status 를 required 로 요구한다. 닿았을 가능성이 있으면 판정기는 아무 status 도 붙이지 않는다 — status 의 **부재**가 곧 「사람이 본다」이고, 판정기가 죽거나 판정이 불가능해도(정책 파싱 실패 · 정책과 판정기의 케이스 ID 불일치 · 빈 변경 목록 · files API 상한) 같은 결과가 된다. 사람의 승인은 PR 을 검토한 사람이 **같은 context 로 직접 success 를 붙이는 것**(수동 status) 하나뿐이다.
 
-케이스는 저장소 소유자가 2026-11-04 정했다. 2026-11-04 오전 등재(MA1·MA2) 뒤 같은 날 RBAC·네트워크 정책·저장 형식·인증·샌드박스 케이스(MA3~MA5)를 더했다. 배포 매니페스트(`k8s/deployment.yaml` · `service.yaml` · `kustomization.yaml` 등)와 CI 워크플로 전반은 대상이 아니다(게이트 자신의 워크플로만 MA2). 케이스를 더하거나 줄이는 것은 사람의 결정이고, 바꾸면 아래 표·surface·anchors 와 판정기를 같은 PR 에서 함께 고친다.
+케이스는 저장소 소유자가 2026-11-04 정했다. 2026-11-04 오전 등재(MA1·MA2) 뒤 같은 날 RBAC·네트워크 정책·저장 형식·인증·샌드박스 케이스(MA3~MA5)를 더했다. 배포 매니페스트(`deploy/base/deployment.yaml` · `service.yaml` · `kustomization.yaml` 등)와 CI 워크플로 전반은 대상이 아니다(게이트 자신의 워크플로만 MA2). 케이스를 더하거나 줄이는 것은 사람의 결정이고, 바꾸면 아래 표·surface·anchors 와 판정기를 같은 PR 에서 함께 고친다.
 
 ## 프로세스
 
@@ -27,7 +27,7 @@
 |---|---|---|
 | MA1 | 제품 문서 — 가치·PRD·테스트·여정: `docs/values.md` · `docs/prd/` · `docs/test/` · `docs/user-journeys/` 의 **모든** 변경(개명은 옛 경로와 새 경로 둘 다 판정 입력이 된다) | 제품이 무엇을 왜 하는가의 결정이고, 소유자는 사용자다(`docs/values.md` 「제품 소유자」). 정합성 루프(reconciler docs-impl·scenario-e2e 등)가 어긋남을 「문서를 구현에 맞추는」 방향으로 닫으면 제품 결정이 사람 눈 없이 바뀐다. 테스트 문서는 AC 의 검증 기준을 정하므로 함께 건다. 집계(doc-tracker)·목업은 결정을 옮겨 적을 뿐이라 대상이 아니다 |
 | MA2 | 판정기·워크플로·정책 자신 — `scripts/review-policy/` · `.github/workflows/review-policy.yml` · `docs/review-policy.md` | 워크플로가 `pull_request_target` 이라 PR 은 **base 쪽 판정기**로 판정된다 — PR 이 규칙을 고쳐 자기를 통과시킬 수는 없지만, 그 변경 자체(케이스를 줄이거나 자기 경로를 빼는 편집)는 옛 판정기가 보지 못한 채 다음 PR 부터 효력을 가진다. 그래서 이 경로의 변경은 사람 눈에 올린다 |
-| MA3 | RBAC·ServiceAccount·네트워크 정책 — `k8s/rbac.yaml` · `k8s/data-plane-rbac.yaml` · `k8s/session-mcp-serviceaccount.yaml` · `k8s/network-policy.yaml` 의 모든 변경. 배포 매니페스트(`deployment.yaml` · `service.yaml` · `kustomization.yaml` 등)는 대상이 아니다 | Flux 가 `k8s/` 를 그대로 운영에 적용한다. control-plane Role 의 파드·ConfigMap·PVC 생성/삭제 권한, data-plane 의 `view` 바인딩, 인증 없는 control-plane API 를 지키는 유일한 선인 ingress NetworkPolicy 와 셸 워크로드 egress 차단이 이 파일들에 있다 — 넓어지면 에이전트 워크로드가 닿는 범위가 그대로 넓어진다 |
+| MA3 | RBAC·ServiceAccount·네트워크 정책 — `deploy/base/rbac.yaml` · `deploy/base/data-plane-rbac.yaml` · `deploy/base/session-mcp-serviceaccount.yaml` · `deploy/base/network-policy.yaml` 의 모든 변경. 배포 매니페스트(`deployment.yaml` · `service.yaml` · `kustomization.yaml` 등)는 대상이 아니다 | Flux 가 `deploy/base/` 를 `deploy/overlays/prod/` 로 감싸 그대로 운영에 적용한다. control-plane Role 의 파드·ConfigMap·PVC 생성/삭제 권한, data-plane 의 `view` 바인딩, 인증 없는 control-plane API 를 지키는 유일한 선인 ingress NetworkPolicy 와 셸 워크로드 egress 차단이 이 파일들에 있다 — 넓어지면 에이전트 워크로드가 닿는 범위가 그대로 넓어진다 |
 | MA4 | 저장 형식 — 레포 접근 허용목록 SQLite(`control-plane/internal/repoaccess/`) · 세션 ConfigMap 저장(`control-plane/internal/adapter/configmap/`, `control-plane/internal/session/session.go`) · S3 체크포인트·아카이브(`control-plane/internal/adapter/checkpointstore/`, `control-plane/internal/adapter/archive/`) · 데이터 플레인 상태 아카이브(`data-plane/cmd/agent/state_archive.go`, `data-plane/cmd/agent/checkpoint.go`). 테스트(`*_test.go`, `envtest/`)는 대상이 아니다 | 이미 쓰인 데이터를 읽어야 하는 형식이다 — 허용목록 SQLite 는 마이그레이션 장치 없이 `CREATE TABLE IF NOT EXISTS` 로 만들어지고, 세션 JSON 태그·tar 아카이브 레이아웃·S3 키 접두사가 바뀌면 기존 세션과 아카이브를 복원할 수 없게 된다. 단위 테스트는 「새로 쓰고 새로 읽는」 왕복만 보므로 옛 데이터와의 호환 파괴를 잡지 못한다 |
 | MA5 | 인증·샌드박스·승인 게이트웨이 — 헬퍼 인증(`control-plane/internal/helperauth/`) · 레포 접근 API(`control-plane/cmd/control-plane/repo_access.go`, `control-plane/internal/api/repo_access.go`) · 자격증명 프록시와 K3s MCP 거부목록·git push·비공개 레포 접근 토큰(`data-plane/cmd/agent/credential_proxy*.go`, `k3s_mcp_proxy.go`, `k3s_mcp_tool_deny.go`, `session_mcp_git_push.go`, `session_mcp_repo_access.go`, `minimax_marketplace.go`) · 토큰 발급 진입점(`data-plane/entrypoint.sh`) · 워크로드 파드 보안·네트워크 격리(`control-plane/internal/adapter/k8s/`) · 승인 게이트웨이(`data-plane/cmd/agent/approval_gateway.go`, `approval_wait.go`, `session_mcp_tools.go`) · 두 이미지(`control-plane/Dockerfile`, `data-plane/Dockerfile`). 테스트(`*_test.go`)는 대상이 아니다 | 에이전트 워크로드가 무엇에 닿을 수 있는가를 정하는 코드다 — TokenReview 로 헬퍼 파드의 세션을 식별하고, 프록시가 공급자 토큰을 응답에서 지우며, 거부목록이 minimax-code 제한의 유일한 집행 지점이고, 파드 securityContext·세션별 NetworkPolicy 가 사용자 코드를 클러스터에서 떼어 놓으며, 모든 외부 도구가 승인 게이트웨이를 거친다. 느슨해져도 테스트는 「통과하지만 덜 막는」 변경을 잡지 못한다. `control-plane/internal/adapter/k8s/` 는 변경이 잦아 승인 대기가 늘어나는 것을 비용으로 받아들인다 |
 
@@ -36,8 +36,8 @@
 케이스의 위험이 레포에 나타나는 모양. reconciler as-is 지문이 이 블록에 걸리는 (파일, 토큰) 집합을 잰다 — 위험 신호가 새 파일에 나타나면 지문이 움직여 이 정책이 다시 판정된다. 걸리는 파일은 전부 위 케이스에 덮이거나 아래 「의도적 제외」에 있어야 한다. 테스트·집계·목업은 운영 경로가 아니라 표면에서 뺀다.
 
 ```surface
-scope: docs k8s control-plane data-plane
-exclude: ^docs/(doc-tracker|journeys|mockups)/|\.html$|_test\.go$|^control-plane/test/|/envtest/|^k8s/[^/]*\.example\.yaml$
+scope: docs deploy/base control-plane data-plane
+exclude: ^docs/(doc-tracker|journeys|mockups)/|\.html$|_test\.go$|^control-plane/test/|/envtest/|^deploy/base/[^/]*\.example\.yaml$
 ere: ^### ([A-Z]+-)?AC[-.0-9A-Z]*|^## 제품 가치|^## Acceptance Criteria|^### 시나리오|^## 테스트 시나리오|^## 검증 대상 AC
 ere: ^kind: (Role|ClusterRole|RoleBinding|ClusterRoleBinding|NetworkPolicy|ServiceAccount)$
 ere: CREATE TABLE|ALTER TABLE|tar\.NewReader
@@ -56,10 +56,10 @@ docs/user-journeys/*
 scripts/review-policy/*
 .github/workflows/review-policy.yml
 docs/review-policy.md
-k8s/rbac.yaml
-k8s/data-plane-rbac.yaml
-k8s/session-mcp-serviceaccount.yaml
-k8s/network-policy.yaml
+deploy/base/rbac.yaml
+deploy/base/data-plane-rbac.yaml
+deploy/base/session-mcp-serviceaccount.yaml
+deploy/base/network-policy.yaml
 control-plane/internal/repoaccess/*
 control-plane/internal/adapter/configmap/*
 control-plane/internal/adapter/checkpointstore/*

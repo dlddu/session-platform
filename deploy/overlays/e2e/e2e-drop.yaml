@@ -8,8 +8,8 @@
 # 운영과 다른 것은 셋이고 셋 다 배포 지형의 차이다:
 #   - 주소: 운영은 ExternalName → Traefik → Sablier 를 지나지만(깨우기 대기), 여기는 Service 하나로
 #     곧장 닿는다. 깨우기 지연(307·블로킹)은 단위 테스트가 대신 본다.
-#   - 이미지: 발행 이미지(ghcr.io/dlddu/drop:<sha>)는 arm64 하나뿐이라 amd64 e2e 러너에서 돌지
-#     않는다. scripts/e2e/up.sh 가 같은 DROP_SHA 커밋을 소스에서 빌드해 `drop:e2e` 로 싣는다
+#   - 이미지: 발행 이미지(ghcr.io/dlddu/drop:<sha>)는 arm64 하나뿐이라 amd64 머신(로컬)에서 돌지
+#     않는다. 어느 아키텍처에서든 같게 돌도록 scripts/e2e/up.sh 가 같은 DROP_SHA 커밋을 소스에서 빌드해 `drop:e2e` 로 싣는다
 #     (PocketAide 와 같은 방식).
 #   - 저장소: PVC 대신 emptyDir — 보관 기간·용량 상한은 drop 자신의 e2e 몫이다.
 #

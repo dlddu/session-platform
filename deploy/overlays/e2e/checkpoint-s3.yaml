@@ -1,6 +1,6 @@
 # kind e2e ONLY: the `checkpoint-s3` ConfigMap the control-plane pod reads (its
-# configMapKeyRefs are required, see k8s/deployment.yaml). Here it points at the
-# in-cluster MinIO (deploy/minio.yaml) instead of AWS, so the archive round trip
+# configMapKeyRefs are required, see deploy/base/deployment.yaml). Here it points at the
+# in-cluster MinIO (deploy/overlays/e2e/minio.yaml) instead of AWS, so the archive round trip
 # exercises the real S3 code path without any cloud account.
 #
 # role-arn is intentionally EMPTY: with no role the store uses the ambient

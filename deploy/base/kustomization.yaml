@@ -1,6 +1,6 @@
 # Base manifests for the session platform (production). Flux applies this
-# directory directly; the kind-based e2e SUT reuses it through the deploy/
-# overlay (deploy/kustomization.yaml), which patches in the kind-only
+# through deploy/overlays/prod (PR previews through deploy/overlays/preview); the kind-based e2e SUT reuses it through the deploy/overlays/e2e/
+# overlay (deploy/overlays/e2e/kustomization.yaml), which patches in the kind-only
 # differences. Keep environment-neutral defaults here.
 #
 # 이 base 를 소비하는 곳이 셋이다:
@@ -8,9 +8,9 @@
 #              deploy = main@SHA + 「deployment.yaml 을 그 SHA 로 고정」 커밋(CI 의 `pin`).
 #   2) PR 프리뷰 flux-cd-apps/apps/session-platform-preview — PR head SHA 에 고정하고
 #              S3 체크포인트 저장소는 주입하지 않는다(아카이브 게이트 off).
-#   3) e2e     deploy/ 오버레이 — 로컬 빌드 이미지 + MinIO.
+#   3) e2e     deploy/overlays/e2e/ 오버레이 — 로컬 빌드 이미지 + MinIO.
 #
-# 2)·3)은 base 의 env 를 **이름으로** 또는 **인덱스로** 덮어쓴다. deploy/ 오버레이가
+# 2)·3)은 base 의 env 를 **이름으로** 또는 **인덱스로** 덮어쓴다. deploy/overlays/e2e/ 오버레이가
 # env/1·env/2·env/3 을 인덱스로 잡고 있으니, deployment.yaml 의 env 순서를 바꾸거나
 # 앞쪽에 항목을 끼워 넣으면 그 오버레이도 함께 고쳐야 한다.
 apiVersion: kustomize.config.k8s.io/v1beta1

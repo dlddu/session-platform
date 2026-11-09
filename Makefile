@@ -101,7 +101,7 @@ check-fidelity:
 	python3 scripts/check-fidelity-allowlist.py
 
 ## check-scenario-mapping: verify the 테스트 시나리오 <-> e2e 1:1 mapping (docs/test/e2e.md).
-## Static — no cluster, no toolchain; runs on every PR from ci.yml.
+## Static — no cluster, no toolchain; runs on every PR from test.yml.
 check-scenario-mapping:
 	./scripts/e2e/check-scenario-mapping.sh
 

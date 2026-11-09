@@ -69,7 +69,11 @@ web/                  React + Vite + TS SPA
 data-plane/           multi-workload agent selected by DATA_PLANE_WORKLOAD
   cmd/agent/            PTY shell, agent CLI runners, state archive, and credential proxy
   Dockerfile            agent + Claude Code / MiniMax Code CLI runtime (no CRIU)
-deploy/               kind config + control-plane manifests (2-replica e2e overlay)
+deploy/
+  base/                 production manifests (Deployment, Service, RBAC, NetworkPolicy)
+  overlays/prod/        what Flux applies from the `deploy` branch (base + namespace)
+  overlays/preview/     what PR preview environments apply (base as is)
+  overlays/e2e/         kind config + the kind e2e SUT (2 control-plane replicas, fixtures)
 docs/                 value / PRD·AC / journeys / mockups / retired CRIU verification record
 ```
 
@@ -258,7 +262,7 @@ gitignored.
   happy-path scenarios from `docs/test/architecture.md` driven **in-process**
   (handlers mounted in a test server) with the stub adapters.
 - **E2E** (kind-deployed SUT): builds the combined image, loads it into a kind
-  cluster (`deploy/`, 2 control-plane replicas), and runs a Go API suite + a
+  cluster (`deploy/overlays/e2e/`, 2 control-plane replicas), and runs a Go API suite + a
   Playwright browser suite against the deployed control-plane (reachable at
   `http://localhost:8080` via a NodePort). Covers create/list/get/switch·read·write,
   real-pod provisioning (AC-A1/A2), and cross-replica state consistency over the
@@ -292,37 +296,46 @@ gitignored.
 
 ## CI
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) is the single CI entry
-point (push to `main`, every PR, `workflow_dispatch`). A `changes` job decides
-which path-scoped jobs apply; the rest always run:
+PRs run [`.github/workflows/pr.yml`](.github/workflows/pr.yml); `main` branch
+protection needs only its `pr-gate` check (plus `review/manual-approval`,
+[docs/review-policy.md](docs/review-policy.md)). A `changes` job decides which
+path-scoped jobs apply:
 
-- **every run** — the static docs ↔ code gates (e2e fidelity allowlist, render
+- **image** — [`image.yml`](.github/workflows/image.yml) publishes both images
+  for the PR head SHA (see Deployment).
+- **test** — [`test.yml`](.github/workflows/test.yml), every PR, no image
+  needed: the static docs ↔ code gates (e2e fidelity allowlist, render
   fidelity, comment-policy ledger, scenario ↔ e2e mapping), lint + unit (Go),
   typecheck + build (web), the in-process integration harness, the
-  real-apiserver envtest conflict suite, and the GHCR image publish (see
-  Deployment).
-- **e2e** — calls the reusable
-  [`.github/workflows/e2e.yml`](.github/workflows/e2e.yml) (kind SUT, Go API +
-  Playwright) on PRs touching `control-plane/`, `data-plane/`, `web/`,
-  `deploy/`, `k8s/`, `scripts/e2e/`, `Makefile`, or the workflows, and on
-  `workflow_dispatch`; Playwright reports/traces upload as artifacts.
-- **journey prototype** — the user-journey ↔ mockup gate (`tools/`), on changes
-  to `docs/journeys/`, `docs/user-journeys/`, `docs/mockups/README.md`,
-  `docs/index.html`, `docs/doc-structure-state.md`, `tools/`, or the workflow.
+  real-apiserver envtest conflict suite, and — on changes to
+  `docs/journeys/`, `docs/user-journeys/`, `docs/mockups/README.md`,
+  `docs/index.html`, `docs/doc-structure-state.md` or `tools/` — the
+  user-journey ↔ mockup gate.
+- **e2e** — [`e2e.yml`](.github/workflows/e2e.yml) (kind SUT, Go API +
+  Playwright) after `image`, running the images it just published, on PRs
+  touching `control-plane/`, `data-plane/`, `web/`, `deploy/`, `scripts/e2e/`,
+  `Makefile`, or the image/e2e/PR workflows; Playwright reports/traces upload
+  as artifacts.
+- **pr-gate** — fails unless every job above succeeded (a path-filtered e2e
+  counts as passed).
 
-Path-scoped jobs that do not apply show as *skipped* rather than missing.
+Pushes to `main` run only `image.yml` (publish + pin, when the merge touches
+the images or the production manifests) — the commit already passed `pr-gate`.
 
 ## Deployment
 
 The cluster runs this via GitOps (Flux) from the `flux-cd-apps` repo.
 
-- The image jobs in [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
-  publish the combined control-plane image as
+- [`.github/workflows/image.yml`](.github/workflows/image.yml)
+  publishes the combined control-plane image as
   `ghcr.io/dlddu/session-platform:<sha>` and the multi-workload agent as
   `ghcr.io/dlddu/session-platform-data-plane:<sha>` for every PR (head SHA, used
-  by preview environments) and every push to `main`; on `main` the `pin` job
-  then commits that SHA into `k8s/deployment.yaml`. There is no `latest` tag.
-- [`k8s/`](k8s/) holds the cluster manifests Flux applies: the `control-plane`
+  by preview environments) and every push to `main` that touches the images or production manifests; on
+  `main` the `pin` job then pins that SHA in `deploy/base/deployment.yaml` and
+  force-pushes the result to the `deploy` branch, which Flux tracks (`main` is
+  never rewritten). There is no `latest` tag.
+- [`deploy/base/`](deploy/base/) holds the cluster manifests Flux applies (through
+  [`deploy/overlays/prod/`](deploy/overlays/prod/), from the `deploy` branch): the `control-plane`
   Deployment + Service (port 80 → 8080), control-plane RBAC (pods + configmaps
   + leases), and the data-plane ServiceAccount with a cluster-wide built-in
   `view` binding. The latter is read-only and deliberately cannot read Secrets.
@@ -384,23 +397,23 @@ control-plane process's startup environment, so either display change requires
 a Deployment rollout. During the interval before that rollout, a newly started
 `platform-default` session may already use the new ConfigMap model while the UI
 still shows the prior snapshot. See
-[`k8s/claude-code-credentials-secret.example.yaml`](k8s/claude-code-credentials-secret.example.yaml)
+[`deploy/base/claude-code-credentials-secret.example.yaml`](deploy/base/claude-code-credentials-secret.example.yaml)
 and
-[`k8s/claude-code-config-configmap.example.yaml`](k8s/claude-code-config-configmap.example.yaml).
+[`deploy/base/claude-code-config-configmap.example.yaml`](deploy/base/claude-code-config-configmap.example.yaml).
 
 Codex sessions need `DATA_PLANE_CODEX_IMAGE` (the same data-plane image) and,
 optionally, the `codex-credentials` Secret (`k3s-mcp-token`) and `codex-config`
 ConfigMap (`model`, `models`, `k3s-mcp-url`, `plugin-marketplace-url`); see the
-`k8s/codex-*.example.yaml` files. `codex-chat` also needs at least one slot in
+`deploy/base/codex-*.example.yaml` files. `codex-chat` also needs at least one slot in
 its pool (`CODEX_CHAT_AUTH_SLOTS`, with `CODEX_CHAT_AUTH_STORAGE_CLASS` /
 `_STORAGE_SIZE`, default `1Gi`): each slot PVC holds the ChatGPT login and the
 session's SQLite database, which the sidecar serves as the `db` MCP server
 (`raw_query`, `raw_exec`, `ledger_get`, `ledger_list`, `ledger_put`, `ledger_delete`).
 See [session ledger contracts and storage migration](docs/session-ledger.md). Tenancy needs the
 `session-platform-tenants` ConfigMap
-([example](k8s/session-platform-tenants-configmap.example.yaml)) and a
+([example](deploy/base/session-platform-tenants-configmap.example.yaml)) and a
 `system:auth-delegator` ClusterRoleBinding for the control-plane
-ServiceAccount, kept outside this base for the reason `k8s/rbac.yaml` gives.
+ServiceAccount, kept outside this base for the reason `deploy/base/rbac.yaml` gives.
 
-The [`deploy/`](deploy/) directory remains the local `kind` setup for the
-integration harness; `k8s/` is the deployed-cluster source of truth.
+The [`deploy/overlays/e2e/`](deploy/overlays/e2e/) directory remains the local `kind` setup for the
+integration harness; `deploy/base/` is the deployed-cluster source of truth.
