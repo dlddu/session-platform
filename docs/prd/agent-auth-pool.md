@@ -56,16 +56,16 @@
 - **검증 방법**: 에이전트 단위 테스트로 턴 전·중·후 동기화(슬롯 없음 → HOME 삭제, HOME 갱신 → 슬롯 갱신, HOME 삭제 → 슬롯 삭제)와 아카이브에 로그인 파일이 없음을 확인한다. `GET /auth-slot`이 슬롯 상태를 돌려주고 반납이 Lease 주석에 적음을 확인한다.
 
 ### AC-N6: `codex-chat` 슬롯 = 로그인 + 세션 DB, 컨테이너마다 제 몫만 마운트
-- **설명**: `codex-chat` 풀(`CODEX_CHAT_AUTH_SLOTS`·`_STORAGE_CLASS`·`_STORAGE_SIZE` 기본 `1Gi`)의 슬롯은 두 디렉터리로 나뉜다 — `auth/`(로그인 파일 `auth.json`)와 `db/<sessionID>/`(세션 DB `session.db`). 같은 PVC를 subPath로 나눠 마운트한다:
+- **설명**: `codex-chat` 풀(`CODEX_CHAT_AUTH_SLOTS`·`_STORAGE_CLASS`·`_STORAGE_SIZE` 기본 `1Gi`)의 슬롯은 두 디렉터리로 나뉜다 — `auth/`(로그인 파일 `auth.json`)와 `db/`(세션 DB `session.db`). DB 디렉터리는 세션이 아니라 **슬롯**의 것이다 — 채팅 세션을 지우고 새로 만들어도 같은 슬롯을 받으면 같은 DB를 이어 쓴다. 같은 PVC를 subPath로 나눠 마운트한다:
   1. 주 컨테이너는 `auth/`만 `/var/run/session-platform/auth-slot`에 받는다. 로그인 동기화·아카이브 제외는 AC-N4 그대로다.
-  2. `k3s-mcp-proxy` 사이드카는 `db/<sessionID>/`만 `/var/run/session-platform/session-db`에 받고(`SESSION_DB_DIR`), 같은 포트의 `/session-db/mcp`에서 **세션 DB MCP**를 서빙한다. 주 컨테이너는 그 주소만 받는다(`SESSION_DB_MCP_URL`). 사이드카는 로그인 파일에, 주 컨테이너는 DB 파일에 닿지 않는다 — 그래서 AC-N4의 「사이드카에 슬롯을 마운트하지 않는다」는 「사이드카에 로그인을 마운트하지 않는다」로 읽는다.
-  3. 초기화 컨테이너 `slot-init`(root, `CHOWN`·`FOWNER`만)이 슬롯 전체를 마운트해 두 디렉터리를 만들고 `db/<sessionID>/`를 사이드카 사용자(65532)에게 넘긴다 — kubelet이 만드는 subPath는 root 소유 0750이라 non-root 사이드카가 쓰지 못한다. `efs` access point처럼 소유자를 하나로 매핑하는 볼륨에서는 chown이 실패하지만, 그 볼륨은 이미 사이드카가 쓸 수 있으므로 실패를 무시한다.
+  2. `k3s-mcp-proxy` 사이드카는 `db/`만 `/var/run/session-platform/session-db`에 받고(`SESSION_DB_DIR`), 같은 포트의 `/session-db/mcp`에서 **세션 DB MCP**를 서빙한다. 주 컨테이너는 그 주소만 받는다(`SESSION_DB_MCP_URL`). 사이드카는 로그인 파일에, 주 컨테이너는 DB 파일에 닿지 않는다 — 그래서 AC-N4의 「사이드카에 슬롯을 마운트하지 않는다」는 「사이드카에 로그인을 마운트하지 않는다」로 읽는다.
+  3. 초기화 컨테이너 `slot-init`(root, `CHOWN`·`FOWNER`만)이 슬롯 전체를 마운트해 두 디렉터리를 만들고 `db/`를 사이드카 사용자(65532)에게 넘긴다 — kubelet이 만드는 subPath는 root 소유 0750이라 non-root 사이드카가 쓰지 못한다. `efs` access point처럼 소유자를 하나로 매핑하는 볼륨에서는 chown이 실패하지만, 그 볼륨은 이미 사이드카가 쓸 수 있으므로 실패를 무시한다.
 
   세션 DB MCP의 raw 도구는 둘이다: `raw_query`(행을 돌려주는 문장, 최대 1000행·약 1MiB, 넘으면 `truncated`)와 `raw_exec`(바꾸는 문장, `rowsAffected`·`lastInsertId`; 매개변수가 없으면 `;`로 이은 여러 문장). 둘 다 `{sql, params?}`를 받고 `params`는 `?` 자리에 순서대로 묶인다. SQLite가 거부한 문장은 `isError` 도구 결과로 메시지를 돌려준다. 한 문장은 30초로 끊는다. DB는 `journal_mode=DELETE`로 연다 — 운영 `efs`는 NFS라 WAL의 공유 메모리가 동작하지 않고, 파일을 여는 프로세스는 사이드카 하나다. 사이드카가 뜰 때 디렉터리가 준비되지 않았으면 그 호출만 실패하고 다음 호출이 다시 연다(사이드카는 K3s MCP도 맡으므로 죽지 않는다). DB는 아카이브에 들어가지 않는다 — 슬롯에 있으므로 동결·복원·재생성을 건너 남는다.
-  DB가 있는 codex-chat은 스냅샷/복구/복원 실패에도 슬롯을 유지하며 frozen holder 재회수 대상이 아니다. 삭제 시 반납하고, 동결 중에도 풀 용량을 차지한다. 다른 타입의 스냅샷 반납 규칙은 유지한다. 상위 작업 관리 도구와 raw 트랜잭션 경계·슬롯 재사용 격리·기존 DB 이관 제약은 [세션 원장 계약](../session-ledger.md)을 따른다. 슬롯 공용 `db/session.db`는 자동 이관하지 않고 보존한다.
+  DB가 있는 codex-chat은 스냅샷/복구/복원 실패에도 슬롯을 유지하며 frozen holder 재회수 대상이 아니다. 삭제 시 반납하고, 동결 중에도 풀 용량을 차지한다. 다른 타입의 스냅샷 반납 규칙은 유지한다. 상위 작업 관리 도구와 raw 트랜잭션 경계는 [세션 원장 계약](../session-ledger.md)을 따른다. 한때(PR #216) DB가 `db/<sessionID>/`로 세션마다 나뉘어 재생성한 채팅이 빈 DB를 열었으므로, 슬롯 단위로 되돌린다; 그 사이 남은 `db/<sessionID>/` 디렉터리는 자동으로 합치지 않고 보존한다.
 - **달성 가치**: V3(장기 세션), V1
 - **구체화 대상**: AC-N1(슬롯)·AC-N4(로그인 배치) — 슬롯에 세션 DB를 더하고 컨테이너별로 나눠 마운트한 것, `codex-workload.md` AC-J5(도구 표면)·AC-J6(사이드카)
-- **검증 방법**: 제출된 `codex-chat` pod spec에서 PVC가 자기 슬롯 하나이고, 주 컨테이너는 subPath `auth`, 사이드카는 subPath `db/<sessionID>`, `slot-init`만 슬롯 전체를 마운트함을 확인한다(`control-plane/test/codex_orchestrator_test.go`). 세션 DB MCP 단위 테스트로 `raw_exec` → `raw_query` 왕복, SQLite 오류가 `isError`, 행 상한과 `truncated`, 늦게 생긴 디렉터리를 다음 호출이 여는 것, `/session-db/mcp` 밖의 요청은 K3s MCP 프록시로 가는 것을 확인한다(`data-plane/cmd/agent/session_db_mcp_test.go`).
+- **검증 방법**: 제출된 `codex-chat` pod spec에서 PVC가 자기 슬롯 하나이고, 주 컨테이너는 subPath `auth`, 사이드카는 subPath `db`, `slot-init`만 슬롯 전체를 마운트함을 확인한다(`control-plane/test/codex_orchestrator_test.go`). 세션 DB MCP 단위 테스트로 `raw_exec` → `raw_query` 왕복, SQLite 오류가 `isError`, 행 상한과 `truncated`, 늦게 생긴 디렉터리를 다음 호출이 여는 것, `/session-db/mcp` 밖의 요청은 K3s MCP 프록시로 가는 것을 확인한다(`data-plane/cmd/agent/session_db_mcp_test.go`).
 
 ### AC-N5: 권한 — control plane은 PVC·Lease만, 세션은 자기 슬롯만
 - **설명**: control plane Role은 이미 가진 `persistentvolumeclaims` create/get/list/watch와 `leases` 전체 동사로 풀을 다룬다 — 새 권한이 없다. 세션 파드는 자기 슬롯 PVC 하나만 마운트하고, 다른 슬롯에 닿는 Kubernetes 자격 증명을 받지 않는다(타입별 SA 권한은 바뀌지 않는다). 슬롯 파일은 셸이 있는 주 컨테이너가 읽을 수 있다 — 프록시로 숨기지 않기로 했다(2026-11-07 사용자 결정): 세션 안 에이전트가 그 계정의 토큰을 읽을 수 있다는 것이 이 풀의 알려진 대가다.
