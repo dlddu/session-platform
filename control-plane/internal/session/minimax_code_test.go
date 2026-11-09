@@ -29,10 +29,9 @@ func TestMiniMaxCodeWorkloadType(t *testing.T) {
 // only shell takes raw stdin.
 func TestQueuesPrompts(t *testing.T) {
 	for w, want := range map[WorkloadType]bool{
-		WorkloadTypeShell:         false,
-		WorkloadTypeClaudeCode:    true,
-		WorkloadTypeApprovalGated: true,
-		WorkloadTypeMiniMaxCode:   true,
+		WorkloadTypeShell:       false,
+		WorkloadTypeClaudeCode:  true,
+		WorkloadTypeMiniMaxCode: true,
 	} {
 		if got := w.QueuesPrompts(); got != want {
 			t.Errorf("%s.QueuesPrompts() = %v, want %v", w, got, want)

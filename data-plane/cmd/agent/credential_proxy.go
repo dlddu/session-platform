@@ -379,33 +379,8 @@ func validateClaudeProxyClientEnv() error {
 	return nil
 }
 
-// validateApprovalGatedClientEnv is the approval-gated counterpart: the workload
-// pod holds no external credential at all (AC-F6). It returns the session MCP
-// URL, which is this type's only tool surface that leaves the pod.
-func validateApprovalGatedClientEnv() (string, error) {
-	if err := validateHelperEndpoint(os.Getenv("ANTHROPIC_BASE_URL"), helperProxyPort); err != nil {
-		return "", fmt.Errorf("approval-gated provider endpoint: %w", err)
-	}
-	if os.Getenv("ANTHROPIC_AUTH_TOKEN") != claudeProxyPlaceholderToken {
-		return "", errors.New("approval-gated workload must use the non-secret credential proxy placeholder")
-	}
-	if os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("CLAUDE_CODE_OAUTH_TOKEN") != "" {
-		return "", errors.New("approval-gated container must not receive direct credentials")
-	}
-	if os.Getenv("K3S_MCP_TOKEN") != "" {
-		// AC-F6 (2026-09-03 decision): this type has no runtime plugin
-		// bootstrap, so the token that bootstrap needed must not be here either.
-		return "", errors.New("approval-gated container must not receive the K3s MCP token")
-	}
-	mcpURL := os.Getenv(sessionMCPURLEnv)
-	if err := validateHelperEndpoint(mcpURL, sessionMCPPort); err != nil {
-		return "", fmt.Errorf("approval-gated session MCP endpoint: %w", err)
-	}
-	return mcpURL, nil
-}
-
-// validateHelperEndpoint checks one of the two in-cluster addresses the control
-// plane injects into an approval-gated workload pod. A loopback value would mean
+// validateHelperEndpoint checks one of the in-cluster helper pod addresses the
+// control plane injects into a gated workload pod. A loopback value would mean
 // the proxy or MCP had been folded back into this pod, which is exactly the
 // arrangement AC-F2 moved away from.
 func validateHelperEndpoint(raw string, wantPort int) error {

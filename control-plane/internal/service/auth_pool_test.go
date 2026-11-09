@@ -158,7 +158,6 @@ func TestCreateRejectsForeignEffort(t *testing.T) {
 		{Name: "x", WorkloadType: session.WorkloadTypeClaudeCode, ReasoningEffort: "minimal"},
 		{Name: "x", WorkloadType: session.WorkloadTypeShell, ReasoningEffort: "low"},
 		{Name: "x", WorkloadType: session.WorkloadTypeCodexChat, ReasoningEffort: "low"},
-		{Name: "x", WorkloadType: session.WorkloadTypeApprovalGated, ReasoningEffort: "low"},
 	} {
 		if _, err := h.svc.Create(context.Background(), req); !errors.Is(err, session.ErrInvalidInput) {
 			t.Errorf("%s effort %q: err = %v, want invalid input", req.WorkloadType, req.ReasoningEffort, err)

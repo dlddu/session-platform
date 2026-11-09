@@ -330,8 +330,8 @@ func TestK3SMCPProxySeedRoute(t *testing.T) {
 		t.Errorf("unconfigured refresh = %d %s", rec.Code, rec.Body.String())
 	}
 
-	// The approval-gated helper pod: a token for the session MCP's token mint,
-	// and no marketplace to stage.
+	// A helper pod with a token for the session MCP's token mint and no
+	// marketplace to stage (no type configures one today; the mode stays sound).
 	t.Setenv(miniMaxMarketplaceDirEnv, "")
 	tokenOnly, err := newK3SMCPProxyWithTransport("", "k3s-token", "", nil, http.DefaultTransport)
 	if err != nil {

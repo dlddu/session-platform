@@ -198,10 +198,10 @@ func TestClaudeCode_GatewayPodUnchanged(t *testing.T) {
 	}
 }
 
-func TestApprovalGated_RefusesEffort(t *testing.T) {
-	orch, _ := newReadyOrchestrator(t, k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, claudeCodeImage))
-	if _, err := orch.Start(context.Background(), "ag01", k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated, ReasoningEffort: "high"}); err == nil {
-		t.Fatal("approval-gated accepted a reasoning effort (AC-E8)")
+func TestMiniMaxCode_RefusesEffort(t *testing.T) {
+	orch, _ := newReadyOrchestrator(t, k8s.WithWorkloadImage(session.WorkloadTypeMiniMaxCode, miniMaxCodeImage))
+	if _, err := orch.Start(context.Background(), "mm01", k8s.WorkloadSpec{Type: session.WorkloadTypeMiniMaxCode, ReasoningEffort: "high"}); err == nil {
+		t.Fatal("minimax-code accepted a reasoning effort (AC-E8)")
 	}
 }
 

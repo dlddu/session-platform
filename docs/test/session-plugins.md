@@ -16,6 +16,6 @@
 
 ### 시나리오 2: 받을 수 없는 선택은 pod 없이 400이다
 - **사전 조건**: 아무 SUT
-- **실행 단계**: 다음 본문으로 각각 세션 생성 — `plugins: null` · `plugins: []` · `plugins: "development"` · 중복 · `a/b`·`dev@other`·`,`가 든 이름 · 17개 · `shell`(타입 생략 포함)에 목록 · `approval-gated`에 목록
+- **실행 단계**: 다음 본문으로 각각 세션 생성 — `plugins: null` · `plugins: []` · `plugins: "development"` · 중복 · `a/b`·`dev@other`·`,`가 든 이름 · 17개 · `shell`(타입 생략 포함)에 목록
 - **기대 결과**: 전부 `400`이고 세션 목록과 pod 수가 변하지 않는다
 - **검증 AC**: AC-L1

@@ -3,7 +3,7 @@
 #
 # Why this exists at all: kind's built-in `standard` class is rancher
 # local-path in nodePathMap mode, which rejects any access mode other than
-# ReadWriteOnce before it provisions anything. An approval-gated session's
+# ReadWriteOnce before it provisions anything. A gated session's
 # claim therefore never binds, its pod pair never leaves Pending, and session
 # creation does not return — which is exactly how the first attempt at AC-F5
 # turned this job red. Naming a class is not enough; the cluster has to have

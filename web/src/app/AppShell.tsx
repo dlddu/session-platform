@@ -4,6 +4,7 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { api } from "../api/client";
 import { LockIcon } from "./icons";
 import { ToastProvider } from "./Toast";
+import { learnWorkloadCatalog } from "./workloadKind";
 import "./shell.css";
 
 export const REPO_ACCESS_PATH = "/access";
@@ -21,6 +22,12 @@ export function useRepoAccessBadge(): SetRepoAccessBadge {
 export function AppShell() {
   const { pathname } = useLocation();
   const [pending, setPending] = useState<number | null>(null);
+
+  // 어느 타입이 승인 게이트 뒤에 있는지는 서버 카탈로그가 정한다(workloadKind.ts).
+  // 실패하면 출하 시점의 시드가 그대로 남는다.
+  useEffect(() => {
+    api.getConfig().then(learnWorkloadCatalog).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (pathname === REPO_ACCESS_PATH) return;

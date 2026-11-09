@@ -47,7 +47,7 @@ func TestParseWildcardGrantsEveryType(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 	lab, _ := cfg.Lookup("lab")
-	for _, w := range []session.WorkloadType{session.WorkloadTypeShell, session.WorkloadTypeClaudeCode, session.WorkloadTypeMiniMaxCode, session.WorkloadTypeCodexChat, session.WorkloadTypeCodexTask, session.WorkloadTypeApprovalGated} {
+	for _, w := range []session.WorkloadType{session.WorkloadTypeShell, session.WorkloadTypeClaudeCode, session.WorkloadTypeMiniMaxCode, session.WorkloadTypeCodexChat, session.WorkloadTypeCodexTask} {
 		if !lab.Allows(w) {
 			t.Errorf("wildcard tenant refuses %q", w)
 		}

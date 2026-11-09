@@ -75,9 +75,8 @@ func k3sMCPFixedHeaders(sessionID string) map[string]string {
 
 // k3sMCPProxy is the proxy's handler plus, when it holds a token and a
 // marketplace directory, the marketplace bootstrap the caller starts
-// (minimax_marketplace.go). Only minimax-code sets the directory; an
-// approval-gated helper pod runs this proxy for the session MCP's token mint
-// alone (AC-H5).
+// (minimax_marketplace.go). minimax-code sets the directory; without one the
+// proxy serves the session MCP's token mint alone (AC-H5).
 type k3sMCPProxy struct {
 	http.Handler
 	seeder *miniMaxMarketplaceSeeder

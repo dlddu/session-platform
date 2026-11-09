@@ -30,20 +30,14 @@ func listNetworkPolicies(t *testing.T, cs *fake.Clientset) map[string]networking
 	return byName
 }
 
-func startApprovalGated(t *testing.T, sessionID string) (*k8s.ClientOrchestrator, *fake.Clientset, podSet) {
-	t.Helper()
-	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))
-	started, err := orch.Start(context.Background(), sessionID,
-		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated})
-	if err != nil {
-		t.Fatalf("start approval-gated session: %v", err)
-	}
-	return orch, cs, newPodSet(t, listPods(t, cs), started)
-}
+// The boundary is the gate's (AC-F2) and is checked on minimax-code, today the
+// only gated type. Its helper pod runs one more proxy than the gate needs (the
+// K3s MCP proxy, AC-G6), so the helper port set here is the gate's two ports
+// plus that one; minimax_code_orchestrator_test.go pins why.
+var gatedHelperPorts = []int32{8091, 8092, 8093}
 
-func TestApprovalGatedSessionGetsEgressAllowlistAndHelperIngressPolicy(t *testing.T) {
-	_, cs, pods := startApprovalGated(t, "f2f2")
+func TestApprovalGateSessionGetsEgressAllowlistAndHelperIngressPolicy(t *testing.T) {
+	cs, pods := startMiniMax(t, "f2f2")
 	policies := listNetworkPolicies(t, cs)
 	if len(policies) != 2 {
 		t.Fatalf("network policies = %d, want 2 (workload egress + helper ingress)", len(policies))
@@ -87,7 +81,7 @@ func TestApprovalGatedSessionGetsEgressAllowlistAndHelperIngressPolicy(t *testin
 	if got := helper.To[0].PodSelector.MatchLabels; got[k8s.LabelSessionID] != "f2f2" || got[k8s.LabelPodRole] != k8s.PodRoleHelper {
 		t.Fatalf("helper egress peer selector = %v, want this session's helper pod", got)
 	}
-	assertPorts(t, "helper egress", helper.Ports, 8091, 8092)
+	assertPorts(t, "helper egress", helper.Ports, gatedHelperPorts...)
 
 	ingress, ok := policies[pods.helper.Name+"-helper-ingress"]
 	if !ok {
@@ -107,15 +101,15 @@ func TestApprovalGatedSessionGetsEgressAllowlistAndHelperIngressPolicy(t *testin
 		got[k8s.LabelPodRole] != k8s.PodRoleWorkload {
 		t.Fatalf("ingress peer selector = %v, want this session's workload pod", got)
 	}
-	assertPorts(t, "helper ingress", ingress.Spec.Ingress[0].Ports, 8091, 8092)
+	assertPorts(t, "helper ingress", ingress.Spec.Ingress[0].Ports, gatedHelperPorts...)
 }
 
 // The policies exist for the helper pod's sake, so they must not outlive it:
 // freeze, delete and a failed provisioning rollback all reclaim the pod, and an
 // owner reference is what makes every one of those paths reclaim the policies
 // too without the reclaim code having to know they exist.
-func TestApprovalGatedBoundaryPoliciesAreOwnedByTheirHelperPod(t *testing.T) {
-	_, cs, pods := startApprovalGated(t, "f2f3")
+func TestApprovalGateBoundaryPoliciesAreOwnedByTheirHelperPod(t *testing.T) {
+	cs, pods := startMiniMax(t, "f2f3")
 	if pods.helper.UID == "" {
 		t.Fatal("helper pod has no UID; the ownership assertion below would be vacuous")
 	}
@@ -134,9 +128,9 @@ func TestApprovalGatedBoundaryPoliciesAreOwnedByTheirHelperPod(t *testing.T) {
 	}
 }
 
-// Only this type moves a credential holder onto the pod network, so only this
-// type needs the boundary. A policy on a shell or claude-code session would be
-// a silent behaviour change for workloads whose egress was never restricted.
+// Only a gated type moves a credential holder onto the pod network, so only a
+// gated type needs the boundary. A policy on a shell or claude-code session would
+// be a silent behaviour change for workloads whose egress was never restricted.
 func TestOtherWorkloadTypesGetNoNetworkPolicies(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -164,16 +158,15 @@ func TestOtherWorkloadTypesGetNoNetworkPolicies(t *testing.T) {
 // incoming round would inherit a boundary that disappears when the outgoing
 // pod does.
 func TestRestoreRoundGetsItsOwnBoundaryPolicies(t *testing.T) {
-	orch, cs := newReadyOrchestrator(t,
-		k8s.WithWorkloadImage(session.WorkloadTypeApprovalGated, approvalGatedImage))
+	orch, cs := newMiniMaxOrchestrator(t)
 	if _, err := orch.Start(context.Background(), "f2f5",
-		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated}); err != nil {
-		t.Fatalf("start approval-gated session: %v", err)
+		k8s.WorkloadSpec{Type: gatedType}); err != nil {
+		t.Fatalf("start gated session: %v", err)
 	}
 	restored, err := orch.RestoreInto(context.Background(), "f2f5", "archive-ref",
-		k8s.WorkloadSpec{Type: session.WorkloadTypeApprovalGated})
+		k8s.WorkloadSpec{Type: gatedType})
 	if err != nil {
-		t.Fatalf("restore approval-gated session: %v", err)
+		t.Fatalf("restore gated session: %v", err)
 	}
 	if len(restored.Auxiliary) != 1 {
 		t.Fatalf("restored auxiliary pods = %d, want 1", len(restored.Auxiliary))

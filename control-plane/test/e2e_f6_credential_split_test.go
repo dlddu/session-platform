@@ -1,8 +1,9 @@
 //go:build e2e
 
-// 검증 시나리오: approval-gated-workload.md#시나리오 8
+// 검증 시나리오: approval-gate.md#시나리오 8
 //
-// AC-F6 (docs/prd/approval-gated-workload.md), asserted on the deployed SUT.
+// AC-F6 (docs/prd/approval-gate.md), asserted on the deployed SUT for a session of
+// the gated type (harness_approval_gate_test.go), whose provider pair is its own.
 // What this file buys, what it deliberately leaves out and why, and which
 // neighbour owns each thing it does not re-buy are all in docs/test/e2e.md —
 // this file's row of § "시나리오 ↔ e2e 파일 매핑" and its four rows of
@@ -41,7 +42,7 @@ const (
 
 	pluginTokenEnvVar = "K3S_MCP_TOKEN"
 
-	modelEnvVar             = "CLAUDE_CODE_MODEL"
+	modelEnvVar             = gatedModelEnvVar
 	controlPlaneLabel       = "app=control-plane"
 	controlPlaneStartupLine = "starting control plane"
 )
@@ -63,7 +64,7 @@ func newF6Session(t *testing.T, body map[string]any) (f6Session, bool) {
 	t.Helper()
 	resp, raw := do(t, http.MethodPost, "/api/v1/sessions", body)
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("create approval-gated session: status=%d body=%s", resp.StatusCode, raw)
+		t.Fatalf("create %s session: status=%d body=%s", gatedWorkloadType, resp.StatusCode, raw)
 	}
 	s := f6Decode(t, raw)
 	t.Cleanup(func() {
@@ -72,7 +73,7 @@ func newF6Session(t *testing.T, body map[string]any) (f6Session, bool) {
 		}
 	})
 	if s.Pod == "" {
-		t.Fatal("approval-gated session has no workload pod (AC-A2)")
+		t.Fatal("gated session has no workload pod (AC-A2)")
 	}
 	cs, cfg, ok := kubeClient(t)
 	if !ok {
@@ -95,8 +96,8 @@ func f6Decode(t *testing.T, raw []byte) f4Session {
 	if err := json.Unmarshal(raw, &s); err != nil {
 		t.Fatalf("decode session: %v body=%s", err, raw)
 	}
-	if s.WorkloadType != "approval-gated" {
-		t.Fatalf("workloadType=%q want approval-gated", s.WorkloadType)
+	if s.WorkloadType != gatedWorkloadType {
+		t.Fatalf("workloadType=%q want %s", s.WorkloadType, gatedWorkloadType)
 	}
 	return s
 }
@@ -275,7 +276,7 @@ func f6NoSecretRefTo(t *testing.T, c corev1.Container, secretName string, keys .
 		} else if ref := e6ConfigMapRef(env); ref != nil {
 			name, key = ref.Name, ref.Key
 		}
-		if name != secretName && name != configConfigMapName {
+		if name != secretName && name != configConfigMapName && name != gatedConfigConfigMap {
 			continue
 		}
 		if banned[key] {
@@ -322,9 +323,9 @@ func f6ControlPlaneLog(t *testing.T, cs kubernetes.Interface, ns string) string 
 	return all.String()
 }
 
-func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
+func TestApprovalGateCredentialSplit_OnTheDeployedSUT(t *testing.T) {
 	f, ok := newF6Session(t, map[string]any{
-		"name": uniqueName(t), "workloadType": "approval-gated",
+		"name": uniqueName(t), "workloadType": gatedWorkloadType,
 	})
 	if !ok {
 		return // the wire contract is asserted by create; the rest needs the cluster
@@ -358,19 +359,19 @@ func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
 	})
 
 	t.Run("ProviderCredentialsOnlyInTheProxyContainer", func(t *testing.T) {
-		f6RequireConfigMapRef(t, proxy, configConfigMapName, "ANTHROPIC_BASE_URL", "base-url", false)
-		f6RequireSecretRef(t, proxy, credentialsSecretName, "ANTHROPIC_AUTH_TOKEN", "auth-token", false)
-		f6RequireConfigMapRef(t, proxy, configConfigMapName, "ANTHROPIC_CA_CERT", "ca-cert", true)
+		f6RequireConfigMapRef(t, proxy, gatedConfigConfigMap, "ANTHROPIC_BASE_URL", "base-url", false)
+		f6RequireSecretRef(t, proxy, gatedCredentialsSecret, "ANTHROPIC_AUTH_TOKEN", "auth-token", false)
+		f6RequireConfigMapRef(t, proxy, gatedConfigConfigMap, "ANTHROPIC_CA_CERT", "ca-cert", true)
 
 		e6RequireAbsent(t, mcp, "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_CA_CERT")
-		f6NoSecretRefTo(t, mcp, credentialsSecretName, "base-url", "auth-token", "ca-cert")
+		f6NoSecretRefTo(t, mcp, gatedCredentialsSecret, "base-url", "auth-token", "ca-cert")
 
 		e6RequireLiteral(t, proxy, proxyPlacementEnv, helperPlacement)
 		e6RequireLiteral(t, proxy, proxyAgentAddrEnv, helperProxyBind)
 	})
 
 	t.Run("WorkloadContainerHoldsAddressesAndAPlaceholderOnly", func(t *testing.T) {
-		f6NoSecretRefTo(t, work, credentialsSecretName, "base-url", "auth-token", "ca-cert", "k3s-mcp-token")
+		f6NoSecretRefTo(t, work, gatedCredentialsSecret, "base-url", "auth-token", "ca-cert", "k3s-mcp-token")
 		e6RequireAbsent(t, work, pluginTokenEnvVar, "ANTHROPIC_CA_CERT")
 		e6RequireLiteral(t, work, "ANTHROPIC_AUTH_TOKEN", proxyPlaceholderToken)
 
@@ -390,7 +391,7 @@ func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
 
 	t.Run("NeitherSecretIsResolvedInTheWorkloadContainer", func(t *testing.T) {
 		callerToken := f.callerToken(t)
-		provider := f.secret(t, credentialsSecretName)
+		provider := f.secret(t, gatedCredentialsSecret)
 		token := provider["auth-token"]
 		if token == "" {
 			t.Fatal("the provider Secret has no auth-token; the split is untestable against this deployment")
@@ -437,23 +438,23 @@ func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
 	})
 
 	t.Run("PlatformDefaultModelResolvesFromTheOptionalKey", func(t *testing.T) {
-		f6RequireConfigMapRef(t, work, configConfigMapName, modelEnvVar, "model", true)
+		f6RequireConfigMapRef(t, work, gatedConfigConfigMap, modelEnvVar, "model", true)
 		e6RequireAbsent(t, mcp, modelEnvVar)
 		e6RequireAbsent(t, proxy, modelEnvVar)
 
-		want := f.configMap(t, configConfigMapName)["model"]
+		want := f.configMap(t, gatedConfigConfigMap)["model"]
 		if want == "" {
 			t.Skip("this deployment leaves the optional model key empty; the omission branch is unit-owned")
 		}
 		if got := strings.TrimSpace(f.sh(t, f.work.Name, workloadContainer,
-			`printf %s "$CLAUDE_CODE_MODEL"`)); got != want {
-			t.Fatalf("workload container resolved CLAUDE_CODE_MODEL=%q, want the ConfigMap's %q", got, want)
+			`printf %s "$`+modelEnvVar+`"`)); got != want {
+			t.Fatalf("workload container resolved %s=%q, want the ConfigMap's %q", modelEnvVar, got, want)
 		}
 	})
 
 	t.Run("NoTokenReachesTheSessionAPIOrTheControlPlaneLog", func(t *testing.T) {
 		callerToken := f.callerToken(t)
-		provider := f.secret(t, credentialsSecretName)
+		provider := f.secret(t, gatedCredentialsSecret)
 
 		lookupResp, lookup := do(t, http.MethodGet, "/api/v1/sessions/"+f.session.ID, nil)
 		if lookupResp.StatusCode != http.StatusOK {
@@ -493,7 +494,9 @@ func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
 		// A second control for the log alone: a platform-configured value it
 		// echoes on the startup line proves the log carries that material at
 		// all, so the absences below are a property of what the control plane
-		// logs rather than of a log that could never hold one.
+		// logs rather than of a log that could never hold one. The value it
+		// echoes is claude-code's default model, so the control reads that
+		// ConfigMap, not the gated type's.
 		if model := f.configMap(t, configConfigMapName)["model"]; model != "" {
 			if log := surfaces[len(surfaces)-1].text; !strings.Contains(log, model) {
 				t.Fatalf("the control plane log echoes no value resolved from %s; the absences below would say less than AC-F6 asks",
@@ -520,10 +523,10 @@ func TestApprovalGatedCredentialSplit_OnTheDeployedSUT(t *testing.T) {
 	})
 }
 
-func TestApprovalGatedCredentialSplit_ConcreteModelBeatsThePlatformDefault(t *testing.T) {
-	const concrete = "claude-e2e-alternate"
+func TestApprovalGateCredentialSplit_ConcreteModelBeatsThePlatformDefault(t *testing.T) {
+	const concrete = "MiniMax-e2e-alternate"
 	f, ok := newF6Session(t, map[string]any{
-		"name": uniqueName(t), "workloadType": "approval-gated", "model": concrete,
+		"name": uniqueName(t), "workloadType": gatedWorkloadType, "model": concrete,
 	})
 	if !ok {
 		return
@@ -534,23 +537,23 @@ func TestApprovalGatedCredentialSplit_ConcreteModelBeatsThePlatformDefault(t *te
 	e6RequireAbsent(t, f.proxy(t), modelEnvVar)
 
 	if got := strings.TrimSpace(f.sh(t, f.work.Name, workloadContainer,
-		`printf %s "$CLAUDE_CODE_MODEL"`)); got != concrete {
-		t.Fatalf("workload container resolved CLAUDE_CODE_MODEL=%q, want the literal %q — the Secret default must not win",
-			got, concrete)
+		`printf %s "$`+modelEnvVar+`"`)); got != concrete {
+		t.Fatalf("workload container resolved %s=%q, want the literal %q — the ConfigMap default must not win",
+			modelEnvVar, got, concrete)
 	}
 	if f.session.State != "active" {
 		t.Fatalf("state=%q want active", f.session.State)
 	}
 }
 
-func TestApprovalGatedCredentialSplit_PlacementCannotBeChosenByTheCreateRequest(t *testing.T) {
+func TestApprovalGateCredentialSplit_PlacementCannotBeChosenByTheCreateRequest(t *testing.T) {
 	for _, field := range []string{
 		"userId", "approvalGatewayUrl", "approvalGatewayApiKey", "authToken", "baseUrl",
 	} {
 		t.Run(field, func(t *testing.T) {
 			name := uniqueName(t)
 			resp, body := do(t, http.MethodPost, "/api/v1/sessions", map[string]any{
-				"name": name, "workloadType": "approval-gated", field: "caller-supplied-value",
+				"name": name, "workloadType": gatedWorkloadType, field: "caller-supplied-value",
 			})
 			if resp.StatusCode != http.StatusBadRequest {
 				t.Fatalf("create with %q: status=%d body=%s, want 400", field, resp.StatusCode, body)

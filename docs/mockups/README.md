@@ -24,16 +24,18 @@
 | [`index.html`](./index.html) | Sessions — control plane (세션 목록 대시보드 · 테넌트 필터·태그) | **`STP-session-list`** (보조: `STP-step-away`·`STP-switch-away`·`STP-freeze-confirm`) | V4 (보조 V1·V5·V8) | 미연결 — 인라인 임의 토큰 |
 | [`new-session.html`](./new-session.html) | New session (새 세션 생성 · 테넌트 선택) | **`STP-create-request`, `STP-workspace-entry`, `STP-workload-choice`**(타입 카드 6종 + 추론 수준 + 테넌트 선택) | V1, V5, **V8** | 미연결 — 인라인 임의 토큰 |
 | [`workspace.html`](./workspace.html) | Session workspace (활성 `shell` 세션 작업) | **`STP-isolated-work`, `STP-shell-attach`, `STP-command-input`, `STP-output-read`, `STP-shell-state-carry`, `STP-freeze-now`** | V1, V3, V2 | 미연결 — 인라인 임의 토큰 |
-| [`agent-workspace.html`](./agent-workspace.html) | Agent session workspace (활성 `claude-code` · `minimax-code` · `codex-chat` · `codex-task` 세션 작업) | **`STP-prompt-submit`, `STP-response-watch`, `STP-conversation-carry`, `STP-agent-freeze-resume`, `STP-freeze-now`** | V8, V3, V2 (보조 V1) | 미연결 — 인라인 임의 토큰 |
-| [`gated-workspace.html`](./gated-workspace.html) | Gated agent session workspace (활성 `approval-gated` 세션 작업 · 워크로드 파드 + 헬퍼 파드) | **`STP-gated-prompt-submit`, `STP-approval-wait`, `STP-gated-result`, `STP-freeze-now`** | V8, V3, V2 (보조 V1) | 미연결 — 인라인 임의 토큰 |
+| [`agent-workspace.html`](./agent-workspace.html) | Agent session workspace (활성 `claude-code` · `codex-chat` · `codex-task` 세션 작업) | **`STP-prompt-submit`, `STP-response-watch`, `STP-conversation-carry`, `STP-agent-freeze-resume`, `STP-freeze-now`** | V8, V3, V2 (보조 V1) | 미연결 — 인라인 임의 토큰 |
+| [`gated-workspace.html`](./gated-workspace.html) | Gated agent session workspace (승인 게이트를 쓰는 타입 — 지금은 `minimax-code` — 의 활성 세션 작업 · 워크로드 파드 + 헬퍼 파드) | **`STP-gated-prompt-submit`, `STP-approval-wait`, `STP-gated-result`, `STP-freeze-now`** | V8, V3, V2 (보조 V1) | 미연결 — 인라인 임의 토큰 |
 | [`restore.html`](./restore.html) | Resume from session archive (`shell` 아카이브 복원 — 2026-11-01 이전 CRIU) | **`STP-restore-resume`(`shell`)** (보조: `STP-auto-freeze`) | V3, V2 | 미연결 — 인라인 임의 토큰 |
 | [`repo-access.html`](./repo-access.html) | Repo access — control plane (비공개 레포 허용 목록 · 접근 요청 승인) | **`STP-access-review`, `STP-access-decide`** | V8, V1 | 미연결 — 인라인 임의 토큰 |
 
 > **타입별 작업 화면이 넷으로 갈립니다 (2026-08-08 → 2026-09-03 → 2026-11-01 → 2026-11-05)**: `workspace.html`은 `shell` 타입,
-> `agent-workspace.html`은 `claude-code` · `minimax-code` · `codex-chat` · `codex-task` 타입, `gated-workspace.html`은 `approval-gated` 타입 전용입니다.
-> 워크로드 타입은 여섯 종류(`shell` · `claude-code` · `minimax-code` · `codex-chat` · `codex-task` · `approval-gated`)지만 화면은 세 장입니다 —
-> `minimax-code`·`codex-chat`·`codex-task`는 `claude-code`와 실행 모델이 같아 `agent-workspace.html`을 함께 씁니다. `codex-chat`만의 차이는
+> `agent-workspace.html`은 게이트가 없는 에이전트 타입(`claude-code` · `codex-chat` · `codex-task`), `gated-workspace.html`은 승인 게이트를 쓰는 타입
+> (`../prd/approval-gate.md` 「적용 타입」 — 지금은 `minimax-code`) 전용입니다. 워크로드 타입은 다섯 종류(`shell` · `claude-code` · `minimax-code` ·
+> `codex-chat` · `codex-task`)지만 화면은 세 장입니다 — 에이전트 타입끼리는 실행 모델이 같고, 화면을 가르는 것은 타입 이름이 아니라 **게이트 여부**입니다
+> (구현은 `GET /config`의 `approvalGate`). `codex-chat`만의 차이는
 > 첫 프롬프트의 ChatGPT 기기 로그인 안내(입력 줄 아래 한 줄 + 콘솔의 notice 줄)와 Workload 패널의 자격 증명 행입니다.
+> *2026-11-05 전에는 `approval-gated` 타입이 따로 있었고 `minimax-code`는 `agent-workspace.html`을 썼다.*
 >
 > **Codex 분리와 추론 수준 (2026-11-07, AC-J1·AC-M1·AC-E8·AC-M4)**: 옛 `codex`는 `codex-chat`으로 이름이 바뀌었고 작업용 `codex-task`가
 > 새 카드로 붙었습니다. `new-session.html`은 모델 아래에 추론 수준(`Reasoning effort`, 첫 칸 CLI default = 필드 생략)을 두고,
@@ -84,7 +86,7 @@
 |-----------|------|-------------|------|------|
 | `web/src/screens/Sessions.tsx` | screen | `docs/mockups/index.html` | 세션 목록 대시보드. 상태별 카드 + workloadType 태그 + 테넌트 필터(테넌트가 설정된 운영자에게만) | ✅ 매핑 |
 | `web/src/screens/NewSession.tsx` | screen | `docs/mockups/new-session.html` | 생성 모달 · 테넌트 선택(또는 고정 한 줄) · 워크로드 타입 카드 · 프로비저닝 단계 뷰 | ✅ 매핑 |
-| `web/src/screens/Workspace.tsx` | screen | `docs/mockups/workspace.html`, `docs/mockups/agent-workspace.html`, `docs/mockups/gated-workspace.html` | 한 화면이 `workloadType`에 따라 여섯으로 갈린다(`shell` / `claude-code` / `minimax-code` / `codex-chat` / `codex-task` / `approval-gated`). `claude-code`·`minimax-code`·`codex-chat`·`codex-task`는 `agent-workspace.html`을 함께 쓴다 — 실행 모델이 같아 같은 SSE 루프를 쓰고 갈리는 것은 카피(와 codex 계열의 로그인 안내 한 줄)뿐이다. `approval-gated`는 같은 화면에서 갈리는 게 `Egress` 패널이다 | ✅ 매핑 (1:N) |
+| `web/src/screens/Workspace.tsx` | screen | `docs/mockups/workspace.html`, `docs/mockups/agent-workspace.html`, `docs/mockups/gated-workspace.html` | 한 화면이 `workloadType`에 따라 갈린다(`shell` / 게이트 없는 에이전트 / 게이트를 쓰는 에이전트). `claude-code`·`codex-chat`·`codex-task`는 `agent-workspace.html`을 함께 쓴다 — 실행 모델이 같아 같은 SSE 루프를 쓰고 갈리는 것은 카피(와 codex 계열의 로그인 안내 한 줄)뿐이다. 게이트를 쓰는 타입(`minimax-code`)은 `gated-workspace.html` — 같은 화면에서 갈리는 게 `Egress` 패널이다 | ✅ 매핑 (1:N) |
 | `web/src/screens/Restore.tsx` | screen | `docs/mockups/restore.html` | 체크포인트 복원 화면 | ✅ 매핑 |
 | `web/src/screens/RepoAccess.tsx` | screen | `docs/mockups/repo-access.html` | 레포 접근 화면(`/access`, AC-H2). 대기 요청 카드 · 허용 목록 표 · 추가 입력. 앱 자체 로그인은 없다(인그레스 forward-auth 가 문). mockup에 없는 비활성(`503`) 상태는 한 줄 안내로 그린다 | ✅ 매핑 |
 | `web/src/screens/RepoAccess.css` | style | `docs/mockups/repo-access.html` | 이 화면 전용 CSS. 공용 셸과 섞이지 않게 `.access` 아래로 범위를 묶었다 | ✅ 매핑 |
@@ -137,7 +139,7 @@ mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="pane
 | `web/src/screens/Restore.tsx` | `docs/mockups/restore.html` | — | Vitals · Lifecycle | — |
 
 `Workspace.tsx`는 한 파일이 세 mockup을 그리므로 **쌍마다 그 변형이 실제로 그리는 패널만** 선언합니다
-(`Workload` 패널은 `isAgent`일 때만, `Egress` 패널은 `approval-gated`일 때만 렌더). 게이트는 쌍별
+(`Workload` 패널은 `isAgent`일 때만, `Egress` 패널은 게이트를 쓰는 타입일 때만 렌더). 게이트는 쌍별
 선언의 **합집합이 파일에서 추출한 패널 전체와 같은지**까지 확인하므로, 한 쌍에서 빼는 방식으로
 차집합을 줄일 수 없습니다.
 
@@ -213,7 +215,7 @@ mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="pane
 
 | 단계 | 시각화 | mockup · 근거 |
 |------|:---:|------|
-| `STP-workload-choice` 작업 환경 선택 | ✅ | `new-session.html` **workload type 카드**(shell/claude-code/minimax-code/codex/approval-gated) + 테넌트 선택 + model 선택 + 불변성 안내 |
+| `STP-workload-choice` 작업 환경 선택 | ✅ | `new-session.html` **workload type 카드**(shell/claude-code/minimax-code/codex-chat/codex-task — `minimax-code`가 승인 게이트 타입) + 테넌트 선택 + model 선택 + 불변성 안내 |
 | `STP-prompt-submit` 프롬프트 전송 | ✅ | `agent-workspace.html` input-row `▸` 프롬프트 + passive output 연결 표시 (`codex`: 입력 줄 아래 로그인 안내 한 줄) |
 | `STP-response-watch` 응답 확인 | ✅ | `agent-workspace.html` term — 실행 중 자동 append + 재연결 가능한 커서 표기 (`codex`: 첫 턴의 기기 로그인 notice 줄) |
 | `STP-conversation-carry` 대화 이어짐 | ✅ | `agent-workspace.html` **Conversation 패널** — 턴 이력·작업 디렉터리·생성 파일 |
@@ -322,7 +324,7 @@ mockup의 `<div class="panel">` 안 `<h4>` 제목과, 구현의 `className="pane
 | `sessions` | `web/src/screens/Sessions.tsx` | [`index.html`](./index.html) | `JRN-idle-resume` · `JRN-manual-freeze` · `JRN-multi-session-switch` · `JRN-session-deletion` |
 | `workspace` | `web/src/screens/Workspace.tsx` | [`workspace.html`](./workspace.html) | `JRN-idle-resume` · `JRN-manual-freeze` · `JRN-multi-session-switch` · `JRN-session-creation` · `JRN-shell-interaction` |
 | `agent-workspace` | `web/src/screens/Workspace.tsx` (`claude-code` 변형) | [`agent-workspace.html`](./agent-workspace.html) | `JRN-agent-prompt-loop` |
-| `gated-workspace` | `web/src/screens/Workspace.tsx` (`approval-gated` 변형) | [`gated-workspace.html`](./gated-workspace.html) | `JRN-approval-gated-work` · `JRN-repo-access` |
+| `gated-workspace` | `web/src/screens/Workspace.tsx` (승인 게이트 타입 변형) | [`gated-workspace.html`](./gated-workspace.html) | `JRN-approval-gated-work` · `JRN-repo-access` |
 | `restore` | `web/src/screens/Restore.tsx` | [`restore.html`](./restore.html) | `JRN-idle-resume` |
 | `repo-access` | `web/src/screens/RepoAccess.tsx` | [`repo-access.html`](./repo-access.html) | `JRN-repo-access` |
 | `delete-session-dialog` | `web/src/app/DeleteSessionDialog.tsx` | — (대응 mockup 없음) | `JRN-session-deletion` |
@@ -453,6 +455,7 @@ DOM이 정본이고, 표와 DOM이 어긋나면 `tools/journey-prototype.test.mj
 
 - **2026-11-07** — **Codex 채팅용·작업용 분리와 추론 수준 (AC-J1·AC-M1·AC-E8·AC-M4)**: `codex`가 `codex-chat`으로 이름이 바뀌고 작업용 `codex-task`가 생기면서 세 mockup을 같은 PR의 SPA 구현과 함께 고쳤다. `new-session.html`은 `codex` 카드를 `codex-chat`으로 바꾸고 `codex-task` 카드(셸·파일 편집·네트워크, 로그인 슬롯)를 더했으며, 모델 아래에 `Reasoning effort` 세그먼트(첫 칸 CLI default = 필드 생략)를 `claude-code`·`codex-task`에서만 보이게 그렸다. `codex-task`의 고정 안내문은 로그인 슬롯(AC-N2) 문장이다(`claude-code`는 게이트웨이 모드에서도 같은 화면이라 안내문을 바꾸지 않았다). `index.html`·`agent-workspace.html`은 타입 리터럴만 `codex-chat`으로 바꿨다. 새 여정 단계 없이 기존 `STP-workload-choice`에 붙였다. mockup 수·매핑 표의 행·패널 구조·여정 커버리지 합계는 변하지 않았다.
 - **2026-11-05** — **`codex` 워크로드 타입과 테넌트 반영 (AC-J1·AC-J3 · AC-K2·AC-K4)**: 다섯 번째 워크로드 타입 `codex`(ChatGPT 구독으로 도는 Codex SDK 에이전트)와 ServiceAccount 기반 테넌트가 상류에 들어오면서 세 mockup을 같은 PR의 SPA 구현과 함께 고쳤다. `new-session.html`에 `codex` 타입 카드(문구는 제어면 카탈로그의 description 그대로)와 그 타입의 고정 안내문을 넣고, 타입 카드 앞에 테넌트 선택(기본 No tenant · 고르면 그 테넌트가 받은 타입 카드만 남음)과 테넌트 호출자용 고정 한 줄 `Tenant: <name>`을 쿼리 `?tenancy=`로 갈라 그렸다. `index.html`에는 테넌트 필터(All · 테넌트별 · No tenant, `?tenant=`로 공유)와 카드 푸터의 테넌트 태그, `codex → agent-workspace.html` 경로·`◇ codex` 태그·세션 카드 2건을 더했다. `agent-workspace.html`에는 `codex` 세션 1건을 더해 첫 턴의 ChatGPT 기기 로그인 notice 줄(인증 URL·일회용 코드·로그인 완료)과 입력 줄 아래 안내 한 줄 "First prompt signs this session in to ChatGPT — watch the transcript for a link and code."를 그리고, Workload 패널의 자격 증명 행을 이 타입에서만 `Login: ChatGPT · this session only`로 바꿨다. 테넌트가 하나도 없는 배포에서 두 화면은 이전과 같다. 새 여정 단계 없이 기존 `STP-workload-choice`·`STP-session-list`·`STP-prompt-submit`·`STP-response-watch`에 붙였다. mockup 수·매핑 표의 행·패널 구조·여정 커버리지 합계는 변하지 않았다.
+- **2026-11-05** — **`approval-gated` 타입 제거 — 게이트는 타입의 능력으로**: 승인 게이트가 독립 워크로드 타입이 아니라 타입이 갖추는 능력이 되면서(`../prd/approval-gate.md`, AC-F1 폐기) `new-session.html`의 `approval-gated` 카드를 걷고 `minimax-code` 카드를 게이트 타입으로(방패 아이콘·승인 카피·헬퍼 파드 안내문) 바꿨다. `index.html`·`new-session.html`에서 `minimax-code` 세션은 `gated-workspace.html`로 링크되고 `⏸ minimax-code` 태그를 단다. `gated-workspace.html`의 예시 세션·콘솔 라벨·`workloadType=` 줄은 `minimax-code`로, `repo-access.html`의 요청 카드 태그도 `minimax-code`로 고쳤다. 구현(`NewSession.tsx`·`SessionCard.tsx`·`workloadKind.ts`·`sessionRoutes.ts`)도 같은 변경에서 맞췄다. 패널 구조·mockup 수·매핑 행·여정 커버리지는 변하지 않았다.
 - **2026-11-04 (rct_20261104-0003)** — **`new-session.html` 고정 안내문을 워크로드별로 (구현이 아니라 목업을 맞춤)**: 안내문이 정적 단일 문장 "Workload type and model are fixed…"라 모델을 고르지 않는 `shell`·`minimax-code`에는 사실과 다른 말(model을 고른다)을 하고 있었다. 구현(`NewSession.tsx`)은 이미 플랫폼 사실대로 워크로드별 문장이고 `web/e2e/journeys/j6-model-selection.spec.ts`가 agent 문장을 단언하므로, 구현을 되돌리지 않고 `pickType`이 타입별로 같은 4개 문장을 고르게 했다. 허용목록 이탈이 아니라 목업·구현 카피 일치. 패널 구조·mockup 수·매핑·여정 커버리지는 변하지 않았다.
 - **2026-11-01 (2)** — **`minimax-code` 갈래를 목업에 반영 (AC-G1)**: 4번째 워크로드 타입 `minimax-code`(PRD `docs/prd/minimax-code-workload.md` AC-G1~G6)가 세션 목록과 에이전트 작업 화면에 반영되지 않은 채 있었다 — `agent-workspace.html`은 "minimax-code" 0건인 claude-code 고정값이었고(`claude-code session` · `Type: claude-code` · `workloadType=claude-code`), `index.html`의 `WS_PAGE`에 minimax-code가 없어 그 타입의 세션 카드가 쉘 화면(`workspace.html`)으로 링크되고 타입 태그도 찍히지 않았다. `agent-workspace.html`의 콘솔 라벨·입력 placeholder·Workload 패널의 `Type`·터미널의 `workloadType=` 줄을 세션의 타입에서 나오게 하고 minimax-code 세션 예시 1건을 추가했으며, `index.html`에 `minimax-code → agent-workspace.html` 경로와 `◇ minimax-code` 태그와 세션 카드 1건을 넣었다. claude-code 갈래의 입력 placeholder 문구(목업 "streams one claude -p response" 대 구현 "runs claude -p once in the session pod")는 2026-08-08 출처의 기존 차이라 목업 카피를 그대로 두고 이번 변경에서 닫지 않았다. mockup 수·매핑 표의 행·패널 구조·여정 커버리지는 변하지 않았다.
 - **2026-11-01** — **CRIU 퇴역 반영 (AC-D4 개정)**: 모든 타입의 동결이 파일시스템 아카이브로 통일되고 쉘 복원이 「홈 디렉터리 파일·출력 이력을 가진 새 쉘」로 바뀐 것을 화면 카피에 맞췄다. `restore.html`·`workspace.html`의 복원 오버레이·콘솔·Shell state 패널에서 CRIU·프로세스 트리 보존 서술을 걷고 보존되는 것/되지 않는 것을 나눠 적었으며, `index.html`·`new-session.html` 카드의 `checkpoint` 라벨을 `archive`로, `agent-workspace.html`·`gated-workspace.html`의 「no CRIU」 문구를 걷었다. 같은 변경에서 SPA(`Restore.tsx`·`SessionCard.tsx`)도 같은 어휘로 갱신했다. 패널 구조·mockup 수·매핑·여정 커버리지는 변하지 않았다.

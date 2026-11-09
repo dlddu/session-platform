@@ -83,6 +83,6 @@
 
 ### 시나리오 11: 추론 수준은 생성 시 정해지고 실행 argv까지 간다
 - **사전 조건**: SUT와 그 클러스터의 kube 접근
-- **실행 단계**: (a) `GET /config`를 읽는다 → (b) `reasoningEffort=max`로 `claude-code` 세션을 만든다 → (c) 같은 필드를 `shell`·`approval-gated`·`codex-chat` 생성에 준다
+- **실행 단계**: (a) `GET /config`를 읽는다 → (b) `reasoningEffort=max`로 `claude-code` 세션을 만든다 → (c) 같은 필드를 `shell`·`minimax-code`·`codex-chat` 생성에 준다
 - **기대 결과**: (a) `claude-code` 항목의 `reasoningEfforts`가 `low`·`medium`·`high`·`xhigh`·`max`이고, 받지 않는 타입은 빈 배열이다. (b) 조회 응답의 `reasoningEffort`가 `max`이고 주 컨테이너가 `CLAUDE_CODE_EFFORT=max`를 받는다. (c) 모두 400이고 파드가 없다
 - **검증 AC**: AC-E8

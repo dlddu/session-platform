@@ -39,7 +39,7 @@ func baseURL() string {
 }
 
 // Mirrors control-plane/api/openapi.yaml, declared here rather than imported for
-// the reason e2e_f1 gives.
+// the reason harness_approval_gate_test.go gives.
 type session struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`

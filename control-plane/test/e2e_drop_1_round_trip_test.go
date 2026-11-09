@@ -30,9 +30,9 @@ func TestDropRoundTrip_FilesLeaveAndReturnThroughTheSharedVolume(t *testing.T) {
 		t.Skip("no cluster access; the file is placed and read back through exec")
 	}
 	ns := sessionNamespace()
-	status, s := createTyped(t, map[string]any{"name": uniqueName(t), "workloadType": "approval-gated"})
+	status, s := createTyped(t, map[string]any{"name": uniqueName(t), "workloadType": gatedWorkloadType})
 	if status != http.StatusCreated {
-		t.Fatalf("create approval-gated session: status=%d", status)
+		t.Fatalf("create %s session: status=%d", gatedWorkloadType, status)
 	}
 	t.Cleanup(func() {
 		if resp, raw := do(t, http.MethodDelete, "/api/v1/sessions/"+s.ID, nil); resp.StatusCode >= 400 {

@@ -136,8 +136,8 @@ type claudeAuthConfig struct {
 	pool authPoolEnv
 	// subscriptionDefaultModel and subscriptionModels are claude-code's picker
 	// in subscription mode. They come from their own ConfigMap keys because the
-	// gateway's model ids (OpenRouter) mean nothing to a Claude subscription, and
-	// approval-gated keeps reading the gateway's keys (AC-E7).
+	// gateway's model ids (OpenRouter) mean nothing to a Claude subscription
+	// (AC-E7).
 	subscriptionDefaultModel string
 	subscriptionModels       []string
 }

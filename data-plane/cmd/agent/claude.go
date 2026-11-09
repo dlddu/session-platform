@@ -161,7 +161,8 @@ type claudeConfig struct {
 
 // toolSurface is what the platform lets a session's agent reach beyond its own
 // filesystem tools. Exactly one form is sanctioned per workload type (AC-E6 for
-// claude-code, AC-F6's 2026-09-03 decision for approval-gated).
+// claude-code; docs/prd/approval-gate.md AC-F6's 2026-09-03 decision for a
+// Claude CLI behind the approval gate, which no type selects today).
 type toolSurface struct {
 	// Plugins are the managed marketplace plugins to enable, as
 	// "<name>@dlddu-plugins" (AC-E6; the session's own selection, AC-L1).
@@ -1203,7 +1204,7 @@ func managedSettingsFor(tools toolSurface) claudeManagedSettings {
 
 // ensureClaudeManagedSettings installs this pod's tool surface into the session
 // HOME, or normalises the one an archive brought back. Normalising rather than
-// trusting the archive matters for approval-gated: the session MCP lives in a
+// trusting the archive matters behind the approval gate: the session MCP lives in a
 // helper pod whose address is new on every restore (AC-F4), so a restored HOME
 // always names the *previous* round's MCP.
 //

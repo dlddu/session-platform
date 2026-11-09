@@ -53,9 +53,6 @@ const (
 	// WorkloadTypeClaudeCode — the Claude Code CLI workload
 	// (docs/prd/claude-code-workload.md, AC-E2~E6).
 	WorkloadTypeClaudeCode WorkloadType = "claude-code"
-	// WorkloadTypeApprovalGated — the approval-gated agent workload
-	// (docs/prd/approval-gated-workload.md, AC-F1~F6).
-	WorkloadTypeApprovalGated WorkloadType = "approval-gated"
 
 	// PlatformDefaultModel is the stable session-level alias for the model
 	// selected by the platform's optional ConfigMap configuration (falling back to
@@ -76,7 +73,7 @@ var modelNamePattern = regexp.MustCompile(`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}
 // default. Use that on the way in and this to reject explicit garbage.
 func (w WorkloadType) Valid() bool {
 	switch w {
-	case WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeApprovalGated, WorkloadTypeMiniMaxCode,
+	case WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode,
 		WorkloadTypeCodexChat, WorkloadTypeCodexTask:
 		return true
 	default:
@@ -119,8 +116,8 @@ func NormalizeStoredWorkloadType(w WorkloadType) (WorkloadType, error) {
 // accepting a meaningless immutable setting. The agent types resolve an omitted
 // model to PlatformDefaultModel; concrete model identifiers are kept verbatim
 // after trimming and are passed to the CLI as a single argv element.
-// approval-gated shares this contract unchanged — AC-F1 states the model field
-// follows AC-E6 exactly, so the two agent types must not drift apart here.
+// minimax-code shares this contract unchanged (AC-G1 → AC-E6), so the agent
+// types must not drift apart here.
 func NormalizeModel(workload WorkloadType, model string) (string, error) {
 	model = strings.TrimSpace(model)
 	switch workload {
@@ -129,7 +126,7 @@ func NormalizeModel(workload WorkloadType, model string) (string, error) {
 			return "", ErrInvalidInput
 		}
 		return "", nil
-	case WorkloadTypeClaudeCode, WorkloadTypeApprovalGated, WorkloadTypeMiniMaxCode,
+	case WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode,
 		WorkloadTypeCodexChat, WorkloadTypeCodexTask:
 		if model == "" {
 			return PlatformDefaultModel, nil
@@ -158,7 +155,7 @@ var pluginNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 // platform-default plugins, exactly as before the field existed. A non-nil list
 // replaces that default outright, so it must be non-empty, free of duplicates
 // and made of valid names. Only the types whose agent loads marketplace plugins
-// take one; shell and approval-gated reject it rather than storing a setting
+// take one; shell rejects it rather than storing a setting
 // nothing would honour. The returned slice is a copy in request order.
 func NormalizePlugins(workload WorkloadType, plugins []string) ([]string, error) {
 	if plugins == nil {
@@ -269,10 +266,9 @@ type Session struct {
 	// NormalizeWorkloadType.
 	WorkloadType WorkloadType `json:"workloadType,omitempty"`
 	// Model is meaningful only for the agent workload types (claude-code and
-	// approval-gated) and, like the workload type, is fixed at creation.
+	// minimax-code) and, like the workload type, is fixed at creation.
 	// "platform-default" delegates selection to the platform-managed ConfigMap and
-	// then the Claude Code installation fallback (AC-E6, reused verbatim by
-	// AC-F1).
+	// then the CLI's installation fallback (AC-E6, reused verbatim by AC-G1).
 	Model string `json:"model,omitempty"`
 	// Plugins is the session's marketplace plugin selection (AC-L1), fixed at
 	// creation and carried across snapshot/restore. Absent means the workload
@@ -297,8 +293,8 @@ type Session struct {
 	// AC-F4's helper pod is the first of them). They are session-exclusive,
 	// share the workload pod's lifetime, and are reclaimed with it (AC-A3) —
 	// so this is empty exactly when Pod is. shell and claude-code provision
-	// none, leaving it absent from the wire; approval-gated provisions exactly
-	// one — its helper pod.
+	// none, leaving it absent from the wire; a type behind the approval gate
+	// (HasApprovalGate) provisions exactly one — its helper pod.
 	AuxiliaryPods []string    `json:"auxiliaryPods,omitempty"`
 	CreatedAt     time.Time   `json:"createdAt"`
 	LastAccess    time.Time   `json:"lastAccess"`           // last read/write; drives idle/snapshot timing (AC-B1)

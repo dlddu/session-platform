@@ -9,8 +9,9 @@ info:
     uniform "ensure active then serve": read, write and switch promote
     idle->active (AC-C1) or restore snapshot->active (AC-B2) before serving.
     A session picks a workload type at creation (AC-E1): `shell` (the default),
-    `claude-code`, `approval-gated`, `minimax-code`, `codex-chat` or `codex-task`
+    `claude-code`, `minimax-code`, `codex-chat` or `codex-task`
     (`codex-chat` was `codex` before 2026-11-07). The type is immutable for the session's lifetime — no
+
     endpoint changes it, and a restore keeps it — so switching workloads means
     creating a new session. For `shell`, write injects the payload into the PTY
     stdin (AC-D2); for `claude-code` (and the agent types that reuse its
@@ -113,6 +114,7 @@ paths:
                     takesModel: false
                     takesPlugins: false
                     input: terminal
+                    approvalGate: false
                     defaultModel: null
                     models: []
                     reasoningEfforts: []
@@ -122,6 +124,7 @@ paths:
                     takesModel: true
                     takesPlugins: true
                     input: prompt
+                    approvalGate: false
                     defaultModel: "~anthropic/claude-opus-latest"
                     models: [sonnet, opus]
                     reasoningEfforts: [low, medium, high, xhigh, max]
@@ -728,7 +731,7 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
     RequestEntityTooLarge:
-      description: The JSON wire body exceeds 8 MiB, or an agent workload prompt (claude-code, approval-gated, minimax-code) exceeds the 1 MiB decoded payload limit
+      description: The JSON wire body exceeds 8 MiB, or an agent workload prompt (claude-code, minimax-code) exceeds the 1 MiB decoded payload limit
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -811,7 +814,8 @@ components:
     WorkloadTypeConfig:
       type: object
       additionalProperties: false
-      required: [type, label, description, takesModel, takesPlugins, input, defaultModel, models, reasoningEfforts]
+      required: [type, label, description, takesModel, takesPlugins, input, approvalGate, defaultModel, models, reasoningEfforts]
+
       properties:
         type:
           type: string
@@ -835,6 +839,15 @@ components:
             How the session is driven. `terminal` writes keystrokes to a PTY and
             reads a terminal screen; `prompt` writes whole prompts to a serial
             agent queue and reads its text stream.
+        approvalGate:
+          type: boolean
+          description: >
+            Whether sessions of this type run behind the approval gate
+            (docs/prd/approval-gate.md AC-F2~F6): a session-scoped helper pod,
+            workload egress confined to it, and a human decision before every
+            external tool call. A capability of the type, not a type of its
+            own — clients render the gated workspace from this flag rather
+            than from a type name.
         defaultModel:
           type: string
           nullable: true
@@ -898,17 +911,17 @@ components:
       enum: [active, idle, snapshot]
     WorkloadType:
       type: string
-      enum: [shell, claude-code, approval-gated, minimax-code, codex-chat, codex-task]
+      enum: [shell, claude-code, minimax-code, codex-chat, codex-task]
+
       default: shell
       description: >
-        Which data plane workload the session runs (AC-E1/AC-F1). Fixed at
+        Which data plane workload the session runs (AC-E1). Fixed at
         creation and immutable afterwards. `shell` is an interactive PTY shell
         (AC-D1~D5); `claude-code` is the Claude Code CLI workload (AC-E2~E6);
-        `approval-gated` is the same agent execution model behind a human
-        approval gate, provisioned as a workload pod plus a session-scoped
-        helper pod (AC-F1~F6); `minimax-code` is the MiniMax Code CLI
-        (`mcode`) on that same execution model, with its own provider Secret and ConfigMap
-        behind the same credential proxy (AC-G1~G4); `codex-chat` runs the Codex SDK on
+        `minimax-code` is the MiniMax Code CLI (`mcode`) on that same
+        execution model, with its own provider Secret and ConfigMap, behind
+        the approval gate — a workload pod plus a session-scoped helper pod
+        (AC-G1~G6, docs/prd/approval-gate.md AC-F2~F6); `codex-chat` runs the Codex SDK on
         the same execution model, signs each session in to ChatGPT with a
         device code on its first prompt, and is limited to conversation,
         platform plugin skills and the K3s MCP (AC-J1~J7). Its old name `codex`
@@ -916,6 +929,7 @@ components:
         `codex-task` runs the same SDK with a shell, files and network like
         `claude-code`, signed in through a login slot of the `codex-task` auth
         pool (AC-M1~M4, AC-N1~N5). Each non-default type requires the control plane
+
         to have an image configured for it, and creating a session of a type
         with no configured image fails rather than falling back to a shell.
     Checkpoint:
@@ -943,8 +957,9 @@ components:
           type: string
           description: >
             Immutable model identifier for the agent workload types. Present
-            for `claude-code`, `approval-gated`, `minimax-code`, `codex-chat` and `codex-task`, which share
-            this contract (AC-E6, reused by AC-F1 and AC-G1); omitted at creation resolves to
+            for `claude-code`, `minimax-code`, `codex-chat` and `codex-task`, which share
+            this contract (AC-E6, reused by AC-G1); omitted at creation resolves to
+
             `platform-default`.
             Whenever the primary container starts, including a restart, that
             alias resolves through the optional ConfigMap model and then the CLI
@@ -975,9 +990,10 @@ components:
             Session-scoped pods that serve the workload pod without running the
             workload themselves (AC-A2's auxiliary-pod clause). They share the
             workload pod's lifetime and are reclaimed with it, so this is absent
-            exactly when `pod` is. `shell`, `claude-code`, `minimax-code`, `codex-chat` and `codex-task`
-            sessions provision none; an `approval-gated` session lists its one helper pod here
-            (AC-F4).
+            exactly when `pod` is. `shell`, `claude-code`, `codex-chat` and `codex-task`
+            sessions provision none; a session of a type behind the approval gate
+            (`minimax-code`) lists its one helper pod here (AC-F4).
+
         createdAt: { type: string, format: date-time }
         lastAccess: { type: string, format: date-time }
         checkpoint: { $ref: "#/components/schemas/Checkpoint" }
@@ -1003,7 +1019,8 @@ components:
           pattern: '^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$'
           description: >
             Model for this session. Valid when workloadType is `claude-code`,
-            `approval-gated`, `minimax-code`, `codex-chat` or `codex-task`; omitted resolves to `platform-default`. A concrete
+            `minimax-code`, `codex-chat` or `codex-task`; omitted resolves to `platform-default`. A concrete
+
             value is passed literally and takes precedence over the platform
             ConfigMap default. The catalog returned by GET /config is advisory,
             not an allowlist. Credentials are never accepted in this request.
@@ -1034,7 +1051,7 @@ components:
             `mcp-servers`), leaves it without K3s tools too. The selection is
             installed again on every restore: a `claude-code` session whose
             plugin has since left the marketplace cannot be restored. `null`, an empty list, a duplicate or an
-            invalid name → 400, as is a list on `shell` or `approval-gated`.
+            invalid name → 400, as is a list on `shell`.
         reasoningEffort:
           type: string
           minLength: 1
@@ -1059,7 +1076,8 @@ components:
           type: string
           description: >
             Raw workload input. Agent workload writes (claude-code,
-            approval-gated, minimax-code, codex-chat, codex-task) are limited to 1 MiB of UTF-8 bytes
+            minimax-code, codex-chat, codex-task) are limited to 1 MiB of UTF-8 bytes
+
             per prompt; larger writes return 413.
     ReadRequest:
       type: object

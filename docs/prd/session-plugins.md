@@ -20,7 +20,7 @@
 - **설명**: `POST /sessions`는 선택 필드 `plugins`(문자열 배열)를 받는다.
   - **생략**이면 지금과 같다 — 세션은 타입 기본 플러그인을 받고, 응답·저장 레코드에 `plugins`가 없다.
   - **지정**하면 그 목록이 그 세션이 받는 플러그인의 **전부**다 — 타입 기본값에 더하지 않고 **대체**한다(2026-11-07 사용자 결정). 기본 플러그인도 계속 쓰려면 목록에 함께 적는다. 예: `claude-code`에 `["development"]`만 주면 `session-platform` 플러그인은 설치되지 않는다.
-  - 받는 타입은 마켓플레이스 플러그인을 싣는 `claude-code`·`codex-chat`·`codex-task`·`minimax-code`다. `shell`과 `approval-gated`(AC-F6 — 외부 자격 증명·플러그인 부트스트랩이 없다)에 목록을 주면 **400**이다. `GET /config`의 `workloadTypes[].takesPlugins`가 이를 알린다.
+  - 받는 타입은 마켓플레이스 플러그인을 싣는 `claude-code`·`codex-chat`·`codex-task`·`minimax-code`다. `shell`에 목록을 주면 **400**이다 *(2026-11-05 제거된 `approval-gated`도 그랬다 — AC-F6)*. `GET /config`의 `workloadTypes[].takesPlugins`가 이를 알린다.
   - 목록은 1~16개, 중복 없이, 각 이름은 `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`다. `null`·빈 배열·배열이 아닌 값·중복·형식 위반은 pod를 만들기 **전에** **400**이다. 이름이 마켓플레이스에 실제로 있는지는 control plane이 보지 않는다(아래 AC-L1 설치 지점).
   - 선택은 모델(AC-E6)처럼 **불변 메타데이터**다 — 세션 레코드에 저장되고, 동결·복원을 건너 유지되며, 복원 pod는 타입 기본값이 아니라 그 세션의 선택으로 뜬다. 기존 세션 경로로 바꿀 수 없다.
   - **설치 지점**은 타입마다 그 타입이 이미 플러그인을 받던 자리 하나다 — `claude-code`는 워크로드 컨테이너의 `CLAUDE_CODE_PLUGINS`(진입점이 각 이름을 `<이름>@dlddu-plugins`로 설치하고, 에이전트가 관리형 설정에서 같은 목록만 켠다), `codex-chat`·`codex-task`는 세션 파드 `k3s-mcp-proxy` 사이드카의 시더(`CODEX_PLUGINS` 대신), `minimax-code`는 헬퍼 파드 `k3s-mcp-proxy`의 시더. 선택을 고르지 않은 세션에는 그 변수가 아예 없다.
