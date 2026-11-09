@@ -243,7 +243,7 @@ spec:
             - name: CLAUDE_CODE_AUTH_MODE
               value: "subscription"
             - name: CLAUDE_CODE_AUTH_SLOTS
-              value: "2"
+              value: "5"
             # 두 풀의 슬롯 PVC 스토리지 클래스(AC-N1). 이 클러스터에는 기본 StorageClass 가 없어
             # 비우면 PVC 가 Pending 에 머문다. efs 는 RWX 라 세션이 노드에 묶이지 않는다. efs 는
             # PVC 이름으로 경로·access point 를 정하므로(`/${.PVC.name}`, reuseAccessPoint) PVC 이름에
