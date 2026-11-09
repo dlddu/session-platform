@@ -58,6 +58,9 @@ func TestCodex_OnePodWithLoopbackK3SProxy(t *testing.T) {
 	if v, _ := envValue(agent, k8s.K3SMCPProxyURLEnvVar); v != "http://127.0.0.1:8093" {
 		t.Errorf("agent %s = %q, want the loopback sidecar", k8s.K3SMCPProxyURLEnvVar, v)
 	}
+	if v, _ := envValue(agent, k8s.SchedulerMCPURLEnvVar); v != "http://127.0.0.1:8093/scheduler/mcp" {
+		t.Errorf("agent %s = %q, want the sidecar's scheduler MCP (AC-P1)", k8s.SchedulerMCPURLEnvVar, v)
+	}
 	for _, e := range agent.Env {
 		if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
 			t.Errorf("agent env %s reads Secret %s: the workload container must hold no platform credential (AC-J6)", e.Name, e.ValueFrom.SecretKeyRef.Name)
@@ -69,12 +72,13 @@ func TestCodex_OnePodWithLoopbackK3SProxy(t *testing.T) {
 	}
 	proxy := container(t, pod, k8s.CodexK3SMCPProxyContainerName)
 	want := map[string]string{
-		"DATA_PLANE_WORKLOAD":        "k3s-mcp-proxy",
-		"DATA_PLANE_AGENT_ADDR":      "127.0.0.1:8093",
-		"DATA_PLANE_PROXY_PLACEMENT": "sidecar",
-		"SESSION_ID":                 "cx01",
-		"MINIMAX_CODE_PLUGINS":       "session-platform,extra",
-		"K3S_MCP_TOOL_POLICY":        "allow-all",
+		"DATA_PLANE_WORKLOAD":         "k3s-mcp-proxy",
+		"DATA_PLANE_AGENT_ADDR":       "127.0.0.1:8093",
+		"DATA_PLANE_PROXY_PLACEMENT":  "sidecar",
+		"SESSION_ID":                  "cx01",
+		"MINIMAX_CODE_PLUGINS":        "session-platform,extra",
+		"K3S_MCP_TOOL_POLICY":         "allow-all",
+		"SESSION_SCHEDULER_AGENT_URL": "http://127.0.0.1:8090",
 	}
 	for name, value := range want {
 		if got, _ := envValue(proxy, name); got != value {

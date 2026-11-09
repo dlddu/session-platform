@@ -320,6 +320,42 @@ func (c *HTTPClient) AwaitingApproval(ctx context.Context, pod string) (bool, er
 	return out.Awaiting, nil
 }
 
+// ActiveSchedules reports how many schedules the pod's scheduler holds
+// (docs/prd/session-scheduler.md AC-P3). Like AwaitingApproval it is an
+// optional capability, asked only on the idle reaper path.
+func (c *HTTPClient) ActiveSchedules(ctx context.Context, pod string) (int, error) {
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL(ip)+"/scheduler", nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("read scheduler state from session pod %s: %w", pod, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return 0, fmt.Errorf(
+			"read scheduler state from session pod %s: agent returned %d: %s",
+			pod, resp.StatusCode, strings.TrimSpace(string(body)),
+		)
+	}
+	var out struct {
+		Active *int `json:"active"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, fmt.Errorf("decode scheduler state from session pod %s: %w", pod, err)
+	}
+	if out.Active == nil {
+		return 0, fmt.Errorf("decode scheduler state from session pod %s: no active count", pod)
+	}
+	return *out.Active, nil
+}
+
 // AuthSlotSignedIn reports whether the pod's auth pool slot holds a login
 // (AC-N4). Like AwaitingApproval it is an optional capability, not part of
 // Client: only the release path asks, and only to rank the slot for the next
