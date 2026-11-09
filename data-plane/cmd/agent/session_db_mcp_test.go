@@ -61,8 +61,7 @@ func newTestSessionDB(t *testing.T) (*sessionDB, http.Handler) {
 	return db, http.HandlerFunc(db.serveMCP)
 }
 
-// AC-N6: the two raw tools are the whole surface, and a write is readable
-// back through the other one.
+// AC-N6: raw tools remain available alongside the task ledger.
 func TestSessionDBMCP_RawExecThenRawQuery(t *testing.T) {
 	db, h := newTestSessionDB(t)
 
@@ -75,8 +74,8 @@ func TestSessionDBMCP_RawExecThenRawQuery(t *testing.T) {
 	for _, tool := range list.Result.(map[string]any)["tools"].([]any) {
 		names = append(names, tool.(map[string]any)["name"].(string))
 	}
-	if strings.Join(names, ",") != "raw_query,raw_exec" {
-		t.Fatalf("tools = %v, want raw_query and raw_exec only", names)
+	if strings.Join(names, ",") != "raw_query,raw_exec,ledger_get,ledger_list,ledger_put,ledger_delete" {
+		t.Fatalf("tools = %v, want raw and ledger tools", names)
 	}
 
 	if out, isErr := sessionDBTool(t, h, "raw_exec",

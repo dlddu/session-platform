@@ -202,3 +202,67 @@ func TestRefreshPluginsCodexTask(t *testing.T) {
 		t.Fatalf("codex-task refresh: %v", err)
 	}
 }
+
+func TestCodexChatRetainsDatabaseSlotAcrossSnapshot(t *testing.T) {
+	ctx := context.Background()
+	stub := k8s.NewStubOrchestrator("sessions")
+	ckpt := archive.NewStubCheckpointer(true)
+	pool := k8s.NewMemoryAuthPool(1)
+	st := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
+	svc := service.New(stub, st, ckpt, agent.NewStubClient(), service.WithWorkloadCheckpointer(session.WorkloadTypeCodexChat, ckpt), service.WithAuthPool(session.WorkloadTypeCodexChat, pool))
+	a, err := svc.Create(ctx, session.CreateRequest{Name: "parent", WorkloadType: session.WorkloadTypeCodexChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Snapshot(ctx, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if pool.Holder(0) != a.ID {
+		t.Fatal("snapshot released database slot")
+	}
+	if _, err = svc.Create(ctx, session.CreateRequest{Name: "other", WorkloadType: session.WorkloadTypeCodexChat}); !errors.Is(err, session.ErrAuthPoolExhausted) {
+		t.Fatal("frozen DB slot reclaimed", err)
+	}
+	if _, err = svc.Restore(ctx, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if slot := stub.SpecFor(a.ID).AuthSlot; slot == nil || *slot != 0 {
+		t.Fatal("restore changed DB slot")
+	}
+	if _, err = svc.Snapshot(ctx, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Terminate(ctx, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if pool.Holder(0) != "" {
+		t.Fatal("delete did not release slot")
+	}
+}
+
+type failingRestoreChat struct{ *k8s.StubOrchestrator }
+
+func (failingRestoreChat) RestoreInto(context.Context, string, string, k8s.WorkloadSpec) (k8s.SessionPods, error) {
+	return k8s.SessionPods{}, errors.New("restore failed")
+}
+func TestCodexChatFailedRestoreKeepsDatabaseSlot(t *testing.T) {
+	ctx := context.Background()
+	stub := k8s.NewStubOrchestrator("sessions")
+	ckpt := archive.NewStubCheckpointer(true)
+	pool := k8s.NewMemoryAuthPool(1)
+	st := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
+	svc := service.New(failingRestoreChat{stub}, st, ckpt, agent.NewStubClient(), service.WithWorkloadCheckpointer(session.WorkloadTypeCodexChat, ckpt), service.WithAuthPool(session.WorkloadTypeCodexChat, pool))
+	a, err := svc.Create(ctx, session.CreateRequest{Name: "parent", WorkloadType: session.WorkloadTypeCodexChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Snapshot(ctx, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.Restore(ctx, a.ID); err == nil {
+		t.Fatal("expected restore failure")
+	}
+	if pool.Holder(0) != a.ID {
+		t.Fatal("failed restore released DB slot")
+	}
+}

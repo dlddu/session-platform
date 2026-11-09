@@ -580,7 +580,7 @@ func (s *Service) snapshotWithTransactionLocked(
 		return nil, err
 	}
 	frozen, err := s.finalizeSnapshotLocked(ctx, sess, generation)
-	if err == nil {
+	if err == nil && frozen.WorkloadType != session.WorkloadTypeCodexChat {
 		s.releaseAuthSlotBestEffort(frozen.WorkloadType, frozen.ID, signedIn)
 	}
 	return frozen, err
@@ -676,7 +676,7 @@ func (s *Service) recoverSnapshotLocked(ctx context.Context, sess *session.Sessi
 			return nil, err
 		}
 		frozen, err := s.finalizeSnapshotLocked(ctx, sess, token)
-		if err == nil {
+		if err == nil && frozen.WorkloadType != session.WorkloadTypeCodexChat {
 			// The pod may already be gone, so the login state stays unknown.
 			s.releaseAuthSlotBestEffort(frozen.WorkloadType, frozen.ID, nil)
 		}
@@ -841,14 +841,14 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 		return nil, err
 	}
 	spec := k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins, ReasoningEffort: effort}
-	// Any free slot will do: the conversation is in the archive, the login in
-	// the slot (AC-N3). A full pool leaves the session frozen.
+	// codex-chat retains its DB slot across snapshots; other types can use
+	// any free login slot (AC-N3). A full pool leaves the session frozen.
 	if spec.AuthSlot, err = s.acquireAuthSlot(ctx, workload, id); err != nil {
 		return nil, err
 	}
 	keepSlot := false
 	defer func() {
-		if !keepSlot {
+		if !keepSlot && workload != session.WorkloadTypeCodexChat {
 			s.releaseAuthSlotBestEffort(workload, id, nil)
 		}
 	}()
@@ -1125,7 +1125,7 @@ func (s *Service) acquireAuthSlot(ctx context.Context, workload session.Workload
 }
 
 // staleAuthHolder is AC-N2's holder half of the reclaim rule: a holder whose
-// record is gone or frozen runs no pod. The pool adds the age half.
+// record is gone or frozen without a DB can be reclaimed after the age gate.
 func (s *Service) staleAuthHolder(ctx context.Context, holder string) (bool, error) {
 	sess, err := s.store.Get(ctx, holder)
 	if errors.Is(err, session.ErrNotFound) {
@@ -1134,7 +1134,7 @@ func (s *Service) staleAuthHolder(ctx context.Context, holder string) (bool, err
 	if err != nil {
 		return false, err
 	}
-	return sess.State == session.StateSnapshot && sess.Pod == "", nil
+	return sess.WorkloadType != session.WorkloadTypeCodexChat && sess.State == session.StateSnapshot && sess.Pod == "", nil
 }
 
 // authSlotSignedIn asks the session's pod whether its slot holds a login, so

@@ -715,7 +715,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		return nil, err
 	}
 	volumes = append(volumes, slotVolumes...)
-	initContainers, err := attachSessionDB(&container, sidecars, workloadType, image)
+	initContainers, err := attachSessionDB(&container, sidecars, workloadType, image, sessionID)
 	if err != nil {
 		return nil, err
 	}
