@@ -236,7 +236,7 @@ spec:
             # 인증 풀 크기(AC-N1). 슬롯 i 는 Lease `codex-task-auth-<i>` 와 PVC `<네임스페이스>-codex-task-auth-<i>` 이고 control plane 이
             # 처음 임대할 때 만들며 지우지 않는다. 0 이면 이 타입은 /config 에 나오지 않는다.
             - name: CODEX_TASK_AUTH_SLOTS
-              value: "2"
+              value: "5"
             # claude-code 공급자 인증 모드(AC-E7). subscription 은 풀 `claude-code` 의 슬롯
             # (PVC `<네임스페이스>-claude-code-auth-<i>` 의 .credentials.json)으로 Claude 구독에 직접 붙고 credential-proxy
             # 사이드카를 두지 않는다. gateway 는 AC-E6 의 base-url·auth-token 경로(kind e2e 가 쓴다).

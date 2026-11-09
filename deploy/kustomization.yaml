@@ -118,7 +118,8 @@ patches:
   # SHELL_ARCHIVE_ENABLED, env/3 is DATA_PLANE_CLAUDE_CODE_IMAGE, env/12 is
   # DATA_PLANE_MINIMAX_CODE_IMAGE, env/14 is MINIMAX_CODE_ARCHIVE_ENABLED,
   # env/16 is DROP_URL, env/17 is DATA_PLANE_CODEX_IMAGE, env/22 is
-  # DATA_PLANE_CODEX_TASK_IMAGE, env/27 is CLAUDE_CODE_AUTH_MODE, env/30 is
+  # DATA_PLANE_CODEX_TASK_IMAGE, env/26 is CODEX_TASK_AUTH_SLOTS, env/27 is
+  # CLAUDE_CODE_AUTH_MODE, env/30 is
   # CODEX_TASK_AUTH_STORAGE_CLASS, env/33 is CODEX_CHAT_AUTH_SLOTS and env/34 is
   # CODEX_CHAT_AUTH_STORAGE_CLASS. Each replace past env/3 is preceded by a `test`
   # of the entry's name, so a reordered base fails the build instead of
@@ -219,6 +220,14 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/env/22/value
         value: session-platform/data-plane:dev
+      # codex-task 풀 크기는 운영(base)과 따로 2로 고정한다(AC-N1) — 풀 고갈 시나리오가 슬롯 수만큼
+      # 세션 파드를 띄우므로 kind 를 가볍게 둔다. env/26 가 CODEX_TASK_AUTH_SLOTS.
+      - op: test
+        path: /spec/template/spec/containers/0/env/26/name
+        value: CODEX_TASK_AUTH_SLOTS
+      - op: replace
+        path: /spec/template/spec/containers/0/env/26/value
+        value: "2"
       # claude-code 는 이 SUT 에서 게이트웨이 모드다(AC-E7) — 기존 claude-code e2e 는 공급자 대역
       # (deploy/e2e-anthropic-fake.yaml)을 credential-proxy 로 부른다. 실 구독 로그인은 e2e 밖이다.
       # env/27 가 CLAUDE_CODE_AUTH_MODE.
