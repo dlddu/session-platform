@@ -63,7 +63,7 @@ func TestClaudeCodeToolSurfaceIsUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claude-code environment rejected: %v", err)
 	}
-	if !tools.Plugin || tools.SessionMCP != "" {
+	if len(tools.Plugins) != 1 || tools.Plugins[0] != claudeSessionPlatformPlugin || tools.SessionMCP != "" {
 		t.Fatalf("claude-code tool surface = %+v, want the marketplace plugin only", tools)
 	}
 }
@@ -272,7 +272,7 @@ func TestPluginToolSurfaceClearsAnyMCPRegistration(t *testing.T) {
 	if err := ensureClaudeManagedSettings(homeDir, toolSurface{SessionMCP: "http://10.42.0.9:8092"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugin: true}); err != nil {
+	if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{claudeSessionPlatformPlugin}}); err != nil {
 		t.Fatal(err)
 	}
 	servers, err := loadClaudeMCPRegistration(homeDir)
@@ -331,7 +331,7 @@ func TestManagedSettingsWidenNothingWithoutASharedVolume(t *testing.T) {
 	if got := readManagedSettings(t, homeDir).Permissions.AdditionalDirectories; len(got) != 0 {
 		t.Fatalf("additionalDirectories = %v, want none", got)
 	}
-	if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugin: true}); err != nil {
+	if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{claudeSessionPlatformPlugin}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := readManagedSettings(t, homeDir).Permissions.AdditionalDirectories; len(got) != 0 {

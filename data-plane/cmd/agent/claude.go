@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -37,6 +38,14 @@ const (
 	claudeSettingsDir           = ".claude"
 	claudeSettingsFile          = "settings.json"
 	claudeSessionPlatformPlugin = "session-platform@dlddu-plugins"
+	// claudePluginMarketplace is the marketplace every managed plugin comes
+	// from; entrypoint.sh installs from it under this name.
+	claudePluginMarketplace = "dlddu-plugins"
+	// claudePluginsEnv is a session's own plugin selection (AC-L1), bare
+	// names, comma-separated. Unset means the platform plugin alone.
+	// Keep in sync with control-plane/internal/adapter/k8s
+	// (ClaudeCodePluginsEnvVar) and entrypoint.sh.
+	claudePluginsEnv = "CLAUDE_CODE_PLUGINS"
 	// sessionMCPPermission names every tool of the session MCP server.
 	sessionMCPPermission       = "mcp__" + sessionMCPServerName
 	maxClaudePromptBytes       = 1 << 20
@@ -142,6 +151,12 @@ type claudeConfig struct {
 	// Tools is written into the session HOME on boot.
 	Tools toolSurface
 	CLI   agentCLI
+	// AuthSlot, when set, is the pool slot whose login this session's CLI
+	// uses (docs/prd/agent-auth-pool.md, AC-N4).
+	AuthSlot *authSlot
+	// Login, when set, signs a claude-code subscription session in on its
+	// first prompt (AC-E7). It needs AuthSlot.
+	Login claudeLogin
 }
 
 // toolSurface is what the platform lets a session's agent reach beyond its own
@@ -149,8 +164,9 @@ type claudeConfig struct {
 // claude-code; docs/prd/approval-gate.md AC-F6's 2026-09-03 decision for a
 // Claude CLI behind the approval gate, which no type selects today).
 type toolSurface struct {
-	// Plugin enables the managed session-platform marketplace plugin.
-	Plugin bool
+	// Plugins are the managed marketplace plugins to enable, as
+	// "<name>@dlddu-plugins" (AC-E6; the session's own selection, AC-L1).
+	Plugins []string
 	// SessionMCP, when set, is the URL of this session's MCP server.
 	SessionMCP string
 	// SharedDir, when set, is the shared volume this session's MCP writes large
@@ -180,6 +196,9 @@ type claudeRuntimeState struct {
 
 type promptJob struct {
 	prompt string
+	// seq is the job's place in arrival order. AC-E7's sign-in reads only
+	// writes that arrived after its URL was shown as codes.
+	seq uint64
 }
 
 // claudeWorkload owns one session's one-shot Claude invocations. A single
@@ -196,6 +215,8 @@ type claudeWorkload struct {
 	tools    toolSurface
 	cli      agentCLI
 	out      scrollback
+	authSlot *authSlot
+	login    claudeLogin
 
 	// approvals is what AC-F3's idle exception is decided from.
 	approvals approvalWaits
@@ -211,13 +232,29 @@ type claudeWorkload struct {
 	checkpointID            string
 	lastAbortedCheckpointID string
 	restoring               bool
-	active                  bool
-	hasRun                  bool
-	turns                   int
-	stopping                bool
-	runTimeout              time.Duration
-	runOutputLimit          int
-	scrollbackLimit         int
+	// refreshing holds the worker between turns while AC-J7's plugin refresh
+	// rewrites the session's skills.
+	refreshing bool
+	// turnRefreshed is set once the running turn asked for its one refresh
+	// (AC-J7); turnRefreshNotice is the transcript line that refresh left,
+	// written after the turn's end marker rather than inside its output.
+	turnRefreshed     bool
+	turnRefreshNotice string
+	// pendingLogin is AC-E7's sign-in between its two writes.
+	pendingLogin *pendingClaudeLogin
+	// droppedLogin remembers a sign-in that ended before its code arrived,
+	// so a code sent for it is still never recorded or run.
+	droppedLogin *droppedClaudeLogin
+	// enqueued counts accepted writes; it stamps promptJob.seq.
+	enqueued        uint64
+	finished        uint64
+	active          bool
+	hasRun          bool
+	turns           int
+	stopping        bool
+	runTimeout      time.Duration
+	runOutputLimit  int
+	scrollbackLimit int
 
 	now        func() time.Time
 	ctx        context.Context
@@ -279,6 +316,9 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 	if cli == nil {
 		cli = claudeCLI{}
 	}
+	if cfg.Login != nil && cfg.AuthSlot == nil {
+		return nil, errors.New("a claude subscription sign-in needs an auth slot")
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &claudeWorkload{
@@ -292,6 +332,8 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 		redact:          normaliseRedactionLiterals(cfg.Redact),
 		tools:           cfg.Tools,
 		cli:             cli,
+		authSlot:        cfg.AuthSlot,
+		login:           cfg.Login,
 		runTimeout:      runTimeout,
 		runOutputLimit:  runOutputLimit,
 		scrollbackLimit: scrollbackLimit,
@@ -339,9 +381,17 @@ func (c *claudeWorkload) Close() {
 	}
 	c.stopping = true
 	c.accepting = false
+	pending := c.pendingLogin
+	c.pendingLogin = nil
+	if pending != nil && pending.timer != nil {
+		pending.timer.Stop()
+	}
 	c.cancel()
 	c.cond.Broadcast()
 	c.mu.Unlock()
+	if pending != nil {
+		pending.proc.kill()
+	}
 	<-c.workerDone
 }
 
@@ -360,7 +410,8 @@ func (c *claudeWorkload) enqueue(prompt string) error {
 	case c.queue.Len() >= maxClaudeQueuedPrompts || c.queuedBytes+len(prompt) > maxClaudeQueuedBytes:
 		return errClaudeQueueFull
 	}
-	c.queue.PushBack(promptJob{prompt: prompt})
+	c.enqueued++
+	c.queue.PushBack(promptJob{prompt: prompt, seq: c.enqueued})
 	c.queuedBytes += len(prompt)
 	c.cond.Signal()
 	return nil
@@ -435,7 +486,7 @@ func (c *claudeWorkload) runWorker() {
 	defer close(c.workerDone)
 	for {
 		c.mu.Lock()
-		for !c.stopping && (!c.ready || c.queue.Len() == 0) {
+		for !c.stopping && (!c.ready || c.refreshing || c.queue.Len() == 0) {
 			c.cond.Wait()
 		}
 		if c.stopping {
@@ -448,11 +499,24 @@ func (c *claudeWorkload) runWorker() {
 		c.queuedBytes -= len(job.prompt)
 		resume := c.hasRun
 		c.active = true
+		c.turnRefreshed = false
+		c.turnRefreshNotice = ""
 		c.turns++
 		seq := c.turns
+		input := c.classifyInputLocked(job)
 		c.mu.Unlock()
 
-		c.beginTurn(seq, job.prompt)
+		prompt, ok := c.openTurn(seq, job.prompt, input)
+		if !ok {
+			c.endTurn(seq, "error")
+			c.mu.Lock()
+			c.active = false
+			c.finished++
+			c.cond.Broadcast()
+			c.mu.Unlock()
+			continue
+		}
+		prompt, noticed := c.withTurnNotice(prompt, resume)
 		output := newClaudeOutputSink(
 			&c.out,
 			c.redact,
@@ -464,7 +528,8 @@ func (c *claudeWorkload) runWorker() {
 		stdout := c.cli.newProjector(stdoutUTF8)
 		stderr := newUTF8NormalizingWriter(output)
 		runCtx, cancelRun := context.WithTimeout(c.ctx, c.runTimeout)
-		err := c.runner.Run(runCtx, c.argv(job.prompt, resume), runnerOptions{
+		stopSlotWatch := c.watchAuthSlot()
+		err := c.runner.Run(runCtx, c.argv(prompt, resume), runnerOptions{
 			Dir:    c.workDir,
 			Env:    environmentWithHome(c.homeDir),
 			Stdout: stdout,
@@ -472,6 +537,8 @@ func (c *claudeWorkload) runWorker() {
 		})
 		timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
 		cancelRun()
+		stopSlotWatch()
+		c.pushAuthSlot()
 		// Flush projector/newline, per-fd UTF-8 tails, redaction tail and the
 		// invocation-limit tail before active becomes false. A checkpoint waiting
 		// on c.active therefore archives every byte produced by the drained run.
@@ -480,14 +547,28 @@ func (c *claudeWorkload) runWorker() {
 		err = errors.Join(err, stderr.Close())
 		err = errors.Join(err, output.Close())
 		c.endTurn(seq, claudeTurnStatus(err, timedOut))
+		c.mu.Lock()
+		refreshNotice := c.turnRefreshNotice
+		c.turnRefreshNotice = ""
+		c.mu.Unlock()
+		if refreshNotice != "" {
+			c.appendPlatformNotice(refreshNotice)
+		}
 
 		// Resume state follows AC-E4. Persist before reporting idle, so a
 		// checkpoint cannot archive a stale flag.
-		nextHasRun := resume || err == nil || errors.Is(err, exec.ErrWaitDelay)
+		succeeded := err == nil || errors.Is(err, exec.ErrWaitDelay)
+		nextHasRun := resume || succeeded
 		persistErr := persistClaudeRuntimeState(c.stateDir, nextHasRun)
+		// A turn that refreshed its own skills was told what changed in the
+		// tool result, so its success settles the note as a told turn does.
+		if succeeded && (noticed || refreshNotice != "") {
+			c.clearTurnNotice()
+		}
 		c.mu.Lock()
 		c.hasRun = nextHasRun
 		c.active = false
+		c.finished++
 		c.cond.Broadcast()
 		c.mu.Unlock()
 
@@ -500,17 +581,251 @@ func (c *claudeWorkload) runWorker() {
 	}
 }
 
+// openTurn writes the turn's input record and settles what the turn runs. A
+// turn normally runs its own prompt. With a sign-in pending (AC-E7) the write
+// is the sign-in code instead: the record shows a placeholder, and the turn
+// runs the prompt that was held for the sign-in. ok is false when the turn
+// has nothing to run.
+func (c *claudeWorkload) openTurn(seq int, prompt string, input turnInput) (string, bool) {
+	switch {
+	case input.code != nil:
+		c.beginTurn(seq, claudeLoginCodeInput)
+		if !c.completeLogin(input.code, prompt) {
+			return "", false
+		}
+		return input.code.prompt, true
+	case input.staleCode:
+		c.beginTurn(seq, claudeLoginCodeInput)
+		c.appendPlatformNotice("[session-platform: the Claude sign-in this message was for had already ended, so it was taken as its code and not used. Send your prompt again to start a new sign-in.]\n")
+		return "", false
+	case input.beforeSignIn:
+		c.beginTurn(seq, prompt)
+		c.appendPlatformNotice("[session-platform: this prompt was sent before the Claude sign-in started, so it did not run. Send it again after signing in.]\n")
+		return "", false
+	}
+	c.beginTurn(seq, prompt)
+	c.pullAuthSlot()
+	if c.login != nil && !c.subscriptionGate(prompt) {
+		return "", false
+	}
+	return prompt, true
+}
+
+// pullAuthSlot gives the CLI the slot's login before it runs (AC-N4). A
+// failed copy is logged rather than failing the turn: the CLI then reports
+// for itself that it is not signed in.
+func (c *claudeWorkload) pullAuthSlot() {
+	if c.authSlot == nil {
+		return
+	}
+	if err := c.authSlot.pull(c.homeDir); err != nil {
+		c.logger.Error("copy the auth slot login into HOME", "err", c.redactString(err.Error()))
+	}
+}
+
+func (c *claudeWorkload) pushAuthSlot() {
+	if c.authSlot == nil {
+		return
+	}
+	if err := c.authSlot.push(c.homeDir); err != nil {
+		c.logger.Error("copy the login back to the auth slot", "err", c.redactString(err.Error()))
+	}
+}
+
+func (c *claudeWorkload) watchAuthSlot() func() {
+	if c.authSlot == nil {
+		return func() {}
+	}
+	return c.authSlot.watch(c.homeDir)
+}
+
+// archiveExclusions is what the session archive leaves out of the state tree.
+func (c *claudeWorkload) archiveExclusions() []string {
+	if c.authSlot == nil {
+		return nil
+	}
+	return []string{c.authSlot.archiveExclusion()}
+}
+
+// withTurnNotice prepends AC-J7's skill-change note to a resumed turn. A first
+// turn starts a conversation that reads the skills as they are now, so it is
+// not told; either way a turn that succeeds settles the note. noticed reports
+// whether there was one to settle.
+func (c *claudeWorkload) withTurnNotice(prompt string, resume bool) (string, bool) {
+	refresher, ok := c.cli.(pluginRefresher)
+	if !ok {
+		return prompt, false
+	}
+	notice, err := refresher.turnNotice(c.homeDir)
+	if err != nil {
+		c.logger.Warn("read the pending plugin skill note", "err", c.redactString(err.Error()))
+		return prompt, false
+	}
+	if notice == "" {
+		return prompt, false
+	}
+	if resume {
+		prompt = notice + "\n\n" + prompt
+	}
+	return prompt, true
+}
+
+func (c *claudeWorkload) clearTurnNotice() {
+	if refresher, ok := c.cli.(pluginRefresher); ok {
+		if err := refresher.clearTurnNotice(c.homeDir); err != nil {
+			c.logger.Warn("clear the plugin skill note", "err", c.redactString(err.Error()))
+		}
+	}
+}
+
+// refreshPlugins is AC-J7: fetch the platform plugins again without leaving
+// the conversation. It runs only between turns — never under a running one,
+// never with one queued, never during a checkpoint — and holds the worker
+// while it rewrites the skills, so a prompt that arrives meanwhile waits.
+func (c *claudeWorkload) refreshPlugins() (pluginRefresh, error) {
+	refresher, ok := c.cli.(pluginRefresher)
+	if !ok {
+		return pluginRefresh{}, errPluginRefreshUnsupported
+	}
+	c.mu.Lock()
+	switch {
+	case c.stopping:
+		c.mu.Unlock()
+		return pluginRefresh{}, errClaudeStopping
+	case !c.ready:
+		c.mu.Unlock()
+		return pluginRefresh{}, errClaudeAwaitingRestore
+	case !c.accepting || c.checkpointing:
+		c.mu.Unlock()
+		return pluginRefresh{}, errClaudeAdmissionClosed
+	case c.refreshing:
+		c.mu.Unlock()
+		return pluginRefresh{}, errPluginRefreshRunning
+	case c.active || c.queue.Len() != 0:
+		c.mu.Unlock()
+		return pluginRefresh{}, errPluginRefreshBusy
+	}
+	c.refreshing = true
+	c.mu.Unlock()
+
+	result, err := refresher.refreshPlugins(c.homeDir)
+
+	c.mu.Lock()
+	c.refreshing = false
+	c.cond.Broadcast()
+	c.mu.Unlock()
+	if err != nil {
+		c.logger.Warn("plugin refresh failed", "err", c.redactString(err.Error()))
+		return pluginRefresh{}, err
+	}
+	c.appendPlatformNotice(pluginRefreshNotice(result))
+	return result, nil
+}
+
+// refreshPluginsInTurn is AC-J7: the running turn's own `refresh_skills` call.
+// The turn is the caller, so it is the one thing that may be running; it is
+// refused while a freeze waits on the turn, under another refresh, and after
+// the turn's first attempt, so a model cannot loop the marketplace clone.
+func (c *claudeWorkload) refreshPluginsInTurn() (pluginRefresh, error) {
+	refresher, ok := c.cli.(pluginRefresher)
+	if !ok {
+		return pluginRefresh{}, errPluginRefreshUnsupported
+	}
+	c.mu.Lock()
+	switch {
+	case c.stopping:
+		c.mu.Unlock()
+		return pluginRefresh{}, errClaudeStopping
+	case !c.ready:
+		c.mu.Unlock()
+		return pluginRefresh{}, errClaudeAwaitingRestore
+	case !c.active:
+		c.mu.Unlock()
+		return pluginRefresh{}, errPluginRefreshNoTurn
+	case c.checkpointing:
+		c.mu.Unlock()
+		return pluginRefresh{}, errClaudeAdmissionClosed
+	case c.refreshing:
+		c.mu.Unlock()
+		return pluginRefresh{}, errPluginRefreshRunning
+	case c.turnRefreshed:
+		c.mu.Unlock()
+		return pluginRefresh{}, errPluginRefreshTurnLimit
+	}
+	c.refreshing = true
+	c.turnRefreshed = true
+	seq := c.turns
+	c.mu.Unlock()
+
+	result, err := refresher.refreshPlugins(c.homeDir)
+
+	c.mu.Lock()
+	c.refreshing = false
+	// A turn that ended while its refresh ran (a timeout) is no longer there to
+	// carry the line, and never saw the result, so the note stays pending.
+	sameTurn := c.active && c.turns == seq
+	if err == nil && sameTurn {
+		c.turnRefreshNotice = pluginRefreshNotice(result)
+	}
+	c.cond.Broadcast()
+	c.mu.Unlock()
+	if err != nil {
+		c.logger.Warn("in-turn plugin refresh failed", "err", c.redactString(err.Error()))
+		return pluginRefresh{}, err
+	}
+	if !sameTurn {
+		c.appendPlatformNotice(pluginRefreshNotice(result))
+	}
+	return result, nil
+}
+
+// pluginRefreshStatus maps a refresh error to the agent route's status.
+func pluginRefreshStatus(err error) int {
+	switch {
+	case errors.Is(err, errPluginRefreshUnsupported):
+		return http.StatusNotFound
+	case errors.Is(err, errClaudeAwaitingRestore), errors.Is(err, errClaudeStopping):
+		return http.StatusServiceUnavailable
+	case errors.Is(err, errClaudeAdmissionClosed), errors.Is(err, errPluginRefreshBusy),
+		errors.Is(err, errPluginRefreshRunning), errors.Is(err, errPluginRefreshNoTurn):
+		return http.StatusConflict
+	case errors.Is(err, errPluginRefreshTurnLimit):
+		return http.StatusTooManyRequests
+	case errors.Is(err, errPluginRefreshFailed):
+		return http.StatusBadGateway
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+// fromLoopback reports whether a request came from inside the pod. The control
+// plane and the kubelet reach the agent on the pod IP; only a process sharing
+// the pod's network namespace — the skills MCP codex spawns — reaches loopback.
+func fromLoopback(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func (c *claudeWorkload) argv(prompt string, resume bool) []string {
 	return c.cli.argv(c.binary, c.model, prompt, resume)
 }
 
-func claudeArgv(binary, model, prompt string, resume bool) []string {
+// claudeArgv builds one Claude Code invocation. effort is AC-E8's session
+// effort, empty for the CLI default.
+func claudeArgv(binary, model, effort, prompt string, resume bool) []string {
 	argv := []string{binary}
 	if resume {
 		argv = append(argv, "--continue")
 	}
 	if model != "" && model != platformDefaultModel {
 		argv = append(argv, "--model", model)
+	}
+	if effort != "" {
+		argv = append(argv, "--effort", effort)
 	}
 	// The option delimiter prevents a prompt beginning with "--" from changing
 	// any platform-controlled flag.
@@ -549,7 +864,7 @@ func (c *claudeWorkload) beginCheckpoint(ctx context.Context, requestedID string
 	c.checkpointing = true
 	c.checkpointReady = false
 	c.checkpointID = checkpointID
-	for !c.stopping && ctx.Err() == nil && (c.active || c.queue.Len() != 0) {
+	for !c.stopping && ctx.Err() == nil && (c.active || c.refreshing || c.queue.Len() != 0) {
 		c.cond.Wait()
 	}
 	if c.stopping {
@@ -565,7 +880,10 @@ func (c *claudeWorkload) beginCheckpoint(ctx context.Context, requestedID string
 		return nil, "", err
 	}
 	hasRun := c.hasRun
+	pending := c.pendingLogin
 	c.mu.Unlock()
+	// A sign-in cannot wait across an archive: its process belongs to this pod.
+	c.dropPendingLogin(pending, "[session-platform: the session was archived during the Claude sign-in; the held prompt was dropped. Send it again to start over.]\n")
 	if err := persistClaudeRuntimeState(c.stateDir, hasRun); err != nil {
 		c.abortCheckpoint()
 		return nil, "", err
@@ -872,8 +1190,8 @@ func managedSettingsFor(tools toolSurface) claudeManagedSettings {
 	settings := claudeManagedSettings{}
 	settings.Permissions.Allow = append([]string(nil), claudeManagedTools...)
 	settings.EnabledPlugins = map[string]bool{}
-	if tools.Plugin {
-		settings.EnabledPlugins[claudeSessionPlatformPlugin] = true
+	for _, plugin := range tools.Plugins {
+		settings.EnabledPlugins[plugin] = true
 	}
 	if tools.SessionMCP != "" {
 		settings.Permissions.Allow = append(settings.Permissions.Allow, sessionMCPPermission)
@@ -1010,7 +1328,7 @@ func storeClaudeManagedSettings(settingsDir, settingsPath string, settings claud
 }
 
 // validateClaudeManagedSettings insists the session HOME declares exactly one of
-// the two sanctioned tool surfaces — the marketplace plugin (AC-E6) or a session
+// the two sanctioned tool surfaces — marketplace plugins (AC-E6, AC-L1) or a session
 // MCP (AC-F6). Archive validation runs it before the workload type of the pod
 // doing the restore is relevant, and the pod normalises to its own surface right
 // afterwards (ensureClaudeManagedSettings).
@@ -1028,7 +1346,14 @@ func validateClaudeManagedSettings(homeDir string) error {
 
 // validateClaudeToolSurface is the exactly-one rule over the two halves.
 func validateClaudeToolSurface(settings claudeManagedSettings, registered map[string]claudeMCPServer) error {
-	plugin := len(settings.EnabledPlugins) == 1 && settings.EnabledPlugins[claudeSessionPlatformPlugin]
+	// Which plugins is the pod's to say (ensureClaudeManagedSettings); here any
+	// non-empty set of enabled marketplace plugins is the plugin surface.
+	plugin := len(settings.EnabledPlugins) != 0
+	for name, enabled := range settings.EnabledPlugins {
+		if !enabled || !managedClaudePlugin(name) {
+			plugin = false
+		}
+	}
 	// An archive taken while the registration was written into settings.json
 	// still names the surface there, so either location counts as registered —
 	// ensureClaudeMCPRegistration moves it on the boot right after this.
@@ -1041,14 +1366,49 @@ func validateClaudeToolSurface(settings claudeManagedSettings, registered map[st
 		return errors.New("claude managed settings permits the session MCP without registering it")
 	case plugin == mcp:
 		return fmt.Errorf(
-			"claude managed settings must declare exactly one platform tool surface: %s or the %s server",
-			claudeSessionPlatformPlugin, sessionMCPServerName)
+			"claude managed settings must declare exactly one platform tool surface: %s plugins or the %s server",
+			claudePluginMarketplace, sessionMCPServerName)
 	case plugin && (len(settings.MCPServers) != 0 || len(registered) != 0):
 		return errors.New("claude managed settings must not mix the managed plugin with an MCP server")
 	case mcp && len(settings.EnabledPlugins) != 0:
 		return errors.New("claude managed settings must not mix a session MCP with an enabled plugin")
 	}
 	return nil
+}
+
+// claudePluginNamePattern mirrors the control plane's session plugin names
+// (session.NormalizePlugins) so a selection it accepted is one this pod can
+// install and an archive can carry.
+var claudePluginNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// managedClaudePlugin reports whether name is a plugin the platform installs:
+// one from its own marketplace. Which ones a given session runs is decided by
+// the pod (claudePluginsFromEnv), never by an archive.
+func managedClaudePlugin(name string) bool {
+	plugin, ok := strings.CutSuffix(name, "@"+claudePluginMarketplace)
+	return ok && claudePluginNamePattern.MatchString(plugin)
+}
+
+// claudePluginsFromEnv resolves the plugins a claude-code pod enables: the
+// session's own selection when the control plane passed one (AC-L1),
+// otherwise the platform plugin alone (AC-E6). entrypoint.sh installs the same
+// list before the agent starts, so the two must agree on the default.
+func claudePluginsFromEnv() ([]string, error) {
+	raw, set := os.LookupEnv(claudePluginsEnv)
+	if !set {
+		return []string{claudeSessionPlatformPlugin}, nil
+	}
+	names := strings.Split(raw, ",")
+	plugins := make([]string, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		if !claudePluginNamePattern.MatchString(name) || seen[name] {
+			return nil, fmt.Errorf("%s must be a comma-separated list of distinct plugin names, got %q", claudePluginsEnv, raw)
+		}
+		seen[name] = true
+		plugins = append(plugins, name+"@"+claudePluginMarketplace)
+	}
+	return plugins, nil
 }
 
 // registersSessionMCP reports whether servers carry the platform's own entry.
@@ -1128,7 +1488,7 @@ func loadClaudeManagedSettings(homeDir string) (claudeManagedSettings, error) {
 	// this pod is not — is acceptable: the caller rewrites them right after.
 	// Something the platform never installs is not.
 	for name := range settings.EnabledPlugins {
-		if name != claudeSessionPlatformPlugin {
+		if !managedClaudePlugin(name) {
 			return settings, fmt.Errorf("claude managed settings enables unmanaged plugin %s", name)
 		}
 	}
@@ -1156,6 +1516,19 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 	// is awaiting restore — an unready agent is simply not waiting on anyone.
 	mux.HandleFunc("GET "+approvalWaitPath, func(w http.ResponseWriter, _ *http.Request) {
 		serveApprovalWait(w, &c.approvals)
+	})
+
+	// AC-N4: whether this session's auth slot holds a login, asked by the
+	// control plane before it returns the slot to the pool.
+	mux.HandleFunc("GET "+authSlotPath, func(w http.ResponseWriter, _ *http.Request) {
+		serveAuthSlot(w, c.authSlot)
+	})
+
+	mux.HandleFunc("GET "+agentQueuePath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentQueue(w, r, c)
+	})
+	mux.HandleFunc("GET "+agentSchedulerPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentScheduler(w, r, c)
 	})
 
 	mux.HandleFunc("GET /attach", func(w http.ResponseWriter, r *http.Request) {
@@ -1236,6 +1609,31 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 		serveOutputStream(w, r, &c.out)
 	})
 
+	mux.HandleFunc("POST "+pluginRefreshPath, func(w http.ResponseWriter, _ *http.Request) {
+		result, err := c.refreshPlugins()
+		if err != nil {
+			http.Error(w, c.redactString(err.Error()), pluginRefreshStatus(err))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(result)
+	})
+
+	// AC-J7: the skills MCP's refresh_skills, from inside the running turn.
+	mux.HandleFunc("POST "+pluginRefreshTurnPath, func(w http.ResponseWriter, r *http.Request) {
+		if !fromLoopback(r) {
+			http.Error(w, "the in-turn refresh is only for the session's own skills MCP", http.StatusForbidden)
+			return
+		}
+		result, err := c.refreshPluginsInTurn()
+		if err != nil {
+			http.Error(w, c.redactString(err.Error()), pluginRefreshStatus(err))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(result)
+	})
+
 	mux.HandleFunc("POST /checkpoint", func(w http.ResponseWriter, r *http.Request) {
 		archive, err := os.CreateTemp("", "claude-checkpoint-*.tar")
 		if err != nil {
@@ -1270,7 +1668,7 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 				c.abortCheckpoint()
 			}
 		}()
-		if err := writeStateArchive(archive, c.stateDir, c.tools.SharedDir, scrollbackBytes); err != nil {
+		if err := writeStateArchiveExcluding(archive, c.stateDir, c.tools.SharedDir, scrollbackBytes, c.archiveExclusions()); err != nil {
 			http.Error(w, "build checkpoint archive: "+c.redactString(err.Error()), http.StatusInternalServerError)
 			return
 		}

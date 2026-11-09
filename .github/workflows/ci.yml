@@ -162,6 +162,12 @@ jobs:
       - name: unit tests
         working-directory: data-plane
         run: go test ./...
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: codex runner tests
+        working-directory: data-plane/codex-runner
+        run: npm ci && node --test
 
   web:
     name: web (typecheck + build)

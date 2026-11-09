@@ -121,3 +121,32 @@ func TestK3SMCPProxyRefusesWhatItCannotInspect(t *testing.T) {
 		t.Fatalf("upstream received %d requests the filter could not clear", len(*forwarded))
 	}
 }
+
+func TestK3SMCPProxyForwardsDeniedToolsUnderAllowAllPolicy(t *testing.T) {
+	t.Setenv(k3sMCPToolPolicyEnv, "allow-all")
+	handler, forwarded := newDenyTestProxy(t)
+	for _, body := range []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_create","arguments":{"name":"x"}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"resource_delete","arguments":{}}}`,
+	} {
+		if recorder := postK3SMCP(handler, body); recorder.Code != http.StatusOK {
+			t.Fatalf("request %s = %d %q", body, recorder.Code, recorder.Body.String())
+		}
+	}
+	if len(*forwarded) != 2 || !strings.Contains((*forwarded)[0], `"session_create"`) {
+		t.Fatalf("forwarded = %q, want both calls byte-for-byte", *forwarded)
+	}
+}
+
+func TestK3SMCPProxyFallsBackToDenyListForAnyOtherPolicy(t *testing.T) {
+	for _, policy := range []string{"", "deny-list", "true", "Allow-All", "allow-all "} {
+		t.Run(policy, func(t *testing.T) {
+			t.Setenv(k3sMCPToolPolicyEnv, policy)
+			handler, forwarded := newDenyTestProxy(t)
+			postK3SMCP(handler, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"session_create","arguments":{}}}`)
+			if len(*forwarded) != 0 {
+				t.Fatalf("policy %q forwarded %q, want the deny list", policy, *forwarded)
+			}
+		})
+	}
+}

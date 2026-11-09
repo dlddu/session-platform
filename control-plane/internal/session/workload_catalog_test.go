@@ -1,10 +1,14 @@
 package session
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestWorkloadTypeCatalogMatchesValidation(t *testing.T) {
 	known := []WorkloadType{
 		WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode,
+		WorkloadTypeCodexChat, WorkloadTypeCodexTask,
 	}
 	catalog := WorkloadTypes()
 	if len(catalog) != len(known) {
@@ -29,11 +33,24 @@ func TestWorkloadTypeCatalogMatchesValidation(t *testing.T) {
 		if accepts := err == nil; accepts != info.TakesModel {
 			t.Errorf("%q TakesModel = %v, but NormalizeModel accepts a model: %v", info.Type, info.TakesModel, accepts)
 		}
+		_, err = NormalizePlugins(info.Type, []string{"some-plugin"})
+		if accepts := err == nil; accepts != info.TakesPlugins || accepts != TakesPlugins(info.Type) {
+			t.Errorf("%q TakesPlugins = %v, but NormalizePlugins accepts plugins: %v", info.Type, info.TakesPlugins, accepts)
+		}
 		if info.ApprovalGate != info.Type.HasApprovalGate() {
 			t.Errorf("%q ApprovalGate = %v, but HasApprovalGate() = %v", info.Type, info.ApprovalGate, info.Type.HasApprovalGate())
 		}
 	}
 	for _, w := range known {
+		info := infoFor(t, catalog, w)
+		for _, effort := range info.ReasoningEfforts {
+			if got, err := NormalizeReasoningEffort(w, effort); err != nil || got != effort {
+				t.Errorf("%q lists effort %q but NormalizeReasoningEffort = %q, %v", w, effort, got, err)
+			}
+		}
+		if _, err := NormalizeReasoningEffort(w, "not-an-effort"); err == nil {
+			t.Errorf("%q accepted an unlisted effort", w)
+		}
 		if !seen[w] {
 			t.Errorf("valid type %q is missing from the catalog", w)
 		}
@@ -48,5 +65,67 @@ func TestWorkloadTypesReturnsCopy(t *testing.T) {
 	got[0].Label = "mutated"
 	if WorkloadTypes()[0].Label == "mutated" {
 		t.Fatal("WorkloadTypes exposed the package catalog")
+	}
+}
+
+func infoFor(t *testing.T, catalog []WorkloadTypeInfo, w WorkloadType) WorkloadTypeInfo {
+	t.Helper()
+	for _, info := range catalog {
+		if info.Type == w {
+			return info
+		}
+	}
+	t.Fatalf("%q missing from the catalog", w)
+	return WorkloadTypeInfo{}
+}
+
+func TestReasoningEffortsPerType(t *testing.T) {
+	want := map[WorkloadType][]string{
+		WorkloadTypeClaudeCode: {"low", "medium", "high", "xhigh", "max"},
+		WorkloadTypeCodexTask:  {"minimal", "low", "medium", "high", "xhigh"},
+	}
+	for _, info := range WorkloadTypes() {
+		if got, exp := strings.Join(info.ReasoningEfforts, ","), strings.Join(want[info.Type], ","); got != exp {
+			t.Errorf("%q efforts = %q, want %q", info.Type, got, exp)
+		}
+	}
+	if _, err := NormalizeReasoningEffort(WorkloadTypeClaudeCode, "minimal"); err == nil {
+		t.Error("claude-code accepted codex's minimal")
+	}
+	if _, err := NormalizeReasoningEffort(WorkloadTypeCodexTask, "max"); err == nil {
+		t.Error("codex-task accepted claude's max")
+	}
+	if got, err := NormalizeReasoningEffort(WorkloadTypeShell, ""); err != nil || got != "" {
+		t.Errorf("unset effort on shell = %q, %v", got, err)
+	}
+}
+
+// AC-J1: a stored record may still say "codex"; a request may not.
+func TestLegacyCodexOnlyInStoredRecords(t *testing.T) {
+	got, err := NormalizeStoredWorkloadType("codex")
+	if err != nil || got != WorkloadTypeCodexChat {
+		t.Fatalf("NormalizeStoredWorkloadType(codex) = %q, %v", got, err)
+	}
+	if _, err := NormalizeWorkloadType("codex"); err == nil {
+		t.Fatal("NormalizeWorkloadType accepted the legacy codex")
+	}
+	for _, info := range WorkloadTypes() {
+		if info.Type == "codex" {
+			t.Fatal("the catalog must not offer the legacy name")
+		}
+	}
+}
+
+func TestWorkloadTypesCopiesEfforts(t *testing.T) {
+	got := WorkloadTypes()
+	for i := range got {
+		if len(got[i].ReasoningEfforts) > 0 {
+			got[i].ReasoningEfforts[0] = "mutated"
+		}
+	}
+	for _, info := range WorkloadTypes() {
+		if len(info.ReasoningEfforts) > 0 && info.ReasoningEfforts[0] == "mutated" {
+			t.Fatal("WorkloadTypes exposed a catalog effort list")
+		}
 	}
 }

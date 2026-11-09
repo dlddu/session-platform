@@ -27,12 +27,15 @@ type agentCLI interface {
 // claudeCLI is the Claude Code CLI that claude-code runs. It is the default
 // when a config names no CLI, so that type runs exactly as it did before the
 // seam existed.
-type claudeCLI struct{}
+type claudeCLI struct {
+	// effort is the session's effort (AC-E8); empty leaves the CLI default.
+	effort string
+}
 
 func (claudeCLI) workloadName() string { return workloadClaudeCode }
 
-func (claudeCLI) argv(binary, model, prompt string, resume bool) []string {
-	return claudeArgv(binary, model, prompt, resume)
+func (c claudeCLI) argv(binary, model, prompt string, resume bool) []string {
+	return claudeArgv(binary, model, c.effort, prompt, resume)
 }
 
 func (claudeCLI) newProjector(dst io.Writer) io.WriteCloser {

@@ -26,9 +26,11 @@ import (
 // (AC-G5). The container clones the marketplace once at start and serves the
 // selected plugins at miniMaxPluginSeedPath as a bundle with no secret in it;
 // the workload agent installs that bundle and points the K3s MCP server at
-// this proxy.
+// this proxy. A POST to miniMaxPluginRefreshPath clones it again on request
+// (AC-J7) — nothing re-clones on its own.
 const (
-	miniMaxPluginSeedPath = "/plugin-seed"
+	miniMaxPluginSeedPath    = "/plugin-seed"
+	miniMaxPluginRefreshPath = "/plugin-seed/refresh"
 
 	// Keep in sync with control-plane/internal/adapter/k8s
 	// (MiniMaxMarketplaceDirEnvVar and the env it may pass through).
@@ -64,10 +66,26 @@ var miniMaxPluginPathFields = []string{"skills", "commands", "agents", "mcpServe
 // miniMaxSeedBundle is the wire shape of miniMaxPluginSeedPath. Files are keyed
 // by their slash-separated path inside the plugin and carried as base64.
 type miniMaxSeedBundle struct {
-	State   string              `json:"state"`
-	Error   string              `json:"error,omitempty"`
-	Plugins []miniMaxSeedPlugin `json:"plugins"`
+	State string `json:"state"`
+	Error string `json:"error,omitempty"`
+	// Revision is the marketplace commit the plugins were read from, when git
+	// could tell.
+	Revision string              `json:"revision,omitempty"`
+	Plugins  []miniMaxSeedPlugin `json:"plugins"`
 }
+
+// miniMaxRefreshResult is the wire shape of miniMaxPluginRefreshPath: the
+// bundle's state and revision after the request, without its files.
+type miniMaxRefreshResult struct {
+	State    string `json:"state"`
+	Revision string `json:"revision,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+var (
+	errMiniMaxSeedBootstrapping = errors.New("plugin marketplace is still on its first clone")
+	errMiniMaxRefreshRunning    = errors.New("a plugin marketplace refresh is already running")
+)
 
 type miniMaxSeedPlugin struct {
 	Name  string            `json:"name"`
@@ -84,8 +102,13 @@ type miniMaxMarketplaceSeeder struct {
 	// githubToken asks the K3s MCP for a short-lived marketplace read token.
 	githubToken func(context.Context) (string, error)
 	// clone fetches the marketplace into dir with the given auth header.
-	clone   func(ctx context.Context, url, authHeader, dir string) error
-	backoff time.Duration
+	clone func(ctx context.Context, url, authHeader, dir string) error
+	// revision reads the commit a clone checked out.
+	revision func(ctx context.Context, dir string) (string, error)
+	backoff  time.Duration
+
+	// refreshing serialises refreshes; one that finds it held is refused.
+	refreshing sync.Mutex
 
 	mu     sync.Mutex
 	bundle miniMaxSeedBundle
@@ -101,6 +124,7 @@ func newMiniMaxMarketplaceSeeder(upstream http.Handler, mcpPath string, logger *
 		workDir:        os.Getenv(miniMaxMarketplaceDirEnv),
 		logger:         logger,
 		clone:          gitCloneMarketplace,
+		revision:       gitCloneRevision,
 		backoff:        miniMaxBootstrapBackoff,
 		bundle:         miniMaxSeedBundle{State: miniMaxSeedStateBootstrapping, Plugins: []miniMaxSeedPlugin{}},
 	}
@@ -133,10 +157,10 @@ func (s *miniMaxMarketplaceSeeder) run(ctx context.Context) {
 			case <-time.After(s.backoff):
 			}
 		}
-		var plugins []miniMaxSeedPlugin
-		if plugins, err = s.bootstrap(ctx); err == nil {
-			s.set(miniMaxSeedBundle{State: miniMaxSeedStateReady, Plugins: plugins})
-			s.logger.Info("minimax plugin marketplace staged", "plugins", len(plugins))
+		var bundle miniMaxSeedBundle
+		if bundle, err = s.bootstrap(ctx); err == nil {
+			s.set(bundle)
+			s.logger.Info("plugin marketplace staged", "plugins", len(bundle.Plugins), "revision", bundle.Revision)
 			return
 		}
 		s.logger.Warn("minimax plugin marketplace bootstrap failed", "attempt", attempt+1, "err", err)
@@ -150,26 +174,85 @@ func (s *miniMaxMarketplaceSeeder) set(bundle miniMaxSeedBundle) {
 	s.bundle = bundle
 }
 
-func (s *miniMaxMarketplaceSeeder) bootstrap(ctx context.Context) ([]miniMaxSeedPlugin, error) {
+func (s *miniMaxMarketplaceSeeder) current() miniMaxSeedBundle {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bundle
+}
+
+// bootstrap is one clone, read into a ready bundle.
+func (s *miniMaxMarketplaceSeeder) bootstrap(ctx context.Context) (miniMaxSeedBundle, error) {
 	token, err := s.githubToken(ctx)
 	if err != nil {
-		return nil, err
+		return miniMaxSeedBundle{}, err
 	}
 	header := "Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+token))
 	if err := os.MkdirAll(s.workDir, 0o700); err != nil {
-		return nil, fmt.Errorf("create marketplace work dir: %w", err)
+		return miniMaxSeedBundle{}, fmt.Errorf("create marketplace work dir: %w", err)
 	}
 	dir, err := os.MkdirTemp(s.workDir, "clone-")
 	if err != nil {
-		return nil, fmt.Errorf("create marketplace clone dir: %w", err)
+		return miniMaxSeedBundle{}, fmt.Errorf("create marketplace clone dir: %w", err)
 	}
 	defer os.RemoveAll(dir)
 	cloneCtx, cancel := context.WithTimeout(ctx, miniMaxCloneTimeout)
 	defer cancel()
 	if err := s.clone(cloneCtx, s.marketplaceURL, header, dir); err != nil {
-		return nil, err
+		return miniMaxSeedBundle{}, err
 	}
-	return buildMiniMaxSeed(dir, s.plugins)
+	plugins, err := buildMiniMaxSeed(dir, s.plugins)
+	if err != nil {
+		return miniMaxSeedBundle{}, err
+	}
+	revision, err := s.revision(cloneCtx, dir)
+	if err != nil {
+		// The revision names what was read; the plugins are what matters.
+		s.logger.Warn("could not read the plugin marketplace revision", "err", err)
+	}
+	return miniMaxSeedBundle{State: miniMaxSeedStateReady, Revision: revision, Plugins: plugins}, nil
+}
+
+// refresh clones the marketplace once more and serves what it read (AC-J7).
+// A failed refresh leaves the bundle being served as it was, so a session never
+// loses skills it had to a marketplace it cannot reach right now. It is refused
+// while the first clone is still running and while another refresh is.
+func (s *miniMaxMarketplaceSeeder) refresh(ctx context.Context) (miniMaxSeedBundle, error) {
+	if s.current().State == miniMaxSeedStateBootstrapping {
+		return s.current(), errMiniMaxSeedBootstrapping
+	}
+	if !s.refreshing.TryLock() {
+		return s.current(), errMiniMaxRefreshRunning
+	}
+	defer s.refreshing.Unlock()
+	bundle, err := s.bootstrap(ctx)
+	if err != nil {
+		s.logger.Warn("plugin marketplace refresh failed; keeping the plugins already staged", "err", err)
+		return s.current(), err
+	}
+	s.set(bundle)
+	s.logger.Info("plugin marketplace refreshed", "plugins", len(bundle.Plugins), "revision", bundle.Revision)
+	return bundle, nil
+}
+
+func (s *miniMaxMarketplaceSeeder) serveRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	bundle, err := s.refresh(r.Context())
+	result := miniMaxRefreshResult{State: bundle.State, Revision: bundle.Revision}
+	status := http.StatusOK
+	switch {
+	case errors.Is(err, errMiniMaxSeedBootstrapping), errors.Is(err, errMiniMaxRefreshRunning):
+		status = http.StatusConflict
+		result.Error = err.Error()
+	case err != nil:
+		status = http.StatusBadGateway
+		result.Error = err.Error()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 func (s *miniMaxMarketplaceSeeder) serveSeed(w http.ResponseWriter, r *http.Request) {
@@ -197,6 +280,17 @@ func serveUnconfiguredSeed(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(miniMaxSeedBundle{State: miniMaxSeedStateUnconfigured, Plugins: []miniMaxSeedPlugin{}})
+}
+
+// serveUnconfiguredRefresh answers a refresh with nothing to refresh: the
+// state, not an error, as for the seed itself.
+func serveUnconfiguredRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(miniMaxRefreshResult{State: miniMaxSeedStateUnconfigured})
 }
 
 // githubTokenThroughProxy calls the K3s MCP's github_app_installation_token
@@ -317,6 +411,17 @@ func gitCloneMarketplace(ctx context.Context, url, authHeader, dir string) error
 		return fmt.Errorf("clone plugin marketplace: %w: %s", err, msg)
 	}
 	return nil
+}
+
+// gitCloneRevision is the commit a clone checked out.
+func gitCloneRevision(ctx context.Context, dir string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "HEAD")
+	cmd.Env = append(os.Environ(), "HOME="+filepath.Dir(dir))
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("read marketplace revision: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // buildMiniMaxSeed reads the selected plugins out of a marketplace clone. Every

@@ -141,7 +141,98 @@ func newTestSeeder(t *testing.T, token func(context.Context) (string, error)) *m
 		writeTestMarketplace(t, dir)
 		return nil
 	}
+	s.revision = func(context.Context, string) (string, error) { return "rev-1", nil }
 	return s
+}
+
+func refreshResponse(t *testing.T, s *miniMaxMarketplaceSeeder) (int, miniMaxRefreshResult) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	s.serveRefresh(rec, httptest.NewRequest(http.MethodPost, miniMaxPluginRefreshPath, nil))
+	var result miniMaxRefreshResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return rec.Code, result
+}
+
+// AC-J7: a refresh clones again and serves what it read; nothing changes
+// until one is asked for.
+func TestMiniMaxSeederRefreshServesTheNewClone(t *testing.T) {
+	s := newTestSeeder(t, func(context.Context) (string, error) { return "ghs_test", nil })
+	if code, result := refreshResponse(t, s); code != http.StatusConflict || result.State != miniMaxSeedStateBootstrapping {
+		t.Fatalf("refresh before the first clone = %d %+v, want 409 bootstrapping", code, result)
+	}
+	s.run(context.Background())
+	if _, bundle := seedResponse(t, s); bundle.Revision != "rev-1" {
+		t.Fatalf("first clone revision = %q", bundle.Revision)
+	}
+	s.revision = func(context.Context, string) (string, error) { return "rev-2", nil }
+	if _, bundle := seedResponse(t, s); bundle.Revision != "rev-1" {
+		t.Fatalf("revision moved without a refresh: %q", bundle.Revision)
+	}
+	code, result := refreshResponse(t, s)
+	if code != http.StatusOK || result.State != miniMaxSeedStateReady || result.Revision != "rev-2" || result.Error != "" {
+		t.Fatalf("refresh = %d %+v", code, result)
+	}
+	if _, bundle := seedResponse(t, s); bundle.Revision != "rev-2" || len(bundle.Plugins) != 1 {
+		t.Fatalf("seed after refresh = %+v", bundle)
+	}
+	if entries, _ := os.ReadDir(s.workDir); len(entries) != 0 {
+		t.Errorf("refresh clone left behind: %v", entries)
+	}
+}
+
+// A refresh that cannot reach the marketplace keeps what the session had.
+func TestMiniMaxSeederFailedRefreshKeepsTheBundle(t *testing.T) {
+	fail := false
+	s := newTestSeeder(t, func(context.Context) (string, error) {
+		if fail {
+			return "", errors.New("K3s MCP GitHub token tool returned an error")
+		}
+		return "ghs_test", nil
+	})
+	s.run(context.Background())
+	fail = true
+	code, result := refreshResponse(t, s)
+	if code != http.StatusBadGateway || result.State != miniMaxSeedStateReady || result.Revision != "rev-1" || result.Error == "" {
+		t.Fatalf("failed refresh = %d %+v, want 502 with the old bundle", code, result)
+	}
+	if code, bundle := seedResponse(t, s); code != http.StatusOK || bundle.State != miniMaxSeedStateReady || len(bundle.Plugins) != 1 {
+		t.Fatalf("seed after a failed refresh = %d %+v", code, bundle)
+	}
+}
+
+// A first clone that failed is recovered by a refresh that succeeds.
+func TestMiniMaxSeederRefreshRecoversAFailedBootstrap(t *testing.T) {
+	fail := true
+	s := newTestSeeder(t, func(context.Context) (string, error) {
+		if fail {
+			return "", errors.New("unreachable")
+		}
+		return "ghs_test", nil
+	})
+	s.run(context.Background())
+	fail = false
+	if code, result := refreshResponse(t, s); code != http.StatusOK || result.State != miniMaxSeedStateReady {
+		t.Fatalf("refresh after a failed bootstrap = %d %+v", code, result)
+	}
+}
+
+func TestMiniMaxSeederRefusesAConcurrentRefresh(t *testing.T) {
+	s := newTestSeeder(t, func(context.Context) (string, error) { return "ghs_test", nil })
+	s.run(context.Background())
+	s.refreshing.Lock()
+	code, result := refreshResponse(t, s)
+	s.refreshing.Unlock()
+	if code != http.StatusConflict || result.State != miniMaxSeedStateReady {
+		t.Fatalf("concurrent refresh = %d %+v, want 409", code, result)
+	}
+	rec := httptest.NewRecorder()
+	s.serveRefresh(rec, httptest.NewRequest(http.MethodGet, miniMaxPluginRefreshPath, nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET refresh = %d, want 405", rec.Code)
+	}
 }
 
 func seedResponse(t *testing.T, s *miniMaxMarketplaceSeeder) (int, miniMaxSeedBundle) {
@@ -233,6 +324,11 @@ func TestK3SMCPProxySeedRoute(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), miniMaxSeedStateUnconfigured) {
 		t.Errorf("unconfigured seed = %d %s", rec.Code, rec.Body.String())
 	}
+	rec = httptest.NewRecorder()
+	unconfigured.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, miniMaxPluginRefreshPath, nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), miniMaxSeedStateUnconfigured) {
+		t.Errorf("unconfigured refresh = %d %s", rec.Code, rec.Body.String())
+	}
 
 	// A helper pod with a token for the session MCP's token mint and no
 	// marketplace to stage (no type configures one today; the mode stays sound).
@@ -263,6 +359,11 @@ func TestK3SMCPProxySeedRoute(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("seed before the bootstrap ran = %d, want 503", rec.Code)
 	}
+	rec = httptest.NewRecorder()
+	configured.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, miniMaxPluginRefreshPath, nil))
+	if rec.Code != http.StatusConflict {
+		t.Errorf("refresh before the bootstrap ran = %d, want 409", rec.Code)
+	}
 }
 
 // The real clone: scoped header, no credential helper, and a failure message
@@ -291,7 +392,14 @@ func TestGitCloneMarketplaceFromALocalRemote(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dst, ".claude-plugin", "marketplace.json")); err != nil {
 		t.Errorf("clone is missing the manifest: %v", err)
 	}
-	err := gitCloneMarketplace(context.Background(), "file://"+filepath.Join(src, "missing"), header, filepath.Join(t.TempDir(), "x"))
+	head, err := exec.Command("git", "-C", src, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rev, err := gitCloneRevision(context.Background(), dst); err != nil || rev != strings.TrimSpace(string(head)) {
+		t.Errorf("clone revision = %q, %v; want %s", rev, err, head)
+	}
+	err = gitCloneMarketplace(context.Background(), "file://"+filepath.Join(src, "missing"), header, filepath.Join(t.TempDir(), "x"))
 	if err == nil || strings.Contains(err.Error(), "c2VjcmV0") {
 		t.Errorf("failed clone error = %v, want one without the header", err)
 	}

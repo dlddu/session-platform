@@ -7,6 +7,31 @@ workload="${DATA_PLANE_WORKLOAD:-shell}"
 if [ "$workload" = "claude-code" ]; then
   : "${K3S_MCP_TOKEN:?K3S_MCP_TOKEN is required for Claude plugin bootstrap}"
 
+  # A session that chose its plugins (AC-L1) gets exactly those; otherwise
+  # the platform plugin alone. The agent enables the same list
+  # (claudePluginsFromEnv), so the default must match it.
+  plugins="${CLAUDE_CODE_PLUGINS-session-platform}"
+  if [ -z "$plugins" ]; then
+    echo "CLAUDE_CODE_PLUGINS is set but names no plugin" >&2
+    exit 1
+  fi
+  # Check every name before touching the network, so a bad selection mints
+  # no token and leaves nothing half-installed behind it.
+  # Split on commas only, and never glob: a name is checked as written.
+  set -f
+  old_ifs="$IFS"
+  IFS=','
+  for plugin in $plugins; do
+    case "$plugin" in
+      ''|[!A-Za-z0-9]*|*[!A-Za-z0-9._-]*)
+        echo "CLAUDE_CODE_PLUGINS has an invalid plugin name: '$plugin'" >&2
+        exit 1
+        ;;
+    esac
+  done
+  IFS="$old_ifs"
+  set +f
+
   k3s_mcp_url="${K3S_MCP_URL:-https://homelab-k3s-mcp.llkm.nl/mcp}"
   # The marketplace is a plain git remote, so the platform can point this at any
   # host that serves the same repository shape — production keeps github.com and
@@ -65,15 +90,22 @@ if [ "$workload" = "claude-code" ]; then
   GIT_CONFIG_VALUE_0="Authorization: ${github_auth_header}" \
   GIT_TERMINAL_PROMPT=0 \
     claude plugin marketplace add "$marketplace_url"
-  HOME="$bootstrap_home" \
-  CLAUDE_CODE_PLUGIN_CACHE_DIR="$plugin_cache_dir" \
-  GIT_CONFIG_COUNT=1 \
-  GIT_CONFIG_KEY_0="$marketplace_auth_key" \
-  GIT_CONFIG_VALUE_0="Authorization: ${github_auth_header}" \
-  GIT_TERMINAL_PROMPT=0 \
-    claude plugin install session-platform@dlddu-plugins
+  set -f
+  IFS=','
+  for plugin in $plugins; do
+    IFS="$old_ifs"
+    HOME="$bootstrap_home" \
+    CLAUDE_CODE_PLUGIN_CACHE_DIR="$plugin_cache_dir" \
+    GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0="$marketplace_auth_key" \
+    GIT_CONFIG_VALUE_0="Authorization: ${github_auth_header}" \
+    GIT_TERMINAL_PROMPT=0 \
+      claude plugin install "${plugin}@dlddu-plugins"
+  done
+  IFS="$old_ifs"
+  set +f
 
-  unset github_auth_header github_token mcp_response mcp_request
+  unset github_auth_header github_token mcp_response mcp_request plugins plugin old_ifs
   # The agent must resolve the plugin from the very same cache the bootstrap
   # populated. A seed dir only syncs marketplace registrations, and only after
   # plugin loading has already run, so the installed plugin never resolves.

@@ -173,6 +173,108 @@ spec:
             # deploy/ 오버레이가 이 자리를 env/16 으로 잡아 kind 안 drop 주소로 바꾼다.
             - name: DROP_URL
               value: http://drop-external.drop.svc.cluster.local
+            # codex 워크로드(docs/prd/codex-workload.md, AC-J1~J6)와 멀티테넌시(docs/prd/multitenancy.md).
+            # 이 다섯 항목도 env 목록 맨 끝에 둔다 — deploy/ 오버레이가 env/19(이미지)를 인덱스로 잡는다.
+            # 이미지 문자열이 위와 같아서 CI `pin` job 의 sed 가 이 자리도 함께 SHA 로 고정한다.
+            - name: DATA_PLANE_CODEX_IMAGE
+              value: "ghcr.io/dlddu/session-platform-data-plane:cc4615f73c4db0df6151680d65ee6390a0e5ee52"
+            # codex 세션은 ChatGPT 로그인을 세션마다 스스로 한다(AC-J3) — 공급자 Secret 이 없다.
+            # Secret `codex-credentials` 는 선택 k3s-mcp-token 하나만, ConfigMap `codex-config` 는
+            # 선택 model·models·k3s-mcp-url·plugin-marketplace-url 만 담는다. 둘 다 없어도 세션은
+            # 뜬다(K3s MCP 도구와 플러그인 스킬 없이). k8s/codex-*.example.yaml 참고.
+            - name: CODEX_DEFAULT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: codex-config
+                  key: model
+                  optional: true
+            - name: CODEX_MODELS
+              valueFrom:
+                configMapKeyRef:
+                  name: codex-config
+                  key: models
+                  optional: true
+            # codex 전용 데이터 전송 게이트(AC-J4). 이 타입의 아카이브에는 세션의 ChatGPT
+            # 로그인(auth.json)이 들어간다. PR 프리뷰 오버레이는 이 이름을 false 로 덮어쓴다(flux-cd-apps #109).
+            - name: CODEX_ARCHIVE_ENABLED
+              value: "true"
+            # 테넌시 설정(AC-K3). 없으면 테넌시가 없다 — 토큰 없는 호출(운영자)은 지금과 같고,
+            # Bearer 토큰 호출은 모두 403 이다. 토큰 검증(TokenReview)에는 control-plane SA 의
+            # system:auth-delegator 바인딩이 필요하다(rbac.yaml 머리말과 같은 이유로 base 밖, flux-cd-apps).
+            # k8s/session-platform-tenants-configmap.example.yaml 참고.
+            - name: SESSION_PLATFORM_TENANTS
+              valueFrom:
+                configMapKeyRef:
+                  name: session-platform-tenants
+                  key: tenants.json
+                  optional: true
+            # codex 작업용 워크로드(docs/prd/codex-task-workload.md, AC-M1~M4)와 에이전트 인증 풀
+            # (docs/prd/agent-auth-pool.md, AC-N1~N5), claude-code 구독 인증(AC-E7). 이 일곱 항목도
+            # env 목록 맨 끝에 둔다 — deploy/ 오버레이가 env/24(이미지)·env/29(인증 모드)를 인덱스로 잡는다.
+            # 이미지 문자열이 위와 같아서 CI `pin` job 의 sed 가 이 자리도 함께 SHA 로 고정한다.
+            - name: DATA_PLANE_CODEX_TASK_IMAGE
+              value: "ghcr.io/dlddu/session-platform-data-plane:cc4615f73c4db0df6151680d65ee6390a0e5ee52"
+            # codex-task 의 모델 카탈로그(AC-M4). Secret `codex-task-credentials` 는 선택 k3s-mcp-token
+            # 하나만, ConfigMap `codex-task-config` 는 선택 model·models·k3s-mcp-url·plugin-marketplace-url
+            # 만 담는다. 이름은 codex-chat 의 것과 겹치면 안 된다(AC-M1). k8s/codex-task-*.example.yaml 참고.
+            - name: CODEX_TASK_DEFAULT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: codex-task-config
+                  key: model
+                  optional: true
+            - name: CODEX_TASK_MODELS
+              valueFrom:
+                configMapKeyRef:
+                  name: codex-task-config
+                  key: models
+                  optional: true
+            # codex-task 전용 데이터 전송 게이트(AC-M3). 이 타입의 아카이브에는 로그인이 없다 —
+            # auth.json 은 풀 슬롯에만 있다(AC-N4). 대신 셸이 만든 작업 디렉터리 파일이 들어간다.
+            - name: CODEX_TASK_ARCHIVE_ENABLED
+              value: "true"
+            # 인증 풀 크기(AC-N1). 슬롯 i 는 Lease `codex-task-auth-<i>` 와 PVC `<네임스페이스>-codex-task-auth-<i>` 이고 control plane 이
+            # 처음 임대할 때 만들며 지우지 않는다. 0 이면 이 타입은 /config 에 나오지 않는다.
+            - name: CODEX_TASK_AUTH_SLOTS
+              value: "2"
+            # claude-code 공급자 인증 모드(AC-E7). subscription 은 풀 `claude-code` 의 슬롯
+            # (PVC `<네임스페이스>-claude-code-auth-<i>` 의 .credentials.json)으로 Claude 구독에 직접 붙고 credential-proxy
+            # 사이드카를 두지 않는다. gateway 는 AC-E6 의 base-url·auth-token 경로(kind e2e 가 쓴다).
+            - name: CLAUDE_CODE_AUTH_MODE
+              value: "subscription"
+            - name: CLAUDE_CODE_AUTH_SLOTS
+              value: "2"
+            # 두 풀의 슬롯 PVC 스토리지 클래스(AC-N1). 이 클러스터에는 기본 StorageClass 가 없어
+            # 비우면 PVC 가 Pending 에 머문다. efs 는 RWX 라 세션이 노드에 묶이지 않는다. efs 는
+            # PVC 이름으로 경로·access point 를 정하므로(`/${.PVC.name}`, reuseAccessPoint) PVC 이름에
+            # 네임스페이스가 들어간다 — 프리뷰 슬롯이 운영 슬롯과 같은 디렉터리를 쓰지 않게.
+            - name: CLAUDE_CODE_AUTH_STORAGE_CLASS
+              value: "efs"
+            - name: CODEX_TASK_AUTH_STORAGE_CLASS
+              value: "efs"
+            # 구독 모드 claude-code 의 모델 카탈로그(AC-E7). 게이트웨이의 model·models(OpenRouter id)는
+            # 구독에서 뜻이 없으므로, 같은 ConfigMap 의 별도 선택 키에서 온다.
+            # platform-default 세션 파드도 `subscription-model` 키를 읽는다.
+            - name: CLAUDE_CODE_SUBSCRIPTION_DEFAULT_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: claude-code-config
+                  key: subscription-model
+                  optional: true
+            - name: CLAUDE_CODE_SUBSCRIPTION_MODELS
+              valueFrom:
+                configMapKeyRef:
+                  name: claude-code-config
+                  key: subscription-models
+                  optional: true
+            # codex-chat 슬롯 풀(AC-N6). 슬롯 i 는 Lease `codex-chat-auth-<i>` 와 PVC
+            # `<네임스페이스>-codex-chat-auth-<i>` 이고, 안에 ChatGPT 로그인(auth/)과 세션 DB(db/)를
+            # 함께 둔다. 채팅은 장기 단일 세션이라 1 — 0 이면 이 타입은 /config 에 나오지 않는다.
+            # 클래스는 다른 풀과 같은 이유로 efs. efs 는 NFS 라 세션 DB 는 WAL 을 쓰지 않는다.
+            - name: CODEX_CHAT_AUTH_SLOTS
+              value: "1"
+            - name: CODEX_CHAT_AUTH_STORAGE_CLASS
+              value: "efs"
           readinessProbe:
             httpGet:
               path: /api/v1/healthz

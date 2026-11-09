@@ -67,6 +67,13 @@ resources:
   # substituted, so it sits outside the allowlist like MinIO — see its header.
   - e2e-drop.yaml
 
+  # Tenants for docs/test/multitenancy.md: two tenant ServiceAccounts, one
+  # ServiceAccount no tenant claims, the tenant ConfigMap the base projects into
+  # SESSION_PLATFORM_TENANTS, and the TokenReview grant production keeps in
+  # flux-cd-apps. Nothing is substituted — the e2e suites mint real projected
+  # tokens for these accounts.
+  - e2e-tenancy.yaml
+
   # The ReadWriteMany class AC-F5's session-shared volume is provisioned from.
   # kind's default class is node-local and refuses a ReadWriteMany claim, so
   # without this the volume cannot stand here at all — see the file's header
@@ -109,8 +116,11 @@ patches:
   # locally built agent image scripts/e2e/up.sh loads into kind (the base
   # references the ghcr-published tag). env/1 is DATA_PLANE_IMAGE, env/2 is
   # SHELL_ARCHIVE_ENABLED, env/3 is DATA_PLANE_CLAUDE_CODE_IMAGE, env/12 is
-  # DATA_PLANE_MINIMAX_CODE_IMAGE, env/14 is MINIMAX_CODE_ARCHIVE_ENABLED and
-  # env/16 (the base's last entry) is DROP_URL. Each replace past env/3 is preceded by a `test`
+  # DATA_PLANE_MINIMAX_CODE_IMAGE, env/14 is MINIMAX_CODE_ARCHIVE_ENABLED,
+  # env/16 is DROP_URL, env/17 is DATA_PLANE_CODEX_IMAGE, env/22 is
+  # DATA_PLANE_CODEX_TASK_IMAGE, env/27 is CLAUDE_CODE_AUTH_MODE, env/30 is
+  # CODEX_TASK_AUTH_STORAGE_CLASS, env/33 is CODEX_CHAT_AUTH_SLOTS and env/34 is
+  # CODEX_CHAT_AUTH_STORAGE_CLASS. Each replace past env/3 is preceded by a `test`
   # of the entry's name, so a reordered base fails the build instead of
   # silently flipping a different variable.
   #
@@ -185,8 +195,8 @@ patches:
             secretKeyRef:
               name: checkpoint-s3-credentials
               key: access-key
-      # drop's in-cluster address here (deploy/e2e-drop.yaml). env/16 is DROP_URL,
-      # the base's last entry; production goes through an ExternalName and
+      # drop's in-cluster address here (deploy/e2e-drop.yaml). env/16 is DROP_URL;
+      # production goes through an ExternalName and
       # Traefik, neither of which kind has.
       - op: test
         path: /spec/template/spec/containers/0/env/16/name
@@ -194,6 +204,53 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/env/16/value
         value: http://drop.drop.svc.cluster.local
+      # codex 도 같은 로컬 빌드 에이전트 이미지다. env/17 가 DATA_PLANE_CODEX_IMAGE.
+      - op: test
+        path: /spec/template/spec/containers/0/env/17/name
+        value: DATA_PLANE_CODEX_IMAGE
+      - op: replace
+        path: /spec/template/spec/containers/0/env/17/value
+        value: session-platform/data-plane:dev
+      # codex-task 도 같은 이미지다(AC-M1). env/22 가 DATA_PLANE_CODEX_TASK_IMAGE. 풀 크기는 base 의
+      # 2 그대로 — 슬롯 PVC 는 kind 기본 StorageClass(local-path)로 묶인다(AC-N1).
+      - op: test
+        path: /spec/template/spec/containers/0/env/22/name
+        value: DATA_PLANE_CODEX_TASK_IMAGE
+      - op: replace
+        path: /spec/template/spec/containers/0/env/22/value
+        value: session-platform/data-plane:dev
+      # claude-code 는 이 SUT 에서 게이트웨이 모드다(AC-E7) — 기존 claude-code e2e 는 공급자 대역
+      # (deploy/e2e-anthropic-fake.yaml)을 credential-proxy 로 부른다. 실 구독 로그인은 e2e 밖이다.
+      # env/27 가 CLAUDE_CODE_AUTH_MODE.
+      - op: test
+        path: /spec/template/spec/containers/0/env/27/name
+        value: CLAUDE_CODE_AUTH_MODE
+      - op: replace
+        path: /spec/template/spec/containers/0/env/27/value
+        value: gateway
+      # base 는 운영 클러스터의 efs 를 슬롯 클래스로 고정한다. kind 에는 efs 가 없으므로 비워
+      # 기본 StorageClass(local-path)로 묶는다(AC-N1). env/30 가 CODEX_TASK_AUTH_STORAGE_CLASS.
+      - op: test
+        path: /spec/template/spec/containers/0/env/30/name
+        value: CODEX_TASK_AUTH_STORAGE_CLASS
+      - op: replace
+        path: /spec/template/spec/containers/0/env/30/value
+        value: ""
+      # codex-chat 슬롯 풀(AC-N6)도 같은 이유로 클래스를 비우고, codex 시나리오가 세션을 차례로
+      # 만들고 지우는 동안 반납이 늦어도 막히지 않게 2 슬롯을 둔다. env/33 가 CODEX_CHAT_AUTH_SLOTS,
+      # env/34 이 CODEX_CHAT_AUTH_STORAGE_CLASS.
+      - op: test
+        path: /spec/template/spec/containers/0/env/33/name
+        value: CODEX_CHAT_AUTH_SLOTS
+      - op: replace
+        path: /spec/template/spec/containers/0/env/33/value
+        value: "2"
+      - op: test
+        path: /spec/template/spec/containers/0/env/34/name
+        value: CODEX_CHAT_AUTH_STORAGE_CLASS
+      - op: replace
+        path: /spec/template/spec/containers/0/env/34/value
+        value: ""
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:

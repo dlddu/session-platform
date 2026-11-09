@@ -5,7 +5,17 @@ import type { PlatformConfig, WorkloadType } from "../api/types";
 // 실행 모델 계약은 AC-G1 이 AC-E2~E6 을 재사용하므로, 그 계약에서 파생된 것은 둘 다 받아야 한다.
 // 동결 방식은 이 판정과 무관하다 — 모든 타입이 파일시스템 아카이브로 동결된다(AC-B1).
 export function isAgentWorkload(workloadType: WorkloadType): boolean {
-  return workloadType === "claude-code" || workloadType === "minimax-code";
+  return (
+    workloadType === "claude-code" ||
+    workloadType === "minimax-code" ||
+    isCodexWorkload(workloadType)
+  );
+}
+
+// AC-J1 · AC-M1. 채팅용과 작업용은 러너·플러그인 배선을 같이 쓰므로 로그인 안내와
+// 플러그인 새로고침을 함께 받는다.
+export function isCodexWorkload(workloadType: WorkloadType): boolean {
+  return workloadType === "codex-chat" || workloadType === "codex-task";
 }
 
 // 승인 게이트는 타입이 아니라 타입의 능력이다(docs/prd/approval-gate.md AC-F2~F6).

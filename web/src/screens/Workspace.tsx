@@ -1,18 +1,23 @@
 // mockup: docs/mockups/workspace.html, docs/mockups/agent-workspace.html, docs/mockups/gated-workspace.html
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import type {
   OutputStreamEvent,
   OutputStreamResetEvent,
   OutputStreamState,
+  PluginRefreshResult,
   Session,
 } from "../api/types";
 import { renderAgentTranscript } from "../app/agentTranscript";
 import { DeleteSessionDialog } from "../app/DeleteSessionDialog";
 import { StateBadge } from "../app/StateBadge";
 import { useToast } from "../app/Toast";
-import { isAgentWorkload, isGatedWorkload } from "../app/workloadKind";
+import {
+  isAgentWorkload,
+  isCodexWorkload,
+  isGatedWorkload,
+} from "../app/workloadKind";
 
 const SHELL_READ_DELAYS_MS = [250, 700] as const;
 const STREAM_RECONNECT_BASE_MS = 250;
@@ -50,6 +55,18 @@ function isCursor(value: unknown): value is number {
   );
 }
 
+function pluginRefreshSummary(result: PluginRefreshResult): string {
+  if (result.state === "unconfigured") {
+    return "This session has no plugin marketplace to refresh";
+  }
+  const changed = result.added.length + result.updated.length + result.removed.length;
+  if (changed === 0) return "Plugin skills are already up to date";
+  return (
+    `Plugin skills refreshed — ${result.added.length} added, ` +
+    `${result.updated.length} updated, ${result.removed.length} removed`
+  );
+}
+
 function displayModel(model?: string): string {
   return !model || model === "platform-default" ? "platform default" : model;
 }
@@ -69,6 +86,7 @@ export function Workspace() {
     useState<OutputStreamState>("connecting");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [refreshingPlugins, setRefreshingPlugins] = useState(false);
   const offsetRef = useRef(0);
   const readQueueRef = useRef<Promise<void>>(Promise.resolve());
   const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -565,6 +583,31 @@ export function Workspace() {
     }
   }
 
+  // AC-J7 — the agent leaves its own line in the transcript; this reports the
+  // outcome where the button was pressed.
+  async function refreshPlugins() {
+    if (!sess || refreshingPlugins) return;
+    const generation = generationRef.current;
+    setRefreshingPlugins(true);
+    try {
+      const result = await api.refreshPlugins(id);
+      if (generationRef.current !== generation) return;
+      setSess(result.session);
+      toast(pluginRefreshSummary(result));
+    } catch (refreshError) {
+      if (generationRef.current !== generation) return;
+      const busy = refreshError instanceof ApiError && refreshError.status === 409;
+      toast(
+        busy
+          ? "Plugin skills refresh between turns — try again when the reply finishes"
+          : `Could not refresh plugin skills: ${refreshError}`,
+        "warm",
+      );
+    } finally {
+      if (generationRef.current === generation) setRefreshingPlugins(false);
+    }
+  }
+
   function handleDeleted(deleted: Session) {
     stopStreamRef.current?.();
     toast('Session "' + deleted.name + '" deleted');
@@ -700,7 +743,9 @@ export function Workspace() {
                   : isAgent
                     ? sess.workloadType === "minimax-code"
                       ? "send a prompt — runs mcode exec once in the session pod"
-                      : "send a prompt — streams one claude -p response"
+                      : isCodexWorkload(sess.workloadType)
+                        ? "send a prompt — runs one Codex turn in the session pod"
+                        : "send a prompt — streams one claude -p response"
                     : "run a command — executes in the session shell (bash)"
               }
               spellCheck={isAgent}
@@ -730,6 +775,13 @@ export function Workspace() {
               </button>
             ) : null}
           </form>
+          {isCodexWorkload(sess.workloadType) && !frozen ? (
+            <div className="agent-hint" data-testid="ws-codex-login-hint">
+              {sess.workloadType === "codex-task"
+                ? "If this session's login slot is empty, the first prompt signs it in to ChatGPT — watch the transcript for a link and code."
+                : "First prompt signs this session in to ChatGPT — watch the transcript for a link and code."}
+            </div>
+          ) : null}
         </div>
 
         <div>
@@ -747,6 +799,14 @@ export function Workspace() {
                 <span>Model</span>
                 <strong>{modelLabel}</strong>
               </div>
+              {sess.reasoningEffort ? (
+                <div className="workload-kv">
+                  <span>Reasoning effort</span>
+                  <strong data-testid="ws-reasoning-effort">
+                    {sess.reasoningEffort}
+                  </strong>
+                </div>
+              ) : null}
               {gated ? (
                 <div className="workload-kv">
                   <span>Helper pod</span>
@@ -790,6 +850,24 @@ export function Workspace() {
           <div className="panel">
             <h4>Actions</h4>
             <div className="action-stack">
+              {isCodexWorkload(sess.workloadType) ? (
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  data-testid="ws-refresh-plugins"
+                  onClick={() => void refreshPlugins()}
+                  disabled={
+                    frozen ||
+                    archiving ||
+                    refreshingPlugins ||
+                    pendingSubmissions > 0
+                  }
+                  aria-busy={refreshingPlugins}
+                  title="Fetch the platform plugin skills again — the conversation is kept"
+                >
+                  {refreshingPlugins ? "Refreshing skills…" : "Refresh plugin skills"}
+                </button>
+              ) : null}
               <button
                 className="btn btn-ghost"
                 type="button"

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"sync"
+
+	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
 // StubClient is an in-memory Client for tests: Write appends the payload to a
@@ -31,6 +33,12 @@ func (c *StubClient) Write(_ context.Context, pod, payload string) error {
 	defer c.mu.Unlock()
 	c.bufs[pod] = append(c.bufs[pod], payload...)
 	return nil
+}
+
+// RefreshPlugins reports a session with no marketplace: the stub has no
+// sidecar to clone one.
+func (c *StubClient) RefreshPlugins(context.Context, string) (session.PluginChanges, error) {
+	return session.PluginChanges{State: "unconfigured", Added: []string{}, Updated: []string{}, Removed: []string{}}, nil
 }
 
 func (c *StubClient) Read(_ context.Context, pod string, offset int64) (string, int64, error) {

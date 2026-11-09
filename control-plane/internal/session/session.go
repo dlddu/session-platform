@@ -7,6 +7,7 @@ package session
 import (
 	"errors"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -72,7 +73,8 @@ var modelNamePattern = regexp.MustCompile(`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}
 // default. Use that on the way in and this to reject explicit garbage.
 func (w WorkloadType) Valid() bool {
 	switch w {
-	case WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode:
+	case WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode,
+		WorkloadTypeCodexChat, WorkloadTypeCodexTask:
 		return true
 	default:
 		return false
@@ -86,6 +88,9 @@ func (w WorkloadType) Valid() bool {
 // It doubles as the read path for stored sessions: records written before the
 // type axis existed carry no workloadType, so decoding them yields "" — which
 // this resolves to shell, the only type those sessions could have been.
+// A request or tenant grant naming "codex" is refused: every caller moved to
+// codex-chat (AC-J1); only stored records keep the old name, read through
+// NormalizeStoredWorkloadType.
 func NormalizeWorkloadType(w WorkloadType) (WorkloadType, error) {
 	if w == "" {
 		return WorkloadTypeShell, nil
@@ -94,6 +99,16 @@ func NormalizeWorkloadType(w WorkloadType) (WorkloadType, error) {
 		return "", ErrInvalidInput
 	}
 	return w, nil
+}
+
+// NormalizeStoredWorkloadType is NormalizeWorkloadType for a decoded session
+// record. Records written before the codex split carry "codex", which is
+// codex-chat (AC-J1); refusing it would fail every List that meets one.
+func NormalizeStoredWorkloadType(w WorkloadType) (WorkloadType, error) {
+	if w == legacyWorkloadTypeCodex {
+		return WorkloadTypeCodexChat, nil
+	}
+	return NormalizeWorkloadType(w)
 }
 
 // NormalizeModel validates the workload-specific model setting (AC-E6).
@@ -111,7 +126,8 @@ func NormalizeModel(workload WorkloadType, model string) (string, error) {
 			return "", ErrInvalidInput
 		}
 		return "", nil
-	case WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode:
+	case WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode,
+		WorkloadTypeCodexChat, WorkloadTypeCodexTask:
 		if model == "" {
 			return PlatformDefaultModel, nil
 		}
@@ -122,6 +138,73 @@ func NormalizeModel(workload WorkloadType, model string) (string, error) {
 	default:
 		return "", ErrInvalidInput
 	}
+}
+
+// MaxSessionPlugins bounds a create request's plugin list (AC-L1). A plugin is
+// installed on every boot and restore, so the bound keeps one request from
+// turning pod start into an unbounded marketplace walk.
+const MaxSessionPlugins = 16
+
+// pluginNamePattern is a marketplace plugin name: one path segment the data
+// plane can use as a directory name and Claude Code as the left half of
+// "<plugin>@<marketplace>".
+var pluginNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// NormalizePlugins validates the session's marketplace plugin selection
+// (AC-L1). nil means unspecified: the session gets its workload type's
+// platform-default plugins, exactly as before the field existed. A non-nil list
+// replaces that default outright, so it must be non-empty, free of duplicates
+// and made of valid names. Only the types whose agent loads marketplace plugins
+// take one; shell rejects it rather than storing a setting
+// nothing would honour. The returned slice is a copy in request order.
+func NormalizePlugins(workload WorkloadType, plugins []string) ([]string, error) {
+	if plugins == nil {
+		return nil, nil
+	}
+	if !TakesPlugins(workload) {
+		return nil, ErrInvalidInput
+	}
+	if len(plugins) == 0 || len(plugins) > MaxSessionPlugins {
+		return nil, ErrInvalidInput
+	}
+	seen := make(map[string]bool, len(plugins))
+	out := make([]string, 0, len(plugins))
+	for _, name := range plugins {
+		if !pluginNamePattern.MatchString(name) || seen[name] {
+			return nil, ErrInvalidInput
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out, nil
+}
+
+// TakesPlugins reports whether a create request may carry plugins for the
+// workload type (AC-L1).
+func TakesPlugins(workload WorkloadType) bool {
+	switch workload {
+	case WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode, WorkloadTypeCodexChat, WorkloadTypeCodexTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// NormalizeReasoningEffort validates the session's reasoning effort (AC-E8).
+// Empty means unset — the CLI's own default — and is valid for every type; a
+// value is valid only when the type's catalog entry lists it, so the catalog
+// is the one place a type's efforts are declared. Callers that must reject an
+// explicitly empty value (the create API) do so before calling this.
+func NormalizeReasoningEffort(workload WorkloadType, effort string) (string, error) {
+	if effort == "" {
+		return "", nil
+	}
+	for _, info := range workloadTypeCatalog {
+		if info.Type == workload && slices.Contains(info.ReasoningEfforts, effort) {
+			return effort, nil
+		}
+	}
+	return "", ErrInvalidInput
 }
 
 // MaxIdle is the maximum idle duration before a session is snapshotted.
@@ -187,8 +270,20 @@ type Session struct {
 	// "platform-default" delegates selection to the platform-managed ConfigMap and
 	// then the CLI's installation fallback (AC-E6, reused verbatim by AC-G1).
 	Model string `json:"model,omitempty"`
-	Name  string `json:"name"`
-	State State  `json:"state"`
+	// Plugins is the session's marketplace plugin selection (AC-L1), fixed at
+	// creation and carried across snapshot/restore. Absent means the workload
+	// type's platform default; present, it is the exact set the agent loads.
+	Plugins []string `json:"plugins,omitempty"`
+	// ReasoningEffort is the session's reasoning effort for the types whose
+	// catalog entry lists efforts (AC-E8, AC-M4). Empty leaves it to the CLI;
+	// like the model it is fixed at creation and carried across a restore.
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	// Tenant is the tenant that owns the session (docs/prd/multitenancy.md,
+	// AC-K2), fixed at creation. Empty means operator-owned: sessions created
+	// before tenancy existed, or by the operator without naming a tenant.
+	Tenant string `json:"tenant,omitempty"`
+	Name   string `json:"name"`
+	State  State  `json:"state"`
 	// Pod is the session's dedicated *workload* pod — the one running the
 	// workload its type selects. It is the 1:1 subject of AC-A2 and is empty
 	// when the session is snapshotted/reclaimed.
@@ -254,4 +349,20 @@ var (
 	// live pod behind synthetic metadata. Callers may retry after the workload's
 	// real snapshot strategy is enabled.
 	ErrCheckpointDisabled = errors.New("checkpoint strategy is disabled")
+	// ErrUnauthenticated and ErrForbidden are the tenancy boundary's errors
+	// (AC-K1, AC-K3): a bearer token that does not prove a ServiceAccount, and
+	// a proven caller asking for something its tenant may not have.
+	// ErrWorkloadBusy reports an operation that runs only between turns —
+	// a plugin refresh (AC-J7) — asked for while one runs or waits.
+	ErrWorkloadBusy = errors.New("workload is busy")
+	// ErrPluginRefreshFailed reports a plugin marketplace the session could not
+	// fetch again; the skills it had are kept (AC-J7).
+	ErrPluginRefreshFailed = errors.New("plugin refresh failed")
+	// ErrAuthPoolExhausted reports that every login slot of the session type's
+	// auth pool is held, so no pod was made; a restore leaves the session
+	// frozen (AC-N2).
+	ErrAuthPoolExhausted = errors.New("auth pool exhausted")
+
+	ErrUnauthenticated = errors.New("unauthenticated")
+	ErrForbidden       = errors.New("forbidden")
 )

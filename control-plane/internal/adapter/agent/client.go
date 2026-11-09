@@ -34,11 +34,17 @@ const checkpointIDHeader = "X-Session-Checkpoint-ID"
 //   - Read  → AC-D3/AC-E3: output after offset plus nextOffset; offset 0
 //     replays the full history and reads are non-consuming.
 //   - Stream → the same append-only output as resumable SSE events.
+//   - RefreshPlugins → AC-J7: the agent fetches its platform plugins again.
 type Client interface {
 	Write(ctx context.Context, pod, payload string) error
 	Read(ctx context.Context, pod string, offset int64) (payload string, nextOffset int64, err error)
 	Stream(ctx context.Context, pod string, offset int64) (io.ReadCloser, error)
+	RefreshPlugins(ctx context.Context, pod string) (session.PluginChanges, error)
 }
+
+// pluginRefreshTimeout bounds one refresh: the sidecar's clone timeout plus
+// the agent's sync.
+const pluginRefreshTimeout = 3 * time.Minute
 
 // HTTPClient is the real Client: it resolves the pod's current IP through the
 // Kubernetes API on every call (pod IPs are not stable across restore, and
@@ -212,6 +218,44 @@ func (c *HTTPClient) Write(ctx context.Context, pod, payload string) error {
 	return nil
 }
 
+// RefreshPlugins asks the agent to fetch its platform plugins again (AC-J7).
+func (c *HTTPClient) RefreshPlugins(ctx context.Context, pod string) (session.PluginChanges, error) {
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return session.PluginChanges{}, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, pluginRefreshTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL(ip)+"/plugins/refresh", nil)
+	if err != nil {
+		return session.PluginChanges{}, err
+	}
+	resp, err := c.stream.Do(req)
+	if err != nil {
+		return session.PluginChanges{}, fmt.Errorf("refresh plugins in session pod %s: %w", pod, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		message := strings.TrimSpace(string(body))
+		switch resp.StatusCode {
+		case http.StatusConflict:
+			return session.PluginChanges{}, fmt.Errorf("refresh plugins in session pod %s: %w: %s", pod, session.ErrWorkloadBusy, message)
+		case http.StatusBadGateway:
+			return session.PluginChanges{}, fmt.Errorf("refresh plugins in session pod %s: %w: %s", pod, session.ErrPluginRefreshFailed, message)
+		case http.StatusNotFound:
+			return session.PluginChanges{}, fmt.Errorf("refresh plugins in session pod %s: %w: %s", pod, session.ErrInvalidState, message)
+		default:
+			return session.PluginChanges{}, fmt.Errorf("refresh plugins in session pod %s: agent returned %d: %s", pod, resp.StatusCode, message)
+		}
+	}
+	var changes session.PluginChanges
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&changes); err != nil {
+		return session.PluginChanges{}, fmt.Errorf("refresh plugins in session pod %s: decode: %w", pod, err)
+	}
+	return changes, nil
+}
+
 // Read fetches workload output after offset from the agent (AC-D3/AC-E3).
 func (c *HTTPClient) Read(ctx context.Context, pod string, offset int64) (string, int64, error) {
 	ip, err := c.resolve(ctx, pod)
@@ -274,6 +318,79 @@ func (c *HTTPClient) AwaitingApproval(ctx context.Context, pod string) (bool, er
 		return false, fmt.Errorf("decode approval wait from session pod %s: %w", pod, err)
 	}
 	return out.Awaiting, nil
+}
+
+// ActiveSchedules reports how many schedules the pod's scheduler holds
+// (docs/prd/session-scheduler.md AC-P3). Like AwaitingApproval it is an
+// optional capability, asked only on the idle reaper path.
+func (c *HTTPClient) ActiveSchedules(ctx context.Context, pod string) (int, error) {
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL(ip)+"/scheduler", nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("read scheduler state from session pod %s: %w", pod, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return 0, fmt.Errorf(
+			"read scheduler state from session pod %s: agent returned %d: %s",
+			pod, resp.StatusCode, strings.TrimSpace(string(body)),
+		)
+	}
+	var out struct {
+		Active *int `json:"active"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, fmt.Errorf("decode scheduler state from session pod %s: %w", pod, err)
+	}
+	if out.Active == nil {
+		return 0, fmt.Errorf("decode scheduler state from session pod %s: no active count", pod)
+	}
+	return *out.Active, nil
+}
+
+// AuthSlotSignedIn reports whether the pod's auth pool slot holds a login
+// (AC-N4). Like AwaitingApproval it is an optional capability, not part of
+// Client: only the release path asks, and only to rank the slot for the next
+// session.
+func (c *HTTPClient) AuthSlotSignedIn(ctx context.Context, pod string) (bool, error) {
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL(ip)+"/auth-slot", nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("read auth slot from session pod %s: %w", pod, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return false, fmt.Errorf(
+			"read auth slot from session pod %s: agent returned %d: %s",
+			pod, resp.StatusCode, strings.TrimSpace(string(body)),
+		)
+	}
+	var out struct {
+		SignedIn *bool `json:"signedIn"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return false, fmt.Errorf("decode auth slot from session pod %s: %w", pod, err)
+	}
+	if out.SignedIn == nil {
+		return false, fmt.Errorf("decode auth slot from session pod %s: no signedIn", pod)
+	}
+	return *out.SignedIn, nil
 }
 
 // Stream opens the data plane's long-lived SSE output feed at offset, over the

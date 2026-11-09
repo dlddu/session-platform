@@ -2,7 +2,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { Session, WorkloadType } from "../api/types";
+import type {
+  ModelCatalog,
+  PlatformConfig,
+  Session,
+  TenantConfig,
+  WorkloadType,
+} from "../api/types";
 import { LockIcon } from "../app/icons";
 import { liveSessionPath } from "../app/sessionRoutes";
 import {
@@ -19,6 +25,84 @@ const STEP_LABELS = [
   "Schedule dedicated pod",
   "Open read / write channel",
 ];
+
+// Card order follows the control plane's catalog (session.WorkloadTypes).
+const WORKLOAD_ORDER: WorkloadType[] = [
+  "shell",
+  "claude-code",
+  "minimax-code",
+  "codex-chat",
+  "codex-task",
+];
+
+const WORKLOAD_CARDS: Record<
+  WorkloadType,
+  { icon: string; iconClass?: string; wide?: boolean; description: string }
+> = {
+  shell: { icon: "$", description: "Interactive bash. You type the commands." },
+  "claude-code": {
+    icon: "◇",
+    iconClass: "agent",
+    description: "Agent CLI. You send prompts, it does the work.",
+  },
+  "minimax-code": {
+    icon: "⏸",
+    iconClass: "gated",
+    wide: true,
+    description:
+      "MiniMax Code CLI behind the approval gate — it cannot reach the outside on its own; external calls wait for approval.",
+  },
+  "codex-chat": {
+    icon: "◇",
+    iconClass: "agent",
+    wide: true,
+    description:
+      "Long-running Codex chat on your ChatGPT plan. Conversation, plugin skills and K3s MCP only.",
+  },
+  "codex-task": {
+    icon: "◇",
+    iconClass: "agent",
+    wide: true,
+    description:
+      "Codex coding agent with a shell, file edits and network. Uses a login slot from the platform pool.",
+  },
+};
+
+const PLATFORM_DEFAULT_CATALOG: ModelCatalog = {
+  defaultModel: "platform-default",
+  models: [],
+};
+
+// claude-code's catalog is the only one an older control plane reports; any
+// other type falls back to free text.
+function catalogFor(
+  config: PlatformConfig | null,
+  workloadType: WorkloadType,
+): ModelCatalog {
+  if (!config) return PLATFORM_DEFAULT_CATALOG;
+  const entry = config.workloadTypes.find((t) => t.type === workloadType);
+  if (entry && entry.defaultModel !== null) {
+    return { defaultModel: entry.defaultModel, models: entry.models };
+  }
+  if (workloadType === "claude-code") {
+    return config.claudeCode;
+  }
+  return PLATFORM_DEFAULT_CATALOG;
+}
+
+// AC-E8: the allowed values come from /config; an older control plane lists
+// none, which hides the choice rather than guessing values it may reject.
+const NO_EFFORTS: string[] = [];
+
+function effortsFor(
+  config: PlatformConfig | null,
+  workloadType: WorkloadType,
+): string[] {
+  return (
+    config?.workloadTypes.find((t) => t.type === workloadType)
+      ?.reasoningEfforts ?? NO_EFFORTS
+  );
+}
 
 const STEP_GAP_MS = 450;
 const SETTLE_MS = 320;
@@ -98,8 +182,10 @@ export function NewSession() {
   const [workloadType, setWorkloadType] = useState<WorkloadType>("shell");
   const [model, setModel] = useState("");
   const [submittedModel, setSubmittedModel] = useState("");
-  const [defaultModel, setDefaultModel] = useState("platform-default");
-  const [configuredModels, setConfiguredModels] = useState<string[]>([]);
+  const [effort, setEffort] = useState("");
+  const [submittedEffort, setSubmittedEffort] = useState("");
+  const [config, setConfig] = useState<PlatformConfig | null>(null);
+  const [tenant, setTenant] = useState("");
   const [phase, setPhase] = useState<"input" | "provisioning">("input");
   const [error, setError] = useState<string | null>(null);
   // 완료 표시된 단계 수(0..3). 이 인덱스의 단계가 「진행 중」이다.
@@ -117,33 +203,55 @@ export function NewSession() {
 
     void api
       .getConfig()
-      .then((config) => {
-        if (!active) return;
-        const { defaultModel: configuredDefaultModel, models } =
-          config.claudeCode;
-        const selectableModels = models.filter(
-          (configuredModel) => configuredModel !== configuredDefaultModel,
-        );
-        setDefaultModel(configuredDefaultModel);
-        setConfiguredModels(models);
-        if (models.length > 0) {
-          setModel((current) =>
-            current === "" || selectableModels.includes(current) ? current : "",
-          );
-        }
+      .then((loaded) => {
+        if (active) setConfig(loaded);
       })
       .catch(() => {
         // Older/unavailable control planes retain the free-text model input.
-        if (active) {
-          setDefaultModel("platform-default");
-          setConfiguredModels([]);
-        }
+        if (active) setConfig(null);
       });
 
     return () => {
       active = false;
     };
   }, []);
+
+  const { defaultModel, models: configuredModels } = catalogFor(
+    config,
+    workloadType,
+  );
+  const efforts = effortsFor(config, workloadType);
+  const tenants = config?.tenants ?? [];
+  const callerTenant = config?.tenant ?? null;
+  const pickedTenant: TenantConfig | null = callerTenant
+    ? callerTenant
+    : (tenants.find((t) => t.name === tenant) ?? null);
+  const offeredTypes = pickedTenant
+    ? WORKLOAD_ORDER.filter((t) => pickedTenant.workloadTypes.includes(t))
+    : WORKLOAD_ORDER;
+
+  // A pending choice survives a catalog that still lists it; anything else
+  // falls back to the platform default.
+  useEffect(() => {
+    if (configuredModels.length === 0) return;
+    setModel((current) =>
+      current === "" ||
+      (current !== defaultModel && configuredModels.includes(current))
+        ? current
+        : "",
+    );
+  }, [configuredModels, defaultModel]);
+
+  // A choice the newly picked type does not list falls back to the CLI default.
+  useEffect(() => {
+    setEffort((current) => (efforts.includes(current) ? current : ""));
+  }, [efforts]);
+
+  useEffect(() => {
+    if (offeredTypes.length > 0 && !offeredTypes.includes(workloadType)) {
+      setWorkloadType(offeredTypes[0]);
+    }
+  }, [offeredTypes, workloadType]);
 
   const close = () => {
     if (phase === "provisioning") return;
@@ -168,11 +276,15 @@ export function NewSession() {
           ? "platform default"
           : defaultModel),
     );
+    const chosenEffort = efforts.includes(effort) ? effort : "";
+    setSubmittedEffort(chosenEffort);
     api
       .createSession({
         name: trimmed,
         workloadType,
         ...(choosesModel && trimmedModel ? { model: trimmedModel } : {}),
+        ...(chosenEffort ? { reasoningEffort: chosenEffort } : {}),
+        ...(!callerTenant && pickedTenant ? { tenant: pickedTenant.name } : {}),
       })
       .then((sess) => {
         sessionRef.current = sess;
@@ -259,6 +371,33 @@ export function NewSession() {
                 placeholder="api-gateway-dev"
               />
             </label>
+            {callerTenant ? (
+              <div className="tenant-line" data-testid="new-session-tenant-fixed">
+                Tenant: <b>{callerTenant.name}</b>
+              </div>
+            ) : tenants.length > 0 ? (
+              <label className="field">
+                <span>Tenant</span>
+                <select
+                  data-testid="new-session-tenant"
+                  value={tenant}
+                  onChange={(e) => setTenant(e.target.value)}
+                  aria-describedby="new-session-tenant-hint"
+                >
+                  <option value="">No tenant</option>
+                  {tenants.map((t) => (
+                    <option key={t.name} value={t.name}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+                <small className="field-hint" id="new-session-tenant-hint">
+                  {pickedTenant
+                    ? `Only the types ${pickedTenant.name} is granted are shown. The tenant can see and use this session.`
+                    : "No tenant keeps the session operator-only."}
+                </small>
+              </label>
+            ) : null}
             <fieldset className="workload-field">
               <legend>Workload type</legend>
               <div
@@ -266,52 +405,38 @@ export function NewSession() {
                 role="radiogroup"
                 aria-label="Workload type"
               >
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={workloadType === "shell"}
-                  className={"workload-option" + (workloadType === "shell" ? " selected" : "")}
-                  data-testid="new-session-workload-shell"
-                  onClick={() => setWorkloadType("shell")}
-                >
-                  <span className="workload-default">default</span>
-                  <span className="workload-icon" aria-hidden="true">$</span>
-                  <strong>shell</strong>
-                  <small>Interactive bash. You type the commands.</small>
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={workloadType === "claude-code"}
-                  className={
-                    "workload-option" +
-                    (workloadType === "claude-code" ? " selected" : "")
-                  }
-                  data-testid="new-session-workload-claude-code"
-                  onClick={() => setWorkloadType("claude-code")}
-                >
-                  <span className="workload-icon agent" aria-hidden="true">◇</span>
-                  <strong>claude-code</strong>
-                  <small>Agent CLI. You send prompts, it does the work.</small>
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={workloadType === "minimax-code"}
-                  className={
-                    "workload-option wide" +
-                    (workloadType === "minimax-code" ? " selected" : "")
-                  }
-                  data-testid="new-session-workload-minimax-code"
-                  onClick={() => setWorkloadType("minimax-code")}
-                >
-                  <span className="workload-icon gated" aria-hidden="true">⏸</span>
-                  <strong>minimax-code</strong>
-                  <small>
-                    MiniMax Code CLI behind the approval gate — it cannot reach
-                    the outside on its own; external calls wait for approval.
-                  </small>
-                </button>
+                {offeredTypes.map((type) => {
+                  const card = WORKLOAD_CARDS[type];
+                  return (
+                    <button
+                      key={type}
+                      type="button"
+                      role="radio"
+                      aria-checked={workloadType === type}
+                      className={
+                        "workload-option" +
+                        (card.wide ? " wide" : "") +
+                        (workloadType === type ? " selected" : "")
+                      }
+                      data-testid={`new-session-workload-${type}`}
+                      onClick={() => setWorkloadType(type)}
+                    >
+                      {type === "shell" ? (
+                        <span className="workload-default">default</span>
+                      ) : null}
+                      <span
+                        className={
+                          "workload-icon" + (card.iconClass ? " " + card.iconClass : "")
+                        }
+                        aria-hidden="true"
+                      >
+                        {card.icon}
+                      </span>
+                      <strong>{type}</strong>
+                      <small>{card.description}</small>
+                    </button>
+                  );
+                })}
               </div>
             </fieldset>
             {hasModelChoice(workloadType) ? (
@@ -353,6 +478,27 @@ export function NewSession() {
                 </small>
               </label>
             ) : null}
+            {efforts.length > 0 ? (
+              <label className="field model-field">
+                <span>Reasoning effort</span>
+                <select
+                  data-testid="new-session-effort"
+                  value={effort}
+                  onChange={(e) => setEffort(e.target.value)}
+                  aria-describedby="new-session-effort-hint"
+                >
+                  <option value="">CLI default</option>
+                  {efforts.map((value) => (
+                    <option key={value} value={value}>
+                      {value}
+                    </option>
+                  ))}
+                </select>
+                <small className="field-hint" id="new-session-effort-hint">
+                  CLI default leaves the effort to the agent and its model.
+                </small>
+              </label>
+            ) : null}
             <div className="immutable-note">
               <LockIcon size={14} className="immutable-note-icon" />
               <span>
@@ -360,7 +506,12 @@ export function NewSession() {
                   ? hasModelChoice(workloadType)
                     ? "Workload type and model choice are fixed for this session. The session also gets a helper pod that holds the approval gate and the only route out."
                     : "Workload type is fixed for this session. It runs the platform default model, resolved at container start, and gets a helper pod that holds the approval gate and the only route out."
-                  : isAgentWorkload(workloadType)
+                  : workloadType === "codex-chat"
+                    ? "Workload type and model choice are fixed for this session. The first prompt signs the session in to ChatGPT, and the login is kept in its archive."
+                    : workloadType === "codex-task"
+                    ? "Workload type, model and reasoning effort are fixed for this session. It takes a login slot while it has a pod; an empty slot signs in on the first prompt."
+                    : isAgentWorkload(workloadType)
+
                       ? "Workload type and model choice are fixed for this session. Platform default resolves to the configured default at container start."
                       : (
                         <>
@@ -400,7 +551,8 @@ export function NewSession() {
           <>
             <div className="provision-workload" data-testid="prov-workload">
               {isAgentWorkload(workloadType)
-                ? `workloadType=${workloadType} · model=${submittedModel}`
+                ? `workloadType=${workloadType} · model=${submittedModel}` +
+                  (submittedEffort ? ` · effort=${submittedEffort}` : "")
                 : "workloadType=shell"}
             </div>
             <div className="steps" data-testid="prov-steps">

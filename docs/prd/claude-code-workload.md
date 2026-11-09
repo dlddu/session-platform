@@ -39,7 +39,7 @@
 ## Acceptance Criteria
 
 ### AC-E1: 세션 워크로드 타입 선택
-- **설명**: 세션 생성 요청은 워크로드 타입 `workloadType`을 받는다. 허용값은 `shell`·`claude-code`·`minimax-code`(AC-G1)이며 *(2026-11-05: `approval-gated`(옛 AC-F1)는 제거되어 허용값이 아니다)*, **필드 생략만** `shell` 기본값으로 해석한다(explicit empty/null/비문자열은 400). 타입은 세션 수명 동안 **불변**이다(타입을 바꾸려면 새 세션을 만든다). 하나의 세션은 정확히 하나의 워크로드 타입을 가지고, control plane은 타입에 따라 서로 다른 data plane 워크로드(에이전트 모드/이미지)로 pod를 프로비저닝한다. 타입이 늘어나도 AC-A1(control plane은 워크로드를 직접 실행하지 않음)과 AC-A2(1 세션 = 1 전용 워크로드 파드)는 그대로 유지된다.
+- **설명**: 세션 생성 요청은 워크로드 타입 `workloadType`을 받는다. 허용값은 `shell`·`claude-code`·`minimax-code`(AC-G1)·`codex-chat`(AC-J1)·`codex-task`(AC-M1)이며 *(2026-11-05: `approval-gated`(옛 AC-F1)는 제거되어 허용값이 아니다)*, **필드 생략만** `shell` 기본값으로 해석한다(explicit empty/null/비문자열은 400). 타입은 세션 수명 동안 **불변**이다(타입을 바꾸려면 새 세션을 만든다). 하나의 세션은 정확히 하나의 워크로드 타입을 가지고, control plane은 타입에 따라 서로 다른 data plane 워크로드(에이전트 모드/이미지)로 pod를 프로비저닝한다. 타입이 늘어나도 AC-A1(control plane은 워크로드를 직접 실행하지 않음)과 AC-A2(1 세션 = 1 전용 워크로드 파드)는 그대로 유지된다.
 - **달성 가치**: V8, V1
 - **구체화 대상**: AC-A1의 "실제 세션 워크로드" — 이제 **타입별로 분기**한다 (AC-D1은 `shell` 타입의 구체화, AC-E1~E6은 `claude-code` 타입의 구체화)
 - **검증 방법**: `workloadType=claude-code`로 세션을 생성하면 해당 pod에서 클로드 코드 CLI 실행이 가능하고, `workloadType` 미지정 생성은 기존과 동일하게 `shell` 세션으로 동작함을 확인한다. explicit `""`/`null`/비문자열과 허용값 외 타입은 pod 생성 전 400으로 거부됨을 확인한다. 기존 세션 route에 workload/model 변경 필드를 보내면 400이고 원래 값이 유지됨을 확인한다.
@@ -126,6 +126,8 @@
 - **달성 가치**: V1
 - **검증 방법**: ConfigMap의 필수 HTTPS `base-url`과 Secret의 필수 `auth-token`이 sidecar에만 주입되고 주 컨테이너에는 localhost URL·placeholder와 필수 `k3s-mcp-token` SecretKeyRef만 있음을 확인한다. entrypoint가 Claude workload에서만 K3s MCP에 `plugin-marketplace`/`contents:read` 토큰을 요청하고 HTTPS marketplace와 plugin을 설치한 뒤 GitHub token 없이 agent를 exec하며, shell/proxy는 bootstrap을 건너뛰는지 확인한다. optional `k3s-mcp-url`·`plugin-marketplace-url`이 주 컨테이너에만 optional ConfigMapKeyRef로 있고 credential-proxy·control-plane에는 없음을 확인한다. 두 키에 값이 있으면 부트스트랩이 그 주소로 K3s MCP를 호출하고 그 원격에 `marketplace add`를 실행하며 Git `extraheader`의 범위도 그 URL을 따라 이동하는지, 키가 없거나 값이 비면 프로덕션 기본 주소를 쓰는지 확인한다. session managed settings가 해당 plugin만 활성화하는지 확인한다. `K3S_MCP_TOKEN`은 credential-proxy/control-plane에 없고 runner output redaction 대상인지 검증한다. pod가 `data-plane` ServiceAccount와 token을 사용하고 일반 클러스터 리소스에는 `get/list/watch`가 가능하지만 Secret `get/list/watch`는 거부됨을 확인한다. sidecar가 loopback에만 바인딩되고 평문 HTTP·고정 upstream 외 목적지·허용 목록 밖 요청 헤더·CONNECT/Upgrade를 거부하거나 제거하며, 중간 1xx 응답도 자격 증명을 누출하지 않음을 확인한다. optional `ca-cert`가 credential-proxy 컨테이너에만 optional ConfigMapKeyRef로 있고 주 컨테이너에는 없음을 확인한다. 값이 있으면 그 발급자가 서명한 사설 게이트웨이 upstream에 도달하고, 같은 설정에서 공개 발급 upstream의 검증도 계속 성공하며(신뢰 확대가 기존 신뢰를 약화하지 않는다), 키가 없거나 값이 비면 시스템 풀만 쓰고, 인증서가 하나도 없는 비어 있지 않은 번들은 proxy 시작 실패임을 확인한다. 지연 가능한 테스트 upstream이 첫 safe SSE chunk를 flush한 뒤 EOF를 막아도 proxy client가 release 전에 그 chunk를 받고, token을 response read 여러 개에 나누어도 어느 pre-release chunk에도 원문이 없으며 raw upstream 64 MiB SSE 상한을 full-body buffer 없이 지키는지 확인한다. 생성 요청의 자격 증명 필드는 unknown field로 400 거부되고 세션 조회 응답과 read/SSE 출력에 토큰 문자열이 포함되지 않음을 확인한다. runner에서도 token을 여러 stdout/stderr write에 나누어도 중간 SSE event에 원문이 없어야 한다. `platform-default` 세션의 주 컨테이너만 optional `model` ConfigMapKeyRef를 가지며, ConfigMap 값이 비어 있지 않으면 그 값으로 실행하고 키가 없거나 값이 비면 `--model`을 생략하는지 확인한다. 구체 `model`로 생성한 세션은 literal 환경 변수를 사용해 ConfigMap 기본값보다 우선하고, explicit empty/null/비문자열·앞뒤 공백·invalid pattern은 400임을 확인한다.
 
+> 📌 **2026-11-07 (AC-L1)**: 위의 `session-platform@dlddu-plugins` 설치는 이제 **타입 기본값**이다 — 세션이 생성 시 `plugins`를 고르면 진입점은 그 목록만 설치하고 관리형 설정도 그 목록만 켠다(`session-plugins.md`).
+
   공개 `model`과 `models`만 control-plane 환경에 키 단위 투영되고 credential은 없는지 확인하고, custom 설정 ConfigMap 이름을 쓸 때 두 ConfigMap ref 이름이 함께 patch되는지 확인한다. unset/empty/`[]`는 config API의 non-null 빈 배열과 free-text UI로 이어져야 한다. 올바른 배열은 순서대로 노출되고, malformed JSON·null·배열 외 값·빈/공백/invalid/중복/reserved 항목은 control-plane startup 오류인지 확인한다. config 응답은 concrete default 또는 fallback `platform-default`와 catalog만 포함하고 `Cache-Control: no-store`이며, catalog 밖 valid model도 API로 생성되는지 검증한다. singular `model` 변경은 새/복원 pod와 container restart의 실행값에 반영되고, singular/plural UI snapshot은 control-plane rollout 뒤에 함께 반영되는지 확인한다.
 
 > ✅ **구현 결정 (모델 정책, 2026-08-08; 2026-08-09 개정)**: model은 workload type과 함께 생성 시 확정되어 불변이다. `platform-default`는 특정 공급자 모델 버전을 API에 하드코딩하지 않는 세션 메타데이터 별칭이다. 이 별칭의 유효 모델은 플랫폼 설정의 optional `model` 키(2026-11-02부터 ConfigMap)로 운영자가 선택하며, 키가 없거나 비면 설치된 Claude Code CLI의 기본 선택에 위임한다. 구체 세션 model은 literal 값으로 이 플랫폼 기본값보다 우선한다.
@@ -137,3 +139,28 @@
 > ✅ **구현 결정 (설정·자격 증명 분리, 2026-11-02)**: 운영의 플랫폼 Secret은 external-secrets 가 SSM 에서 렌더한다(flux-cd-apps). 그 Secret에서 자격 증명이 아닌 키를 ConfigMap `claude-code-config`(`CLAUDE_CODE_CONFIG_CONFIGMAP`)로 옮겨, Secret `claude-code-credentials`에는 `auth-token`·`k3s-mcp-token`만 남겼다. 키 이름, 필수/선택 여부, 어느 컨테이너에 들어가는지는 하나도 바뀌지 않았다 — 바뀐 것은 pod spec이 그 키를 `secretKeyRef` 대신 `configMapKeyRef`로 읽는다는 것뿐이다. control plane은 두 객체를 Kubernetes API로 읽지 않고 pod spec과 자기 Deployment env에서 이름으로만 참조하므로 RBAC은 변하지 않는다. 세션 pod의 `data-plane` 서비스 어카운트는 `view`로 ConfigMap을 읽을 수 있지만 그 안에는 자격 증명이 없다.
 
 > ✅ **구현 결정 (이미지/모드, 2026-08-08)**: 하나의 data-plane 이미지에 PTY shell과 Claude Code CLI를 포함하고(*2026-11-01*: CRIU 바이너리는 제거됐다) `DATA_PLANE_WORKLOAD`로 시작 모드를 분기한다. Kubernetes pod label/env와 control-plane의 immutable workload spec이 선택한 모드를 끝까지 전달한다.
+
+### AC-E7: 공급자 인증 모드 — Claude 구독(인증 풀) 또는 게이트웨이
+- **설명**: `claude-code`의 공급자 인증은 control plane 설정 `CLAUDE_CODE_AUTH_MODE`가 고른다 (2026-11-07 사용자 결정: 운영은 OpenRouter 게이트웨이에서 Claude 구독으로 옮긴다).
+  - **`subscription`** (운영 기본, `k8s/deployment.yaml`): 풀 `claude-code`(`agent-auth-pool.md` AC-N1~N5, `CLAUDE_CODE_AUTH_SLOTS`)의 슬롯을 쓴다. 파드에는 credential-proxy 사이드카가 **없고**, 주 컨테이너는 `ANTHROPIC_BASE_URL`·`ANTHROPIC_AUTH_TOKEN`·`ANTHROPIC_API_KEY`·`CLAUDE_CODE_OAUTH_TOKEN`을 받지 않으며 하나라도 있으면 에이전트가 기동을 거부한다. CLI는 공급자에 직접 붙는다. 슬롯 파일은 `.credentials.json`이고 HOME 쪽 자리는 `$HOME/.claude/.credentials.json`이다(AC-N4). 주 컨테이너는 이 모드를 `CLAUDE_CODE_AUTH_MODE=subscription`으로 받는다. 모델은 게이트웨이와 따로 고른다 — 게이트웨이의 `model`·`models`(OpenRouter id)는 구독에서 뜻이 없고 `approval-gated`가 계속 읽으므로, 같은 ConfigMap의 선택 키 `subscription-model`·`subscription-models`(control plane `CLAUDE_CODE_SUBSCRIPTION_DEFAULT_MODEL`·`CLAUDE_CODE_SUBSCRIPTION_MODELS`)가 이 모드의 UI 카탈로그이고, `platform-default` 파드는 `subscription-model`을 읽는다(없으면 CLI 기본).
+  - **`gateway`**: AC-E6 그대로 — loopback credential-proxy가 ConfigMap `base-url`과 Secret `auth-token`을 들고 주 컨테이너는 placeholder만 본다. 풀을 쓰지 않는다. e2e(공급자 대역)와 되돌리기용으로 남긴다.
+
+  값이 비면 `gateway`, 그 밖의 값은 control plane 기동 실패다. `subscription`인데 풀 크기가 0이면 이 타입은 `GET /config`에 나오지 않는다(AC-N1).
+
+  **빈 슬롯의 로그인** (`subscription`): Claude Code의 `claude auth login --claudeai`는 URL을 출력한 뒤 붙여 넣을 코드를 stdin에서 기다린다(device code가 아니다, 2.1.220에서 확인). 그래서 로그인을 두 번의 write로 나눈다.
+  1. 턴 시작 시 `claude auth status --json`이 로그인 안 됨을 알리면, 에이전트가 `claude auth login --claudeai`를 띄우고 그 로그인 URL을 플랫폼 안내 줄로 내보낸다 — 「브라우저에서 열어 로그인하고, 화면에 나온 코드를 다음 메시지로 보내라」. 이 프롬프트는 실행하지 않고 보류하며, 턴은 `status=error`로 끝난다.
+  2. 다음 write의 payload는 프롬프트가 아니라 **코드**다. 입력 기록에는 `[login code]`만 남기고 코드 자체는 출력에 쓰지 않는다. 에이전트가 코드를 로그인 프로세스의 stdin에 넣고, 성공하면 슬롯에 동기화한 뒤(AC-N4) 같은 턴에서 보류한 프롬프트를 실행한다. 실패하면 안내 한 줄을 남기고 보류한 프롬프트를 버린다 — 다음 프롬프트가 다시 1번부터 한다.
+  3. 보류는 15분 뒤, 또는 동결·종료 시 로그인 프로세스를 끝내고 안내 한 줄과 함께 사라진다. 만료·동결로 사라진 뒤 30분 안의 첫 write는 늦게 온 코드로 보고 `[login code]`로만 기록하며 실행하지 않는다 — 코드가 프롬프트로 출력·모델에 새지 않게 한다.
+  4. 코드로 읽는 것은 URL 안내 **뒤에** 받은 write뿐이다. 그 전에 이미 큐에 있던 프롬프트는 그대로 기록하되 실행하지 않고 「로그인 후 다시 보내라」는 안내를 남긴다.
+  5. `claude auth status`가 시간 초과·실행 실패·읽을 수 없는 결과면 로그인을 시작하지 않는다 — 그 턴만 안내와 함께 실패하고 아무것도 보류하지 않는다.
+
+  슬롯 동기화(AC-N4)는 그 턴의 시작 복사가 성공해 HOME에 파일을 놓았을 때만 턴 끝의 「HOME에 없음」을 로그아웃으로 읽고, 턴 끝 복사가 실패하면 다음 턴 시작은 HOME의 새 사본을 먼저 슬롯에 저장한다. HOME → 슬롯 복사는 내용이 JSON일 때만 한다.
+- **달성 가치**: V3, V1
+- **구체화 대상**: AC-E6(공급자 자격 증명 배치)를 구독 계정에 맞춘 것, AC-N4의 `claude-code` 슬롯 파일과 로그인 흐름
+- **검증 방법**: `subscription`에서 제출된 pod spec에 credential-proxy 컨테이너·`ANTHROPIC_*` env가 없고 슬롯 PVC와 `CLAUDE_CODE_AUTH_MODE=subscription`이 있음을 확인한다. `gateway`에서는 AC-E6의 모양 그대로임을 확인한다. 에이전트 단위 테스트로 로그인 안 됨 → URL 안내·프롬프트 보류 → 다음 write가 코드로 쓰이고 출력에 코드가 없으며 성공 시 보류한 프롬프트가 실행됨을 확인한다. `subscription` 모드 주 컨테이너가 `ANTHROPIC_AUTH_TOKEN`이 있으면 기동을 거부함을 확인한다.
+
+### AC-E8: 세션 추론 수준(`reasoningEffort`) — 생성 시 고정
+- **설명**: 생성 요청은 선택 필드 `reasoningEffort`를 받는다. 이 필드를 받는 타입은 `claude-code`와 `codex-task`(AC-M4)뿐이고, 다른 타입에 주면 pod 생성 전 400이다. 값은 타입마다 정해진 목록 중 하나이고(`claude-code`: `low`·`medium`·`high`·`xhigh`·`max` — CLI의 `--effort`), 빈 문자열·비문자열·목록 밖은 400이다. 생략하면 세션에 저장하지 않고 CLI의 기본값을 쓴다. 값은 모델·타입처럼 **생성 시 고정**이다 — 세션 레코드의 `reasoningEffort`로 조회 응답에 나오고, 동결·복원을 건너 유지되며, 바꾸려면 새 세션을 만든다. `GET /config`의 각 타입 항목은 `reasoningEfforts` 배열을 내놓는다(받지 않는 타입은 빈 배열). `claude-code` 파드는 `CLAUDE_CODE_EFFORT`로 받고 모든 실행 argv에 `--effort <값>`을 붙인다. 승인 게이트 타입 `minimax-code`는 받지 않는다.
+- **달성 가치**: V8
+- **구체화 대상**: AC-E1(타입 선택)과 같은 축 — 세션 생성 시 고르는 작업 환경에 추론 수준을 더한 것
+- **검증 방법**: `reasoningEffort=max`로 만든 `claude-code` 세션의 조회 응답·파드 env·실행 argv에 그 값이 있음을 확인한다. `shell`·`minimax-code`·`codex-chat`에 주면 400이고 파드가 없음을 확인한다. `GET /config`가 타입별 목록을 내놓고, 세션 생성 화면이 그 목록이 빈 타입에서는 선택지를 숨김을 확인한다.

@@ -61,10 +61,19 @@ func (s SessionPods) Names() []string {
 }
 
 // WorkloadSpec is the immutable runtime configuration copied from a session
-// into every fresh or restored pod (Model: see session.NormalizeModel).
+// into every fresh or restored pod (Model: see session.NormalizeModel;
+// Plugins: see session.NormalizePlugins — nil means the type's default).
 type WorkloadSpec struct {
 	Type  session.WorkloadType
 	Model string
+	// Plugins is the session's plugin selection, nil for the type default (AC-L1).
+	Plugins []string
+	// ReasoningEffort is the session's effort, empty when unset (AC-E8).
+	ReasoningEffort string
+	// AuthSlot is the auth pool slot the service leased for this pod, nil for
+	// a type without a pool (AC-N2). It is per provisioning round, not part of
+	// the session: a restore may run on a different slot (AC-N3).
+	AuthSlot *int
 }
 
 // PodOrchestrator provisions and reclaims the pods that back a session — its
@@ -100,6 +109,7 @@ type StubOrchestrator struct {
 	running   map[string]SessionPods          // sessionID -> the session's pod set
 	workload  map[string]session.WorkloadType // sessionID -> the type it was started with
 	models    map[string]string               // sessionID -> immutable model setting
+	specs     map[string]WorkloadSpec         // sessionID -> the whole spec of its last round
 }
 
 // NewStubOrchestrator returns a stub bound to the given namespace.
@@ -112,6 +122,7 @@ func NewStubOrchestrator(namespace string) *StubOrchestrator {
 		running:   map[string]SessionPods{},
 		workload:  map[string]session.WorkloadType{},
 		models:    map[string]string{},
+		specs:     map[string]WorkloadSpec{},
 	}
 }
 
@@ -137,6 +148,12 @@ func (o *StubOrchestrator) Start(_ context.Context, sessionID string, workload W
 	o.running[sessionID] = pods
 	o.workload[sessionID] = workload.Type
 	o.models[sessionID] = workload.Model
+	spec := workload
+	spec.Plugins = append([]string(nil), workload.Plugins...)
+	if workload.Plugins == nil {
+		spec.Plugins = nil
+	}
+	o.specs[sessionID] = spec
 	return pods, nil
 }
 
@@ -158,6 +175,22 @@ func (o *StubOrchestrator) ModelFor(sessionID string) string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.models[sessionID]
+}
+
+// PluginsFor reports the plugin selection last copied into a session pod in
+// tests (AC-L1); nil means the type default.
+func (o *StubOrchestrator) PluginsFor(sessionID string) []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.specs[sessionID].Plugins...)
+}
+
+// SpecFor reports the whole spec of the session's last Start or RestoreInto,
+// so tests can see the effort and auth slot the service passed (AC-E8, AC-N2).
+func (o *StubOrchestrator) SpecFor(sessionID string) WorkloadSpec {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.specs[sessionID]
 }
 
 // RunningCount reports how many pods the stub believes are running. It counts

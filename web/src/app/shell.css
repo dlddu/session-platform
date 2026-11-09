@@ -323,6 +323,18 @@ article.card {
   height: 12px;
   opacity: 0.8;
 }
+.tenant-tag {
+  margin-left: auto;
+  border: 1px solid var(--line-2);
+  border-radius: 5px;
+  padding: 1px 6px;
+  color: var(--text-dim);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.tenant-tag + .workload-tag {
+  margin-left: 0;
+}
 .workload-tag {
   margin-left: auto;
   color: var(--text-faint);
@@ -337,6 +349,42 @@ article.card {
 .btn svg {
   width: 16px;
   height: 16px;
+}
+
+/* ---------- tenant filter (AC-K2) ---------- */
+.tenant-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: -12px 0 22px;
+}
+.tenant-filter-label {
+  margin-right: 4px;
+  color: var(--text-faint);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.tenant-filter-option {
+  padding: 6px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--ink-2);
+  color: var(--text-faint);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11.5px;
+  transition: 0.16s var(--ease);
+}
+.tenant-filter-option:hover {
+  border-color: var(--line-2);
+  color: var(--text-dim);
+}
+.tenant-filter-option.selected {
+  border-color: var(--line-2);
+  background: var(--surface-3);
+  color: var(--text);
 }
 
 /* ---------- summary reclaim chip ---------- */
@@ -809,6 +857,14 @@ article.card {
   cursor: not-allowed;
   opacity: 0.45;
 }
+.agent-hint {
+  border-top: 1px dashed var(--line);
+  padding: 8px 16px 10px;
+  background: var(--ink);
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
 .ws-body {
   display: grid;
   grid-template-columns: 1fr 320px;
@@ -1118,6 +1174,20 @@ article.card {
 .guarantee b {
   color: var(--text-dim);
   font-weight: 500;
+}
+.tenant-line {
+  margin: -4px 0 16px;
+  color: var(--text-faint);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.tenant-line b {
+  color: var(--text);
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
 }
 .modal-actions {
   display: flex;

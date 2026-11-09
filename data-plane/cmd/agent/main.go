@@ -74,6 +74,9 @@ const (
 )
 
 func main() {
+	if code, handled := runAgentSubcommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); handled {
+		os.Exit(code)
+	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	addr := env("DATA_PLANE_AGENT_ADDR", defaultAddr)
@@ -107,7 +110,8 @@ func main() {
 			logger.Info("session shell started", "shell", a.shellPath, "pid", sh.pid, "addr", addr, "home", a.homeDir())
 		}
 	case workloadClaudeCode:
-		tools, err := agentToolSurface(workload)
+		auth, err := claudeAuthFromEnv(workload, logger)
+
 		if err != nil {
 			logger.Error("unsafe agent credential configuration", "workload", workload, "err", err)
 			os.Exit(1)
@@ -117,17 +121,35 @@ func main() {
 			logger.Error("invalid claude-code run timeout", "err", err)
 			os.Exit(1)
 		}
+		binary := env("CLAUDE_CODE_BIN", defaultClaudeBinary)
+		var login claudeLogin
+		if auth.slot != nil {
+			login = execClaudeLogin{binary: binary}
+		}
 		claude, err := newClaudeWorkload(claudeConfig{
 			StateDir:    env("CLAUDE_CODE_STATE_DIR", defaultClaudeStateDir),
 			Model:       env("CLAUDE_CODE_MODEL", platformDefaultModel),
-			Binary:      env("CLAUDE_CODE_BIN", defaultClaudeBinary),
+			Binary:      binary,
 			RestoreMode: restoreMode,
 			Runner:      execCommandRunner{},
 			Logger:      logger,
 			Redact:      credentialLiteralsFromEnv(),
 			RunTimeout:  runTimeout,
-			Tools:       tools,
+			Tools:       auth.tools,
+			CLI:         claudeCLI{effort: auth.effort},
+			AuthSlot:    auth.slot,
+			Login:       login,
 		})
+		if err != nil {
+			logger.Error("failed to initialise agent workload", "workload", workload, "err", err)
+			os.Exit(1)
+		}
+		a.claude = claude
+		logger.Info("agent workload started", "workload", workload, "addr", addr,
+			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode,
+			"auth_mode", auth.mode, "effort", auth.effort)
+	case workloadCodexChat, workloadCodexTask:
+		claude, err := newCodexWorkloadFromEnv(workload, logger, restoreMode)
 		if err != nil {
 			logger.Error("failed to initialise agent workload", "workload", workload, "err", err)
 			os.Exit(1)
@@ -212,6 +234,29 @@ func main() {
 		handler = proxy
 		if proxy.seeder != nil {
 			go proxy.seeder.run(context.Background())
+		}
+		// A codex-chat sidecar also serves the session DB from its slot (AC-N6).
+		if dir := os.Getenv(sessionDBDirEnv); dir != "" {
+			db, err := newSessionDB(dir, logger)
+			if err != nil {
+				logger.Error("invalid session database directory", "err", err)
+				os.Exit(1)
+			}
+			defer db.Close()
+			handler = withSessionDBMCP(proxy, db)
+			logger.Info("session db mcp enabled", "path", sessionDBMCPPath)
+		}
+		// A codex sidecar also keeps the session's schedules (AC-P1~P3).
+		if raw := os.Getenv(schedulerAgentURLEnv); raw != "" {
+			agent, err := newHTTPSchedulerAgent(raw)
+			if err != nil {
+				logger.Error("invalid scheduler agent URL", "err", err)
+				os.Exit(1)
+			}
+			sched := newScheduler(agent, logger)
+			go sched.run(context.Background())
+			handler = withScheduler(handler, sched)
+			logger.Info("scheduler mcp enabled", "path", schedulerMCPPath)
 		}
 		logger.Info("k3s mcp proxy started", "addr", addr, "configured", token != "",
 			"session_id_header", k3sMCPFixedHeaders(os.Getenv(sessionIDEnv)) != nil)
@@ -668,16 +713,59 @@ func durationEnv(k string, def time.Duration) (time.Duration, error) {
 	return duration, nil
 }
 
-// agentToolSurface validates the credential wiring of a Claude CLI workload and
-// reports the platform-managed tool surface it must run with. minimax-code
-// validates its own (validateMiniMaxClientEnv).
+// claudeAuth is how a Claude Code workload reaches its provider and what it
+// may use: the tool surface, AC-E7's auth mode with its slot, and AC-E8's
+// effort.
+type claudeAuth struct {
+	tools  toolSurface
+	mode   string
+	slot   *authSlot
+	effort string
+}
+
+// claudeAuthFromEnv validates claude-code's credential wiring under AC-E7's
+// mode.
+func claudeAuthFromEnv(workload string, logger *slog.Logger) (claudeAuth, error) {
+	mode, err := claudeAuthModeFromEnv()
+	if err != nil {
+		return claudeAuth{}, err
+	}
+	effort, err := claudeEffortFromEnv()
+	if err != nil {
+		return claudeAuth{}, err
+	}
+	if mode == claudeAuthModeGateway {
+		tools, err := agentToolSurface(workload)
+		return claudeAuth{tools: tools, mode: mode, effort: effort}, err
+	}
+	if err := validateClaudeSubscriptionClientEnv(); err != nil {
+		return claudeAuth{}, err
+	}
+	slot, err := newAuthSlotFromEnv(claudeCredentialsFile, claudeCredentialsHomeRel, logger)
+	if err != nil {
+		return claudeAuth{}, err
+	}
+	plugins, err := claudePluginsFromEnv()
+	if err != nil {
+		return claudeAuth{}, err
+	}
+	return claudeAuth{tools: toolSurface{Plugins: plugins}, mode: mode, slot: slot, effort: effort}, nil
+}
+
+// agentToolSurface validates the credential wiring of a gateway-mode Claude CLI
+// workload and reports the platform-managed tool surface it must run with.
+// minimax-code validates its own (validateMiniMaxClientEnv).
 func agentToolSurface(workload string) (toolSurface, error) {
 	switch workload {
 	case workloadClaudeCode:
 		if err := validateClaudeProxyClientEnv(); err != nil {
 			return toolSurface{}, err
 		}
-		return toolSurface{Plugin: true}, nil
+		plugins, err := claudePluginsFromEnv()
+		if err != nil {
+			return toolSurface{}, err
+		}
+		return toolSurface{Plugins: plugins}, nil
 	default:
 		return toolSurface{}, fmt.Errorf("workload %q has no agent tool surface", workload)
 	}

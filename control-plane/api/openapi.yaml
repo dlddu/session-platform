@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: session-platform control plane API
-  version: 0.3.0
+  version: 0.5.0
   description: >
     REST surface the SPA uses to create, list and operate sessions. Each
     session maps 1:1 to a dedicated data plane *workload* pod and may own
@@ -9,7 +9,9 @@ info:
     uniform "ensure active then serve": read, write and switch promote
     idle->active (AC-C1) or restore snapshot->active (AC-B2) before serving.
     A session picks a workload type at creation (AC-E1): `shell` (the default),
-    `claude-code` or `minimax-code`. The type is immutable for the session's lifetime — no
+    `claude-code`, `minimax-code`, `codex-chat` or `codex-task`
+    (`codex-chat` was `codex` before 2026-11-07). The type is immutable for the session's lifetime — no
+
     endpoint changes it, and a restore keeps it — so switching workloads means
     creating a new session. For `shell`, write injects the payload into the PTY
     stdin (AC-D2); for `claude-code` (and the agent types that reuse its
@@ -39,6 +41,20 @@ info:
     default (or `platform-default` when absent) together with a separate,
     optional ordered model catalog for UI presentation. The catalog is not an
     API allowlist (AC-E6).
+
+    Tenancy (AC-K1~K5). A request without an `Authorization` header is the
+    operator: it sees every session, may filter the list by tenant and may
+    create a session on behalf of a tenant. A request with
+    `Authorization: Bearer <token>` speaks for a tenant: the token must be a
+    Kubernetes ServiceAccount token minted for the `session-platform` audience
+    (TokenReview), and the ServiceAccount must be listed by a configured
+    tenant. Otherwise the request is answered 401 (token not proven) or 403
+    (proven, but no tenant claims it) — never as the operator. A tenant sees
+    only its own sessions: every session-id route answers another tenant's
+    session, and an untenanted one, with 404 exactly as for a missing id. A
+    tenant may create only the workload types its tenant is granted (403
+    otherwise), and the repo-access management routes refuse any bearer
+    caller with 403.
 servers:
   - url: /api/v1
 paths:
@@ -84,6 +100,10 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/RuntimeConfig" }
               example:
+                tenant: null
+                tenants:
+                  - name: pocket-aide
+                    workloadTypes: [claude-code, codex-chat]
                 claudeCode:
                   defaultModel: "~anthropic/claude-opus-latest"
                   models: [sonnet, opus]
@@ -92,25 +112,45 @@ paths:
                     label: Shell
                     description: Interactive bash. You type the commands.
                     takesModel: false
+                    takesPlugins: false
                     input: terminal
                     approvalGate: false
                     defaultModel: null
                     models: []
+                    reasoningEfforts: []
                   - type: claude-code
                     label: Claude Code
                     description: Agent CLI. You send prompts, it does the work.
                     takesModel: true
+                    takesPlugins: true
                     input: prompt
                     approvalGate: false
                     defaultModel: "~anthropic/claude-opus-latest"
                     models: [sonnet, opus]
+                    reasoningEfforts: [low, medium, high, xhigh, max]
   /sessions:
     get:
-      summary: List sessions
+      summary: List the sessions the caller sees
       operationId: listSessions
+      parameters:
+        - name: tenant
+          in: query
+          required: false
+          schema: { type: string }
+          description: >
+            Operator only (AC-K2). Keeps sessions owned by this tenant; an
+            empty value keeps untenanted (operator-owned) sessions only. A
+            tenant caller sending it gets 400 — its list is already scoped.
       responses:
+        "400":
+          description: A tenant caller sent the operator-only `tenant` filter
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "200":
-          description: All sessions
+          description: Every session for the operator; the tenant's own for a tenant caller
           content:
             application/json:
               schema:
@@ -134,12 +174,21 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Session" }
         "400":
-          description: Malformed body, unknown field, trailing JSON, or invalid name, workload type, or model
+          description: Malformed body, unknown field, trailing JSON, or invalid name, workload type, model or tenant
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403":
+          description: >
+            The owning tenant is not granted the workload type, or a tenant
+            caller named another tenant (AC-K3)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "413":
           $ref: "#/components/responses/RequestEntityTooLarge"
+        "503": { $ref: "#/components/responses/AuthPoolExhausted" }
   /sessions/{id}:
     get:
       summary: Get a single session
@@ -273,6 +322,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "413":
           $ref: "#/components/responses/RequestEntityTooLarge"
+        "503": { $ref: "#/components/responses/AuthPoolExhausted" }
   /sessions/{id}/write:
     post:
       summary: Write to a session (state-branched, AC-C3)
@@ -312,6 +362,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/AuthPoolExhausted" }
   /sessions/{id}/switch:
     post:
       summary: Switch to a session, restoring from snapshot if needed (AC-C4)
@@ -348,6 +399,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/AuthPoolExhausted" }
   /sessions/{id}/snapshot:
     post:
       summary: Archive a session on demand and reclaim its pod (AC-B1/AC-A3)
@@ -396,6 +448,66 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+  /sessions/{id}/plugins/refresh:
+    post:
+      summary: Fetch a codex-chat or codex-task session's plugin skills again, keeping its conversation (AC-J7)
+      operationId: refreshSessionPlugins
+      description: >
+        Codex sessions only. The session's K3s MCP sidecar clones the plugin
+        marketplace again and the agent makes the session's platform-managed
+        skills match it; the conversation and thread are untouched, and the
+        next resumed turn opens with a note naming what changed. It runs only
+        between turns. Like a write, it brings an idle session active and
+        restores a snapshotted one first (which by itself already starts from
+        the current marketplace). A refresh that cannot reach the marketplace
+        keeps the skills the session had. Nothing refreshes on its own.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          description: What the refresh changed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginRefreshResult" }
+        "400":
+          description: Malformed body, trailing JSON, or a non-empty request object
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Not found, or another tenant's session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: A turn is running or queued, a refresh or checkpoint is already running, or the session's state changed concurrently
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "422":
+          description: The session is neither codex-chat nor codex-task
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: The marketplace could not be fetched again; the session keeps the skills it had
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503": { $ref: "#/components/responses/AuthPoolExhausted" }
   /repo-access:
     get:
       summary: Allow list and pending requests (AC-H1/AC-H4)
@@ -600,6 +712,24 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
 components:
   responses:
+    Unauthenticated:
+      description: A bearer token was sent that TokenReview does not prove for the `session-platform` audience (AC-K1)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: The caller's ServiceAccount belongs to no tenant, or the route is operator-only (AC-K1, AC-K4)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    AuthPoolExhausted:
+      description: >
+        Every login slot of the session type's auth pool is held (AC-N2), so no
+        pod was made. A session that needed a restore stays `snapshot`. The
+        body's `error` is exactly `auth pool exhausted`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
     RequestEntityTooLarge:
       description: The JSON wire body exceeds 8 MiB, or an agent workload prompt (claude-code, minimax-code) exceeds the 1 MiB decoded payload limit
       content:
@@ -652,8 +782,21 @@ components:
     RuntimeConfig:
       type: object
       additionalProperties: false
-      required: [claudeCode, workloadTypes]
+      required: [claudeCode, workloadTypes, tenant, tenants]
       properties:
+        tenant:
+          allOf:
+            - $ref: "#/components/schemas/TenantConfig"
+          nullable: true
+          description: The calling tenant (AC-K4). `null` for the operator.
+        tenants:
+          type: array
+          description: >
+            Tenants the operator may create into and filter by, in
+            configuration order (AC-K4). Always empty for a tenant caller and
+            when the deployment configures no tenants.
+          items:
+            $ref: "#/components/schemas/TenantConfig"
         claudeCode:
           $ref: "#/components/schemas/ClaudeCodeConfig"
         workloadTypes:
@@ -664,13 +807,15 @@ components:
             is configured, so a client that builds its picker and create-request
             validation from this list needs no release when a type is added.
             `claudeCode` predates this list and repeats its `claude-code` entry
-            for existing clients.
+            for existing clients. For a tenant caller the list is further
+            narrowed to the tenant's granted types (AC-K3).
           items:
             $ref: "#/components/schemas/WorkloadTypeConfig"
     WorkloadTypeConfig:
       type: object
       additionalProperties: false
-      required: [type, label, description, takesModel, input, approvalGate, defaultModel, models]
+      required: [type, label, description, takesModel, takesPlugins, input, approvalGate, defaultModel, models, reasoningEfforts]
+
       properties:
         type:
           type: string
@@ -684,6 +829,9 @@ components:
         takesModel:
           type: boolean
           description: Whether a create request for this type may carry `model`. A model on a type where this is false is rejected with 400.
+        takesPlugins:
+          type: boolean
+          description: Whether a create request for this type may carry `plugins` (AC-L1). A plugin list on a type where this is false is rejected with 400.
         input:
           type: string
           enum: [prompt, terminal]
@@ -714,6 +862,25 @@ components:
           description: Same meaning as `ClaudeCodeConfig.models` for this type. Always empty when `takesModel` is false.
           items:
             type: string
+        reasoningEfforts:
+          type: array
+          uniqueItems: true
+          description: >
+            The values a create request's `reasoningEffort` may take for this
+            type, in display order (AC-E8). Empty when the type takes none — a
+            create request carrying one is then rejected with 400.
+          items:
+            type: string
+    TenantConfig:
+      type: object
+      additionalProperties: false
+      required: [name, workloadTypes]
+      properties:
+        name: { type: string, pattern: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$' }
+        workloadTypes:
+          type: array
+          description: The tenant's granted types that this deployment offers, in display order.
+          items: { $ref: "#/components/schemas/WorkloadType" }
     ClaudeCodeConfig:
       type: object
       additionalProperties: false
@@ -744,7 +911,8 @@ components:
       enum: [active, idle, snapshot]
     WorkloadType:
       type: string
-      enum: [shell, claude-code, minimax-code]
+      enum: [shell, claude-code, minimax-code, codex-chat, codex-task]
+
       default: shell
       description: >
         Which data plane workload the session runs (AC-E1). Fixed at
@@ -753,7 +921,15 @@ components:
         `minimax-code` is the MiniMax Code CLI (`mcode`) on that same
         execution model, with its own provider Secret and ConfigMap, behind
         the approval gate — a workload pod plus a session-scoped helper pod
-        (AC-G1~G6, docs/prd/approval-gate.md AC-F2~F6). Each non-default type requires the control plane
+        (AC-G1~G6, docs/prd/approval-gate.md AC-F2~F6); `codex-chat` runs the Codex SDK on
+        the same execution model, signs each session in to ChatGPT with a
+        device code on its first prompt, and is limited to conversation,
+        platform plugin skills and the K3s MCP (AC-J1~J7). Its old name `codex`
+        is refused in requests; sessions stored under it are answered as `codex-chat`.
+        `codex-task` runs the same SDK with a shell, files and network like
+        `claude-code`, signed in through a login slot of the `codex-task` auth
+        pool (AC-M1~M4, AC-N1~N5). Each non-default type requires the control plane
+
         to have an image configured for it, and creating a session of a type
         with no configured image fails rather than falling back to a shell.
     Checkpoint:
@@ -770,17 +946,38 @@ components:
         id: { type: string }
         name: { type: string }
         workloadType: { $ref: "#/components/schemas/WorkloadType" }
+        tenant:
+          type: string
+          description: >
+            Owning tenant, fixed at creation (AC-K2). Absent for an
+            operator-owned session, including every session created before
+            tenancy existed.
         state: { $ref: "#/components/schemas/State" }
         model:
           type: string
           description: >
             Immutable model identifier for the agent workload types. Present
-            for `claude-code` and `minimax-code`, which share
+            for `claude-code`, `minimax-code`, `codex-chat` and `codex-task`, which share
             this contract (AC-E6, reused by AC-G1); omitted at creation resolves to
+
             `platform-default`.
             Whenever the primary container starts, including a restart, that
             alias resolves through the optional ConfigMap model and then the CLI
             fallback.
+        plugins:
+          type: array
+          items: { type: string }
+          description: >
+            The session's marketplace plugin selection, fixed at creation and
+            carried across snapshot/restore (AC-L1). Absent when the session was
+            created without one and runs its type's platform-default plugins.
+        reasoningEffort:
+          type: string
+          description: >
+            Immutable reasoning effort, present only when the create request
+            named one (AC-E8). `claude-code` takes low, medium, high, xhigh or
+            max; `codex-task` takes minimal, low, medium, high or xhigh (AC-M4).
+            Absent means the CLI's own default. A restore keeps it.
         pod:
           type: string
           description: >
@@ -793,9 +990,10 @@ components:
             Session-scoped pods that serve the workload pod without running the
             workload themselves (AC-A2's auxiliary-pod clause). They share the
             workload pod's lifetime and are reclaimed with it, so this is absent
-            exactly when `pod` is. `shell` and `claude-code` sessions provision
-            none; a session of a type behind the approval gate (`minimax-code`)
-            lists its one helper pod here (AC-F4).
+            exactly when `pod` is. `shell`, `claude-code`, `codex-chat` and `codex-task`
+            sessions provision none; a session of a type behind the approval gate
+            (`minimax-code`) lists its one helper pod here (AC-F4).
+
         createdAt: { type: string, format: date-time }
         lastAccess: { type: string, format: date-time }
         checkpoint: { $ref: "#/components/schemas/Checkpoint" }
@@ -814,17 +1012,62 @@ components:
             - $ref: "#/components/schemas/WorkloadType"
           description: >
             Optional. Omitted means `shell`, so a request that predates the
-            workload type axis behaves unchanged. A value outside the enum is
-            rejected with 400 before any pod is provisioned.
+            workload type axis behaves unchanged. Any value outside the enum,
+            including `codex-chat`'s old name `codex` (AC-J1), is rejected with 400 before any pod is provisioned.
         model:
           type: string
           pattern: '^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$'
           description: >
-            Model for this session. Valid when workloadType is `claude-code`
-            or `minimax-code`; omitted resolves to `platform-default`. A concrete
+            Model for this session. Valid when workloadType is `claude-code`,
+            `minimax-code`, `codex-chat` or `codex-task`; omitted resolves to `platform-default`. A concrete
+
             value is passed literally and takes precedence over the platform
             ConfigMap default. The catalog returned by GET /config is advisory,
             not an allowlist. Credentials are never accepted in this request.
+        plugins:
+          type: array
+          minItems: 1
+          maxItems: 16
+          uniqueItems: true
+          items:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+          description: >
+            Optional marketplace plugins for this session (AC-L1), by plugin name
+            in the platform marketplace (no `@marketplace` suffix). Valid when
+            workloadType is `claude-code`, `minimax-code`, `codex-chat` or
+            `codex-task`. Omitted, the session gets its type's platform default
+            (`session-platform` for claude-code, the deployment's `CODEX_PLUGINS`
+            for codex-chat and `CODEX_TASK_PLUGINS` for codex-task,
+            `mcp-servers` for minimax-code). Given, it replaces that default
+            outright — list the default too if the session should keep it.
+            Names are not checked against the marketplace here: a name it does
+            not list fails the pod's plugin bootstrap, which for `claude-code`
+            fails the create (its agent never becomes reachable) and for
+            `codex-chat`/`codex-task`/`minimax-code` leaves the session running without plugins,
+            as any marketplace failure already does. `minimax-code` registers
+            its K3s MCP server only from a selected plugin that declares it, so
+            a failed bundle, or a list without such a plugin (default
+            `mcp-servers`), leaves it without K3s tools too. The selection is
+            installed again on every restore: a `claude-code` session whose
+            plugin has since left the marketplace cannot be restored. `null`, an empty list, a duplicate or an
+            invalid name → 400, as is a list on `shell`.
+        reasoningEffort:
+          type: string
+          minLength: 1
+          description: >
+            Optional reasoning effort, fixed at creation (AC-E8). It must be one
+            of the type's `reasoningEfforts` from GET /config; a type with none,
+            an empty string, a non-string or an unlisted value is rejected with
+            400 before any pod is provisioned.
+        tenant:
+          type: string
+          minLength: 1
+          description: >
+            Operator only: the configured tenant the session is created for
+            (AC-K2). A tenant caller may omit it or name itself; its sessions
+            always belong to it. Unknown tenant → 400; a type the owning tenant
+            is not granted → 403.
     WriteRequest:
       type: object
       additionalProperties: false
@@ -833,7 +1076,8 @@ components:
           type: string
           description: >
             Raw workload input. Agent workload writes (claude-code,
-            minimax-code) are limited to 1 MiB of UTF-8 bytes
+            minimax-code, codex-chat, codex-task) are limited to 1 MiB of UTF-8 bytes
+
             per prompt; larger writes return 413.
     ReadRequest:
       type: object
@@ -880,6 +1124,31 @@ components:
         path:
           type: string
           description: which state branch served the write
+    PluginRefreshResult:
+      type: object
+      required: [session, path, state, added, updated, removed]
+      properties:
+        session: { $ref: "#/components/schemas/Session" }
+        path:
+          type: string
+          description: Which state branch served the refresh, as for a write (e.g. `active`, `snapshot->restore->refresh-plugins`).
+        state:
+          type: string
+          enum: [ready, unconfigured]
+          description: "`unconfigured`: the session has no plugin marketplace (no K3s MCP token), so there was nothing to fetch."
+        revision:
+          type: string
+          description: The marketplace commit the skills now come from, when known.
+        added:
+          type: array
+          items: { type: string }
+          description: Platform-managed skill directories (`<plugin>--<skill>`) the refresh installed.
+        updated:
+          type: array
+          items: { type: string }
+        removed:
+          type: array
+          items: { type: string }
     Error:
       type: object
       properties:

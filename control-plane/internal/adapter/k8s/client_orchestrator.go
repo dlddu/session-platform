@@ -74,7 +74,10 @@ const (
 	workloadEnvVar = "DATA_PLANE_WORKLOAD"
 
 	// Claude Code runtime configuration (AC-E6).
-	ClaudeCodeModelEnvVar    = "CLAUDE_CODE_MODEL"
+	ClaudeCodeModelEnvVar = "CLAUDE_CODE_MODEL"
+	// ClaudeCodeEffortEnvVar carries a claude-code session's reasoning effort;
+	// absent when the session names none (AC-E8).
+	ClaudeCodeEffortEnvVar   = "CLAUDE_CODE_EFFORT"
 	K3SMCPTokenEnvVar        = "K3S_MCP_TOKEN"
 	claudeCodeStateDirEnvVar = "CLAUDE_CODE_STATE_DIR"
 	workloadStateVolumePath  = "/session"
@@ -93,7 +96,10 @@ const (
 	ClaudeCodeAuthTokenSecretKey   = "auth-token"
 	ClaudeCodeK3SMCPTokenSecretKey = "k3s-mcp-token"
 	ClaudeCodeModelConfigKey       = "model"
-	ClaudeCodeBaseURLConfigKey     = "base-url"
+	// ClaudeCodeSubscriptionModelConfigKey is platform-default's model for a
+	// claude-code session in subscription mode (AC-E7).
+	ClaudeCodeSubscriptionModelConfigKey = "subscription-model"
+	ClaudeCodeBaseURLConfigKey           = "base-url"
 	// AnthropicCACertEnvVar carries an optional PEM bundle the credential proxy
 	// must trust *in addition to* the system roots, for a deployment whose
 	// provider `base-url` is a private gateway issued by a CA no public store
@@ -112,6 +118,11 @@ const (
 	ClaudeCodePluginMarketplaceURLEnvVar    = "CLAUDE_CODE_PLUGIN_MARKETPLACE_URL"
 	ClaudeCodeK3SMCPURLConfigKey            = "k3s-mcp-url"
 	ClaudeCodePluginMarketplaceURLConfigKey = "plugin-marketplace-url"
+	// ClaudeCodePluginsEnvVar carries a session's own plugin selection
+	// (AC-L1), comma-separated, and is set only when the session chose one.
+	// Keep in sync with data-plane/entrypoint.sh and data-plane/cmd/agent
+	// (claudePluginsEnv).
+	ClaudeCodePluginsEnvVar = "CLAUDE_CODE_PLUGINS"
 	// ClaudeCredentialsContainerName identifies the isolated Secret holder.
 	ClaudeCredentialsContainerName = "claude-credentials"
 	// ClaudeCredentialProxyURL is the loopback-only endpoint visible to the
@@ -212,6 +223,11 @@ type ClientOrchestrator struct {
 	dropURL                  string // drop's in-cluster URL for the helper's drop_* tools (drop.go)
 	miniMaxCredentialsSecret string
 	miniMaxConfigConfigMap   string
+	codexCredentialsSecret   string
+	codexConfigConfigMap     string
+	codexPlugins             string
+	codexTask                codexProfile
+	claudeAuthMode           ClaudeCodeAuthMode
 	// AC-F5's per-session shared claim — see shared_volume.go.
 	sharedVolumeStorageClass string
 	sharedVolumeSize         resource.Quantity
@@ -322,9 +338,18 @@ func NewClientOrchestrator(client kubernetes.Interface, namespace string, opts .
 		claudeConfigConfigMap:    defaultClaudeConfigConfigMap,
 		miniMaxCredentialsSecret: defaultMiniMaxCredentialsSecret,
 		miniMaxConfigConfigMap:   defaultMiniMaxConfigConfigMap,
-		sharedVolumeSize:         resource.MustParse(defaultSharedVolumeSize),
-		pollInterval:             defaultPollInterval,
-		readyTimeout:             defaultReadyTimeout,
+		codexCredentialsSecret:   defaultCodexCredentialsSecret,
+		codexConfigConfigMap:     defaultCodexConfigConfigMap,
+		codexPlugins:             DefaultCodexPlugins,
+		codexTask: codexProfile{
+			credentialsSecret: defaultCodexTaskCredentialsSecret,
+			configConfigMap:   defaultCodexTaskConfigConfigMap,
+			plugins:           DefaultCodexPlugins,
+		},
+		claudeAuthMode:   ClaudeCodeAuthGateway,
+		sharedVolumeSize: resource.MustParse(defaultSharedVolumeSize),
+		pollInterval:     defaultPollInterval,
+		readyTimeout:     defaultReadyTimeout,
 	}
 	for _, opt := range opts {
 		opt(o)
@@ -388,6 +413,12 @@ func (o *ClientOrchestrator) startSet(ctx context.Context, sessionID, checkpoint
 	if err != nil {
 		return SessionPods{}, err
 	}
+	// Validate the plugin selection before any pod exists: the helper pod below
+	// carries it too, and must not be provisioned for a request buildPod would
+	// refuse (AC-L1).
+	if workload.Plugins, err = session.NormalizePlugins(workloadType, workload.Plugins); err != nil {
+		return SessionPods{}, err
+	}
 	suffix := ""
 	if checkpointRef != "" {
 		if suffix, err = restoreSuffix(); err != nil {
@@ -398,7 +429,7 @@ func (o *ClientOrchestrator) startSet(ctx context.Context, sessionID, checkpoint
 	var auxiliary []PodRef
 	var helper helperEndpoints
 	if workloadType.HasApprovalGate() {
-		spec, err := o.helperPodSpec(sessionID, suffix, workloadType)
+		spec, err := o.helperPodSpec(sessionID, suffix, workloadType, workload.Plugins)
 		if err != nil {
 			return SessionPods{}, err
 		}
@@ -534,6 +565,14 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 	if err != nil {
 		return nil, err
 	}
+	plugins, err := session.NormalizePlugins(workloadType, workload.Plugins)
+	if err != nil {
+		return nil, err
+	}
+	workload.Plugins = plugins
+	if workload.ReasoningEffort, err = session.NormalizeReasoningEffort(workloadType, workload.ReasoningEffort); err != nil {
+		return nil, err
+	}
 	image, err := o.imageFor(workloadType)
 	if err != nil {
 		return nil, err
@@ -581,12 +620,14 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 	case session.WorkloadTypeClaudeCode:
 		modelEnv := corev1.EnvVar{Name: ClaudeCodeModelEnvVar, Value: model}
 		if model == session.PlatformDefaultModel {
-			// platform-default resolves at pod start from the optional key (AC-E6).
-			modelEnv = optionalConfigMapEnv(
-				ClaudeCodeModelEnvVar,
-				o.claudeConfigConfigMap,
-				ClaudeCodeModelConfigKey,
-			)
+			// platform-default resolves at pod start from the optional key (AC-E6);
+			// a subscription reads its own key, since the gateway's model ids are
+			// not subscription models (AC-E7).
+			key := ClaudeCodeModelConfigKey
+			if o.claudeAuthMode == ClaudeCodeAuthSubscription {
+				key = ClaudeCodeSubscriptionModelConfigKey
+			}
+			modelEnv = optionalConfigMapEnv(ClaudeCodeModelEnvVar, o.claudeConfigConfigMap, key)
 		}
 		container.Env = append(container.Env,
 			modelEnv,
@@ -598,9 +639,16 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 				ClaudeCodePluginMarketplaceURLConfigKey,
 			),
 			corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: workloadStateDir},
-			corev1.EnvVar{Name: AnthropicBaseURLEnvVar, Value: ClaudeCredentialProxyURL},
-			corev1.EnvVar{Name: AnthropicAuthTokenEnvVar, Value: credentialProxyPlaceholderToken},
 		)
+		// Only a session that chose its plugins carries the variable; without it
+		// the entrypoint and agent fall back to the platform plugin (AC-L1).
+		if plugins != nil {
+			container.Env = append(container.Env,
+				corev1.EnvVar{Name: ClaudeCodePluginsEnvVar, Value: strings.Join(plugins, ",")})
+		}
+		if workload.ReasoningEffort != "" {
+			container.Env = append(container.Env, corev1.EnvVar{Name: ClaudeCodeEffortEnvVar, Value: workload.ReasoningEffort})
+		}
 		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
 			Name: claudeCodeStateVolumeName, MountPath: workloadStateVolumePath,
 		})
@@ -608,10 +656,32 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			Name:         claudeCodeStateVolumeName,
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		})
-
-		sidecars = append(sidecars, o.claudeCredentialProxy(image))
+		if o.claudeAuthMode == ClaudeCodeAuthSubscription {
+			// AC-E7: the CLI reaches the provider itself with the slot's login,
+			// so there is no proxy to point it at and no gateway token to hold.
+			container.Env = append(container.Env, corev1.EnvVar{
+				Name: ClaudeCodeAuthModeEnvVar, Value: string(ClaudeCodeAuthSubscription),
+			})
+		} else {
+			container.Env = append(container.Env,
+				corev1.EnvVar{Name: AnthropicBaseURLEnvVar, Value: ClaudeCredentialProxyURL},
+				corev1.EnvVar{Name: AnthropicAuthTokenEnvVar, Value: credentialProxyPlaceholderToken},
+			)
+			sidecars = append(sidecars, o.claudeCredentialProxy(image))
+		}
 	case session.WorkloadTypeMiniMaxCode:
 		sidecars, volumes = o.miniMaxCodePod(&container, model, helper, helperPodNameFor(sessionID, suffix))
+	case session.WorkloadTypeCodexChat, session.WorkloadTypeCodexTask:
+		sidecars, volumes = o.codexPod(&container, sessionID, workload, workloadType, model, image)
+	}
+	slotVolumes, err := o.attachAuthSlot(&container, workloadType, workload.AuthSlot)
+	if err != nil {
+		return nil, err
+	}
+	volumes = append(volumes, slotVolumes...)
+	initContainers, err := attachSessionDB(&container, sidecars, workloadType, image)
+	if err != nil {
+		return nil, err
 	}
 	name := podName(sessionID)
 	var annotations map[string]string
@@ -628,7 +698,9 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 	// inspect cluster resources. Its ClusterRoleBinding uses the built-in `view`
 	// role rather than a wildcard rule because RBAC cannot subtract Secrets from
 	// an otherwise-wildcard grant.
-	automountServiceAccountToken := true
+	// codex-chat alone has no shell to use one with (AC-J6); codex-task runs at
+	// claude-code's level and gets it (AC-M1).
+	automountServiceAccountToken := workloadType != session.WorkloadTypeCodexChat
 
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -647,6 +719,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			ServiceAccountName:           DataPlaneServiceAccountName,
 			AutomountServiceAccountToken: &automountServiceAccountToken,
 			SecurityContext:              workloadPodSecurityContext(workloadType),
+			InitContainers:               initContainers,
 			Containers:                   containers,
 			Volumes:                      volumes,
 		},
@@ -659,7 +732,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 //
 // Unlike the workload pod it gets no apiserver credential — nothing in it needs
 // the API server, and the pod holds both of the platform's external secrets.
-func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadType session.WorkloadType) (*corev1.Pod, error) {
+func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadType session.WorkloadType, plugins []string) (*corev1.Pod, error) {
 	image, err := o.imageFor(workloadType)
 	if err != nil {
 		return nil, err
@@ -720,7 +793,7 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 	}
 	helperVolumes = o.addRepoAccess(&mcp, helperVolumes)
 	helperVolumes = o.addDrop(&mcp, helperVolumes)
-	proxies, err := o.helperProxyContainers(sessionID, workloadType, image)
+	proxies, err := o.helperProxyContainers(sessionID, workloadType, image, plugins)
 	if err != nil {
 		return nil, err
 	}

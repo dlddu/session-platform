@@ -94,6 +94,7 @@
 
   /* ---------- session grid ---------- */
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:16px}
+  .empty{padding:40px;text-align:center;color:var(--text-faint)}
   .card{
     position:relative;border-radius:var(--r);padding:18px;cursor:pointer;overflow:hidden;
     background:var(--surface);border:1px solid var(--line);
@@ -111,6 +112,18 @@
   .card-foot{display:flex;align-items:center;gap:8px;margin-top:16px;
     font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--text-faint)}
   .card-foot .pod{display:flex;align-items:center;gap:6px}
+  /* tenant tag (AC-K2) — session.tenant 이 있을 때만 */
+  .card-foot .tenant-tag{margin-left:auto;border:1px solid var(--line-2);border-radius:5px;padding:1px 6px;
+    color:var(--text-dim);font-size:10px;white-space:nowrap}
+
+  /* tenant filter (AC-K2) — 테넌트가 설정된 운영자에게만 · ?tenant= 로 공유 가능 */
+  .tenant-filter{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:-12px 0 22px}
+  .tenant-filter .lab{margin-right:4px;font-family:"IBM Plex Mono",monospace;font-size:10.5px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--text-faint)}
+  .tenant-filter button{font-family:"IBM Plex Mono",monospace;font-size:11.5px;padding:6px 11px;border-radius:9px;
+    background:var(--ink-2);border:1px solid var(--line);color:var(--text-faint);transition:.16s var(--ease)}
+  .tenant-filter button:hover{border-color:var(--line-2);color:var(--text-dim)}
+  .tenant-filter button.sel{background:var(--surface-3);border-color:var(--line-2);color:var(--text)}
   .card-foot svg{width:12px;height:12px;opacity:.8}
 
   /* vitals (active/idle) */
@@ -387,6 +400,8 @@
         </div>
 
         <div class="summary" id="summary"><!-- chips injected --></div>
+        <div class="tenant-filter" id="tenant-filter" role="group" aria-label="Filter by tenant"><!-- options injected --></div>
+        <div class="empty" id="grid-empty" style="display:none"></div>
         <div class="grid" id="grid"><!-- cards injected --></div>
       </div>
     </section>
@@ -412,12 +427,14 @@ let sessions = [
   {id:'4e5f', name:'scrape-worker', type:'shell', state:'idle', pod:'sess-4e5f-q8wd', region:'us-east-1', up:'1h 38m', upMin:98, cpu:3, mem:188, memMax:1024, idleMin:48, freezeSec:702},
   {id:'6d40', name:'vendor-rates-sync', type:'minimax-code', state:'active', pod:'sess-6d40-p2vq', region:'us-east-1', up:'42m', upMin:42, cpu:19, mem:372, memMax:2048, idleMin:0},
   {id:'b2d7', name:'changelog-autogen', type:'minimax-code', state:'active', pod:'sess-b2d7-q4mf', region:'us-east-1', up:'38m', upMin:38, cpu:18, mem:341, memMax:2048, idleMin:0},
+  {id:'e41c', name:'cluster-triage', type:'codex-chat', tenant:'pocket-aide', state:'active', pod:'sess-e41c-v9rn', region:'us-east-1', up:'12m', upMin:12, cpu:9, mem:226, memMax:2048, idleMin:0},
+  {id:'3f88', name:'nightly-report', type:'shell', tenant:'ops-bot', state:'idle', pod:'sess-3f88-w2tc', region:'us-east-1', up:'1h 52m', upMin:112, cpu:1, mem:150, memMax:1024, idleMin:33, freezeSec:1620},
   {id:'0a17', name:'model-train-7b', type:'shell', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'2h ago', checkpoint:'412 MB', reclaim:'2 vCPU · 4 GB'},
   {id:'c83d', name:'doc-migration', type:'claude-code', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'18m ago', checkpoint:'38 MB archive', reclaim:'1 vCPU · 2 GB'}
 ];
-// 타입에 따라 작업 화면이 갈린다: shell → workspace.html · claude-code → agent-workspace.html
-// · 승인 게이트를 쓰는 타입(minimax-code) → gated-workspace.html (AC-G1 · docs/prd/approval-gate.md)
-const WS_PAGE = {'claude-code':'agent-workspace.html', 'minimax-code':'gated-workspace.html', 'shell':'workspace.html'};
+// 타입에 따라 작업 화면이 갈린다: shell → workspace.html · claude-code · codex → agent-workspace.html
+// · 승인 게이트를 쓰는 타입(minimax-code) → gated-workspace.html (AC-G1 · AC-J1 · docs/prd/approval-gate.md)
+const WS_PAGE = {'claude-code':'agent-workspace.html', 'minimax-code':'gated-workspace.html', 'codex-chat':'agent-workspace.html', 'shell':'workspace.html'};
 function wsHref(s){
   if(s.state==='snapshot') return `restore.html?id=${s.id}`;
   return `${WS_PAGE[s.type]||'workspace.html'}?id=${s.id}`;
@@ -427,6 +444,8 @@ function typeTag(s){
     return `<span class="pod" style="color:#b79ae0" title="workloadType=claude-code">◇ claude-code</span>`;
   if(s.type==='minimax-code')
     return `<span class="pod" style="color:var(--idle)" title="workloadType=minimax-code">⏸ minimax-code</span>`;
+  if(s.type==='codex-chat')
+    return `<span class="pod" style="color:#b79ae0" title="workloadType=codex-chat">◇ codex-chat</span>`;
   return `<span class="pod" style="color:var(--text-faint)" title="workloadType=shell">$ shell</span>`;
 }
 function fmtSec(s){const m=Math.floor(s/60),ss=s%60;return m+':'+String(ss).padStart(2,'0');}
@@ -448,10 +467,36 @@ function toast(msg,kind){
 
 const grid = document.getElementById('grid');
 const summaryEl = document.getElementById('summary');
+/* ---------- AC-K2 · AC-K4 · 테넌트 필터 ----------
+   테넌트가 하나라도 설정된 운영자 화면에만 보인다(?tenancy=none 이면 오늘과 똑같다).
+   ?tenant 없음 = All · ?tenant=<name> = 그 테넌트 · ?tenant= (빈 값) = No tenant */
+const TENANTS = ['pocket-aide','ops-bot'];
+const params = new URLSearchParams(location.search);
+const TENANCY_ON = params.get('tenancy') !== 'none';
+let tenantFilter = TENANCY_ON ? params.get('tenant') : null;
+function shown(){
+  return tenantFilter===null ? sessions : sessions.filter(s=>(s.tenant||'')===tenantFilter);
+}
+function renderTenantFilter(){
+  const el = document.getElementById('tenant-filter');
+  if(!TENANCY_ON){ el.style.display='none'; return; }
+  const opts = [{v:null,l:'All'}].concat(TENANTS.map(t=>({v:t,l:t}))).concat([{v:'',l:'No tenant'}]);
+  el.innerHTML = '<span class="lab">Tenant</span>' + opts.map((o,i)=>
+    `<button class="${tenantFilter===o.v?'sel':''}" aria-pressed="${tenantFilter===o.v}" onclick="pickTenantFilter(${i})">${o.l}</button>`).join('');
+  el._opts = opts;
+}
+function pickTenantFilter(i){
+  tenantFilter = document.getElementById('tenant-filter')._opts[i].v;
+  const q = new URLSearchParams(location.search);
+  if(tenantFilter===null) q.delete('tenant'); else q.set('tenant', tenantFilter);
+  history.replaceState(null,'',location.pathname+(q.toString()?'?'+q:''));
+  renderTenantFilter(); renderSummary(); renderGrid();
+}
 function renderSummary(){
-  const a = sessions.filter(s=>s.state==='active').length;
-  const i = sessions.filter(s=>s.state==='idle').length;
-  const f = sessions.filter(s=>s.state==='snapshot').length;
+  const list = shown();
+  const a = list.filter(s=>s.state==='active').length;
+  const i = list.filter(s=>s.state==='idle').length;
+  const f = list.filter(s=>s.state==='snapshot').length;
   summaryEl.innerHTML = `
     <div class="chip"><span class="dot" style="background:var(--active);box-shadow:0 0 8px var(--active)"></span><b>${a}</b><span>active</span></div>
     <div class="chip"><span class="dot" style="background:var(--idle)"></span><b>${i}</b><span>idle</span></div>
@@ -495,21 +540,27 @@ function cardHTML(s){
       <span class="badge ${s.state}"><span class="led"></span>${STATE_LABEL[s.state]}</span>
     </div>
     ${body}
-    <div class="card-foot">${podLine}<span style="margin-left:auto">${typeTag(s)}</span></div>
+    <div class="card-foot">${podLine}${s.tenant?`<span class="tenant-tag" title="tenant=${s.tenant}">${s.tenant}</span>`:''}<span style="${s.tenant?'':'margin-left:auto'}">${typeTag(s)}</span></div>
   </button>`;
 }
-function renderGrid(){ grid.innerHTML = sessions.map(cardHTML).join(''); }
+function renderGrid(){
+  const list = shown();
+  grid.innerHTML = list.map(cardHTML).join('');
+  const empty = document.getElementById('grid-empty');
+  empty.style.display = list.length ? 'none' : '';
+  empty.textContent = tenantFilter==='' ? 'No untenanted sessions.' : `No sessions for tenant ${tenantFilter}.`;
+}
 function startGridTick(){
   setInterval(()=>{
     if(window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     document.querySelectorAll('#grid .card[data-state="active"]').forEach((card,idx)=>{
-      const s = sessions.filter(x=>x.state==='active')[idx]; if(!s) return;
+      const s = shown().filter(x=>x.state==='active')[idx]; if(!s) return;
       s.cpu = Math.max(4, Math.min(96, s.cpu + (Math.random()*8-4)|0));
       const cv=card.querySelector('[data-cpu]'), cb=card.querySelector('[data-cpubar]');
       if(cv){cv.innerHTML=`${s.cpu}<small>%</small>`; cb.style.width=s.cpu+'%';}
     });
     document.querySelectorAll('#grid .card[data-state="idle"]').forEach((card,idx)=>{
-      const s = sessions.filter(x=>x.state==='idle')[idx]; if(!s) return;
+      const s = shown().filter(x=>x.state==='idle')[idx]; if(!s) return;
       s.freezeSec = Math.max(0, s.freezeSec-1);
       const frz=card.querySelector('[data-frz]'); if(frz) frz.textContent='freezes in '+fmtSec(s.freezeSec);
       const ring=card.querySelector('[data-ring]'); if(ring) ring.style.setProperty('--p', Math.max(0,Math.round((1-s.freezeSec/3600)*100)));
@@ -517,7 +568,7 @@ function startGridTick(){
   },1000);
 }
 
-renderSummary(); renderGrid(); startGridTick();
+renderTenantFilter(); renderSummary(); renderGrid(); startGridTick();
 </script>
 </body>
 </html>

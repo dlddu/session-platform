@@ -6,11 +6,11 @@
 |---|---|
 | 여정 식별자 | `JRN-agent-prompt-loop` |
 | 여정명 | 작업 환경을 골라 에이전트에게 일을 시킨다 |
-| 상태 | 초안 (v0.2.2) |
+| 상태 | 초안 (v0.4.1) |
 | 담당자 | 미지정 |
 | 최종 수정일 | 2026-11-05 |
 | 달성 가치 | V8 목적에 맞는 작업 환경 선택 · V3 끊김 없는 세션 연속성 |
-| 연결 문서 | PRD [`claude-code-workload`](../prd/claude-code-workload.md)(AC-E1~E6) · [`lifecycle`](../prd/lifecycle.md)(AC-B1~B3) · mockup `new-session.html`·`agent-workspace.html` ([매핑](../mockups/README.md)) |
+| 연결 문서 | PRD [`claude-code-workload`](../prd/claude-code-workload.md)(AC-E1~E6) · [`codex-workload`](../prd/codex-workload.md)(AC-J1~J7) · [`multitenancy`](../prd/multitenancy.md)(AC-K3·K4) · [`lifecycle`](../prd/lifecycle.md)(AC-B1~B3) · mockup `new-session.html`·`agent-workspace.html` ([매핑](../mockups/README.md)) |
 
 > 이 여정은 두 가지를 함께 담는다 — **타입을 고르는 순간**(`STP-workload-choice`, V8)과
 > `claude-code` 타입의 **사용 루프**(나머지 단계). 다른 타입의 같은 자리는
@@ -51,6 +51,9 @@ P1 멀티세션 작업자 ([README](./README.md#p1-멀티세션-작업자)).
 - **사용자 행동**: 세션을 만들면서 작업 환경을 고른다 — 직접 명령을 치는 쉘, 프롬프트로 일을 맡기는 에이전트,
   또는 **밖으로 나갈 때마다 내 승인을 받는 에이전트**(승인 게이트가 걸린 타입 — 지금은 `minimax-code`) 셋 중 하나다.
   에이전트 쪽을 고르면 사용할 모델도 함께 정하는데, 기본값 그대로 넘어갈 수 있다.
+  에이전트에는 **ChatGPT 구독으로 도는 Codex**도 있다 — 셸·파일 도구 없이 대화·플랫폼 스킬·K3s MCP만 쓴다.
+  테넌트가 설정된 배포에서 운영자는 **어느 테넌트의 세션인지**도 함께 고르고, 그러면 그 테넌트가 쓸 수 있는
+  환경만 남는다(테넌트 자신으로 들어온 호출자에게는 처음부터 그것만 보인다).
   **타입과 모델은 세션 수명 동안 바꿀 수 없다** — 바꾸려면 새 세션을 만든다.
   승인 게이트를 고른 뒤의 사용 루프는 [`JRN-approval-gated-work`](./JRN-approval-gated-work.md)가 다룬다.
 - **터치포인트**: New session 모달의 workload type 카드 3종과 model 선택 (mockup `new-session.html`)
@@ -58,7 +61,7 @@ P1 멀티세션 작업자 ([README](./README.md#p1-멀티세션-작업자)).
   차이를 모르면 기본값으로 넘어가고, 되돌릴 수 없다는 안내가 없으면 나중에 당황한다.
 - **페인포인트 / 이탈 위험**: 불변이라는 사실을 고른 뒤에 알게 되면 세션을 버리고 다시 만든다
   → 선택 시점에 불변임을 명시하고, 각 환경이 어떤 일에 맞는지 한 줄로 설명한다. 모델은 기본값으로 지나갈 수 있게 둔다.
-- **관련 AC**: AC-E1, AC-E6, AC-G1 (보조 AC-A1·A2)
+- **관련 AC**: AC-E1, AC-E6, AC-G1, AC-J1, AC-K3, AC-K4 (보조 AC-A1·A2)
 
 ### `STP-prompt-submit` 프롬프트로 일을 맡긴다
 
@@ -114,6 +117,9 @@ P1 멀티세션 작업자 ([README](./README.md#p1-멀티세션-작업자)).
 | 보고 있는 중 세션이 접힘 | 자동 복원하지 않고 복원 화면으로 안내 | `JRN-idle-resume`의 `STP-reaccess` |
 | 다른 모델·타입이 필요해짐 | 기존 세션을 바꾸지 않고 새 세션을 만든다 | `STP-workload-choice` |
 | 외부 접근에 사람의 승인이 필요해짐 | 승인 게이트가 걸린 타입(`minimax-code`)으로 새 세션을 만든다 | `JRN-approval-gated-work`의 `STP-gated-prompt-submit` |
+| `codex` 세션의 첫 프롬프트 — 아직 ChatGPT에 로그인하지 않음 | 응답 대신 확인 주소와 일회용 코드가 기록에 나타난다. 브라우저에서 코드를 넣고 승인하면 같은 프롬프트가 이어서 실행된다. 로그인은 세션에 남아 접혔다 돌아와도 다시 묻지 않는다 (AC-J3) | `STP-response-watch` |
+| 고른 테넌트가 쓸 수 없는 환경 | 카드에 보이지 않고, API로 직접 만들면 거절(403)된다 (AC-K3) | `STP-workload-choice` |
+| 오래 쓰는 `codex` 세션에서 플랫폼 스킬이 바뀜 | 작업 화면의 `Refresh plugin skills`를 누르면 대화를 그대로 둔 채 스킬을 새로 받고, 무엇이 바뀌었는지 기록에 한 줄 남는다. 다음 프롬프트는 바뀐 스킬을 다시 읽으라는 안내와 함께 시작한다. 응답이 진행 중이면 받지 않고(409) 끝난 뒤 다시 누르게 한다 (AC-J7) | `STP-conversation-carry` |
 
 ## 5. 측정 지표
 
@@ -133,5 +139,7 @@ P1 멀티세션 작업자 ([README](./README.md#p1-멀티세션-작업자)).
 | v0.1 | 2026-08-08 | 최초 작성 (구 식별자 J6) — 워크로드 타입 확장과 V8 신설에 따라 신설 | 미지정 |
 | v0.1.1 | 2026-08-09 | live output UX(자동 append·커서 재개·reset 복구) 반영 | 미지정 |
 | v0.2 | 2026-08-30 | 전면 재작성 — 슬러그 식별자 전환. CLI 플래그·커서 인코딩·바이트 상한 등 계약 서술을 AC-E2~E6으로 위임하고 사용자 관측 경험만 남김. 여정 정의·분기·지표·변경 이력 추가, 구현 상태 절은 `../doc-tracker/`로 이관 | Claude |
+| v0.4 | 2026-11-05 | `codex` 세션의 수동 플러그인 새로고침(AC-J7) 반영 — 분기 1행 추가(`STP-conversation-carry`). 단계 수·식별자 변화 없음 | Claude |
+| v0.3 | 2026-11-05 | `codex` 타입(AC-J1~J6)과 멀티테넌시(AC-K3·K4) 반영 — `STP-workload-choice`에 Codex 선택지와 테넌트 선택을 더하고, 첫 프롬프트의 ChatGPT 로그인·테넌트 미허용 타입 분기 2행 추가. 단계 수·식별자 변화 없음 | Claude |
 | v0.2.1 | 2026-09-03 | `approval-gated` 타입(AC-F1) 신설 반영 — `STP-workload-choice`에 세 번째 선택지 추가, 신규 여정 `JRN-approval-gated-work`로의 연결과 분기 1행 추가. 단계 수·식별자 변화 없음 | Claude |
-| v0.2.2 | 2026-11-05 | `approval-gated` 타입 제거 반영 — 세 번째 선택지는 승인 게이트가 걸린 타입(`minimax-code`)이 되었다(`approval-gate.md`, AC-F1 폐기 → AC-G1). 단계 수·식별자 변화 없음 | Claude |
+| v0.4.1 | 2026-11-05 | `approval-gated` 타입 제거 반영 — 승인 게이트 선택지는 승인 게이트가 걸린 타입(`minimax-code`)이 되었다(`approval-gate.md`, AC-F1 폐기 → AC-G1). 단계 수·식별자 변화 없음 | Claude |

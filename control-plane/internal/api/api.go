@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/dlddu/session-platform/control-plane/internal/session"
+	"github.com/dlddu/session-platform/control-plane/internal/tenancy"
 )
 
 type API struct {
@@ -19,6 +20,8 @@ type API struct {
 	modelConfigs map[session.WorkloadType]modelConfig
 	// nil offers every known type; an empty map offers none.
 	offered map[session.WorkloadType]bool
+	callers tenancy.Resolver
+	tenants *tenancy.Config
 }
 
 type modelConfig struct {
@@ -53,10 +56,20 @@ func WithOfferedWorkloadTypes(types ...session.WorkloadType) Option {
 	}
 }
 
+// WithTenancy scopes every session route to the caller's tenant (AC-K1~K4).
+// Without it every request is the operator, exactly as before tenancy.
+func WithTenancy(callers tenancy.Resolver, tenants *tenancy.Config) Option {
+	return func(a *API) {
+		a.callers = callers
+		a.tenants = tenants
+	}
+}
+
 func New(mgr session.Manager, opts ...Option) *API {
 	a := &API{
 		mgr:          mgr,
 		modelConfigs: map[session.WorkloadType]modelConfig{},
+		callers:      tenancy.StaticResolver(tenancy.OperatorCaller),
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -79,6 +92,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/sessions/{id}/switch", a.switchSession)
 
 	mux.HandleFunc("POST /api/v1/sessions/{id}/snapshot", a.snapshotSession)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/plugins/refresh", a.refreshPlugins)
 }
 
 // ---- request/response DTOs ----
@@ -90,6 +104,14 @@ type createReq struct {
 
 	// Model is raw for the same reason; its contract is AC-E6.
 	Model json.RawMessage `json:"model"`
+
+	// Plugins is raw so an omitted list (the type's default plugins) differs
+	// from an explicit null; its contract is AC-L1.
+	Plugins json.RawMessage `json:"plugins"`
+	// ReasoningEffort is raw for the same reason; its contract is AC-E8.
+	ReasoningEffort json.RawMessage `json:"reasoningEffort"`
+
+	Tenant json.RawMessage `json:"tenant"`
 }
 
 type writeReq struct {
@@ -113,10 +135,26 @@ type writeResp struct {
 	Path    string           `json:"path"`
 }
 
+// pluginRefreshResp flattens the refresh's changes beside the session.
+type pluginRefreshResp struct {
+	Session *session.Session `json:"session"`
+	Path    string           `json:"path"`
+	session.PluginChanges
+}
+
 type runtimeConfigResp struct {
 	// ClaudeCode predates WorkloadTypes and is kept for existing clients.
 	ClaudeCode    claudeCodeConfigResp   `json:"claudeCode"`
 	WorkloadTypes []workloadTypeConfResp `json:"workloadTypes"`
+	// Tenant is the calling tenant, null for the operator (AC-K4).
+	Tenant *tenantResp `json:"tenant"`
+	// Tenants is what the operator may pick from; empty for a tenant caller.
+	Tenants []tenantResp `json:"tenants"`
+}
+
+type tenantResp struct {
+	Name          string                 `json:"name"`
+	WorkloadTypes []session.WorkloadType `json:"workloadTypes"`
 }
 
 type workloadTypeConfResp struct {
@@ -124,12 +162,16 @@ type workloadTypeConfResp struct {
 	Label       string               `json:"label"`
 	Description string               `json:"description"`
 	TakesModel  bool                 `json:"takesModel"`
-	Input       session.InputMode    `json:"input"`
+	// TakesPlugins says whether a create request may carry plugins (AC-L1).
+	TakesPlugins bool              `json:"takesPlugins"`
+	Input        session.InputMode `json:"input"`
 	// ApprovalGate tells the client to render the gated workspace (AC-F2~F6).
 	ApprovalGate bool `json:"approvalGate"`
 	// DefaultModel is null exactly when TakesModel is false.
 	DefaultModel *string  `json:"defaultModel"`
 	Models       []string `json:"models"`
+	// ReasoningEfforts is never null; empty means the type takes none (AC-E8).
+	ReasoningEfforts []string `json:"reasoningEfforts"`
 }
 
 type claudeCodeConfigResp struct {
@@ -147,7 +189,11 @@ func (a *API) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (a *API) runtimeConfig(w http.ResponseWriter, _ *http.Request) {
+func (a *API) runtimeConfig(w http.ResponseWriter, r *http.Request) {
+	caller, ok := a.caller(w, r)
+	if !ok {
+		return
+	}
 	// Avoid browser/proxy caching so a control-plane rollout immediately
 	// exposes its new snapshot.
 	w.Header().Set("Cache-Control", "no-store")
@@ -155,9 +201,20 @@ func (a *API) runtimeConfig(w http.ResponseWriter, _ *http.Request) {
 	resp := runtimeConfigResp{
 		ClaudeCode:    claudeCodeConfigResp{DefaultModel: claude.defaultModel, Models: claude.models},
 		WorkloadTypes: []workloadTypeConfResp{},
+		Tenants:       []tenantResp{},
+	}
+	if caller.Tenant != nil {
+		resp.Tenant = &tenantResp{Name: caller.Tenant.Name, WorkloadTypes: a.offeredOf(caller.Tenant)}
+	} else {
+		for _, t := range a.tenants.Tenants() {
+			resp.Tenants = append(resp.Tenants, tenantResp{Name: t.Name, WorkloadTypes: a.offeredOf(t)})
+		}
 	}
 	for _, info := range session.WorkloadTypes() {
 		if a.offered != nil && !a.offered[info.Type] {
+			continue
+		}
+		if caller.Tenant != nil && !caller.Tenant.Allows(info.Type) {
 			continue
 		}
 		entry := workloadTypeConfResp{
@@ -165,9 +222,12 @@ func (a *API) runtimeConfig(w http.ResponseWriter, _ *http.Request) {
 			Label:        info.Label,
 			Description:  info.Description,
 			TakesModel:   info.TakesModel,
+			TakesPlugins: info.TakesPlugins,
 			Input:        info.Input,
 			ApprovalGate: info.ApprovalGate,
 			Models:       []string{},
+			// WorkloadTypes copies the list, so it is never the catalog's own.
+			ReasoningEfforts: info.ReasoningEfforts,
 		}
 		if info.TakesModel {
 			mc := a.modelConfig(info.Type)
@@ -177,6 +237,18 @@ func (a *API) runtimeConfig(w http.ResponseWriter, _ *http.Request) {
 		resp.WorkloadTypes = append(resp.WorkloadTypes, entry)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// offeredOf keeps the types of a tenant's grant this deployment offers, in
+// catalog order, so a picker never shows a type whose create would fail.
+func (a *API) offeredOf(t *tenancy.Tenant) []session.WorkloadType {
+	out := []session.WorkloadType{}
+	for _, info := range session.WorkloadTypes() {
+		if (a.offered == nil || a.offered[info.Type]) && t.Allows(info.Type) {
+			out = append(out, info.Type)
+		}
+	}
+	return out
 }
 
 func (a *API) modelConfig(w session.WorkloadType) modelConfig {
@@ -189,6 +261,10 @@ func (a *API) modelConfig(w session.WorkloadType) modelConfig {
 }
 
 func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
+	caller, ok := a.caller(w, r)
+	if !ok {
+		return
+	}
 	var req createReq
 	if err := decodeRequestBody(r.Body, &req, true); err != nil {
 		if errors.Is(err, session.ErrRequestBodyTooLarge) {
@@ -200,10 +276,16 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	var workload session.WorkloadType
 	if len(req.WorkloadType) != 0 {
-		if err := json.Unmarshal(req.WorkloadType, &workload); err != nil || !workload.Valid() {
+		if err := json.Unmarshal(req.WorkloadType, &workload); err != nil || workload == "" {
 			writeErr(w, session.ErrInvalidInput)
 			return
 		}
+		normalized, err := session.NormalizeWorkloadType(workload)
+		if err != nil {
+			writeErr(w, session.ErrInvalidInput)
+			return
+		}
+		workload = normalized
 	}
 	var model string
 	if len(req.Model) != 0 {
@@ -212,8 +294,29 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var plugins []string
+	if len(req.Plugins) != 0 {
+		// An explicit null decodes to a nil slice, which would silently mean
+		// "type default"; only a JSON array is a selection.
+		if err := json.Unmarshal(req.Plugins, &plugins); err != nil || plugins == nil {
+			writeErr(w, session.ErrInvalidInput)
+			return
+		}
+	}
+	var effort string
+	if len(req.ReasoningEffort) != 0 {
+		if err := json.Unmarshal(req.ReasoningEffort, &effort); err != nil || effort == "" {
+			writeErr(w, session.ErrInvalidInput)
+			return
+		}
+	}
+	tenant, err := a.createTenant(caller, req.Tenant, workload)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	sess, err := a.mgr.Create(r.Context(), session.CreateRequest{
-		Name: req.Name, WorkloadType: workload, Model: model,
+		Name: req.Name, WorkloadType: workload, Model: model, Plugins: plugins, ReasoningEffort: effort, Tenant: tenant,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -223,15 +326,34 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) listSessions(w http.ResponseWriter, r *http.Request) {
+	caller, ok := a.caller(w, r)
+	if !ok {
+		return
+	}
+	filter, filtered := r.URL.Query()["tenant"]
+	if filtered && (!caller.Operator || len(filter) != 1) {
+		writeErr(w, session.ErrInvalidInput)
+		return
+	}
 	sessions, err := a.mgr.List(r.Context())
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+	visible := make([]*session.Session, 0, len(sessions))
+	for _, sess := range sessions {
+		if !caller.Sees(sess.Tenant) || (filtered && sess.Tenant != filter[0]) {
+			continue
+		}
+		visible = append(visible, sess)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": visible})
 }
 
 func (a *API) getSession(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
 	sess, err := a.mgr.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeErr(w, err)
@@ -241,6 +363,9 @@ func (a *API) getSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) deleteSession(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
 	if err := a.mgr.Terminate(r.Context(), r.PathValue("id")); err != nil {
 		writeErr(w, err)
 		return
@@ -252,6 +377,9 @@ func (a *API) deleteSession(w http.ResponseWriter, r *http.Request) {
 // Last-Event-ID header wins over the query cursor so a native EventSource
 // reconnect resumes from the last event the browser accepted.
 func (a *API) streamSession(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
 	offset, err := outputStreamOffset(r)
 	if err != nil {
 		writeErr(w, session.ErrInvalidInput)
@@ -306,6 +434,9 @@ func outputStreamOffset(r *http.Request) (int64, error) {
 }
 
 func (a *API) readSession(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
 	var req readReq
 	if err := decodeRequestBody(r.Body, &req, false); err != nil {
 		writeErr(w, err)
@@ -324,6 +455,9 @@ func (a *API) readSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) writeSession(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
 	var req writeReq
 	if err := decodeRequestBody(r.Body, &req, false); err != nil {
 		writeErr(w, err)
@@ -338,6 +472,9 @@ func (a *API) writeSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) switchSession(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
 	if err := decodeRequestBody(r.Body, &struct{}{}, false); err != nil {
 		writeErr(w, err)
 		return
@@ -352,6 +489,9 @@ func (a *API) switchSession(w http.ResponseWriter, r *http.Request) {
 
 // snapshotSession freezes a session and reclaims its pod (AC-B1/AC-A3).
 func (a *API) snapshotSession(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
 	if err := decodeRequestBody(r.Body, &struct{}{}, false); err != nil {
 		writeErr(w, err)
 		return
@@ -362,6 +502,100 @@ func (a *API) snapshotSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, sess)
+}
+
+// refreshPlugins fetches a codex session's plugin skills again, between
+// turns, without ending its conversation (AC-J7).
+func (a *API) refreshPlugins(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
+	if err := decodeRequestBody(r.Body, &struct{}{}, false); err != nil {
+		writeErr(w, err)
+		return
+	}
+	res, err := a.mgr.RefreshPlugins(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, pluginRefreshResp{
+		Session:       res.Session,
+		Path:          res.Path,
+		PluginChanges: res.Changes,
+	})
+}
+
+// ---- tenancy ----
+
+// caller resolves the request's caller, answering the request itself when it
+// cannot (AC-K1).
+func (a *API) caller(w http.ResponseWriter, r *http.Request) (tenancy.Caller, bool) {
+	if a.callers == nil {
+		return tenancy.OperatorCaller, true
+	}
+	caller, err := a.callers.Resolve(r)
+	if err != nil {
+		writeErr(w, err)
+		return tenancy.Caller{}, false
+	}
+	return caller, true
+}
+
+// authorizeSession admits a session-id route only for a caller that sees the
+// session. Another tenant's session answers exactly like a missing one, so a
+// tenant cannot learn which ids exist (AC-K2).
+func (a *API) authorizeSession(w http.ResponseWriter, r *http.Request) bool {
+	caller, ok := a.caller(w, r)
+	if !ok {
+		return false
+	}
+	if caller.Operator {
+		return true
+	}
+	sess, err := a.mgr.Get(r.Context(), r.PathValue("id"))
+	if err == nil && !caller.Sees(sess.Tenant) {
+		err = session.ErrNotFound
+	}
+	if err != nil {
+		writeErr(w, err)
+		return false
+	}
+	return true
+}
+
+// createTenant decides the tenant a new session belongs to (AC-K2, AC-K3). A
+// tenant caller always creates into its own tenant; the operator names one or
+// none. Either way the owning tenant must be granted the workload type.
+func (a *API) createTenant(caller tenancy.Caller, raw json.RawMessage, requested session.WorkloadType) (string, error) {
+	var named string
+	if len(raw) != 0 {
+		if err := json.Unmarshal(raw, &named); err != nil || named == "" {
+			return "", session.ErrInvalidInput
+		}
+	}
+	owner := caller.Tenant
+	if caller.Operator && named != "" {
+		t, ok := a.tenants.Lookup(named)
+		if !ok {
+			return "", session.ErrInvalidInput
+		}
+		owner = t
+	}
+	if owner == nil {
+		return "", nil
+	}
+	if named != "" && named != owner.Name {
+		return "", session.ErrForbidden
+	}
+	workload, err := session.NormalizeWorkloadType(requested)
+	if err != nil {
+		return "", err
+	}
+	if !owner.Allows(workload) {
+		return "", session.ErrForbidden
+	}
+	return owner.Name, nil
 }
 
 // ---- helpers ----
@@ -429,6 +663,10 @@ func writeErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, session.ErrNotFound):
 		status = http.StatusNotFound
+	case errors.Is(err, session.ErrUnauthenticated):
+		status = http.StatusUnauthorized
+	case errors.Is(err, session.ErrForbidden):
+		status = http.StatusForbidden
 	case errors.Is(err, session.ErrInvalidInput):
 		status = http.StatusBadRequest
 	case errors.Is(err, session.ErrInvalidState):
@@ -445,6 +683,14 @@ func writeErr(w http.ResponseWriter, err error) {
 		status = http.StatusInsufficientStorage
 	case errors.Is(err, session.ErrCheckpointDisabled):
 		status = http.StatusServiceUnavailable
+	case errors.Is(err, session.ErrWorkloadBusy):
+		status = http.StatusConflict
+	case errors.Is(err, session.ErrPluginRefreshFailed):
+		status = http.StatusBadGateway
+	case errors.Is(err, session.ErrAuthPoolExhausted):
+		// The wrapped cause names slots and holders; clients only get the class.
+		writeJSON(w, http.StatusServiceUnavailable, errResp{Error: session.ErrAuthPoolExhausted.Error()})
+		return
 	}
 	writeJSON(w, status, errResp{Error: err.Error()})
 }
