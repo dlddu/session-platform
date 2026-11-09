@@ -49,7 +49,7 @@ func TestCodex2_OnePodTokenOnlyInSidecar(t *testing.T) {
 	if len(claims) != 1 || !strings.HasPrefix(claims[0], sessionNamespace()+"-codex-chat-auth-") {
 		t.Errorf("pod claims = %v, want one codex-chat slot", claims)
 	}
-	wantSubPath := map[string]string{"session": "auth", "k3s-mcp-proxy": "db/" + s.ID}
+	wantSubPath := map[string]string{"session": "auth", "k3s-mcp-proxy": "db"}
 	for _, c := range pod.Spec.Containers {
 		for _, m := range c.VolumeMounts {
 			if m.Name == "auth-slot" && m.SubPath != wantSubPath[c.Name] {

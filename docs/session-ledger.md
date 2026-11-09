@@ -2,22 +2,24 @@
 
 The `db` MCP on the codex-chat loopback sidecar offers `ledger_get`,
 `ledger_list`, `ledger_put`, and `ledger_delete` alongside the raw SQL tools.
-This is one parent's bookkeeping, not a global task service or authoritative
+This is the chat slot's bookkeeping, not a global task service or authoritative
 platform session inventory. No tool calls session create/delete, sends push,
 starts turns, or schedules work. codex-task and Claude workers do not receive
 this DB. The parent collects their final result and records it on return;
 never pass a parent's token or DB access to a worker.
 
-## Storage and isolation
+## Storage
 
-The codex-chat slot PVC mounts `auth/` into the workload and
-`db/<sessionID>/` into the sidecar at `/var/run/session-platform/session-db`.
-Only slot-init mounts the whole PVC. IDs are validated before constructing a
-subPath or init command. Reusing a slot for another session therefore opens a
-separate file. The workload gets a loopback endpoint, not a file mount; the
-existing pod/network boundary is the authorization boundary. Ledger `owner`
-is a bookkeeping field, not an authorization claim. Raw SQL can modify ledger
-tables: these APIs are not a security boundary against the same session.
+The codex-chat slot PVC mounts `auth/` into the workload and `db/` into the
+sidecar at `/var/run/session-platform/session-db`. Only slot-init mounts the
+whole PVC. The database belongs to the **slot**, not to a session: a chat
+session that is deleted and recreated, and lands on the same slot, opens the
+same `session.db` and continues the same ledger (AC-N6). The workload gets a
+loopback endpoint, not a file mount; the existing pod/network boundary is the
+authorization boundary. Ledger `owner` is a bookkeeping field, not an
+authorization claim, and records written by an earlier session on the slot
+keep that session's ID as owner. Raw SQL can modify ledger tables: these APIs
+are not a security boundary against the same slot.
 
 SQLite uses DELETE journaling (NFS/EFS cannot use WAL shared memory), a 5s busy
 timeout and one pooled connection. Each ledger call has a 30s deadline and a
@@ -33,20 +35,20 @@ prior rowsAffected/lastInsertId. Query actual state when verifying raw writes.
 
 codex-chat retains its slot lease while snapshotted, including recovery and failed restore; it is not eligible for stale frozen-holder reclaim. Explicit deletion releases it. Consequently frozen chats still consume pool capacity. Other workload types continue releasing login slots on snapshot.
 
-DB data is outside the workload archive. Restart/restore using the same held
-slot and session ID reopens the same PVC path, not a snapshot of the DB.
-PVC loss or moving to another slot is not covered. Explicit session deletion
-releases the slot but retains PVC data; cleanup of old directories is an
-operator retention concern, never implicit ledger CRUD.
+DB data is outside the workload archive. Restart, restore and recreation on
+the same slot reopen the same PVC path, not a snapshot of the DB. PVC loss or
+moving to another slot (a pool with more than one codex-chat slot) is not
+covered. Explicit session deletion releases the slot and keeps `db/` for the
+next session on it; deleting data is an operator concern, never implicit
+ledger CRUD.
 
-**Upgrade:** existing slot-wide `db/session.db` is left untouched. It has no
-trustworthy owner marker, so no new session automatically imports it. Before
-rollout, owners who need existing data must arrange a separately authorized,
-offline copy into the verified session's new directory, with the sidecar
-stopped, ownership checked, and integrity/row checks after copy. Do not infer
-ownership from slot number or copy a live SQLite file. Until that migration is
-verified, existing raw tables are retained but not visible at the new endpoint.
-This PR does not run that operational migration.
+**History:** PR #216 briefly scoped the directory to `db/<sessionID>/`, so a
+recreated chat opened an empty DB. That was reverted to the slot-level `db/`.
+Directories `db/<sessionID>/` left from that window are retained, not merged
+automatically. Moving one into `db/session.db` is an offline operation: the
+source session must be gone (no sidecar has the file open), copy with the
+SQLite backup API, check integrity and row counts, and keep the replaced file
+as a backup.
 
 ## API
 
@@ -128,12 +130,11 @@ and list/read verification follow a confirmed merge before parent cleanup.
 Local tests exercise preservation of user tables/user_version, schema refusal,
 transaction rollback on receipt failure, single-winner CAS, replay and ID reuse,
 validation, filtering/keyset pages, raw transaction cleanup and close/reopen.
-Pod-spec tests cover session-specific mounts; separate local DBs cover file
-isolation. These do not claim a deployed NFS restart/snapshot/restore test.
+Pod-spec tests cover the slot-level mount. These do not claim a deployed NFS restart/snapshot/restore test.
 
-After authorized merge/deployment, verify tool discovery in the parent, scoped
-storage ownership/migration, restart and snapshot/restore with the same slot,
-and slot reuse isolation using separately authorized disposable sessions.
+After authorized merge/deployment, verify tool discovery in the parent,
+restart and snapshot/restore with the same slot, and that a deleted and
+recreated chat session on the same slot reads the earlier session's rows.
 Refresh parent skills, then list/read changed skills and references. A skill
 refresh alone does not deploy runtime tools; before availability use the skill's
 conversation-record fallback. This implementation session does not create test

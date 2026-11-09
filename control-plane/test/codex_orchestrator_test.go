@@ -148,8 +148,8 @@ func TestCodexChat_SlotSplitsLoginAndDatabase(t *testing.T) {
 	}
 
 	proxy := container(t, pod, k8s.CodexK3SMCPProxyContainerName)
-	if m, ok := slotMount(proxy); !ok || m.MountPath != k8s.SessionDBMountPath || m.SubPath != "db/cx03" {
-		t.Errorf("proxy slot mount = %+v, want %s from subPath db/cx03", m, k8s.SessionDBMountPath)
+	if m, ok := slotMount(proxy); !ok || m.MountPath != k8s.SessionDBMountPath || m.SubPath != "db" {
+		t.Errorf("proxy slot mount = %+v, want %s from the slot-level subPath db", m, k8s.SessionDBMountPath)
 	}
 	if v, _ := envValue(proxy, k8s.SessionDBDirEnvVar); v != k8s.SessionDBMountPath {
 		t.Errorf("proxy %s = %q", k8s.SessionDBDirEnvVar, v)
