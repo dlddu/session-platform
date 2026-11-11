@@ -103,7 +103,7 @@ func TestAuthSlotPullPushAndLogout(t *testing.T) {
 // AC-N4 2: a login the CLI refreshes mid-turn reaches the slot before the
 // turn ends.
 func TestAuthSlotWatchCopiesRefreshMidTurn(t *testing.T) {
-	slot := newTestAuthSlot(t, claudeCredentialsFile, claudeCredentialsHomeRel)
+	slot := newTestAuthSlot(t, codexAuthFile, codexAuthHomeRel)
 	home := t.TempDir()
 	stop := slot.watch(home)
 	defer stop()
@@ -151,7 +151,7 @@ func TestNewAuthSlotFromEnv(t *testing.T) {
 	}
 }
 
-func newSlotClaudeTestServer(t *testing.T, runner commandRunner, slot *authSlot, login claudeLogin) (*claudeWorkload, *httptest.Server) {
+func newSlotClaudeTestServer(t *testing.T, runner commandRunner, slot *authSlot) (*claudeWorkload, *httptest.Server) {
 	t.Helper()
 	c, err := newClaudeWorkload(claudeConfig{
 		StateDir: filepath.Join(t.TempDir(), "state"),
@@ -161,7 +161,6 @@ func newSlotClaudeTestServer(t *testing.T, runner commandRunner, slot *authSlot,
 		Logger:   testLogger(),
 		Tools:    toolSurface{Plugins: []string{claudeSessionPlatformPlugin}},
 		AuthSlot: slot,
-		Login:    login,
 	})
 	if err != nil {
 		t.Fatalf("new claude workload: %v", err)
@@ -191,11 +190,11 @@ func archiveNames(t *testing.T, archive []byte) []string {
 	}
 }
 
-// AC-N4 end to end on the worker: the CLI sees the slot's login, its
-// refresh goes back to the slot, the archive leaves the login out, and
-// GET /auth-slot reports the slot.
+// AC-N4 end to end on the worker the pooled types share: the CLI sees the
+// slot's login, its refresh goes back to the slot, the archive leaves the
+// login out, and GET /auth-slot reports the slot.
 func TestClaudeWorkloadSyncsAuthSlotAroundTurns(t *testing.T) {
-	slot := newTestAuthSlot(t, claudeCredentialsFile, claudeCredentialsHomeRel)
+	slot := newTestAuthSlot(t, codexAuthFile, codexAuthHomeRel)
 	if err := writeLoginFile(slot.slotPath(), []byte(`{"t":"slot-token"}`)); err != nil {
 		t.Fatal(err)
 	}
@@ -203,11 +202,11 @@ func TestClaudeWorkloadSyncsAuthSlotAroundTurns(t *testing.T) {
 	seen := make(chan string, 1)
 	runner.output = func(_ int, opts runnerOptions) {
 		home := envValue(opts.Env, "HOME")
-		content, _ := os.ReadFile(filepath.Join(home, claudeCredentialsHomeRel))
+		content, _ := os.ReadFile(filepath.Join(home, codexAuthHomeRel))
 		seen <- string(content)
-		_ = os.WriteFile(filepath.Join(home, claudeCredentialsHomeRel), []byte(`{"t":"refreshed-token"}`), 0o600)
+		_ = os.WriteFile(filepath.Join(home, codexAuthHomeRel), []byte(`{"t":"refreshed-token"}`), 0o600)
 	}
-	c, srv := newSlotClaudeTestServer(t, runner, slot, &fakeClaudeLogin{loggedIn: true})
+	c, srv := newSlotClaudeTestServer(t, runner, slot)
 
 	writeViaHTTP(t, srv, "hello", http.StatusOK)
 	receiveClaudeRun(t, runner.started)
@@ -241,7 +240,7 @@ func TestClaudeWorkloadSyncsAuthSlotAroundTurns(t *testing.T) {
 	}
 	names := archiveNames(t, archive)
 	for _, name := range names {
-		if strings.HasSuffix(name, claudeCredentialsHomeRel) {
+		if strings.HasSuffix(name, codexAuthHomeRel) {
 			t.Fatalf("the archive carries the slot login: %q", names)
 		}
 	}

@@ -135,13 +135,20 @@ func TestClaudeCode_SubscriptionPodShape(t *testing.T) {
 		k8s.WithClaudeCodeAuthMode(k8s.ClaudeCodeAuthSubscription),
 	)
 	pod := onlyPod(t, orch, func() []corev1.Pod { return listPods(t, cs) }, "cc01", k8s.WorkloadSpec{
-		Type: session.WorkloadTypeClaudeCode, Model: "opus", ReasoningEffort: "max", AuthSlot: slot(0),
+		Type: session.WorkloadTypeClaudeCode, Model: "opus", ReasoningEffort: "max",
 	})
 	if n := len(pod.Spec.Containers); n != 1 {
 		t.Fatalf("containers = %s, want the workload container alone (no credential proxy, AC-E7)", containerNames(pod))
 	}
-	assertSlotMount(t, pod, testNS+"-claude-code-auth-0")
+	for _, v := range pod.Spec.Volumes {
+		if v.PersistentVolumeClaim != nil {
+			t.Errorf("subscription pod mounts claim %s; the OAuth token replaced the slot (AC-E7)", v.PersistentVolumeClaim.ClaimName)
+		}
+	}
 	agent := container(t, pod, k8s.ContainerName)
+	if _, ok := envValue(agent, k8s.AuthSlotDirEnvVar); ok {
+		t.Errorf("subscription agent receives %s", k8s.AuthSlotDirEnvVar)
+	}
 	for _, name := range []string{k8s.AnthropicBaseURLEnvVar, k8s.AnthropicAuthTokenEnvVar} {
 		if _, ok := envValue(agent, name); ok {
 			t.Errorf("subscription agent receives %s", name)
@@ -157,16 +164,27 @@ func TestClaudeCode_SubscriptionPodShape(t *testing.T) {
 		}
 	}
 	var k3sToken bool
+	var oauth *corev1.SecretKeySelector
 	for _, e := range agent.Env {
 		if e.Name == k8s.K3SMCPTokenEnvVar && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
 			k3sToken = true
+		}
+		if e.Name == k8s.ClaudeCodeOAuthTokenEnvVar {
+			if e.Value != "" || e.ValueFrom == nil {
+				t.Fatalf("%s is not a Secret reference: %+v", k8s.ClaudeCodeOAuthTokenEnvVar, e)
+			}
+			oauth = e.ValueFrom.SecretKeyRef
 		}
 	}
 	if !k3sToken {
 		t.Error("subscription agent lost its K3s MCP token for the plugin bootstrap")
 	}
-	if _, err := orch.Start(context.Background(), "cc02", k8s.WorkloadSpec{Type: session.WorkloadTypeClaudeCode}); err == nil {
-		t.Fatal("subscription claude-code started without an auth slot")
+	if oauth == nil || oauth.Name != "claude-code-credentials" || oauth.Key != k8s.ClaudeCodeOAuthTokenSecretKey ||
+		(oauth.Optional != nil && *oauth.Optional) {
+		t.Errorf("%s ref = %+v, want required key %q of claude-code-credentials", k8s.ClaudeCodeOAuthTokenEnvVar, oauth, k8s.ClaudeCodeOAuthTokenSecretKey)
+	}
+	if _, err := orch.Start(context.Background(), "cc02", k8s.WorkloadSpec{Type: session.WorkloadTypeClaudeCode, AuthSlot: slot(0)}); err == nil {
+		t.Fatal("subscription claude-code accepted an auth slot it would never use")
 	}
 }
 
@@ -189,6 +207,11 @@ func TestClaudeCode_GatewayPodUnchanged(t *testing.T) {
 	}
 	if _, ok := envValue(agent, k8s.ClaudeCodeAuthModeEnvVar); ok {
 		t.Error("gateway agent receives the subscription marker")
+	}
+	for _, e := range agent.Env {
+		if e.Name == k8s.ClaudeCodeOAuthTokenEnvVar {
+			t.Error("gateway agent receives the subscription OAuth token")
+		}
 	}
 	if v, _ := envValue(agent, k8s.ClaudeCodeEffortEnvVar); v != "low" {
 		t.Errorf("effort = %q, want low", v)
@@ -213,7 +236,7 @@ func TestClaudeCode_SubscriptionPlatformDefaultReadsSubscriptionKey(t *testing.T
 		slot *int
 		key  string
 	}{
-		{k8s.ClaudeCodeAuthSubscription, slot(0), k8s.ClaudeCodeSubscriptionModelConfigKey},
+		{k8s.ClaudeCodeAuthSubscription, nil, k8s.ClaudeCodeSubscriptionModelConfigKey},
 		{k8s.ClaudeCodeAuthGateway, nil, k8s.ClaudeCodeModelConfigKey},
 	} {
 		orch, cs := newReadyOrchestrator(t,

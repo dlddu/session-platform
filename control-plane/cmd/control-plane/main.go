@@ -83,7 +83,6 @@ func main() {
 		"codex_chat_auth_slots", cfg.codex.pool.slots,
 		"codex_task_auth_slots", cfg.codexTask.pool.slots,
 		"claude_code_auth_mode", cfg.claudeAuth.mode,
-		"claude_code_auth_slots", cfg.claudeAuth.pool.slots,
 		"tenants", len(cfg.tenancy.tenants.Tenants()),
 		"approval_gateway_url", cfg.approvalGatewayURL,
 		"data_plane_shell", cfg.dataPlaneShell,
@@ -308,7 +307,7 @@ type config struct {
 func (c config) offeredWorkloadTypes() []session.WorkloadType {
 	types := []session.WorkloadType{session.WorkloadTypeShell}
 	for w, offered := range map[session.WorkloadType]bool{
-		session.WorkloadTypeClaudeCode:  c.dataPlaneClaudeCodeImage != "" && c.claudeAuth.offered(),
+		session.WorkloadTypeClaudeCode:  c.dataPlaneClaudeCodeImage != "",
 		session.WorkloadTypeMiniMaxCode: c.miniMax.image != "",
 		session.WorkloadTypeCodexChat:   c.codex.offered(),
 		session.WorkloadTypeCodexTask:   c.codexTask.offered(),

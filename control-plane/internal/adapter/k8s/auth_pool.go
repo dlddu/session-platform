@@ -24,11 +24,10 @@ import (
 // row of login slots, each a PVC named like a StatefulSet's volume claim and
 // a Lease of the same name whose holder is the one session using it.
 const (
-	// AuthPoolCodexTask, AuthPoolClaudeCode and AuthPoolCodexChat name the
-	// pools.
-	AuthPoolCodexTask  = "codex-task"
-	AuthPoolClaudeCode = "claude-code"
-	AuthPoolCodexChat  = "codex-chat"
+	// AuthPoolCodexTask and AuthPoolCodexChat name the pools. claude-code
+	// signs in with an OAuth token instead of a slot (AC-E7).
+	AuthPoolCodexTask = "codex-task"
+	AuthPoolCodexChat = "codex-chat"
 
 	LabelAuthPool       = "session-platform.dev/auth-pool"
 	LabelAuthSlot       = "session-platform.dev/auth-slot"
@@ -437,7 +436,8 @@ type ClaudeCodeAuthMode string
 const (
 	// ClaudeCodeAuthGateway is AC-E6's credential-proxy sidecar, the default.
 	ClaudeCodeAuthGateway ClaudeCodeAuthMode = "gateway"
-	// ClaudeCodeAuthSubscription signs the CLI in through an auth pool slot.
+	// ClaudeCodeAuthSubscription signs the CLI in to a Claude subscription
+	// with the platform's long-lived OAuth token (`claude setup-token`).
 	ClaudeCodeAuthSubscription ClaudeCodeAuthMode = "subscription"
 
 	// ClaudeCodeAuthModeEnvVar tells a subscription-mode agent where its login
@@ -467,16 +467,14 @@ func WithClaudeCodeAuthMode(mode ClaudeCodeAuthMode) Option {
 }
 
 // AuthPoolFor names the pool a session of this type leases from, if any:
-// codex-task and codex-chat always, claude-code in subscription mode (AC-M2,
-// AC-E7, AC-N6).
-func AuthPoolFor(workload session.WorkloadType, claudeMode ClaudeCodeAuthMode) (string, bool) {
-	switch {
-	case workload == session.WorkloadTypeCodexTask:
+// codex-task and codex-chat (AC-M2, AC-N6). claude-code takes none in either
+// auth mode — a subscription signs in with the platform's OAuth token (AC-E7).
+func AuthPoolFor(workload session.WorkloadType) (string, bool) {
+	switch workload {
+	case session.WorkloadTypeCodexTask:
 		return AuthPoolCodexTask, true
-	case workload == session.WorkloadTypeCodexChat:
+	case session.WorkloadTypeCodexChat:
 		return AuthPoolCodexChat, true
-	case workload == session.WorkloadTypeClaudeCode && claudeMode == ClaudeCodeAuthSubscription:
-		return AuthPoolClaudeCode, true
 	default:
 		return "", false
 	}
@@ -522,7 +520,7 @@ func authSlotSubPath(pool string) string {
 // start a pod that would sign in somewhere the pool does not track (AC-N4,
 // AC-N5).
 func (o *ClientOrchestrator) attachAuthSlot(container *corev1.Container, workloadType session.WorkloadType, slot *int) ([]corev1.Volume, error) {
-	pool, uses := AuthPoolFor(workloadType, o.claudeAuthMode)
+	pool, uses := AuthPoolFor(workloadType)
 	switch {
 	case !uses && slot == nil:
 		return nil, nil

@@ -1,12 +1,16 @@
 # PRD: 에이전트 인증 풀 (agent auth pool)
 
-> 대상 요구사항: 구독 계정으로 도는 작업용 에이전트 타입(`codex-task`·`claude-code`, 2026-11-09부터 채팅용 `codex-chat`도)이 세션마다 로그인하지 않도록,
+> 대상 요구사항: 구독 계정으로 도는 작업용 에이전트 타입(`codex-task`, 2026-11-09부터 채팅용 `codex-chat`도)이 세션마다 로그인하지 않도록,
 > 플랫폼이 **로그인 슬롯 풀**을 두고 세션에 슬롯을 하나씩 **독점 임대**한다 (2026-11-07 사용자 결정).
 > 슬롯은 StatefulSet의 `volumeClaimTemplates`처럼 이름이 고정된 PVC이고, 세션 파드가 그 PVC를 직접 마운트한다.
 >
 > 📌 **개정 (2026-11-09, 사용자 결정)**: 채팅용 `codex-chat`도 풀을 쓴다(AC-N6). 이 풀의 슬롯은 로그인과 함께
 > **세션 DB**(SQLite)를 담고, 사이드카가 그 DB를 MCP로 내놓는다. 채팅은 장기 단일 세션 기준이지만, 같은 타입의
 > 세션이 늘어날 때를 위해 처음부터 슬롯 단위로 둔다.
+>
+> 📌 **개정 (2026-11-12, 사용자 결정)**: `claude-code`는 풀을 쓰지 않는다 — 구독 모드가 `claude setup-token`의 장기
+> OAuth 토큰 하나를 Secret에서 받아 모든 세션이 함께 쓴다(`claude-code-workload.md` AC-E7). 풀 `claude-code`와
+> `CLAUDE_CODE_AUTH_SLOTS` 설정은 없어졌고, 이미 만들어진 그 풀의 PVC·Lease는 AC-N1대로 control plane이 지우지 않는다.
 
 ## 달성 가치
 - **V3 끊김 없는 세션 연속성** — 작업 세션이 동결·복원되거나 새로 만들어져도 다시 로그인하지 않는다. 로그인은 세션이 아니라 슬롯에 남는다 (AC-N1·L4)
@@ -17,13 +21,13 @@
 > 📌 **가치 연결 규칙**: 다른 PRD와 같이 각 AC는 자신이 구체화하는 상위 AC의 가치를 상속한다.
 
 > 이 문서는 **풀 자체**(슬롯·임대·반납·로그인 동기화)만 정한다. 어떤 타입이 풀을 쓰는지와 슬롯 안 파일 이름은
-> 타입 PRD가 정한다 — `codex-task`는 `codex-task-workload.md`의 AC-M2, `claude-code`는 `claude-code-workload.md`의 AC-E7,
+> 타입 PRD가 정한다 — `codex-task`는 `codex-task-workload.md`의 AC-M2,
 > `codex-chat`은 `codex-workload.md`의 AC-J3과 이 문서의 AC-N6(슬롯 안 배치와 세션 DB).
 
 ## Acceptance Criteria
 
 ### AC-N1: 슬롯 = 이름이 고정된 PVC, control plane이 만들고 지우지 않는다
-- **설명**: 풀은 타입마다 하나다. 풀 `<pool>`(`codex-task`·`claude-code`·`codex-chat`)의 슬롯 `i`(0 ≤ i < N)는 PVC `<네임스페이스>-<pool>-auth-<i>`다. PVC 이름에 네임스페이스를 넣는 것은 동적 프로비저너가 PVC 이름만으로 볼륨을 정할 수 있어서다 — 운영 클러스터의 `efs` 클래스는 `/${.PVC.name}` 경로와 재사용 access point를 써, 이름이 같으면 프리뷰 네임스페이스의 슬롯이 운영 슬롯과 같은 디렉터리를 쓰고 프리뷰를 지울 때 운영 로그인까지 지운다(2026-11-07 프리뷰 점검에서 발견). N은 control plane 설정(`CODEX_TASK_AUTH_SLOTS`·`CLAUDE_CODE_AUTH_SLOTS`·`CODEX_CHAT_AUTH_SLOTS`)이고, 0이면 그 타입은 풀이 없어 `GET /config`에 나오지 않으며 생성은 pod 없이 실패한다. PVC는 처음 임대될 때 control plane이 만든다(`ReadWriteOnce`, 크기 `<POOL>_AUTH_STORAGE_SIZE` 기본 `16Mi` — `codex-chat`은 세션 DB를 담아 `1Gi`, 클래스 `<POOL>_AUTH_STORAGE_CLASS` 비면 클러스터 기본 — 운영은 기본 클래스가 없어 `efs`를 지정한다). 라벨은 `session-platform.dev/auth-pool=<pool>`, `session-platform.dev/auth-slot=<i>`다. control plane은 슬롯 PVC를 **지우지 않는다** — 세션이 지워져도, N을 줄여도 남는다(StatefulSet의 PVC 보존과 같다). N을 줄이면 범위 밖 슬롯은 더 임대하지 않을 뿐이다. 노드 국소 스토리지(local-path, kind e2e)에서는 PV의 노드 친화성 때문에 그 슬롯을 받은 세션 파드가 그 노드에 뜬다. 운영의 `efs`는 RWX라 노드에 묶이지 않는다.
+- **설명**: 풀은 타입마다 하나다. 풀 `<pool>`(`codex-task`·`codex-chat`)의 슬롯 `i`(0 ≤ i < N)는 PVC `<네임스페이스>-<pool>-auth-<i>`다. PVC 이름에 네임스페이스를 넣는 것은 동적 프로비저너가 PVC 이름만으로 볼륨을 정할 수 있어서다 — 운영 클러스터의 `efs` 클래스는 `/${.PVC.name}` 경로와 재사용 access point를 써, 이름이 같으면 프리뷰 네임스페이스의 슬롯이 운영 슬롯과 같은 디렉터리를 쓰고 프리뷰를 지울 때 운영 로그인까지 지운다(2026-11-07 프리뷰 점검에서 발견). N은 control plane 설정(`CODEX_TASK_AUTH_SLOTS`·`CODEX_CHAT_AUTH_SLOTS`)이고, 0이면 그 타입은 풀이 없어 `GET /config`에 나오지 않으며 생성은 pod 없이 실패한다. PVC는 처음 임대될 때 control plane이 만든다(`ReadWriteOnce`, 크기 `<POOL>_AUTH_STORAGE_SIZE` 기본 `16Mi` — `codex-chat`은 세션 DB를 담아 `1Gi`, 클래스 `<POOL>_AUTH_STORAGE_CLASS` 비면 클러스터 기본 — 운영은 기본 클래스가 없어 `efs`를 지정한다). 라벨은 `session-platform.dev/auth-pool=<pool>`, `session-platform.dev/auth-slot=<i>`다. control plane은 슬롯 PVC를 **지우지 않는다** — 세션이 지워져도, N을 줄여도 남는다(StatefulSet의 PVC 보존과 같다). N을 줄이면 범위 밖 슬롯은 더 임대하지 않을 뿐이다. 노드 국소 스토리지(local-path, kind e2e)에서는 PV의 노드 친화성 때문에 그 슬롯을 받은 세션 파드가 그 노드에 뜬다. 운영의 `efs`는 RWX라 노드에 묶이지 않는다.
 - **달성 가치**: V3
 - **구체화 대상**: AC-B3(무결성) — 동결·복원·재생성을 건너 보존되는 상태에 「슬롯의 로그인」을 더한 것
 - **검증 방법**: 풀 크기 2의 배포에서 첫 세션 생성 뒤 PVC `<네임스페이스>-<pool>-auth-0`이 라벨과 함께 생기고 세션 파드가 그것을 마운트함을 확인한다. 세션을 지운 뒤에도 PVC가 남음을 확인한다. 풀 크기 0이면 `GET /config`에 타입이 없고 생성이 pod 없이 실패함을 확인한다.

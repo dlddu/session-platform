@@ -97,7 +97,12 @@ const (
 	AnthropicAuthTokenEnvVar       = "ANTHROPIC_AUTH_TOKEN"
 	ClaudeCodeAuthTokenSecretKey   = "auth-token"
 	ClaudeCodeK3SMCPTokenSecretKey = "k3s-mcp-token"
-	ClaudeCodeModelConfigKey       = "model"
+	// ClaudeCodeOAuthTokenSecretKey holds the long-lived Claude subscription
+	// token `claude setup-token` prints; a subscription-mode pod gets it as
+	// ClaudeCodeOAuthTokenEnvVar (AC-E7). Keep in sync with data-plane/cmd/agent.
+	ClaudeCodeOAuthTokenSecretKey = "oauth-token"
+	ClaudeCodeOAuthTokenEnvVar    = "CLAUDE_CODE_OAUTH_TOKEN"
+	ClaudeCodeModelConfigKey      = "model"
 	// ClaudeCodeSubscriptionModelConfigKey is platform-default's model for a
 	// claude-code session in subscription mode (AC-E7).
 	ClaudeCodeSubscriptionModelConfigKey = "subscription-model"
@@ -667,11 +672,13 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		})
 		if o.claudeAuthMode == ClaudeCodeAuthSubscription {
-			// AC-E7: the CLI reaches the provider itself with the slot's login,
-			// so there is no proxy to point it at and no gateway token to hold.
-			container.Env = append(container.Env, corev1.EnvVar{
-				Name: ClaudeCodeAuthModeEnvVar, Value: string(ClaudeCodeAuthSubscription),
-			})
+			// AC-E7: the CLI reaches the provider itself with the platform's
+			// subscription OAuth token, so there is no proxy to point it at and
+			// no gateway token to hold.
+			container.Env = append(container.Env,
+				corev1.EnvVar{Name: ClaudeCodeAuthModeEnvVar, Value: string(ClaudeCodeAuthSubscription)},
+				secretEnv(ClaudeCodeOAuthTokenEnvVar, o.claudeCredentialsSecret, ClaudeCodeOAuthTokenSecretKey),
+			)
 		} else {
 			container.Env = append(container.Env,
 				corev1.EnvVar{Name: AnthropicBaseURLEnvVar, Value: ClaudeCredentialProxyURL},

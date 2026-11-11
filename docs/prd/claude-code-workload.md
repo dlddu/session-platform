@@ -140,24 +140,19 @@
 
 > ✅ **구현 결정 (이미지/모드, 2026-08-08)**: 하나의 data-plane 이미지에 PTY shell과 Claude Code CLI를 포함하고(*2026-11-01*: CRIU 바이너리는 제거됐다) `DATA_PLANE_WORKLOAD`로 시작 모드를 분기한다. Kubernetes pod label/env와 control-plane의 immutable workload spec이 선택한 모드를 끝까지 전달한다.
 
-### AC-E7: 공급자 인증 모드 — Claude 구독(인증 풀) 또는 게이트웨이
+### AC-E7: 공급자 인증 모드 — Claude 구독(OAuth 토큰) 또는 게이트웨이
 - **설명**: `claude-code`의 공급자 인증은 control plane 설정 `CLAUDE_CODE_AUTH_MODE`가 고른다 (2026-11-07 사용자 결정: 운영은 OpenRouter 게이트웨이에서 Claude 구독으로 옮긴다).
-  - **`subscription`** (운영 기본, `deploy/base/deployment.yaml`): 풀 `claude-code`(`agent-auth-pool.md` AC-N1~N5, `CLAUDE_CODE_AUTH_SLOTS`)의 슬롯을 쓴다. 파드에는 credential-proxy 사이드카가 **없고**, 주 컨테이너는 `ANTHROPIC_BASE_URL`·`ANTHROPIC_AUTH_TOKEN`·`ANTHROPIC_API_KEY`·`CLAUDE_CODE_OAUTH_TOKEN`을 받지 않으며 하나라도 있으면 에이전트가 기동을 거부한다. CLI는 공급자에 직접 붙는다. 슬롯 파일은 `.credentials.json`이고 HOME 쪽 자리는 `$HOME/.claude/.credentials.json`이다(AC-N4). 주 컨테이너는 이 모드를 `CLAUDE_CODE_AUTH_MODE=subscription`으로 받는다. 모델은 게이트웨이와 따로 고른다 — 게이트웨이의 `model`·`models`(OpenRouter id)는 구독에서 뜻이 없고 `approval-gated`가 계속 읽으므로, 같은 ConfigMap의 선택 키 `subscription-model`·`subscription-models`(control plane `CLAUDE_CODE_SUBSCRIPTION_DEFAULT_MODEL`·`CLAUDE_CODE_SUBSCRIPTION_MODELS`)가 이 모드의 UI 카탈로그이고, `platform-default` 파드는 `subscription-model`을 읽는다(없으면 CLI 기본).
-  - **`gateway`**: AC-E6 그대로 — loopback credential-proxy가 ConfigMap `base-url`과 Secret `auth-token`을 들고 주 컨테이너는 placeholder만 본다. 풀을 쓰지 않는다. e2e(공급자 대역)와 되돌리기용으로 남긴다.
+  - **`subscription`** (운영 기본, `deploy/base/deployment.yaml`): 플랫폼 Secret(`CLAUDE_CODE_CREDENTIALS_SECRET`, 기본 `claude-code-credentials`)의 **필수** 키 `oauth-token` — `claude setup-token`이 발급하는 장기 OAuth 토큰 — 을 주 컨테이너가 `CLAUDE_CODE_OAUTH_TOKEN`으로 받는다(secretKeyRef, 값을 pod spec에 쓰지 않는다). 모든 구독 세션이 이 토큰 하나를 함께 쓰며, 인증 풀(`agent-auth-pool.md`)을 쓰지 않는다 — 슬롯 PVC·Lease가 없고 세션 수에 풀 상한도 없다. 파드에는 credential-proxy 사이드카가 **없고**, 주 컨테이너는 `ANTHROPIC_BASE_URL`·`ANTHROPIC_AUTH_TOKEN`·`ANTHROPIC_API_KEY`를 받지 않는다. 에이전트는 그중 하나라도 있거나 `CLAUDE_CODE_OAUTH_TOKEN`이 비었거나 공백·줄바꿈을 품으면 기동을 거부한다. CLI는 공급자에 직접 붙고 로그인 단계가 없다. 토큰은 다른 자격 증명처럼 출력 redaction 대상이다. 주 컨테이너는 이 모드를 `CLAUDE_CODE_AUTH_MODE=subscription`으로 받는다. 모델은 게이트웨이와 따로 고른다 — 게이트웨이의 `model`·`models`(OpenRouter id)는 구독에서 뜻이 없고 `approval-gated`가 계속 읽으므로, 같은 ConfigMap의 선택 키 `subscription-model`·`subscription-models`(control plane `CLAUDE_CODE_SUBSCRIPTION_DEFAULT_MODEL`·`CLAUDE_CODE_SUBSCRIPTION_MODELS`)가 이 모드의 UI 카탈로그이고, `platform-default` 파드는 `subscription-model`을 읽는다(없으면 CLI 기본).
+  - **`gateway`**: AC-E6 그대로 — loopback credential-proxy가 ConfigMap `base-url`과 Secret `auth-token`을 들고 주 컨테이너는 placeholder만 본다. `CLAUDE_CODE_OAUTH_TOKEN`도 받지 않는다. e2e(공급자 대역)와 되돌리기용으로 남긴다.
 
-  값이 비면 `gateway`, 그 밖의 값은 control plane 기동 실패다. `subscription`인데 풀 크기가 0이면 이 타입은 `GET /config`에 나오지 않는다(AC-N1).
+  값이 비면 `gateway`, 그 밖의 값은 control plane 기동 실패다. 두 모드 모두 이미지가 설정되어 있으면 `GET /config`에 나온다.
 
-  **빈 슬롯의 로그인** (`subscription`): Claude Code의 `claude auth login --claudeai`는 URL을 출력한 뒤 붙여 넣을 코드를 stdin에서 기다린다(device code가 아니다, 2.1.220에서 확인). 그래서 로그인을 두 번의 write로 나눈다.
-  1. 턴 시작 시 `claude auth status --json`이 로그인 안 됨을 알리면, 에이전트가 `claude auth login --claudeai`를 띄우고 그 로그인 URL을 플랫폼 안내 줄로 내보낸다 — 「브라우저에서 열어 로그인하고, 화면에 나온 코드를 다음 메시지로 보내라」. 이 프롬프트는 실행하지 않고 보류하며, 턴은 `status=error`로 끝난다.
-  2. 다음 write의 payload는 프롬프트가 아니라 **코드**다. 입력 기록에는 `[login code]`만 남기고 코드 자체는 출력에 쓰지 않는다. 에이전트가 코드를 로그인 프로세스의 stdin에 넣고, 성공하면 슬롯에 동기화한 뒤(AC-N4) 같은 턴에서 보류한 프롬프트를 실행한다. 실패하면 안내 한 줄을 남기고 보류한 프롬프트를 버린다 — 다음 프롬프트가 다시 1번부터 한다.
-  3. 보류는 15분 뒤, 또는 동결·종료 시 로그인 프로세스를 끝내고 안내 한 줄과 함께 사라진다. 만료·동결로 사라진 뒤 30분 안의 첫 write는 늦게 온 코드로 보고 `[login code]`로만 기록하며 실행하지 않는다 — 코드가 프롬프트로 출력·모델에 새지 않게 한다.
-  4. 코드로 읽는 것은 URL 안내 **뒤에** 받은 write뿐이다. 그 전에 이미 큐에 있던 프롬프트는 그대로 기록하되 실행하지 않고 「로그인 후 다시 보내라」는 안내를 남긴다.
-  5. `claude auth status`가 시간 초과·실행 실패·읽을 수 없는 결과면 로그인을 시작하지 않는다 — 그 턴만 안내와 함께 실패하고 아무것도 보류하지 않는다.
-
-  슬롯 동기화(AC-N4)는 그 턴의 시작 복사가 성공해 HOME에 파일을 놓았을 때만 턴 끝의 「HOME에 없음」을 로그아웃으로 읽고, 턴 끝 복사가 실패하면 다음 턴 시작은 HOME의 새 사본을 먼저 슬롯에 저장한다. HOME → 슬롯 복사는 내용이 JSON일 때만 한다.
+  토큰은 세션 안에서 CLI와 그 도구(Bash 등)가 읽을 수 있다 — 이전의 슬롯 로그인 파일(`$HOME/.claude/.credentials.json`)과 같은 노출 수준이고, 프록시로 숨기지 않는다(AC-N5와 같은 대가). 토큰 교체는 Secret을 바꾸면 그 뒤에 시작하는 주 컨테이너(새 세션, 복원, 컨테이너 재시작)부터 적용된다.
 - **달성 가치**: V3, V1
-- **구체화 대상**: AC-E6(공급자 자격 증명 배치)를 구독 계정에 맞춘 것, AC-N4의 `claude-code` 슬롯 파일과 로그인 흐름
-- **검증 방법**: `subscription`에서 제출된 pod spec에 credential-proxy 컨테이너·`ANTHROPIC_*` env가 없고 슬롯 PVC와 `CLAUDE_CODE_AUTH_MODE=subscription`이 있음을 확인한다. `gateway`에서는 AC-E6의 모양 그대로임을 확인한다. 에이전트 단위 테스트로 로그인 안 됨 → URL 안내·프롬프트 보류 → 다음 write가 코드로 쓰이고 출력에 코드가 없으며 성공 시 보류한 프롬프트가 실행됨을 확인한다. `subscription` 모드 주 컨테이너가 `ANTHROPIC_AUTH_TOKEN`이 있으면 기동을 거부함을 확인한다.
+- **구체화 대상**: AC-E6(공급자 자격 증명 배치)를 구독 계정에 맞춘 것
+- **검증 방법**: `subscription`에서 제출된 pod spec에 credential-proxy 컨테이너·`ANTHROPIC_*` env·슬롯 PVC가 없고, `CLAUDE_CODE_AUTH_MODE=subscription`과 `claude-code-credentials`/`oauth-token`을 가리키는 필수 secretKeyRef `CLAUDE_CODE_OAUTH_TOKEN`이 있음을 확인한다. 슬롯을 준 구독 세션 생성은 pod 없이 거부된다. `gateway`에서는 AC-E6의 모양 그대로이고 `CLAUDE_CODE_OAUTH_TOKEN`이 없음을 확인한다. 에이전트 단위 테스트로 `subscription` 주 컨테이너가 토큰이 없거나 공백을 품거나 `ANTHROPIC_*`가 있으면 기동을 거부하고(거부 메시지에 토큰 값이 없다), 토큰이 redaction 목록에 있음을 확인한다.
+
+> ✅ **구현 결정 (구독 인증을 OAuth 토큰으로, 2026-11-12 사용자 결정)**: 2026-11-07의 구독 모드는 인증 풀 `claude-code`의 슬롯에 `claude auth login --claudeai` 결과(`.credentials.json`)를 두고, 빈 슬롯이면 첫 프롬프트가 URL 안내 → 다음 write를 코드로 받는 두 단계 로그인을 돌았다. 이를 `claude setup-token`의 장기 OAuth 토큰 하나를 Secret에서 주입하는 방식으로 바꿨다 — ① 세션마다·슬롯마다 사람이 로그인할 필요가 없고 ② setup-token 토큰은 refresh token처럼 쓸 때마다 바뀌지 않아 독점 임대(AC-N2)의 이유가 없다. 로그인 흐름(`claude auth status`/`login` 호출, 프롬프트 보류, `[login code]` 기록)과 `claude-code` 풀(`CLAUDE_CODE_AUTH_SLOTS`·`_STORAGE_CLASS`·`_STORAGE_SIZE`)을 걷었다. 모드 이름 `subscription`과 모델 카탈로그 키는 그대로다. 이미 만들어진 슬롯 PVC `<네임스페이스>-claude-code-auth-<i>`와 Lease `claude-code-auth-<i>`는 control plane이 지우지 않으므로(AC-N1) 운영자가 정리한다.
 
 ### AC-E8: 세션 추론 수준(`reasoningEffort`) — 생성 시 고정
 - **설명**: 생성 요청은 선택 필드 `reasoningEffort`를 받는다. 이 필드를 받는 타입은 `claude-code`와 `codex-task`(AC-M4)뿐이고, 다른 타입에 주면 pod 생성 전 400이다. 값은 타입마다 정해진 목록 중 하나이고(`claude-code`: `low`·`medium`·`high`·`xhigh`·`max` — CLI의 `--effort`), 빈 문자열·비문자열·목록 밖은 400이다. 생략하면 세션에 저장하지 않고 CLI의 기본값을 쓴다. 값은 모델·타입처럼 **생성 시 고정**이다 — 세션 레코드의 `reasoningEffort`로 조회 응답에 나오고, 동결·복원을 건너 유지되며, 바꾸려면 새 세션을 만든다. `GET /config`의 각 타입 항목은 `reasoningEfforts` 배열을 내놓는다(받지 않는 타입은 빈 배열). `claude-code` 파드는 `CLAUDE_CODE_EFFORT`로 받고 모든 실행 argv에 `--effort <값>`을 붙인다. 승인 게이트 타입 `minimax-code`는 받지 않는다.

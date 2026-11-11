@@ -30,7 +30,7 @@ type Service struct {
 	now                func() time.Time // injectable clock for tests
 	leaseRenewInterval time.Duration
 	// authPools are the login slot pools by the type that leases from them
-	// (AC-N2): codex-task, and claude-code in subscription mode.
+	// (AC-N2): codex-task and codex-chat.
 	authPools map[session.WorkloadType]k8s.AuthPool
 }
 
