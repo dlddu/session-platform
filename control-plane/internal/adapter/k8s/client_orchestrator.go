@@ -208,7 +208,11 @@ const (
 	serviceAccountNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
 	defaultPollInterval = 2 * time.Second
-	defaultReadyTimeout = 2 * time.Minute
+	// defaultReadyTimeout covers a pod that first waits for the cluster
+	// autoscaler to add a node, then pulls the data plane image on it. Two
+	// minutes was not enough for that (2026-11-11: scale-up ~70s + image
+	// pull 48s timed a claude-code session out).
+	defaultReadyTimeout = 5 * time.Minute
 )
 
 // ClientOrchestrator is the real PodOrchestrator: it provisions and reclaims a
@@ -1062,6 +1066,29 @@ func (o *ClientOrchestrator) Reach(ctx context.Context, ref PodRef) error {
 	_ = conn.WriteControl(websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return conn.Close()
+}
+
+// Gone reports a pod that is absent or terminally finished. Session pods
+// restart in place, so Failed/Succeeded only follows an eviction; an evicted
+// pod is kept by the kubelet but never runs again (AC-C5). A pod still
+// terminating is not yet gone: the next access sees it absent.
+func (o *ClientOrchestrator) Gone(ctx context.Context, ref PodRef) (bool, error) {
+	ns := ref.Namespace
+	if ns == "" {
+		ns = o.namespace
+	}
+	pod, err := o.client.CoreV1().Pods(ns).Get(ctx, ref.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get pod %s/%s: %w", ns, ref.Name, err)
+	}
+	switch pod.Status.Phase {
+	case corev1.PodFailed, corev1.PodSucceeded:
+		return true, nil
+	}
+	return false, nil
 }
 
 // cleanup best-effort deletes pods that failed to come up (or that a later

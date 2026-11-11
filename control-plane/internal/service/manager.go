@@ -37,9 +37,9 @@ type Service struct {
 const defaultLeaseRenewInterval = 5 * time.Second
 
 // createRoundTimeout backstops a Create detached from its caller: a helper pod
-// and a workload pod at the orchestrator's 2-minute ready bound each, plus the
+// and a workload pod at the orchestrator's 5-minute ready bound each, plus the
 // reachability check, fit well inside it.
-const createRoundTimeout = 10 * time.Minute
+const createRoundTimeout = 15 * time.Minute
 
 type agentCheckpointAborter interface {
 	AbortCheckpoint(context.Context, string, string) error
@@ -363,7 +363,7 @@ func (s *Service) Read(ctx context.Context, id string, offset int64) (*session.R
 	}
 	payload, next, err := s.agent.Read(ctx, sess.Pod, offset)
 	if err != nil {
-		return nil, err
+		return nil, s.podLost(ctx, id, sess, err)
 	}
 	s.touch(ctx, id)
 	return &session.ReadResult{
@@ -372,6 +372,26 @@ func (s *Service) Read(ctx context.Context, id string, offset int64) (*session.R
 		Payload:    payload,
 		NextOffset: next,
 	}, nil
+}
+
+// podLost answers a failed agent call. When the session's workload pod no
+// longer exists (its node was reclaimed or it was evicted), the session can
+// never be served again: it is terminated — freeing its auth slot — and
+// reported as not found, so a client opens a new session instead of retrying
+// a dead one forever (AC-C5). Any other failure, and a pod whose state cannot
+// be read, returns the original error.
+func (s *Service) podLost(ctx context.Context, id string, sess *session.Session, cause error) error {
+	if sess.Pod == "" {
+		return cause
+	}
+	gone, err := s.orch.Gone(ctx, k8s.PodRef{Name: sess.Pod})
+	if err != nil || !gone {
+		return cause
+	}
+	if err := s.Terminate(context.WithoutCancel(ctx), id); err != nil && !errors.Is(err, session.ErrNotFound) {
+		return errors.Join(cause, err)
+	}
+	return fmt.Errorf("%w: session %s lost its pod %s", session.ErrNotFound, id, sess.Pod)
 }
 
 // Stream passively observes the retained pod's append-only output. Deliberately
@@ -404,7 +424,7 @@ func (s *Service) Write(ctx context.Context, id, payload string) (*session.Write
 		return nil, err
 	}
 	if err := s.agent.Write(ctx, sess.Pod, payload); err != nil {
-		return nil, err
+		return nil, s.podLost(ctx, id, sess, err)
 	}
 	s.touch(ctx, id)
 	return &session.WriteResult{
