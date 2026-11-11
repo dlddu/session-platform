@@ -146,9 +146,9 @@ docs/                 value / PRD·AC / journeys / mockups / retired CRIU verifi
 - **Per-session plugins** (AC-L1, [`docs/prd/session-plugins.md`](docs/prd/session-plugins.md)):
   `POST /api/v1/sessions` takes an optional `plugins` list of plugin names from
   the platform marketplace for `claude-code`, `codex` and `minimax-code`.
-  Omitted, a session gets its type's default (`session-platform`, the
-  deployment's `CODEX_PLUGINS`, `mcp-servers`); given, the list **replaces**
-  that default and is fixed for the session's lifetime, snapshot/restore
+  Omitted, a codex-chat session gets the deployment's `CODEX_PLUGINS` and
+  every other type runs without plugins; given, the list **replaces** that
+  default and is fixed for the session's lifetime, snapshot/restore
   included. It reaches the one place each type already installs plugins:
   `CLAUDE_CODE_PLUGINS` on the claude-code workload container (entrypoint
   install + managed settings), or `MINIMAX_CODE_PLUGINS` on the codex /

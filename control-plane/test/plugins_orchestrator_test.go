@@ -154,8 +154,8 @@ func TestPlugins_CodexSidecarSeeder(t *testing.T) {
 	}
 }
 
-// codex-task seeds from its own sidecar the same way, falling back to its own
-// CODEX_TASK_PLUGINS rather than codex-chat's (AC-L1, AC-M1).
+// codex-task seeds from its own sidecar the same way, but has no default: a
+// session that chose none gets no plugins, never codex-chat's (AC-L1, AC-M1).
 func TestPlugins_CodexTaskSidecarSeeder(t *testing.T) {
 	start := func(t *testing.T, id string, plugins []string) string {
 		t.Helper()
@@ -163,7 +163,6 @@ func TestPlugins_CodexTaskSidecarSeeder(t *testing.T) {
 			k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
 			k8s.WithWorkloadImage(session.WorkloadTypeCodexTask, codexImage),
 			k8s.WithCodexPlugins("codex-session,extra"),
-			k8s.WithCodexTaskPlugins("task-bundle"),
 		)
 		slot := 0
 		if _, err := orch.Start(context.Background(), id, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexTask, Plugins: plugins, AuthSlot: &slot}); err != nil {
@@ -175,7 +174,7 @@ func TestPlugins_CodexTaskSidecarSeeder(t *testing.T) {
 	if got := start(t, "pl-ct", []string{"learning"}); got != "learning" {
 		t.Errorf("selection: MINIMAX_CODE_PLUGINS = %q, want learning", got)
 	}
-	if got := start(t, "pl-ct-default", nil); got != "task-bundle" {
-		t.Errorf("omitted: MINIMAX_CODE_PLUGINS = %q, want codex-task's own task-bundle", got)
+	if got := start(t, "pl-ct-default", nil); got != "" {
+		t.Errorf("omitted: MINIMAX_CODE_PLUGINS = %q, want none", got)
 	}
 }

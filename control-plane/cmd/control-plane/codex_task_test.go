@@ -16,7 +16,7 @@ func TestLoadCodexTaskConfigDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.image != "" || cfg.credentialsSecret != "codex-task-credentials" || cfg.configConfigMap != "codex-task-config" ||
-		cfg.plugins != "codex-session" || cfg.archiveEnabled || cfg.defaultModel != session.PlatformDefaultModel ||
+		cfg.archiveEnabled || cfg.defaultModel != session.PlatformDefaultModel ||
 		cfg.pool.slots != 0 || cfg.pool.storageSize != "16Mi" || cfg.pool.storageClass != "" {
 		t.Fatalf("defaults = %+v", cfg)
 	}

@@ -231,7 +231,8 @@ interactive shell and Claude Code workloads.
   token through its own handler in process, clones
   `MINIMAX_CODE_PLUGIN_MARKETPLACE_URL` into `MINIMAX_CODE_MARKETPLACE_DIR` with a
   URL-scoped header, and serves the plugins named in `MINIMAX_CODE_PLUGINS`
-  (default `mcp-servers`) — manifest plus the files its `skills`, `commands`,
+  (the session's selection; empty or unset means none, and then nothing is
+  cloned and the bundle is `ready` and empty) — manifest plus the files its `skills`, `commands`,
   `agents` and `mcpServers` fields name, never hooks — at `GET /plugin-seed`
   (503 while bootstrapping, then `ready`, `failed` or `unconfigured`).
 - `mcp` is the session MCP that runs in the helper pod's other container
@@ -289,14 +290,15 @@ still, archives `home/` plus the scrollback, and keeps both paused until the
 control plane reclaims the pod or calls `/checkpoint/abort`, which SIGCONTs the
 tree and reopens writes. A process that daemonized out of the shell's tree is
 not paused. The image includes the official
-`@anthropic-ai/claude-code` npm package. For a `claude-code` container only,
+`@anthropic-ai/claude-code` npm package. For a `claude-code` container whose
+session chose plugins (`CLAUDE_CODE_PLUGINS` set; AC-L1) only,
 `entrypoint.sh` calls K3s MCP with `K3S_MCP_TOKEN` to mint a short-lived
 `contents:read` GitHub App token scoped to `plugin-marketplace`, supplies that
 token only through a process-scoped Git HTTPS Authorization header while running
 `claude plugin marketplace add https://github.com/dlddu/plugin-marketplace.git`
-and `claude plugin install session-platform@dlddu-plugins`, then exports the
+and `claude plugin install <name>@dlddu-plugins` for each chosen plugin, then exports the
 runtime plugin seed and execs the agent. The GitHub token is unset before the
-agent starts; every other workload — `shell`, `minimax-code` (its marketplace path is the K3s MCP proxy, above), `mcp` and
+agent starts; a claude-code session that chose none, and every other workload — `shell`, `minimax-code` (its marketplace path is the K3s MCP proxy, above), `mcp` and
 `credential-proxy` — skips this bootstrap.
 Provider authentication credentials are not present in the Claude container or
 inherited by its Bash tools. That container receives
@@ -335,7 +337,8 @@ literal name because Kubernetes does not interpolate
 `CLAUDE_CODE_CONFIG_CONFIGMAP` there.
 
 Fresh session HOME also receives a platform-managed `.claude/settings.json`
-that enables only `session-platform@dlddu-plugins` and allows only the coding
+that enables only the session's chosen `<name>@dlddu-plugins` plugins (none
+unless it chose some) and allows only the coding
 tools `Read`, `Write`, `Edit`, `Glob`, `Grep`, and `Bash`; the agent does not use
 `--dangerously-skip-permissions`. Every invocation starts Claude Code in `auto`
 permission mode through an explicit CLI flag.

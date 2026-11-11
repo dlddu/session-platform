@@ -36,7 +36,7 @@ func TestClaudeAuthFromEnv(t *testing.T) {
 	setClaudeGatewayEnv(t)
 	t.Setenv(claudeAuthModeEnv, "")
 	auth, err := claudeAuthFromEnv(workloadClaudeCode)
-	if err != nil || auth.mode != claudeAuthModeGateway || len(auth.tools.Plugins) == 0 {
+	if err != nil || auth.mode != claudeAuthModeGateway || len(auth.tools.Plugins) != 0 {
 		t.Fatalf("gateway = %+v, %v", auth, err)
 	}
 	t.Setenv(claudeOAuthTokenEnv, "sk-ant-oat01-x")
@@ -80,7 +80,7 @@ func TestClaudeAuthFromEnv(t *testing.T) {
 	t.Setenv(claudeOAuthTokenEnv, "sk-ant-oat01-x")
 	t.Setenv(claudeEffortEnv, "xhigh")
 	auth, err = claudeAuthFromEnv(workloadClaudeCode)
-	if err != nil || auth.mode != claudeAuthModeSubscription || auth.effort != "xhigh" || len(auth.tools.Plugins) == 0 {
+	if err != nil || auth.mode != claudeAuthModeSubscription || auth.effort != "xhigh" || len(auth.tools.Plugins) != 0 {
 		t.Fatalf("subscription = %+v, %v", auth, err)
 	}
 	if !slices.Contains(credentialLiteralsFromEnv(), "sk-ant-oat01-x") {
