@@ -30,9 +30,12 @@ const (
 	// refuses to rename an active mount point (EBUSY), while archive restore
 	// atomically swaps this directory with a staged sibling.
 	defaultClaudeStateDir = "/session/state"
-	defaultClaudeBinary   = "claude"
-	platformDefaultModel  = "platform-default"
-	claudePermissionMode  = "auto"
+	// defaultClaudeRunnerBinary is what each claude-code turn runs (AC-E2);
+	// claudeRunnerBinaryEnv overrides it. The runner finds the Claude Code CLI
+	// it drives through CLAUDE_CODE_BIN, default `claude` on PATH.
+	defaultClaudeRunnerBinary = "/usr/local/bin/claude-runner"
+	claudeRunnerBinaryEnv     = "CLAUDE_RUNNER_BIN"
+	platformDefaultModel      = "platform-default"
 
 	claudeRuntimeStateFile      = ".session-platform-claude.json"
 	claudeSettingsDir           = ".claude"
@@ -267,7 +270,7 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 	}
 	binary := strings.TrimSpace(cfg.Binary)
 	if binary == "" {
-		binary = defaultClaudeBinary
+		binary = defaultClaudeRunnerBinary
 	}
 	runner := cfg.Runner
 	if runner == nil {
@@ -751,26 +754,25 @@ func (c *claudeWorkload) argv(prompt string, resume bool) []string {
 	return c.cli.argv(c.binary, c.model, prompt, resume)
 }
 
-// claudeArgv builds one Claude Code invocation. effort is AC-E8's session
-// effort, empty for the CLI default.
-func claudeArgv(binary, model, effort, prompt string, resume bool) []string {
+// claudeRunnerArgv builds one claude-runner invocation (AC-E2). effort is
+// AC-E8's session effort, empty for the CLI default. --resume follows AC-E4:
+// only after the first successful run; the runner then resumes the session id
+// it recorded. Permission mode, partial messages and the system prompt are the
+// runner's, not flags here, so no argv can change them.
+func claudeRunnerArgv(binary, model, effort, prompt string, resume bool) []string {
 	argv := []string{binary}
-	if resume {
-		argv = append(argv, "--continue")
-	}
 	if model != "" && model != platformDefaultModel {
 		argv = append(argv, "--model", model)
 	}
 	if effort != "" {
 		argv = append(argv, "--effort", effort)
 	}
+	if resume {
+		argv = append(argv, "--resume")
+	}
 	// The option delimiter prevents a prompt beginning with "--" from changing
 	// any platform-controlled flag.
-	return append(argv,
-		"--permission-mode", claudePermissionMode,
-		"-p", "--output-format", "stream-json", "--verbose",
-		"--include-partial-messages", "--", prompt,
-	)
+	return append(argv, "--", prompt)
 }
 
 // beginCheckpoint atomically closes admission and drains all accepted work.

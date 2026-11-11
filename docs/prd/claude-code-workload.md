@@ -45,32 +45,41 @@
 - **검증 방법**: `workloadType=claude-code`로 세션을 생성하면 해당 pod에서 클로드 코드 CLI 실행이 가능하고, `workloadType` 미지정 생성은 기존과 동일하게 `shell` 세션으로 동작함을 확인한다. explicit `""`/`null`/비문자열과 허용값 외 타입은 pod 생성 전 400으로 거부됨을 확인한다. 기존 세션 route에 workload/model 변경 필드를 보내면 400이고 원래 값이 유지됨을 확인한다.
 
 ### AC-E2: write = 프롬프트 1회 실행
-- **설명**: `claude-code` 세션에서 `POST /sessions/{id}/write`의 `payload`는 **프롬프트**로 해석되어, 세션 pod 안에서 다음 형태의 1회 실행을 트리거한다:
+- **설명**: `claude-code` 세션에서 `POST /sessions/{id}/write`의 `payload`는 **프롬프트**로 해석되어, 세션 pod 안에서 다음 형태의 1회 실행을 트리거한다 *(2026-11-12 개정: Claude Code CLI를 직접 띄우던 것을 Claude Agent SDK 러너로 바꿨다 — 아래 「구현 결정 (Agent SDK 러너)」)*:
 
   ```
   ANTHROPIC_BASE_URL=http://127.0.0.1:8091  ANTHROPIC_AUTH_TOKEN=<비밀이 아닌 proxy placeholder> \
-    claude [--continue] [--model <선택된 모델>] \
-      --permission-mode auto -p \
-      --output-format stream-json --verbose --include-partial-messages -- "<payload>"
+    claude-runner [--model <선택된 모델>] [--effort <추론 수준>] [--resume] -- "<payload>"
   ```
+
+  `claude-runner`(`data-plane/claude-runner`)는 Claude Agent SDK의 `query()`를 한 번 부르고, SDK는 이미지에 고정 설치된 Claude Code CLI를 자식 프로세스로 구동한다. 러너가 SDK에 고정으로 주는 옵션은 Claude Code 기본 시스템 프롬프트(`systemPrompt: {type: "preset", preset: "claude_code"}`), 모든 설정 원천(`user`·`project`·`local` — CLI 기본과 같다), `permissionMode: "default"`, partial message, 그리고 도구 권한 콜백 `canUseTool`(아래 「구현 결정 (headless 권한 정책)」)이다. 이 값들은 argv 플래그가 아니므로 에이전트나 프롬프트가 바꿀 수 없다.
 
   실제 공급자 HTTPS URL·토큰은 별도 credential-proxy sidecar에만 ConfigMapKeyRef·SecretKeyRef로 주입된다. CLI와 도구가 실행되는 주 컨테이너는 localhost proxy와 비밀이 아닌 placeholder만 보며, proxy가 HTTPS 목적지를 고정하고 요청 자격 증명을 실제 토큰으로 교체한다. 평문 HTTP upstream은 같은 pod 네트워크에서의 패킷 관찰 위험 때문에 시작 시 거부한다.
 
-  `-p`는 print(비대화) 모드이고 `--` 뒤 payload는 옵션이 아닌 단일 positional argv로 전달된다. `stream-json`과 partial-message 플래그는 실행이 끝나기 전의 assistant `text_delta`를 stdout JSONL로 내보낸다. data plane은 JSONL 원문이나 최종 result를 사용자 출력으로 저장하지 않고, `text_delta`만 한 번씩 순서대로 투영하며 diagnostic stderr도 같은 append-only 출력에 합친다. 세션 metadata가 `platform-default`이면 pod spec이 플랫폼 설정 ConfigMap의 optional `model` 키를 주 컨테이너의 `CLAUDE_CODE_MODEL` ConfigMapKeyRef로 둔다. 주 컨테이너가 시작하거나 재시작할 때 해석한 값이 비어 있지 않으면 `--model <ConfigMap 값>`을 넣고, 키가 없거나 값이 비어 있으면 `--model`을 생략해 설치된 Claude CLI 기본 선택에 위임한다. 구체 model을 명시한 세션은 ConfigMapKeyRef 대신 그 값을 literal `CLAUDE_CODE_MODEL`로 받아 ConfigMap 기본값보다 우선하며 `--model`의 단일 argv로 전달한다. **첫 성공 실행 이후**부터 `--continue`도 추가한다(실패·timeout인 첫 실행은 대화를 만든 것으로 보지 않는다). 실행은 **원샷**이다 — 프로세스는 응답을 출력한 뒤 종료하며, 세션이 살아 있는 동안 상주하는 CLI 프로세스는 없다. write는 쉘 타입(AC-D2)과 동일한 비블로킹 규약을 따른다: 실행 완료를 기다리지 않고 즉시 반환하고, 실행 중 출력은 AC-E3의 stream/read로 회수한다. 한 prompt payload는 최대 1 MiB이며 초과 write는 큐에 넣지 않고 `413 Payload Too Large`로 거부한다. 동일 세션에서 이전 실행이 아직 끝나지 않은 상태에서 다음 write가 오면 **직렬로 큐잉**된다 — 한 세션 안에서 두 개의 `claude` 실행이 동시에 돌지 않으며, 이것이 AC-E4의 대화 순서를 보장한다. bounded queue가 포화된 새 write는 `429 Too Many Requests`로 거부된다.
+  `--` 뒤 payload는 옵션이 아닌 단일 positional argv로 전달된다. 러너는 SDK 메시지를 한 줄에 하나씩 stdout JSONL로 내보내며(모양은 CLI `stream-json`과 같다), partial message가 실행이 끝나기 전의 assistant `text_delta`를 실어 나른다. 러너 자신의 안내(권한 거부 등)는 `{"type":"session_platform.notice","text":"[session-platform: …]"}` 줄이다. data plane은 JSONL 원문이나 최종 result를 사용자 출력으로 저장하지 않고, `text_delta`와 러너 안내만 한 번씩 순서대로 투영하며 diagnostic stderr(러너와 CLI의 stderr)도 같은 append-only 출력에 합친다. 세션 metadata가 `platform-default`이면 pod spec이 플랫폼 설정 ConfigMap의 optional `model` 키를 주 컨테이너의 `CLAUDE_CODE_MODEL` ConfigMapKeyRef로 둔다. 주 컨테이너가 시작하거나 재시작할 때 해석한 값이 비어 있지 않으면 `--model <ConfigMap 값>`을 넣고, 키가 없거나 값이 비어 있으면 `--model`을 생략해 설치된 Claude CLI 기본 선택에 위임한다. 구체 model을 명시한 세션은 ConfigMapKeyRef 대신 그 값을 literal `CLAUDE_CODE_MODEL`로 받아 ConfigMap 기본값보다 우선하며 `--model`의 단일 argv로 전달한다. **첫 성공 실행 이후**부터 `--resume`도 추가한다(실패·timeout인 첫 실행은 대화를 만든 것으로 보지 않는다 — 재개 대상은 AC-E4). 실행은 **원샷**이다 — 러너와 그 CLI 자식은 응답을 출력한 뒤 종료하며, 세션이 살아 있는 동안 상주하는 러너·CLI 프로세스는 없다. write는 쉘 타입(AC-D2)과 동일한 비블로킹 규약을 따른다: 실행 완료를 기다리지 않고 즉시 반환하고, 실행 중 출력은 AC-E3의 stream/read로 회수한다. 한 prompt payload는 최대 1 MiB이며 초과 write는 큐에 넣지 않고 `413 Payload Too Large`로 거부한다. 동일 세션에서 이전 실행이 아직 끝나지 않은 상태에서 다음 write가 오면 **직렬로 큐잉**된다 — 한 세션 안에서 두 개의 러너 실행이 동시에 돌지 않으며, 이것이 AC-E4의 대화 순서를 보장한다. bounded queue가 포화된 새 write는 `429 Too Many Requests`로 거부된다.
 
   각 invocation에서 증분 redaction 후 저장되는 **assistant text + diagnostic stderr는 marker를 포함해 16 MiB**로 제한한다. raw stream-json framing은 이 quota나 cursor에 포함하지 않는다. 넘친 tail은 버리고 이미 노출한 bytes를 고치지 않은 채 보존된 prefix 끝에 `[session-platform: invocation output truncated at 16 MiB]`를 붙인다. 해당 invocation과 이미 받아 둔 후속 queue는 정상적으로 직렬 실행한다.
 - **달성 가치**: V3
 - **구체화 대상**: AC-C3(Write API 상태별 분기)의 "write" 시맨틱 — `claude-code` 타입 버전
-- **검증 방법**: active 세션에 `payload="1+1은?"`로 write 후 pod에서 위 exact argv의 `claude` 프로세스가 1회 기동되고 응답 출력 후 종료함을 확인한다. write가 실행 완료를 기다리지 않고 반환하며, fake runner가 첫 delta 뒤 대기하는 동안에도 그 delta가 read와 SSE에 보이는지 확인한다. 연속 2회 write 시 두 실행이 겹치지 않고 순서대로 수행됨을 확인한다. 첫 실행 실패·timeout 뒤에는 `--continue`가 붙지 않고 첫 성공 뒤에만 붙음을 확인한다. prompt가 1 MiB를 넘으면 public API까지 413이고 실행되지 않으며, queue 포화 시 429, invocation 출력 초과 시 16 MiB 경계 안의 append-only truncation marker를 확인한다.
+- **검증 방법**: active 세션에 `payload="1+1은?"`로 write 후 pod에서 위 exact argv의 `claude-runner` 프로세스가 1회 기동되고 응답 출력 후 종료함을 확인한다. write가 실행 완료를 기다리지 않고 반환하며, fake runner가 첫 delta 뒤 대기하는 동안에도 그 delta가 read와 SSE에 보이는지 확인한다. 연속 2회 write 시 두 실행이 겹치지 않고 순서대로 수행됨을 확인한다. 첫 실행 실패·timeout 뒤에는 `--resume`이 붙지 않고 첫 성공 뒤에만 붙음을 확인한다. 러너 단위 테스트로 SDK 옵션(시스템 프롬프트 preset·설정 원천·`permissionMode: "default"`·partial message)과 권한 판정을 확인한다. prompt가 1 MiB를 넘으면 public API까지 413이고 실행되지 않으며, queue 포화 시 429, invocation 출력 초과 시 16 MiB 경계 안의 append-only truncation marker를 확인한다.
 
-> ✅ **구현 결정 (headless 권한 정책, 2026-08-08)**: 전용 session pod를 실행 경계로 삼고, 모든 invocation을 `--permission-mode auto`로 시작한다. 세션 HOME의 플랫폼 관리 `.claude/settings.json`에는 코딩에 필요한 `Read`·`Write`·`Edit`·`Glob`·`Grep`·`Bash`만 허용한다. `--dangerously-skip-permissions`는 사용하지 않으며 설정 파일은 파일시스템 아카이브에 포함해 복원 후에도 동일 정책을 유지한다.
+> ✅ **구현 결정 (headless 권한 정책, 2026-08-08; 2026-11-12 개정)**: 전용 session pod를 실행 경계로 삼는다. 세션 HOME의 플랫폼 관리 `.claude/settings.json`에는 코딩에 필요한 `Read`·`Write`·`Edit`·`Glob`·`Grep`·`Bash`만 허용 규칙으로 두며, 설정 파일은 파일시스템 아카이브에 포함해 복원 후에도 동일 정책을 유지한다. `--dangerously-skip-permissions`(SDK의 `bypassPermissions`)는 사용하지 않는다.
+>
+> *2026-11-12 개정 (사용자 결정)*: 초판은 모든 invocation을 `--permission-mode auto`로 시작해, 설정 규칙이 정하지 않은 도구 요청을 CLI의 모델 분류기가 승인·거부했다. 이제는 `permissionMode: "default"`로 시작하고, 규칙이 정하지 않은 요청은 SDK의 `canUseTool` 콜백으로 **플랫폼이 결정적으로 판정**한다(`data-plane/claude-runner/lib.mjs`의 `decideTool`).
+> - **허용**: 플랫폼 내장 도구 목록(`Read`·`Write`·`Edit`·`MultiEdit`·`NotebookEdit`·`Glob`·`Grep`·`LS`·`Bash`·`BashOutput`·`KillShell`·`KillBash`·`TodoWrite`·`Task`·`TaskOutput`·`TaskStop`·`Agent`·`Skill`·`SlashCommand`·`ToolSearch`·`WebFetch`·`WebSearch`)과, 관리형 설정이 켠 **이 세션의 플러그인**(AC-E6·AC-L1)이 내놓는 MCP 도구(`mcp__plugin_<플러그인>_…`).
+> - **안내와 함께 거부**: 사람의 응답을 기다리는 `AskUserQuestion`·`EnterPlanMode`·`ExitPlanMode` — 원샷 턴에는 답할 사람이 없으므로 「스스로 정하고 가정을 밝힌 뒤 계속하라」는 메시지를 도구 결과로 돌려준다.
+> - **거부**: 그 밖의 모든 것 — 예컨대 클론한 저장소의 `.mcp.json`이 들여온 MCP 서버나 세션이 고르지 않은 플러그인의 도구. 모델은 「이 세션의 도구 표면이 아니다」는 도구 결과를 받는다.
+>
+> 거부는 모두 출력에 `[session-platform: denied <도구>: <사유>]` 한 줄로 남는다. 이 안내는 러너 stdout으로 나오므로 assistant text와 같은 경로(증분 redaction·실행당 16 MiB quota)를 지난다. 분류기 대신 결정적 목록을 쓰는 이유는 같은 요청이 실행마다 다르게 판정되지 않게 하고, 무엇이 왜 막혔는지를 사용자가 출력에서 바로 보게 하기 위해서다. 설정 원천은 CLI 기본과 같게 셋 다 읽으므로, 작업 디렉터리의 프로젝트 설정이 둔 허용 규칙은 콜백보다 먼저 적용된다(CLI 시절과 같다).
+
+> ✅ **구현 결정 (Agent SDK 러너, 2026-11-12, 사용자 결정)**: `claude-code`의 한 턴을 Claude Code CLI 직접 실행에서 Claude Agent SDK(`@anthropic-ai/claude-agent-sdk`, TypeScript) 러너로 바꿨다. 목적은 둘이다 — 대화를 「최근 대화」(`--continue`)가 아니라 **기록한 세션 ID**로 재개하는 것(AC-E4)과, 도구 권한을 **플랫폼 콜백**으로 판정하는 것(위 권한 정책). 러너는 `codex-runner`와 같은 모양의 작은 Node 스크립트이고 큐·바운드·커서·turn 마커·아카이브·자격 증명 배치(AC-E2~E6)는 그대로 공용 원샷 러너의 것이다. SDK는 CLI를 자식으로 구동하는 얇은 계층이라, 이미지는 SDK를 그 번들 CLI 없이(`--omit=optional`) 설치하고 `pathToClaudeCodeExecutable`로 이미 고정 설치된 CLI를 가리킨다 — 한 바이너리가 턴과 플러그인 부트스트랩을 함께 맡는다. 구독 모드(AC-E7)의 `CLAUDE_CODE_OAUTH_TOKEN`은 러너가 받은 환경 그대로 CLI에 전해진다. SDK와 CLI는 비공개 프로토콜로 말하므로 릴리스를 함께 고정한다(SDK `0.3.N` ↔ CLI `2.1.N`, 현재 `0.3.220` ↔ `2.1.220`). 이미지 빌드가 `claude-runner --check-cli`로 두 버전이 어긋나면 실패한다. SDK의 기본값이 CLI와 다른 둘(시스템 프롬프트를 주지 않으면 빈 프롬프트, `permissionMode`)은 러너가 명시한다.
 
 ### AC-E3: read/stream = 실행 중 출력, offset 커서 기반 델타
 - **설명**: `claude-code` 세션의 출력은 쉘 타입(AC-D3)과 **동일한 append-only offset 커서 규약**을 따른다. `POST /sessions/{id}/read`는 요청 `offset`(직전 응답이 발급한 `nextOffset`, 생략 시 0) 이후에 누적된 출력을 반환하고 새 `nextOffset`을 발급한다. 이 JSON read는 비파괴적 catch-up·reconcile·`offset=0` 전체 replay 용으로 계속 지원한다.
 
   정상 UI 경로는 `GET /sessions/{id}/stream?offset=N`의 workspace 수명 SSE다. 실행이 끝날 때까지 기다리지 않고 안전하게 확정된 새 bytes마다 `event: output`을 보낸다. event id는 서버가 발급한 `nextOffset`이고 data는 `{offset,payloadBase64,nextOffset}`이다. base64는 정확한 byte 범위·길이·overlap 검증을 보존하기 위한 wire encoding이며 UTF-8 rune 중간 cursor를 허용하기 위한 것이 아니다. 증분 redaction을 마친 Claude 저장 출력은 valid UTF-8이고 모든 서버 발급 cursor와 event 경계는 code-point 경계다. 재연결 요청에 `Last-Event-ID`가 있으면 query `offset`보다 우선한다. 연결은 한 invocation 완료로 닫히지 않으며 run/queue 상태 event도 만들지 않는다. comment keepalive는 연결만 유지하고 output cursor나 `lastAccess`를 바꾸지 않는다. stream은 passive 관찰 경로라 active/idle의 기존 pod만 읽고 상태를 승격하거나 snapshot을 복원하지 않으며 `lastAccess`도 touch하지 않는다.
 
-  누적 대상은 stdout stream-json에서 순서대로 투영한 assistant `text_delta`와 diagnostic stderr다. raw JSONL과 delta를 중복하는 최종 result는 누적하지 않는다. 각 invocation은 **turn 마커**로 감싸여, 클라이언트가 바이트열만으로 write마다 입력과 출력을 갈라 볼 수 있다 — 쉘에서 PTY echo가 입력을 출력에 남기는 것에 해당하는 입력 기록이다. 마커는 RS(`0x1E`)로 시작해 개행으로 끝나는 한 줄이고, 한 turn은 다음 순서로 기록된다.
+  누적 대상은 러너 stdout JSONL에서 순서대로 투영한 assistant `text_delta`·러너 안내(`session_platform.notice`)와 diagnostic stderr다. raw JSONL과 delta를 중복하는 최종 result는 누적하지 않는다. 각 invocation은 **turn 마커**로 감싸여, 클라이언트가 바이트열만으로 write마다 입력과 출력을 갈라 볼 수 있다 — 쉘에서 PTY echo가 입력을 출력에 남기는 것에 해당하는 입력 기록이다. 마커는 RS(`0x1E`)로 시작해 개행으로 끝나는 한 줄이고, 한 turn은 다음 순서로 기록된다.
 
   ```
   0x1E "session-platform input seq=<n> at=<RFC3339 UTC 초>" LF   <프롬프트> LF
@@ -98,7 +107,9 @@
 - **달성 가치**: V3
 - **검증 방법**: `write("내 이름은 다르마야")` → `write("내 이름이 뭐야?")` 후 read하면 두 번째 응답이 "다르마"를 포함함을 확인한다(문맥 이어짐). 별개 세션에서 같은 두 번째 프롬프트를 실행하면 이름을 알지 못함을 확인한다(세션 간 대화 격리, AC-A2). `write("touch marker.txt")` 후 `write("작업 디렉터리에 어떤 파일이 있어?")` 응답에 `marker.txt`가 포함됨을 확인한다.
 
-> ✅ **구현 결정 (재개 방식, 2026-08-08)**: 첫 실행은 새 대화를 시작하고, 성공한 첫 실행 이후부터 `--continue`로 해당 세션 pod의 최근 대화를 잇는다. 세션별 고정 HOME과 작업 디렉터리를 사용하며, 별도 대화 ID를 control-plane 메타데이터에 저장하지 않는다. resume 플래그와 CLI 기록은 파일시스템 아카이브에 함께 보존된다.
+> ✅ **구현 결정 (재개 방식, 2026-08-08; 2026-11-12 개정)**: 첫 실행은 새 대화를 시작하고, 성공한 첫 실행 이후부터 재개 모드로 잇는다. 세션별 고정 HOME과 작업 디렉터리를 사용하며, 별도 대화 ID를 control-plane 메타데이터에 저장하지 않는다. resume 플래그와 CLI 기록은 파일시스템 아카이브에 함께 보존된다.
+>
+> *2026-11-12 개정 (사용자 결정, Agent SDK 러너)*: 초판은 재개를 `--continue`(작업 디렉터리의 **가장 최근** 대화)로 했다. 이제 러너가 SDK가 알려 준 세션 ID(`system/init` 메시지의 `session_id`)를 세션 HOME의 `.claude/session-platform-session.json`(`{"version":1,"sessionId":…}`)에 기록하고, 재개 턴(`--resume`)은 SDK `resume: <그 ID>`로 **정확히 그 대화**를 잇는다. 기록은 세션 HOME 안에 있으므로 아카이브가 그대로 나른다. 경계 셋: ① 기록이 없는 재개 — 개정 전에 만들어져 동결된 세션 — 은 예전처럼 가장 최근 대화를 잇는다(SDK `continue: true`). ② 기록은 있는데 그 대화 기록 파일이 디스크에 없으면(SDK `getSessionInfo`가 못 찾으면) 다른 대화를 짐작해 잇지 않고 새 대화를 시작하며 출력에 그 사실을 한 줄로 남긴다. ③ 기록은 새 세션 ID를 받는 즉시 쓰므로, 재개 턴이 도중에 실패해도 다음 턴은 같은 대화를 잇는다(첫 실행 실패는 에이전트가 `--resume`을 붙이지 않으므로 새 대화다). 이 개정은 `claude-code`만의 것이다 — 같은 AC를 재사용하는 `minimax-code`(AC-G2)는 여전히 `--continue`다.
 
 ### AC-E5: 파일시스템 아카이브 기반 동결·복원
 > 📌 **개정 (2026-11-01)**: 초판 제목은 「CRIU 비대상 — …」였고, 쉘 타입만 CRIU로 프로세스 트리를 보존한다는 대비 위에 서 있었다. CRIU가 모든 워크로드에서 퇴역하면서 이 AC가 정의한 아카이브가 **모든 타입의 공통 동결 경로**가 됐다(`shell`의 보존 대상은 AC-D4, 게이트 타입의 공유 볼륨은 AC-F5). 아래 계약 자체는 바뀌지 않는다.
