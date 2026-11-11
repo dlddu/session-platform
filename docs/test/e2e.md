@@ -455,6 +455,7 @@ test.yml에는 e2e 파일을 클러스터 없이 지키는 게이트 둘이 더 
 | `codex-workload.md#시나리오 7` | `web/e2e/codex-workload-7-plugin-refresh.spec.ts` | playwright | `codex` 세션 작업 화면의 Actions 패널에만 `Refresh plugin skills` 가 있고, 누르면 세션이 `active` 로 남은 채 결과 알림(kind SUT 는 마켓플레이스 토큰이 없어 「새로 받을 마켓플레이스가 없다」)과 출력 안내 줄이 나타나며, `shell` 세션에 같은 API 를 부르면 422 라는 것. |
 | `multitenancy.md#시나리오 4` | `web/e2e/multitenancy-4-operator-ui.spec.ts` | playwright | 테넌트가 설정된 SUT 에서 운영자의 새 세션 화면에 테넌트 선택(기본 무소속)이 있고, `e2e-alpha` 를 고르면 타입 카드가 `shell`·`codex` 로 좁혀지며, 그렇게 만든 세션이 `tenant: e2e-alpha` 로 저장되고 목록에서 태그·필터(새로고침 뒤 포함)로 갈린다는 것. |
 | `codex-task-workload.md#시나리오 1` | `web/e2e/codex-task-workload-1-agent-type.spec.ts` | playwright | 새 세션 화면에 `Codex task` 카드와 추론 수준 선택지(`CLI default`·`minimal`~`xhigh`)가 있고, `high` 를 골라 만든 세션이 `active` 의 `codex-task` 세션이며 작업 화면의 Workload 패널과 조회 응답에 `reasoningEffort=high` 가 있다. 끝에 세션을 지워 풀 슬롯을 돌려준다. |
+| `lifecycle.md#시나리오 5` | `web/e2e/lifecycle-5-recover-deleted.spec.ts` | playwright | 동결 → 삭제해 조회가 404 인 `shell` 세션이 `POST /recover` 로 **같은 id·이름**의 `active` 세션이 되어 **동결 전과 다른 pod** 위에 서고, offset 0 read 가 동결 전 마커 줄을 돌려준다는 것. 살아 있는 id 의 recover 는 409, 동결된 적 없는 id 는 404. 끝에 세션을 지운다. |
 <!-- scenario-mapping:end -->
 
 ## 시나리오 예외 목록
@@ -589,10 +590,10 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 ## 집계
 
 <!-- scenario-summary:begin -->
-- 시나리오 총계: 76
+- 시나리오 총계: 77
 - 예외: 11
 - 유예: 60
-- 시나리오 매칭 파일: 5
+- 시나리오 매칭 파일: 6
 - 공백: 0
 <!-- scenario-summary:end -->
 

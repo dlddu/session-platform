@@ -93,6 +93,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /api/v1/sessions/{id}/snapshot", a.snapshotSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/plugins/refresh", a.refreshPlugins)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/recover", a.recoverSession)
 }
 
 // ---- request/response DTOs ----
@@ -497,6 +498,33 @@ func (a *API) snapshotSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, err := a.mgr.Snapshot(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sess)
+}
+
+// recoverSession puts a deleted session back (AC-B4). The id has no record to
+// authorize against, so the check runs on the recovered manifest instead.
+func (a *API) recoverSession(w http.ResponseWriter, r *http.Request) {
+	caller, ok := a.caller(w, r)
+	if !ok {
+		return
+	}
+	if err := decodeRequestBody(r.Body, &struct{}{}, false); err != nil {
+		writeErr(w, err)
+		return
+	}
+	sess, err := a.mgr.Recover(r.Context(), r.PathValue("id"), func(rec *session.Session) error {
+		if !caller.Sees(rec.Tenant) {
+			return session.ErrNotFound
+		}
+		if caller.Tenant != nil && !caller.Tenant.Allows(rec.WorkloadType) {
+			return session.ErrForbidden
+		}
+		return nil
+	})
 	if err != nil {
 		writeErr(w, err)
 		return

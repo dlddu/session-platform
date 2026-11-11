@@ -191,6 +191,9 @@ func main() {
 		os.Exit(1)
 	}
 	serviceOpts = append(serviceOpts, poolOpts...)
+	if manifests, ok := cstore.(service.SessionManifests); ok {
+		serviceOpts = append(serviceOpts, service.WithSessionManifests(manifests))
+	}
 	mgr := service.New(orch, store, shellCkpt, agentClient, serviceOpts...)
 	snapshotEnabled := cfg.anyArchiveEnabled()
 
