@@ -205,6 +205,8 @@
 | 2026-11-05 | `data-plane/cmd/agent/codex_plugin_refresh.go` | 25 | `90a9cc6d7634` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 플러그인 새로고침(AC-J7) 슬라이스가 새로 둔 파일. *2026-11-08 재측정(codex `refresh_skills` — 턴 안 플러그인 새로고침, AC-J7 개정): 23→25줄. 판정하지 않았다 — 판정 칸 `—` 유지.* |
 | 2026-11-05 | `data-plane/cmd/agent/codex_plugin_refresh_test.go` | 25 | `68527fa73625` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 플러그인 새로고침(AC-J7) 슬라이스가 새로 둔 파일. *2026-11-08 재측정(codex `refresh_skills` — 턴 안 플러그인 새로고침, AC-J7 개정): 17→25줄. 판정하지 않았다 — 판정 칸 `—` 유지.* |
 | 2026-11-05 | `web/e2e/codex-workload-7-plugin-refresh.spec.ts` | 4 | `972afbcc1e28` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-11-05 codex 플러그인 새로고침(AC-J7) 슬라이스가 새로 둔 파일. |
+| 2026-11-11 | `control-plane/internal/service/lost_pod_test.go` | 6 | `fd0301b6bfd8` | — | **등록 2026-11-11**(state-api AC-C5 · pod 를 잃은 세션의 404 정리 PR): 새 테스트 파일. 판정하지 않았다 — 판정 칸 `—`. |
+| 2026-11-11 | `control-plane/test/client_orchestrator_gone_test.go` | 2 | `8e56e51fb4a8` | — | **등록 2026-11-11**(state-api AC-C5 · pod 를 잃은 세션의 404 정리 PR): 새 통합 테스트 파일. 판정하지 않았다 — 판정 칸 `—`. |
 <!-- /판정-원장 -->
 
 **이 표의 행이 담는 것**: 판정 범위(파일 단위) · 그 범위의 현재 주석 줄 수 · 지문 · 판정 칸 ·
