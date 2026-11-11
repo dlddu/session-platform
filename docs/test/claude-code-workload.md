@@ -7,7 +7,7 @@
 - AC-E4: 대화 연속성 = pod에 지속되는 대화 기록 (PRD: 세션 워크로드 — 클로드 코드 CLI)
 - AC-E5: 파일시스템 아카이브 기반 동결·복원 (PRD: 세션 워크로드 — 클로드 코드 CLI)
 - AC-E6: 공급자 자격 증명은 sidecar Secret, 플러그인 토큰은 main Secret, 플랫폼 모델은 optional ConfigMap (PRD: 세션 워크로드 — 클로드 코드 CLI)
-- AC-E7: 공급자 인증 모드 — Claude 구독(인증 풀) 또는 게이트웨이 (PRD: 세션 워크로드 — 클로드 코드 CLI)
+- AC-E7: 공급자 인증 모드 — Claude 구독(OAuth 토큰) 또는 게이트웨이 (PRD: 세션 워크로드 — 클로드 코드 CLI)
 - AC-E8: 세션 추론 수준(`reasoningEffort`) — 생성 시 고정 (PRD: 세션 워크로드 — 클로드 코드 CLI)
 ## 자동화 상태 (2026-08-09)
 
@@ -75,10 +75,10 @@
 - **기대 결과**: active/idle은 기존 pod output을 stream하되 상태 승격·restore·`lastAccess` touch가 없고, keepalive도 cursor/유휴 시간을 바꾸지 않음. snapshot stream은 invalid-state이며 pod를 만들지 않음. SPA는 EventSource를 즉시 닫고 GET session 후 active/idle만 마지막 cursor로 backoff 재연결하며 snapshot은 read fallback 없이 Restore 화면으로 이동
 - **검증 AC**: AC-E3, AC-E5 (보조 AC-B1/B2)
 
-### 시나리오 10: 구독 모드 — 프록시 없는 파드, 두 번의 write로 나눈 로그인
-- **사전 조건**: `CLAUDE_CODE_AUTH_MODE=subscription`, 빈 슬롯 하나뿐인 풀, Claude 구독 계정
-- **실행 단계**: (a) `claude-code` 세션을 만들어 파드를 조회한다 → (b) 프롬프트를 보낸다 → (c) 안내된 URL에서 로그인하고 화면의 코드를 다음 write로 보낸다 → (d) 세션을 지우고 새 `claude-code` 세션에 프롬프트를 보낸다
-- **기대 결과**: (a) 파드에 credential-proxy 컨테이너가 없고 주 컨테이너에 `ANTHROPIC_*` env가 없으며 슬롯 PVC와 `CLAUDE_CODE_AUTH_MODE=subscription`이 있다. (b) 출력에 로그인 URL과 「코드를 다음 메시지로 보내라」는 안내가 나오고 프롬프트는 실행되지 않는다. (c) 입력 기록에는 `[login code]`만 남고, 로그인 뒤 (b)의 프롬프트가 같은 턴에서 실행된다. (d) 로그인 안내 없이 실행된다
+### 시나리오 10: 구독 모드 — 프록시·슬롯 없는 파드, OAuth 토큰으로 바로 실행
+- **사전 조건**: `CLAUDE_CODE_AUTH_MODE=subscription`, Secret `claude-code-credentials`에 `claude setup-token`이 발급한 `oauth-token`, Claude 구독 계정
+- **실행 단계**: (a) `claude-code` 세션을 만들어 파드를 조회한다 → (b) 프롬프트를 보낸다 → (c) 두 번째 `claude-code` 세션을 동시에 만들어 프롬프트를 보낸다 → (d) 출력에서 토큰 값을 찾는다
+- **기대 결과**: (a) 파드에 credential-proxy 컨테이너·슬롯 PVC가 없고 주 컨테이너에 `ANTHROPIC_*` env가 없으며, `CLAUDE_CODE_AUTH_MODE=subscription`과 `claude-code-credentials`/`oauth-token`을 가리키는 secretKeyRef `CLAUDE_CODE_OAUTH_TOKEN`이 있다. (b) 로그인 안내 없이 첫 프롬프트가 실행된다. (c) 두 세션이 같은 토큰으로 함께 실행된다(풀 상한·503 없음). (d) 출력 어디에도 토큰 값이 없다
 - **검증 AC**: AC-E7
 
 ### 시나리오 11: 추론 수준은 생성 시 정해지고 실행 argv까지 간다

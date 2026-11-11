@@ -40,23 +40,14 @@ interactive shell and Claude Code workloads.
   The pending queue is bounded to 64 prompts and 8 MiB; a new write that would
   exceed either bound returns 429 while already accepted prompts keep draining.
   `CLAUDE_CODE_AUTH_MODE` picks the provider auth (AC-E7). Unset or `gateway`
-  is the loopback credential proxy above. `subscription` uses a Claude
-  subscription whose login lives in the session's auth slot: the agent refuses
-  to start if `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`
-  or `CLAUDE_CODE_OAUTH_TOKEN` is set or if `AGENT_AUTH_SLOT_DIR` is not a
-  mounted directory. Before every turn it copies the slot's `.credentials.json`
-  to `$HOME/.claude/.credentials.json` (and removes HOME's copy when the slot
-  has none), copies it back every second while the CLI runs and once more after
-  it exits (a file the CLI removed empties the slot), always by atomic 0600
-  replace rather than a symlink; the archive leaves that file out
-  (`docs/prd/agent-auth-pool.md`, AC-N4). If `claude auth status --json` does
-  not report `loggedIn`, the turn starts `claude auth login --claudeai`, shows
-  its URL as notice lines, holds the prompt and ends with `status=error`; the
-  next write is the pasted code — recorded as `[login code]`, never echoed —
-  fed to the waiting login, after which the held prompt runs in that turn. A
-  failed code drops the held prompt; a pending sign-in expires after 15
-  minutes and ends on a checkpoint or stop. `GET /auth-slot` answers
-  `{"signedIn": bool}` for a workload with a slot and 404 otherwise.
+  is the loopback credential proxy above. `subscription` signs the CLI in to a
+  Claude subscription with the platform's long-lived OAuth token (the one
+  `claude setup-token` prints), which the control plane projects from the
+  `oauth-token` key of `claude-code-credentials` as `CLAUDE_CODE_OAUTH_TOKEN`.
+  The agent refuses to start if that variable is empty or holds whitespace, or
+  if `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY` is
+  set. There is no sign-in step and no auth slot; the token is redacted from
+  session output like every other credential.
 
 - `minimax-code` runs the MiniMax Code CLI on the same one-shot runner as
   `claude-code` — queue, bounds, cursor, resume flag and archive are shared
@@ -206,9 +197,14 @@ interactive shell and Claude Code workloads.
   shell and `unified_exec` on, opens the sandbox, keeps every other
   `codex-chat` switch, and carries its own developer instructions (marker
   `session-platform codex task session`). The ChatGPT login is the auth
-  slot's `auth.json`, kept in sync with `$HOME/.codex/auth.json` exactly like
-  `claude-code`'s subscription login and left out of the archive (AC-M2,
-  AC-M3); an empty slot gets the same in-turn device-code sign-in as
+  slot's `auth.json` (`AGENT_AUTH_SLOT_DIR`), kept in sync with
+  `$HOME/.codex/auth.json` — copied into HOME before every turn (HOME's copy
+  removed when the slot has none), back every second while the runner works
+  and once more after it exits (a file removed in HOME empties the slot),
+  always by atomic 0600 replace rather than a symlink — and left out of the
+  archive (AC-M2, AC-M3, `docs/prd/agent-auth-pool.md` AC-N4;
+  `GET /auth-slot` answers `{"signedIn": bool}` for a workload with a slot and
+  404 otherwise); an empty slot gets the same in-turn device-code sign-in as
   `codex-chat`, and the end-of-turn copy keeps it for the next session. The
   image build renders both modes (`/agent codex-render-config <home>
   chat|task`) and runs `surface-check.mjs --mode chat|task`: task mode must
