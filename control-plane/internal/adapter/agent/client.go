@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +27,11 @@ import (
 
 const checkpointIDHeader = "X-Session-Checkpoint-ID"
 
+// PermissionModeParam is the agent's /write query parameter for a claude-code
+// turn's permission mode (AC-E2). Keep in sync with data-plane/cmd/agent
+// (claudePermissionModeParam).
+const PermissionModeParam = "permissionMode"
+
 // Client is the workload I/O port onto a session's data plane agent, addressed by
 // pod name (the only pod handle sessions store).
 //
@@ -36,7 +42,7 @@ const checkpointIDHeader = "X-Session-Checkpoint-ID"
 //   - Stream → the same append-only output as resumable SSE events.
 //   - RefreshPlugins → AC-J7: the agent fetches its platform plugins again.
 type Client interface {
-	Write(ctx context.Context, pod, payload string) error
+	Write(ctx context.Context, pod, payload, permissionMode string) error
 	Read(ctx context.Context, pod string, offset int64) (payload string, nextOffset int64, err error)
 	Stream(ctx context.Context, pod string, offset int64) (io.ReadCloser, error)
 	RefreshPlugins(ctx context.Context, pod string) (session.PluginChanges, error)
@@ -185,13 +191,19 @@ func (c *HTTPClient) baseURL(ip string) string {
 	return "http://" + net.JoinHostPort(ip, strconv.Itoa(c.port))
 }
 
-// Write forwards shell stdin or a Claude prompt to the agent (AC-D2/AC-E2).
-func (c *HTTPClient) Write(ctx context.Context, pod, payload string) error {
+// Write forwards shell stdin or a Claude prompt to the agent (AC-D2/AC-E2). A
+// non-empty permissionMode rides as a query parameter, so the body stays the
+// raw payload.
+func (c *HTTPClient) Write(ctx context.Context, pod, payload, permissionMode string) error {
 	ip, err := c.resolve(ctx, pod)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL(ip)+"/write", strings.NewReader(payload))
+	target := c.baseURL(ip) + "/write"
+	if permissionMode != "" {
+		target += "?" + url.Values{PermissionModeParam: {permissionMode}}.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(payload))
 	if err != nil {
 		return err
 	}

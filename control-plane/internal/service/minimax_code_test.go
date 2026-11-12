@@ -133,7 +133,7 @@ func TestMiniMaxCodeOversizedPromptIsRejectedBeforeRestore(t *testing.T) {
 	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
-	if _, err := svc.Write(ctx, sess.ID, strings.Repeat("x", session.MaxClaudePromptBytes+1)); !errors.Is(err, session.ErrWorkloadPromptTooLarge) {
+	if _, err := svc.Write(ctx, sess.ID, strings.Repeat("x", session.MaxClaudePromptBytes+1), session.WriteOptions{}); !errors.Is(err, session.ErrWorkloadPromptTooLarge) {
 		t.Fatalf("write error = %v, want %v", err, session.ErrWorkloadPromptTooLarge)
 	}
 	if got := orch.RunningCount(); got != 0 {

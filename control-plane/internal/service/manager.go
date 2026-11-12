@@ -424,9 +424,11 @@ func (s *Service) Stream(ctx context.Context, id string, offset int64) (io.ReadC
 	return s.agent.Stream(ctx, sess.Pod, offset)
 }
 
-// Write validates workload-specific limits, brings the session active, and
-// sends the payload to the agent (AC-C3, AC-D2/E2).
-func (s *Service) Write(ctx context.Context, id, payload string) (*session.WriteResult, error) {
+// Write validates workload-specific limits and the write's options, brings the
+// session active, and sends the payload to the agent (AC-C3, AC-D2/E2). Both
+// checks run before activation, so a write that would be refused never
+// restores a snapshot.
+func (s *Service) Write(ctx context.Context, id, payload string, opts session.WriteOptions) (*session.WriteResult, error) {
 	current, err := s.Get(ctx, id)
 	if err != nil {
 		return nil, err
@@ -434,11 +436,15 @@ func (s *Service) Write(ctx context.Context, id, payload string) (*session.Write
 	if current.WorkloadType.QueuesPrompts() && len(payload) > session.MaxClaudePromptBytes {
 		return nil, session.ErrWorkloadPromptTooLarge
 	}
+	mode, err := session.NormalizePermissionMode(current.WorkloadType, opts.PermissionMode)
+	if err != nil {
+		return nil, err
+	}
 	sess, branch, err := s.activate(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.agent.Write(ctx, sess.Pod, payload); err != nil {
+	if err := s.agent.Write(ctx, sess.Pod, payload, mode); err != nil {
 		return nil, s.podLost(ctx, id, sess, err)
 	}
 	s.touch(ctx, id)

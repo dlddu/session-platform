@@ -27,6 +27,7 @@ const testCheckpointIDHeader = "X-Session-Checkpoint-ID"
 type fakeAgent struct {
 	buf         []byte
 	writeStatus int
+	writeQuery  string // raw query of the last /write
 
 	streamOffset      string
 	streamStatus      int
@@ -51,6 +52,7 @@ func (a *fakeAgent) handler() http.Handler {
 	mux.HandleFunc("POST /write", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		a.buf = append(a.buf, body...)
+		a.writeQuery = r.URL.RawQuery
 		if a.writeStatus != 0 && a.writeStatus != http.StatusOK {
 			http.Error(w, http.StatusText(a.writeStatus), a.writeStatus)
 			return
@@ -158,11 +160,30 @@ func harness(t *testing.T, podName string) (*agent.HTTPClient, *fakeAgent) {
 func TestHTTPClientWriteForwardsPayload(t *testing.T) {
 	c, fa := harness(t, "sess-ab12")
 
-	if err := c.Write(context.Background(), "sess-ab12", "echo hello\n"); err != nil {
+	if err := c.Write(context.Background(), "sess-ab12", "echo hello\n", ""); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if got := string(fa.buf); got != "echo hello\n" {
 		t.Fatalf("agent received %q, want the verbatim payload", got)
+	}
+	if fa.writeQuery != "" {
+		t.Fatalf("write without a permission mode sent query %q, want none", fa.writeQuery)
+	}
+}
+
+// AC-E2: a turn's permission mode rides as a query parameter beside the
+// unchanged raw prompt body.
+func TestHTTPClientWriteSendsPermissionMode(t *testing.T) {
+	c, fa := harness(t, "sess-ab12")
+
+	if err := c.Write(context.Background(), "sess-ab12", "edit it", "acceptEdits"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if got := string(fa.buf); got != "edit it" {
+		t.Fatalf("agent received %q, want the verbatim payload", got)
+	}
+	if want := agent.PermissionModeParam + "=acceptEdits"; fa.writeQuery != want {
+		t.Fatalf("write query = %q, want %q", fa.writeQuery, want)
 	}
 }
 
@@ -226,7 +247,7 @@ func TestHTTPClientStreamValidatesAgentResponse(t *testing.T) {
 
 func TestHTTPClientUnknownPod(t *testing.T) {
 	c := agent.NewHTTPClient(fake.NewSimpleClientset(), "sessions")
-	if err := c.Write(context.Background(), "sess-gone", "x"); err == nil {
+	if err := c.Write(context.Background(), "sess-gone", "x", ""); err == nil {
 		t.Fatal("write to unknown pod succeeded, want error")
 	}
 	if _, _, err := c.Read(context.Background(), "sess-gone", 0); err == nil {
@@ -242,7 +263,7 @@ func TestHTTPClientPodNotRunning(t *testing.T) {
 		Status:     corev1.PodStatus{Phase: corev1.PodPending},
 	})
 	c := agent.NewHTTPClient(cs, "sessions")
-	if err := c.Write(context.Background(), "sess-cold", "x"); err == nil {
+	if err := c.Write(context.Background(), "sess-cold", "x", ""); err == nil {
 		t.Fatal("write to pending pod succeeded, want error")
 	}
 }
@@ -262,7 +283,7 @@ func TestHTTPClientAgentErrorSurfaces(t *testing.T) {
 	})
 	c := agent.NewHTTPClient(cs, "sessions", agent.WithPort(port))
 
-	err := c.Write(context.Background(), "sess-dead", "x")
+	err := c.Write(context.Background(), "sess-dead", "x", "")
 	if err == nil || !strings.Contains(err.Error(), "503") {
 		t.Fatalf("write error = %v, want the agent's 503 surfaced", err)
 	}
@@ -276,14 +297,14 @@ func TestStubClientCursorSemantics(t *testing.T) {
 	c := agent.NewStubClient()
 	ctx := context.Background()
 
-	if err := c.Write(ctx, "p1", "one"); err != nil {
+	if err := c.Write(ctx, "p1", "one", ""); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	full, next, err := c.Read(ctx, "p1", 0)
 	if err != nil || full != "one" || next != 3 {
 		t.Fatalf("read 0 = (%q, %d, %v), want (one, 3, nil)", full, next, err)
 	}
-	_ = c.Write(ctx, "p1", "two")
+	_ = c.Write(ctx, "p1", "two", "")
 	delta, next2, _ := c.Read(ctx, "p1", next)
 	if delta != "two" || next2 != 6 {
 		t.Fatalf("cursor read = (%q, %d), want (two, 6)", delta, next2)
@@ -383,7 +404,7 @@ func TestHTTPClientWritePreservesAdmissionErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c, fa := harness(t, "sess-limited")
 			fa.writeStatus = tc.status
-			err := c.Write(context.Background(), "sess-limited", "prompt")
+			err := c.Write(context.Background(), "sess-limited", "prompt", "")
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("write error = %v, want errors.Is(_, %v)", err, tc.want)
 			}

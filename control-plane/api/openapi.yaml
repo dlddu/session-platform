@@ -1135,6 +1135,17 @@ components:
             minimax-code, codex-chat, codex-task) are limited to 1 MiB of UTF-8 bytes
 
             per prompt; larger writes return 413.
+        permissionMode:
+          type: string
+          enum: [auto, acceptEdits]
+          description: >
+            claude-code only (AC-E2): the permission mode of the turn this write
+            queues. Omitted runs the turn in auto, where the CLI's model
+            classifier approves or denies the tool requests the managed settings
+            leave open; acceptEdits accepts file edits. It applies to this turn
+            only — the next write without it runs in auto again. Any other value,
+            an empty string, or a permission mode on another workload type returns
+            400 without activating the session.
     ReadRequest:
       type: object
       additionalProperties: false

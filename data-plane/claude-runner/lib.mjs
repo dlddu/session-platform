@@ -21,11 +21,18 @@ export const EXIT_USAGE = 64;
 // AC-E8's list for claude-code; the SDK's EffortLevel.
 export const EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 
+// AC-E2's permission modes a write may choose for its turn. "auto" lets the
+// CLI's model classifier approve or deny what the settings rules leave open;
+// "acceptEdits" accepts file edits and leaves the rest to canUseTool. No mode
+// that skips permission checks is offered.
+export const DEFAULT_PERMISSION_MODE = "auto";
+export const PERMISSION_MODES = new Set([DEFAULT_PERMISSION_MODE, "acceptEdits"]);
+
 // AC-E2's permission policy: the built-in tools the platform lets a
 // claude-code turn use. Read-only and bookkeeping tools never ask; the rest
-// reach canUseTool only when no settings rule already decided them. Anything a
-// turn asks for that is not here, not a tool of the session's own plugins and
-// not a headless question is denied.
+// reach canUseTool only when neither a settings rule nor the turn's permission
+// mode already decided them. Anything a turn asks for that is not here, not a
+// tool of the session's own plugins and not a headless question is denied.
 export const PLATFORM_TOOLS = new Set([
   "Read",
   "Write",
@@ -62,11 +69,12 @@ export const HEADLESS_DENIAL =
 export class UsageError extends Error {}
 
 // parseArgs reads the agent's argv:
-// [--model <m>] [--effort <e>] [--resume] -- <prompt>. The prompt is the one
-// argument after "--", so nothing in it is a flag.
+// [--model <m>] [--effort <e>] [--permission-mode <p>] [--resume] -- <prompt>.
+// The prompt is the one argument after "--", so nothing in it is a flag.
 export function parseArgs(argv) {
   let model = PLATFORM_DEFAULT_MODEL;
   let effort = null;
+  let permissionMode = DEFAULT_PERMISSION_MODE;
   let resume = false;
   let checkCli = false;
   const value = (i, flag) => {
@@ -82,7 +90,7 @@ export function parseArgs(argv) {
       if (rest.length !== 1) {
         throw new UsageError("expected exactly one prompt argument after --");
       }
-      return { model, effort, resume, prompt: rest[0], checkCli };
+      return { model, effort, permissionMode, resume, prompt: rest[0], checkCli };
     }
     if (arg === "--model") {
       model = value(i++, "--model");
@@ -90,6 +98,11 @@ export function parseArgs(argv) {
       effort = value(i++, "--effort");
       if (!EFFORTS.has(effort)) {
         throw new UsageError(`unknown effort ${JSON.stringify(effort)}`);
+      }
+    } else if (arg === "--permission-mode") {
+      permissionMode = value(i++, "--permission-mode");
+      if (!PERMISSION_MODES.has(permissionMode)) {
+        throw new UsageError(`unknown permission mode ${JSON.stringify(permissionMode)}`);
       }
     } else if (arg === "--resume") {
       resume = true;
@@ -100,7 +113,7 @@ export function parseArgs(argv) {
     }
   }
   if (checkCli) {
-    return { model, effort, resume, prompt: null, checkCli };
+    return { model, effort, permissionMode, resume, prompt: null, checkCli };
   }
   throw new UsageError("missing -- <prompt>");
 }
@@ -221,13 +234,22 @@ export function decideTool(toolName, plugins = []) {
 // queryOptions are the SDK options of one turn. The system prompt and the
 // setting sources are spelled out because the SDK's defaults differ from the
 // CLI's: without the preset it sends an empty system prompt.
-export function queryOptions({ model, effort, cwd, claudeBin, plan, canUseTool, stderr }) {
+export function queryOptions({
+  model,
+  effort,
+  permissionMode = DEFAULT_PERMISSION_MODE,
+  cwd,
+  claudeBin,
+  plan,
+  canUseTool,
+  stderr,
+}) {
   const options = {
     cwd,
     pathToClaudeCodeExecutable: claudeBin,
     systemPrompt: { type: "preset", preset: "claude_code" },
     settingSources: ["user", "project", "local"],
-    permissionMode: "default",
+    permissionMode,
     includePartialMessages: true,
     canUseTool,
     stderr,

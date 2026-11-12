@@ -89,7 +89,7 @@ type Manager interface {
 	List(ctx context.Context) ([]*Session, error)
 	Read(ctx context.Context, id string, offset int64) (*ReadResult, error)
 	Stream(ctx context.Context, id string, offset int64) (io.ReadCloser, error)
-	Write(ctx context.Context, id, payload string) (*WriteResult, error)
+	Write(ctx context.Context, id, payload string, opts WriteOptions) (*WriteResult, error)
 	Switch(ctx context.Context, id string) (*Session, error)
 	Snapshot(ctx context.Context, id string) (*Session, error)
 	Restore(ctx context.Context, id string) (*Session, error)

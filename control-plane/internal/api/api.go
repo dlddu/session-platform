@@ -117,6 +117,10 @@ type createReq struct {
 
 type writeReq struct {
 	Payload string `json:"payload"`
+	// PermissionMode is the turn's permission mode, claude-code only (AC-E2).
+	// A pointer so an explicitly empty value is refused rather than read as the
+	// default.
+	PermissionMode *string `json:"permissionMode"`
 }
 
 type readReq struct {
@@ -464,7 +468,15 @@ func (a *API) writeSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	res, err := a.mgr.Write(r.Context(), r.PathValue("id"), req.Payload)
+	var opts session.WriteOptions
+	if req.PermissionMode != nil {
+		if *req.PermissionMode == "" {
+			writeErr(w, session.ErrInvalidInput)
+			return
+		}
+		opts.PermissionMode = *req.PermissionMode
+	}
+	res, err := a.mgr.Write(r.Context(), r.PathValue("id"), req.Payload, opts)
 	if err != nil {
 		writeErr(w, err)
 		return

@@ -42,7 +42,7 @@ func TestLostPodSessionIsReportedNotFound(t *testing.T) {
 			if op == "read" {
 				_, err = svc.Read(ctx, sess.ID, 0)
 			} else {
-				_, err = svc.Write(ctx, sess.ID, "hello")
+				_, err = svc.Write(ctx, sess.ID, "hello", session.WriteOptions{})
 			}
 			if !errors.Is(err, session.ErrNotFound) {
 				t.Fatalf("%s on lost pod: err = %v, want ErrNotFound", op, err)
