@@ -124,7 +124,7 @@ func main() {
 		claude, err := newClaudeWorkload(claudeConfig{
 			StateDir:    env("CLAUDE_CODE_STATE_DIR", defaultClaudeStateDir),
 			Model:       env("CLAUDE_CODE_MODEL", platformDefaultModel),
-			Binary:      env("CLAUDE_CODE_BIN", defaultClaudeBinary),
+			Binary:      env(claudeRunnerBinaryEnv, defaultClaudeRunnerBinary),
 			RestoreMode: restoreMode,
 			Runner:      execCommandRunner{},
 			Logger:      logger,

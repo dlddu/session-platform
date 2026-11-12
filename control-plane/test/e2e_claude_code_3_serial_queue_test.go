@@ -213,12 +213,12 @@ func TestClaudeSerialQueue_InvocationsNeverRunConcurrently(t *testing.T) {
 			"probe output=%q", len(observed), res.out)
 	}
 	if maxConcurrent > 1 {
-		t.Fatalf("%d `claude` processes ran at once — the second write was accepted while the first "+
+		t.Fatalf("%d claude-runner processes ran at once — the second write was accepted while the first "+
 			"invocation was still running, and a session must still run them one after the other "+
 			"(AC-E2); probe output=%q", maxConcurrent, res.out)
 	}
 	if lastCount != 0 {
-		t.Fatalf("the probe stopped while %d `claude` process(es) were still running — invocations are "+
+		t.Fatalf("the probe stopped while %d claude-runner process(es) were still running — invocations are "+
 			"one-shot (AC-E2); probe output=%q", lastCount, res.out)
 	}
 

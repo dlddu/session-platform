@@ -174,11 +174,11 @@ func TestClaudeCodeFreeze_ArchiveRoundTripsWorkspaceHistoryAndResume(t *testing.
 	})
 	argv := probe.invocations(t)
 	if len(argv) == 0 {
-		t.Fatal("the argv probe saw no invocation in the restored pod, so it can say nothing about --continue")
+		t.Fatal("the argv probe saw no invocation in the restored pod, so it can say nothing about --resume")
 	}
-	if !strings.Contains(argv[0], "--continue") {
-		t.Fatalf("the first invocation in the restored pod = %q, want --continue — the conversation state "+
-			"is archived with the session and resumed after restore (AC-E5/AC-E4)", argv[0])
+	if !strings.Contains(argv[0], " "+e2ResumeArgument+" ") {
+		t.Fatalf("the first invocation in the restored pod = %q, want %s — the conversation state "+
+			"is archived with the session and resumed after restore (AC-E5/AC-E4)", argv[0], e2ResumeArgument)
 	}
 	if want := e5PromptAfterRestore; !strings.Contains(argv[0], want) {
 		t.Fatalf("the first invocation in the restored pod = %q, want it to carry the prompt %q", argv[0], want)
