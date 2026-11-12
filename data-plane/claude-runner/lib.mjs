@@ -288,3 +288,182 @@ export function classify(message) {
   }
   return {};
 }
+
+// How long a turn waits, after a result that left background tasks running,
+// before it asks the model to stop them; how long it then waits before closing
+// anyway; and the quiet spell that lets a finished task's notification start
+// the model's follow-up before the input closes (AC-E2).
+export const DEFAULT_BACKGROUND_WAIT_MS = 10 * 60 * 1000;
+export const BACKGROUND_STOP_GRACE_MS = 2 * 60 * 1000;
+export const BACKGROUND_QUIET_MS = 2 * 1000;
+
+// backgroundWaitFromEnv reads CLAUDE_RUNNER_BACKGROUND_WAIT_MS, falling back to
+// the default for anything that is not a positive integer.
+export function backgroundWaitFromEnv(env) {
+  const raw = env.CLAUDE_RUNNER_BACKGROUND_WAIT_MS;
+  if (raw && /^[1-9][0-9]*$/.test(raw)) {
+    return Number(raw);
+  }
+  return DEFAULT_BACKGROUND_WAIT_MS;
+}
+
+// stopNote is the platform's message when a turn's background work outlives
+// the wait. The model stops it with TaskStop rather than the runner through the
+// SDK, because only a stop the model makes is recorded in the transcript: one
+// the runner makes leaves no record, and the next resumed turn would again open
+// with a "stopped" notice in front of its prompt.
+export function stopNote(taskIds, waitMs) {
+  const minutes = Math.round((waitMs / 60000) * 10) / 10;
+  return (
+    `[session-platform] Background task(s) ${taskIds.join(", ")} are still running ${minutes} minute(s) ` +
+    "after this turn's answer, which is as long as a turn waits. Stop them now with the TaskStop tool, then " +
+    "say briefly what they were doing and what is left undone; do not start them again in this turn."
+  );
+}
+
+// TurnInput is the input a turn hands the SDK (AC-E2): the prompt, and at most
+// one platform message after it. Closing it ends the CLI process, and a
+// background task still running then is killed — its work is lost, and the
+// next resumed turn opens with a "stopped, no completion record" notice in the
+// same user message as its prompt, which the model reads as an injected
+// instruction. So the input stays open after a result while tasks the turn
+// started are running: they finish inside the turn, the CLI hands their
+// completion to the model, and the input closes after the follow-up result. If
+// tasks are still running waitMs after the first such result, stopNote goes in
+// (and onExpire is told), and the input closes graceMs later regardless.
+export class TurnInput {
+  #prompt;
+  #waitMs;
+  #graceMs;
+  #quietMs;
+  #setTimer;
+  #clearTimer;
+  #onExpire;
+  #resolveClosed;
+  #closed;
+  #isClosed = false;
+  #settled = false;
+  #sawBackground = false;
+  #running = new Set();
+  #waitTimer = null;
+  #graceTimer = null;
+  #quietTimer = null;
+  #wakeNote = null;
+  #pendingNote = null;
+
+  constructor({
+    prompt,
+    waitMs = DEFAULT_BACKGROUND_WAIT_MS,
+    graceMs = BACKGROUND_STOP_GRACE_MS,
+    quietMs = BACKGROUND_QUIET_MS,
+    setTimer = setTimeout,
+    clearTimer = clearTimeout,
+    onExpire = () => {},
+  }) {
+    this.#prompt = prompt;
+    this.#waitMs = waitMs;
+    this.#graceMs = graceMs;
+    this.#quietMs = quietMs;
+    this.#setTimer = setTimer;
+    this.#clearTimer = clearTimer;
+    this.#onExpire = onExpire;
+    this.#closed = new Promise((resolve) => {
+      this.#resolveClosed = resolve;
+    });
+  }
+
+  get closed() {
+    return this.#isClosed;
+  }
+
+  async *messages() {
+    yield userMessage(this.#prompt);
+    const note =
+      this.#pendingNote ??
+      (await Promise.race([
+        this.#closed.then(() => null),
+        new Promise((resolve) => {
+          this.#wakeNote = resolve;
+        }),
+      ]));
+    if (note !== null && !this.#isClosed) {
+      yield userMessage(note);
+      await this.#closed;
+    }
+  }
+
+  // observe feeds every SDK message of the turn, in order.
+  observe(message) {
+    if (this.#isClosed || !message || typeof message !== "object") {
+      return;
+    }
+    if (message.type === "system" && message.subtype === "background_tasks_changed") {
+      this.#running = new Set((message.tasks || []).map((task) => task.task_id));
+      if (this.#running.size > 0) {
+        this.#sawBackground = true;
+      }
+    } else if (message.type === "result") {
+      this.#settled = true;
+    } else if (message.type !== "stream_event" && !(message.type === "system" && message.subtype === "task_updated")) {
+      // Anything else after a result — a task notification, the follow-up
+      // turn's init or assistant text — means the conversation moved on.
+      this.#settled = false;
+    }
+    this.#reconsider();
+  }
+
+  close() {
+    if (this.#isClosed) {
+      return;
+    }
+    this.#isClosed = true;
+    for (const timer of [this.#waitTimer, this.#graceTimer, this.#quietTimer]) {
+      if (timer !== null) {
+        this.#clearTimer(timer);
+      }
+    }
+    this.#resolveClosed();
+  }
+
+  #reconsider() {
+    if (this.#quietTimer !== null) {
+      this.#clearTimer(this.#quietTimer);
+      this.#quietTimer = null;
+    }
+    if (!this.#settled) {
+      return;
+    }
+    if (this.#running.size === 0) {
+      if (!this.#sawBackground) {
+        this.close();
+        return;
+      }
+      this.#quietTimer = this.#setTimer(() => this.close(), this.#quietMs);
+      return;
+    }
+    if (this.#waitTimer === null) {
+      this.#waitTimer = this.#setTimer(() => this.#expire(), this.#waitMs);
+    }
+  }
+
+  #expire() {
+    if (this.#isClosed) {
+      return;
+    }
+    if (this.#running.size > 0) {
+      const taskIds = [...this.#running];
+      this.#onExpire(taskIds);
+      const note = stopNote(taskIds, this.#waitMs);
+      if (this.#wakeNote) {
+        this.#wakeNote(note);
+      } else {
+        this.#pendingNote = note;
+      }
+    }
+    this.#graceTimer = this.#setTimer(() => this.close(), this.#graceMs);
+  }
+}
+
+function userMessage(text) {
+  return { type: "user", message: { role: "user", content: text }, parent_tool_use_id: null };
+}

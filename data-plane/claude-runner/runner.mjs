@@ -8,7 +8,9 @@
 // JSON lines written here (data-plane/cmd/agent/claude_stream.go). Every SDK
 // message is one line — the same shapes the CLI's stream-json printed — and
 // the runner's own messages are {"type":"session_platform.notice","text":...}
-// lines.
+// lines. The turn's input stays open while background tasks it started are
+// running (TurnInput), so their work finishes inside the turn;
+// CLAUDE_RUNNER_BACKGROUND_WAIT_MS bounds that wait.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -20,7 +22,9 @@ import {
   EXIT_USAGE,
   SESSION_FILE,
   SETTINGS_FILE,
+  TurnInput,
   UsageError,
+  backgroundWaitFromEnv,
   classify,
   decideTool,
   noticeLine,
@@ -153,9 +157,17 @@ async function main(argv) {
   });
 
   let outcome = null;
+  const input = new TurnInput({
+    prompt: args.prompt,
+    waitMs: backgroundWaitFromEnv(process.env),
+    onExpire: (taskIds) => {
+      notice(`background work still running after the turn's wait (${taskIds.join(", ")}); asking the model to stop it`).catch(() => {});
+    },
+  });
   try {
-    for await (const message of query({ prompt: args.prompt, options })) {
+    for await (const message of query({ prompt: input.messages(), options })) {
       await emit(JSON.stringify(message) + "\n");
+      input.observe(message);
       const verdict = classify(message);
       // Recorded as soon as the CLI reports it, so a turn that fails later
       // still leaves the conversation it did create for the next resume.
@@ -172,6 +184,8 @@ async function main(argv) {
   } catch (err) {
     await notice(`the turn failed: ${err && err.message ? err.message : String(err)}`);
     return EXIT_TURN_FAILED;
+  } finally {
+    input.close();
   }
   return outcome === "completed" ? EXIT_OK : EXIT_TURN_FAILED;
 }
