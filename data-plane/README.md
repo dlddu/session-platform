@@ -33,6 +33,13 @@ interactive shell and Claude Code workloads.
   that would ask a person go to the SDK's `canUseTool` callback, which allows the
   platform's built-in tools and the session's own plugin MCP tools and denies
   the rest with a `[session-platform: denied …]` line in the output.
+  The turn's input stays open after its result while background tasks it
+  started are still running, so they finish inside the turn and the model sees
+  their completion; a task still running after `CLAUDE_RUNNER_BACKGROUND_WAIT_MS`
+  (default 10 minutes) gets one platform message asking the model to stop it
+  with `TaskStop`, and the input closes two minutes later regardless. Closing
+  earlier would kill the task and make the next resumed turn open with a
+  "stopped" notice glued to its prompt.
   `CLAUDE_CODE_EFFORT` (`low`, `medium`, `high`, `xhigh` or `max`, AC-E8) adds
   `--effort`; empty leaves the CLI default and any other value refuses start.
   The runner writes every SDK message as one JSONL line; the agent projects
