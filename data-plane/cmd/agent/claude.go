@@ -30,19 +30,21 @@ const (
 	// refuses to rename an active mount point (EBUSY), while archive restore
 	// atomically swaps this directory with a staged sibling.
 	defaultClaudeStateDir = "/session/state"
-	defaultClaudeBinary   = "claude"
-	platformDefaultModel  = "platform-default"
-	claudePermissionMode  = "auto"
+	// defaultClaudeRunnerBinary is what each claude-code turn runs (AC-E2);
+	// claudeRunnerBinaryEnv overrides it. The runner finds the Claude Code CLI
+	// it drives through CLAUDE_CODE_BIN, default `claude` on PATH.
+	defaultClaudeRunnerBinary = "/usr/local/bin/claude-runner"
+	claudeRunnerBinaryEnv     = "CLAUDE_RUNNER_BIN"
+	platformDefaultModel      = "platform-default"
 
-	claudeRuntimeStateFile      = ".session-platform-claude.json"
-	claudeSettingsDir           = ".claude"
-	claudeSettingsFile          = "settings.json"
-	claudeSessionPlatformPlugin = "session-platform@dlddu-plugins"
+	claudeRuntimeStateFile = ".session-platform-claude.json"
+	claudeSettingsDir      = ".claude"
+	claudeSettingsFile     = "settings.json"
 	// claudePluginMarketplace is the marketplace every managed plugin comes
 	// from; entrypoint.sh installs from it under this name.
 	claudePluginMarketplace = "dlddu-plugins"
 	// claudePluginsEnv is a session's own plugin selection (AC-L1), bare
-	// names, comma-separated. Unset means the platform plugin alone.
+	// names, comma-separated. Unset means no plugins.
 	// Keep in sync with control-plane/internal/adapter/k8s
 	// (ClaudeCodePluginsEnvVar) and entrypoint.sh.
 	claudePluginsEnv           = "CLAUDE_CODE_PLUGINS"
@@ -267,7 +269,7 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 	}
 	binary := strings.TrimSpace(cfg.Binary)
 	if binary == "" {
-		binary = defaultClaudeBinary
+		binary = defaultClaudeRunnerBinary
 	}
 	runner := cfg.Runner
 	if runner == nil {
@@ -751,26 +753,25 @@ func (c *claudeWorkload) argv(prompt string, resume bool) []string {
 	return c.cli.argv(c.binary, c.model, prompt, resume)
 }
 
-// claudeArgv builds one Claude Code invocation. effort is AC-E8's session
-// effort, empty for the CLI default.
-func claudeArgv(binary, model, effort, prompt string, resume bool) []string {
+// claudeRunnerArgv builds one claude-runner invocation (AC-E2). effort is
+// AC-E8's session effort, empty for the CLI default. --resume follows AC-E4:
+// only after the first successful run; the runner then resumes the session id
+// it recorded. Permission mode, partial messages and the system prompt are the
+// runner's, not flags here, so no argv can change them.
+func claudeRunnerArgv(binary, model, effort, prompt string, resume bool) []string {
 	argv := []string{binary}
-	if resume {
-		argv = append(argv, "--continue")
-	}
 	if model != "" && model != platformDefaultModel {
 		argv = append(argv, "--model", model)
 	}
 	if effort != "" {
 		argv = append(argv, "--effort", effort)
 	}
+	if resume {
+		argv = append(argv, "--resume")
+	}
 	// The option delimiter prevents a prompt beginning with "--" from changing
 	// any platform-controlled flag.
-	return append(argv,
-		"--permission-mode", claudePermissionMode,
-		"-p", "--output-format", "stream-json", "--verbose",
-		"--include-partial-messages", "--", prompt,
-	)
+	return append(argv, "--", prompt)
 }
 
 // beginCheckpoint atomically closes admission and drains all accepted work.
@@ -1216,17 +1217,14 @@ func validateClaudeManagedSettings(homeDir string) error {
 	return validateClaudeToolSurface(settings)
 }
 
-// validateClaudeToolSurface requires a non-empty set of enabled marketplace
-// plugins. Which plugins is the pod's to say (ensureClaudeManagedSettings).
+// validateClaudeToolSurface requires every enabled plugin to be an enabled
+// marketplace plugin; a session that chose none has none (AC-L1). Which
+// plugins is the pod's to say (ensureClaudeManagedSettings).
 func validateClaudeToolSurface(settings claudeManagedSettings) error {
-	plugin := len(settings.EnabledPlugins) != 0
 	for name, enabled := range settings.EnabledPlugins {
 		if !enabled || !managedClaudePlugin(name) {
-			plugin = false
+			return fmt.Errorf("claude managed settings may only enable %s plugins, got %s", claudePluginMarketplace, name)
 		}
-	}
-	if !plugin {
-		return fmt.Errorf("claude managed settings must enable %s plugins as its platform tool surface", claudePluginMarketplace)
 	}
 	return nil
 }
@@ -1245,13 +1243,12 @@ func managedClaudePlugin(name string) bool {
 }
 
 // claudePluginsFromEnv resolves the plugins a claude-code pod enables: the
-// session's own selection when the control plane passed one (AC-L1),
-// otherwise the platform plugin alone (AC-E6). entrypoint.sh installs the same
-// list before the agent starts, so the two must agree on the default.
+// session's own selection when the control plane passed one (AC-L1), otherwise
+// none. entrypoint.sh installs the same list before the agent starts.
 func claudePluginsFromEnv() ([]string, error) {
 	raw, set := os.LookupEnv(claudePluginsEnv)
 	if !set {
-		return []string{claudeSessionPlatformPlugin}, nil
+		return nil, nil
 	}
 	names := strings.Split(raw, ",")
 	plugins := make([]string, 0, len(names))

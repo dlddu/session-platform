@@ -355,7 +355,6 @@ func NewClientOrchestrator(client kubernetes.Interface, namespace string, opts .
 		codexTask: codexProfile{
 			credentialsSecret: defaultCodexTaskCredentialsSecret,
 			configConfigMap:   defaultCodexTaskConfigConfigMap,
-			plugins:           DefaultCodexPlugins,
 		},
 		claudeAuthMode:   ClaudeCodeAuthGateway,
 		sharedVolumeSize: resource.MustParse(defaultSharedVolumeSize),

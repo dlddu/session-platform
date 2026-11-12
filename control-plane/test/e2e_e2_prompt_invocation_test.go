@@ -19,7 +19,7 @@
 //     the drain rate rather than observing a contract.
 //   - the 16 MiB per-invocation truncation marker: the stand-in cannot be made
 //     to emit that much.
-//   - `--continue` staying off after a *failed* first run: no way to fail an
+//   - `--resume` staying off after a *failed* first run: no way to fail an
 //     invocation on the SUT without breaking the wiring the other assertions
 //     need.
 package e2e_test
@@ -41,11 +41,16 @@ const (
 	e2PromptSecond = "e2-prompt-second"
 )
 
-// What may precede this run of flags is `--continue` (only after a successful
-// run) and `--model <effective model>`; what follows `-- ` is the prompt as a
-// single positional argument.
-const e2InvariantArgv = "--permission-mode auto -p --output-format stream-json " +
-	"--verbose --include-partial-messages -- "
+// Each turn is one claude-runner process (AC-E2): `node` running this script,
+// then `--model <effective model>` and `--effort` when the session has them,
+// `--resume` only after a successful run, and `-- ` followed by the prompt as a
+// single positional argument. Permission mode, partial messages and the system
+// prompt are the runner's own, so they are not on this command line at all.
+const (
+	e2RunnerScript   = "/opt/claude-runner/runner.mjs"
+	e2InvariantArgv  = " -- "
+	e2ResumeArgument = "--resume"
+)
 
 // Prints one line per *change*: "<count>\t<argv>". $1 is the sampling window in
 // seconds; it stops early once a resume invocation has come and gone.
@@ -55,9 +60,10 @@ const e2InvariantArgv = "--permission-mode auto -p --output-format stream-json "
 // does every subshell a command substitution forks, since those inherit the
 // parent's command line — skipping $$ alone is not enough, which is why the
 // lowercase sentinel below marks every process this probe owns. And a process
-// that merely *mentions* the flags (any shell running a script that contains
-// them) is not an invocation either, so argv[0] must be the CLI itself. Both
-// guards were added because a dry run without them counted the wrong process.
+// that merely *mentions* the runner (any shell running a script that contains
+// its path) is not an invocation either, so argv[0] must be node and argv[1]
+// the runner script. Both guards were added because a dry run without them
+// counted the wrong process.
 //
 // The sentinel is deliberately not spelled with an uppercase E2E_ prefix: that
 // shape is a fidelity-allowlist seam token (scripts/check-fidelity-allowlist.py),
@@ -75,11 +81,11 @@ while [ "$(date +%s)" -lt "$end" ]; do
 		c=$(tr '\0' ' ' <"$d/cmdline" 2>/dev/null) || continue
 		case "$c" in
 		*claude-argv-probe-self*) continue ;;
-		*--include-partial-messages*) ;;
+		*" /opt/claude-runner/runner.mjs "*) ;;
 		*) continue ;;
 		esac
 		case "${c%% *}" in
-		*claude) ;;
+		*node) ;;
 		*) continue ;;
 		esac
 		n=$((n + 1))
@@ -88,7 +94,7 @@ while [ "$(date +%s)" -lt "$end" ]; do
 	if [ "$n" != "$prev" ] || [ "$seen" != "$prevcmd" ]; then
 		printf '%s\t%s\n' "$n" "$seen"
 	fi
-	case "$seen" in *--continue*) sawcont=1 ;; esac
+	case "$seen" in *" --resume "*) sawcont=1 ;; esac
 	prev=$n
 	prevcmd=$seen
 	if [ "$sawcont" = 1 ] && [ "$n" -eq 0 ]; then
@@ -251,40 +257,43 @@ func TestClaudePromptInvocation_ExactArgvOneShotAndSerialised(t *testing.T) {
 			"probe output=%q", len(observed), res.out)
 	}
 	if maxConcurrent > 1 {
-		t.Fatalf("%d `claude` processes ran at once — a session serialises its invocations (AC-E2); "+
+		t.Fatalf("%d claude-runner processes ran at once — a session serialises its invocations (AC-E2); "+
 			"probe output=%q", maxConcurrent, res.out)
 	}
 	if lastCount != 0 {
-		t.Fatalf("the probe stopped while %d `claude` process(es) were still running — invocations are "+
+		t.Fatalf("the probe stopped while %d claude-runner process(es) were still running — invocations are "+
 			"one-shot and leave no resident CLI (AC-E2); probe output=%q", lastCount, res.out)
 	}
 
 	first, second := observed[0], observed[1]
 	for _, argv := range []string{first, second} {
-		// argv[0] is the configured binary — `claude` unless CLAUDE_CODE_BIN
-		// names a path, which no manifest in this repo does.
-		if arg0, _, _ := strings.Cut(argv, " "); !strings.HasSuffix(arg0, "claude") {
-			t.Fatalf("invocation argv[0] = %q, want the `claude` binary (AC-E2); full argv=%q", arg0, argv)
+		// The pod runs the image's claude-runner wrapper, which execs node on
+		// the runner script; no manifest in this repo sets CLAUDE_RUNNER_BIN.
+		arg0, rest, _ := strings.Cut(argv, " ")
+		if !strings.HasSuffix(arg0, "node") || !strings.HasPrefix(rest, e2RunnerScript+" ") {
+			t.Fatalf("invocation argv = %q, want node running %s (AC-E2)", argv, e2RunnerScript)
 		}
-		if strings.Contains(argv, "--dangerously-skip-permissions") {
-			t.Fatalf("invocation used --dangerously-skip-permissions: %q — platform policy is "+
-				"--permission-mode auto (AC-E2 구현 결정)", argv)
+		for _, flag := range []string{"--permission-mode", "--dangerously-skip-permissions", "--continue"} {
+			if strings.Contains(argv, flag) {
+				t.Fatalf("invocation argv carried %s: %q — permission policy and resume are the runner's, "+
+					"not flags the agent passes (AC-E2 구현 결정)", flag, argv)
+			}
 		}
 	}
-	if want := e2InvariantArgv + e2PromptFirst; !strings.Contains(first, want) {
-		t.Fatalf("first invocation argv = %q, want it to contain %q (AC-E2 exact argv)", first, want)
+	if want := e2InvariantArgv + e2PromptFirst; !strings.HasSuffix(first, want) {
+		t.Fatalf("first invocation argv = %q, want it to end with %q (AC-E2 exact argv)", first, want)
 	}
-	if want := e2InvariantArgv + e2PromptSecond; !strings.Contains(second, want) {
-		t.Fatalf("second invocation argv = %q, want it to contain %q (AC-E2 exact argv)", second, want)
+	if want := e2InvariantArgv + e2PromptSecond; !strings.HasSuffix(second, want) {
+		t.Fatalf("second invocation argv = %q, want it to end with %q (AC-E2 exact argv)", second, want)
 	}
 
-	if strings.Contains(first, "--continue") {
-		t.Fatalf("the first invocation carried --continue: %q — a session's first prompt starts a new "+
-			"conversation (AC-E2)", first)
+	if strings.Contains(first, e2ResumeArgument) {
+		t.Fatalf("the first invocation carried %s: %q — a session's first prompt starts a new "+
+			"conversation (AC-E4)", e2ResumeArgument, first)
 	}
-	if !strings.Contains(second, "--continue") {
-		t.Fatalf("the second invocation did not carry --continue: %q — writes after a successful run "+
-			"resume the conversation (AC-E2)", second)
+	if !strings.Contains(second, " "+e2ResumeArgument+" ") {
+		t.Fatalf("the second invocation did not carry %s: %q — writes after a successful run "+
+			"resume the recorded conversation (AC-E4)", e2ResumeArgument, second)
 	}
 }
 

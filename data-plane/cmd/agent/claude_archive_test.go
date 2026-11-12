@@ -123,7 +123,7 @@ func TestClaudeCheckpointDrainsAcceptedQueue(t *testing.T) {
 	}
 }
 
-// State files, conversation HOME, output bytes, and the --continue flag survive
+// State files, conversation HOME, output bytes, and the resume flag survive
 // a filesystem archive round trip. A pre-snapshot cursor still points exactly
 // at the end of the restored history.
 func TestClaudeArchiveRestoreRoundTripPreservesStateCursorAndResume(t *testing.T) {
@@ -205,11 +205,7 @@ func TestClaudeArchiveRestoreRoundTripPreservesStateCursorAndResume(t *testing.T
 
 	writeViaHTTP(t, srv2, "continue", http.StatusOK)
 	run := receiveClaudeRun(t, runner2.started)
-	want := []string{
-		"claude", "--continue", "--model", "claude-roundtrip", "--permission-mode", "auto",
-		"-p", "--output-format",
-		"stream-json", "--verbose", "--include-partial-messages", "--", "continue",
-	}
+	want := []string{defaultClaudeRunnerBinary, "--model", "claude-roundtrip", "--resume", "--", "continue"}
 	if !reflect.DeepEqual(run.argv, want) {
 		t.Fatalf("post-restore argv = %q, want %q", run.argv, want)
 	}

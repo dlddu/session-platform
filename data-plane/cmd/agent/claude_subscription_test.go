@@ -8,16 +8,12 @@ import (
 )
 
 func TestClaudeArgvCarriesEffort(t *testing.T) {
-	got := (claudeCLI{effort: "max"}).argv("claude", "opus", "p", true)
-	want := []string{
-		"claude", "--continue", "--model", "opus", "--effort", "max",
-		"--permission-mode", "auto", "-p", "--output-format", "stream-json", "--verbose",
-		"--include-partial-messages", "--", "p",
-	}
+	got := (claudeCLI{effort: "max"}).argv(defaultClaudeRunnerBinary, "opus", "p", true)
+	want := []string{defaultClaudeRunnerBinary, "--model", "opus", "--effort", "max", "--resume", "--", "p"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("argv = %q, want %q", got, want)
 	}
-	if got := (claudeCLI{}).argv("claude", platformDefaultModel, "p", false); slicesContain(got, "--effort") {
+	if got := (claudeCLI{}).argv(defaultClaudeRunnerBinary, platformDefaultModel, "p", false); slicesContain(got, "--effort") {
 		t.Fatalf("no effort means no flag: %q", got)
 	}
 }
@@ -36,7 +32,7 @@ func TestClaudeAuthFromEnv(t *testing.T) {
 	setClaudeGatewayEnv(t)
 	t.Setenv(claudeAuthModeEnv, "")
 	auth, err := claudeAuthFromEnv(workloadClaudeCode)
-	if err != nil || auth.mode != claudeAuthModeGateway || len(auth.tools.Plugins) == 0 {
+	if err != nil || auth.mode != claudeAuthModeGateway || len(auth.tools.Plugins) != 0 {
 		t.Fatalf("gateway = %+v, %v", auth, err)
 	}
 	t.Setenv(claudeOAuthTokenEnv, "sk-ant-oat01-x")
@@ -80,7 +76,7 @@ func TestClaudeAuthFromEnv(t *testing.T) {
 	t.Setenv(claudeOAuthTokenEnv, "sk-ant-oat01-x")
 	t.Setenv(claudeEffortEnv, "xhigh")
 	auth, err = claudeAuthFromEnv(workloadClaudeCode)
-	if err != nil || auth.mode != claudeAuthModeSubscription || auth.effort != "xhigh" || len(auth.tools.Plugins) == 0 {
+	if err != nil || auth.mode != claudeAuthModeSubscription || auth.effort != "xhigh" || len(auth.tools.Plugins) != 0 {
 		t.Fatalf("subscription = %+v, %v", auth, err)
 	}
 	if !slices.Contains(credentialLiteralsFromEnv(), "sk-ant-oat01-x") {

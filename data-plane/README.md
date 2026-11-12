@@ -22,16 +22,27 @@ interactive shell and Claude Code workloads.
   environment, cwd and shell variables/functions/aliases are not carried over.
 - `claude-code` launches no resident shell. Write asynchronously queues a
   prompt for one serial worker; each job executes
-  `claude [--continue] [--model MODEL] [--effort EFFORT] --permission-mode auto
-  -p --output-format stream-json --verbose --include-partial-messages -- PROMPT`.
+  `claude-runner [--model MODEL] [--effort EFFORT] [--resume] -- PROMPT`
+  (`CLAUDE_RUNNER_BIN`, default `/usr/local/bin/claude-runner`). The runner
+  ([`claude-runner/`](claude-runner/)) runs one Claude Agent SDK `query()`
+  that drives the pinned Claude Code CLI (`CLAUDE_CODE_BIN`, default `claude`
+  on `PATH`) with Claude Code's own system prompt, all setting sources,
+  partial messages and `permissionMode: default`; tool requests no settings
+  rule decides go to the SDK's `canUseTool` callback, which allows the
+  platform's built-in tools and the session's own plugin MCP tools and denies
+  the rest with a `[session-platform: denied …]` line in the output.
   `CLAUDE_CODE_EFFORT` (`low`, `medium`, `high`, `xhigh` or `max`, AC-E8) adds
   `--effort`; empty leaves the CLI default and any other value refuses start.
-  The agent parses stdout JSONL and
-  projects ordered `text_delta` values, while diagnostic stderr is retained as
-  text. Both are incrementally redacted and appended through the same offset
-  cursor contract while the invocation is still running. `--continue` starts
-  only after the first successful invocation; a failed or timed-out first run
-  still starts a new conversation next time. A non-empty concrete
+  The runner writes every SDK message as one JSONL line; the agent projects
+  ordered `text_delta` values and the runner's notices, while diagnostic stderr
+  is retained as text. Both are incrementally redacted and appended through the
+  same offset cursor contract while the invocation is still running.
+  `--resume` starts only after the first successful invocation; a failed or
+  timed-out first run still starts a new conversation next time. The runner
+  records the SDK session id in `$HOME/.claude/session-platform-session.json`
+  and resumes exactly that conversation; an archive without the record
+  continues the most recent one, and a record whose transcript is gone starts
+  over with a notice. A non-empty concrete
   `CLAUDE_CODE_MODEL` adds `--model` with that value as one argv element;
   an empty value or the `platform-default` sentinel omits the model flag. Each
   invocation is limited to 30 minutes by default; set
@@ -231,7 +242,8 @@ interactive shell and Claude Code workloads.
   token through its own handler in process, clones
   `MINIMAX_CODE_PLUGIN_MARKETPLACE_URL` into `MINIMAX_CODE_MARKETPLACE_DIR` with a
   URL-scoped header, and serves the plugins named in `MINIMAX_CODE_PLUGINS`
-  (default `mcp-servers`) — manifest plus the files its `skills`, `commands`,
+  (the session's selection; empty or unset means none, and then nothing is
+  cloned and the bundle is `ready` and empty) — manifest plus the files its `skills`, `commands`,
   `agents` and `mcpServers` fields name, never hooks — at `GET /plugin-seed`
   (503 while bootstrapping, then `ready`, `failed` or `unconfigured`).
 - `mcp` is the session MCP that runs in the helper pod's other container
@@ -289,14 +301,15 @@ still, archives `home/` plus the scrollback, and keeps both paused until the
 control plane reclaims the pod or calls `/checkpoint/abort`, which SIGCONTs the
 tree and reopens writes. A process that daemonized out of the shell's tree is
 not paused. The image includes the official
-`@anthropic-ai/claude-code` npm package. For a `claude-code` container only,
+`@anthropic-ai/claude-code` npm package. For a `claude-code` container whose
+session chose plugins (`CLAUDE_CODE_PLUGINS` set; AC-L1) only,
 `entrypoint.sh` calls K3s MCP with `K3S_MCP_TOKEN` to mint a short-lived
 `contents:read` GitHub App token scoped to `plugin-marketplace`, supplies that
 token only through a process-scoped Git HTTPS Authorization header while running
 `claude plugin marketplace add https://github.com/dlddu/plugin-marketplace.git`
-and `claude plugin install session-platform@dlddu-plugins`, then exports the
+and `claude plugin install <name>@dlddu-plugins` for each chosen plugin, then exports the
 runtime plugin seed and execs the agent. The GitHub token is unset before the
-agent starts; every other workload — `shell`, `minimax-code` (its marketplace path is the K3s MCP proxy, above), `mcp` and
+agent starts; a claude-code session that chose none, and every other workload — `shell`, `minimax-code` (its marketplace path is the K3s MCP proxy, above), `mcp` and
 `credential-proxy` — skips this bootstrap.
 Provider authentication credentials are not present in the Claude container or
 inherited by its Bash tools. That container receives
@@ -335,7 +348,8 @@ literal name because Kubernetes does not interpolate
 `CLAUDE_CODE_CONFIG_CONFIGMAP` there.
 
 Fresh session HOME also receives a platform-managed `.claude/settings.json`
-that enables only `session-platform@dlddu-plugins` and allows only the coding
+that enables only the session's chosen `<name>@dlddu-plugins` plugins (none
+unless it chose some) and allows only the coding
 tools `Read`, `Write`, `Edit`, `Glob`, `Grep`, and `Bash`; the agent does not use
 `--dangerously-skip-permissions`. Every invocation starts Claude Code in `auto`
 permission mode through an explicit CLI flag.

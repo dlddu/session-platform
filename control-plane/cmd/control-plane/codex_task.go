@@ -61,7 +61,6 @@ type codexTaskConfig struct {
 	image             string
 	credentialsSecret string
 	configConfigMap   string
-	plugins           string
 	// archiveEnabled is this type's own data-transfer gate (AC-M3).
 	archiveEnabled bool
 	defaultModel   string
@@ -86,7 +85,6 @@ func loadCodexTaskConfig() (codexTaskConfig, error) {
 		image:             env("DATA_PLANE_CODEX_TASK_IMAGE", ""),
 		credentialsSecret: env("CODEX_TASK_CREDENTIALS_SECRET", "codex-task-credentials"),
 		configConfigMap:   env("CODEX_TASK_CONFIG_CONFIGMAP", "codex-task-config"),
-		plugins:           env("CODEX_TASK_PLUGINS", k8s.DefaultCodexPlugins),
 		archiveEnabled:    envBool("CODEX_TASK_ARCHIVE_ENABLED", false),
 		defaultModel:      defaultModel,
 		models:            models,

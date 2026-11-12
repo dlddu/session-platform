@@ -127,6 +127,9 @@ jobs:
       - name: codex runner tests
         working-directory: data-plane/codex-runner
         run: npm ci && node --test
+      - name: claude runner tests
+        working-directory: data-plane/claude-runner
+        run: npm ci --omit=optional && node --test
 
   web:
     name: web (typecheck + build)

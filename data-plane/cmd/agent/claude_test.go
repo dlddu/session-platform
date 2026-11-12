@@ -100,12 +100,12 @@ func newClaudeTestServerAt(t *testing.T, runner commandRunner, model string, res
 	c, err := newClaudeWorkload(claudeConfig{
 		StateDir:    stateDir,
 		Model:       model,
-		Binary:      defaultClaudeBinary,
+		Binary:      defaultClaudeRunnerBinary,
 		RestoreMode: restoreMode,
 		Runner:      runner,
 		Logger:      testLogger(),
 		Redact:      redact,
-		Tools:       toolSurface{Plugins: []string{claudeSessionPlatformPlugin}},
+		Tools:       toolSurface{Plugins: []string{testClaudePlugin}},
 	})
 	if err != nil {
 		t.Fatalf("new claude workload: %v", err)
@@ -196,14 +196,10 @@ func TestClaudeWriteIsNonBlockingAndSerial(t *testing.T) {
 	waitClaudeIdle(t, c)
 
 	wantFirst := []string{
-		"claude", "--model", "claude-test-model", "--permission-mode", "auto",
-		"-p", "--output-format",
-		"stream-json", "--verbose", "--include-partial-messages", "--", "first prompt",
+		defaultClaudeRunnerBinary, "--model", "claude-test-model", "--", "first prompt",
 	}
 	wantSecond := []string{
-		"claude", "--continue", "--model", "claude-test-model", "--permission-mode", "auto",
-		"-p", "--output-format",
-		"stream-json", "--verbose", "--include-partial-messages", "--", "second prompt",
+		defaultClaudeRunnerBinary, "--model", "claude-test-model", "--resume", "--", "second prompt",
 	}
 	if !reflect.DeepEqual(first.argv, wantFirst) {
 		t.Fatalf("first argv = %q, want %q", first.argv, wantFirst)
@@ -222,8 +218,8 @@ func TestClaudeWriteIsNonBlockingAndSerial(t *testing.T) {
 	}
 }
 
-// The platform default is selected outside the CLI. Passing its sentinel to
-// Claude would name a non-existent model, so --model is intentionally omitted.
+// The platform default is selected outside the runner. Passing its sentinel
+// would name a non-existent model, so --model is intentionally omitted.
 func TestClaudePlatformDefaultOmitsModelFlag(t *testing.T) {
 	runner := newFakeClaudeRunner()
 	c, srv := newClaudeTestServer(t, runner, platformDefaultModel, false, nil)
@@ -231,11 +227,7 @@ func TestClaudePlatformDefaultOmitsModelFlag(t *testing.T) {
 	writeViaHTTP(t, srv, "hello", http.StatusOK)
 	run := receiveClaudeRun(t, runner.started)
 	waitClaudeIdle(t, c)
-	want := []string{
-		"claude", "--permission-mode", "auto", "-p",
-		"--output-format", "stream-json", "--verbose",
-		"--include-partial-messages", "--", "hello",
-	}
+	want := []string{defaultClaudeRunnerBinary, "--", "hello"}
 	if !reflect.DeepEqual(run.argv, want) {
 		t.Fatalf("argv = %q, want %q", run.argv, want)
 	}
@@ -249,11 +241,7 @@ func TestClaudeOpenRouterLatestAliasIsPassedAsOneModelArgument(t *testing.T) {
 	writeViaHTTP(t, srv, "hello", http.StatusOK)
 	run := receiveClaudeRun(t, runner.started)
 	waitClaudeIdle(t, c)
-	want := []string{
-		"claude", "--model", model, "--permission-mode", "auto",
-		"-p", "--output-format", "stream-json",
-		"--verbose", "--include-partial-messages", "--", "hello",
-	}
+	want := []string{defaultClaudeRunnerBinary, "--model", model, "--", "hello"}
 	if !reflect.DeepEqual(run.argv, want) {
 		t.Fatalf("argv = %q, want %q", run.argv, want)
 	}
@@ -304,8 +292,8 @@ func TestClaudeManagedToolPolicyIsProvisionedUnderSessionHome(t *testing.T) {
 			t.Fatalf("managed settings %q are missing %s", data, tool)
 		}
 	}
-	if !strings.Contains(string(data), `"`+claudeSessionPlatformPlugin+`":true`) {
-		t.Fatalf("managed settings %q do not enable %s", data, claudeSessionPlatformPlugin)
+	if !strings.Contains(string(data), `"`+testClaudePlugin+`":true`) {
+		t.Fatalf("managed settings %q do not enable %s", data, testClaudePlugin)
 	}
 	if strings.Contains(string(data), "bypassPermissions") {
 		t.Fatalf("managed settings bypass permissions: %q", data)
@@ -325,7 +313,7 @@ func TestClaudeManagedSettingsUpgradeEnablesSessionPlatformPlugin(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{claudeSessionPlatformPlugin}}); err != nil {
+	if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{testClaudePlugin}}); err != nil {
 		t.Fatalf("upgrade managed settings: %v", err)
 	}
 	if err := validateClaudeManagedSettings(homeDir); err != nil {
@@ -346,7 +334,7 @@ func TestClaudeManagedSettingsRejectsUnmanagedPlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{claudeSessionPlatformPlugin}})
+	err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{testClaudePlugin}})
 	if err == nil || !strings.Contains(err.Error(), "unmanaged plugin") {
 		t.Fatalf("ensure managed settings error = %v, want unmanaged plugin rejection", err)
 	}
@@ -367,11 +355,7 @@ func TestClaudePromptCannotInjectCLIOptions(t *testing.T) {
 	writeViaHTTP(t, srv, prompt, http.StatusOK)
 	run := receiveClaudeRun(t, runner.started)
 	waitClaudeIdle(t, c)
-	want := []string{
-		"claude", "--model", "immutable-model", "--permission-mode", "auto",
-		"-p", "--output-format",
-		"stream-json", "--verbose", "--include-partial-messages", "--", prompt,
-	}
+	want := []string{defaultClaudeRunnerBinary, "--model", "immutable-model", "--", prompt}
 	if !reflect.DeepEqual(run.argv, want) {
 		t.Fatalf("argv = %q, want %q", run.argv, want)
 	}
@@ -393,14 +377,14 @@ func TestClaudeFailedFirstInvocationDoesNotResume(t *testing.T) {
 	writeViaHTTP(t, srv, "new conversation", http.StatusOK)
 	second := receiveClaudeRun(t, runner.started)
 	waitClaudeIdle(t, c)
-	if slicesContain(second.argv, "--continue") {
+	if slicesContain(second.argv, "--resume") {
 		t.Fatalf("failed first invocation was resumed: %q", second.argv)
 	}
 
 	writeViaHTTP(t, srv, "continue successful conversation", http.StatusOK)
 	third := receiveClaudeRun(t, runner.started)
 	waitClaudeIdle(t, c)
-	if !slicesContain(third.argv, "--continue") {
+	if !slicesContain(third.argv, "--resume") {
 		t.Fatalf("third invocation did not resume successful conversation: %q", third.argv)
 	}
 }
@@ -641,7 +625,7 @@ func TestClaudeCloseIsIdempotent(t *testing.T) {
 		StateDir: filepath.Join(t.TempDir(), "state"),
 		Runner:   newFakeClaudeRunner(),
 		Logger:   testLogger(),
-		Tools:    toolSurface{Plugins: []string{claudeSessionPlatformPlugin}},
+		Tools:    toolSurface{Plugins: []string{testClaudePlugin}},
 	})
 	if err != nil {
 		t.Fatal(err)

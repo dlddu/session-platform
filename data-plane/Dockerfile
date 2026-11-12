@@ -1,7 +1,8 @@
 # Multi-workload data plane image. DATA_PLANE_WORKLOAD selects a PTY-attached
-# shell, the serial one-shot Claude Code runner, or its localhost credential
-# proxy sidecar. Shell and Claude expose lifecycle/I/O endpoints and snapshot
-# through the same filesystem archive, and the proxy isolates auth.
+# shell, the serial one-shot Claude Code runner (claude-runner, on the Claude
+# Agent SDK), or its localhost credential proxy sidecar. Shell and Claude
+# expose lifecycle/I/O endpoints and snapshot through the same filesystem
+# archive, and the proxy isolates auth.
 # See cmd/agent and ./README.md.
 # Build from the repo root:  docker build -f data-plane/Dockerfile -t session-platform/data-plane .
 
@@ -20,6 +21,10 @@ RUN CGO_ENABLED=0 go build -o /out/agent ./cmd/agent
 # overridable, while the default is a published exact version rather than the
 # moving npm "latest" tag.
 FROM node:22-trixie-slim AS claude-build
+# claude-runner's Agent SDK (data-plane/claude-runner/package.json) drives this
+# CLI over a private protocol, so the two move together: the SDK release
+# 0.3.N is built for Claude Code 2.1.N, and the runtime stage refuses a pair
+# that drifted apart (claude-runner --check-cli).
 ARG CLAUDE_CODE_VERSION=2.1.220
 # The MiniMax Code CLI (`mcode`) for the minimax-code workload, pinned the same
 # way. It needs Node 22.19+, which this stage provides, and installs from the
@@ -32,6 +37,16 @@ RUN npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && npm install --global "@minimax-ai/code@${MINIMAX_CODE_VERSION}" \
  && mcode --version \
  && npm cache clean --force
+
+FROM node:22-trixie-slim AS claude-runner-build
+WORKDIR /opt/claude-runner
+COPY data-plane/claude-runner/package.json data-plane/claude-runner/package-lock.json ./
+# --omit=optional leaves out the SDK's own bundled CLI binary: the runner drives
+# the pinned CLI installed above, so one binary serves both the turns and the
+# plugin bootstrap.
+RUN npm ci --omit=dev --omit=optional --ignore-scripts && npm cache clean --force
+COPY data-plane/claude-runner/*.mjs ./
+RUN node --test
 
 FROM node:22-trixie-slim AS codex-build
 WORKDIR /opt/codex-runner
@@ -77,8 +92,8 @@ RUN gh_arch="$(dpkg --print-architecture)" \
 
 # ---- stage 4: runtime ----
 # A full glibc distro rather than distroless/alpine: the session workload IS an
-# interactive /bin/bash or Node-based Claude CLI. The pinned Node/Claude
-# runtime and static agent are added below.
+# interactive /bin/bash or the Node-based Claude runner and CLI. The pinned
+# Node/Claude runtime and static agent are added below.
 FROM debian:trixie
 # safe.directory '/shared/*': the AC-F5 shared volume is EFS in production, and
 # its access point forces every file to uid/gid 50000, so a repository the
@@ -119,6 +134,10 @@ RUN groupadd --gid 1000 session \
 COPY --from=claude-build /usr/local/ /usr/local/
 ENV DISABLE_AUTOUPDATER=1
 RUN node --version && npm --version && claude --version && mcode --version
+COPY --from=claude-runner-build /opt/claude-runner /opt/claude-runner
+RUN printf '#!/bin/sh\nexec node /opt/claude-runner/runner.mjs "$@"\n' > /usr/local/bin/claude-runner \
+ && chmod 0755 /usr/local/bin/claude-runner \
+ && claude-runner --check-cli
 COPY --from=codex-build /opt/codex-runner /opt/codex-runner
 RUN printf '#!/bin/sh\nexec node /opt/codex-runner/runner.mjs "$@"\n' > /usr/local/bin/codex-runner \
  && chmod 0755 /usr/local/bin/codex-runner \

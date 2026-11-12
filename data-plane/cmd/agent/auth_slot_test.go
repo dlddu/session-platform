@@ -156,10 +156,10 @@ func newSlotClaudeTestServer(t *testing.T, runner commandRunner, slot *authSlot)
 	c, err := newClaudeWorkload(claudeConfig{
 		StateDir: filepath.Join(t.TempDir(), "state"),
 		Model:    platformDefaultModel,
-		Binary:   defaultClaudeBinary,
+		Binary:   defaultClaudeRunnerBinary,
 		Runner:   runner,
 		Logger:   testLogger(),
-		Tools:    toolSurface{Plugins: []string{claudeSessionPlatformPlugin}},
+		Tools:    toolSurface{Plugins: []string{testClaudePlugin}},
 		AuthSlot: slot,
 	})
 	if err != nil {

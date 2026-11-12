@@ -89,9 +89,12 @@ docs/                 value / PRD·AC / journeys / mockups / retired CRIU verifi
   the default 15-second Lease every 5 seconds; private snapshot transactions are
   owner-fenced. Read/Write/Switch dispatch on state (AC-C2/C3/C4).
 - **Workloads**: `shell` (default) runs one PTY shell; `claude-code` runs one
-  CLI process per prompt through a bounded serial queue. Claude is invoked with
-  `--permission-mode auto` and partial `stream-json` output
-  enabled; the data plane incrementally redacts and UTF-8-normalizes assistant
+  Claude Agent SDK turn per prompt (`claude-runner`, which drives the pinned
+  Claude Code CLI) through a bounded serial queue. Each turn resumes the SDK
+  session id it recorded, and tool requests no settings rule decides go to the
+  SDK's `canUseTool` callback, where the platform allows its built-in tools and
+  the session's own plugin tools and denies the rest; partial messages are
+  enabled and the data plane incrementally redacts and UTF-8-normalizes assistant
   text deltas and diagnostic stderr before appending them to the session
   scrollback. Type and Claude model are immutable session
   metadata. For the `platform-default` alias, the pod projects the optional
@@ -146,9 +149,9 @@ docs/                 value / PRD·AC / journeys / mockups / retired CRIU verifi
 - **Per-session plugins** (AC-L1, [`docs/prd/session-plugins.md`](docs/prd/session-plugins.md)):
   `POST /api/v1/sessions` takes an optional `plugins` list of plugin names from
   the platform marketplace for `claude-code`, `codex` and `minimax-code`.
-  Omitted, a session gets its type's default (`session-platform`, the
-  deployment's `CODEX_PLUGINS`, `mcp-servers`); given, the list **replaces**
-  that default and is fixed for the session's lifetime, snapshot/restore
+  Omitted, a codex-chat session gets the deployment's `CODEX_PLUGINS` and
+  every other type runs without plugins; given, the list **replaces** that
+  default and is fixed for the session's lifetime, snapshot/restore
   included. It reaches the one place each type already installs plugins:
   `CLAUDE_CODE_PLUGINS` on the claude-code workload container (entrypoint
   install + managed settings), or `MINIMAX_CODE_PLUGINS` on the codex /

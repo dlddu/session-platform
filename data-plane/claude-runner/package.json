@@ -1,0 +1,17 @@
+{
+  "name": "session-platform-claude-runner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Claude Agent SDK runner for the session-platform claude-code workload (AC-E2).",
+  "type": "module",
+  "main": "runner.mjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.220"
+  }
+}

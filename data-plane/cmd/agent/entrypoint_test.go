@@ -40,6 +40,43 @@ func TestEntrypointSkipsPluginBootstrapForShell(t *testing.T) {
 	}
 }
 
+// AC-L1: a claude-code session that chose no plugins has nothing to bootstrap —
+// no K3s MCP token request, no marketplace, no install — and starts the agent.
+func TestEntrypointSkipsPluginBootstrapWhenClaudeCodeChoseNone(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "calls.log")
+	writeEntrypointTestExecutable(t, dir, "curl", `printf 'curl\n' >> "$CALL_LOG"`)
+	writeEntrypointTestExecutable(t, dir, "claude", `printf 'claude:%s\n' "$*" >> "$CALL_LOG"`)
+	agent := writeEntrypointTestExecutable(t, dir, "agent", `
+[ "${CLAUDE_CODE_PLUGIN_CACHE_DIR+x}" != "x" ]
+printf 'agent\n' >> "$CALL_LOG"
+`)
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "CLAUDE_CODE_PLUGINS=") && !strings.HasPrefix(kv, "CLAUDE_CODE_PLUGIN_CACHE_DIR=") &&
+			!strings.HasPrefix(kv, "K3S_MCP_TOKEN=") {
+			env = append(env, kv)
+		}
+	}
+	cmd := exec.Command("/bin/sh", filepath.Join("..", "..", "entrypoint.sh"))
+	cmd.Env = append(env,
+		"PATH="+dir+":"+os.Getenv("PATH"),
+		"DATA_PLANE_WORKLOAD=claude-code",
+		"DATA_PLANE_AGENT_BIN="+agent,
+		"CALL_LOG="+logPath,
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("entrypoint: %v\n%s", err, output)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); got != "agent\n" {
+		t.Fatalf("calls = %q, want agent only", got)
+	}
+}
+
 func TestEntrypointBootstrapsPrivateMarketplaceWithScopedAuthHeaderWithoutLeakingGitHubTokenToAgent(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "calls.log")
@@ -71,6 +108,7 @@ printf 'agent\n' >> "$CALL_LOG"
 		"PATH="+dir+":"+os.Getenv("PATH"),
 		"DATA_PLANE_WORKLOAD=claude-code",
 		"DATA_PLANE_AGENT_BIN="+agent,
+		"CLAUDE_CODE_PLUGINS=session-platform",
 		"K3S_MCP_TOKEN=test-k3s-mcp-token",
 		"K3S_MCP_URL=https://k3s-mcp.example.test/mcp",
 		"CLAUDE_CODE_PLUGIN_CACHE_DIR="+cacheDir,
@@ -127,6 +165,7 @@ printf 'claude:%s\n' "$*" >> "$CALL_LOG"
 		"PATH="+dir+":"+os.Getenv("PATH"),
 		"DATA_PLANE_WORKLOAD=claude-code",
 		"DATA_PLANE_AGENT_BIN="+agent,
+		"CLAUDE_CODE_PLUGINS=session-platform",
 		"K3S_MCP_TOKEN=test-k3s-mcp-token",
 		"K3S_MCP_URL="+mcpURL,
 		"EXPECTED_K3S_MCP_URL="+mcpURL,
@@ -184,7 +223,7 @@ printf 'agent\n' >> "$CALL_LOG"
 	return string(data), output, err
 }
 
-// AC-L1: a session's own selection replaces the platform plugin, each name is
+// AC-L1: a session's own selection is what gets installed, each name
 // installed from the platform marketplace in order, and the agent sees the
 // same list so it enables exactly what was installed.
 func TestEntrypointInstallsTheSessionsPluginSelection(t *testing.T) {

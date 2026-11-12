@@ -23,7 +23,8 @@ const (
 	defaultCodexTaskCredentialsSecret = "codex-task-credentials"
 	defaultCodexTaskConfigConfigMap   = "codex-task-config"
 	// DefaultCodexPlugins is the marketplace plugin whose skills a codex-chat
-	// or codex-task session gets when the deployment names none (AC-J5, AC-M1).
+	// session gets when it chooses none and the deployment names none (AC-J5).
+	// codex-task has no default: a session that chooses none gets no plugins.
 	DefaultCodexPlugins = "codex-session"
 
 	// CodexModelEnvVar carries the session's model, or the ConfigMap's optional
@@ -106,18 +107,10 @@ func WithCodexTaskConfigConfigMap(name string) Option {
 	}
 }
 
-// WithCodexTaskPlugins names the marketplace plugins codex-task sessions get.
-func WithCodexTaskPlugins(plugins string) Option {
-	return func(o *ClientOrchestrator) {
-		if plugins = strings.TrimSpace(plugins); plugins != "" {
-			o.codexTask.plugins = plugins
-		}
-	}
-}
-
 // codexProfile is what the two codex types configure separately: their own
-// Secret, ConfigMap and plugin bundle, so a codex-task deployment never hands
-// a chat session its token or skills (AC-M1).
+// Secret, ConfigMap and default plugin bundle (codex-chat's alone; codex-task
+// has none), so a codex-task deployment never hands a chat session its token
+// or skills (AC-M1).
 type codexProfile struct {
 	credentialsSecret string
 	configConfigMap   string
@@ -167,7 +160,8 @@ func (o *ClientOrchestrator) codexPod(container *corev1.Container, sessionID str
 // codexK3SMCPProxy is minimax-code's K3s MCP proxy moved from the helper pod
 // into the session pod, bound to loopback (AC-J6). Its seeder clones the
 // marketplace for the plugin skills (AC-J5): the session's own selection when
-// it made one (AC-L1), otherwise the type's deployment default.
+// it made one (AC-L1), otherwise the type's default — codex-chat's
+// CODEX_PLUGINS, and for codex-task nothing.
 func (o *ClientOrchestrator) codexK3SMCPProxy(sessionID, image string, profile codexProfile, plugins []string) corev1.Container {
 	port := strconv.Itoa(k3sMCPProxyPort)
 	selected := profile.plugins

@@ -114,7 +114,6 @@ func main() {
 		k8s.WithWorkloadImage(session.WorkloadTypeCodexTask, cfg.codexTask.image),
 		k8s.WithCodexTaskCredentialsSecret(cfg.codexTask.credentialsSecret),
 		k8s.WithCodexTaskConfigConfigMap(cfg.codexTask.configConfigMap),
-		k8s.WithCodexTaskPlugins(cfg.codexTask.plugins),
 		k8s.WithClaudeCodeAuthMode(cfg.claudeAuth.mode),
 		k8s.WithApprovalGatewayURL(cfg.approvalGatewayURL),
 		k8s.WithSharedVolume(cfg.sharedVolumeStorageClass, cfg.sharedVolumeSize),
