@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -215,6 +216,49 @@ func TestClaudeWriteIsNonBlockingAndSerial(t *testing.T) {
 	}
 	if runs, maxActive := runner.snapshot(); len(runs) != 2 || maxActive != 1 {
 		t.Fatalf("runs=%d maxActive=%d, want 2 and 1", len(runs), maxActive)
+	}
+}
+
+// AC-E2: a write chooses its own turn's permission mode through the query
+// parameter; the next write without one runs in the runner's default again, and
+// a mode outside the allowlist is refused before anything is queued.
+func TestClaudeWritePermissionModeIsPerTurn(t *testing.T) {
+	runner := newFakeClaudeRunner()
+	c, srv := newClaudeTestServer(t, runner, platformDefaultModel, false, nil)
+
+	for _, mode := range []string{"default", "bypassPermissions", "plan", "dontAsk"} {
+		writeWithPermissionMode(t, srv, "refused", mode, http.StatusBadRequest)
+	}
+	writeWithPermissionMode(t, srv, "edit it", "acceptEdits", http.StatusOK)
+	first := receiveClaudeRun(t, runner.started)
+	waitClaudeIdle(t, c)
+	writeViaHTTP(t, srv, "plain", http.StatusOK)
+	second := receiveClaudeRun(t, runner.started)
+	waitClaudeIdle(t, c)
+
+	wantFirst := []string{defaultClaudeRunnerBinary, "--permission-mode", "acceptEdits", "--", "edit it"}
+	wantSecond := []string{defaultClaudeRunnerBinary, "--resume", "--", "plain"}
+	if !reflect.DeepEqual(first.argv, wantFirst) {
+		t.Fatalf("first argv = %q, want %q", first.argv, wantFirst)
+	}
+	if !reflect.DeepEqual(second.argv, wantSecond) {
+		t.Fatalf("second argv = %q, want %q", second.argv, wantSecond)
+	}
+	if runs, _ := runner.snapshot(); len(runs) != 2 {
+		t.Fatalf("runs = %d, want 2: a refused mode must not queue a turn", len(runs))
+	}
+}
+
+func writeWithPermissionMode(t *testing.T, srv *httptest.Server, payload, mode string, wantStatus int) {
+	t.Helper()
+	target := srv.URL + "/write?" + url.Values{claudePermissionModeParam: {mode}}.Encode()
+	resp, err := http.Post(target, "application/octet-stream", strings.NewReader(payload))
+	if err != nil {
+		t.Fatalf("POST /write: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != wantStatus {
+		t.Fatalf("POST /write?permissionMode=%s status = %d, want %d", mode, resp.StatusCode, wantStatus)
 	}
 }
 

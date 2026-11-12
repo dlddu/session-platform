@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import os from "node:os";
 import path from "node:path";
 import {
+  DEFAULT_PERMISSION_MODE,
   HEADLESS_DENIAL,
   NOTICE_TYPE,
   PLATFORM_DEFAULT_MODEL,
@@ -23,17 +24,34 @@ import {
 } from "./lib.mjs";
 
 test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
-  assert.deepEqual(parseArgs(["--model", "claude-opus-5-5", "--effort", "max", "--resume", "--", "--help me"]), {
-    model: "claude-opus-5-5",
-    effort: "max",
-    resume: true,
-    prompt: "--help me",
-    checkCli: false,
-  });
+  assert.deepEqual(
+    parseArgs([
+      "--model",
+      "claude-opus-5-5",
+      "--effort",
+      "max",
+      "--permission-mode",
+      "acceptEdits",
+      "--resume",
+      "--",
+      "--help me",
+    ]),
+    {
+      model: "claude-opus-5-5",
+      effort: "max",
+      permissionMode: "acceptEdits",
+      resume: true,
+      prompt: "--help me",
+      checkCli: false,
+    },
+  );
   const bare = parseArgs(["--", "hi"]);
   assert.equal(bare.model, PLATFORM_DEFAULT_MODEL);
   assert.equal(bare.effort, null);
   assert.equal(bare.resume, false);
+  assert.equal(bare.permissionMode, DEFAULT_PERMISSION_MODE);
+  assert.equal(DEFAULT_PERMISSION_MODE, "auto");
+  assert.equal(parseArgs(["--permission-mode", "auto", "--", "x"]).permissionMode, "auto");
   assert.equal(parseArgs(["--check-cli"]).checkCli, true);
 });
 
@@ -44,6 +62,11 @@ test("parseArgs refuses what the agent never sends", () => {
     ["--model"],
     ["--model", "", "--", "x"],
     ["--effort", "turbo", "--", "x"],
+    ["--permission-mode", "--", "x"],
+    ["--permission-mode", "default", "--", "x"],
+    ["--permission-mode", "bypassPermissions", "--", "x"],
+    ["--permission-mode", "plan", "--", "x"],
+    ["--permission-mode", "dontAsk", "--", "x"],
     ["--continue", "--", "x"],
     ["hello"],
   ]) {
@@ -81,7 +104,7 @@ test("queryOptions spells out what the SDK defaults differently from the CLI", (
   });
   assert.deepEqual(base.systemPrompt, { type: "preset", preset: "claude_code" });
   assert.deepEqual(base.settingSources, ["user", "project", "local"]);
-  assert.equal(base.permissionMode, "default");
+  assert.equal(base.permissionMode, "auto");
   assert.equal(base.includePartialMessages, true);
   assert.equal(base.canUseTool, canUseTool);
   assert.equal(base.pathToClaudeCodeExecutable, "/usr/local/bin/claude");
@@ -95,7 +118,9 @@ test("queryOptions spells out what the SDK defaults differently from the CLI", (
     cwd: "/w",
     claudeBin: "/c",
     plan: { kind: "resume", sessionId: "s" },
+    permissionMode: "acceptEdits",
   });
+  assert.equal(resumed.permissionMode, "acceptEdits");
   assert.equal(resumed.model, "claude-opus-5-5");
   assert.equal(resumed.effort, "high");
   assert.equal(resumed.resume, "s");

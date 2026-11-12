@@ -44,8 +44,9 @@ const (
 // Each turn is one claude-runner process (AC-E2): `node` running this script,
 // then `--model <effective model>` and `--effort` when the session has them,
 // `--resume` only after a successful run, and `-- ` followed by the prompt as a
-// single positional argument. Permission mode, partial messages and the system
-// prompt are the runner's own, so they are not on this command line at all.
+// single positional argument. These writes choose no permission mode, so the
+// runner starts them in auto with no flag; partial messages and the system
+// prompt are the runner's own and never on this command line.
 const (
 	e2RunnerScript   = "/opt/claude-runner/runner.mjs"
 	e2InvariantArgv  = " -- "
@@ -275,8 +276,8 @@ func TestClaudePromptInvocation_ExactArgvOneShotAndSerialised(t *testing.T) {
 		}
 		for _, flag := range []string{"--permission-mode", "--dangerously-skip-permissions", "--continue"} {
 			if strings.Contains(argv, flag) {
-				t.Fatalf("invocation argv carried %s: %q — permission policy and resume are the runner's, "+
-					"not flags the agent passes (AC-E2 구현 결정)", flag, argv)
+				t.Fatalf("invocation argv carried %s: %q — a write without a permission mode runs in the "+
+					"runner's auto, and resume is the runner's (AC-E2 구현 결정)", flag, argv)
 			}
 		}
 	}

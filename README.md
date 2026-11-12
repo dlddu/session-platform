@@ -91,9 +91,12 @@ docs/                 value / PRD·AC / journeys / mockups / retired CRIU verifi
 - **Workloads**: `shell` (default) runs one PTY shell; `claude-code` runs one
   Claude Agent SDK turn per prompt (`claude-runner`, which drives the pinned
   Claude Code CLI) through a bounded serial queue. Each turn resumes the SDK
-  session id it recorded, and tool requests no settings rule decides go to the
-  SDK's `canUseTool` callback, where the platform allows its built-in tools and
-  the session's own plugin tools and denies the rest; partial messages are
+  session id it recorded and runs in the `auto` permission mode (the CLI's
+  model classifier decides what the settings rules leave open) unless its write
+  chose `acceptEdits` through the optional `permissionMode` field, for that turn
+  only. Tool requests that would ask a person go to the SDK's `canUseTool`
+  callback, where the platform allows its built-in tools and the session's own
+  plugin tools and denies the rest; partial messages are
   enabled and the data plane incrementally redacts and UTF-8-normalizes assistant
   text deltas and diagnostic stderr before appending them to the session
   scrollback. Type and Claude model are immutable session

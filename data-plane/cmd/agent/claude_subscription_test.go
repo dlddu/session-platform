@@ -18,6 +18,30 @@ func TestClaudeArgvCarriesEffort(t *testing.T) {
 	}
 }
 
+// AC-E2: a write's permission mode comes before the prompt delimiter, and a
+// turn whose write chose none carries no flag, so the runner starts it in auto.
+func TestClaudeArgvCarriesPermissionMode(t *testing.T) {
+	got := (claudeCLI{effort: "max"}).argvWithPermissionMode(defaultClaudeRunnerBinary, "opus", "p", true, "acceptEdits")
+	want := []string{
+		defaultClaudeRunnerBinary, "--model", "opus", "--effort", "max",
+		"--permission-mode", "acceptEdits", "--resume", "--", "p",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv = %q, want %q", got, want)
+	}
+	if got := (claudeCLI{}).argv(defaultClaudeRunnerBinary, platformDefaultModel, "p", false); slicesContain(got, "--permission-mode") {
+		t.Fatalf("no mode means no flag: %q", got)
+	}
+	for mode, want := range map[string]bool{
+		"auto": true, "acceptEdits": true,
+		"": false, "default": false, "plan": false, "dontAsk": false, "bypassPermissions": false, "AUTO": false,
+	} {
+		if got := (claudeCLI{}).validPermissionMode(mode); got != want {
+			t.Fatalf("validPermissionMode(%q) = %v, want %v", mode, got, want)
+		}
+	}
+}
+
 func setClaudeGatewayEnv(t *testing.T) {
 	t.Setenv("ANTHROPIC_BASE_URL", claudeProxyBaseURL)
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", claudeProxyPlaceholderToken)

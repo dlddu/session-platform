@@ -22,13 +22,15 @@ interactive shell and Claude Code workloads.
   environment, cwd and shell variables/functions/aliases are not carried over.
 - `claude-code` launches no resident shell. Write asynchronously queues a
   prompt for one serial worker; each job executes
-  `claude-runner [--model MODEL] [--effort EFFORT] [--resume] -- PROMPT`
+  `claude-runner [--model MODEL] [--effort EFFORT] [--permission-mode MODE] [--resume] -- PROMPT`
   (`CLAUDE_RUNNER_BIN`, default `/usr/local/bin/claude-runner`). The runner
   ([`claude-runner/`](claude-runner/)) runs one Claude Agent SDK `query()`
   that drives the pinned Claude Code CLI (`CLAUDE_CODE_BIN`, default `claude`
   on `PATH`) with Claude Code's own system prompt, all setting sources,
-  partial messages and `permissionMode: default`; tool requests no settings
-  rule decides go to the SDK's `canUseTool` callback, which allows the
+  partial messages and `permissionMode: auto` — or `acceptEdits` when the
+  write that queued the turn chose it through `POST /write?permissionMode=…`
+  (no other mode is accepted, and the body stays the raw prompt). Tool requests
+  that would ask a person go to the SDK's `canUseTool` callback, which allows the
   platform's built-in tools and the session's own plugin MCP tools and denies
   the rest with a `[session-platform: denied …]` line in the output.
   `CLAUDE_CODE_EFFORT` (`low`, `medium`, `high`, `xhigh` or `max`, AC-E8) adds
@@ -352,7 +354,8 @@ that enables only the session's chosen `<name>@dlddu-plugins` plugins (none
 unless it chose some) and allows only the coding
 tools `Read`, `Write`, `Edit`, `Glob`, `Grep`, and `Bash`; the agent does not use
 `--dangerously-skip-permissions`. Every invocation starts Claude Code in `auto`
-permission mode through an explicit CLI flag.
+permission mode unless its write chose `acceptEdits`; the runner sets the mode
+as an SDK option, so no prompt can change it.
 
 Projected assistant text plus diagnostic stderr from one Claude invocation is
 capped at 16 MiB after incremental redaction, including the terminal line

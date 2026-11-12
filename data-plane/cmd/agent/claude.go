@@ -47,8 +47,12 @@ const (
 	// names, comma-separated. Unset means no plugins.
 	// Keep in sync with control-plane/internal/adapter/k8s
 	// (ClaudeCodePluginsEnvVar) and entrypoint.sh.
-	claudePluginsEnv           = "CLAUDE_CODE_PLUGINS"
-	maxClaudePromptBytes       = 1 << 20
+	claudePluginsEnv     = "CLAUDE_CODE_PLUGINS"
+	maxClaudePromptBytes = 1 << 20
+	// claudePermissionModeParam is the /write query parameter that names the
+	// turn's permission mode (AC-E2); the body stays the raw prompt. Keep in
+	// sync with control-plane/internal/adapter/agent (PermissionModeParam).
+	claudePermissionModeParam  = "permissionMode"
 	maxClaudeQueuedPrompts     = 64
 	maxClaudeQueuedBytes       = 8 << 20
 	maxClaudeRunOutputBytes    = 16 << 20
@@ -192,6 +196,9 @@ type claudeRuntimeState struct {
 
 type promptJob struct {
 	prompt string
+	// permissionMode is the mode the write chose for this turn (AC-E2), or ""
+	// for the runner's default.
+	permissionMode string
 }
 
 // claudeWorkload owns one session's one-shot Claude invocations. A single
@@ -367,7 +374,16 @@ func (c *claudeWorkload) Close() {
 	<-c.workerDone
 }
 
-func (c *claudeWorkload) enqueue(prompt string) error {
+func (c *claudeWorkload) enqueue(prompt, permissionMode string) error {
+	if permissionMode != "" {
+		moder, ok := c.cli.(permissionModer)
+		if !ok {
+			return errPermissionModeUnsupported
+		}
+		if !moder.validPermissionMode(permissionMode) {
+			return errPermissionModeUnknown
+		}
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	switch {
@@ -382,7 +398,7 @@ func (c *claudeWorkload) enqueue(prompt string) error {
 	case c.queue.Len() >= maxClaudeQueuedPrompts || c.queuedBytes+len(prompt) > maxClaudeQueuedBytes:
 		return errClaudeQueueFull
 	}
-	c.queue.PushBack(promptJob{prompt: prompt})
+	c.queue.PushBack(promptJob{prompt: prompt, permissionMode: permissionMode})
 	c.queuedBytes += len(prompt)
 	c.cond.Signal()
 	return nil
@@ -490,7 +506,7 @@ func (c *claudeWorkload) runWorker() {
 		stderr := newUTF8NormalizingWriter(output)
 		runCtx, cancelRun := context.WithTimeout(c.ctx, c.runTimeout)
 		stopSlotWatch := c.watchAuthSlot()
-		err := c.runner.Run(runCtx, c.argv(prompt, resume), runnerOptions{
+		err := c.runner.Run(runCtx, c.argv(prompt, resume, job.permissionMode), runnerOptions{
 			Dir:    c.workDir,
 			Env:    environmentWithHome(c.homeDir),
 			Stdout: stdout,
@@ -749,22 +765,32 @@ func fromLoopback(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func (c *claudeWorkload) argv(prompt string, resume bool) []string {
+// argv builds the turn's invocation. enqueue has already refused a permission
+// mode the CLI does not take.
+func (c *claudeWorkload) argv(prompt string, resume bool, permissionMode string) []string {
+	if moder, ok := c.cli.(permissionModer); ok && permissionMode != "" {
+		return moder.argvWithPermissionMode(c.binary, c.model, prompt, resume, permissionMode)
+	}
 	return c.cli.argv(c.binary, c.model, prompt, resume)
 }
 
 // claudeRunnerArgv builds one claude-runner invocation (AC-E2). effort is
-// AC-E8's session effort, empty for the CLI default. --resume follows AC-E4:
-// only after the first successful run; the runner then resumes the session id
-// it recorded. Permission mode, partial messages and the system prompt are the
-// runner's, not flags here, so no argv can change them.
-func claudeRunnerArgv(binary, model, effort, prompt string, resume bool) []string {
+// AC-E8's session effort, empty for the CLI default. permissionMode is the
+// write's choice, already checked against claudePermissionModes; empty leaves
+// the runner's auto. --resume follows AC-E4: only after the first successful
+// run; the runner then resumes the session id it recorded. Partial messages and
+// the system prompt are the runner's, not flags here, so no argv can change
+// them, and the runner itself refuses a mode outside its allowlist.
+func claudeRunnerArgv(binary, model, effort, permissionMode, prompt string, resume bool) []string {
 	argv := []string{binary}
 	if model != "" && model != platformDefaultModel {
 		argv = append(argv, "--model", model)
 	}
 	if effort != "" {
 		argv = append(argv, "--effort", effort)
+	}
+	if permissionMode != "" {
+		argv = append(argv, "--permission-mode", permissionMode)
 	}
 	if resume {
 		argv = append(argv, "--resume")
@@ -1397,8 +1423,10 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 			http.Error(w, "read prompt: "+c.redactString(err.Error()), http.StatusBadRequest)
 			return
 		}
-		if err := c.enqueue(string(prompt)); err != nil {
+		if err := c.enqueue(string(prompt), r.URL.Query().Get(claudePermissionModeParam)); err != nil {
 			switch {
+			case errors.Is(err, errPermissionModeUnsupported), errors.Is(err, errPermissionModeUnknown):
+				http.Error(w, err.Error(), http.StatusBadRequest)
 			case errors.Is(err, errClaudeQueueFull):
 				http.Error(w, err.Error(), http.StatusTooManyRequests)
 			case errors.Is(err, errClaudeOutputFull):

@@ -53,6 +53,16 @@ func newCodexTestServer(t *testing.T, runner commandRunner, model string, restor
 	return c, srv
 }
 
+// AC-E2: the permission mode is claude-code's; codex refuses a write naming one.
+func TestCodexRefusesPermissionMode(t *testing.T) {
+	runner := newFakeClaudeRunner()
+	_, srv := newCodexTestServer(t, runner, "gpt-6", false, t.TempDir(), codexCLI{})
+	writeWithPermissionMode(t, srv, "hi", "auto", http.StatusBadRequest)
+	if runs, _ := runner.snapshot(); len(runs) != 0 {
+		t.Fatalf("runs = %d, want 0", len(runs))
+	}
+}
+
 // AC-J2: each write is one runner invocation in the session workspace with
 // the session HOME; the model is always named, --resume follows AC-E4, and a
 // prompt that looks like a flag stays a prompt.
@@ -489,7 +499,7 @@ func TestNewCodexTaskWorkloadFromEnv(t *testing.T) {
 	if w.authSlot == nil || w.cli.workloadName() != workloadCodexTask {
 		t.Fatalf("slot = %v, workload = %s", w.authSlot, w.cli.workloadName())
 	}
-	got := w.argv("p", true)
+	got := w.argv("p", true, "")
 	want := []string{"/opt/runner", "--mode", "task", "--model", "gpt-6", "--effort", "xhigh", "--resume", "--", "p"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("argv = %q, want %q", got, want)

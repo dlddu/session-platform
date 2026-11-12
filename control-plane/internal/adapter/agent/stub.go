@@ -28,7 +28,7 @@ func NewStubClient() *StubClient {
 	return &StubClient{bufs: map[string][]byte{}}
 }
 
-func (c *StubClient) Write(_ context.Context, pod, payload string) error {
+func (c *StubClient) Write(_ context.Context, pod, payload, _ string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.bufs[pod] = append(c.bufs[pod], payload...)
