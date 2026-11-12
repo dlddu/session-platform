@@ -1040,7 +1040,7 @@ func (s *Service) reinstate(ctx context.Context, frozen *session.Session) error 
 	}
 	defer s.unlockBestEffort(frozen.ID, token)
 	if _, err := s.store.Get(ctx, frozen.ID); err == nil {
-		return fmt.Errorf("%w: session %s still exists", session.ErrConflict, frozen.ID)
+		return fmt.Errorf("%w: %s", session.ErrAlreadyExists, frozen.ID)
 	} else if !errors.Is(err, session.ErrNotFound) {
 		return err
 	}
