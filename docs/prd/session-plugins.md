@@ -11,24 +11,28 @@
 
 ## 용어
 - **플랫폼 마켓플레이스** — `dlddu/plugin-marketplace`(이름 `dlddu-plugins`). 배포가 `plugin-marketplace-url`로 다른 원격을 가리킬 수 있지만 마켓플레이스는 하나다.
-- **타입 기본 플러그인** — 세션이 플러그인을 고르지 않았을 때 그 타입이 받는 것: `claude-code`는 `session-platform`(AC-E6), `codex-chat`은 배포의 `CODEX_PLUGINS`(기본 `codex-session`, AC-J5), `minimax-code`는 `mcp-servers`(AC-G5).
+- **타입 기본 플러그인** — 세션이 플러그인을 고르지 않았을 때 그 타입이 받는 것: `codex-chat`만 배포의 `CODEX_PLUGINS`(기본 `codex-session`, AC-J5)가 있고, `claude-code`·`codex-task`·`minimax-code`는 **없다** — 고르지 않으면 플러그인 없이 뜬다(2026-11-12 사용자 결정).
 - **플러그인 선택** — 생성 요청의 `plugins`: 플랫폼 마켓플레이스의 플러그인 이름 목록(`@마켓플레이스` 접미사 없음).
 
 ## Acceptance Criteria
 
 ### AC-L1: 생성 시 플러그인 선택 — 타입 기본값을 대체하고, 세션 수명 동안 고정
 - **설명**: `POST /sessions`는 선택 필드 `plugins`(문자열 배열)를 받는다.
-  - **생략**이면 지금과 같다 — 세션은 타입 기본 플러그인을 받고, 응답·저장 레코드에 `plugins`가 없다.
-  - **지정**하면 그 목록이 그 세션이 받는 플러그인의 **전부**다 — 타입 기본값에 더하지 않고 **대체**한다(2026-11-07 사용자 결정). 기본 플러그인도 계속 쓰려면 목록에 함께 적는다. 예: `claude-code`에 `["development"]`만 주면 `session-platform` 플러그인은 설치되지 않는다.
+  - **생략**이면 세션은 타입 기본 플러그인을 받고(`codex-chat`만 있다 — 나머지 타입은 플러그인 없이 뜬다), 응답·저장 레코드에 `plugins`가 없다.
+  - **지정**하면 그 목록이 그 세션이 받는 플러그인의 **전부**다 — 타입 기본값에 더하지 않고 **대체**한다(2026-11-07 사용자 결정). 기본 플러그인도 계속 쓰려면 목록에 함께 적는다. 예: `codex-chat`에 `["development"]`만 주면 `codex-session` 플러그인은 설치되지 않는다.
   - 받는 타입은 마켓플레이스 플러그인을 싣는 `claude-code`·`codex-chat`·`codex-task`·`minimax-code`다. `shell`에 목록을 주면 **400**이다 *(2026-11-05 제거된 `approval-gated`도 그랬다 — AC-F6)*. `GET /config`의 `workloadTypes[].takesPlugins`가 이를 알린다.
   - 목록은 1~16개, 중복 없이, 각 이름은 `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`다. `null`·빈 배열·배열이 아닌 값·중복·형식 위반은 pod를 만들기 **전에** **400**이다. 이름이 마켓플레이스에 실제로 있는지는 control plane이 보지 않는다(아래 AC-L1 설치 지점).
   - 선택은 모델(AC-E6)처럼 **불변 메타데이터**다 — 세션 레코드에 저장되고, 동결·복원을 건너 유지되며, 복원 pod는 타입 기본값이 아니라 그 세션의 선택으로 뜬다. 기존 세션 경로로 바꿀 수 없다.
-  - **설치 지점**은 타입마다 그 타입이 이미 플러그인을 받던 자리 하나다 — `claude-code`는 워크로드 컨테이너의 `CLAUDE_CODE_PLUGINS`(진입점이 각 이름을 `<이름>@dlddu-plugins`로 설치하고, 에이전트가 관리형 설정에서 같은 목록만 켠다), `codex-chat`·`codex-task`는 세션 파드 `k3s-mcp-proxy` 사이드카의 시더(`CODEX_PLUGINS` 대신), `minimax-code`는 헬퍼 파드 `k3s-mcp-proxy`의 시더. 선택을 고르지 않은 세션에는 그 변수가 아예 없다.
+  - **설치 지점**은 타입마다 그 타입이 이미 플러그인을 받던 자리 하나다 — `claude-code`는 워크로드 컨테이너의 `CLAUDE_CODE_PLUGINS`(진입점이 각 이름을 `<이름>@dlddu-plugins`로 설치하고, 에이전트가 관리형 설정에서 같은 목록만 켠다), `codex-chat`·`codex-task`는 세션 파드 `k3s-mcp-proxy` 사이드카의 시더(`codex-chat`은 `CODEX_PLUGINS` 대신), `minimax-code`는 헬퍼 파드 `k3s-mcp-proxy`의 시더. 선택을 고르지 않은 `claude-code`·`minimax-code` 세션에는 그 변수가 아예 없고, 진입점은 부트스트랩(토큰 요청·마켓플레이스 추가·설치)을 통째로 건너뛰며 관리형 설정은 아무 플러그인도 켜지 않는다. 시더는 목록이 비면 마켓플레이스를 받지 않고 빈 번들을 내놓는다.
   - 마켓플레이스에 없는 이름은 그 설치 지점에서 실패한다 — `claude-code`는 진입점이 멈춰 에이전트가 닿지 않으므로 **생성이 실패**하고, `codex-chat`·`codex-task`·`minimax-code`는 지금의 마켓플레이스 실패와 똑같이 **플러그인 없이** 세션이 뜬다. `codex-chat`·`codex-task`의 K3s MCP는 사이드카가 직접 잇으므로 그대로 남지만, `minimax-code`의 K3s MCP 서버는 **선택된 플러그인이 선언한 것**에서만 등록되므로(AC-G5) 번들이 실패하면 K3s 도구도 없다. 같은 이유로 `minimax-code` 선택에서 K3s 서버를 선언한 플러그인(기본 `mcp-servers`)을 빼면 K3s 도구가 사라진다.
   - 여러 플러그인이 같은 MCP 서버(예: K3s)를 선언하면 `minimax-code`는 한 번만 등록한다. 같은 이름을 다르게 선언한 뒤쪽 플러그인의 서버는 경고와 함께 빠진다 — 겹치는 선언이 세션 기동을 실패시키지 않는다.
 - **달성 가치**: V8
 - **구체화 대상**: AC-E1(·G1·J1)의 타입 선택 — 같은 선택 축을 타입 안의 플러그인까지 넓힌 것. AC-E6·AC-J5·AC-G5의 「플랫폼이 정한 플러그인」은 이제 **타입 기본값**이다.
 - **검증 방법**: 세 타입 각각에 목록을 주어 만든 세션의 응답·레코드에 그 목록이 있고 해당 설치 지점 컨테이너에만 그 목록이 실리며, 생략한 세션에는 실리지 않음을 확인한다. 동결 뒤 복원한 세션이 같은 목록을 유지하고 복원 pod에도 실림을 확인한다. 위의 잘못된 요청이 모두 400이고 pod가 생기지 않음을 확인한다.
+
+## 결정 사항 (2026-11-12, 사용자)
+- **`codex-chat` 밖의 타입 기본 플러그인을 없앤다.** 운영 마켓플레이스에서 `session-platform` 플러그인이 빠져 `claude-code` 기본 세션이 진입점 설치 실패로 뜨지 못한 것이 계기다. 이제 `claude-code`·`codex-task`·`minimax-code`는 `plugins`를 생략하면 플러그인 없이 뜬다 — `CODEX_TASK_PLUGINS` 설정도 없앴다. `codex-chat`은 장기 채팅 세션(PocketAide)이 `codex-session` 스킬에 기대므로 `CODEX_PLUGINS`(기본 `codex-session`)를 유지한다. 생략한 `minimax-code` 세션은 K3s MCP 서버를 선언한 플러그인이 없으므로 K3s 도구도 없다.
+- 이미 저장된 세션 중 `plugins`가 없는 것은 다음 복원부터 플러그인 없이 뜬다(복원 pod는 그 시점의 타입 기본값을 따른다).
 
 ## 결정 사항 (2026-11-07, 사용자)
 - **지정은 타입 기본값을 대체한다** — 추가가 아니다. 「정확히 이 플러그인들」이 세션 수명 내내 읽기 쉽고, 기본 플러그인을 빼고 싶은 경우도 같은 필드 하나로 표현된다.

@@ -39,7 +39,6 @@ const (
 	miniMaxMarketplaceDirEnv = "MINIMAX_CODE_MARKETPLACE_DIR"
 
 	defaultMiniMaxMarketplaceURL = "https://github.com/dlddu/plugin-marketplace.git"
-	defaultMiniMaxPlugins        = "mcp-servers"
 
 	miniMaxSeedStateBootstrapping = "bootstrapping"
 	miniMaxSeedStateReady         = "ready"
@@ -120,7 +119,7 @@ func newMiniMaxMarketplaceSeeder(upstream http.Handler, mcpPath string, logger *
 	}
 	s := &miniMaxMarketplaceSeeder{
 		marketplaceURL: env(miniMaxMarketplaceURLEnv, defaultMiniMaxMarketplaceURL),
-		plugins:        splitPluginList(env(miniMaxPluginsEnv, defaultMiniMaxPlugins)),
+		plugins:        splitPluginList(os.Getenv(miniMaxPluginsEnv)),
 		workDir:        os.Getenv(miniMaxMarketplaceDirEnv),
 		logger:         logger,
 		clone:          gitCloneMarketplace,
@@ -180,8 +179,12 @@ func (s *miniMaxMarketplaceSeeder) current() miniMaxSeedBundle {
 	return s.bundle
 }
 
-// bootstrap is one clone, read into a ready bundle.
+// bootstrap is one clone, read into a ready bundle. A session that chose no
+// plugins (AC-L1) has nothing to clone: its bundle is ready and empty.
 func (s *miniMaxMarketplaceSeeder) bootstrap(ctx context.Context) (miniMaxSeedBundle, error) {
+	if len(s.plugins) == 0 {
+		return miniMaxSeedBundle{State: miniMaxSeedStateReady, Plugins: []miniMaxSeedPlugin{}}, nil
+	}
 	token, err := s.githubToken(ctx)
 	if err != nil {
 		return miniMaxSeedBundle{}, err

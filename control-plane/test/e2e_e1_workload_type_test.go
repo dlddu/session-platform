@@ -125,7 +125,8 @@ func TestWorkloadType_ClaudeCodeSessionRunsTheClaudeCLI(t *testing.T) {
 	}
 }
 
-// Pod Ready already proves the bootstrap ran to completion — entrypoint.sh is
+// The session chooses the fixture's plugin: one that chooses none has nothing
+// to bootstrap (AC-L1). Pod Ready already proves the bootstrap ran to completion — entrypoint.sh is
 // `set -eu`, so a failed token request or a failed `claude plugin marketplace
 // add` kills the container before the agent starts. What this test adds is
 // *which remote answered*: the in-cluster fixture carries a marker string that
@@ -139,7 +140,7 @@ func TestWorkloadType_ClaudeCodeSessionRunsTheClaudeCLI(t *testing.T) {
 // `claude plugin marketplace list`).
 func TestWorkloadType_ClaudeCodePluginBootstrapUsedTheInClusterMarketplace(t *testing.T) {
 	status, s := createTyped(t, map[string]any{
-		"name": uniqueName(t), "workloadType": "claude-code",
+		"name": uniqueName(t), "workloadType": "claude-code", "plugins": []string{"session-platform"},
 	})
 	if status != http.StatusCreated {
 		t.Fatalf("create claude-code session: status=%d", status)

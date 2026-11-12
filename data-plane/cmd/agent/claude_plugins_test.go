@@ -9,10 +9,14 @@ import (
 	"testing"
 )
 
-// AC-L1: unset keeps the platform plugin; a selection is qualified with the
-// platform marketplace, kept in order, and refused when malformed.
+// testClaudePlugin is a managed plugin the tests enable; the platform no longer
+// enables any by default (AC-L1).
+const testClaudePlugin = "session-platform@dlddu-plugins"
+
+// AC-L1: unset means no plugins; a selection is qualified with the platform
+// marketplace, kept in order, and refused when malformed.
 func TestClaudePluginsFromEnv(t *testing.T) {
-	t.Run("unset is the platform plugin", func(t *testing.T) {
+	t.Run("unset is no plugins", func(t *testing.T) {
 		// t.Setenv restores the variable once the test ends.
 		t.Setenv(claudePluginsEnv, "")
 		os.Unsetenv(claudePluginsEnv)
@@ -20,8 +24,8 @@ func TestClaudePluginsFromEnv(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := []string{claudeSessionPlatformPlugin}; !reflect.DeepEqual(got, want) {
-			t.Fatalf("plugins = %q, want %q", got, want)
+		if len(got) != 0 {
+			t.Fatalf("plugins = %q, want none", got)
 		}
 	})
 	t.Run("selection", func(t *testing.T) {
@@ -49,7 +53,7 @@ func TestClaudePluginsFromEnv(t *testing.T) {
 // surface is as valid as the single platform plugin.
 func TestClaudeManagedSettingsFollowThePodsSelection(t *testing.T) {
 	homeDir := t.TempDir()
-	if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{claudeSessionPlatformPlugin}}); err != nil {
+	if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{testClaudePlugin}}); err != nil {
 		t.Fatalf("first boot: %v", err)
 	}
 	selection := []string{"development@dlddu-plugins", "learning@dlddu-plugins"}
@@ -69,6 +73,31 @@ func TestClaudeManagedSettingsFollowThePodsSelection(t *testing.T) {
 	want := map[string]bool{"development@dlddu-plugins": true, "learning@dlddu-plugins": true}
 	if !reflect.DeepEqual(settings.EnabledPlugins, want) {
 		t.Fatalf("enabled plugins = %v, want exactly %v", settings.EnabledPlugins, want)
+	}
+}
+
+// A session that chose no plugins boots, archives and restores with none, and
+// a restore drops the plugins an older archive enabled (AC-L1).
+func TestClaudeManagedSettingsWithoutPlugins(t *testing.T) {
+	homeDir := t.TempDir()
+	if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{testClaudePlugin}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureClaudeManagedSettings(homeDir, toolSurface{}); err != nil {
+		t.Fatalf("restore boot without plugins: %v", err)
+	}
+	if err := validateClaudeManagedSettings(homeDir); err != nil {
+		t.Fatalf("settings without plugins are invalid: %v", err)
+	}
+	settings, err := loadClaudeManagedSettings(homeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(settings.EnabledPlugins) != 0 {
+		t.Fatalf("enabled plugins = %v, want none", settings.EnabledPlugins)
+	}
+	if err := ensureClaudeManagedSettings(t.TempDir(), toolSurface{}); err != nil {
+		t.Fatalf("first boot without plugins: %v", err)
 	}
 }
 

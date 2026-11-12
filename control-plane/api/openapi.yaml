@@ -1036,19 +1036,18 @@ components:
             Optional marketplace plugins for this session (AC-L1), by plugin name
             in the platform marketplace (no `@marketplace` suffix). Valid when
             workloadType is `claude-code`, `minimax-code`, `codex-chat` or
-            `codex-task`. Omitted, the session gets its type's platform default
-            (`session-platform` for claude-code, the deployment's `CODEX_PLUGINS`
-            for codex-chat and `CODEX_TASK_PLUGINS` for codex-task,
-            `mcp-servers` for minimax-code). Given, it replaces that default
-            outright — list the default too if the session should keep it.
+            `codex-task`. Omitted, a codex-chat session gets the deployment's
+            `CODEX_PLUGINS` and every other type runs without plugins. Given, it
+            replaces that default outright — list the default too if the session
+            should keep it.
             Names are not checked against the marketplace here: a name it does
             not list fails the pod's plugin bootstrap, which for `claude-code`
             fails the create (its agent never becomes reachable) and for
             `codex-chat`/`codex-task`/`minimax-code` leaves the session running without plugins,
             as any marketplace failure already does. `minimax-code` registers
             its K3s MCP server only from a selected plugin that declares it, so
-            a failed bundle, or a list without such a plugin (default
-            `mcp-servers`), leaves it without K3s tools too. The selection is
+            a failed bundle, an omitted list, or a list without such a plugin
+            (`mcp-servers` declares it), leaves it without K3s tools too. The selection is
             installed again on every restore: a `claude-code` session whose
             plugin has since left the marketplace cannot be restored. `null`, an empty list, a duplicate or an
             invalid name → 400, as is a list on `shell`.

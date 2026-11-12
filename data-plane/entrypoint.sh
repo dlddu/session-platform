@@ -4,13 +4,13 @@ set -eu
 agent_bin="${DATA_PLANE_AGENT_BIN:-/agent}"
 workload="${DATA_PLANE_WORKLOAD:-shell}"
 
-if [ "$workload" = "claude-code" ]; then
+# A claude-code session that chose its plugins (AC-L1) gets exactly those; one
+# that chose none runs without plugins, so there is nothing to bootstrap. The
+# agent enables the same list (claudePluginsFromEnv).
+if [ "$workload" = "claude-code" ] && [ -n "${CLAUDE_CODE_PLUGINS+set}" ]; then
   : "${K3S_MCP_TOKEN:?K3S_MCP_TOKEN is required for Claude plugin bootstrap}"
 
-  # A session that chose its plugins (AC-L1) gets exactly those; otherwise
-  # the platform plugin alone. The agent enables the same list
-  # (claudePluginsFromEnv), so the default must match it.
-  plugins="${CLAUDE_CODE_PLUGINS-session-platform}"
+  plugins="$CLAUDE_CODE_PLUGINS"
   if [ -z "$plugins" ]; then
     echo "CLAUDE_CODE_PLUGINS is set but names no plugin" >&2
     exit 1

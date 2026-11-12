@@ -159,7 +159,7 @@ func newSlotClaudeTestServer(t *testing.T, runner commandRunner, slot *authSlot)
 		Binary:   defaultClaudeRunnerBinary,
 		Runner:   runner,
 		Logger:   testLogger(),
-		Tools:    toolSurface{Plugins: []string{claudeSessionPlatformPlugin}},
+		Tools:    toolSurface{Plugins: []string{testClaudePlugin}},
 		AuthSlot: slot,
 	})
 	if err != nil {

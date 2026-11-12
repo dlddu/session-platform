@@ -105,7 +105,7 @@ func newClaudeTestServerAt(t *testing.T, runner commandRunner, model string, res
 		Runner:      runner,
 		Logger:      testLogger(),
 		Redact:      redact,
-		Tools:       toolSurface{Plugins: []string{claudeSessionPlatformPlugin}},
+		Tools:       toolSurface{Plugins: []string{testClaudePlugin}},
 	})
 	if err != nil {
 		t.Fatalf("new claude workload: %v", err)
@@ -292,8 +292,8 @@ func TestClaudeManagedToolPolicyIsProvisionedUnderSessionHome(t *testing.T) {
 			t.Fatalf("managed settings %q are missing %s", data, tool)
 		}
 	}
-	if !strings.Contains(string(data), `"`+claudeSessionPlatformPlugin+`":true`) {
-		t.Fatalf("managed settings %q do not enable %s", data, claudeSessionPlatformPlugin)
+	if !strings.Contains(string(data), `"`+testClaudePlugin+`":true`) {
+		t.Fatalf("managed settings %q do not enable %s", data, testClaudePlugin)
 	}
 	if strings.Contains(string(data), "bypassPermissions") {
 		t.Fatalf("managed settings bypass permissions: %q", data)
@@ -313,7 +313,7 @@ func TestClaudeManagedSettingsUpgradeEnablesSessionPlatformPlugin(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{claudeSessionPlatformPlugin}}); err != nil {
+	if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{testClaudePlugin}}); err != nil {
 		t.Fatalf("upgrade managed settings: %v", err)
 	}
 	if err := validateClaudeManagedSettings(homeDir); err != nil {
@@ -334,7 +334,7 @@ func TestClaudeManagedSettingsRejectsUnmanagedPlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{claudeSessionPlatformPlugin}})
+	err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{testClaudePlugin}})
 	if err == nil || !strings.Contains(err.Error(), "unmanaged plugin") {
 		t.Fatalf("ensure managed settings error = %v, want unmanaged plugin rejection", err)
 	}
@@ -625,7 +625,7 @@ func TestClaudeCloseIsIdempotent(t *testing.T) {
 		StateDir: filepath.Join(t.TempDir(), "state"),
 		Runner:   newFakeClaudeRunner(),
 		Logger:   testLogger(),
-		Tools:    toolSurface{Plugins: []string{claudeSessionPlatformPlugin}},
+		Tools:    toolSurface{Plugins: []string{testClaudePlugin}},
 	})
 	if err != nil {
 		t.Fatal(err)
