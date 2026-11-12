@@ -430,7 +430,7 @@ DOM이 정본이고, 표와 DOM이 어긋나면 `tools/journey-prototype.test.mj
   안내하는 free-text 입력으로 돌아간다. catalog는 API allowlist가 아니다. `platform-default`는 특정 공급자 버전을
   API에 고정하지 않는 별칭이며, 새/복원 pod 또는 container restart 때 optional ConfigMap `model`을 우선하고
   missing/empty면 CLI 기본 선택에 위임한다. 실행 중 컨테이너는 ConfigMap 변경으로 즉시 바뀌지 않는다.
-- **대화 재개 (AC-E4)**: 실제 계약은 첫 성공 실행 뒤 `--continue`와 세션별 고정 HOME/workdir이다.
+- **대화 재개 (AC-E4)**: 실제 계약은 첫 성공 실행 뒤 기록한 세션 ID로의 재개(*2026-11-12 전에는 `--continue`*)와 세션별 고정 HOME/workdir이다.
   mockup은 CLI flag 자체보다 사용자가 보는 연속 대화 결과를 표현한다.
 - **codex 기기 로그인 예시 (AC-J3)**: `agent-workspace.html`의 `cluster-triage` 세션 콘솔에 찍힌 인증 URL과
   일회용 코드 `WXYZ-1234`, notice 문장, `k3s.pods_list` 호출과 응답은 전부 자리표시자다. 계약은 **첫 프롬프트가

@@ -24,9 +24,9 @@ type agentCLI interface {
 	validateState(root string) error
 }
 
-// claudeCLI is the Claude Code CLI that claude-code runs. It is the default
-// when a config names no CLI, so that type runs exactly as it did before the
-// seam existed.
+// claudeCLI is what claude-code runs: claude-runner, which drives the pinned
+// Claude Code CLI through the Claude Agent SDK (data-plane/claude-runner). It
+// is the default when a config names no CLI.
 type claudeCLI struct {
 	// effort is the session's effort (AC-E8); empty leaves the CLI default.
 	effort string
@@ -35,7 +35,7 @@ type claudeCLI struct {
 func (claudeCLI) workloadName() string { return workloadClaudeCode }
 
 func (c claudeCLI) argv(binary, model, prompt string, resume bool) []string {
-	return claudeArgv(binary, model, c.effort, prompt, resume)
+	return claudeRunnerArgv(binary, model, c.effort, prompt, resume)
 }
 
 func (claudeCLI) newProjector(dst io.Writer) io.WriteCloser {

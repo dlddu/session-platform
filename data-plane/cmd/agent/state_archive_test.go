@@ -127,7 +127,7 @@ func newSharedClaudeServer(t *testing.T, stateDir, sharedDir string, restoreMode
 	t.Helper()
 	c, err := newClaudeWorkload(claudeConfig{
 		StateDir:    stateDir,
-		Binary:      defaultClaudeBinary,
+		Binary:      defaultClaudeRunnerBinary,
 		RestoreMode: restoreMode,
 		Runner:      newFakeClaudeRunner(),
 		Logger:      testLogger(),

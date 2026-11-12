@@ -22,16 +22,27 @@ interactive shell and Claude Code workloads.
   environment, cwd and shell variables/functions/aliases are not carried over.
 - `claude-code` launches no resident shell. Write asynchronously queues a
   prompt for one serial worker; each job executes
-  `claude [--continue] [--model MODEL] [--effort EFFORT] --permission-mode auto
-  -p --output-format stream-json --verbose --include-partial-messages -- PROMPT`.
+  `claude-runner [--model MODEL] [--effort EFFORT] [--resume] -- PROMPT`
+  (`CLAUDE_RUNNER_BIN`, default `/usr/local/bin/claude-runner`). The runner
+  ([`claude-runner/`](claude-runner/)) runs one Claude Agent SDK `query()`
+  that drives the pinned Claude Code CLI (`CLAUDE_CODE_BIN`, default `claude`
+  on `PATH`) with Claude Code's own system prompt, all setting sources,
+  partial messages and `permissionMode: default`; tool requests no settings
+  rule decides go to the SDK's `canUseTool` callback, which allows the
+  platform's built-in tools and the session's own plugin MCP tools and denies
+  the rest with a `[session-platform: denied …]` line in the output.
   `CLAUDE_CODE_EFFORT` (`low`, `medium`, `high`, `xhigh` or `max`, AC-E8) adds
   `--effort`; empty leaves the CLI default and any other value refuses start.
-  The agent parses stdout JSONL and
-  projects ordered `text_delta` values, while diagnostic stderr is retained as
-  text. Both are incrementally redacted and appended through the same offset
-  cursor contract while the invocation is still running. `--continue` starts
-  only after the first successful invocation; a failed or timed-out first run
-  still starts a new conversation next time. A non-empty concrete
+  The runner writes every SDK message as one JSONL line; the agent projects
+  ordered `text_delta` values and the runner's notices, while diagnostic stderr
+  is retained as text. Both are incrementally redacted and appended through the
+  same offset cursor contract while the invocation is still running.
+  `--resume` starts only after the first successful invocation; a failed or
+  timed-out first run still starts a new conversation next time. The runner
+  records the SDK session id in `$HOME/.claude/session-platform-session.json`
+  and resumes exactly that conversation; an archive without the record
+  continues the most recent one, and a record whose transcript is gone starts
+  over with a notice. A non-empty concrete
   `CLAUDE_CODE_MODEL` adds `--model` with that value as one argv element;
   an empty value or the `platform-default` sentinel omits the model flag. Each
   invocation is limited to 30 minutes by default; set

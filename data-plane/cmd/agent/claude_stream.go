@@ -8,8 +8,9 @@ import (
 	"unicode/utf8"
 )
 
-// claudeStreamProjector turns Claude Code's --output-format=stream-json stdout
-// into the user-facing text stream retained by the session (AC-E3). A non-JSON
+// claudeStreamProjector turns claude-runner's stdout — the Agent SDK's messages,
+// one JSON line each, in the shapes Claude Code's stream-json prints — into the
+// user-facing text stream retained by the session (AC-E3). A non-JSON
 // line is passed through for backwards-compatible diagnostics and deterministic
 // fake runners.
 type claudeStreamProjector struct {
@@ -53,8 +54,13 @@ func (p *claudeStreamProjector) Close() error {
 	return p.finishMessage()
 }
 
+// claudeNoticeType is claude-runner's own line: a platform notice such as a
+// tool the permission policy denied (AC-E2). Its text is shown as written.
+const claudeNoticeType = "session_platform.notice"
+
 type claudeStreamEnvelope struct {
 	Type    string `json:"type"`
+	Text    string `json:"text"`
 	IsError bool   `json:"is_error"`
 	Result  string `json:"result"`
 	Event   struct {
@@ -78,6 +84,19 @@ func (p *claudeStreamProjector) projectLine(line []byte, hadNewline bool) error 
 		}
 		if hadNewline {
 			_, err := p.dst.Write([]byte{'\n'})
+			return err
+		}
+		return nil
+	}
+
+	if envelope.Type == claudeNoticeType {
+		if envelope.Text == "" {
+			return nil
+		}
+		if err := p.finishMessage(); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(p.dst, envelope.Text+"\n"); err != nil {
 			return err
 		}
 		return nil
