@@ -32,6 +32,21 @@ type Service struct {
 	// authPools are the login slot pools by the type that leases from them
 	// (AC-N2): codex-task and codex-chat.
 	authPools map[session.WorkloadType]k8s.AuthPool
+	manifests SessionManifests
+}
+
+// SessionManifests keeps each session's manifest in durable storage beside its
+// archives (AC-B4). Nil disables both writing and recovery.
+type SessionManifests interface {
+	PutManifest(ctx context.Context, m session.Manifest) error
+	// GetManifest returns session.ErrNotFound when the id has no manifest.
+	GetManifest(ctx context.Context, id string) (*session.Manifest, error)
+}
+
+// WithSessionManifests records a manifest on every committed snapshot and
+// enables Recover.
+func WithSessionManifests(m SessionManifests) Option {
+	return func(s *Service) { s.manifests = m }
 }
 
 const defaultLeaseRenewInterval = 5 * time.Second
@@ -589,6 +604,16 @@ func (s *Service) snapshotWithTransactionLocked(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// Written before the commit so every committed snapshot is recoverable
+	// (AC-B4); a failed write rolls the snapshot back like a failed archive.
+	if s.manifests != nil {
+		if err := s.manifests.PutManifest(ctx, session.ManifestFor(sess, cp)); err != nil {
+			if ctx.Err() != nil {
+				return nil, err
+			}
+			return nil, s.rollbackPreparingSnapshot(ctx, sess, ckpt, err)
+		}
+	}
 	// Persist both the durable archive ref and the commit decision before issuing
 	// Kubernetes DELETE. From this point recovery completes reclamation; it never
 	// risks reopening admission after an ambiguously accepted DELETE.
@@ -960,6 +985,60 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 	}
 	keepSlot = true
 	return &next, nil
+}
+
+// Recover puts a deleted session back from the manifest its last committed
+// snapshot left, then restores it like any snapshot (AC-B4). The id must not
+// name a session that still exists.
+func (s *Service) Recover(ctx context.Context, id string, admit func(*session.Session) error) (*session.Session, error) {
+	if s.manifests == nil {
+		return nil, session.ErrCheckpointDisabled
+	}
+	if !session.ValidSessionID(id) {
+		return nil, session.ErrNotFound
+	}
+	m, err := s.manifests.GetManifest(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if m.ID != id {
+		return nil, fmt.Errorf("manifest for %s names session %s", id, m.ID)
+	}
+	frozen := m.SnapshotSession(s.now())
+	if frozen.WorkloadType, err = session.NormalizeStoredWorkloadType(frozen.WorkloadType); err != nil {
+		return nil, err
+	}
+	if admit != nil {
+		if err := admit(frozen); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := s.checkpointerFor(frozen.WorkloadType); err != nil {
+		return nil, err
+	}
+	if err := s.reinstate(ctx, frozen); err != nil {
+		return nil, err
+	}
+	return s.Restore(ctx, id)
+}
+
+// reinstate writes the frozen record under the session lock, refusing an id
+// that is still in use.
+func (s *Service) reinstate(ctx context.Context, frozen *session.Session) error {
+	token, err := newID()
+	if err != nil {
+		return err
+	}
+	if err := s.store.Lock(ctx, frozen.ID, token); err != nil {
+		return err
+	}
+	defer s.unlockBestEffort(frozen.ID, token)
+	if _, err := s.store.Get(ctx, frozen.ID); err == nil {
+		return fmt.Errorf("%w: session %s still exists", session.ErrConflict, frozen.ID)
+	} else if !errors.Is(err, session.ErrNotFound) {
+		return err
+	}
+	return s.store.Put(ctx, frozen)
 }
 
 func (s *Service) getSessionBestEffort(id string) (*session.Session, error) {

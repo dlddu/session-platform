@@ -254,6 +254,7 @@ gitignored.
 | `GET  /sessions/{id}/stream` | passive live output SSE        | E3     |
 | `POST /sessions/{id}/switch` | switch (restore if snapshot)   | C4     |
 | `POST /sessions/{id}/snapshot` | archive now and reclaim pod       | B1, A3 |
+| `POST /sessions/{id}/recover` | bring a deleted session back from its last archive | B4, K2 |
 
 ## Testing
 

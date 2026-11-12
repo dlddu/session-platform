@@ -448,6 +448,63 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+  /sessions/{id}/recover:
+    post:
+      summary: Put a deleted session back from its last archive (AC-B4)
+      operationId: recoverSession
+      description: >
+        For a session id that no longer exists. Every committed snapshot leaves
+        a manifest beside its archive naming the session's workload type,
+        model, plugins, reasoning effort, tenant and name; recovery reads it,
+        recreates the session under the same id in snapshot state and restores
+        it into a new pod, so the session comes back as it was when it was last
+        frozen. Work done after that freeze is not recovered. A tenant caller
+        can recover only its own tenant's sessions and needs the workload type
+        granted; any other id answers 404 exactly like an unknown one. If the
+        restore itself fails, the session stays in snapshot state and the next
+        access retries it.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          description: The recovered, restored session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "400":
+          description: Malformed body, trailing JSON, or a non-empty request object
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: The owning tenant is no longer granted the session's workload type
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: No manifest for this id, or the caller does not see it
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: A session with this id still exists
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "503":
+          description: Recovery or the workload's archive strategy is disabled, or no login slot is free
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /sessions/{id}/plugins/refresh:
     post:
       summary: Fetch a codex-chat or codex-task session's plugin skills again, keeping its conversation (AC-J7)

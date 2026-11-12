@@ -4,6 +4,7 @@
 - AC-B1: 60분 유휴 후 스냅샷 (PRD: 세션 라이프사이클 & 워크로드별 스냅샷)
 - AC-B2: 스냅샷 복원 (PRD: 세션 라이프사이클 & 워크로드별 스냅샷)
 - AC-B3: 스냅샷·복원 무결성 (PRD: 세션 라이프사이클 & 워크로드별 스냅샷)
+- AC-B4: 삭제된 세션 복원 (PRD: 세션 라이프사이클 & 워크로드별 스냅샷)
 
 ## 테스트 시나리오
 
@@ -31,3 +32,10 @@
 - **실행 단계**: 60분 유휴 snapshot으로 pod 회수·SSE 단절 → SPA `onerror`와 후속 API 호출 관찰
 - **기대 결과**: SPA가 native EventSource를 즉시 close하고 GET session으로 `snapshot`을 확인한 뒤 자동 stream/read 재시도를 하지 않음. Restore 화면으로 이동하며 사용자가 명시적으로 복원하기 전에는 새 pod가 생기지 않음
 - **검증 AC**: AC-B1, AC-B2 (보조 AC-E3)
+
+### 시나리오 5: 삭제된 세션을 id로 복원
+- **사전 조건**: 아카이브 게이트가 켜진 타입(`shell`)의 active 세션 1개, 누적 출력에 마커 줄이 있음
+- **실행 단계**: 세션 동결(`POST /snapshot`) → 삭제(`DELETE`) → 조회가 404인 것 확인 → `POST /sessions/{id}/recover` → 같은 id로 다시 recover → 한 번도 동결되지 않은 id로 recover
+- **기대 결과**: 첫 recover가 200으로 **같은 id·이름**의 `active` 세션을 **동결 전과 다른 pod** 위에 돌려주고, 뒤이은 조회도 같다. offset 0 read가 동결 전 마커 줄을 포함한다(누적 출력 보존). 살아 있는 id의 recover는 409, 매니페스트가 없는 id는 404다
+- **검증 AC**: AC-B4 (보조 AC-B2, AC-B3)
+- **단위 수준 보조 검증**: 테넌트 범위(다른 테넌트 404 · 좁혀진 타입 403 · 운영자 허용)는 `control-plane/internal/api/recover_test.go`, 매니페스트 쓰기 실패 시 동결 롤백·게이트 꺼짐 503·거부 시 무기록은 `control-plane/internal/service/recover_test.go`, 매니페스트 키·버전·403과 404 구분은 `control-plane/internal/adapter/checkpointstore/manifest_test.go`가 검증한다.

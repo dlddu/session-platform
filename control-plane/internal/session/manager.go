@@ -80,6 +80,7 @@ type PluginRefreshResult struct {
 //   - Snapshot  → AC-B1 (workload archive + reclaim on idle).
 //   - Restore   → AC-B2 (restore the workload into a new pod).
 //   - Terminate → AC-A3 (reclaim resources).
+//   - Recover   → AC-B4 (put a deleted session back from its last archive).
 //   - RefreshPlugins → AC-J7 (fetch a codex-chat or codex-task session's plugin skills again,
 //     between turns, keeping its conversation).
 type Manager interface {
@@ -94,4 +95,7 @@ type Manager interface {
 	Restore(ctx context.Context, id string) (*Session, error)
 	Terminate(ctx context.Context, id string) error
 	RefreshPlugins(ctx context.Context, id string) (*PluginRefreshResult, error)
+	// Recover calls admit with the recovered record before anything is
+	// written, so the caller decides who may see it (AC-K2).
+	Recover(ctx context.Context, id string, admit func(*Session) error) (*Session, error)
 }
