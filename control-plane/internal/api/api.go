@@ -711,7 +711,7 @@ func writeErr(w http.ResponseWriter, err error) {
 		status = http.StatusBadRequest
 	case errors.Is(err, session.ErrInvalidState):
 		status = http.StatusUnprocessableEntity
-	case errors.Is(err, session.ErrConflict):
+	case errors.Is(err, session.ErrConflict), errors.Is(err, session.ErrAlreadyExists):
 		status = http.StatusConflict
 	case errors.Is(err, session.ErrWorkloadQueueFull):
 		status = http.StatusTooManyRequests

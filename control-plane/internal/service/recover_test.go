@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -140,18 +141,27 @@ func TestRecoverRefusesWhatItCannotOrMustNotRecover(t *testing.T) {
 	}{
 		{"never snapshotted", "0123456789abcdef0123456789abcdef", session.ErrNotFound},
 		{"malformed id", "../../etc", session.ErrNotFound},
-		{"session still exists", live.ID, session.ErrConflict},
+		{"session still exists", live.ID, session.ErrAlreadyExists},
+	}
+	before, err := f.store.Get(ctx, live.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := f.svc.Recover(ctx, tc.id, nil); !errors.Is(err, tc.want) {
+			_, err := f.svc.Recover(ctx, tc.id, nil)
+			if !errors.Is(err, tc.want) {
 				t.Fatalf("recover err = %v, want %v", err, tc.want)
+			}
+			if errors.Is(err, session.ErrConflict) || strings.Contains(err.Error(), "concurrently") {
+				t.Fatalf("recover err = %q reads as a race", err)
 			}
 		})
 	}
 	stored, err := f.store.Get(ctx, live.ID)
-	if err != nil || stored.State != session.StateSnapshot {
-		t.Fatalf("existing session after refused recover = %+v, %v; want it untouched", stored, err)
+	if err != nil || stored.State != session.StateSnapshot || !stored.LastAccess.Equal(before.LastAccess) ||
+		stored.Checkpoint == nil || stored.Checkpoint.Ref != before.Checkpoint.Ref {
+		t.Fatalf("existing session after refused recover = %+v, %v; want it untouched (lastAccess %v)", stored, err, before.LastAccess)
 	}
 }
 

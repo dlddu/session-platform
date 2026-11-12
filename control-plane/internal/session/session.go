@@ -334,7 +334,10 @@ var (
 	ErrNotFound     = errors.New("session not found")
 	ErrInvalidState = errors.New("session in invalid state for operation")
 	ErrConflict     = errors.New("session state changed concurrently")
-	ErrInvalidInput = errors.New("invalid input")
+	// ErrAlreadyExists is a recovery's refusal of an id that is still a live
+	// session (AC-B4): nothing raced, there is just nothing to bring back.
+	ErrAlreadyExists = errors.New("session already exists")
+	ErrInvalidInput  = errors.New("invalid input")
 	// ErrRequestBodyTooLarge reports the public HTTP wire-body limit.
 	ErrRequestBodyTooLarge = errors.New("request body exceeds size limit")
 	// ErrWorkloadPromptTooLarge reports the per-write prompt byte limit.
