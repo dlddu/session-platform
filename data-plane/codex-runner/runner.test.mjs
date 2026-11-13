@@ -144,26 +144,33 @@ test("TurnTranslator emits exec events for its own turn and closes open items", 
   assert.equal(errored.translate("turn/completed", { threadId: "main", turn: { id: "t4", status: "completed", items: [] } }).outcome, "failed");
 });
 
-test("AgentTracker reports only agents that end while the main thread is idle", () => {
+test("AgentTracker learns agents from spawns, activity items and unknown threads", () => {
   const agents = new AgentTracker("main");
-  assert.equal(agents.observe("thread/started", { thread: { id: "main" } }), null);
-  assert.equal(agents.observe("thread/started", { thread: { id: "a", agentNickname: "Ada", parentThreadId: "main" } }), "Background agent Ada started.");
-  assert.equal(agents.observe("thread/started", { thread: { id: "b", agentNickname: null } }), "Background agent b started.");
-  assert.deepEqual(agents.busy().map((a) => a.id), ["a", "b"], "an agent is busy before its first turn");
-  agents.observe("turn/started", { threadId: "a", turn: { id: "ta" } });
-  assert.equal(agents.observe("item/started", { threadId: "a", turnId: "ta", item: { type: "mcpToolCall", server: "k3s", tool: "ping" } }), "· Ada: k3s.ping");
-  agents.observe("item/completed", { threadId: "a", turnId: "ta", item: { type: "agentMessage", text: "found it" } });
-  assert.equal(agents.observe("turn/completed", { threadId: "a", turn: { id: "ta", status: "completed" } }), "Background agent Ada finished.");
+  assert.deepEqual(agents.observe("thread/started", { thread: { id: "main" } }), []);
+  const spawn = { id: "s", type: "collabAgentToolCall", tool: "spawnAgent", status: "completed", senderThreadId: "main", receiverThreadIds: ["agent-0000aaaa"] };
+  assert.deepEqual(agents.observe("item/completed", { threadId: "main", turnId: "t1", item: spawn }), ["Background agent 0000aaaa started."]);
+  assert.deepEqual(agents.observe("item/completed", { threadId: "main", turnId: "t1", item: spawn }), [], "a second sighting is not a new agent");
+  assert.deepEqual(
+    agents.observe("item/completed", { threadId: "main", turnId: "t1", item: { id: "x", type: "subAgentActivity", kind: "started", agentThreadId: "agent-0000aaaa", agentPath: "/root/ada" } }),
+    [],
+  );
+  assert.deepEqual(agents.observe("item/completed", { threadId: "main", item: { ...spawn, status: "failed", receiverThreadIds: ["never"] } }), []);
+  assert.deepEqual(agents.busy().map((a) => [a.id, a.name]), [["agent-0000aaaa", "ada"]], "busy from its spawn, before its first turn");
+
+  agents.observe("turn/started", { threadId: "agent-0000aaaa", turn: { id: "ta" } });
+  assert.deepEqual(agents.observe("item/started", { threadId: "agent-0000aaaa", turnId: "ta", item: { type: "mcpToolCall", server: "k3s", tool: "ping" } }), ["· ada: k3s.ping"]);
+  agents.observe("item/completed", { threadId: "agent-0000aaaa", turnId: "ta", item: { type: "agentMessage", text: "found it" } });
+  assert.deepEqual(agents.observe("turn/completed", { threadId: "agent-0000aaaa", turn: { id: "ta", status: "completed" } }), ["Background agent ada finished."]);
   assert.deepEqual(agents.takeUnreported(), [], "the main turn was still running and saw the result itself");
 
   agents.setMainBusy(false);
-  agents.observe("turn/started", { threadId: "b", turn: { id: "tb" } });
-  assert.match(agents.observe("turn/completed", { threadId: "b", turn: { id: "tb", status: "failed", error: { message: "boom" } } }), /failed: boom/);
+  assert.deepEqual(agents.observe("turn/started", { threadId: "grandchild-1234bbbb", turn: { id: "tb" } }), ["Background agent 1234bbbb started."], "an agent's own spawns are found from their events");
+  assert.match(agents.observe("turn/completed", { threadId: "grandchild-1234bbbb", turn: { id: "tb", status: "failed", error: { message: "boom" } } })[0], /failed: boom/);
   const ended = agents.takeUnreported();
-  assert.deepEqual(ended.map((a) => [a.id, a.status, a.error]), [["b", "failed", "boom"]]);
+  assert.deepEqual(ended.map((a) => [a.id, a.status, a.error]), [["grandchild-1234bbbb", "failed", "boom"]]);
   assert.deepEqual(agents.takeUnreported(), []);
   assert.deepEqual(agents.busy(), []);
-  assert.equal(agents.observe("turn/started", { threadId: "zzz", turn: { id: "x" } }), null);
+  assert.deepEqual(agents.observe("configWarning", { summary: "x" }), []);
 });
 
 test("followUpPrompt hands each ended agent's result to the main thread", () => {
@@ -359,7 +366,13 @@ const itemStarted = (threadId, turnId, it) => n("item/started", { threadId, turn
 const done = (threadId, turnId, status = "completed", extra = {}) =>
   n("turn/completed", { threadId, turn: { id: turnId, status, items: [], error: null, ...extra } });
 const message = (id, text) => ({ id, type: "agentMessage", text, phase: null });
-const agentThread = (id, nickname) => n("thread/started", { thread: { id, parentThreadId: "th-1", agentNickname: nickname } });
+// The app server announces a spawned agent only through the spawning
+// thread's spawnAgent item and the agent's own events — no thread/started.
+const spawned = (id) => item("th-1", "t1", {
+  id: `spawn-${id}`, type: "collabAgentToolCall", tool: "spawnAgent", status: "completed",
+  senderThreadId: "th-1", receiverThreadIds: [id], prompt: "go", agentsStates: { [id]: { status: "pendingInit", message: null } },
+});
+const activity = (id, agentPath) => item("th-1", "t1", { id: `act-${id}`, type: "subAgentActivity", kind: "started", agentThreadId: id, agentPath });
 const notices = (lines) => lines.filter((l) => l.type === NOTICE_TYPE).map((l) => l.text);
 const turnStarts = (requests) => requests.filter((r) => r.method === "turn/start");
 
@@ -426,7 +439,7 @@ test("runner stops the turn when a sub-agent does something forbidden", () => {
     const result = runRunner(home, ["--", "go"], {
       threadId: "th-1",
       turns: [{ id: "t1", steps: [
-        agentThread("child", "Ada"),
+        spawned("child"),
         started("child", "tc"),
         itemStarted("child", "tc", { id: "f", type: "fileChange", changes: [], status: "inProgress" }),
         done("th-1", "t1"),
@@ -483,7 +496,8 @@ test("runner waits for sub-agents the turn left running and hands their results 
       turns: [
         { id: "t1", steps: [
           started("th-1", "t1"),
-          agentThread("child", "Ada"),
+          spawned("child"),
+          activity("child", "/root/Ada"),
           started("child", "tc"),
           item("th-1", "t1", message("m1", "Started Ada; I'll report back.")),
           done("th-1", "t1"),
@@ -524,15 +538,15 @@ test("runner stops sub-agents that outlast the wait and still lets the main thre
     const result = runRunner(home, ["--", "research"], {
       threadId: "th-1",
       turns: [
-        { id: "t1", steps: [agentThread("slow", null), started("slow", "ts"), done("th-1", "t1")] },
+        { id: "t1", steps: [spawned("slow-agent"), started("slow-agent", "ts"), done("th-1", "t1")] },
         { id: "t2", steps: [item("th-1", "t2", message("m2", "slow was stopped")), done("th-1", "t2")] },
       ],
-      interrupts: { slow: [done("slow", "ts", "interrupted")] },
+      interrupts: { "slow-agent": [done("slow-agent", "ts", "interrupted")] },
     }, { CODEX_RUNNER_BACKGROUND_WAIT_MS: "200" });
     assert.equal(result.status, EXIT_OK, result.stderr);
-    assert.ok(result.requests.some((r) => r.method === "turn/interrupt" && r.params.threadId === "slow" && r.params.turnId === "ts"));
-    assert.ok(notices(result.lines).some((t) => /still running after .* stopping slow/.test(t)), notices(result.lines).join("\n"));
-    assert.match(turnStarts(result.requests)[1].params.input[0].text, /- slow: stopped by the platform after waiting 0 minute\(s\)\./);
+    assert.ok(result.requests.some((r) => r.method === "turn/interrupt" && r.params.threadId === "slow-agent" && r.params.turnId === "ts"));
+    assert.ok(notices(result.lines).some((t) => /still running after .* stopping ow-agent/.test(t)), notices(result.lines).join("\n"));
+    assert.match(turnStarts(result.requests)[1].params.input[0].text, /- ow-agent \(slow-agent\): stopped by the platform after waiting 0 minute\(s\)\./);
     assert.ok(result.lines.some((l) => l.item && l.item.text === "slow was stopped"));
   });
 });
@@ -543,7 +557,7 @@ test("runner does not wait for agents the turn already finished with", () => {
     const result = runRunner(home, ["--", "quick"], {
       threadId: "th-1",
       turns: [{ id: "t1", steps: [
-        agentThread("child", "Ada"), started("child", "tc"), done("child", "tc"),
+        spawned("child"), started("child", "tc"), done("child", "tc"),
         item("th-1", "t1", message("m", "Ada said hi")), done("th-1", "t1"),
       ] }],
     });

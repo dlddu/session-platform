@@ -286,15 +286,13 @@ class Session {
         return;
       }
     }
-    if (this.#agents && params.threadId !== this.#threadId) {
-      const text = this.#agents.observe(method, params);
-      if (text) {
+    if (this.#agents) {
+      for (const text of this.#agents.observe(method, params)) {
         await notice(text);
       }
       this.#agentChanged();
-      return;
     }
-    if (this.#translator) {
+    if (this.#translator && params.threadId === this.#threadId) {
       const { events, outcome } = this.#translator.translate(method, params);
       for (const event of events) {
         await emit(JSON.stringify(event) + "\n");

@@ -425,11 +425,15 @@ export function backgroundWaitFromEnv(env) {
   return DEFAULT_BACKGROUND_WAIT_MS;
 }
 
-// AgentTracker follows the sub-agent threads the app server attaches while
-// the runner is connected. An agent is busy from its thread's start (before
-// its first turn) until its turn ends; an agent whose turn ends while the
-// main thread has no turn running is unreported until a follow-up turn tells
-// the main thread about it — a turn in progress learns of its agents itself.
+// AgentTracker follows the sub-agent threads of the run. The app server sends
+// no thread/started for a spawned agent (codex 0.166.0 sends it only for
+// threads a client starts or forks), so an agent is known from the
+// spawnAgent call or subAgentActivity item that names it, or else from the
+// first event of a thread that is not the main one. An agent is busy from its
+// spawn (before its first turn) until its turn ends; an agent whose turn ends
+// while the main thread has no turn running is unreported until a follow-up
+// turn tells the main thread about it — a turn in progress learns of its
+// agents itself.
 export class AgentTracker {
   #agents = new Map();
   #mainBusy = true;
@@ -442,39 +446,56 @@ export class AgentTracker {
     this.#mainBusy = busy;
   }
 
+  #register(id, notices) {
+    if (!id || id === this.mainThreadId || this.#agents.has(id)) {
+      return this.#agents.get(id) || null;
+    }
+    const agent = { id, name: id.slice(-8), busy: true, turnId: null, status: null, message: null, error: null, unreported: false };
+    this.#agents.set(id, agent);
+    notices.push(`Background agent ${agent.name} started.`);
+    return agent;
+  }
+
+  // observe returns the notices one notification adds to the session output.
   observe(method, params) {
+    const notices = [];
     if (!params) {
-      return null;
+      return notices;
     }
-    if (method === "thread/started") {
-      const thread = params.thread;
-      if (!thread || !thread.id || thread.id === this.mainThreadId || this.#agents.has(thread.id)) {
-        return null;
+    const item = params.item;
+    if ((method === "item/started" || method === "item/completed") && item) {
+      if (item.type === "collabAgentToolCall" && item.tool === "spawnAgent" && item.status !== "failed") {
+        for (const id of item.receiverThreadIds || []) {
+          this.#register(id, notices);
+        }
+      } else if (item.type === "subAgentActivity" && item.agentThreadId) {
+        const agent = this.#register(item.agentThreadId, notices);
+        const path = typeof item.agentPath === "string" ? item.agentPath.split("/").filter(Boolean).pop() : null;
+        if (agent && path) {
+          agent.name = path;
+        }
       }
-      const name = thread.agentNickname || thread.id;
-      this.#agents.set(thread.id, { id: thread.id, name, busy: true, turnId: null, status: null, message: null, error: null, unreported: false });
-      return `Background agent ${name} started.`;
     }
-    const agent = this.#agents.get(params.threadId);
-    if (!agent) {
-      return null;
+    if (!params.threadId || params.threadId === this.mainThreadId) {
+      return notices;
     }
+    const agent = this.#register(params.threadId, notices);
     switch (method) {
       case "turn/started":
         agent.busy = true;
         agent.turnId = params.turn ? params.turn.id : null;
         agent.status = null;
-        return null;
+        break;
       case "item/completed":
-        if (params.item && params.item.type === "agentMessage" && params.item.text) {
-          agent.message = params.item.text;
+        if (item && item.type === "agentMessage" && item.text) {
+          agent.message = item.text;
         }
-        return null;
+        break;
       case "item/started":
-        if (params.item && params.item.type === "mcpToolCall") {
-          return `· ${agent.name}: ${params.item.server}.${params.item.tool}`;
+        if (item && item.type === "mcpToolCall") {
+          notices.push(`· ${agent.name}: ${item.server}.${item.tool}`);
         }
-        return null;
+        break;
       case "turn/completed": {
         const turn = params.turn || {};
         agent.busy = false;
@@ -485,19 +506,21 @@ export class AgentTracker {
           agent.unreported = true;
         }
         if (agent.status === "completed") {
-          return `Background agent ${agent.name} finished.`;
+          notices.push(`Background agent ${agent.name} finished.`);
+        } else if (agent.status === "interrupted") {
+          notices.push(`Background agent ${agent.name} was stopped.`);
+        } else {
+          notices.push(`Background agent ${agent.name} failed${agent.error ? `: ${agent.error}` : "."}`);
         }
-        if (agent.status === "interrupted") {
-          return `Background agent ${agent.name} was stopped.`;
-        }
-        return `Background agent ${agent.name} failed${agent.error ? `: ${agent.error}` : "."}`;
+        break;
       }
       case "thread/closed":
         agent.busy = false;
-        return null;
+        break;
       default:
-        return null;
+        break;
     }
+    return notices;
   }
 
   busy() {
