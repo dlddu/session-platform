@@ -350,7 +350,7 @@ func TestApprovalGate_UngatedTypesUnchanged(t *testing.T) {
 		containers []string
 	}{
 		{session.WorkloadTypeShell, []string{k8s.ContainerName}},
-		{session.WorkloadTypeClaudeCode, []string{k8s.ContainerName, k8s.ClaudeCredentialsContainerName}},
+		{session.WorkloadTypeClaudeCode, []string{k8s.ContainerName, k8s.ClaudeCredentialsContainerName, k8s.K3SMCPProxyContainerName}},
 	} {
 		t.Run(string(tc.workload), func(t *testing.T) {
 			orch, cs := newReadyOrchestrator(t,
@@ -384,8 +384,11 @@ func TestApprovalGate_UngatedTypesUnchanged(t *testing.T) {
 			if placement, ok := envValue(proxy, k8s.CredentialProxyPlacementEnvVar); !ok || placement != "sidecar" {
 				t.Errorf("claude-code proxy placement = %q, want sidecar", placement)
 			}
-			if _, _, ok := secretKey(container(t, pods[0], k8s.ContainerName), k8s.K3SMCPTokenEnvVar); !ok {
+			if _, _, ok := secretKey(container(t, pods[0], k8s.K3SMCPProxyContainerName), k8s.K3SMCPTokenEnvVar); !ok {
 				t.Error("claude-code lost its K3s MCP token projection")
+			}
+			if _, _, ok := secretKey(container(t, pods[0], k8s.ContainerName), k8s.K3SMCPTokenEnvVar); ok {
+				t.Error("claude-code's CLI container holds the K3s MCP token; the sidecar must")
 			}
 		})
 	}

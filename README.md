@@ -108,13 +108,14 @@ docs/                 value / PRD·AC / journeys / mockups / retired CRIU verifi
   default. The required `base-url` (ConfigMap) and `auth-token` (credentials
   Secret) keys remain isolated in a
   hardened localhost proxy sidecar that accepts one configured HTTPS upstream.
-  For Claude workloads, the data-plane entrypoint uses the required
-  `K3S_MCP_TOKEN` to mint a repository-scoped, read-only GitHub App token from
-  K3s MCP, installs `session-platform@dlddu-plugins` from the private
-  `dlddu/plugin-marketplace` into a runtime seed, and only then starts the
-  agent. The GitHub token is not inherited by the agent; `K3S_MCP_TOKEN` is
-  exposed only to the tool-running container and redacted from streamed/read
-  output.
+  As for codex, the optional K3s MCP token lives only in a loopback
+  `k3s-mcp-proxy` sidecar: it mints a repository-scoped, read-only GitHub App
+  token from K3s MCP, clones the private `dlddu/plugin-marketplace` and serves
+  the session's selected plugins as a seed; the agent installs that seed as a
+  local `dlddu-plugins` marketplace and registers the K3s MCP itself (the
+  runner's `k3s` server on the sidecar's loopback address). The tool-running
+  container holds neither token. Without the key, the session runs with no K3s
+  MCP tools and no plugins.
   A separate optional `models` ConfigMap key is an ordered UI soft catalog, not
   an API allowlist. The Deployment projects the public `model` and `models`
   keys into the control plane as `CLAUDE_CODE_DEFAULT_MODEL` and
@@ -155,10 +156,9 @@ docs/                 value / PRD·AC / journeys / mockups / retired CRIU verifi
   Omitted, a codex-chat session gets the deployment's `CODEX_PLUGINS` and
   every other type runs without plugins; given, the list **replaces** that
   default and is fixed for the session's lifetime, snapshot/restore
-  included. It reaches the one place each type already installs plugins:
-  `CLAUDE_CODE_PLUGINS` on the claude-code workload container (entrypoint
-  install + managed settings), or `MINIMAX_CODE_PLUGINS` on the codex /
-  minimax-code `k3s-mcp-proxy` seeder. `GET /api/v1/config` reports
+  included. It reaches the `k3s-mcp-proxy` seeder of every type as
+  `PLUGIN_SEED_PLUGINS`, and claude-code's workload container as
+  `CLAUDE_CODE_PLUGINS` too (agent install + managed settings). `GET /api/v1/config` reports
   `takesPlugins` per type.
 - **Tenancy** (AC-K1~K5, [`docs/prd/multitenancy.md`](docs/prd/multitenancy.md)):
   a request carrying `Authorization: Bearer <ServiceAccount token>` (audience
@@ -355,14 +355,13 @@ Before creating Claude Code sessions, provision the Secret named by
 ConfigMap named by `CLAUDE_CODE_CONFIG_CONFIGMAP` (default
 `claude-code-config`). The Secret holds credentials only: its required
 `auth-token` key is exposed only to the credential-proxy sidecar, and its
-required `k3s-mcp-token` key is exposed only to the Claude tool-running
-container as `K3S_MCP_TOKEN`. Every other key below lives in the ConfigMap; its
+optional `k3s-mcp-token` key is exposed only to the loopback `k3s-mcp-proxy`
+sidecar as `K3S_MCP_TOKEN`. Every other key below lives in the ConfigMap; its
 required `base-url` key, like `auth-token`, is exposed only to the
-credential-proxy sidecar. Its entrypoint uses that
-token to obtain short-lived read access to the private plugin marketplace and
-bootstrap `session-platform@dlddu-plugins`; the running plugin then uses the
-same K3s MCP credential. The agent redacts its literal value from read/SSE
-output. The ConfigMap's `model` key is optional: a non-empty value selects
+credential-proxy sidecar. The K3s MCP sidecar uses its token to obtain
+short-lived read access to the private plugin marketplace and seed the
+session's selected plugins, which the agent installs; the session reaches the
+K3s MCP through the same sidecar, which injects the token. The ConfigMap's `model` key is optional: a non-empty value selects
 the model for `platform-default` sessions, while a missing or empty value falls
 back to the installed Claude CLI default. A concrete model supplied when the
 session is created always wins. Non-empty `model` values are validated against

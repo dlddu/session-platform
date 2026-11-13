@@ -69,12 +69,14 @@ export const HEADLESS_DENIAL =
 export class UsageError extends Error {}
 
 // parseArgs reads the agent's argv:
-// [--model <m>] [--effort <e>] [--permission-mode <p>] [--resume] -- <prompt>.
+// [--model <m>] [--effort <e>] [--permission-mode <p>] [--k3s-mcp-url <u>]
+// [--resume] -- <prompt>.
 // The prompt is the one argument after "--", so nothing in it is a flag.
 export function parseArgs(argv) {
   let model = PLATFORM_DEFAULT_MODEL;
   let effort = null;
   let permissionMode = DEFAULT_PERMISSION_MODE;
+  let k3sMcpUrl = null;
   let resume = false;
   let checkCli = false;
   const value = (i, flag) => {
@@ -90,7 +92,7 @@ export function parseArgs(argv) {
       if (rest.length !== 1) {
         throw new UsageError("expected exactly one prompt argument after --");
       }
-      return { model, effort, permissionMode, resume, prompt: rest[0], checkCli };
+      return { model, effort, permissionMode, k3sMcpUrl, resume, prompt: rest[0], checkCli };
     }
     if (arg === "--model") {
       model = value(i++, "--model");
@@ -104,6 +106,8 @@ export function parseArgs(argv) {
       if (!PERMISSION_MODES.has(permissionMode)) {
         throw new UsageError(`unknown permission mode ${JSON.stringify(permissionMode)}`);
       }
+    } else if (arg === "--k3s-mcp-url") {
+      k3sMcpUrl = loopbackHttpUrl(value(i++, "--k3s-mcp-url"));
     } else if (arg === "--resume") {
       resume = true;
     } else if (arg === "--check-cli") {
@@ -113,15 +117,30 @@ export function parseArgs(argv) {
     }
   }
   if (checkCli) {
-    return { model, effort, permissionMode, resume, prompt: null, checkCli };
+    return { model, effort, permissionMode, k3sMcpUrl, resume, prompt: null, checkCli };
   }
   throw new UsageError("missing -- <prompt>");
+}
+
+// loopbackHttpUrl accepts the K3s MCP proxy sidecar's address only: the agent
+// never points a turn's K3s MCP anywhere but this pod's own sidecar (AC-E6).
+function loopbackHttpUrl(raw) {
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new UsageError(`--k3s-mcp-url is not a URL: ${JSON.stringify(raw)}`);
+  }
+  if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1" || parsed.username || parsed.password) {
+    throw new UsageError(`--k3s-mcp-url must be the loopback sidecar, got ${JSON.stringify(raw)}`);
+  }
+  return raw;
 }
 
 // resolveClaudeBin is the Claude Code executable the SDK drives: CLAUDE_CODE_BIN
 // when it is a path, otherwise that name (default `claude`) looked up on PATH.
 // The image installs the SDK without its bundled binary, so this is the one
-// pinned CLI the plugin bootstrap also uses.
+// pinned CLI the agent's plugin install also uses.
 export function resolveClaudeBin(env) {
   const name = env.CLAUDE_CODE_BIN || "claude";
   if (name.includes(path.sep)) {
@@ -211,10 +230,19 @@ export function pluginToolPrefix(plugin) {
   return `mcp__plugin_${plugin.replace(/[^A-Za-z0-9_-]/g, "_")}_`;
 }
 
+// K3S_MCP_SERVER is the name the platform registers the K3s MCP under, the
+// same as codex's, so its tools are mcp__k3s__<tool> in either type.
+export const K3S_MCP_SERVER = "k3s";
+
 // decideTool is AC-E2's permission policy for one tool request the settings
 // rules left open. It returns { allow: true } or { allow: false, message }.
-export function decideTool(toolName, plugins = []) {
+// k3s says whether this turn registered the platform's K3s MCP; the K3s MCP
+// asks a human before any write itself.
+export function decideTool(toolName, plugins = [], { k3s = false } = {}) {
   if (PLATFORM_TOOLS.has(toolName)) {
+    return { allow: true };
+  }
+  if (k3s && toolName.startsWith(`mcp__${K3S_MCP_SERVER}__`)) {
     return { allow: true };
   }
   if (plugins.some((plugin) => toolName.startsWith(pluginToolPrefix(plugin)))) {
@@ -238,6 +266,7 @@ export function queryOptions({
   model,
   effort,
   permissionMode = DEFAULT_PERMISSION_MODE,
+  k3sMcpUrl = null,
   cwd,
   claudeBin,
   plan,
@@ -259,6 +288,10 @@ export function queryOptions({
   }
   if (effort) {
     options.effort = effort;
+  }
+  if (k3sMcpUrl) {
+    // The sidecar injects the token; the CLI sends none of its own.
+    options.mcpServers = { [K3S_MCP_SERVER]: { type: "http", url: k3sMcpUrl } };
   }
   if (plan.kind === "resume") {
     options.resume = plan.sessionId;

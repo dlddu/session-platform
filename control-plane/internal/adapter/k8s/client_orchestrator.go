@@ -118,17 +118,14 @@ const (
 	AnthropicCACertEnvVar     = "ANTHROPIC_CA_CERT"
 	ClaudeCodeCACertConfigKey = "ca-cert"
 
-	// The plugin bootstrap's two endpoints, as optional keys: absent, the
-	// entrypoint keeps its built-in defaults, so deploy/base/ needs no change
-	// (docs/test/e2e.md's PLUGIN-CRED row is why they are overridable).
+	// The K3s MCP proxy's two endpoints, as optional keys: absent, the proxy
+	// keeps its built-in defaults, so deploy/base/ needs no change.
 	K3SMCPURLEnvVar                         = "K3S_MCP_URL"
-	ClaudeCodePluginMarketplaceURLEnvVar    = "CLAUDE_CODE_PLUGIN_MARKETPLACE_URL"
 	ClaudeCodeK3SMCPURLConfigKey            = "k3s-mcp-url"
 	ClaudeCodePluginMarketplaceURLConfigKey = "plugin-marketplace-url"
 	// ClaudeCodePluginsEnvVar carries a session's own plugin selection
 	// (AC-L1), comma-separated, and is set only when the session chose one.
-	// Keep in sync with data-plane/entrypoint.sh and data-plane/cmd/agent
-	// (claudePluginsEnv).
+	// Keep in sync with data-plane/cmd/agent (claudePluginsEnv).
 	ClaudeCodePluginsEnvVar = "CLAUDE_CODE_PLUGINS"
 	// ClaudeCredentialsContainerName identifies the isolated Secret holder.
 	ClaudeCredentialsContainerName = "claude-credentials"
@@ -643,19 +640,18 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			}
 			modelEnv = optionalConfigMapEnv(ClaudeCodeModelEnvVar, o.claudeConfigConfigMap, key)
 		}
+		// The K3s MCP token stays in the loopback k3s-mcp-proxy sidecar, which
+		// also seeds the selected plugins; the CLI container gets its address
+		// (AC-E6). K3S_MCP_URL is not a credential: the agent reads its path and
+		// recognises the K3s server in a plugin by it.
 		container.Env = append(container.Env,
 			modelEnv,
-			secretEnv(K3SMCPTokenEnvVar, o.claudeCredentialsSecret, ClaudeCodeK3SMCPTokenSecretKey),
 			optionalConfigMapEnv(K3SMCPURLEnvVar, o.claudeConfigConfigMap, ClaudeCodeK3SMCPURLConfigKey),
-			optionalConfigMapEnv(
-				ClaudeCodePluginMarketplaceURLEnvVar,
-				o.claudeConfigConfigMap,
-				ClaudeCodePluginMarketplaceURLConfigKey,
-			),
+			corev1.EnvVar{Name: K3SMCPProxyURLEnvVar, Value: K3SMCPProxyLoopbackURL},
 			corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: workloadStateDir},
 		)
 		// Only a session that chose its plugins carries the variable; without it
-		// the entrypoint and agent fall back to the platform plugin (AC-L1).
+		// the agent enables none (AC-L1).
 		if plugins != nil {
 			container.Env = append(container.Env,
 				corev1.EnvVar{Name: ClaudeCodePluginsEnvVar, Value: strings.Join(plugins, ",")})
@@ -685,6 +681,9 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			)
 			sidecars = append(sidecars, o.claudeCredentialProxy(image))
 		}
+		sidecars = append(sidecars, o.loopbackK3SMCPProxy(sessionID, image,
+			o.claudeCredentialsSecret, o.claudeConfigConfigMap, strings.Join(plugins, ",")))
+		volumes = append(volumes, pluginSeedMarketplaceEmptyDir())
 	case session.WorkloadTypeMiniMaxCode:
 		sidecars, volumes = o.miniMaxCodePod(&container, model, helper, helperPodNameFor(sessionID, suffix))
 	case session.WorkloadTypeCodexChat, session.WorkloadTypeCodexTask:

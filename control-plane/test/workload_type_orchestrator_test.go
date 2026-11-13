@@ -55,7 +55,7 @@ func TestClientOrchestrator_PodSpecBranchesOnWorkloadType(t *testing.T) {
 		wantContainers int
 	}{
 		{session.WorkloadTypeShell, shellImage, 1},
-		{session.WorkloadTypeClaudeCode, claudeCodeImage, 2},
+		{session.WorkloadTypeClaudeCode, claudeCodeImage, 3},
 	}
 	for _, tc := range cases {
 		orch, cs := newReadyOrchestrator(t,
@@ -186,7 +186,7 @@ func TestClientOrchestrator_ModelIsValidatedAndCopiedToPod(t *testing.T) {
 	}
 }
 
-func TestClientOrchestrator_ClaudeProviderCredentialsAreIsolatedAndK3sTokenIsSecretBacked(t *testing.T) {
+func TestClientOrchestrator_ClaudeProviderCredentialsAndK3sTokenAreIsolatedInSidecars(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t,
 		k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, claudeCodeImage),
@@ -199,8 +199,8 @@ func TestClientOrchestrator_ClaudeProviderCredentialsAreIsolatedAndK3sTokenIsSec
 		t.Fatalf("start: %v", err)
 	}
 	pod := listPods(t, cs)[0]
-	if len(pod.Spec.Containers) != 2 {
-		t.Fatalf("containers = %d, want agent + credential proxy", len(pod.Spec.Containers))
+	if len(pod.Spec.Containers) != 3 {
+		t.Fatalf("containers = %d, want agent + credential proxy + K3s MCP proxy", len(pod.Spec.Containers))
 	}
 	if pod.Spec.ServiceAccountName != k8s.DataPlaneServiceAccountName {
 		t.Fatalf("service account = %q, want %q", pod.Spec.ServiceAccountName, k8s.DataPlaneServiceAccountName)
@@ -221,26 +221,18 @@ func TestClientOrchestrator_ClaudeProviderCredentialsAreIsolatedAndK3sTokenIsSec
 			continue
 		}
 		if ref := env.ValueFrom.SecretKeyRef; ref != nil {
-			isRequiredK3SToken := env.Name == k8s.K3SMCPTokenEnvVar &&
-				ref.Name == "provider-credentials" && ref.Key == k8s.ClaudeCodeK3SMCPTokenSecretKey &&
-				(ref.Optional == nil || !*ref.Optional)
-			if !isRequiredK3SToken {
-				t.Fatalf("main container has unexpected Secret env %s: %+v", env.Name, env)
-			}
+			t.Fatalf("main container has unexpected Secret env %s: %+v", env.Name, env)
 		}
 		if ref := env.ValueFrom.ConfigMapKeyRef; ref != nil {
 			isOptionalModel := env.Name == k8s.ClaudeCodeModelEnvVar &&
 				ref.Name == "provider-config" && ref.Key == k8s.ClaudeCodeModelConfigKey &&
 				ref.Optional != nil && *ref.Optional
-			// Bootstrap *addresses*, not credentials: optional so a ConfigMap
-			// without them leaves the entrypoint's production defaults in place.
+			// An *address*, not a credential: optional so a ConfigMap without it
+			// leaves the production default in place.
 			isOptionalK3SURL := env.Name == k8s.K3SMCPURLEnvVar &&
 				ref.Name == "provider-config" && ref.Key == k8s.ClaudeCodeK3SMCPURLConfigKey &&
 				ref.Optional != nil && *ref.Optional
-			isOptionalMarketplaceURL := env.Name == k8s.ClaudeCodePluginMarketplaceURLEnvVar &&
-				ref.Name == "provider-config" && ref.Key == k8s.ClaudeCodePluginMarketplaceURLConfigKey &&
-				ref.Optional != nil && *ref.Optional
-			if !isOptionalModel && !isOptionalK3SURL && !isOptionalMarketplaceURL {
+			if !isOptionalModel && !isOptionalK3SURL {
 				t.Fatalf("main container has unexpected ConfigMap env %s: %+v", env.Name, env)
 			}
 		}
@@ -257,15 +249,12 @@ func TestClientOrchestrator_ClaudeProviderCredentialsAreIsolatedAndK3sTokenIsSec
 	if !ok || model.ValueFrom == nil || model.ValueFrom.ConfigMapKeyRef == nil {
 		t.Fatalf("main model is not ConfigMap-backed: %+v", model)
 	}
-	k3sToken, ok := envVarOf(main, k8s.K3SMCPTokenEnvVar)
-	if !ok || k3sToken.ValueFrom == nil || k3sToken.ValueFrom.SecretKeyRef == nil {
-		t.Fatalf("main K3s MCP token is not Secret-backed: %+v", k3sToken)
+	if _, ok := envVarOf(main, k8s.K3SMCPTokenEnvVar); ok {
+		t.Fatalf("tool-running container must not receive %s", k8s.K3SMCPTokenEnvVar)
 	}
-	k3sTokenRef := k3sToken.ValueFrom.SecretKeyRef
-	if k3sTokenRef.Name != "provider-credentials" || k3sTokenRef.Key != k8s.ClaudeCodeK3SMCPTokenSecretKey ||
-		(k3sTokenRef.Optional != nil && *k3sTokenRef.Optional) {
-		t.Fatalf("main K3s MCP token selector = %+v, want required provider-credentials/%s",
-			k3sTokenRef, k8s.ClaudeCodeK3SMCPTokenSecretKey)
+	proxyURL, ok := envVarOf(main, k8s.K3SMCPProxyURLEnvVar)
+	if !ok || proxyURL.Value != k8s.K3SMCPProxyLoopbackURL || proxyURL.ValueFrom != nil {
+		t.Fatalf("main %s = %+v (present=%v), want %q", k8s.K3SMCPProxyURLEnvVar, proxyURL, ok, k8s.K3SMCPProxyLoopbackURL)
 	}
 	if main.SecurityContext != nil && main.SecurityContext.Privileged != nil && *main.SecurityContext.Privileged {
 		t.Fatal("claude-code main container is privileged")
@@ -277,9 +266,42 @@ func TestClientOrchestrator_ClaudeProviderCredentialsAreIsolatedAndK3sTokenIsSec
 	if len(main.VolumeMounts) != 1 || main.VolumeMounts[0].MountPath != "/session" {
 		t.Fatalf("claude state mount = %+v, want one /session mount", main.VolumeMounts)
 	}
-	if len(pod.Spec.Volumes) != 1 || pod.Spec.Volumes[0].EmptyDir == nil ||
-		pod.Spec.Volumes[0].Name != main.VolumeMounts[0].Name {
-		t.Fatalf("claude state volume = %+v, want one matching emptyDir", pod.Spec.Volumes)
+	if len(pod.Spec.Volumes) != 2 || pod.Spec.Volumes[0].EmptyDir == nil ||
+		pod.Spec.Volumes[0].Name != main.VolumeMounts[0].Name || pod.Spec.Volumes[1].EmptyDir == nil {
+		t.Fatalf("claude volumes = %+v, want the state emptyDir and the marketplace emptyDir", pod.Spec.Volumes)
+	}
+
+	k3s, ok := containerNamed(pod, k8s.K3SMCPProxyContainerName)
+	if !ok {
+		t.Fatalf("missing K3s MCP proxy container %q", k8s.K3SMCPProxyContainerName)
+	}
+	if got, _ := envOf(k3s, "DATA_PLANE_WORKLOAD"); got != "k3s-mcp-proxy" {
+		t.Fatalf("K3s MCP proxy workload = %q, want k3s-mcp-proxy", got)
+	}
+	if got, _ := envOf(k3s, "DATA_PLANE_AGENT_ADDR"); got != "127.0.0.1:8093" {
+		t.Fatalf("K3s MCP proxy listen address = %q, want loopback", got)
+	}
+	// Optional, as for codex: a Secret without the key starts the proxy
+	// unconfigured and the session runs without K3s MCP tools or plugins.
+	k3sToken, ok := envVarOf(k3s, k8s.K3SMCPTokenEnvVar)
+	if !ok || k3sToken.ValueFrom == nil || k3sToken.ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("K3s MCP proxy token is not Secret-backed: %+v", k3sToken)
+	}
+	if sel := k3sToken.ValueFrom.SecretKeyRef; sel.Name != "provider-credentials" ||
+		sel.Key != k8s.ClaudeCodeK3SMCPTokenSecretKey || sel.Optional == nil || !*sel.Optional {
+		t.Fatalf("K3s MCP proxy token selector = %+v, want optional provider-credentials/%s",
+			sel, k8s.ClaudeCodeK3SMCPTokenSecretKey)
+	}
+	for _, name := range []string{k8s.AnthropicAuthTokenEnvVar, k8s.AnthropicBaseURLEnvVar, k8s.ClaudeCodeOAuthTokenEnvVar} {
+		if _, ok := envVarOf(k3s, name); ok {
+			t.Fatalf("K3s MCP proxy must not receive %s", name)
+		}
+	}
+	if len(k3s.VolumeMounts) != 1 || k3s.VolumeMounts[0].Name != pod.Spec.Volumes[1].Name {
+		t.Fatalf("K3s MCP proxy mounts = %+v, want only the marketplace emptyDir", k3s.VolumeMounts)
+	}
+	if k3s.ReadinessProbe == nil || k3s.ReadinessProbe.Exec == nil {
+		t.Fatal("loopback K3s MCP proxy needs an in-container readiness probe")
 	}
 
 	proxy, ok := containerNamed(pod, k8s.ClaudeCredentialsContainerName)

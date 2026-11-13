@@ -41,12 +41,13 @@ const (
 	claudeSettingsDir      = ".claude"
 	claudeSettingsFile     = "settings.json"
 	// claudePluginMarketplace is the marketplace every managed plugin comes
-	// from; entrypoint.sh installs from it under this name.
+	// from; the agent stages the sidecar's seed under this name
+	// (stageClaudeMarketplace).
 	claudePluginMarketplace = "dlddu-plugins"
 	// claudePluginsEnv is a session's own plugin selection (AC-L1), bare
 	// names, comma-separated. Unset means no plugins.
 	// Keep in sync with control-plane/internal/adapter/k8s
-	// (ClaudeCodePluginsEnvVar) and entrypoint.sh.
+	// (ClaudeCodePluginsEnvVar).
 	claudePluginsEnv     = "CLAUDE_CODE_PLUGINS"
 	maxClaudePromptBytes = 1 << 20
 	// claudePermissionModeParam is the /write query parameter that names the
@@ -781,7 +782,7 @@ func (c *claudeWorkload) argv(prompt string, resume bool, permissionMode string)
 // run; the runner then resumes the session id it recorded. Partial messages and
 // the system prompt are the runner's, not flags here, so no argv can change
 // them, and the runner itself refuses a mode outside its allowlist.
-func claudeRunnerArgv(binary, model, effort, permissionMode, prompt string, resume bool) []string {
+func claudeRunnerArgv(binary, model, effort, permissionMode, k3sMCPURL, prompt string, resume bool) []string {
 	argv := []string{binary}
 	if model != "" && model != platformDefaultModel {
 		argv = append(argv, "--model", model)
@@ -791,6 +792,9 @@ func claudeRunnerArgv(binary, model, effort, permissionMode, prompt string, resu
 	}
 	if permissionMode != "" {
 		argv = append(argv, "--permission-mode", permissionMode)
+	}
+	if k3sMCPURL != "" {
+		argv = append(argv, "--k3s-mcp-url", k3sMCPURL)
 	}
 	if resume {
 		argv = append(argv, "--resume")
@@ -1270,7 +1274,8 @@ func managedClaudePlugin(name string) bool {
 
 // claudePluginsFromEnv resolves the plugins a claude-code pod enables: the
 // session's own selection when the control plane passed one (AC-L1), otherwise
-// none. entrypoint.sh installs the same list before the agent starts.
+// none. The agent installs them from the K3s MCP sidecar's seed
+// (claude_plugins.go).
 func claudePluginsFromEnv() ([]string, error) {
 	raw, set := os.LookupEnv(claudePluginsEnv)
 	if !set {

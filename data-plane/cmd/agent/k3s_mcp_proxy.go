@@ -118,7 +118,7 @@ func newK3SMCPProxyWithTransport(rawURL, token, sessionID string, logger *slog.L
 		_, _ = w.Write(health)
 	})
 	result := &k3sMCPProxy{Handler: mux}
-	if upstream != nil && strings.TrimSpace(os.Getenv(miniMaxMarketplaceDirEnv)) != "" {
+	if upstream != nil && strings.TrimSpace(os.Getenv(pluginSeedMarketplaceDirEnv)) != "" {
 		result.seeder = newMiniMaxMarketplaceSeeder(upstream, mcpPath, logger)
 		mux.HandleFunc(miniMaxPluginSeedPath, result.seeder.serveSeed)
 		mux.HandleFunc(miniMaxPluginRefreshPath, result.seeder.serveRefresh)

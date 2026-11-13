@@ -503,7 +503,7 @@ const (
 )
 
 // CodexChatSessionDBMCPURL is the database MCP on the loopback sidecar.
-var CodexChatSessionDBMCPURL = CodexK3SMCPProxyURL + sessionDBMCPPath
+var CodexChatSessionDBMCPURL = K3SMCPProxyLoopbackURL + sessionDBMCPPath
 
 // authSlotSubPath is where the login lives inside a pool's slot: the root
 // for the login-only pools, its own directory for codex-chat's.
@@ -554,12 +554,12 @@ func attachSessionDB(container *corev1.Container, sidecars []corev1.Container, w
 	}
 	proxy := -1
 	for i := range sidecars {
-		if sidecars[i].Name == CodexK3SMCPProxyContainerName {
+		if sidecars[i].Name == K3SMCPProxyContainerName {
 			proxy = i
 		}
 	}
 	if proxy < 0 {
-		return nil, fmt.Errorf("workload type %q has no %s sidecar to serve its session database", workloadType, CodexK3SMCPProxyContainerName)
+		return nil, fmt.Errorf("workload type %q has no %s sidecar to serve its session database", workloadType, K3SMCPProxyContainerName)
 	}
 	sidecars[proxy].VolumeMounts = append(sidecars[proxy].VolumeMounts, corev1.VolumeMount{
 		Name: AuthSlotVolumeName, MountPath: SessionDBMountPath, SubPath: codexChatSlotDBDir,

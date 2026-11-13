@@ -63,12 +63,14 @@ spec:
               value: "ghcr.io/dlddu/session-platform-data-plane:cc4615f73c4db0df6151680d65ee6390a0e5ee52"
             # This Secret holds credentials only: the required auth-token,
             # referenced only by the localhost credential-proxy sidecar, and the
-            # required k3s-mcp-token, referenced only by the Claude tool-running
-            # container. The non-credential keys live in the `claude-code-config`
-            # ConfigMap (CLAUDE_CODE_CONFIG_CONFIGMAP's default, so it is not
-            # set here): the required base-url and optional ca-cert reach the
-            # sidecar only; the optional model, k3s-mcp-url and
-            # plugin-marketplace-url reach the tool-running container only; and
+            # optional k3s-mcp-token, referenced only by the loopback
+            # k3s-mcp-proxy sidecar. The non-credential keys live in the
+            # `claude-code-config` ConfigMap (CLAUDE_CODE_CONFIG_CONFIGMAP's
+            # default, so it is not set here): the required base-url and
+            # optional ca-cert reach the credential-proxy only; the optional
+            # k3s-mcp-url and plugin-marketplace-url reach the k3s-mcp-proxy
+            # (k3s-mcp-url the tool-running container too); the optional model
+            # reaches the tool-running container only; and
             # the optional model and models catalog also reach the control plane
             # below. The control plane never receives provider credentials or
             # the K3s MCP token (AC-E6). Provision both out of band; see the

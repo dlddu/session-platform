@@ -231,7 +231,7 @@ interactive shell and Claude Code workloads.
   show a shell tool and its own marker, and no image or web tool or bundled
   skill.
 - `k3s-mcp-proxy` is the `minimax-code` helper pod's K3s MCP proxy, and the
-  `codex-chat` and `codex-task` pods' loopback sidecar (`DATA_PLANE_PROXY_PLACEMENT=sidecar`,
+  `claude-code`, `codex-chat` and `codex-task` pods' loopback sidecar (`DATA_PLANE_PROXY_PLACEMENT=sidecar`,
   `127.0.0.1:8093`): the
   credential-proxy implementation with the MCP Streamable HTTP header allowlist
   (`Accept`, `Content-Type`, `Mcp-Session-Id`, `Mcp-Protocol-Version`,
@@ -249,8 +249,8 @@ interactive shell and Claude Code workloads.
   With a token it also bootstraps the plugin marketplace for the workload pod,
   which cannot reach GitHub: it asks the K3s MCP for a `plugin-marketplace` read
   token through its own handler in process, clones
-  `MINIMAX_CODE_PLUGIN_MARKETPLACE_URL` into `MINIMAX_CODE_MARKETPLACE_DIR` with a
-  URL-scoped header, and serves the plugins named in `MINIMAX_CODE_PLUGINS`
+  `PLUGIN_SEED_MARKETPLACE_URL` into `PLUGIN_SEED_MARKETPLACE_DIR` with a
+  URL-scoped header, and serves the plugins named in `PLUGIN_SEED_PLUGINS`
   (the session's selection; empty or unset means none, and then nothing is
   cloned and the bundle is `ready` and empty) — manifest plus the files its `skills`, `commands`,
   `agents` and `mcpServers` fields name, never hooks — at `GET /plugin-seed`
@@ -310,24 +310,26 @@ still, archives `home/` plus the scrollback, and keeps both paused until the
 control plane reclaims the pod or calls `/checkpoint/abort`, which SIGCONTs the
 tree and reopens writes. A process that daemonized out of the shell's tree is
 not paused. The image includes the official
-`@anthropic-ai/claude-code` npm package. For a `claude-code` container whose
-session chose plugins (`CLAUDE_CODE_PLUGINS` set; AC-L1) only,
-`entrypoint.sh` calls K3s MCP with `K3S_MCP_TOKEN` to mint a short-lived
-`contents:read` GitHub App token scoped to `plugin-marketplace`, supplies that
-token only through a process-scoped Git HTTPS Authorization header while running
-`claude plugin marketplace add https://github.com/dlddu/plugin-marketplace.git`
-and `claude plugin install <name>@dlddu-plugins` for each chosen plugin, then exports the
-runtime plugin seed and execs the agent. The GitHub token is unset before the
-agent starts; a claude-code session that chose none, and every other workload — `shell`, `minimax-code` (its marketplace path is the K3s MCP proxy, above), `mcp` and
-`credential-proxy` — skips this bootstrap.
+`@anthropic-ai/claude-code` npm package. `entrypoint.sh` only execs the agent.
+A `claude-code` agent reads its loopback `k3s-mcp-proxy` sidecar
+(`K3S_MCP_PROXY_URL`, above) once per pod, on boot or after a restore: when the
+sidecar holds a token and the session chose plugins (`CLAUDE_CODE_PLUGINS`;
+AC-L1), it writes the sidecar's seed as a local `dlddu-plugins` marketplace
+under `/tmp/session-platform-claude-plugins` — dropping each plugin's own K3s
+MCP server — runs `claude plugin marketplace add <dir>` and
+`claude plugin install <name>@dlddu-plugins` under a HOME of its own, and
+exports the resulting `CLAUDE_CODE_PLUGIN_CACHE_DIR` to its turns; the managed
+settings enable only what was installed. When the sidecar holds a token, every
+turn also gets `--k3s-mcp-url http://127.0.0.1:8093/<path>`, which the runner
+registers as the `k3s` MCP server and allows. What the sidecar cannot deliver is
+left out with a warning rather than failing the pod.
 Provider authentication credentials are not present in the Claude container or
 inherited by its Bash tools. That container receives
 `ANTHROPIC_BASE_URL=http://127.0.0.1:8091` and the non-secret
 `ANTHROPIC_AUTH_TOKEN=session-platform-proxy`; the credential-proxy sidecar
-alone receives the required ConfigMap `base-url` and Secret `auth-token` keys. The primary
-container separately receives the required
-Secret key `k3s-mcp-token` as `K3S_MCP_TOKEN`; that literal is included in
-incremental output redaction and is never projected into the credential proxy.
+alone receives the required ConfigMap `base-url` and Secret `auth-token` keys. The
+optional Secret key `k3s-mcp-token` reaches only the `k3s-mcp-proxy` sidecar;
+the agent refuses to start if the primary container receives `K3S_MCP_TOKEN`.
 For a session whose immutable model metadata is `platform-default`, the primary
 container also receives `CLAUDE_CODE_MODEL` from the platform ConfigMap's
 optional `model` key. A missing or empty key omits `--model` and therefore delegates to the

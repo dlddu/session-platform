@@ -31,8 +31,12 @@ const (
 	// references; the deployment provisions it (deploy/overlays/e2e/, deploy/base/ example).
 	credentialsSecretName = "claude-code-credentials"
 	configConfigMapName   = "claude-code-config"
+	// k3sProxyContainer is the loopback sidecar that alone holds the K3s MCP
+	// token and seeds the session's plugins.
+	k3sProxyContainer = "k3s-mcp-proxy"
 	// What the main container gets in place of the provider's address and token.
 	proxyURLForMainContainer = "http://127.0.0.1:8091"
+	k3sProxyURLForMain       = "http://127.0.0.1:8093"
 	proxyPlaceholderToken    = "session-platform-proxy"
 	// dataPlaneServiceAccount is the session pod's identity: read-only cluster
 	// discovery through the built-in `view` role, which excludes Secrets.
@@ -40,8 +44,8 @@ const (
 )
 
 // Creating one is the expensive part (the pod must reach Ready, which means
-// entrypoint.sh finished its plugin bootstrap), so each test makes a single
-// session and hangs every assertion it can off that one pod.
+// the agent finished installing the sidecar's plugin seed), so each test makes
+// a single session and hangs every assertion it can off that one pod.
 type e6Session struct {
 	session typedSession
 	pod     *corev1.Pod
@@ -264,6 +268,7 @@ func TestCredentialPlacementOnTheDeployedSUT(t *testing.T) {
 	}
 	main := e.container(t, workloadContainer)
 	proxy := e.container(t, credentialsContainer)
+	k3sProxy := e.container(t, k3sProxyContainer)
 
 	t.Run("ProviderCredentialsOnlyInTheProxySidecar", func(t *testing.T) {
 		e6RequireConfigMapRef(t, proxy, "ANTHROPIC_BASE_URL", "base-url", false)
@@ -291,16 +296,24 @@ func TestCredentialPlacementOnTheDeployedSUT(t *testing.T) {
 		}
 	})
 
-	t.Run("PluginTokenAndBootstrapAddressesOnlyInTheMainContainer", func(t *testing.T) {
-		// Required: the plugin bootstrap cannot run without it.
-		e6RequireSecretRef(t, main, "K3S_MCP_TOKEN", "k3s-mcp-token", false)
-		// Optional address-class keys: absent, entrypoint.sh keeps its
-		// production defaults, which is why deploy/base/ needs no change for them.
-		e6RequireConfigMapRef(t, main, "K3S_MCP_URL", "k3s-mcp-url", true)
-		e6RequireConfigMapRef(t, main, "CLAUDE_CODE_PLUGIN_MARKETPLACE_URL", "plugin-marketplace-url", true)
+	t.Run("K3sTokenOnlyInTheK3sProxySidecar", func(t *testing.T) {
+		// Optional, as for codex: without it the sidecar starts unconfigured
+		// and the session runs without K3s MCP tools or plugins.
+		e6RequireSecretRef(t, k3sProxy, "K3S_MCP_TOKEN", "k3s-mcp-token", true)
+		// Optional address-class keys: absent, the sidecar keeps its production
+		// defaults, which is why deploy/base/ needs no change for them.
+		e6RequireConfigMapRef(t, k3sProxy, "K3S_MCP_URL", "k3s-mcp-url", true)
+		e6RequireConfigMapRef(t, k3sProxy, "PLUGIN_SEED_MARKETPLACE_URL", "plugin-marketplace-url", true)
 
-		// The proxy skips the bootstrap entirely, so it is given none of them.
-		e6RequireAbsent(t, proxy, "K3S_MCP_TOKEN", "K3S_MCP_URL", "CLAUDE_CODE_PLUGIN_MARKETPLACE_URL")
+		// The CLI container reaches the K3s MCP and the plugin seed through the
+		// sidecar's loopback address and holds no token of its own.
+		e6RequireLiteral(t, main, "K3S_MCP_PROXY_URL", k3sProxyURLForMain)
+		e6RequireAbsent(t, main, "K3S_MCP_TOKEN", "CLAUDE_CODE_PLUGIN_MARKETPLACE_URL")
+		e6RequireAbsent(t, proxy, "K3S_MCP_TOKEN", "K3S_MCP_URL", "PLUGIN_SEED_MARKETPLACE_URL")
+		e6RequireAbsent(t, k3sProxy, "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_CA_CERT")
+		if got := strings.TrimSpace(e.sh(t, workloadContainer, `printf %s "${K3S_MCP_TOKEN-UNSET}"`)); got != "UNSET" {
+			t.Fatal("the tool-running container carries K3S_MCP_TOKEN; the K3s MCP proxy sidecar holds it")
+		}
 	})
 
 	t.Run("PlatformModelIsAnOptionalConfigMapKeyOnTheMainContainerOnly", func(t *testing.T) {
@@ -332,7 +345,7 @@ func TestCredentialPlacementOnTheDeployedSUT(t *testing.T) {
 				len(got), len(token))
 		}
 		if got := strings.TrimSpace(e.sh(t, credentialsContainer, `printf %s "${K3S_MCP_TOKEN-UNSET}"`)); got != "UNSET" {
-			t.Fatal("the proxy sidecar carries K3S_MCP_TOKEN; the plugin token belongs to the main container only")
+			t.Fatal("the provider proxy sidecar carries K3S_MCP_TOKEN; it belongs to the K3s MCP proxy sidecar only")
 		}
 
 		probe := e6ProbeFields(t, e.sh(t, workloadContainer, e6TokenReachProbe, token, proxyPlaceholderToken))

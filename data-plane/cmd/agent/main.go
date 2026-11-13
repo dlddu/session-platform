@@ -116,6 +116,11 @@ func main() {
 			logger.Error("unsafe agent credential configuration", "workload", workload, "err", err)
 			os.Exit(1)
 		}
+		platform, err := claudePlatformFromEnv(logger)
+		if err != nil {
+			logger.Error("unsafe agent credential configuration", "workload", workload, "err", err)
+			os.Exit(1)
+		}
 		runTimeout, err := durationEnv("CLAUDE_CODE_RUN_TIMEOUT", defaultClaudeRunTimeout)
 		if err != nil {
 			logger.Error("invalid claude-code run timeout", "err", err)
@@ -131,7 +136,7 @@ func main() {
 			Redact:      credentialLiteralsFromEnv(),
 			RunTimeout:  runTimeout,
 			Tools:       auth.tools,
-			CLI:         claudeCLI{effort: auth.effort},
+			CLI:         claudeCLI{effort: auth.effort, platform: platform},
 		})
 		if err != nil {
 			logger.Error("failed to initialise agent workload", "workload", workload, "err", err)
