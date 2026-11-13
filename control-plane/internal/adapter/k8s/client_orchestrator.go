@@ -57,6 +57,11 @@ const (
 	ContainerName         = "session"
 	WorkloadMemoryRequest = "512Mi"
 	WorkloadMemoryLimit   = "1Gi"
+	// WorkloadMemoryRequestDouble and WorkloadMemoryLimitDouble are exactly
+	// double WorkloadMemoryRequest/WorkloadMemoryLimit, selected per-session by
+	// WorkloadSpec.DoubleMemory.
+	WorkloadMemoryRequestDouble = "1Gi"
+	WorkloadMemoryLimitDouble   = "2Gi"
 	// DataPlaneServiceAccountName is the dedicated identity mounted into every
 	// fresh and restored session pod (AC-E6).
 	DataPlaneServiceAccountName = "data-plane"
@@ -559,6 +564,23 @@ func (o *ClientOrchestrator) imageFor(workload session.WorkloadType) (string, er
 	return "", fmt.Errorf("no data plane image configured for workload type %q", workload)
 }
 
+// memoryRequestFor and memoryLimitFor pick the workload container's memory
+// request/limit: the platform default, or exactly double it when the
+// session's WorkloadSpec.DoubleMemory is set.
+func memoryRequestFor(double bool) string {
+	if double {
+		return WorkloadMemoryRequestDouble
+	}
+	return WorkloadMemoryRequest
+}
+
+func memoryLimitFor(double bool) string {
+	if double {
+		return WorkloadMemoryLimitDouble
+	}
+	return WorkloadMemoryLimit
+}
+
 // buildPod assembles the session's workload pod. checkpointRef == "" yields a
 // fresh session pod (no annotation) under the session's deterministic name; a
 // non-empty ref yields a restore-target pod named with the provisioning round's
@@ -606,8 +628,8 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			PeriodSeconds:       2,
 		},
 		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse(WorkloadMemoryRequest)},
-			Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse(WorkloadMemoryLimit)},
+			Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse(memoryRequestFor(workload.DoubleMemory))},
+			Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse(memoryLimitFor(workload.DoubleMemory))},
 		},
 	}
 	container.Env = append(container.Env, corev1.EnvVar{Name: workloadEnvVar, Value: string(workloadType)})

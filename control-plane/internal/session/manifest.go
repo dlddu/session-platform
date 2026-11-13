@@ -22,6 +22,7 @@ type Manifest struct {
 	Model           string       `json:"model,omitempty"`
 	Plugins         []string     `json:"plugins,omitempty"`
 	ReasoningEffort string       `json:"reasoningEffort,omitempty"`
+	DoubleMemory    bool         `json:"doubleMemory,omitempty"`
 	Tenant          string       `json:"tenant,omitempty"`
 	CreatedAt       time.Time    `json:"createdAt"`
 	Checkpoint      Checkpoint   `json:"checkpoint"`
@@ -46,6 +47,7 @@ func ManifestFor(sess *Session, cp *Checkpoint) Manifest {
 		Model:           sess.Model,
 		Plugins:         append([]string(nil), sess.Plugins...),
 		ReasoningEffort: sess.ReasoningEffort,
+		DoubleMemory:    sess.DoubleMemory,
 		Tenant:          sess.Tenant,
 		CreatedAt:       sess.CreatedAt,
 	}
@@ -81,6 +83,7 @@ func (m *Manifest) SnapshotSession(now time.Time) *Session {
 		Model:           m.Model,
 		Plugins:         append([]string(nil), m.Plugins...),
 		ReasoningEffort: m.ReasoningEffort,
+		DoubleMemory:    m.DoubleMemory,
 		Tenant:          m.Tenant,
 		Name:            m.Name,
 		State:           StateSnapshot,

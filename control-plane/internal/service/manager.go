@@ -246,7 +246,7 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 		return nil, err
 	}
 
-	spec := k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins, ReasoningEffort: effort}
+	spec := k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins, ReasoningEffort: effort, DoubleMemory: req.DoubleMemory}
 	// The slot is leased before the pod exists and given back on every
 	// failure below, so an aborted create never strands one (AC-N2).
 	if spec.AuthSlot, err = s.acquireAuthSlot(ctx, workload, id); err != nil {
@@ -277,6 +277,7 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 		Model:           model,
 		Plugins:         plugins,
 		ReasoningEffort: effort,
+		DoubleMemory:    req.DoubleMemory,
 		Tenant:          req.Tenant,
 		Name:            name,
 		State:           session.StateActive,
@@ -929,7 +930,7 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	spec := k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins, ReasoningEffort: effort}
+	spec := k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins, ReasoningEffort: effort, DoubleMemory: sess.DoubleMemory}
 	// codex-chat retains its DB slot across snapshots; other types can use
 	// any free login slot (AC-N3). A full pool leaves the session frozen.
 	if spec.AuthSlot, err = s.acquireAuthSlot(ctx, workload, id); err != nil {

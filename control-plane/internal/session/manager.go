@@ -22,6 +22,10 @@ type CreateRequest struct {
 	// ReasoningEffort is the session's reasoning effort (AC-E8). Empty leaves
 	// it unset; NormalizeReasoningEffort decides which types take one.
 	ReasoningEffort string
+	// DoubleMemory doubles the workload container's memory request/limit over
+	// the platform default. False (the default) keeps existing behavior; it
+	// is immutable after creation and applies regardless of workload type.
+	DoubleMemory bool
 	// Tenant names the owning tenant (AC-K2). The API fills it from the
 	// caller; the manager stores it verbatim.
 	Tenant string

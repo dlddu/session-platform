@@ -195,6 +195,34 @@ func TestWorkloadTypeSurvivesSnapshotRestore(t *testing.T) {
 	}
 }
 
+// The doubled memory option is fixed at creation and must reach the restored
+// pod's spec exactly like model and workload type do.
+func TestDoubleMemorySurvivesSnapshotRestore(t *testing.T) {
+	ctx := context.Background()
+	svc, orch, _ := newServiceWithOrch()
+
+	sess, err := svc.Create(ctx, session.CreateRequest{Name: "double-mem", DoubleMemory: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if !sess.DoubleMemory {
+		t.Fatalf("created session DoubleMemory = false, want true")
+	}
+	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	restored, err := svc.Restore(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if !restored.DoubleMemory {
+		t.Errorf("restored session DoubleMemory = false, want true")
+	}
+	if got := orch.SpecFor(sess.ID).DoubleMemory; !got {
+		t.Errorf("restore provisioned with DoubleMemory = %v, want true", got)
+	}
+}
+
 // AC-E2: a permission mode the session's type does not take is refused before
 // activation, so it never restores a snapshot.
 func TestRefusedPermissionModeDoesNotRestore(t *testing.T) {
