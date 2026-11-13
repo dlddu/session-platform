@@ -476,6 +476,7 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 | `codex-workload.md#시나리오 3` | 기대 결과가 **사람의 브라우저 승인과 실 ChatGPT 구독 계정**에 걸린다 — device code 는 사람이 계정으로 로그인한 브라우저에서 입력해야 승인되고, 그 계정의 보안 설정이 device code 로그인을 허용해야 한다. 승인 끝점은 OpenAI 의 것이라 kind 에 실물로 둘 수 없고, 대역을 세우면 로그인 뒤의 대화가 실 모델이 아니게 된다(`EXT` 대역이 서도 이 시나리오의 「같은 턴이 이어서 실행된다」는 관측되지 않는다). | data plane 단위 테스트 — 러너 안내 줄의 투영(`data-plane/cmd/agent` 의 codex 투영 테스트)과 러너의 로그인 분기(`data-plane/codex-runner` 테스트). 실계정 왕복은 운영 확인. |
 | `codex-workload.md#시나리오 5` | 시나리오 3 위에 서 있다 — 로그인된 세션이 있어야 동결·복원 뒤 「로그인 안내 없이 이어서 답한다」를 관측할 수 있다. 아카이브 왕복 자체는 다른 에이전트 타입과 같은 경로라 그쪽 시나리오(`claude-code-workload.md#시나리오 6`)가 SUT 에서 돈다. | 아카이브 대상 트리에 `~/.codex/auth.json` 과 스레드 파일이 들어가고 관리형 `config.toml` 이 복원 때 다시 쓰인다는 data plane 단위 테스트, 그리고 같은 아카이브 경로의 `claude-code-workload.md#시나리오 6` 대체 검증. |
 | `codex-workload.md#시나리오 6` | 금지 아이템(`command_execution`·`file_change`·`web_search`)은 **실 모델이 그 도구를 부를 때만** 생긴다. 셸·웹 도구는 설정이 꺼 두었으므로 SUT 에서 그 이벤트를 결정적으로 일으킬 경로가 원리적으로 없다 — 일으킬 수 있다면 그것이 곧 AC-J5 위반이다. | `data-plane/codex-runner` 의 `node --test` — 금지 아이템 이벤트 열을 받은 러너가 안내를 남기고 비영 코드로 끝나는지. |
+| `codex-workload.md#시나리오 8` | 기대 결과가 **실 모델이 하위 에이전트를 띄우는 턴**이다 — 하위 에이전트 도구는 모델만 부르고, 그 턴은 실 ChatGPT 로그인 뒤에만 돈다(`codex-workload.md#시나리오 3` 과 같은 사유). app server 를 대역으로 바꾸면 남는 것은 러너의 계약뿐이라 단위 테스트와 같은 것을 재는 셈이다. | `data-plane/codex-runner` 의 `node --test` — 가짜 app server 로 메인 턴 뒤 도는 하위 에이전트를 기다린 뒤 그 마지막 메시지를 실은 후속 턴을 메인 스레드에 여는지, 하위 에이전트 메시지가 메인 답으로 나가지 않는지, 대기 상한을 넘은 에이전트를 `turn/interrupt` 로 중단해 「중단」으로 넘기는지, 메인 턴 중에 끝난 에이전트로는 후속 턴을 열지 않는지, 하위 에이전트의 금지 아이템이 턴을 멈추는지. 실 codex 0.166.0 app server 와의 핸드셰이크·스레드 시작·재개는 수동 스모크로 확인했다. |
 | `agent-auth-pool.md#시나리오 4` | 동기화는 **턴 앞뒤와 턴 중**에 돈다. SUT 에서 `codex-task` 턴을 돌리려면 실 ChatGPT 로그인이 필요하고(`codex-task-workload.md#시나리오 3` 과 같은 사유), `claude-code` 는 풀을 쓰지 않는다(AC-E7). 슬롯에 가짜 파일을 넣어도 CLI 가 그것으로 공급자에 붙지 못해 턴이 로그인 단계에서 끝난다. | `data-plane/cmd/agent` 의 `go test` — `auth_slot_test.go`(턴 전·중·후 동기화, 반쯤 쓰인 파일을 로그아웃으로 읽지 않음, 원자적 쓰기, `GET /auth-slot`)와 아카이브에서 로그인 파일이 빠지는지. |
 | `agent-auth-pool.md#시나리오 5` | 세션 DB MCP 는 사이드카가 **파드 loopback**(`127.0.0.1:8093/session-db/mcp`)에만 연다 — control-plane HTTP API 에도 브라우저에도 그 경로가 없고, 모델이 부르는 길은 실 ChatGPT 로그인 뒤의 턴이다(`codex-workload.md#시나리오 3` 과 같은 사유). 파드 모양 (a) 는 kube 관측이라 `codex-workload.md#시나리오 2` 의 파일과 같은 처지다. | `control-plane/test/codex_orchestrator_test.go` 의 `go test -tags=integration`(`TestCodexChat_SlotSplitsLoginAndDatabase` — PVC 하나·subPath `auth`/`db`·`slot-init` 만 슬롯 전체·주 컨테이너 env, `TestCodexChat_RefusesWithoutSlot`) + `data-plane/cmd/agent/session_db_mcp_test.go`(`raw_exec`→`raw_query` 왕복·SQLite 오류가 `isError`·행 상한·늦게 생긴 디렉터리·`/session-db/mcp` 밖은 프록시로) + `e2e_codex_2_pod_shape_test.go` 가 SUT 파드의 슬롯 마운트를 함께 단언한다. (e) 의 「다음 세션이 이어받는다」는 같은 PVC 를 다시 마운트하는 것이라 저장 계층의 보장이다. |
 | `codex-task-workload.md#시나리오 3` | `codex-workload.md#시나리오 3` 과 같다 — device code 승인은 사람의 브라우저와 실 ChatGPT 구독 계정이 필요하다. 그 뒤의 「다음 세션은 로그인하지 않는다」도 그 로그인 위에 서 있다. | `data-plane/cmd/agent` 의 `go test`(`codex_task_test.go` — 슬롯 파일이 있으면 턴 전에 HOME 으로 오고 턴 뒤 갱신이 슬롯으로 간다)와 `data-plane/codex-runner` 의 `node --test`(작업 모드 스레드 옵션). |
@@ -595,8 +596,8 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 ## 집계
 
 <!-- scenario-summary:begin -->
-- 시나리오 총계: 77
-- 예외: 11
+- 시나리오 총계: 78
+- 예외: 12
 - 유예: 60
 - 시나리오 매칭 파일: 6
 - 공백: 0

@@ -1,6 +1,6 @@
-// Pure helpers of codex-runner (docs/prd/codex-workload.md, AC-J2/J3/J5),
-// kept apart from runner.mjs so `node --test` can exercise them without the
-// SDK, a codex binary or a ChatGPT account.
+// Pure helpers of codex-runner (docs/prd/codex-workload.md, AC-J2/J3/J5/J8),
+// kept apart from runner.mjs so `node --test` can exercise them without a
+// codex binary or a ChatGPT account.
 import { createRequire } from "node:module";
 import { statSync } from "node:fs";
 import path from "node:path";
@@ -117,56 +117,39 @@ export function codexHomeFor(env) {
   return path.join(env.HOME, ".codex");
 }
 
-// threadOptions fixes the sandbox per mode. chat is read-only with no
-// network (AC-J2); task runs like claude-code, with the session pod as the
-// execution boundary (AC-M1). Web search is off in both.
-export function threadOptions(model, cwd, { mode = MODE_CHAT, effort = null } = {}) {
-  const task = mode === MODE_TASK;
-  const options = {
-    sandboxMode: task ? "danger-full-access" : "read-only",
+// appServerArgs starts codex's app server with the settings the SDK used to
+// pass to `codex exec` as --config: web search off, the never-ask approval
+// policy, sandbox network only in task mode (AC-J2, AC-M1), and the effort.
+export function appServerArgs({ mode = MODE_CHAT, effort = null } = {}) {
+  const args = [
+    "app-server",
+    "--config", 'web_search="disabled"',
+    "--config", 'approval_policy="never"',
+    "--config", `sandbox_workspace_write.network_access=${mode === MODE_TASK}`,
+  ];
+  if (effort) {
+    args.push("--config", `model_reasoning_effort="${effort}"`);
+  }
+  return args;
+}
+
+// threadParams fixes the sandbox per mode for thread/start and thread/resume.
+// chat is read-only (AC-J2); task runs like claude-code, with the session pod
+// as the execution boundary (AC-M1).
+export function threadParams(model, cwd, { mode = MODE_CHAT } = {}) {
+  const params = {
+    cwd,
+    sandbox: mode === MODE_TASK ? "danger-full-access" : "read-only",
     approvalPolicy: "never",
-    workingDirectory: cwd,
-    skipGitRepoCheck: true,
-    webSearchMode: "disabled",
-    networkAccessEnabled: task,
   };
   if (model && model !== PLATFORM_DEFAULT_MODEL) {
-    options.model = model;
+    params.model = model;
   }
-  if (effort) {
-    options.modelReasoningEffort = effort;
-  }
-  return options;
+  return params;
 }
 
 export function noticeLine(text) {
   return JSON.stringify({ type: NOTICE_TYPE, text }) + "\n";
-}
-
-// classify says what one SDK event means for the run: a forbidden item to
-// stop on, the turn's outcome, or nothing. Only chat has forbidden items; the
-// kill switch is AC-J5's and codex-task does not run it (AC-M1).
-export function classify(event, mode = MODE_CHAT) {
-  if (!event || typeof event !== "object") {
-    return {};
-  }
-  if (event.type === "item.started" || event.type === "item.updated" || event.type === "item.completed") {
-    const kind = mode === MODE_CHAT && event.item && FORBIDDEN_ITEM_TYPES.get(event.item.type);
-    if (kind) {
-      return { forbidden: event.item.type, action: kind };
-    }
-    return {};
-  }
-  if (event.type === "thread.started" && typeof event.thread_id === "string" && event.thread_id) {
-    return { threadId: event.thread_id };
-  }
-  if (event.type === "turn.completed") {
-    return { outcome: "completed" };
-  }
-  if (event.type === "turn.failed" || event.type === "error") {
-    return { outcome: "failed" };
-  }
-  return {};
 }
 
 // ANSI escapes and the codex warning about its helper links are terminal
@@ -206,8 +189,7 @@ const NATIVE_TARGETS = {
 };
 
 // resolveCodexBin is CODEX_BIN, or the native binary of the installed
-// @openai/codex package, found the way the SDK finds it. The runner needs the
-// path itself because it runs `codex login` outside the SDK.
+// @openai/codex package, found where the package's own launcher looks.
 export function resolveCodexBin(env, fromUrl = import.meta.url) {
   if (env.CODEX_BIN) {
     return env.CODEX_BIN;
@@ -230,4 +212,342 @@ export function resolveCodexBin(env, fromUrl = import.meta.url) {
     }
   }
   throw new Error(`the installed @openai/codex has no binary for ${triple}`);
+}
+
+// The app server speaks camelCase items; the agent's projection
+// (codex_stream.go) reads the snake_case events `codex exec`
+// printed, so the runner translates the main thread's notifications into
+// those, the way codex's own exec event processor does.
+const STATUS = { inProgress: "in_progress", completed: "completed", failed: "failed", declined: "declined", interrupted: "interrupted" };
+const COLLAB_TOOL = { spawnAgent: "spawn_agent", sendInput: "send_input", resumeAgent: "wait", wait: "wait", closeAgent: "close_agent" };
+
+function snakeStatus(status) {
+  return STATUS[status] || status;
+}
+
+// execItem is one app-server item as an exec item, or null for kinds exec
+// never printed (user messages, plans, sub-agent activity, ...).
+export function execItem(item) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+  const id = item.id;
+  switch (item.type) {
+    case "agentMessage":
+      return { id, type: "agent_message", text: item.text ?? "" };
+    case "reasoning": {
+      const text = Array.isArray(item.summary) ? item.summary.join("\n") : "";
+      return text.trim() ? { id, type: "reasoning", text } : null;
+    }
+    case "commandExecution":
+      return {
+        id,
+        type: "command_execution",
+        command: item.command,
+        aggregated_output: item.aggregatedOutput ?? "",
+        exit_code: item.exitCode ?? null,
+        status: snakeStatus(item.status),
+      };
+    case "fileChange":
+      return {
+        id,
+        type: "file_change",
+        changes: (item.changes || []).map((c) => ({ path: c.path, kind: c.kind && typeof c.kind === "object" ? c.kind.type : c.kind })),
+        status: snakeStatus(item.status === "declined" ? "failed" : item.status),
+      };
+    case "mcpToolCall":
+      return {
+        id,
+        type: "mcp_tool_call",
+        server: item.server,
+        tool: item.tool,
+        status: snakeStatus(item.status),
+        arguments: item.arguments ?? null,
+        result: item.result ? { content: item.result.content, structured_content: item.result.structuredContent ?? null } : null,
+        error: item.error ? { message: item.error.message } : null,
+      };
+    case "webSearch":
+      return { id, type: "web_search", query: item.query ?? "" };
+    case "collabAgentToolCall": {
+      const tool = COLLAB_TOOL[item.tool];
+      if (!tool || item.status === "interrupted") {
+        return null;
+      }
+      const states = {};
+      for (const [threadId, state] of Object.entries(item.agentsStates || {})) {
+        states[threadId] = { status: state && state.status, message: (state && state.message) ?? null };
+      }
+      return {
+        id,
+        type: "collab_tool_call",
+        tool,
+        sender_thread_id: item.senderThreadId,
+        receiver_thread_ids: item.receiverThreadIds || [],
+        prompt: item.prompt ?? null,
+        agents_states: states,
+        status: snakeStatus(item.status),
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+// forbiddenAction is the kill switch's verdict on one item of any thread,
+// sub-agents included: `codex exec` only showed the main thread, so a
+// sub-agent's command never reached the old kill switch (AC-J5).
+export function forbiddenAction(item, mode = MODE_CHAT) {
+  const mapped = execItem(item);
+  if (mode !== MODE_CHAT || !mapped) {
+    return null;
+  }
+  const action = FORBIDDEN_ITEM_TYPES.get(mapped.type);
+  return action ? { forbidden: mapped.type, action } : null;
+}
+
+function turnErrorMessage(error, fallback) {
+  if (!error || typeof error !== "object" || !error.message) {
+    return fallback;
+  }
+  return error.additionalDetails ? `${error.message} (${error.additionalDetails})` : error.message;
+}
+
+// TurnTranslator turns the main thread's notifications for one turn into exec
+// events. A started item the turn ends without completing is completed from
+// the turn's own item list, as exec did, so a tool call is never left open.
+export class TurnTranslator {
+  #open = new Set();
+  #errorSeen = false;
+
+  // turnId may be null until turn/start answers; the first notification of
+  // the thread that names a turn fixes it, since notifications can overtake
+  // the response.
+  constructor(threadId, turnId = null) {
+    this.threadId = threadId;
+    this.turnId = turnId;
+  }
+
+  #isTurn(turnId) {
+    if (this.turnId === null && typeof turnId === "string" && turnId) {
+      this.turnId = turnId;
+    }
+    return turnId === this.turnId;
+  }
+
+  get errorSeen() {
+    return this.#errorSeen;
+  }
+
+  translate(method, params) {
+    const events = [];
+    if (!params || params.threadId !== this.threadId) {
+      return { events };
+    }
+    const sameTurn = method !== "turn/started" && method !== "turn/completed" && this.#isTurn(params.turnId);
+    switch (method) {
+      case "turn/started":
+        if (params.turn && this.#isTurn(params.turn.id)) {
+          events.push({ type: "turn.started" });
+        }
+        break;
+      case "item/started": {
+        if (!sameTurn || !params.item || params.item.type === "agentMessage" || params.item.type === "reasoning") {
+          break;
+        }
+        const item = execItem(params.item);
+        if (item) {
+          this.#open.add(params.item.id);
+          events.push({ type: "item.started", item });
+        }
+        break;
+      }
+      case "item/completed": {
+        if (!sameTurn) {
+          break;
+        }
+        const item = execItem(params.item);
+        if (item) {
+          this.#open.delete(params.item.id);
+          events.push({ type: "item.completed", item });
+        }
+        break;
+      }
+      case "error":
+        if (sameTurn && params.error) {
+          if (!params.willRetry) {
+            this.#errorSeen = true;
+          }
+          events.push({ type: "error", message: turnErrorMessage(params.error, "codex reported an error") });
+        }
+        break;
+      case "turn/completed": {
+        const turn = params.turn;
+        if (!turn || !this.#isTurn(turn.id)) {
+          break;
+        }
+        for (const raw of turn.items || []) {
+          if (this.#open.has(raw.id)) {
+            this.#open.delete(raw.id);
+            const item = execItem(raw);
+            if (item) {
+              events.push({ type: "item.completed", item });
+            }
+          }
+        }
+        if (turn.status === "completed") {
+          events.push({ type: "turn.completed" });
+          return { events, outcome: this.#errorSeen ? "failed" : "completed" };
+        }
+        const fallback = turn.status === "interrupted" ? "the turn was interrupted" : "turn failed";
+        events.push({ type: "turn.failed", error: { message: turnErrorMessage(turn.error, fallback) } });
+        return { events, outcome: "failed" };
+      }
+      default:
+        break;
+    }
+    return { events };
+  }
+}
+
+// How long a turn waits, after the main thread's answer, for sub-agents it
+// left running before it stops them — claude-runner's background wait
+// (AC-J8, AC-E2).
+export const DEFAULT_BACKGROUND_WAIT_MS = 10 * 60 * 1000;
+export const MAX_FOLLOW_UP_TURNS = 5;
+export const MAX_AGENT_MESSAGE_CHARS = 8 * 1024;
+
+export function backgroundWaitFromEnv(env) {
+  const raw = env.CODEX_RUNNER_BACKGROUND_WAIT_MS;
+  const value = raw === undefined || raw === "" ? NaN : Number(raw);
+  if (Number.isInteger(value) && value >= 0) {
+    return value;
+  }
+  return DEFAULT_BACKGROUND_WAIT_MS;
+}
+
+// AgentTracker follows the sub-agent threads the app server attaches while
+// the runner is connected. An agent is busy from its thread's start (before
+// its first turn) until its turn ends; an agent whose turn ends while the
+// main thread has no turn running is unreported until a follow-up turn tells
+// the main thread about it — a turn in progress learns of its agents itself.
+export class AgentTracker {
+  #agents = new Map();
+  #mainBusy = true;
+
+  constructor(mainThreadId) {
+    this.mainThreadId = mainThreadId;
+  }
+
+  setMainBusy(busy) {
+    this.#mainBusy = busy;
+  }
+
+  observe(method, params) {
+    if (!params) {
+      return null;
+    }
+    if (method === "thread/started") {
+      const thread = params.thread;
+      if (!thread || !thread.id || thread.id === this.mainThreadId || this.#agents.has(thread.id)) {
+        return null;
+      }
+      const name = thread.agentNickname || thread.id;
+      this.#agents.set(thread.id, { id: thread.id, name, busy: true, turnId: null, status: null, message: null, error: null, unreported: false });
+      return `Background agent ${name} started.`;
+    }
+    const agent = this.#agents.get(params.threadId);
+    if (!agent) {
+      return null;
+    }
+    switch (method) {
+      case "turn/started":
+        agent.busy = true;
+        agent.turnId = params.turn ? params.turn.id : null;
+        agent.status = null;
+        return null;
+      case "item/completed":
+        if (params.item && params.item.type === "agentMessage" && params.item.text) {
+          agent.message = params.item.text;
+        }
+        return null;
+      case "item/started":
+        if (params.item && params.item.type === "mcpToolCall") {
+          return `· ${agent.name}: ${params.item.server}.${params.item.tool}`;
+        }
+        return null;
+      case "turn/completed": {
+        const turn = params.turn || {};
+        agent.busy = false;
+        agent.turnId = null;
+        agent.status = turn.status || "completed";
+        agent.error = turn.error ? turnErrorMessage(turn.error, null) : null;
+        if (!this.#mainBusy) {
+          agent.unreported = true;
+        }
+        if (agent.status === "completed") {
+          return `Background agent ${agent.name} finished.`;
+        }
+        if (agent.status === "interrupted") {
+          return `Background agent ${agent.name} was stopped.`;
+        }
+        return `Background agent ${agent.name} failed${agent.error ? `: ${agent.error}` : "."}`;
+      }
+      case "thread/closed":
+        agent.busy = false;
+        return null;
+      default:
+        return null;
+    }
+  }
+
+  busy() {
+    return [...this.#agents.values()].filter((a) => a.busy);
+  }
+
+  takeUnreported() {
+    const out = [...this.#agents.values()].filter((a) => a.unreported);
+    for (const agent of out) {
+      agent.unreported = false;
+    }
+    return out;
+  }
+}
+
+function clip(text, max) {
+  return text.length <= max ? text : `${text.slice(0, max)}\n[… cut at ${max} characters]`;
+}
+
+export function followUpPrompt(agents, { stoppedAfterMs = null } = {}) {
+  const lines = ["[session-platform] Background agents you started have ended since your last answer:"];
+  for (const agent of agents) {
+    const label = agent.name === agent.id ? agent.id : `${agent.name} (${agent.id})`;
+    if (agent.status === "completed") {
+      lines.push(`- ${label}: completed.${agent.message ? ` Its final message:\n${clip(agent.message, MAX_AGENT_MESSAGE_CHARS)}` : ""}`);
+    } else if (agent.status === "interrupted") {
+      const minutes = stoppedAfterMs === null ? null : Math.round(stoppedAfterMs / 60000);
+      lines.push(`- ${label}: stopped by the platform${minutes === null ? "" : ` after waiting ${minutes} minute(s)`}.${agent.message ? ` Its last message:\n${clip(agent.message, MAX_AGENT_MESSAGE_CHARS)}` : ""}`);
+    } else {
+      lines.push(`- ${label}: failed${agent.error ? `: ${agent.error}` : "."}`);
+    }
+  }
+  lines.push("Tell the user what they found. Do not wait for these agents again.");
+  return lines.join("\n");
+}
+
+// serverRequestResponse is the runner's answer to a request the app server
+// sends it, mirroring `codex exec`: MCP elicitations are cancelled as
+// non-interactive and everything that would need a person is refused.
+export function serverRequestResponse(method, params) {
+  if (method === "mcpServer/elicitation/request") {
+    const meta = params && params._meta;
+    const toolApproval = params && params.mode === "form" && meta && typeof meta === "object" && meta.codex_approval_kind === "mcp_tool_call";
+    return {
+      result: {
+        action: "cancel",
+        content: null,
+        _meta: toolApproval ? { codex_approval_cancellation_reason: "non_interactive" } : null,
+      },
+    };
+  }
+  return { error: { code: -32000, message: `${method} is not supported by codex-runner` } };
 }

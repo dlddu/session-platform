@@ -5,6 +5,8 @@
 > 작업용은 짧은 작업 세션을 여럿 띄우는 용도라 **claude-code와 같은 권한 수준**(셸·파일 편집·네트워크)으로 돌고,
 > 로그인은 세션이 아니라 **인증 풀의 슬롯**(`agent-auth-pool.md`)에 둔다.
 
+> 📌 **2026-11-13 (AC-J8)**: 러너를 같이 쓰므로, 이 타입의 턴이 띄운 하위 에이전트도 답 뒤에 마저 돌고 그 결과가 후속 턴으로 메인 에이전트에 돌아온다(`codex-workload.md` AC-J8). 킬 스위치가 없는 것은 그대로다.
+
 > 📌 **2026-11-09 (AC-P1~P3)**: 도구 표면(AC-M1)에 사이드카의 **스케줄러 MCP**(`scheduler` — 한 번·고정 루프·자체 페이싱 예약)가 더해진다. 회차는 이 세션 에이전트의 큐로 들어가고, 예약이 남은 동안은 유휴 회수가 미뤄진다(`session-scheduler.md`).
 
 ## 달성 가치
@@ -22,7 +24,7 @@
 ### AC-M1: 워크로드 타입 `codex-task` — claude-code 수준의 도구 표면
 - **설명**: `workloadType` 허용값에 `codex-task`가 추가된다(생략·허용값 밖·불변 규칙은 AC-E1). 이미지는 `codex-chat`과 같은 data plane 이미지이고 설정은 `DATA_PLANE_CODEX_TASK_IMAGE`다. 이미지가 비었거나 풀 크기(AC-N1, `CODEX_TASK_AUTH_SLOTS`)가 0이면 `GET /config`에 나오지 않고 생성은 pod 없이 실패한다. 파드는 `codex-chat`과 같은 모양(주 컨테이너 + loopback `k3s-mcp-proxy` 사이드카, 도구 정책 `allow-all`)에 슬롯 PVC를 더한다. 설정은 ConfigMap `codex-task-config`(`CODEX_TASK_CONFIG_CONFIGMAP`: `model`·`models`·`k3s-mcp-url`·`plugin-marketplace-url`, 모두 선택)와 Secret `codex-task-credentials`(`CODEX_TASK_CREDENTIALS_SECRET`: 선택 `k3s-mcp-token`)이며, 다른 에이전트 타입과 이름이 겹치면 control plane이 기동을 거부한다(AC-J6과 같은 이유). 플러그인은 세션이 생성 시 고른 `plugins`만 시드되고, 고르지 않으면 플러그인 없이 뜬다(타입 기본값 없음, 2026-11-12 사용자 결정 — 이전의 `CODEX_TASK_PLUGINS` 설정은 없앴다; `session-plugins.md` AC-L1).
 
-  도구 표면은 claude-code(AC-E2의 구현 결정: 파드가 실행 경계, 코딩 도구 허용)에 맞춘다 — 스레드 옵션 `sandboxMode: danger-full-access`, `approvalPolicy: never`, `networkAccessEnabled: true`, `webSearchMode: disabled`, `skipGitRepoCheck: true`. 관리형 `config.toml`은 셸(`shell_tool`·`unified_exec`)과 파일 편집을 **켜고**, 앱·Codex 자체 플러그인·원격 플러그인·브라우저·컴퓨터 사용·이미지 생성·메모리·훅·도구 제안·스킬 MCP 자동 설치·번들 시스템 스킬은 `codex-chat`과 같이 끈다. 러너의 킬 스위치(AC-J5)는 이 타입에서 돌지 않는다. 셸이 있으므로 플러그인 스킬은 Codex가 `$HOME/.agents/skills`에서 직접 읽는다(스킬 MCP도 그대로 등록한다). 워크로드 파드는 claude-code처럼 data plane SA(`view`)의 토큰을 받는다(`automountServiceAccountToken: true`).
+  도구 표면은 claude-code(AC-E2의 구현 결정: 파드가 실행 경계, 코딩 도구 허용)에 맞춘다 — 스레드 설정 샌드박스 `danger-full-access`, 승인 정책 `never`, 샌드박스 네트워크 켜짐, 웹 검색 `disabled`(*2026-11-13*: 러너가 `codex app-server`를 구동하며 SDK 옵션 이름에서 Codex 설정 이름으로 옮겨 적었다, `codex-workload.md` AC-J2). 관리형 `config.toml`은 셸(`shell_tool`·`unified_exec`)과 파일 편집을 **켜고**, 앱·Codex 자체 플러그인·원격 플러그인·브라우저·컴퓨터 사용·이미지 생성·메모리·훅·도구 제안·스킬 MCP 자동 설치·번들 시스템 스킬은 `codex-chat`과 같이 끈다. 러너의 킬 스위치(AC-J5)는 이 타입에서 돌지 않는다. 셸이 있으므로 플러그인 스킬은 Codex가 `$HOME/.agents/skills`에서 직접 읽는다(스킬 MCP도 그대로 등록한다). 워크로드 파드는 claude-code처럼 data plane SA(`view`)의 토큰을 받는다(`automountServiceAccountToken: true`).
 - **달성 가치**: V8, V1
 - **구체화 대상**: AC-A1의 "실제 세션 워크로드" — 여섯 갈래 (… AC-J2~J7=`codex-chat`, AC-M2~M4=`codex-task`)
 - **검증 방법**: `workloadType=codex-task`로 생성하면 컨테이너 둘의 파드 하나가 슬롯 PVC를 마운트한 채 뜨고, 주 컨테이너에 Secret 참조가 없으며 SA 토큰이 마운트됨을 확인한다. 관리형 설정으로 렌더한 모델 도구 목록에 셸 도구가 있고 번들 스킬이 없음을 확인한다(이미지 빌드 검사). 러너가 이 모드에서 `command_execution` 아이템으로 턴을 끊지 않음을 확인한다.
