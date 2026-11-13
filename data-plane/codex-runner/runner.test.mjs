@@ -186,7 +186,9 @@ test("followUpPrompt hands each ended agent's result to the main thread", () => 
   assert.match(text, /Ada \(a\): completed\. Its final message:\nfound it/);
   assert.match(text, /- b: stopped by the platform after waiting 10 minute\(s\)\./);
   assert.match(text, /Cy \(c\): failed: boom/);
-  assert.match(followUpPrompt([{ id: "a", name: "a", status: "completed", message: "x".repeat(9000) }]), /cut at 8192 characters/);
+  const long = followUpPrompt([{ id: "a", name: "a", status: "completed", message: `${"x".repeat(9000)}\nTHE-END` }]);
+  assert.match(long, /\[… 816 characters cut …\]/);
+  assert.match(long, /THE-END\n/, "the end of a long message survives");
 });
 
 test("serverRequestResponse cancels elicitations and refuses the rest, as exec did", () => {

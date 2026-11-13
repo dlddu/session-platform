@@ -145,7 +145,8 @@ interactive shell and Claude Code workloads.
   main thread's turn ends with sub-agents still running, the runner waits for
   them, then starts a follow-up turn on the main thread whose prompt opens
   with `[session-platform] Background agents you started have ended …` and
-  carries each agent's final message (8 KiB at most each), so the main agent
+  carries each agent's final message (8 KiB at most each, keeping its
+  beginning and end), so the main agent
   reports the results itself. The wait is
   `CODEX_RUNNER_BACKGROUND_WAIT_MS` (default 10 minutes); agents still
   running then are interrupted and reported as stopped. A follow-up turn may

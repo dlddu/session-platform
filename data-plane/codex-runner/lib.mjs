@@ -538,8 +538,15 @@ export class AgentTracker {
   }
 }
 
+// clip keeps both ends of a long message: an agent's conclusion is usually
+// at its end, and cutting only the tail lost it in the preview run.
 function clip(text, max) {
-  return text.length <= max ? text : `${text.slice(0, max)}\n[… cut at ${max} characters]`;
+  if (text.length <= max) {
+    return text;
+  }
+  const tail = Math.floor(max / 4);
+  const head = max - tail;
+  return `${text.slice(0, head)}\n[… ${text.length - max} characters cut …]\n${text.slice(-tail)}`;
 }
 
 export function followUpPrompt(agents, { stoppedAfterMs = null } = {}) {
