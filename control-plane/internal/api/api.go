@@ -93,6 +93,8 @@ func (a *API) Routes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /api/v1/sessions/{id}/snapshot", a.snapshotSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/plugins/refresh", a.refreshPlugins)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/questions", a.listQuestions)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/questions/{questionId}/answer", a.answerQuestion)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/recover", a.recoverSession)
 }
 
@@ -566,6 +568,50 @@ func (a *API) refreshPlugins(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// listQuestions lists what a claude-code session's running turn asked a
+// person (AC-E2).
+func (a *API) listQuestions(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
+	questions, err := a.mgr.Questions(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, questionsResp{Questions: questions})
+}
+
+// answerQuestion answers one waiting question; the turn goes on with it
+// (AC-E2).
+func (a *API) answerQuestion(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
+	var req answerQuestionReq
+	if err := decodeRequestBody(r.Body, &req, true); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if err := a.mgr.AnswerQuestion(r.Context(), r.PathValue("id"), r.PathValue("questionId"), req.Answers); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, answerQuestionResp{Status: "answered"})
+}
+
+type questionsResp struct {
+	Questions []session.PendingQuestion `json:"questions"`
+}
+
+type answerQuestionReq struct {
+	Answers map[string]string `json:"answers"`
+}
+
+type answerQuestionResp struct {
+	Status string `json:"status"`
+}
+
 // ---- tenancy ----
 
 // caller resolves the request's caller, answering the request itself when it
@@ -701,7 +747,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func writeErr(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	switch {
-	case errors.Is(err, session.ErrNotFound):
+	case errors.Is(err, session.ErrNotFound), errors.Is(err, session.ErrQuestionNotFound):
 		status = http.StatusNotFound
 	case errors.Is(err, session.ErrUnauthenticated):
 		status = http.StatusUnauthorized

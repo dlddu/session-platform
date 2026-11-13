@@ -136,7 +136,7 @@ func main() {
 			Redact:      credentialLiteralsFromEnv(),
 			RunTimeout:  runTimeout,
 			Tools:       auth.tools,
-			CLI:         claudeCLI{effort: auth.effort, platform: platform},
+			CLI:         claudeCLI{effort: auth.effort, platform: platform, agentURL: loopbackAgentURL(addr)},
 		})
 		if err != nil {
 			logger.Error("failed to initialise agent workload", "workload", workload, "err", err)

@@ -5,12 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import {
   DEFAULT_BACKGROUND_WAIT_MS,
+  DEFAULT_QUESTION_WAIT_MS,
   DEFAULT_PERMISSION_MODE,
   HEADLESS_DENIAL,
   NOTICE_TYPE,
   PLATFORM_DEFAULT_MODEL,
   TurnInput,
   UsageError,
+  askPerson,
   backgroundWaitFromEnv,
   stopNote,
   classify,
@@ -21,6 +23,7 @@ import {
   pluginToolPrefix,
   pluginsFromSettings,
   queryOptions,
+  questionWaitFromEnv,
   resolveClaudeBin,
   resumePlan,
   sameCliVersion,
@@ -38,6 +41,8 @@ test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
       "acceptEdits",
       "--k3s-mcp-url",
       "http://127.0.0.1:8093/mcp",
+      "--questions-url",
+      "http://127.0.0.1:8090/",
       "--resume",
       "--",
       "--help me",
@@ -47,6 +52,7 @@ test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
       effort: "max",
       permissionMode: "acceptEdits",
       k3sMcpUrl: "http://127.0.0.1:8093/mcp",
+      questionsUrl: "http://127.0.0.1:8090",
       resume: true,
       prompt: "--help me",
       checkCli: false,
@@ -58,6 +64,7 @@ test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
   assert.equal(bare.resume, false);
   assert.equal(bare.permissionMode, DEFAULT_PERMISSION_MODE);
   assert.equal(bare.k3sMcpUrl, null);
+  assert.equal(bare.questionsUrl, null);
   assert.equal(DEFAULT_PERMISSION_MODE, "auto");
   assert.equal(parseArgs(["--permission-mode", "auto", "--", "x"]).permissionMode, "auto");
   assert.equal(parseArgs(["--check-cli"]).checkCli, true);
@@ -80,6 +87,9 @@ test("parseArgs refuses what the agent never sends", () => {
     ["--k3s-mcp-url", "not a url", "--", "x"],
     ["--k3s-mcp-url", "https://homelab-k3s-mcp.llkm.nl/mcp", "--", "x"],
     ["--k3s-mcp-url", "http://10.0.0.5:8093/mcp", "--", "x"],
+    ["--questions-url", "--", "x"],
+    ["--questions-url", "http://10.0.0.5:8090", "--", "x"],
+    ["--questions-url", "https://127.0.0.1:8090", "--", "x"],
     ["hello"],
   ]) {
     assert.throws(() => parseArgs(argv), UsageError, JSON.stringify(argv));
@@ -405,3 +415,142 @@ test("the stop note names the tasks, the wait and the tool", () => {
   assert.match(note, /do not start them again/);
 });
 
+// askPerson's agent, in memory: POST /questions/ask opens, GET polls, DELETE
+// gives up. answerAfter is how many polls go by before the answer appears.
+function fakeQuestionAgent({ answerAfter = 0, answers = null, cancelReason = null, askStatus = 201 } = {}) {
+  const calls = [];
+  let polls = 0;
+  const fetchImpl = async (url, init = {}) => {
+    const method = init.method || "GET";
+    calls.push({ method, url, body: init.body ? JSON.parse(init.body) : undefined });
+    const reply = (status, body) => ({
+      status,
+      ok: status >= 200 && status < 300,
+      json: async () => body,
+      text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
+    });
+    if (method === "POST") {
+      return askStatus === 201 ? reply(201, { id: "q_1" }) : reply(askStatus, "no turn is running");
+    }
+    if (method === "DELETE") {
+      return reply(204, "");
+    }
+    polls++;
+    if (cancelReason) {
+      return reply(200, { state: "cancelled", reason: cancelReason });
+    }
+    if (answers && polls > answerAfter) {
+      return reply(200, { state: "answered", answers });
+    }
+    return reply(200, { state: "pending" });
+  };
+  return { fetchImpl, calls };
+}
+
+const askInput = {
+  questions: [
+    {
+      question: "Which database?",
+      header: "DB",
+      multiSelect: false,
+      options: [
+        { label: "SQLite", description: "file", preview: "x" },
+        { label: "Postgres", description: "server" },
+      ],
+    },
+  ],
+};
+
+test("askPerson relays the questions and returns the person's answers as the tool input", async () => {
+  const agent = fakeQuestionAgent({ answerAfter: 2, answers: { "Which database?": "Postgres" } });
+  const result = await askPerson({
+    url: "http://127.0.0.1:8090",
+    input: askInput,
+    fetchImpl: agent.fetchImpl,
+    sleep: async () => {},
+  });
+  assert.deepEqual(result, { behavior: "allow", updatedInput: { ...askInput, answers: { "Which database?": "Postgres" } } });
+  const ask = agent.calls[0];
+  assert.equal(ask.url, "http://127.0.0.1:8090/questions/ask");
+  // Only the shape the agent takes goes over; previews stay with the model.
+  assert.deepEqual(ask.body.questions[0].options[0], { label: "SQLite", description: "file" });
+  assert.equal(agent.calls.filter((c) => c.method === "GET").length, 3);
+  assert.ok(agent.calls.every((c) => c.method !== "DELETE"));
+});
+
+test("askPerson gives up after the wait and tells the model to decide", async () => {
+  const agent = fakeQuestionAgent();
+  let clock = 0;
+  const result = await askPerson({
+    url: "http://127.0.0.1:8090",
+    input: askInput,
+    waitMs: 5000,
+    pollMs: 1000,
+    fetchImpl: agent.fetchImpl,
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    now: () => clock,
+  });
+  assert.equal(result.behavior, "deny");
+  assert.match(result.message, /Nobody answered within 0\.1 minute/);
+  assert.match(result.message, /Decide on your own/);
+  assert.equal(agent.calls.at(-1).method, "DELETE");
+  assert.equal(agent.calls.at(-1).url, "http://127.0.0.1:8090/questions/ask/q_1");
+});
+
+test("askPerson reports a question the agent closed or could not take", async () => {
+  const closed = await askPerson({
+    url: "http://127.0.0.1:8090",
+    input: askInput,
+    fetchImpl: fakeQuestionAgent({ cancelReason: "the session is being frozen" }).fetchImpl,
+    sleep: async () => {},
+  });
+  assert.equal(closed.behavior, "deny");
+  assert.match(closed.message, /the session is being frozen/);
+
+  const refused = await askPerson({
+    url: "http://127.0.0.1:8090",
+    input: askInput,
+    fetchImpl: fakeQuestionAgent({ askStatus: 409 }).fetchImpl,
+    sleep: async () => {},
+  });
+  assert.equal(refused.behavior, "deny");
+  assert.match(refused.message, /could not be shown to a person \(409/);
+
+  const unreachable = await askPerson({
+    url: "http://127.0.0.1:8090",
+    input: askInput,
+    fetchImpl: async () => {
+      throw new Error("connect ECONNREFUSED");
+    },
+    sleep: async () => {},
+  });
+  assert.match(unreachable.message, /ECONNREFUSED/);
+
+  const empty = await askPerson({ url: "http://127.0.0.1:8090", input: {}, fetchImpl: async () => assert.fail("no call") });
+  assert.equal(empty.behavior, "deny");
+});
+
+test("askPerson stops waiting when the turn is interrupted", async () => {
+  const agent = fakeQuestionAgent();
+  const controller = new AbortController();
+  const result = await askPerson({
+    url: "http://127.0.0.1:8090",
+    input: askInput,
+    signal: controller.signal,
+    fetchImpl: agent.fetchImpl,
+    sleep: async () => controller.abort(),
+  });
+  assert.equal(result.behavior, "deny");
+  assert.match(result.message, /interrupted/);
+  assert.equal(agent.calls.at(-1).method, "DELETE");
+});
+
+test("the question wait comes from the environment only as a positive integer", () => {
+  assert.equal(questionWaitFromEnv({}), DEFAULT_QUESTION_WAIT_MS);
+  assert.equal(questionWaitFromEnv({ CLAUDE_RUNNER_QUESTION_WAIT_MS: "60000" }), 60000);
+  for (const bad of ["0", "-5", "1.5", "abc", ""]) {
+    assert.equal(questionWaitFromEnv({ CLAUDE_RUNNER_QUESTION_WAIT_MS: bad }), DEFAULT_QUESTION_WAIT_MS, bad);
+  }
+});

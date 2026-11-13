@@ -83,6 +83,8 @@ type PluginRefreshResult struct {
 //   - Recover   → AC-B4 (put a deleted session back from its last archive).
 //   - RefreshPlugins → AC-J7 (fetch a codex-chat or codex-task session's plugin skills again,
 //     between turns, keeping its conversation).
+//   - Questions/AnswerQuestion → AC-E2 (a claude-code turn's AskUserQuestion,
+//     answered by a person while the turn waits).
 type Manager interface {
 	Create(ctx context.Context, req CreateRequest) (*Session, error)
 	Get(ctx context.Context, id string) (*Session, error)
@@ -95,6 +97,10 @@ type Manager interface {
 	Restore(ctx context.Context, id string) (*Session, error)
 	Terminate(ctx context.Context, id string) error
 	RefreshPlugins(ctx context.Context, id string) (*PluginRefreshResult, error)
+	// Questions lists what a claude-code session's running turn asked a
+	// person; AnswerQuestion answers one (AC-E2).
+	Questions(ctx context.Context, id string) ([]PendingQuestion, error)
+	AnswerQuestion(ctx context.Context, id, questionID string, answers map[string]string) error
 	// Recover calls admit with the recovered record before anything is
 	// written, so the caller decides who may see it (AC-K2).
 	Recover(ctx context.Context, id string, admit func(*Session) error) (*Session, error)

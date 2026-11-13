@@ -33,6 +33,16 @@ interactive shell and Claude Code workloads.
   that would ask a person go to the SDK's `canUseTool` callback, which allows the
   platform's built-in tools and the session's own plugin MCP tools and denies
   the rest with a `[session-platform: denied …]` line in the output.
+  `AskUserQuestion` is not denied: the agent passes its own loopback address
+  as `--questions-url`, the runner posts the questions to the loopback-only
+  `POST /questions/ask` and polls `GET /questions/ask/{id}` while the turn
+  keeps running, and a person answers through the control plane
+  (`GET /questions`, `POST /questions/{id}/answer` — refused from inside the
+  pod, so the model cannot answer itself). The answers go back as the tool's
+  input `answers`. A question nobody answers within
+  `CLAUDE_RUNNER_QUESTION_WAIT_MS` (default 20 minutes), one a checkpoint
+  closes, or one the agent refuses is denied with a note to decide alone; a
+  question lives only as long as its turn.
   The turn's input stays open after its result while background tasks it
   started are still running, so they finish inside the turn and the model sees
   their completion; a task still running after `CLAUDE_RUNNER_BACKGROUND_WAIT_MS`

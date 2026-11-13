@@ -80,7 +80,7 @@
 > `scripts/check-render-fidelity.py`(CI `render-fidelity` 잡)가 아래 표를 코드와
 > **양방향 집합 동등성**으로 강제합니다 — 표에 없는 구현 파일도, 코드에 없는 표 행도 실패합니다.
 
-매핑된 구현 파일 = **13**
+매핑된 구현 파일 = **14**
 
 | 구현 파일 | 종류 | 대응 mockup | 근거 | 상태 |
 |-----------|------|-------------|------|------|
@@ -97,6 +97,7 @@
 | `web/src/app/icons.tsx` | component | `docs/mockups/index.html` | 인라인 SVG 아이콘 1:1 이식(이 파일의 기존 주석이 이 규약의 선례) | ✅ 매핑 |
 | `web/src/app/shell.css` | style | `docs/mockups/index.html` | 셸·공용 컴포넌트 CSS. `tokens.css`·`icons.tsx`와 같은 규약으로 `index.html`을 정본 출처로 고정하고, 화면별 패널 대조는 아래 「패널 구조 차집합」이 담당 | ✅ 매핑 |
 | `web/src/app/DeleteSessionDialog.tsx` | component | — | 삭제 확인 대화상자. **SPA에만 있고 대응 mockup이 없다**(위 「미시각화 단계 메모」의 `STP-delete-confirm` ❌와 같은 사실) | ❌ 대응 mockup 없음 |
+| `web/src/app/QuestionCard.tsx` | component | — | `claude-code` 턴의 `AskUserQuestion`에 답하는 콘솔 안 카드(AC-E2, 2026-11-14). **SPA에만 있고 대응 mockup이 아직 없다** — `agent-workspace.html`에 질문 대기 상태를 그리는 것이 후속이다 | ❌ 대응 mockup 없음 |
 
 각 구현 파일은 헤더에 `mockup: <경로>` 선언 주석을 갖습니다(대응이 없으면 `mockup: none — <사유>`).
 표와 선언이 어긋나면 게이트가 실패하므로, **둘 중 하나만 고치는 것은 불가능**합니다.
@@ -453,6 +454,7 @@ DOM이 정본이고, 표와 DOM이 어긋나면 `tools/journey-prototype.test.mj
 
 ## 마지막 갱신
 
+- **2026-11-14** — **턴 중 질문 카드 SPA 구현 (AC-E2)**: `web/src/app/QuestionCard.tsx`가 `claude-code` 턴의 `AskUserQuestion`에 답하는 콘솔 안 카드를 그린다. 대응 mockup이 없어 매핑 표에 ❌로 등재했다(매핑된 구현 파일 13→14). `agent-workspace.html`에 질문 대기 상태를 그리는 것은 후속이다.
 - **2026-11-07** — **Codex 채팅용·작업용 분리와 추론 수준 (AC-J1·AC-M1·AC-E8·AC-M4)**: `codex`가 `codex-chat`으로 이름이 바뀌고 작업용 `codex-task`가 생기면서 세 mockup을 같은 PR의 SPA 구현과 함께 고쳤다. `new-session.html`은 `codex` 카드를 `codex-chat`으로 바꾸고 `codex-task` 카드(셸·파일 편집·네트워크, 로그인 슬롯)를 더했으며, 모델 아래에 `Reasoning effort` 세그먼트(첫 칸 CLI default = 필드 생략)를 `claude-code`·`codex-task`에서만 보이게 그렸다. `codex-task`의 고정 안내문은 로그인 슬롯(AC-N2) 문장이다(`claude-code`는 게이트웨이 모드에서도 같은 화면이라 안내문을 바꾸지 않았다). `index.html`·`agent-workspace.html`은 타입 리터럴만 `codex-chat`으로 바꿨다. 새 여정 단계 없이 기존 `STP-workload-choice`에 붙였다. mockup 수·매핑 표의 행·패널 구조·여정 커버리지 합계는 변하지 않았다.
 - **2026-11-05** — **`codex` 워크로드 타입과 테넌트 반영 (AC-J1·AC-J3 · AC-K2·AC-K4)**: 다섯 번째 워크로드 타입 `codex`(ChatGPT 구독으로 도는 Codex SDK 에이전트)와 ServiceAccount 기반 테넌트가 상류에 들어오면서 세 mockup을 같은 PR의 SPA 구현과 함께 고쳤다. `new-session.html`에 `codex` 타입 카드(문구는 제어면 카탈로그의 description 그대로)와 그 타입의 고정 안내문을 넣고, 타입 카드 앞에 테넌트 선택(기본 No tenant · 고르면 그 테넌트가 받은 타입 카드만 남음)과 테넌트 호출자용 고정 한 줄 `Tenant: <name>`을 쿼리 `?tenancy=`로 갈라 그렸다. `index.html`에는 테넌트 필터(All · 테넌트별 · No tenant, `?tenant=`로 공유)와 카드 푸터의 테넌트 태그, `codex → agent-workspace.html` 경로·`◇ codex` 태그·세션 카드 2건을 더했다. `agent-workspace.html`에는 `codex` 세션 1건을 더해 첫 턴의 ChatGPT 기기 로그인 notice 줄(인증 URL·일회용 코드·로그인 완료)과 입력 줄 아래 안내 한 줄 "First prompt signs this session in to ChatGPT — watch the transcript for a link and code."를 그리고, Workload 패널의 자격 증명 행을 이 타입에서만 `Login: ChatGPT · this session only`로 바꿨다. 테넌트가 하나도 없는 배포에서 두 화면은 이전과 같다. 새 여정 단계 없이 기존 `STP-workload-choice`·`STP-session-list`·`STP-prompt-submit`·`STP-response-watch`에 붙였다. mockup 수·매핑 표의 행·패널 구조·여정 커버리지 합계는 변하지 않았다.
 - **2026-11-05** — **`approval-gated` 타입 제거 — 게이트는 타입의 능력으로**: 승인 게이트가 독립 워크로드 타입이 아니라 타입이 갖추는 능력이 되면서(`../prd/approval-gate.md`, AC-F1 폐기) `new-session.html`의 `approval-gated` 카드를 걷고 `minimax-code` 카드를 게이트 타입으로(방패 아이콘·승인 카피·헬퍼 파드 안내문) 바꿨다. `index.html`·`new-session.html`에서 `minimax-code` 세션은 `gated-workspace.html`로 링크되고 `⏸ minimax-code` 태그를 단다. `gated-workspace.html`의 예시 세션·콘솔 라벨·`workloadType=` 줄은 `minimax-code`로, `repo-access.html`의 요청 카드 태그도 `minimax-code`로 고쳤다. 구현(`NewSession.tsx`·`SessionCard.tsx`·`workloadKind.ts`·`sessionRoutes.ts`)도 같은 변경에서 맞췄다. 패널 구조·mockup 수·매핑 행·여정 커버리지는 변하지 않았다.

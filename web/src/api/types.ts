@@ -139,6 +139,25 @@ export interface PluginRefreshResult {
   removed: string[];
 }
 
+/** AC-E2 — one AskUserQuestion call a claude-code turn waits on. */
+export interface QuestionOption {
+  label: string;
+  description: string;
+}
+
+export interface Question {
+  question: string;
+  header: string;
+  options: QuestionOption[];
+  multiSelect: boolean;
+}
+
+export interface PendingQuestion {
+  id: string;
+  questions: Question[];
+  askedAt: string;
+}
+
 export type AllowlistSource = "manual" | "request";
 
 export interface AllowlistEntry {

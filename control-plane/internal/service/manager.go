@@ -487,6 +487,68 @@ func (s *Service) RefreshPlugins(ctx context.Context, id string) (*session.Plugi
 	}, nil
 }
 
+// questionAgent is the agent capability behind a claude-code turn's
+// AskUserQuestion (AC-E2).
+type questionAgent interface {
+	PendingQuestions(ctx context.Context, pod string) ([]session.PendingQuestion, error)
+	AnswerQuestion(ctx context.Context, pod, questionID string, answers map[string]string) error
+}
+
+// Questions lists what a claude-code session's running turn asked a person
+// (AC-E2). It is passive like Stream: it neither restores a snapshot nor
+// counts as an access. A session without a live pod has no running turn, so
+// nothing waits.
+func (s *Service) Questions(ctx context.Context, id string) ([]session.PendingQuestion, error) {
+	sess, agentQ, err := s.questionTarget(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if agentQ == nil {
+		return []session.PendingQuestion{}, nil
+	}
+	return agentQ.PendingQuestions(ctx, sess.Pod)
+}
+
+// AnswerQuestion hands a person's answer to the turn waiting on it (AC-E2).
+// Answering is an access, like a write.
+func (s *Service) AnswerQuestion(ctx context.Context, id, questionID string, answers map[string]string) error {
+	if questionID == "" || len(answers) == 0 {
+		return fmt.Errorf("%w: answer each question", session.ErrInvalidInput)
+	}
+	sess, agentQ, err := s.questionTarget(ctx, id)
+	if err != nil {
+		return err
+	}
+	if agentQ == nil {
+		return session.ErrQuestionNotFound
+	}
+	if err := agentQ.AnswerQuestion(ctx, sess.Pod, questionID, answers); err != nil {
+		return err
+	}
+	s.touch(ctx, id)
+	return nil
+}
+
+// questionTarget is the session a question route acts on, and its agent when
+// a turn could be waiting there.
+func (s *Service) questionTarget(ctx context.Context, id string) (*session.Session, questionAgent, error) {
+	sess, err := s.Get(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	if sess.WorkloadType != session.WorkloadTypeClaudeCode {
+		return nil, nil, fmt.Errorf("%w: questions are asked by claude-code sessions only", session.ErrInvalidState)
+	}
+	if sess.State == session.StateSnapshot || sess.Pod == "" {
+		return sess, nil, nil
+	}
+	agentQ, ok := s.agent.(questionAgent)
+	if !ok {
+		return sess, nil, nil
+	}
+	return sess, agentQ, nil
+}
+
 // Switch makes the target session active — promoting idle or restoring a
 // snapshot as needed — and is a no-op for an already-active session (AC-C4).
 func (s *Service) Switch(ctx context.Context, id string) (*session.Session, error) {
