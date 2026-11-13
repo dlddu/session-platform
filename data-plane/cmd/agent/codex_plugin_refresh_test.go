@@ -141,8 +141,7 @@ func TestPostCodexSidecarRefresh(t *testing.T) {
 }
 
 // AC-J7 on the agent: the route refreshes only between turns, leaves a line
-// in the transcript, and the next resumed turn — not a first one — opens with
-// the note, which a successful turn then settles.
+// in the transcript, and writes nothing into the next turn's prompt.
 func TestCodexPluginRefreshRoute(t *testing.T) {
 	sidecar := &refreshableCodexCLI{}
 	sidecar.set(skillSeed(map[string]string{"s": "v1\n"}), "rev-1")
