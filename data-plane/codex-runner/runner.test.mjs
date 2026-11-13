@@ -119,8 +119,11 @@ test("forbiddenAction is the chat kill switch for every thread's items", () => {
 
 test("TurnTranslator emits exec events for its own turn and closes open items", () => {
   const t = new TurnTranslator("main");
+  const late = { threadId: "main", turnId: "t0", item: { id: "x", type: "subAgentActivity", kind: "completed", agentThreadId: "c" } };
+  assert.deepEqual(t.translate("item/completed", late).events, []);
+  assert.equal(t.turnId, null, "an item of the previous turn does not fix the translator's turn");
   assert.deepEqual(t.translate("turn/started", { threadId: "main", turn: { id: "t1" } }).events, [{ type: "turn.started" }]);
-  assert.equal(t.turnId, "t1", "the first named turn fixes the translator's turn");
+  assert.equal(t.turnId, "t1", "the turn's own turn/started fixes it");
   assert.deepEqual(t.translate("item/started", { threadId: "other", turnId: "x", item: { id: "a", type: "agentMessage", text: "no" } }).events, []);
   assert.deepEqual(t.translate("item/started", { threadId: "main", turnId: "t1", item: { id: "a", type: "agentMessage", text: "" } }).events, []);
   const call = { id: "m", type: "mcpToolCall", server: "k3s", tool: "ping", status: "inProgress" };
@@ -505,6 +508,7 @@ test("runner waits for sub-agents the turn left running and hands their results 
           itemStarted("child", "tc", { id: "k", type: "mcpToolCall", server: "k3s", tool: "ping", status: "inProgress" }),
           item("child", "tc", message("cm", "Ada's findings")),
           done("child", "tc"),
+          item("th-1", "t1", { id: "act-done", type: "subAgentActivity", kind: "completed", agentThreadId: "child", agentPath: "/root/Ada" }),
         ] },
         { id: "t2", steps: [started("th-1", "t2"), item("th-1", "t2", message("m2", "Ada found: findings")), done("th-1", "t2")] },
       ],

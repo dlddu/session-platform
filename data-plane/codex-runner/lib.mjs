@@ -319,19 +319,21 @@ export class TurnTranslator {
   #open = new Set();
   #errorSeen = false;
 
-  // turnId may be null until turn/start answers; the first notification of
-  // the thread that names a turn fixes it, since notifications can overtake
-  // the response.
+  // turnId may be null until turn/start answers; the turn's own turn/started
+  // can overtake the response and fixes it then. Nothing else may fix it: the
+  // previous turn still sends items after it ended (a sub-agent's completed
+  // activity carries the ended turn's id), and adopting that id would ignore
+  // the whole new turn.
   constructor(threadId, turnId = null) {
     this.threadId = threadId;
     this.turnId = turnId;
   }
 
-  #isTurn(turnId) {
-    if (this.turnId === null && typeof turnId === "string" && turnId) {
+  #isTurn(turnId, { starts = false } = {}) {
+    if (starts && this.turnId === null && typeof turnId === "string" && turnId) {
       this.turnId = turnId;
     }
-    return turnId === this.turnId;
+    return this.turnId !== null && turnId === this.turnId;
   }
 
   get errorSeen() {
@@ -346,7 +348,7 @@ export class TurnTranslator {
     const sameTurn = method !== "turn/started" && method !== "turn/completed" && this.#isTurn(params.turnId);
     switch (method) {
       case "turn/started":
-        if (params.turn && this.#isTurn(params.turn.id)) {
+        if (params.turn && this.#isTurn(params.turn.id, { starts: true })) {
           events.push({ type: "turn.started" });
         }
         break;
