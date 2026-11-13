@@ -87,6 +87,7 @@ type WorkloadSpec struct {
 //   - Stop        → AC-A3
 //   - RestoreInto → AC-B2
 //   - Reach       → AC-D1/AC-E1
+//   - Gone        → AC-C5
 type PodOrchestrator interface {
 	// Start provisions the session's fresh pod set.
 	Start(ctx context.Context, sessionID string, workload WorkloadSpec) (SessionPods, error)
@@ -99,6 +100,10 @@ type PodOrchestrator interface {
 	// readiness. It moves no user I/O; Client.Read/Write own those semantics.
 	// (AC-D1/AC-E1)
 	Reach(ctx context.Context, ref PodRef) error
+	// Gone reports whether the pod no longer exists or can never run again
+	// (deleted, evicted, or lost with its node). A pod whose state cannot be
+	// read is an error, never "gone". (AC-C5)
+	Gone(ctx context.Context, ref PodRef) (bool, error)
 }
 
 // StubOrchestrator is an in-memory, no-op PodOrchestrator. It tracks which
@@ -260,3 +265,21 @@ func (o *StubOrchestrator) RestoreInto(ctx context.Context, sessionID, checkpoin
 // Reach is a no-op: the stub has no agent to dial, and its pods are always
 // considered reachable. The real dial lives in ClientOrchestrator.
 func (o *StubOrchestrator) Reach(context.Context, PodRef) error { return nil }
+
+// Gone reports a pod the stub no longer tracks as running. Tests lose a pod
+// underneath its session by calling Stop directly, without Terminate (AC-C5).
+func (o *StubOrchestrator) Gone(_ context.Context, ref PodRef) (bool, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, pods := range o.running {
+		if pods.Workload.Name == ref.Name {
+			return false, nil
+		}
+		for _, aux := range pods.Auxiliary {
+			if aux.Name == ref.Name {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}

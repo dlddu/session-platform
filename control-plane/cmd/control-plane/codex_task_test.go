@@ -16,7 +16,7 @@ func TestLoadCodexTaskConfigDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.image != "" || cfg.credentialsSecret != "codex-task-credentials" || cfg.configConfigMap != "codex-task-config" ||
-		cfg.plugins != "codex-session" || cfg.archiveEnabled || cfg.defaultModel != session.PlatformDefaultModel ||
+		cfg.archiveEnabled || cfg.defaultModel != session.PlatformDefaultModel ||
 		cfg.pool.slots != 0 || cfg.pool.storageSize != "16Mi" || cfg.pool.storageClass != "" {
 		t.Fatalf("defaults = %+v", cfg)
 	}
@@ -47,9 +47,8 @@ func TestLoadClaudeAuthConfig(t *testing.T) {
 		t.Fatal("unknown auth mode accepted")
 	}
 	t.Setenv("CLAUDE_CODE_AUTH_MODE", "subscription")
-	t.Setenv("CLAUDE_CODE_AUTH_SLOTS", "2")
 	cfg, err = loadClaudeAuthConfig()
-	if err != nil || cfg.mode != k8s.ClaudeCodeAuthSubscription || cfg.pool.slots != 2 {
+	if err != nil || cfg.mode != k8s.ClaudeCodeAuthSubscription {
 		t.Fatalf("subscription = %+v, %v", cfg, err)
 	}
 }
@@ -86,7 +85,8 @@ func TestValidateCodexTaskConfigRefusesSharedObjects(t *testing.T) {
 	}
 }
 
-// AC-M1, AC-E7, AC-N1: a pooled type is offered only with a slot.
+// AC-M1, AC-N1: a pooled type is offered only with a slot; claude-code takes
+// none in either auth mode (AC-E7).
 func TestOfferedWorkloadTypesNeedSlots(t *testing.T) {
 	offered := func(c config, w session.WorkloadType) bool { return slices.Contains(c.offeredWorkloadTypes(), w) }
 	task := config{codexTask: codexTaskConfig{image: "img"}}
@@ -102,12 +102,8 @@ func TestOfferedWorkloadTypesNeedSlots(t *testing.T) {
 		t.Error("gateway claude-code not offered")
 	}
 	cc.claudeAuth.mode = k8s.ClaudeCodeAuthSubscription
-	if offered(cc, session.WorkloadTypeClaudeCode) {
-		t.Error("subscription claude-code offered without slots")
-	}
-	cc.claudeAuth.pool.slots = 2
 	if !offered(cc, session.WorkloadTypeClaudeCode) {
-		t.Error("subscription claude-code not offered with slots")
+		t.Error("subscription claude-code not offered without slots")
 	}
 }
 
@@ -115,7 +111,7 @@ func TestAuthPoolOptions(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	cfg := config{
 		dataPlaneClaudeCodeImage: "img",
-		claudeAuth:               claudeAuthConfig{mode: k8s.ClaudeCodeAuthGateway, pool: authPoolEnv{slots: 2, storageSize: "16Mi"}},
+		claudeAuth:               claudeAuthConfig{mode: k8s.ClaudeCodeAuthGateway},
 		codexTask:                codexTaskConfig{image: "img", pool: authPoolEnv{slots: 1, storageSize: "16Mi"}},
 	}
 	opts, err := authPoolOptions(cfg, cs, "ns")
@@ -123,8 +119,8 @@ func TestAuthPoolOptions(t *testing.T) {
 		t.Fatalf("gateway claude + codex-task: %d options, %v; want codex-task's only", len(opts), err)
 	}
 	cfg.claudeAuth.mode = k8s.ClaudeCodeAuthSubscription
-	if opts, err = authPoolOptions(cfg, cs, "ns"); err != nil || len(opts) != 2 {
-		t.Fatalf("subscription: %d options, %v", len(opts), err)
+	if opts, err = authPoolOptions(cfg, cs, "ns"); err != nil || len(opts) != 1 {
+		t.Fatalf("subscription: %d options, %v; want codex-task's only (AC-E7)", len(opts), err)
 	}
 	cfg.codexTask.pool.storageSize = "lots"
 	if _, err := authPoolOptions(cfg, cs, "ns"); err == nil {

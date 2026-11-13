@@ -30,23 +30,30 @@ const (
 	// refuses to rename an active mount point (EBUSY), while archive restore
 	// atomically swaps this directory with a staged sibling.
 	defaultClaudeStateDir = "/session/state"
-	defaultClaudeBinary   = "claude"
-	platformDefaultModel  = "platform-default"
-	claudePermissionMode  = "auto"
+	// defaultClaudeRunnerBinary is what each claude-code turn runs (AC-E2);
+	// claudeRunnerBinaryEnv overrides it. The runner finds the Claude Code CLI
+	// it drives through CLAUDE_CODE_BIN, default `claude` on PATH.
+	defaultClaudeRunnerBinary = "/usr/local/bin/claude-runner"
+	claudeRunnerBinaryEnv     = "CLAUDE_RUNNER_BIN"
+	platformDefaultModel      = "platform-default"
 
-	claudeRuntimeStateFile      = ".session-platform-claude.json"
-	claudeSettingsDir           = ".claude"
-	claudeSettingsFile          = "settings.json"
-	claudeSessionPlatformPlugin = "session-platform@dlddu-plugins"
+	claudeRuntimeStateFile = ".session-platform-claude.json"
+	claudeSettingsDir      = ".claude"
+	claudeSettingsFile     = "settings.json"
 	// claudePluginMarketplace is the marketplace every managed plugin comes
-	// from; entrypoint.sh installs from it under this name.
+	// from; the agent stages the sidecar's seed under this name
+	// (stageClaudeMarketplace).
 	claudePluginMarketplace = "dlddu-plugins"
 	// claudePluginsEnv is a session's own plugin selection (AC-L1), bare
-	// names, comma-separated. Unset means the platform plugin alone.
+	// names, comma-separated. Unset means no plugins.
 	// Keep in sync with control-plane/internal/adapter/k8s
-	// (ClaudeCodePluginsEnvVar) and entrypoint.sh.
-	claudePluginsEnv           = "CLAUDE_CODE_PLUGINS"
-	maxClaudePromptBytes       = 1 << 20
+	// (ClaudeCodePluginsEnvVar).
+	claudePluginsEnv     = "CLAUDE_CODE_PLUGINS"
+	maxClaudePromptBytes = 1 << 20
+	// claudePermissionModeParam is the /write query parameter that names the
+	// turn's permission mode (AC-E2); the body stays the raw prompt. Keep in
+	// sync with control-plane/internal/adapter/agent (PermissionModeParam).
+	claudePermissionModeParam  = "permissionMode"
 	maxClaudeQueuedPrompts     = 64
 	maxClaudeQueuedBytes       = 8 << 20
 	maxClaudeRunOutputBytes    = 16 << 20
@@ -152,9 +159,6 @@ type claudeConfig struct {
 	// AuthSlot, when set, is the pool slot whose login this session's CLI
 	// uses (docs/prd/agent-auth-pool.md, AC-N4).
 	AuthSlot *authSlot
-	// Login, when set, signs a claude-code subscription session in on its
-	// first prompt (AC-E7). It needs AuthSlot.
-	Login claudeLogin
 }
 
 // toolSurface is what the platform lets a session's agent reach beyond its own
@@ -193,9 +197,9 @@ type claudeRuntimeState struct {
 
 type promptJob struct {
 	prompt string
-	// seq is the job's place in arrival order. AC-E7's sign-in reads only
-	// writes that arrived after its URL was shown as codes.
-	seq uint64
+	// permissionMode is the mode the write chose for this turn (AC-E2), or ""
+	// for the runner's default.
+	permissionMode string
 }
 
 // claudeWorkload owns one session's one-shot Claude invocations. A single
@@ -213,7 +217,6 @@ type claudeWorkload struct {
 	cli      agentCLI
 	out      scrollback
 	authSlot *authSlot
-	login    claudeLogin
 
 	// approvals is what AC-F3's idle exception is decided from.
 	approvals approvalWaits
@@ -237,21 +240,14 @@ type claudeWorkload struct {
 	// written after the turn's end marker rather than inside its output.
 	turnRefreshed     bool
 	turnRefreshNotice string
-	// pendingLogin is AC-E7's sign-in between its two writes.
-	pendingLogin *pendingClaudeLogin
-	// droppedLogin remembers a sign-in that ended before its code arrived,
-	// so a code sent for it is still never recorded or run.
-	droppedLogin *droppedClaudeLogin
-	// enqueued counts accepted writes; it stamps promptJob.seq.
-	enqueued        uint64
-	finished        uint64
-	active          bool
-	hasRun          bool
-	turns           int
-	stopping        bool
-	runTimeout      time.Duration
-	runOutputLimit  int
-	scrollbackLimit int
+	finished          uint64
+	active            bool
+	hasRun            bool
+	turns             int
+	stopping          bool
+	runTimeout        time.Duration
+	runOutputLimit    int
+	scrollbackLimit   int
 
 	now        func() time.Time
 	ctx        context.Context
@@ -281,7 +277,7 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 	}
 	binary := strings.TrimSpace(cfg.Binary)
 	if binary == "" {
-		binary = defaultClaudeBinary
+		binary = defaultClaudeRunnerBinary
 	}
 	runner := cfg.Runner
 	if runner == nil {
@@ -313,10 +309,6 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 	if cli == nil {
 		cli = claudeCLI{}
 	}
-	if cfg.Login != nil && cfg.AuthSlot == nil {
-		return nil, errors.New("a claude subscription sign-in needs an auth slot")
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &claudeWorkload{
 		stateDir:        stateDir,
@@ -330,7 +322,6 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 		tools:           cfg.Tools,
 		cli:             cli,
 		authSlot:        cfg.AuthSlot,
-		login:           cfg.Login,
 		runTimeout:      runTimeout,
 		runOutputLimit:  runOutputLimit,
 		scrollbackLimit: scrollbackLimit,
@@ -378,21 +369,22 @@ func (c *claudeWorkload) Close() {
 	}
 	c.stopping = true
 	c.accepting = false
-	pending := c.pendingLogin
-	c.pendingLogin = nil
-	if pending != nil && pending.timer != nil {
-		pending.timer.Stop()
-	}
 	c.cancel()
 	c.cond.Broadcast()
 	c.mu.Unlock()
-	if pending != nil {
-		pending.proc.kill()
-	}
 	<-c.workerDone
 }
 
-func (c *claudeWorkload) enqueue(prompt string) error {
+func (c *claudeWorkload) enqueue(prompt, permissionMode string) error {
+	if permissionMode != "" {
+		moder, ok := c.cli.(permissionModer)
+		if !ok {
+			return errPermissionModeUnsupported
+		}
+		if !moder.validPermissionMode(permissionMode) {
+			return errPermissionModeUnknown
+		}
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	switch {
@@ -407,8 +399,7 @@ func (c *claudeWorkload) enqueue(prompt string) error {
 	case c.queue.Len() >= maxClaudeQueuedPrompts || c.queuedBytes+len(prompt) > maxClaudeQueuedBytes:
 		return errClaudeQueueFull
 	}
-	c.enqueued++
-	c.queue.PushBack(promptJob{prompt: prompt, seq: c.enqueued})
+	c.queue.PushBack(promptJob{prompt: prompt, permissionMode: permissionMode})
 	c.queuedBytes += len(prompt)
 	c.cond.Signal()
 	return nil
@@ -500,19 +491,9 @@ func (c *claudeWorkload) runWorker() {
 		c.turnRefreshNotice = ""
 		c.turns++
 		seq := c.turns
-		input := c.classifyInputLocked(job)
 		c.mu.Unlock()
 
-		prompt, ok := c.openTurn(seq, job.prompt, input)
-		if !ok {
-			c.endTurn(seq, "error")
-			c.mu.Lock()
-			c.active = false
-			c.finished++
-			c.cond.Broadcast()
-			c.mu.Unlock()
-			continue
-		}
+		prompt := c.openTurn(seq, job.prompt)
 		prompt, noticed := c.withTurnNotice(prompt, resume)
 		output := newClaudeOutputSink(
 			&c.out,
@@ -526,7 +507,7 @@ func (c *claudeWorkload) runWorker() {
 		stderr := newUTF8NormalizingWriter(output)
 		runCtx, cancelRun := context.WithTimeout(c.ctx, c.runTimeout)
 		stopSlotWatch := c.watchAuthSlot()
-		err := c.runner.Run(runCtx, c.argv(prompt, resume), runnerOptions{
+		err := c.runner.Run(runCtx, c.argv(prompt, resume, job.permissionMode), runnerOptions{
 			Dir:    c.workDir,
 			Env:    environmentWithHome(c.homeDir),
 			Stdout: stdout,
@@ -578,34 +559,12 @@ func (c *claudeWorkload) runWorker() {
 	}
 }
 
-// openTurn writes the turn's input record and settles what the turn runs. A
-// turn normally runs its own prompt. With a sign-in pending (AC-E7) the write
-// is the sign-in code instead: the record shows a placeholder, and the turn
-// runs the prompt that was held for the sign-in. ok is false when the turn
-// has nothing to run.
-func (c *claudeWorkload) openTurn(seq int, prompt string, input turnInput) (string, bool) {
-	switch {
-	case input.code != nil:
-		c.beginTurn(seq, claudeLoginCodeInput)
-		if !c.completeLogin(input.code, prompt) {
-			return "", false
-		}
-		return input.code.prompt, true
-	case input.staleCode:
-		c.beginTurn(seq, claudeLoginCodeInput)
-		c.appendPlatformNotice("[session-platform: the Claude sign-in this message was for had already ended, so it was taken as its code and not used. Send your prompt again to start a new sign-in.]\n")
-		return "", false
-	case input.beforeSignIn:
-		c.beginTurn(seq, prompt)
-		c.appendPlatformNotice("[session-platform: this prompt was sent before the Claude sign-in started, so it did not run. Send it again after signing in.]\n")
-		return "", false
-	}
+// openTurn writes the turn's input record and gives the CLI the slot's login
+// before the turn runs its prompt.
+func (c *claudeWorkload) openTurn(seq int, prompt string) string {
 	c.beginTurn(seq, prompt)
 	c.pullAuthSlot()
-	if c.login != nil && !c.subscriptionGate(prompt) {
-		return "", false
-	}
-	return prompt, true
+	return prompt
 }
 
 // pullAuthSlot gives the CLI the slot's login before it runs (AC-N4). A
@@ -807,30 +766,42 @@ func fromLoopback(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func (c *claudeWorkload) argv(prompt string, resume bool) []string {
+// argv builds the turn's invocation. enqueue has already refused a permission
+// mode the CLI does not take.
+func (c *claudeWorkload) argv(prompt string, resume bool, permissionMode string) []string {
+	if moder, ok := c.cli.(permissionModer); ok && permissionMode != "" {
+		return moder.argvWithPermissionMode(c.binary, c.model, prompt, resume, permissionMode)
+	}
 	return c.cli.argv(c.binary, c.model, prompt, resume)
 }
 
-// claudeArgv builds one Claude Code invocation. effort is AC-E8's session
-// effort, empty for the CLI default.
-func claudeArgv(binary, model, effort, prompt string, resume bool) []string {
+// claudeRunnerArgv builds one claude-runner invocation (AC-E2). effort is
+// AC-E8's session effort, empty for the CLI default. permissionMode is the
+// write's choice, already checked against claudePermissionModes; empty leaves
+// the runner's auto. --resume follows AC-E4: only after the first successful
+// run; the runner then resumes the session id it recorded. Partial messages and
+// the system prompt are the runner's, not flags here, so no argv can change
+// them, and the runner itself refuses a mode outside its allowlist.
+func claudeRunnerArgv(binary, model, effort, permissionMode, k3sMCPURL, prompt string, resume bool) []string {
 	argv := []string{binary}
-	if resume {
-		argv = append(argv, "--continue")
-	}
 	if model != "" && model != platformDefaultModel {
 		argv = append(argv, "--model", model)
 	}
 	if effort != "" {
 		argv = append(argv, "--effort", effort)
 	}
+	if permissionMode != "" {
+		argv = append(argv, "--permission-mode", permissionMode)
+	}
+	if k3sMCPURL != "" {
+		argv = append(argv, "--k3s-mcp-url", k3sMCPURL)
+	}
+	if resume {
+		argv = append(argv, "--resume")
+	}
 	// The option delimiter prevents a prompt beginning with "--" from changing
 	// any platform-controlled flag.
-	return append(argv,
-		"--permission-mode", claudePermissionMode,
-		"-p", "--output-format", "stream-json", "--verbose",
-		"--include-partial-messages", "--", prompt,
-	)
+	return append(argv, "--", prompt)
 }
 
 // beginCheckpoint atomically closes admission and drains all accepted work.
@@ -877,10 +848,7 @@ func (c *claudeWorkload) beginCheckpoint(ctx context.Context, requestedID string
 		return nil, "", err
 	}
 	hasRun := c.hasRun
-	pending := c.pendingLogin
 	c.mu.Unlock()
-	// A sign-in cannot wait across an archive: its process belongs to this pod.
-	c.dropPendingLogin(pending, "[session-platform: the session was archived during the Claude sign-in; the held prompt was dropped. Send it again to start over.]\n")
 	if err := persistClaudeRuntimeState(c.stateDir, hasRun); err != nil {
 		c.abortCheckpoint()
 		return nil, "", err
@@ -1279,17 +1247,14 @@ func validateClaudeManagedSettings(homeDir string) error {
 	return validateClaudeToolSurface(settings)
 }
 
-// validateClaudeToolSurface requires a non-empty set of enabled marketplace
-// plugins. Which plugins is the pod's to say (ensureClaudeManagedSettings).
+// validateClaudeToolSurface requires every enabled plugin to be an enabled
+// marketplace plugin; a session that chose none has none (AC-L1). Which
+// plugins is the pod's to say (ensureClaudeManagedSettings).
 func validateClaudeToolSurface(settings claudeManagedSettings) error {
-	plugin := len(settings.EnabledPlugins) != 0
 	for name, enabled := range settings.EnabledPlugins {
 		if !enabled || !managedClaudePlugin(name) {
-			plugin = false
+			return fmt.Errorf("claude managed settings may only enable %s plugins, got %s", claudePluginMarketplace, name)
 		}
-	}
-	if !plugin {
-		return fmt.Errorf("claude managed settings must enable %s plugins as its platform tool surface", claudePluginMarketplace)
 	}
 	return nil
 }
@@ -1308,13 +1273,13 @@ func managedClaudePlugin(name string) bool {
 }
 
 // claudePluginsFromEnv resolves the plugins a claude-code pod enables: the
-// session's own selection when the control plane passed one (AC-L1),
-// otherwise the platform plugin alone (AC-E6). entrypoint.sh installs the same
-// list before the agent starts, so the two must agree on the default.
+// session's own selection when the control plane passed one (AC-L1), otherwise
+// none. The agent installs them from the K3s MCP sidecar's seed
+// (claude_plugins.go).
 func claudePluginsFromEnv() ([]string, error) {
 	raw, set := os.LookupEnv(claudePluginsEnv)
 	if !set {
-		return []string{claudeSessionPlatformPlugin}, nil
+		return nil, nil
 	}
 	names := strings.Split(raw, ",")
 	plugins := make([]string, 0, len(names))
@@ -1463,8 +1428,10 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 			http.Error(w, "read prompt: "+c.redactString(err.Error()), http.StatusBadRequest)
 			return
 		}
-		if err := c.enqueue(string(prompt)); err != nil {
+		if err := c.enqueue(string(prompt), r.URL.Query().Get(claudePermissionModeParam)); err != nil {
 			switch {
+			case errors.Is(err, errPermissionModeUnsupported), errors.Is(err, errPermissionModeUnknown):
+				http.Error(w, err.Error(), http.StatusBadRequest)
 			case errors.Is(err, errClaudeQueueFull):
 				http.Error(w, err.Error(), http.StatusTooManyRequests)
 			case errors.Is(err, errClaudeOutputFull):

@@ -5,6 +5,7 @@
 - AC-C2: Read API 상태별 분기 (PRD: 세션 상태 일관성 & Read/Write API)
 - AC-C3: Write API 상태별 분기 (PRD: 세션 상태 일관성 & Read/Write API)
 - AC-C4: 세션 간 자유 전환 (PRD: 세션 상태 일관성 & Read/Write API)
+- AC-C5: pod를 잃은 세션은 not found로 정리된다 (PRD: 세션 상태 일관성 & Read/Write API)
 
 ## 테스트 시나리오
 
@@ -31,6 +32,12 @@
 - **실행 단계**: 세션들 사이를 순차/반복 전환
 - **기대 결과**: 전환마다 대상 세션이 올바른 상태로 활성화(snapshot은 복원), 이전 세션 상태 보존, 격리 유지
 - **검증 AC**: AC-C4
+
+### 시나리오 4-1: pod를 잃은 세션
+- **사전 조건**: active 세션 1개
+- **실행 단계**: (a) control plane을 거치지 않고 세션 pod를 지운 뒤 read → (b) 같은 조건의 다른 세션에 write → (c) pod는 살아 있고 agent 호출만 실패하는 세션에 read
+- **기대 결과**: (a)(b) 404를 반환하고 세션 레코드가 지워지며 로그인 슬롯이 풀린다. (c) 원래 오류(500)가 나고 레코드는 남는다
+- **검증 AC**: AC-C5
 
 ### 시나리오 5: optional body와 strict JSON validation
 - **사전 조건**: active 세션 1개

@@ -37,7 +37,7 @@ func (c *claudeWorkload) queueState() agentQueueState {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	idle := c.ready && c.accepting && !c.stopping && !c.active && !c.refreshing &&
-		!c.checkpointing && !c.restoring && c.queue.Len() == 0 && c.pendingLogin == nil
+		!c.checkpointing && !c.restoring && c.queue.Len() == 0
 	return agentQueueState{Idle: idle, Finished: c.finished, Epoch: agentEpoch}
 }
 

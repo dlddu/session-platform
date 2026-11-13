@@ -83,7 +83,6 @@ func main() {
 		"codex_chat_auth_slots", cfg.codex.pool.slots,
 		"codex_task_auth_slots", cfg.codexTask.pool.slots,
 		"claude_code_auth_mode", cfg.claudeAuth.mode,
-		"claude_code_auth_slots", cfg.claudeAuth.pool.slots,
 		"tenants", len(cfg.tenancy.tenants.Tenants()),
 		"approval_gateway_url", cfg.approvalGatewayURL,
 		"data_plane_shell", cfg.dataPlaneShell,
@@ -115,7 +114,6 @@ func main() {
 		k8s.WithWorkloadImage(session.WorkloadTypeCodexTask, cfg.codexTask.image),
 		k8s.WithCodexTaskCredentialsSecret(cfg.codexTask.credentialsSecret),
 		k8s.WithCodexTaskConfigConfigMap(cfg.codexTask.configConfigMap),
-		k8s.WithCodexTaskPlugins(cfg.codexTask.plugins),
 		k8s.WithClaudeCodeAuthMode(cfg.claudeAuth.mode),
 		k8s.WithApprovalGatewayURL(cfg.approvalGatewayURL),
 		k8s.WithSharedVolume(cfg.sharedVolumeStorageClass, cfg.sharedVolumeSize),
@@ -192,6 +190,9 @@ func main() {
 		os.Exit(1)
 	}
 	serviceOpts = append(serviceOpts, poolOpts...)
+	if manifests, ok := cstore.(service.SessionManifests); ok {
+		serviceOpts = append(serviceOpts, service.WithSessionManifests(manifests))
+	}
 	mgr := service.New(orch, store, shellCkpt, agentClient, serviceOpts...)
 	snapshotEnabled := cfg.anyArchiveEnabled()
 
@@ -308,7 +309,7 @@ type config struct {
 func (c config) offeredWorkloadTypes() []session.WorkloadType {
 	types := []session.WorkloadType{session.WorkloadTypeShell}
 	for w, offered := range map[session.WorkloadType]bool{
-		session.WorkloadTypeClaudeCode:  c.dataPlaneClaudeCodeImage != "" && c.claudeAuth.offered(),
+		session.WorkloadTypeClaudeCode:  c.dataPlaneClaudeCodeImage != "",
 		session.WorkloadTypeMiniMaxCode: c.miniMax.image != "",
 		session.WorkloadTypeCodexChat:   c.codex.offered(),
 		session.WorkloadTypeCodexTask:   c.codexTask.offered(),

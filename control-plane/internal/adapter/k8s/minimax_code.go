@@ -43,13 +43,14 @@ const (
 	k3sMCPProxyWorkload = "k3s-mcp-proxy"
 	k3sMCPProxyPort     = 8093
 
-	// MiniMaxMarketplaceDirEnvVar is where the K3s MCP proxy clones the plugin
-	// marketplace (AC-G5). Its root filesystem is read-only, so the clone gets
-	// an emptyDir of its own; nothing else mounts it.
-	// Keep in sync with data-plane/cmd/agent (miniMaxMarketplaceDirEnv).
-	MiniMaxMarketplaceDirEnvVar = "MINIMAX_CODE_MARKETPLACE_DIR"
-	miniMaxMarketplaceVolume    = "marketplace"
-	miniMaxMarketplacePath      = "/var/lib/session-platform-marketplace"
+	// PluginSeedMarketplaceDirEnvVar is where the K3s MCP proxy clones the plugin
+	// marketplace (AC-G5), in the helper pod or a loopback sidecar alike. Its
+	// root filesystem is read-only, so the clone gets an emptyDir of its own;
+	// nothing else mounts it.
+	// Keep in sync with data-plane/cmd/agent (pluginSeedMarketplaceDirEnv).
+	PluginSeedMarketplaceDirEnvVar = "PLUGIN_SEED_MARKETPLACE_DIR"
+	pluginSeedMarketplaceVolume    = "marketplace"
+	pluginSeedMarketplacePath      = "/var/lib/session-platform-marketplace"
 )
 
 // WithMiniMaxCredentialsSecret selects the platform-managed Secret minimax-code
@@ -158,11 +159,11 @@ func (o *ClientOrchestrator) k3sMCPProxy(sessionID, image, secret string, plugin
 		{Name: CredentialProxyPlacementEnvVar, Value: proxyPlacementHelper},
 		{Name: SessionIDEnvVar, Value: sessionID},
 	}
-	proxy.Env = append(proxy.Env, corev1.EnvVar{Name: MiniMaxMarketplaceDirEnvVar, Value: miniMaxMarketplacePath})
+	proxy.Env = append(proxy.Env, corev1.EnvVar{Name: PluginSeedMarketplaceDirEnvVar, Value: pluginSeedMarketplacePath})
 	if plugins != nil {
 		proxy.Env = append(proxy.Env, corev1.EnvVar{Name: pluginSeedPluginsEnvVar, Value: strings.Join(plugins, ",")})
 	}
-	proxy.VolumeMounts = []corev1.VolumeMount{{Name: miniMaxMarketplaceVolume, MountPath: miniMaxMarketplacePath}}
+	proxy.VolumeMounts = []corev1.VolumeMount{{Name: pluginSeedMarketplaceVolume, MountPath: pluginSeedMarketplacePath}}
 	proxy.Env = append(proxy.Env, optionalSecretEnv(K3SMCPTokenEnvVar, secret, MiniMaxK3SMCPTokenSecretKey))
 	proxy.ReadinessProbe.Exec.Command = []string{"/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/" + port}
 	return proxy
@@ -174,10 +175,7 @@ func helperProxyVolumes(workloadType session.WorkloadType) []corev1.Volume {
 	if workloadType != session.WorkloadTypeMiniMaxCode {
 		return nil
 	}
-	return []corev1.Volume{{
-		Name:         miniMaxMarketplaceVolume,
-		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
-	}}
+	return []corev1.Volume{pluginSeedMarketplaceEmptyDir()}
 }
 
 // helperPolicyPorts are the helper pod ports a session's network policies

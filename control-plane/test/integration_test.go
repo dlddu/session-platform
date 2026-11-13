@@ -223,7 +223,7 @@ func createReal(t *testing.T, svc *service.Service, name string) *session.Sessio
 
 func writeShell(t *testing.T, svc *service.Service, id, payload string) {
 	t.Helper()
-	if _, err := svc.Write(context.Background(), id, payload); err != nil {
+	if _, err := svc.Write(context.Background(), id, payload, session.WriteOptions{}); err != nil {
 		t.Fatalf("write %q: %v", payload, err)
 	}
 }

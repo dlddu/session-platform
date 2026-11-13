@@ -93,6 +93,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /api/v1/sessions/{id}/snapshot", a.snapshotSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/plugins/refresh", a.refreshPlugins)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/recover", a.recoverSession)
 }
 
 // ---- request/response DTOs ----
@@ -120,6 +121,10 @@ type createReq struct {
 
 type writeReq struct {
 	Payload string `json:"payload"`
+	// PermissionMode is the turn's permission mode, claude-code only (AC-E2).
+	// A pointer so an explicitly empty value is refused rather than read as the
+	// default.
+	PermissionMode *string `json:"permissionMode"`
 }
 
 type readReq struct {
@@ -468,7 +473,15 @@ func (a *API) writeSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	res, err := a.mgr.Write(r.Context(), r.PathValue("id"), req.Payload)
+	var opts session.WriteOptions
+	if req.PermissionMode != nil {
+		if *req.PermissionMode == "" {
+			writeErr(w, session.ErrInvalidInput)
+			return
+		}
+		opts.PermissionMode = *req.PermissionMode
+	}
+	res, err := a.mgr.Write(r.Context(), r.PathValue("id"), req.Payload, opts)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -502,6 +515,33 @@ func (a *API) snapshotSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess, err := a.mgr.Snapshot(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sess)
+}
+
+// recoverSession puts a deleted session back (AC-B4). The id has no record to
+// authorize against, so the check runs on the recovered manifest instead.
+func (a *API) recoverSession(w http.ResponseWriter, r *http.Request) {
+	caller, ok := a.caller(w, r)
+	if !ok {
+		return
+	}
+	if err := decodeRequestBody(r.Body, &struct{}{}, false); err != nil {
+		writeErr(w, err)
+		return
+	}
+	sess, err := a.mgr.Recover(r.Context(), r.PathValue("id"), func(rec *session.Session) error {
+		if !caller.Sees(rec.Tenant) {
+			return session.ErrNotFound
+		}
+		if caller.Tenant != nil && !caller.Tenant.Allows(rec.WorkloadType) {
+			return session.ErrForbidden
+		}
+		return nil
+	})
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -676,7 +716,7 @@ func writeErr(w http.ResponseWriter, err error) {
 		status = http.StatusBadRequest
 	case errors.Is(err, session.ErrInvalidState):
 		status = http.StatusUnprocessableEntity
-	case errors.Is(err, session.ErrConflict):
+	case errors.Is(err, session.ErrConflict), errors.Is(err, session.ErrAlreadyExists):
 		status = http.StatusConflict
 	case errors.Is(err, session.ErrWorkloadQueueFull):
 		status = http.StatusTooManyRequests

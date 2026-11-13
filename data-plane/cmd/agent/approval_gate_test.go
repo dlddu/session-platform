@@ -49,7 +49,8 @@ func TestCredentialProxyPlacementFailsClosed(t *testing.T) {
 	}
 }
 
-// claude-code's tool surface is the marketplace plugin. No Claude-CLI type sits
+// claude-code's tool surface is the session's marketplace plugins, none unless
+// it chose some (AC-L1). No Claude-CLI type sits
 // behind the gate now (minimax-code is the gated type and has its own surface,
 // minimax_tools.go), so agentToolSurface knows no other Claude workload.
 func TestClaudeCodeToolSurfaceIsUnchanged(t *testing.T) {
@@ -61,8 +62,8 @@ func TestClaudeCodeToolSurfaceIsUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claude-code environment rejected: %v", err)
 	}
-	if len(tools.Plugins) != 1 || tools.Plugins[0] != claudeSessionPlatformPlugin || tools.SessionMCP != "" {
-		t.Fatalf("claude-code tool surface = %+v, want the marketplace plugin only", tools)
+	if len(tools.Plugins) != 0 || tools.SessionMCP != "" {
+		t.Fatalf("claude-code tool surface = %+v, want no plugins for a session that chose none", tools)
 	}
 }
 
@@ -90,13 +91,13 @@ func TestManagedSettingsRefuseAnMCPSurface(t *testing.T) {
 		"registers an MCP server": func(s *claudeManagedSettings) {
 			s.MCPServers = map[string]json.RawMessage{sessionMCPServerName: json.RawMessage(`{"type":"http","url":"http://10.42.0.9:8092/mcp"}`)}
 		},
-		"enables no plugin": func(s *claudeManagedSettings) {
-			s.EnabledPlugins = map[string]bool{}
+		"lists a plugin as disabled": func(s *claudeManagedSettings) {
+			s.EnabledPlugins = map[string]bool{testClaudePlugin: false}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			homeDir := t.TempDir()
-			if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{claudeSessionPlatformPlugin}}); err != nil {
+			if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{testClaudePlugin}}); err != nil {
 				t.Fatal(err)
 			}
 			if err := validateClaudeManagedSettings(homeDir); err != nil {

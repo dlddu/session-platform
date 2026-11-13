@@ -23,7 +23,8 @@ const (
 	defaultCodexTaskCredentialsSecret = "codex-task-credentials"
 	defaultCodexTaskConfigConfigMap   = "codex-task-config"
 	// DefaultCodexPlugins is the marketplace plugin whose skills a codex-chat
-	// or codex-task session gets when the deployment names none (AC-J5, AC-M1).
+	// session gets when it chooses none and the deployment names none (AC-J5).
+	// codex-task has no default: a session that chooses none gets no plugins.
 	DefaultCodexPlugins = "codex-session"
 
 	// CodexModelEnvVar carries the session's model, or the ConfigMap's optional
@@ -34,12 +35,14 @@ const (
 	// effort; it is absent when the session names none (AC-M4).
 	// Keep in sync with data-plane/cmd/agent.
 	CodexReasoningEffortEnvVar = "CODEX_REASONING_EFFORT"
-	// CodexK3SMCPProxyContainerName is the sidecar that holds the K3s MCP token.
-	CodexK3SMCPProxyContainerName = "k3s-mcp-proxy"
-	// Keep in sync with data-plane/cmd/agent (miniMaxPluginsEnv,
-	// miniMaxMarketplaceURLEnv): the sidecar reuses minimax-code's seeder.
-	pluginSeedPluginsEnvVar        = "MINIMAX_CODE_PLUGINS"
-	pluginSeedMarketplaceURLEnvVar = "MINIMAX_CODE_PLUGIN_MARKETPLACE_URL"
+	// K3SMCPProxyContainerName is the loopback sidecar that holds the K3s MCP
+	// token in a claude-code, codex-chat or codex-task pod.
+	K3SMCPProxyContainerName = "k3s-mcp-proxy"
+	// The K3s MCP proxy's plugin seeder reads these whichever type runs it.
+	// Keep in sync with data-plane/cmd/agent (pluginSeedPluginsEnv,
+	// pluginSeedMarketplaceURLEnv).
+	pluginSeedPluginsEnvVar        = "PLUGIN_SEED_PLUGINS"
+	pluginSeedMarketplaceURLEnvVar = "PLUGIN_SEED_MARKETPLACE_URL"
 	K3SMCPToolPolicyEnvVar         = "K3S_MCP_TOOL_POLICY"
 
 	// The sidecar keeps the session's schedules and queues their runs on the
@@ -52,10 +55,10 @@ const (
 )
 
 // CodexSchedulerMCPURL is the scheduler MCP on the loopback sidecar.
-var CodexSchedulerMCPURL = CodexK3SMCPProxyURL + schedulerMCPPath
+var CodexSchedulerMCPURL = K3SMCPProxyLoopbackURL + schedulerMCPPath
 
-// CodexK3SMCPProxyURL is where the workload container reaches its sidecar.
-var CodexK3SMCPProxyURL = "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(k3sMCPProxyPort))
+// K3SMCPProxyLoopbackURL is where the workload container reaches its sidecar.
+var K3SMCPProxyLoopbackURL = "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(k3sMCPProxyPort))
 
 // WithCodexCredentialsSecret selects the Secret whose optional k3s-mcp-token
 // reaches the codex sidecar.
@@ -106,18 +109,10 @@ func WithCodexTaskConfigConfigMap(name string) Option {
 	}
 }
 
-// WithCodexTaskPlugins names the marketplace plugins codex-task sessions get.
-func WithCodexTaskPlugins(plugins string) Option {
-	return func(o *ClientOrchestrator) {
-		if plugins = strings.TrimSpace(plugins); plugins != "" {
-			o.codexTask.plugins = plugins
-		}
-	}
-}
-
 // codexProfile is what the two codex types configure separately: their own
-// Secret, ConfigMap and plugin bundle, so a codex-task deployment never hands
-// a chat session its token or skills (AC-M1).
+// Secret, ConfigMap and default plugin bundle (codex-chat's alone; codex-task
+// has none), so a codex-task deployment never hands a chat session its token
+// or skills (AC-M1).
 type codexProfile struct {
 	credentialsSecret string
 	configConfigMap   string
@@ -148,7 +143,7 @@ func (o *ClientOrchestrator) codexPod(container *corev1.Container, sessionID str
 	container.Env = append(container.Env,
 		modelEnv,
 		corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: workloadStateDir},
-		corev1.EnvVar{Name: K3SMCPProxyURLEnvVar, Value: CodexK3SMCPProxyURL},
+		corev1.EnvVar{Name: K3SMCPProxyURLEnvVar, Value: K3SMCPProxyLoopbackURL},
 		corev1.EnvVar{Name: SchedulerMCPURLEnvVar, Value: CodexSchedulerMCPURL},
 	)
 	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
@@ -156,7 +151,7 @@ func (o *ClientOrchestrator) codexPod(container *corev1.Container, sessionID str
 	})
 	volumes := []corev1.Volume{
 		{Name: claudeCodeStateVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-		{Name: miniMaxMarketplaceVolume, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		pluginSeedMarketplaceEmptyDir(),
 	}
 	if workload.ReasoningEffort != "" {
 		container.Env = append(container.Env, corev1.EnvVar{Name: CodexReasoningEffortEnvVar, Value: workload.ReasoningEffort})
@@ -164,31 +159,51 @@ func (o *ClientOrchestrator) codexPod(container *corev1.Container, sessionID str
 	return []corev1.Container{o.codexK3SMCPProxy(sessionID, image, profile, workload.Plugins)}, volumes
 }
 
-// codexK3SMCPProxy is minimax-code's K3s MCP proxy moved from the helper pod
-// into the session pod, bound to loopback (AC-J6). Its seeder clones the
-// marketplace for the plugin skills (AC-J5): the session's own selection when
-// it made one (AC-L1), otherwise the type's deployment default.
+// codexK3SMCPProxy is the loopback K3s MCP proxy (AC-J6) with codex's
+// additions. Its seeder clones the marketplace for the plugin skills (AC-J5):
+// the session's own selection when it made one (AC-L1), otherwise the type's
+// default — codex-chat's CODEX_PLUGINS, and for codex-task nothing.
 func (o *ClientOrchestrator) codexK3SMCPProxy(sessionID, image string, profile codexProfile, plugins []string) corev1.Container {
-	port := strconv.Itoa(k3sMCPProxyPort)
 	selected := profile.plugins
 	if plugins != nil {
 		selected = strings.Join(plugins, ",")
 	}
-	proxy := o.credentialProxyContainer(CodexK3SMCPProxyContainerName, image, "127.0.0.1:"+port, proxyPlacementSidecar)
+	proxy := o.loopbackK3SMCPProxy(sessionID, image, profile.credentialsSecret, profile.configConfigMap, selected)
+	proxy.Env = append(proxy.Env, corev1.EnvVar{
+		Name: SchedulerAgentURLEnvVar, Value: "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(o.agentPort)),
+	})
+	return proxy
+}
+
+// loopbackK3SMCPProxy is minimax-code's K3s MCP proxy moved from the helper pod
+// into the session pod, bound to loopback: the one holder of the type's K3s MCP
+// token, and the seeder of the plugins the session selected. secret and
+// configMap are the type's own, so no type reads another's token.
+func (o *ClientOrchestrator) loopbackK3SMCPProxy(sessionID, image, secret, configMap, plugins string) corev1.Container {
+	port := strconv.Itoa(k3sMCPProxyPort)
+	proxy := o.credentialProxyContainer(K3SMCPProxyContainerName, image, "127.0.0.1:"+port, proxyPlacementSidecar)
 	proxy.Env = []corev1.EnvVar{
 		{Name: workloadEnvVar, Value: k3sMCPProxyWorkload},
 		{Name: agentAddrEnvVar, Value: "127.0.0.1:" + port},
 		{Name: CredentialProxyPlacementEnvVar, Value: proxyPlacementSidecar},
 		{Name: SessionIDEnvVar, Value: sessionID},
-		{Name: MiniMaxMarketplaceDirEnvVar, Value: miniMaxMarketplacePath},
-		{Name: pluginSeedPluginsEnvVar, Value: selected},
+		{Name: PluginSeedMarketplaceDirEnvVar, Value: pluginSeedMarketplacePath},
+		{Name: pluginSeedPluginsEnvVar, Value: plugins},
 		{Name: K3SMCPToolPolicyEnvVar, Value: "allow-all"},
-		{Name: SchedulerAgentURLEnvVar, Value: "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(o.agentPort))},
-		optionalSecretEnv(K3SMCPTokenEnvVar, profile.credentialsSecret, MiniMaxK3SMCPTokenSecretKey),
-		optionalConfigMapEnv(K3SMCPURLEnvVar, profile.configConfigMap, ClaudeCodeK3SMCPURLConfigKey),
-		optionalConfigMapEnv(pluginSeedMarketplaceURLEnvVar, profile.configConfigMap, ClaudeCodePluginMarketplaceURLConfigKey),
+		optionalSecretEnv(K3SMCPTokenEnvVar, secret, ClaudeCodeK3SMCPTokenSecretKey),
+		optionalConfigMapEnv(K3SMCPURLEnvVar, configMap, ClaudeCodeK3SMCPURLConfigKey),
+		optionalConfigMapEnv(pluginSeedMarketplaceURLEnvVar, configMap, ClaudeCodePluginMarketplaceURLConfigKey),
 	}
-	proxy.VolumeMounts = []corev1.VolumeMount{{Name: miniMaxMarketplaceVolume, MountPath: miniMaxMarketplacePath}}
+	proxy.VolumeMounts = []corev1.VolumeMount{{Name: pluginSeedMarketplaceVolume, MountPath: pluginSeedMarketplacePath}}
 	proxy.ReadinessProbe.Exec.Command = []string{"/bin/bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/" + port}
 	return proxy
+}
+
+// pluginSeedMarketplaceEmptyDir is the scratch volume the loopback proxy clones
+// the marketplace into; its root filesystem is read-only.
+func pluginSeedMarketplaceEmptyDir() corev1.Volume {
+	return corev1.Volume{
+		Name:         pluginSeedMarketplaceVolume,
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	}
 }

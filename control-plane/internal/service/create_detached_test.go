@@ -53,3 +53,44 @@ func TestCreateOutlivesTheCallersContext(t *testing.T) {
 		t.Fatalf("List = %+v, want the created session", listed)
 	}
 }
+
+func (o ctxHonouringOrchestrator) RestoreInto(ctx context.Context, sessionID, checkpointRef string, workload k8s.WorkloadSpec) (k8s.SessionPods, error) {
+	if err := ctx.Err(); err != nil {
+		return k8s.SessionPods{}, err
+	}
+	return o.StubOrchestrator.RestoreInto(ctx, sessionID, checkpointRef, workload)
+}
+
+// The same holds for a restore: a caller that gives up while the restore pod
+// waits for an image or a node must not reclaim it. The session still turns
+// active, and the next call finds it so.
+func TestRestoreOutlivesTheCallersContext(t *testing.T) {
+	orch := ctxHonouringOrchestrator{k8s.NewStubOrchestrator("sessions")}
+	store := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
+	svc := service.New(orch, store, archive.NewStubCheckpointer(true), agent.NewStubClient())
+
+	created, err := svc.Create(context.Background(), session.CreateRequest{Name: "frozen"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := svc.Snapshot(context.Background(), created.ID); err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	restored, err := svc.Restore(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Restore with a cancelled caller context: %v", err)
+	}
+	if restored.State != session.StateActive || restored.Pod == "" {
+		t.Fatalf("session = %+v, want an active session with a pod", restored)
+	}
+	got, err := svc.Get(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.State != session.StateActive || got.Pod != restored.Pod {
+		t.Fatalf("stored session = %+v, want the restored active session", got)
+	}
+}

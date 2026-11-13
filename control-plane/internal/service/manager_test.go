@@ -414,7 +414,7 @@ func TestPreparingSnapshotRecoversAfterControlPlaneRestart(t *testing.T) {
 		orch, store, archive.NewStubCheckpointer(true), agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 	)
-	if _, err := restarted.Write(ctx, created.ID, "after restart"); err != nil {
+	if _, err := restarted.Write(ctx, created.ID, "after restart", session.WriteOptions{}); err != nil {
 		t.Fatalf("write after recovery: %v", err)
 	}
 	if ckpt.abortCalls != 1 || ckpt.abortPod.Name != created.Pod || ckpt.abortToken != generation {
@@ -561,7 +561,7 @@ func TestPreparingRecoveryOwnerClaimFencesExpiredHolderCommit(t *testing.T) {
 	)
 	writeDone := make(chan error, 1)
 	go func() {
-		_, err := restarted.Write(ctx, created.ID, "after recovery")
+		_, err := restarted.Write(ctx, created.ID, "after recovery", session.WriteOptions{})
 		writeDone <- err
 	}()
 	select {
@@ -651,7 +651,7 @@ func TestHungLeaseRenewCancelsPrepareBeforeCommitSideEffects(t *testing.T) {
 		orch, baseStore, archive.NewStubCheckpointer(true), agent.NewStubClient(),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, ckpt),
 	)
-	if _, err := restarted.Write(ctx, created.ID, "resume"); err != nil {
+	if _, err := restarted.Write(ctx, created.ID, "resume", session.WriteOptions{}); err != nil {
 		t.Fatalf("recover timed-out prepare: %v", err)
 	}
 	if ckpt.abortCalls != 1 {
@@ -930,7 +930,7 @@ func testGateOffRecoveryStillAborts(ctx context.Context, t *testing.T, workload 
 	}
 	ag := &recoveryAbortAgent{StubClient: agent.NewStubClient()}
 	restarted := service.New(orch, store, archive.NewStubCheckpointer(false), ag)
-	if _, err := restarted.Write(ctx, created.ID, "recover"); err != nil {
+	if _, err := restarted.Write(ctx, created.ID, "recover", session.WriteOptions{}); err != nil {
 		t.Fatalf("gate-off recovery: %v", err)
 	}
 	if ag.abortCalls != 1 || ag.abortPod != created.Pod || ag.abortToken != generation {
@@ -1000,7 +1000,7 @@ func TestWriteDispatchesOnState(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	res, err := svc.Write(ctx, sess.ID, "payload-a")
+	res, err := svc.Write(ctx, sess.ID, "payload-a", session.WriteOptions{})
 	if err != nil {
 		t.Fatalf("write active: %v", err)
 	}
@@ -1011,7 +1011,7 @@ func TestWriteDispatchesOnState(t *testing.T) {
 	if err := store.CompareAndSwapState(ctx, sess.ID, session.StateActive, session.StateIdle); err != nil {
 		t.Fatalf("force idle: %v", err)
 	}
-	res, err = svc.Write(ctx, sess.ID, "payload-b")
+	res, err = svc.Write(ctx, sess.ID, "payload-b", session.WriteOptions{})
 	if err != nil {
 		t.Fatalf("write idle: %v", err)
 	}
@@ -1025,7 +1025,7 @@ func TestWriteDispatchesOnState(t *testing.T) {
 	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
-	res, err = svc.Write(ctx, sess.ID, "payload-c")
+	res, err = svc.Write(ctx, sess.ID, "payload-c", session.WriteOptions{})
 	if err != nil {
 		t.Fatalf("write snapshot: %v", err)
 	}
@@ -1048,7 +1048,7 @@ func TestReadWriteMapToAgentIO(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	if _, err := svc.Write(ctx, sess.ID, "echo A\n"); err != nil {
+	if _, err := svc.Write(ctx, sess.ID, "echo A\n", session.WriteOptions{}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	res, err := svc.Read(ctx, sess.ID, 0)
@@ -1076,7 +1076,7 @@ func TestReadWriteMapToAgentIO(t *testing.T) {
 	if err := store.CompareAndSwapState(ctx, sess.ID, session.StateActive, session.StateIdle); err != nil {
 		t.Fatalf("force idle: %v", err)
 	}
-	if _, err := svc.Write(ctx, sess.ID, "echo B\n"); err != nil {
+	if _, err := svc.Write(ctx, sess.ID, "echo B\n", session.WriteOptions{}); err != nil {
 		t.Fatalf("idle write: %v", err)
 	}
 	res3, err := svc.Read(ctx, sess.ID, res.NextOffset)
@@ -1101,7 +1101,7 @@ func TestReadWriteMapToAgentIO(t *testing.T) {
 // failures instead of swallowing them.
 type failingAgent struct{ err error }
 
-func (f failingAgent) Write(context.Context, string, string) error { return f.err }
+func (f failingAgent) Write(context.Context, string, string, string) error { return f.err }
 func (f failingAgent) Stream(context.Context, string, int64) (io.ReadCloser, error) {
 	return nil, f.err
 }
@@ -1124,7 +1124,7 @@ func TestReadWriteSurfaceAgentErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := svc.Write(ctx, sess.ID, "x"); err == nil {
+	if _, err := svc.Write(ctx, sess.ID, "x", session.WriteOptions{}); err == nil {
 		t.Fatal("write succeeded despite agent failure")
 	}
 	if _, err := svc.Read(ctx, sess.ID, 0); err == nil {

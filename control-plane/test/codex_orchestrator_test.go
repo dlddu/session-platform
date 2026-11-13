@@ -70,13 +70,13 @@ func TestCodex_OnePodWithLoopbackK3SProxy(t *testing.T) {
 			t.Errorf("platform-default model must come from codex-cfg's optional key, got %+v", e)
 		}
 	}
-	proxy := container(t, pod, k8s.CodexK3SMCPProxyContainerName)
+	proxy := container(t, pod, k8s.K3SMCPProxyContainerName)
 	want := map[string]string{
 		"DATA_PLANE_WORKLOAD":         "k3s-mcp-proxy",
 		"DATA_PLANE_AGENT_ADDR":       "127.0.0.1:8093",
 		"DATA_PLANE_PROXY_PLACEMENT":  "sidecar",
 		"SESSION_ID":                  "cx01",
-		"MINIMAX_CODE_PLUGINS":        "session-platform,extra",
+		"PLUGIN_SEED_PLUGINS":         "session-platform,extra",
 		"K3S_MCP_TOOL_POLICY":         "allow-all",
 		"SESSION_SCHEDULER_AGENT_URL": "http://127.0.0.1:8090",
 	}
@@ -147,7 +147,7 @@ func TestCodexChat_SlotSplitsLoginAndDatabase(t *testing.T) {
 		t.Errorf("agent has %s: the workload container must not see the database", k8s.SessionDBDirEnvVar)
 	}
 
-	proxy := container(t, pod, k8s.CodexK3SMCPProxyContainerName)
+	proxy := container(t, pod, k8s.K3SMCPProxyContainerName)
 	if m, ok := slotMount(proxy); !ok || m.MountPath != k8s.SessionDBMountPath || m.SubPath != "db" {
 		t.Errorf("proxy slot mount = %+v, want %s from the slot-level subPath db", m, k8s.SessionDBMountPath)
 	}

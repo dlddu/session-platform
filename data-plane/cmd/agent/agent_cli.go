@@ -1,6 +1,9 @@
 package main
 
-import "io"
+import (
+	"errors"
+	"io"
+)
 
 // agentCLI is everything that differs between the one-shot agent CLIs that run
 // on claudeWorkload. The execution model around it — bounded serial queue,
@@ -24,25 +27,62 @@ type agentCLI interface {
 	validateState(root string) error
 }
 
-// claudeCLI is the Claude Code CLI that claude-code runs. It is the default
-// when a config names no CLI, so that type runs exactly as it did before the
-// seam existed.
+// claudeCLI is what claude-code runs: claude-runner, which drives the pinned
+// Claude Code CLI through the Claude Agent SDK (data-plane/claude-runner). It
+// is the default when a config names no CLI.
 type claudeCLI struct {
 	// effort is the session's effort (AC-E8); empty leaves the CLI default.
 	effort string
+	// platform is the K3s MCP proxy sidecar's offer (AC-E6); nil runs with
+	// neither the K3s MCP nor plugins.
+	platform *claudePlatform
 }
 
 func (claudeCLI) workloadName() string { return workloadClaudeCode }
 
 func (c claudeCLI) argv(binary, model, prompt string, resume bool) []string {
-	return claudeArgv(binary, model, c.effort, prompt, resume)
+	return claudeRunnerArgv(binary, model, c.effort, "", c.platform.mcpURL(), prompt, resume)
+}
+
+// permissionModer is an agentCLI whose turns run in a permission mode the write
+// that queued them may choose (AC-E2). Only claude-code is one; a write naming a
+// mode to any other workload is refused.
+type permissionModer interface {
+	validPermissionMode(mode string) bool
+	argvWithPermissionMode(binary, model, prompt string, resume bool, mode string) []string
+}
+
+var (
+	errPermissionModeUnsupported = errors.New("this workload takes no permission mode")
+	errPermissionModeUnknown     = errors.New("unknown permission mode; use auto or acceptEdits")
+)
+
+var _ permissionModer = claudeCLI{}
+
+// claudePermissionModes are the modes a write may choose. The runner starts a
+// turn in auto when the write chose none, and offers no mode that skips
+// permission checks.
+var claudePermissionModes = map[string]bool{"auto": true, "acceptEdits": true}
+
+func (claudeCLI) validPermissionMode(mode string) bool {
+	return claudePermissionModes[mode]
+}
+
+func (c claudeCLI) argvWithPermissionMode(binary, model, prompt string, resume bool, mode string) []string {
+	return claudeRunnerArgv(binary, model, c.effort, mode, c.platform.mcpURL(), prompt, resume)
 }
 
 func (claudeCLI) newProjector(dst io.Writer) io.WriteCloser {
 	return newClaudeStreamProjector(dst)
 }
 
-func (claudeCLI) ensureHome(homeDir string, tools toolSurface) error {
+// ensureHome installs what the sidecar seeded, once per pod, and enables the
+// selected plugins it could install.
+func (c claudeCLI) ensureHome(homeDir string, tools toolSurface) error {
+	if c.platform != nil {
+		c.platform.prepare(tools.Plugins)
+		tools.Plugins = c.platform.enabled(tools.Plugins)
+	}
 	return ensureClaudeManagedSettings(homeDir, tools)
 }
 

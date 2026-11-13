@@ -102,7 +102,12 @@ const (
 	AnthropicAuthTokenEnvVar       = "ANTHROPIC_AUTH_TOKEN"
 	ClaudeCodeAuthTokenSecretKey   = "auth-token"
 	ClaudeCodeK3SMCPTokenSecretKey = "k3s-mcp-token"
-	ClaudeCodeModelConfigKey       = "model"
+	// ClaudeCodeOAuthTokenSecretKey holds the long-lived Claude subscription
+	// token `claude setup-token` prints; a subscription-mode pod gets it as
+	// ClaudeCodeOAuthTokenEnvVar (AC-E7). Keep in sync with data-plane/cmd/agent.
+	ClaudeCodeOAuthTokenSecretKey = "oauth-token"
+	ClaudeCodeOAuthTokenEnvVar    = "CLAUDE_CODE_OAUTH_TOKEN"
+	ClaudeCodeModelConfigKey      = "model"
 	// ClaudeCodeSubscriptionModelConfigKey is platform-default's model for a
 	// claude-code session in subscription mode (AC-E7).
 	ClaudeCodeSubscriptionModelConfigKey = "subscription-model"
@@ -118,17 +123,14 @@ const (
 	AnthropicCACertEnvVar     = "ANTHROPIC_CA_CERT"
 	ClaudeCodeCACertConfigKey = "ca-cert"
 
-	// The plugin bootstrap's two endpoints, as optional keys: absent, the
-	// entrypoint keeps its built-in defaults, so deploy/base/ needs no change
-	// (docs/test/e2e.md's PLUGIN-CRED row is why they are overridable).
+	// The K3s MCP proxy's two endpoints, as optional keys: absent, the proxy
+	// keeps its built-in defaults, so deploy/base/ needs no change.
 	K3SMCPURLEnvVar                         = "K3S_MCP_URL"
-	ClaudeCodePluginMarketplaceURLEnvVar    = "CLAUDE_CODE_PLUGIN_MARKETPLACE_URL"
 	ClaudeCodeK3SMCPURLConfigKey            = "k3s-mcp-url"
 	ClaudeCodePluginMarketplaceURLConfigKey = "plugin-marketplace-url"
 	// ClaudeCodePluginsEnvVar carries a session's own plugin selection
 	// (AC-L1), comma-separated, and is set only when the session chose one.
-	// Keep in sync with data-plane/entrypoint.sh and data-plane/cmd/agent
-	// (claudePluginsEnv).
+	// Keep in sync with data-plane/cmd/agent (claudePluginsEnv).
 	ClaudeCodePluginsEnvVar = "CLAUDE_CODE_PLUGINS"
 	// ClaudeCredentialsContainerName identifies the isolated Secret holder.
 	ClaudeCredentialsContainerName = "claude-credentials"
@@ -213,7 +215,11 @@ const (
 	serviceAccountNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
 	defaultPollInterval = 2 * time.Second
-	defaultReadyTimeout = 2 * time.Minute
+	// defaultReadyTimeout covers a pod that first waits for the cluster
+	// autoscaler to add a node, then pulls the data plane image on it. Two
+	// minutes was not enough for that (2026-11-11: scale-up ~70s + image
+	// pull 48s timed a claude-code session out).
+	defaultReadyTimeout = 5 * time.Minute
 )
 
 // ClientOrchestrator is the real PodOrchestrator: it provisions and reclaims a
@@ -351,7 +357,6 @@ func NewClientOrchestrator(client kubernetes.Interface, namespace string, opts .
 		codexTask: codexProfile{
 			credentialsSecret: defaultCodexTaskCredentialsSecret,
 			configConfigMap:   defaultCodexTaskConfigConfigMap,
-			plugins:           DefaultCodexPlugins,
 		},
 		claudeAuthMode:   ClaudeCodeAuthGateway,
 		sharedVolumeSize: resource.MustParse(defaultSharedVolumeSize),
@@ -657,19 +662,18 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			}
 			modelEnv = optionalConfigMapEnv(ClaudeCodeModelEnvVar, o.claudeConfigConfigMap, key)
 		}
+		// The K3s MCP token stays in the loopback k3s-mcp-proxy sidecar, which
+		// also seeds the selected plugins; the CLI container gets its address
+		// (AC-E6). K3S_MCP_URL is not a credential: the agent reads its path and
+		// recognises the K3s server in a plugin by it.
 		container.Env = append(container.Env,
 			modelEnv,
-			secretEnv(K3SMCPTokenEnvVar, o.claudeCredentialsSecret, ClaudeCodeK3SMCPTokenSecretKey),
 			optionalConfigMapEnv(K3SMCPURLEnvVar, o.claudeConfigConfigMap, ClaudeCodeK3SMCPURLConfigKey),
-			optionalConfigMapEnv(
-				ClaudeCodePluginMarketplaceURLEnvVar,
-				o.claudeConfigConfigMap,
-				ClaudeCodePluginMarketplaceURLConfigKey,
-			),
+			corev1.EnvVar{Name: K3SMCPProxyURLEnvVar, Value: K3SMCPProxyLoopbackURL},
 			corev1.EnvVar{Name: claudeCodeStateDirEnvVar, Value: workloadStateDir},
 		)
 		// Only a session that chose its plugins carries the variable; without it
-		// the entrypoint and agent fall back to the platform plugin (AC-L1).
+		// the agent enables none (AC-L1).
 		if plugins != nil {
 			container.Env = append(container.Env,
 				corev1.EnvVar{Name: ClaudeCodePluginsEnvVar, Value: strings.Join(plugins, ",")})
@@ -685,11 +689,13 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		})
 		if o.claudeAuthMode == ClaudeCodeAuthSubscription {
-			// AC-E7: the CLI reaches the provider itself with the slot's login,
-			// so there is no proxy to point it at and no gateway token to hold.
-			container.Env = append(container.Env, corev1.EnvVar{
-				Name: ClaudeCodeAuthModeEnvVar, Value: string(ClaudeCodeAuthSubscription),
-			})
+			// AC-E7: the CLI reaches the provider itself with the platform's
+			// subscription OAuth token, so there is no proxy to point it at and
+			// no gateway token to hold.
+			container.Env = append(container.Env,
+				corev1.EnvVar{Name: ClaudeCodeAuthModeEnvVar, Value: string(ClaudeCodeAuthSubscription)},
+				secretEnv(ClaudeCodeOAuthTokenEnvVar, o.claudeCredentialsSecret, ClaudeCodeOAuthTokenSecretKey),
+			)
 		} else {
 			container.Env = append(container.Env,
 				corev1.EnvVar{Name: AnthropicBaseURLEnvVar, Value: ClaudeCredentialProxyURL},
@@ -697,6 +703,9 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			)
 			sidecars = append(sidecars, o.claudeCredentialProxy(image))
 		}
+		sidecars = append(sidecars, o.loopbackK3SMCPProxy(sessionID, image,
+			o.claudeCredentialsSecret, o.claudeConfigConfigMap, strings.Join(plugins, ",")))
+		volumes = append(volumes, pluginSeedMarketplaceEmptyDir())
 	case session.WorkloadTypeMiniMaxCode:
 		sidecars, volumes = o.miniMaxCodePod(&container, model, helper, helperPodNameFor(sessionID, suffix))
 	case session.WorkloadTypeCodexChat, session.WorkloadTypeCodexTask:
@@ -1084,6 +1093,29 @@ func (o *ClientOrchestrator) Reach(ctx context.Context, ref PodRef) error {
 	_ = conn.WriteControl(websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return conn.Close()
+}
+
+// Gone reports a pod that is absent or terminally finished. Session pods
+// restart in place, so Failed/Succeeded only follows an eviction; an evicted
+// pod is kept by the kubelet but never runs again (AC-C5). A pod still
+// terminating is not yet gone: the next access sees it absent.
+func (o *ClientOrchestrator) Gone(ctx context.Context, ref PodRef) (bool, error) {
+	ns := ref.Namespace
+	if ns == "" {
+		ns = o.namespace
+	}
+	pod, err := o.client.CoreV1().Pods(ns).Get(ctx, ref.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get pod %s/%s: %w", ns, ref.Name, err)
+	}
+	switch pod.Status.Phase {
+	case corev1.PodFailed, corev1.PodSucceeded:
+		return true, nil
+	}
+	return false, nil
 }
 
 // cleanup best-effort deletes pods that failed to come up (or that a later

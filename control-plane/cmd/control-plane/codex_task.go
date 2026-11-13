@@ -61,7 +61,6 @@ type codexTaskConfig struct {
 	image             string
 	credentialsSecret string
 	configConfigMap   string
-	plugins           string
 	// archiveEnabled is this type's own data-transfer gate (AC-M3).
 	archiveEnabled bool
 	defaultModel   string
@@ -86,7 +85,6 @@ func loadCodexTaskConfig() (codexTaskConfig, error) {
 		image:             env("DATA_PLANE_CODEX_TASK_IMAGE", ""),
 		credentialsSecret: env("CODEX_TASK_CREDENTIALS_SECRET", "codex-task-credentials"),
 		configConfigMap:   env("CODEX_TASK_CONFIG_CONFIGMAP", "codex-task-config"),
-		plugins:           env("CODEX_TASK_PLUGINS", k8s.DefaultCodexPlugins),
 		archiveEnabled:    envBool("CODEX_TASK_ARCHIVE_ENABLED", false),
 		defaultModel:      defaultModel,
 		models:            models,
@@ -133,7 +131,6 @@ func codexTaskArchiveOption(cfg codexTaskConfig, client *agent.HTTPClient, store
 // claudeAuthConfig is claude-code's provider auth choice (AC-E7).
 type claudeAuthConfig struct {
 	mode k8s.ClaudeCodeAuthMode
-	pool authPoolEnv
 	// subscriptionDefaultModel and subscriptionModels are claude-code's picker
 	// in subscription mode. They come from their own ConfigMap keys because the
 	// gateway's model ids (OpenRouter) mean nothing to a Claude subscription
@@ -147,10 +144,6 @@ func loadClaudeAuthConfig() (claudeAuthConfig, error) {
 	if err != nil {
 		return claudeAuthConfig{}, fmt.Errorf("CLAUDE_CODE_AUTH_MODE: %w", err)
 	}
-	pool, err := loadAuthPoolEnv("CLAUDE_CODE", k8s.DefaultAuthSlotStorageSize)
-	if err != nil {
-		return claudeAuthConfig{}, err
-	}
 	defaultModel, err := parseClaudeCodeDefaultModel(os.Getenv("CLAUDE_CODE_SUBSCRIPTION_DEFAULT_MODEL"))
 	if err != nil {
 		return claudeAuthConfig{}, fmt.Errorf("CLAUDE_CODE_SUBSCRIPTION_DEFAULT_MODEL: %w", err)
@@ -160,7 +153,7 @@ func loadClaudeAuthConfig() (claudeAuthConfig, error) {
 		return claudeAuthConfig{}, fmt.Errorf("CLAUDE_CODE_SUBSCRIPTION_MODELS: %w", err)
 	}
 	return claudeAuthConfig{
-		mode: mode, pool: pool,
+		mode:                     mode,
 		subscriptionDefaultModel: defaultModel, subscriptionModels: models,
 	}, nil
 }
@@ -173,15 +166,8 @@ func (c claudeAuthConfig) claudeCodeModelConfig(gatewayDefault string, gatewayMo
 	return gatewayDefault, gatewayModels
 }
 
-// offered reports whether claude-code can provision here given its auth:
-// the gateway needs nothing more, a subscription needs a slot (AC-E7, AC-N1).
-func (c claudeAuthConfig) offered() bool {
-	return c.mode != k8s.ClaudeCodeAuthSubscription || c.pool.slots > 0
-}
-
-// authPoolOptions builds the pools of the types that lease one. A claude-code
-// pool is configured only in subscription mode: in gateway mode its slots
-// would never be mounted, so leasing them would only lock sessions out.
+// authPoolOptions builds the pools of the types that lease one. claude-code
+// has none: a subscription signs in with the platform's OAuth token (AC-E7).
 func authPoolOptions(cfg config, client kubernetes.Interface, namespace string) ([]service.Option, error) {
 	var opts []service.Option
 	if cfg.codex.image != "" {
@@ -200,15 +186,6 @@ func authPoolOptions(cfg config, client kubernetes.Interface, namespace string) 
 		}
 		if pool != nil {
 			opts = append(opts, service.WithAuthPool(session.WorkloadTypeCodexTask, pool))
-		}
-	}
-	if cfg.claudeAuth.mode == k8s.ClaudeCodeAuthSubscription && cfg.dataPlaneClaudeCodeImage != "" {
-		pool, err := cfg.claudeAuth.pool.pool(client, namespace, k8s.AuthPoolClaudeCode)
-		if err != nil {
-			return nil, err
-		}
-		if pool != nil {
-			opts = append(opts, service.WithAuthPool(session.WorkloadTypeClaudeCode, pool))
 		}
 	}
 	return opts, nil

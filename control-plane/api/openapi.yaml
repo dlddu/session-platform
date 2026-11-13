@@ -448,6 +448,64 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+  /sessions/{id}/recover:
+    post:
+      summary: Put a deleted session back from its last archive (AC-B4)
+      operationId: recoverSession
+      description: >
+        For a session id that no longer exists. Every committed snapshot leaves
+        a manifest beside its archive naming the session's workload type,
+        model, plugins, reasoning effort, memory tier, tenant and name;
+        recovery reads it,
+        recreates the session under the same id in snapshot state and restores
+        it into a new pod, so the session comes back as it was when it was last
+        frozen. Work done after that freeze is not recovered. A tenant caller
+        can recover only its own tenant's sessions and needs the workload type
+        granted; any other id answers 404 exactly like an unknown one. If the
+        restore itself fails, the session stays in snapshot state and the next
+        access retries it.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          description: The recovered, restored session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "400":
+          description: Malformed body, trailing JSON, or a non-empty request object
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: The owning tenant is no longer granted the session's workload type
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: No manifest for this id, or the caller does not see it
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: A session with this id still exists
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "503":
+          description: Recovery or the workload's archive strategy is disabled, or no login slot is free
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /sessions/{id}/plugins/refresh:
     post:
       summary: Fetch a codex-chat or codex-task session's plugin skills again, keeping its conversation (AC-J7)
@@ -1043,19 +1101,18 @@ components:
             Optional marketplace plugins for this session (AC-L1), by plugin name
             in the platform marketplace (no `@marketplace` suffix). Valid when
             workloadType is `claude-code`, `minimax-code`, `codex-chat` or
-            `codex-task`. Omitted, the session gets its type's platform default
-            (`session-platform` for claude-code, the deployment's `CODEX_PLUGINS`
-            for codex-chat and `CODEX_TASK_PLUGINS` for codex-task,
-            `mcp-servers` for minimax-code). Given, it replaces that default
-            outright — list the default too if the session should keep it.
+            `codex-task`. Omitted, a codex-chat session gets the deployment's
+            `CODEX_PLUGINS` and every other type runs without plugins. Given, it
+            replaces that default outright — list the default too if the session
+            should keep it.
             Names are not checked against the marketplace here: a name it does
             not list fails the pod's plugin bootstrap, which for `claude-code`
             fails the create (its agent never becomes reachable) and for
             `codex-chat`/`codex-task`/`minimax-code` leaves the session running without plugins,
             as any marketplace failure already does. `minimax-code` registers
             its K3s MCP server only from a selected plugin that declares it, so
-            a failed bundle, or a list without such a plugin (default
-            `mcp-servers`), leaves it without K3s tools too. The selection is
+            a failed bundle, an omitted list, or a list without such a plugin
+            (`mcp-servers` declares it), leaves it without K3s tools too. The selection is
             installed again on every restore: a `claude-code` session whose
             plugin has since left the marketplace cannot be restored. `null`, an empty list, a duplicate or an
             invalid name → 400, as is a list on `shell`.
@@ -1095,6 +1152,17 @@ components:
             minimax-code, codex-chat, codex-task) are limited to 1 MiB of UTF-8 bytes
 
             per prompt; larger writes return 413.
+        permissionMode:
+          type: string
+          enum: [auto, acceptEdits]
+          description: >
+            claude-code only (AC-E2): the permission mode of the turn this write
+            queues. Omitted runs the turn in auto, where the CLI's model
+            classifier approves or denies the tool requests the managed settings
+            leave open; acceptEdits accepts file edits. It applies to this turn
+            only — the next write without it runs in auto again. Any other value,
+            an empty string, or a permission mode on another workload type returns
+            400 without activating the session.
     ReadRequest:
       type: object
       additionalProperties: false

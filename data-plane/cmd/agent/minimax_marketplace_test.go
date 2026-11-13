@@ -332,7 +332,7 @@ func TestK3SMCPProxySeedRoute(t *testing.T) {
 
 	// A helper pod with a token for the session MCP's token mint and no
 	// marketplace to stage (no type configures one today; the mode stays sound).
-	t.Setenv(miniMaxMarketplaceDirEnv, "")
+	t.Setenv(pluginSeedMarketplaceDirEnv, "")
 	tokenOnly, err := newK3SMCPProxyWithTransport("", "k3s-token", "", nil, http.DefaultTransport)
 	if err != nil {
 		t.Fatal(err)
@@ -346,7 +346,7 @@ func TestK3SMCPProxySeedRoute(t *testing.T) {
 		t.Errorf("seed without a marketplace directory = %d %s", rec.Code, rec.Body.String())
 	}
 
-	t.Setenv(miniMaxMarketplaceDirEnv, t.TempDir())
+	t.Setenv(pluginSeedMarketplaceDirEnv, t.TempDir())
 	configured, err := newK3SMCPProxyWithTransport("", "k3s-token", "", nil, http.DefaultTransport)
 	if err != nil {
 		t.Fatal(err)
@@ -402,5 +402,31 @@ func TestGitCloneMarketplaceFromALocalRemote(t *testing.T) {
 	err = gitCloneMarketplace(context.Background(), "file://"+filepath.Join(src, "missing"), header, filepath.Join(t.TempDir(), "x"))
 	if err == nil || strings.Contains(err.Error(), "c2VjcmV0") {
 		t.Errorf("failed clone error = %v, want one without the header", err)
+	}
+}
+
+// AC-L1: a session that chose no plugins has nothing to seed — the bundle is
+// ready and empty without asking for a token or cloning the marketplace.
+func TestMiniMaxSeederWithoutPluginsSkipsTheClone(t *testing.T) {
+	t.Setenv(pluginSeedPluginsEnv, "")
+	s := newMiniMaxMarketplaceSeeder(http.NotFoundHandler(), "/mcp", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if len(s.plugins) != 0 {
+		t.Fatalf("plugins = %q, want none when %s is empty", s.plugins, pluginSeedPluginsEnv)
+	}
+	s.workDir = t.TempDir()
+	s.githubToken = func(context.Context) (string, error) {
+		t.Error("asked for a marketplace token with no plugins to seed")
+		return "", nil
+	}
+	s.clone = func(context.Context, string, string, string) error {
+		t.Error("cloned the marketplace with no plugins to seed")
+		return nil
+	}
+	s.run(context.Background())
+	if _, bundle := seedResponse(t, s); bundle.State != miniMaxSeedStateReady || len(bundle.Plugins) != 0 {
+		t.Fatalf("seed = %+v, want ready with no plugins", bundle)
+	}
+	if code, result := refreshResponse(t, s); code != http.StatusOK || result.State != miniMaxSeedStateReady {
+		t.Fatalf("refresh = %d %+v, want 200 ready", code, result)
 	}
 }

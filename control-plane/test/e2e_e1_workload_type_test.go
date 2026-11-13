@@ -83,9 +83,8 @@ func execInContainer(ctx context.Context, cs kubernetes.Interface, cfg *rest.Con
 	return stdout.String(), stderr.String(), err
 }
 
-// Create only returns after the pod reports Ready, and the pod cannot reach
-// Ready unless entrypoint.sh completed its plugin bootstrap — so a passing
-// create is itself evidence that the bootstrap ran.
+// Create only returns after the pod reports Ready, which needs the agent and
+// both sidecars up — so a passing create is itself evidence that they started.
 func TestWorkloadType_ClaudeCodeSessionRunsTheClaudeCLI(t *testing.T) {
 	status, s := createTyped(t, map[string]any{
 		"name": uniqueName(t), "workloadType": "claude-code",
@@ -125,54 +124,39 @@ func TestWorkloadType_ClaudeCodeSessionRunsTheClaudeCLI(t *testing.T) {
 	}
 }
 
-// Pod Ready already proves the bootstrap ran to completion — entrypoint.sh is
-// `set -eu`, so a failed token request or a failed `claude plugin marketplace
-// add` kills the container before the agent starts. What this test adds is
-// *which remote answered*: the in-cluster fixture carries a marker string that
-// exists in no other marketplace, so finding it in the pod's plugin cache is
-// decisive.
-//
-// The paths are entrypoint.sh's documented defaults, which the control plane does
-// not override: the bootstrap runs the CLI under its own HOME and hands the agent
-// the plugin cache it populated (a fresh `claude` invocation with a different HOME
-// sees neither, which is why this asserts on the filesystem rather than on
-// `claude plugin marketplace list`).
-func TestWorkloadType_ClaudeCodePluginBootstrapUsedTheInClusterMarketplace(t *testing.T) {
+// The kind SUT gives claude-code no K3s MCP token, as it gives codex none: the
+// pod's k3s-mcp-proxy sidecar starts unconfigured, and a session that selected
+// plugins still reaches Ready, without them (AC-E6, AC-L1). The sidecar's own
+// health route is what the agent reads to decide that.
+func TestWorkloadType_ClaudeCodeStartsWithAnUnconfiguredK3sSidecar(t *testing.T) {
 	status, s := createTyped(t, map[string]any{
-		"name": uniqueName(t), "workloadType": "claude-code",
+		"name": uniqueName(t), "workloadType": "claude-code", "plugins": []string{"development"},
 	})
 	if status != http.StatusCreated {
 		t.Fatalf("create claude-code session: status=%d", status)
+	}
+	if s.State != "active" {
+		t.Fatalf("state=%q want active", s.State)
 	}
 	cs, cfg, ok := kubeClient(t)
 	if !ok {
 		return
 	}
 	ns := sessionNamespace()
-	getPodEventually(t, cs, ns, s.Pod)
-
-	const (
-		pluginCacheDir = "/tmp/session-platform-claude-plugin-seed"
-		bootstrapHome  = "/tmp/session-platform-claude-plugin-home"
-		// Present only in deploy/overlays/e2e/plugin-marketplace-git.yaml's fixture.
-		fixtureMarker = "kind e2e fixture"
-	)
+	pod := getPodEventually(t, cs, ns, s.Pod)
+	if _, found := containerByName(pod, "k3s-mcp-proxy"); !found {
+		t.Fatalf("pod %s has no k3s-mcp-proxy sidecar: %v", s.Pod, containerNames(pod))
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	stdout, stderr, err := execInContainer(ctx, cs, cfg, ns, s.Pod, workloadContainer,
-		[]string{"/bin/sh", "-c",
-			"grep -rl '" + fixtureMarker + "' " + pluginCacheDir + " " + bootstrapHome +
-				" 2>/dev/null | head -5; " +
-				"echo '--- cache tree ---'; find " + pluginCacheDir + " " + bootstrapHome +
-				" -maxdepth 4 2>/dev/null | head -40"})
+		[]string{"curl", "-sS", "--max-time", "10", "http://127.0.0.1:8093/healthz"})
 	if err != nil {
-		t.Fatalf("probe plugin cache in %s/%s: %v (stderr=%q)", ns, s.Pod, err, stderr)
+		t.Fatalf("sidecar health from %s/%s: %v (stdout=%q stderr=%q)", ns, s.Pod, err, stdout, stderr)
 	}
-	hits, _, _ := strings.Cut(stdout, "--- cache tree ---")
-	if strings.TrimSpace(hits) == "" {
-		t.Fatalf("the in-cluster marketplace fixture is not in the session pod's plugin cache "+
-			"— the bootstrap resolved some other remote.\n%s", stdout)
+	if !strings.Contains(stdout, `"workload":"k3s-mcp-proxy"`) || !strings.Contains(stdout, `"configured":false`) {
+		t.Fatalf("sidecar health = %q, want an unconfigured k3s-mcp-proxy", stdout)
 	}
 }
 

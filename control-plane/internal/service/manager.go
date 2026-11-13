@@ -30,16 +30,36 @@ type Service struct {
 	now                func() time.Time // injectable clock for tests
 	leaseRenewInterval time.Duration
 	// authPools are the login slot pools by the type that leases from them
-	// (AC-N2): codex-task, and claude-code in subscription mode.
+	// (AC-N2): codex-task and codex-chat.
 	authPools map[session.WorkloadType]k8s.AuthPool
+	manifests SessionManifests
+}
+
+// SessionManifests keeps each session's manifest in durable storage beside its
+// archives (AC-B4). Nil disables both writing and recovery.
+type SessionManifests interface {
+	PutManifest(ctx context.Context, m session.Manifest) error
+	// GetManifest returns session.ErrNotFound when the id has no manifest.
+	GetManifest(ctx context.Context, id string) (*session.Manifest, error)
+}
+
+// WithSessionManifests records a manifest on every committed snapshot and
+// enables Recover.
+func WithSessionManifests(m SessionManifests) Option {
+	return func(s *Service) { s.manifests = m }
 }
 
 const defaultLeaseRenewInterval = 5 * time.Second
 
 // createRoundTimeout backstops a Create detached from its caller: a helper pod
-// and a workload pod at the orchestrator's 2-minute ready bound each, plus the
+// and a workload pod at the orchestrator's 5-minute ready bound each, plus the
 // reachability check, fit well inside it.
-const createRoundTimeout = 10 * time.Minute
+const createRoundTimeout = 15 * time.Minute
+
+// restoreRoundTimeout backstops a Restore detached from its caller, for the
+// same reason and with the same budget as createRoundTimeout: the pods' ready
+// bounds, the archive download and the agent's own restore work fit inside it.
+const restoreRoundTimeout = 15 * time.Minute
 
 type agentCheckpointAborter interface {
 	AbortCheckpoint(context.Context, string, string) error
@@ -364,7 +384,7 @@ func (s *Service) Read(ctx context.Context, id string, offset int64) (*session.R
 	}
 	payload, next, err := s.agent.Read(ctx, sess.Pod, offset)
 	if err != nil {
-		return nil, err
+		return nil, s.podLost(ctx, id, sess, err)
 	}
 	s.touch(ctx, id)
 	return &session.ReadResult{
@@ -373,6 +393,26 @@ func (s *Service) Read(ctx context.Context, id string, offset int64) (*session.R
 		Payload:    payload,
 		NextOffset: next,
 	}, nil
+}
+
+// podLost answers a failed agent call. When the session's workload pod no
+// longer exists (its node was reclaimed or it was evicted), the session can
+// never be served again: it is terminated — freeing its auth slot — and
+// reported as not found, so a client opens a new session instead of retrying
+// a dead one forever (AC-C5). Any other failure, and a pod whose state cannot
+// be read, returns the original error.
+func (s *Service) podLost(ctx context.Context, id string, sess *session.Session, cause error) error {
+	if sess.Pod == "" {
+		return cause
+	}
+	gone, err := s.orch.Gone(ctx, k8s.PodRef{Name: sess.Pod})
+	if err != nil || !gone {
+		return cause
+	}
+	if err := s.Terminate(context.WithoutCancel(ctx), id); err != nil && !errors.Is(err, session.ErrNotFound) {
+		return errors.Join(cause, err)
+	}
+	return fmt.Errorf("%w: session %s lost its pod %s", session.ErrNotFound, id, sess.Pod)
 }
 
 // Stream passively observes the retained pod's append-only output. Deliberately
@@ -390,9 +430,11 @@ func (s *Service) Stream(ctx context.Context, id string, offset int64) (io.ReadC
 	return s.agent.Stream(ctx, sess.Pod, offset)
 }
 
-// Write validates workload-specific limits, brings the session active, and
-// sends the payload to the agent (AC-C3, AC-D2/E2).
-func (s *Service) Write(ctx context.Context, id, payload string) (*session.WriteResult, error) {
+// Write validates workload-specific limits and the write's options, brings the
+// session active, and sends the payload to the agent (AC-C3, AC-D2/E2). Both
+// checks run before activation, so a write that would be refused never
+// restores a snapshot.
+func (s *Service) Write(ctx context.Context, id, payload string, opts session.WriteOptions) (*session.WriteResult, error) {
 	current, err := s.Get(ctx, id)
 	if err != nil {
 		return nil, err
@@ -400,12 +442,16 @@ func (s *Service) Write(ctx context.Context, id, payload string) (*session.Write
 	if current.WorkloadType.QueuesPrompts() && len(payload) > session.MaxClaudePromptBytes {
 		return nil, session.ErrWorkloadPromptTooLarge
 	}
+	mode, err := session.NormalizePermissionMode(current.WorkloadType, opts.PermissionMode)
+	if err != nil {
+		return nil, err
+	}
 	sess, branch, err := s.activate(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.agent.Write(ctx, sess.Pod, payload); err != nil {
-		return nil, err
+	if err := s.agent.Write(ctx, sess.Pod, payload, mode); err != nil {
+		return nil, s.podLost(ctx, id, sess, err)
 	}
 	s.touch(ctx, id)
 	return &session.WriteResult{
@@ -569,6 +615,16 @@ func (s *Service) snapshotWithTransactionLocked(
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	// Written before the commit so every committed snapshot is recoverable
+	// (AC-B4); a failed write rolls the snapshot back like a failed archive.
+	if s.manifests != nil {
+		if err := s.manifests.PutManifest(ctx, session.ManifestFor(sess, cp)); err != nil {
+			if ctx.Err() != nil {
+				return nil, err
+			}
+			return nil, s.rollbackPreparingSnapshot(ctx, sess, ckpt, err)
+		}
 	}
 	// Persist both the durable archive ref and the commit decision before issuing
 	// Kubernetes DELETE. From this point recovery completes reclamation; it never
@@ -799,6 +855,17 @@ func cloneSnapshotTransaction(txn *session.SnapshotTransaction) *session.Snapsho
 // (AC-B2). Guarded by the per-session lock so concurrent restores are atomic
 // (AC-C1).
 func (s *Service) Restore(ctx context.Context, id string) (result *session.Session, retErr error) {
+	// A restore outlives the caller's connection, as a Create does: a restore
+	// pod that waits for an image pull or a node, then the archive and the
+	// agent's own restore, can take longer than a caller keeps a request open.
+	// Tied to the request, the caller's timeout cancelled the round and
+	// reclaimed the pods, so every retry started over and none finished.
+	// Detached, the session turns active once the round completes and the
+	// caller finds it with Get or List; a caller that gives up early is told
+	// nothing it can act on, which is why the K3s MCP offers a restore tool
+	// that answers "pending" instead.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), restoreRoundTimeout)
+	defer cancel()
 	token, err := newID()
 	if err != nil {
 		return nil, err
@@ -941,6 +1008,60 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 	}
 	keepSlot = true
 	return &next, nil
+}
+
+// Recover puts a deleted session back from the manifest its last committed
+// snapshot left, then restores it like any snapshot (AC-B4). The id must not
+// name a session that still exists.
+func (s *Service) Recover(ctx context.Context, id string, admit func(*session.Session) error) (*session.Session, error) {
+	if s.manifests == nil {
+		return nil, session.ErrCheckpointDisabled
+	}
+	if !session.ValidSessionID(id) {
+		return nil, session.ErrNotFound
+	}
+	m, err := s.manifests.GetManifest(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if m.ID != id {
+		return nil, fmt.Errorf("manifest for %s names session %s", id, m.ID)
+	}
+	frozen := m.SnapshotSession(s.now())
+	if frozen.WorkloadType, err = session.NormalizeStoredWorkloadType(frozen.WorkloadType); err != nil {
+		return nil, err
+	}
+	if admit != nil {
+		if err := admit(frozen); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := s.checkpointerFor(frozen.WorkloadType); err != nil {
+		return nil, err
+	}
+	if err := s.reinstate(ctx, frozen); err != nil {
+		return nil, err
+	}
+	return s.Restore(ctx, id)
+}
+
+// reinstate writes the frozen record under the session lock, refusing an id
+// that is still in use.
+func (s *Service) reinstate(ctx context.Context, frozen *session.Session) error {
+	token, err := newID()
+	if err != nil {
+		return err
+	}
+	if err := s.store.Lock(ctx, frozen.ID, token); err != nil {
+		return err
+	}
+	defer s.unlockBestEffort(frozen.ID, token)
+	if _, err := s.store.Get(ctx, frozen.ID); err == nil {
+		return fmt.Errorf("%w: %s", session.ErrAlreadyExists, frozen.ID)
+	} else if !errors.Is(err, session.ErrNotFound) {
+		return err
+	}
+	return s.store.Put(ctx, frozen)
 }
 
 func (s *Service) getSessionBestEffort(id string) (*session.Session, error) {

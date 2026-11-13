@@ -32,7 +32,7 @@ async function createAgentSession(
       workloadType: "claude-code",
       ...(model ? { model } : {}),
     },
-    // 플러그인 설치가 선행하므로(PLUGIN-CRED) 기본 타임아웃으로는 모자란다.
+    // 생성은 파드가 Ready 가 될 때까지(사이드카 둘 포함) 돌아오지 않아 기본 타임아웃으로는 모자란다.
     timeout: 180_000,
   });
   expect(response.status()).toBe(201);

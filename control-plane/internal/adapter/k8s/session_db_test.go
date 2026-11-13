@@ -9,7 +9,7 @@ import (
 
 func TestSessionDBMountIsSlotScoped(t *testing.T) {
 	c := corev1.Container{}
-	s := []corev1.Container{{Name: CodexK3SMCPProxyContainerName}}
+	s := []corev1.Container{{Name: K3SMCPProxyContainerName}}
 	init, err := attachSessionDB(&c, s, session.WorkloadTypeCodexChat, "image")
 	if err != nil {
 		t.Fatal(err)
@@ -21,7 +21,7 @@ func TestSessionDBMountIsSlotScoped(t *testing.T) {
 		t.Fatalf("slot-init does not prepare the slot-level db/: %q", init[0].Command[2])
 	}
 	c = corev1.Container{}
-	s = []corev1.Container{{Name: CodexK3SMCPProxyContainerName}}
+	s = []corev1.Container{{Name: K3SMCPProxyContainerName}}
 	if init, err := attachSessionDB(&c, s, session.WorkloadTypeCodexTask, "image"); err != nil || len(init) != 0 || len(c.Env) != 0 || len(s[0].VolumeMounts) != 0 {
 		t.Fatal("worker received the chat DB")
 	}

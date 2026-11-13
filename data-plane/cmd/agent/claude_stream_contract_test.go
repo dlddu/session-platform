@@ -204,3 +204,34 @@ func TestClaudeRedactorFinishIsInvocationBounded(t *testing.T) {
 		t.Fatalf("redactor-finish cursor = %d, want %d", cursor, limit)
 	}
 }
+
+// claude-runner reports what the platform did inside a turn — a tool its
+// permission policy denied (AC-E2) — as its own notice line. The projector
+// shows the text on a line of its own, closing any half-written message first,
+// and never projects the SDK messages around it that carry no assistant text.
+func TestClaudeProjectorShowsRunnerNoticesOnTheirOwnLine(t *testing.T) {
+	var out bytes.Buffer
+	p := newClaudeStreamProjector(&out)
+	lines := []string{
+		`{"type":"system","subtype":"init","session_id":"67d68b60-5b5e-44d4-8c8c-cbad579a6136"}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"let me ask"}}}`,
+		`{"type":"session_platform.notice","text":"[session-platform: denied AskUserQuestion: decide on your own]"}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"denied","is_error":true}]}}`,
+		`{"type":"session_platform.notice","text":""}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"done"}}}`,
+		`{"type":"stream_event","event":{"type":"message_stop"}}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"let me ask done"}`,
+	}
+	for _, line := range lines {
+		if _, err := io.WriteString(p, line+"\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	want := "let me ask\n[session-platform: denied AskUserQuestion: decide on your own]\ndone\n"
+	if got := out.String(); got != want {
+		t.Fatalf("projected = %q, want %q", got, want)
+	}
+}

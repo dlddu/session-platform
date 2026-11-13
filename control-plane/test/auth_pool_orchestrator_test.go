@@ -71,7 +71,7 @@ func TestCodexTask_PodShape(t *testing.T) {
 		k8s.WithWorkloadImage(session.WorkloadTypeCodexTask, codexImage),
 		k8s.WithCodexTaskCredentialsSecret("codex-task-k3s"),
 		k8s.WithCodexTaskConfigConfigMap("codex-task-cfg"),
-		k8s.WithCodexTaskPlugins("task-bundle"),
+		k8s.WithCodexPlugins("chat-bundle"),
 	)
 	pod := onlyPod(t, orch, func() []corev1.Pod { return listPods(t, cs) }, "ct01", k8s.WorkloadSpec{
 		Type: session.WorkloadTypeCodexTask, Model: session.PlatformDefaultModel, ReasoningEffort: "high", AuthSlot: slot(1),
@@ -101,9 +101,9 @@ func TestCodexTask_PodShape(t *testing.T) {
 			t.Errorf("platform-default model must come from codex-task-cfg, got %+v", e)
 		}
 	}
-	proxy := container(t, pod, k8s.CodexK3SMCPProxyContainerName)
-	if got, _ := envValue(proxy, "MINIMAX_CODE_PLUGINS"); got != "task-bundle" {
-		t.Errorf("proxy plugins = %q, want codex-task's own bundle", got)
+	proxy := container(t, pod, k8s.K3SMCPProxyContainerName)
+	if got, _ := envValue(proxy, "PLUGIN_SEED_PLUGINS"); got != "" {
+		t.Errorf("proxy plugins = %q, want none: codex-task has no default and never takes codex-chat's", got)
 	}
 	var token string
 	for _, e := range proxy.Env {
@@ -135,13 +135,20 @@ func TestClaudeCode_SubscriptionPodShape(t *testing.T) {
 		k8s.WithClaudeCodeAuthMode(k8s.ClaudeCodeAuthSubscription),
 	)
 	pod := onlyPod(t, orch, func() []corev1.Pod { return listPods(t, cs) }, "cc01", k8s.WorkloadSpec{
-		Type: session.WorkloadTypeClaudeCode, Model: "opus", ReasoningEffort: "max", AuthSlot: slot(0),
+		Type: session.WorkloadTypeClaudeCode, Model: "opus", ReasoningEffort: "max",
 	})
-	if n := len(pod.Spec.Containers); n != 1 {
-		t.Fatalf("containers = %s, want the workload container alone (no credential proxy, AC-E7)", containerNames(pod))
+	if got := containerNames(pod); got != k8s.ContainerName+","+k8s.K3SMCPProxyContainerName {
+		t.Fatalf("containers = %s, want the workload and K3s MCP proxy, no credential proxy (AC-E7)", got)
 	}
-	assertSlotMount(t, pod, testNS+"-claude-code-auth-0")
+	for _, v := range pod.Spec.Volumes {
+		if v.PersistentVolumeClaim != nil {
+			t.Errorf("subscription pod mounts claim %s; the OAuth token replaced the slot (AC-E7)", v.PersistentVolumeClaim.ClaimName)
+		}
+	}
 	agent := container(t, pod, k8s.ContainerName)
+	if _, ok := envValue(agent, k8s.AuthSlotDirEnvVar); ok {
+		t.Errorf("subscription agent receives %s", k8s.AuthSlotDirEnvVar)
+	}
 	for _, name := range []string{k8s.AnthropicBaseURLEnvVar, k8s.AnthropicAuthTokenEnvVar} {
 		if _, ok := envValue(agent, name); ok {
 			t.Errorf("subscription agent receives %s", name)
@@ -156,17 +163,24 @@ func TestClaudeCode_SubscriptionPodShape(t *testing.T) {
 			t.Errorf("agent %s = %q, want %q", name, got, want)
 		}
 	}
-	var k3sToken bool
+	var oauth *corev1.SecretKeySelector
 	for _, e := range agent.Env {
-		if e.Name == k8s.K3SMCPTokenEnvVar && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
-			k3sToken = true
+		if e.Name == k8s.K3SMCPTokenEnvVar {
+			t.Error("subscription agent receives the K3s MCP token; the sidecar holds it")
+		}
+		if e.Name == k8s.ClaudeCodeOAuthTokenEnvVar {
+			if e.Value != "" || e.ValueFrom == nil {
+				t.Fatalf("%s is not a Secret reference: %+v", k8s.ClaudeCodeOAuthTokenEnvVar, e)
+			}
+			oauth = e.ValueFrom.SecretKeyRef
 		}
 	}
-	if !k3sToken {
-		t.Error("subscription agent lost its K3s MCP token for the plugin bootstrap")
+	if oauth == nil || oauth.Name != "claude-code-credentials" || oauth.Key != k8s.ClaudeCodeOAuthTokenSecretKey ||
+		(oauth.Optional != nil && *oauth.Optional) {
+		t.Errorf("%s ref = %+v, want required key %q of claude-code-credentials", k8s.ClaudeCodeOAuthTokenEnvVar, oauth, k8s.ClaudeCodeOAuthTokenSecretKey)
 	}
-	if _, err := orch.Start(context.Background(), "cc02", k8s.WorkloadSpec{Type: session.WorkloadTypeClaudeCode}); err == nil {
-		t.Fatal("subscription claude-code started without an auth slot")
+	if _, err := orch.Start(context.Background(), "cc02", k8s.WorkloadSpec{Type: session.WorkloadTypeClaudeCode, AuthSlot: slot(0)}); err == nil {
+		t.Fatal("subscription claude-code accepted an auth slot it would never use")
 	}
 }
 
@@ -175,8 +189,8 @@ func TestClaudeCode_GatewayPodUnchanged(t *testing.T) {
 	pod := onlyPod(t, orch, func() []corev1.Pod { return listPods(t, cs) }, "cc03", k8s.WorkloadSpec{
 		Type: session.WorkloadTypeClaudeCode, ReasoningEffort: "low",
 	})
-	if n := len(pod.Spec.Containers); n != 2 {
-		t.Fatalf("containers = %s, want agent + credential proxy (AC-E6)", containerNames(pod))
+	if n := len(pod.Spec.Containers); n != 3 {
+		t.Fatalf("containers = %s, want agent + credential proxy + K3s MCP proxy (AC-E6)", containerNames(pod))
 	}
 	for _, v := range pod.Spec.Volumes {
 		if v.PersistentVolumeClaim != nil {
@@ -189,6 +203,11 @@ func TestClaudeCode_GatewayPodUnchanged(t *testing.T) {
 	}
 	if _, ok := envValue(agent, k8s.ClaudeCodeAuthModeEnvVar); ok {
 		t.Error("gateway agent receives the subscription marker")
+	}
+	for _, e := range agent.Env {
+		if e.Name == k8s.ClaudeCodeOAuthTokenEnvVar {
+			t.Error("gateway agent receives the subscription OAuth token")
+		}
 	}
 	if v, _ := envValue(agent, k8s.ClaudeCodeEffortEnvVar); v != "low" {
 		t.Errorf("effort = %q, want low", v)
@@ -213,7 +232,7 @@ func TestClaudeCode_SubscriptionPlatformDefaultReadsSubscriptionKey(t *testing.T
 		slot *int
 		key  string
 	}{
-		{k8s.ClaudeCodeAuthSubscription, slot(0), k8s.ClaudeCodeSubscriptionModelConfigKey},
+		{k8s.ClaudeCodeAuthSubscription, nil, k8s.ClaudeCodeSubscriptionModelConfigKey},
 		{k8s.ClaudeCodeAuthGateway, nil, k8s.ClaudeCodeModelConfigKey},
 	} {
 		orch, cs := newReadyOrchestrator(t,

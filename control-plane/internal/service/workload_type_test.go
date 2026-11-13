@@ -223,6 +223,43 @@ func TestDoubleMemorySurvivesSnapshotRestore(t *testing.T) {
 	}
 }
 
+// AC-E2: a permission mode the session's type does not take is refused before
+// activation, so it never restores a snapshot.
+func TestRefusedPermissionModeDoesNotRestore(t *testing.T) {
+	ctx := context.Background()
+	svc, orch, _ := newServiceWithOrch()
+
+	for _, tc := range []struct {
+		workload session.WorkloadType
+		mode     string
+	}{
+		{session.WorkloadTypeClaudeCode, "bypassPermissions"},
+		{session.WorkloadTypeShell, "auto"},
+	} {
+		sess, err := svc.Create(ctx, session.CreateRequest{Name: "mode-" + string(tc.workload), WorkloadType: tc.workload})
+		if err != nil {
+			t.Fatalf("create %s: %v", tc.workload, err)
+		}
+		if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
+			t.Fatalf("snapshot %s: %v", tc.workload, err)
+		}
+		if _, err := svc.Write(ctx, sess.ID, "hi", session.WriteOptions{PermissionMode: tc.mode}); !errors.Is(err, session.ErrInvalidInput) {
+			t.Fatalf("%s write %q err = %v, want ErrInvalidInput", tc.workload, tc.mode, err)
+		}
+		if got := orch.RunningCount(); got != 0 {
+			t.Fatalf("%s refused write restored %d pods, want 0", tc.workload, got)
+		}
+	}
+
+	sess, err := svc.Create(ctx, session.CreateRequest{Name: "mode-ok", WorkloadType: session.WorkloadTypeClaudeCode})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := svc.Write(ctx, sess.ID, "hi", session.WriteOptions{PermissionMode: "acceptEdits"}); err != nil {
+		t.Fatalf("claude-code acceptEdits write: %v", err)
+	}
+}
+
 func TestOversizedClaudePromptIsRejectedBeforeRestore(t *testing.T) {
 	ctx := context.Background()
 	svc, orch, _ := newServiceWithOrch()
@@ -238,7 +275,7 @@ func TestOversizedClaudePromptIsRejectedBeforeRestore(t *testing.T) {
 		t.Fatalf("running pods after snapshot = %d, want 0", got)
 	}
 
-	result, err := svc.Write(ctx, sess.ID, strings.Repeat("x", session.MaxClaudePromptBytes+1))
+	result, err := svc.Write(ctx, sess.ID, strings.Repeat("x", session.MaxClaudePromptBytes+1), session.WriteOptions{})
 	if !errors.Is(err, session.ErrWorkloadPromptTooLarge) {
 		t.Fatalf("write error = %v, want %v", err, session.ErrWorkloadPromptTooLarge)
 	}
@@ -388,7 +425,7 @@ func TestShellWriteIsNotPromptBounded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := svc.Write(ctx, sess.ID, strings.Repeat("x", session.MaxClaudePromptBytes+1)); err != nil {
+	if _, err := svc.Write(ctx, sess.ID, strings.Repeat("x", session.MaxClaudePromptBytes+1), session.WriteOptions{}); err != nil {
 		t.Fatalf("shell write: %v", err)
 	}
 }

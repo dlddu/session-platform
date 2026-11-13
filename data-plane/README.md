@@ -22,16 +22,36 @@ interactive shell and Claude Code workloads.
   environment, cwd and shell variables/functions/aliases are not carried over.
 - `claude-code` launches no resident shell. Write asynchronously queues a
   prompt for one serial worker; each job executes
-  `claude [--continue] [--model MODEL] [--effort EFFORT] --permission-mode auto
-  -p --output-format stream-json --verbose --include-partial-messages -- PROMPT`.
+  `claude-runner [--model MODEL] [--effort EFFORT] [--permission-mode MODE] [--resume] -- PROMPT`
+  (`CLAUDE_RUNNER_BIN`, default `/usr/local/bin/claude-runner`). The runner
+  ([`claude-runner/`](claude-runner/)) runs one Claude Agent SDK `query()`
+  that drives the pinned Claude Code CLI (`CLAUDE_CODE_BIN`, default `claude`
+  on `PATH`) with Claude Code's own system prompt, all setting sources,
+  partial messages and `permissionMode: auto` — or `acceptEdits` when the
+  write that queued the turn chose it through `POST /write?permissionMode=…`
+  (no other mode is accepted, and the body stays the raw prompt). Tool requests
+  that would ask a person go to the SDK's `canUseTool` callback, which allows the
+  platform's built-in tools and the session's own plugin MCP tools and denies
+  the rest with a `[session-platform: denied …]` line in the output.
+  The turn's input stays open after its result while background tasks it
+  started are still running, so they finish inside the turn and the model sees
+  their completion; a task still running after `CLAUDE_RUNNER_BACKGROUND_WAIT_MS`
+  (default 10 minutes) gets one platform message asking the model to stop it
+  with `TaskStop`, and the input closes two minutes later regardless. Closing
+  earlier would kill the task and make the next resumed turn open with a
+  "stopped" notice glued to its prompt.
   `CLAUDE_CODE_EFFORT` (`low`, `medium`, `high`, `xhigh` or `max`, AC-E8) adds
   `--effort`; empty leaves the CLI default and any other value refuses start.
-  The agent parses stdout JSONL and
-  projects ordered `text_delta` values, while diagnostic stderr is retained as
-  text. Both are incrementally redacted and appended through the same offset
-  cursor contract while the invocation is still running. `--continue` starts
-  only after the first successful invocation; a failed or timed-out first run
-  still starts a new conversation next time. A non-empty concrete
+  The runner writes every SDK message as one JSONL line; the agent projects
+  ordered `text_delta` values and the runner's notices, while diagnostic stderr
+  is retained as text. Both are incrementally redacted and appended through the
+  same offset cursor contract while the invocation is still running.
+  `--resume` starts only after the first successful invocation; a failed or
+  timed-out first run still starts a new conversation next time. The runner
+  records the SDK session id in `$HOME/.claude/session-platform-session.json`
+  and resumes exactly that conversation; an archive without the record
+  continues the most recent one, and a record whose transcript is gone starts
+  over with a notice. A non-empty concrete
   `CLAUDE_CODE_MODEL` adds `--model` with that value as one argv element;
   an empty value or the `platform-default` sentinel omits the model flag. Each
   invocation is limited to 30 minutes by default; set
@@ -40,23 +60,14 @@ interactive shell and Claude Code workloads.
   The pending queue is bounded to 64 prompts and 8 MiB; a new write that would
   exceed either bound returns 429 while already accepted prompts keep draining.
   `CLAUDE_CODE_AUTH_MODE` picks the provider auth (AC-E7). Unset or `gateway`
-  is the loopback credential proxy above. `subscription` uses a Claude
-  subscription whose login lives in the session's auth slot: the agent refuses
-  to start if `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`
-  or `CLAUDE_CODE_OAUTH_TOKEN` is set or if `AGENT_AUTH_SLOT_DIR` is not a
-  mounted directory. Before every turn it copies the slot's `.credentials.json`
-  to `$HOME/.claude/.credentials.json` (and removes HOME's copy when the slot
-  has none), copies it back every second while the CLI runs and once more after
-  it exits (a file the CLI removed empties the slot), always by atomic 0600
-  replace rather than a symlink; the archive leaves that file out
-  (`docs/prd/agent-auth-pool.md`, AC-N4). If `claude auth status --json` does
-  not report `loggedIn`, the turn starts `claude auth login --claudeai`, shows
-  its URL as notice lines, holds the prompt and ends with `status=error`; the
-  next write is the pasted code — recorded as `[login code]`, never echoed —
-  fed to the waiting login, after which the held prompt runs in that turn. A
-  failed code drops the held prompt; a pending sign-in expires after 15
-  minutes and ends on a checkpoint or stop. `GET /auth-slot` answers
-  `{"signedIn": bool}` for a workload with a slot and 404 otherwise.
+  is the loopback credential proxy above. `subscription` signs the CLI in to a
+  Claude subscription with the platform's long-lived OAuth token (the one
+  `claude setup-token` prints), which the control plane projects from the
+  `oauth-token` key of `claude-code-credentials` as `CLAUDE_CODE_OAUTH_TOKEN`.
+  The agent refuses to start if that variable is empty or holds whitespace, or
+  if `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY` is
+  set. There is no sign-in step and no auth slot; the token is redacted from
+  session output like every other credential.
 
 - `minimax-code` runs the MiniMax Code CLI on the same one-shot runner as
   `claude-code` — queue, bounds, cursor, resume flag and archive are shared
@@ -206,16 +217,21 @@ interactive shell and Claude Code workloads.
   shell and `unified_exec` on, opens the sandbox, keeps every other
   `codex-chat` switch, and carries its own developer instructions (marker
   `session-platform codex task session`). The ChatGPT login is the auth
-  slot's `auth.json`, kept in sync with `$HOME/.codex/auth.json` exactly like
-  `claude-code`'s subscription login and left out of the archive (AC-M2,
-  AC-M3); an empty slot gets the same in-turn device-code sign-in as
+  slot's `auth.json` (`AGENT_AUTH_SLOT_DIR`), kept in sync with
+  `$HOME/.codex/auth.json` — copied into HOME before every turn (HOME's copy
+  removed when the slot has none), back every second while the runner works
+  and once more after it exits (a file removed in HOME empties the slot),
+  always by atomic 0600 replace rather than a symlink — and left out of the
+  archive (AC-M2, AC-M3, `docs/prd/agent-auth-pool.md` AC-N4;
+  `GET /auth-slot` answers `{"signedIn": bool}` for a workload with a slot and
+  404 otherwise); an empty slot gets the same in-turn device-code sign-in as
   `codex-chat`, and the end-of-turn copy keeps it for the next session. The
   image build renders both modes (`/agent codex-render-config <home>
   chat|task`) and runs `surface-check.mjs --mode chat|task`: task mode must
   show a shell tool and its own marker, and no image or web tool or bundled
   skill.
 - `k3s-mcp-proxy` is the `minimax-code` helper pod's K3s MCP proxy, and the
-  `codex-chat` and `codex-task` pods' loopback sidecar (`DATA_PLANE_PROXY_PLACEMENT=sidecar`,
+  `claude-code`, `codex-chat` and `codex-task` pods' loopback sidecar (`DATA_PLANE_PROXY_PLACEMENT=sidecar`,
   `127.0.0.1:8093`): the
   credential-proxy implementation with the MCP Streamable HTTP header allowlist
   (`Accept`, `Content-Type`, `Mcp-Session-Id`, `Mcp-Protocol-Version`,
@@ -233,9 +249,10 @@ interactive shell and Claude Code workloads.
   With a token it also bootstraps the plugin marketplace for the workload pod,
   which cannot reach GitHub: it asks the K3s MCP for a `plugin-marketplace` read
   token through its own handler in process, clones
-  `MINIMAX_CODE_PLUGIN_MARKETPLACE_URL` into `MINIMAX_CODE_MARKETPLACE_DIR` with a
-  URL-scoped header, and serves the plugins named in `MINIMAX_CODE_PLUGINS`
-  (default `mcp-servers`) — manifest plus the files its `skills`, `commands`,
+  `PLUGIN_SEED_MARKETPLACE_URL` into `PLUGIN_SEED_MARKETPLACE_DIR` with a
+  URL-scoped header, and serves the plugins named in `PLUGIN_SEED_PLUGINS`
+  (the session's selection; empty or unset means none, and then nothing is
+  cloned and the bundle is `ready` and empty) — manifest plus the files its `skills`, `commands`,
   `agents` and `mcpServers` fields name, never hooks — at `GET /plugin-seed`
   (503 while bootstrapping, then `ready`, `failed` or `unconfigured`).
 - `mcp` is the session MCP that runs in the helper pod's other container
@@ -293,23 +310,26 @@ still, archives `home/` plus the scrollback, and keeps both paused until the
 control plane reclaims the pod or calls `/checkpoint/abort`, which SIGCONTs the
 tree and reopens writes. A process that daemonized out of the shell's tree is
 not paused. The image includes the official
-`@anthropic-ai/claude-code` npm package. For a `claude-code` container only,
-`entrypoint.sh` calls K3s MCP with `K3S_MCP_TOKEN` to mint a short-lived
-`contents:read` GitHub App token scoped to `plugin-marketplace`, supplies that
-token only through a process-scoped Git HTTPS Authorization header while running
-`claude plugin marketplace add https://github.com/dlddu/plugin-marketplace.git`
-and `claude plugin install session-platform@dlddu-plugins`, then exports the
-runtime plugin seed and execs the agent. The GitHub token is unset before the
-agent starts; every other workload — `shell`, `minimax-code` (its marketplace path is the K3s MCP proxy, above), `mcp` and
-`credential-proxy` — skips this bootstrap.
+`@anthropic-ai/claude-code` npm package. `entrypoint.sh` only execs the agent.
+A `claude-code` agent reads its loopback `k3s-mcp-proxy` sidecar
+(`K3S_MCP_PROXY_URL`, above) once per pod, on boot or after a restore: when the
+sidecar holds a token and the session chose plugins (`CLAUDE_CODE_PLUGINS`;
+AC-L1), it writes the sidecar's seed as a local `dlddu-plugins` marketplace
+under `/tmp/session-platform-claude-plugins` — dropping each plugin's own K3s
+MCP server — runs `claude plugin marketplace add <dir>` and
+`claude plugin install <name>@dlddu-plugins` under a HOME of its own, and
+exports the resulting `CLAUDE_CODE_PLUGIN_CACHE_DIR` to its turns; the managed
+settings enable only what was installed. When the sidecar holds a token, every
+turn also gets `--k3s-mcp-url http://127.0.0.1:8093/<path>`, which the runner
+registers as the `k3s` MCP server and allows. What the sidecar cannot deliver is
+left out with a warning rather than failing the pod.
 Provider authentication credentials are not present in the Claude container or
 inherited by its Bash tools. That container receives
 `ANTHROPIC_BASE_URL=http://127.0.0.1:8091` and the non-secret
 `ANTHROPIC_AUTH_TOKEN=session-platform-proxy`; the credential-proxy sidecar
-alone receives the required ConfigMap `base-url` and Secret `auth-token` keys. The primary
-container separately receives the required
-Secret key `k3s-mcp-token` as `K3S_MCP_TOKEN`; that literal is included in
-incremental output redaction and is never projected into the credential proxy.
+alone receives the required ConfigMap `base-url` and Secret `auth-token` keys. The
+optional Secret key `k3s-mcp-token` reaches only the `k3s-mcp-proxy` sidecar;
+the agent refuses to start if the primary container receives `K3S_MCP_TOKEN`.
 For a session whose immutable model metadata is `platform-default`, the primary
 container also receives `CLAUDE_CODE_MODEL` from the platform ConfigMap's
 optional `model` key. A missing or empty key omits `--model` and therefore delegates to the
@@ -339,10 +359,12 @@ literal name because Kubernetes does not interpolate
 `CLAUDE_CODE_CONFIG_CONFIGMAP` there.
 
 Fresh session HOME also receives a platform-managed `.claude/settings.json`
-that enables only `session-platform@dlddu-plugins` and allows only the coding
+that enables only the session's chosen `<name>@dlddu-plugins` plugins (none
+unless it chose some) and allows only the coding
 tools `Read`, `Write`, `Edit`, `Glob`, `Grep`, and `Bash`; the agent does not use
 `--dangerously-skip-permissions`. Every invocation starts Claude Code in `auto`
-permission mode through an explicit CLI flag.
+permission mode unless its write chose `acceptEdits`; the runner sets the mode
+as an SDK option, so no prompt can change it.
 
 Projected assistant text plus diagnostic stderr from one Claude invocation is
 capped at 16 MiB after incremental redaction, including the terminal line
