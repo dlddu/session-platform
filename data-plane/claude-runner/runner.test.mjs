@@ -36,6 +36,8 @@ test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
       "max",
       "--permission-mode",
       "acceptEdits",
+      "--k3s-mcp-url",
+      "http://127.0.0.1:8093/mcp",
       "--resume",
       "--",
       "--help me",
@@ -44,6 +46,7 @@ test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
       model: "claude-opus-5-5",
       effort: "max",
       permissionMode: "acceptEdits",
+      k3sMcpUrl: "http://127.0.0.1:8093/mcp",
       resume: true,
       prompt: "--help me",
       checkCli: false,
@@ -54,6 +57,7 @@ test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
   assert.equal(bare.effort, null);
   assert.equal(bare.resume, false);
   assert.equal(bare.permissionMode, DEFAULT_PERMISSION_MODE);
+  assert.equal(bare.k3sMcpUrl, null);
   assert.equal(DEFAULT_PERMISSION_MODE, "auto");
   assert.equal(parseArgs(["--permission-mode", "auto", "--", "x"]).permissionMode, "auto");
   assert.equal(parseArgs(["--check-cli"]).checkCli, true);
@@ -72,6 +76,10 @@ test("parseArgs refuses what the agent never sends", () => {
     ["--permission-mode", "plan", "--", "x"],
     ["--permission-mode", "dontAsk", "--", "x"],
     ["--continue", "--", "x"],
+    ["--k3s-mcp-url", "--", "x"],
+    ["--k3s-mcp-url", "not a url", "--", "x"],
+    ["--k3s-mcp-url", "https://homelab-k3s-mcp.llkm.nl/mcp", "--", "x"],
+    ["--k3s-mcp-url", "http://10.0.0.5:8093/mcp", "--", "x"],
     ["hello"],
   ]) {
     assert.throws(() => parseArgs(argv), UsageError, JSON.stringify(argv));
@@ -112,7 +120,7 @@ test("queryOptions spells out what the SDK defaults differently from the CLI", (
   assert.equal(base.includePartialMessages, true);
   assert.equal(base.canUseTool, canUseTool);
   assert.equal(base.pathToClaudeCodeExecutable, "/usr/local/bin/claude");
-  for (const key of ["model", "effort", "resume", "continue"]) {
+  for (const key of ["model", "effort", "resume", "continue", "mcpServers"]) {
     assert.equal(key in base, false, key);
   }
 
@@ -129,6 +137,9 @@ test("queryOptions spells out what the SDK defaults differently from the CLI", (
   assert.equal(resumed.effort, "high");
   assert.equal(resumed.resume, "s");
   assert.equal("continue" in resumed, false);
+
+  const withK3s = queryOptions({ cwd: "/w", claudeBin: "/c", plan: { kind: "new" }, k3sMcpUrl: "http://127.0.0.1:8093/mcp" });
+  assert.deepEqual(withK3s.mcpServers, { k3s: { type: "http", url: "http://127.0.0.1:8093/mcp" } });
 
   const continued = queryOptions({ cwd: "/w", claudeBin: "/c", plan: { kind: "continue" } });
   assert.equal(continued.continue, true);
@@ -160,6 +171,8 @@ test("decideTool allows the platform tools and the session's own plugin tools", 
   assert.equal(pluginToolPrefix("mcp.servers"), "mcp__plugin_mcp_servers_");
   assert.equal(decideTool("mcp__plugin_session-platform_k3s__session_list", plugins).allow, true);
   assert.equal(decideTool("mcp__plugin_mcp_servers_db__query", plugins).allow, true);
+  // The platform's K3s MCP, when this turn registered it (AC-E6).
+  assert.equal(decideTool("mcp__k3s__resource_list", plugins, { k3s: true }).allow, true);
 });
 
 test("decideTool denies everything else with a reason the model can act on", () => {
@@ -171,6 +184,9 @@ test("decideTool denies everything else with a reason the model can act on", () 
   // A plugin the session did not choose is not the session's either.
   assert.equal(decideTool("mcp__plugin_other_x__y", plugins).allow, false);
   assert.equal(decideTool("mcp__plugin_session-platformx_k__y", plugins).allow, false);
+  // Without a sidecar token the turn registered no K3s MCP to allow.
+  assert.equal(decideTool("mcp__k3s__resource_list", plugins).allow, false);
+  assert.equal(decideTool("mcp__k3sx__resource_list", plugins, { k3s: true }).allow, false);
   for (const tool of ["AskUserQuestion", "ExitPlanMode", "EnterPlanMode"]) {
     assert.deepEqual(decideTool(tool, plugins), { allow: false, message: HEADLESS_DENIAL }, tool);
   }

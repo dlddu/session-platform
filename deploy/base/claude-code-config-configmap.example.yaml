@@ -26,17 +26,16 @@
 #             the proxy uses the system pool. It reaches the proxy container
 #             only, like base-url. A CA certificate is public, so it is not a
 #             credential.
-#   k3s-mcp-url, plugin-marketplace-url (optional) The two bootstrap addresses
-#             the Claude tool-running container reaches before the agent
-#             starts, projected there as K3S_MCP_URL and
-#             CLAUDE_CODE_PLUGIN_MARKETPLACE_URL. Omit them and the data plane
-#             entrypoint keeps the production defaults
+#   k3s-mcp-url, plugin-marketplace-url (optional) The two addresses the
+#             session pod's k3s-mcp-proxy sidecar reaches, projected there as
+#             K3S_MCP_URL and PLUGIN_SEED_MARKETPLACE_URL (k3s-mcp-url also
+#             reaches the tool-running container, which reads its path). Omit
+#             them and the sidecar keeps the production defaults
 #             (https://homelab-k3s-mcp.llkm.nl/mcp and
 #             https://github.com/dlddu/plugin-marketplace.git), which is why the
-#             example below leaves them out. Point them elsewhere only at hosts
-#             that serve the same shapes; the short-lived GitHub token's Git
-#             auth header is scoped to whichever marketplace URL is configured,
-#             so the scope moves with the address and never widens (AC-E6).
+#             example below leaves them out. The K3s MCP address must be https;
+#             the short-lived GitHub token's Git auth header is scoped to
+#             whichever marketplace URL is configured (AC-E6).
 #
 # Omit model (or set it to an empty string) to let the installed Claude Code
 # CLI choose its own default without a --model flag. Explicit concrete models

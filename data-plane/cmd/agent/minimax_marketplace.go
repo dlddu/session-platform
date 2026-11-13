@@ -32,11 +32,13 @@ const (
 	miniMaxPluginSeedPath    = "/plugin-seed"
 	miniMaxPluginRefreshPath = "/plugin-seed/refresh"
 
+	// The seeder's inputs, the same whichever type's K3s MCP proxy runs it
+	// (minimax-code's helper pod, a claude-code or codex loopback sidecar).
 	// Keep in sync with control-plane/internal/adapter/k8s
-	// (MiniMaxMarketplaceDirEnvVar and the env it may pass through).
-	miniMaxMarketplaceURLEnv = "MINIMAX_CODE_PLUGIN_MARKETPLACE_URL"
-	miniMaxPluginsEnv        = "MINIMAX_CODE_PLUGINS"
-	miniMaxMarketplaceDirEnv = "MINIMAX_CODE_MARKETPLACE_DIR"
+	// (PluginSeedMarketplaceDirEnvVar and the env it may pass through).
+	pluginSeedMarketplaceURLEnv = "PLUGIN_SEED_MARKETPLACE_URL"
+	pluginSeedPluginsEnv        = "PLUGIN_SEED_PLUGINS"
+	pluginSeedMarketplaceDirEnv = "PLUGIN_SEED_MARKETPLACE_DIR"
 
 	defaultMiniMaxMarketplaceURL = "https://github.com/dlddu/plugin-marketplace.git"
 
@@ -118,9 +120,9 @@ func newMiniMaxMarketplaceSeeder(upstream http.Handler, mcpPath string, logger *
 		logger = slog.Default()
 	}
 	s := &miniMaxMarketplaceSeeder{
-		marketplaceURL: env(miniMaxMarketplaceURLEnv, defaultMiniMaxMarketplaceURL),
-		plugins:        splitPluginList(os.Getenv(miniMaxPluginsEnv)),
-		workDir:        os.Getenv(miniMaxMarketplaceDirEnv),
+		marketplaceURL: env(pluginSeedMarketplaceURLEnv, defaultMiniMaxMarketplaceURL),
+		plugins:        splitPluginList(os.Getenv(pluginSeedPluginsEnv)),
+		workDir:        os.Getenv(pluginSeedMarketplaceDirEnv),
 		logger:         logger,
 		clone:          gitCloneMarketplace,
 		revision:       gitCloneRevision,

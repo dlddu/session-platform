@@ -2,7 +2,9 @@
 # production splits it — the `claude-code-config` ConfigMap holds the
 # non-credential keys and the `claude-code-credentials` Secret below holds only
 # the credentials. These throwaway values let the credential-proxy resolve its
-# base-url/auth-token refs and the tool-running container resolve K3S_MCP_TOKEN.
+# base-url/auth-token refs. There is no k3s-mcp-token, as there is none for
+# codex: the session pod's k3s-mcp-proxy sidecar starts unconfigured, so a
+# session runs without K3s MCP tools or marketplace plugins.
 # The tool-running container never receives the provider credentials, and
 # hermetic tests never send any placeholder to an external API. The optional
 # model value may be projected into the tool-running container for a
@@ -25,17 +27,6 @@ data:
   # historical copy in a comment would let a future row pass while the setting it
   # describes had already moved.
   base-url: "https://anthropic-fake:8443"
-  # The two bootstrap endpoints the session pod reaches before the agent starts.
-  # Both keys are optional in production; when absent the data plane
-  # entrypoint falls back to the real organisation endpoints, so `deploy/base/` is
-  # unaffected. Here they point at the in-cluster stand-ins the overlay deploys:
-  #   - k3s-mcp-url          -> deploy/overlays/e2e/e2e-k3s-mcp-fake.yaml (approved mock
-  #                             exception PLUGIN-CRED; the real service holds a
-  #                             GitHub App private key that cannot be cloned)
-  #   - plugin-marketplace-url -> deploy/overlays/e2e/plugin-marketplace-git.yaml (a real git
-  #                             remote, not a mock — same code path as github.com)
-  k3s-mcp-url: "http://k3s-mcp-fake:8080/mcp"
-  plugin-marketplace-url: "http://plugin-marketplace-git:8080/plugin-marketplace.git"
   model: "claude-e2e-model"
   models: '["claude-e2e-model","claude-e2e-alternate"]'
   # Optional, non-credential: the issuer of the stand-in provider's certificate.
@@ -67,4 +58,3 @@ metadata:
 type: Opaque
 stringData:
   auth-token: "e2e-placeholder-not-a-real-token"
-  k3s-mcp-token: "e2e-k3s-mcp-placeholder-not-a-real-token"

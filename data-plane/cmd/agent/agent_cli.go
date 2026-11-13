@@ -33,12 +33,15 @@ type agentCLI interface {
 type claudeCLI struct {
 	// effort is the session's effort (AC-E8); empty leaves the CLI default.
 	effort string
+	// platform is the K3s MCP proxy sidecar's offer (AC-E6); nil runs with
+	// neither the K3s MCP nor plugins.
+	platform *claudePlatform
 }
 
 func (claudeCLI) workloadName() string { return workloadClaudeCode }
 
 func (c claudeCLI) argv(binary, model, prompt string, resume bool) []string {
-	return claudeRunnerArgv(binary, model, c.effort, "", prompt, resume)
+	return claudeRunnerArgv(binary, model, c.effort, "", c.platform.mcpURL(), prompt, resume)
 }
 
 // permissionModer is an agentCLI whose turns run in a permission mode the write
@@ -66,14 +69,20 @@ func (claudeCLI) validPermissionMode(mode string) bool {
 }
 
 func (c claudeCLI) argvWithPermissionMode(binary, model, prompt string, resume bool, mode string) []string {
-	return claudeRunnerArgv(binary, model, c.effort, mode, prompt, resume)
+	return claudeRunnerArgv(binary, model, c.effort, mode, c.platform.mcpURL(), prompt, resume)
 }
 
 func (claudeCLI) newProjector(dst io.Writer) io.WriteCloser {
 	return newClaudeStreamProjector(dst)
 }
 
-func (claudeCLI) ensureHome(homeDir string, tools toolSurface) error {
+// ensureHome installs what the sidecar seeded, once per pod, and enables the
+// selected plugins it could install.
+func (c claudeCLI) ensureHome(homeDir string, tools toolSurface) error {
+	if c.platform != nil {
+		c.platform.prepare(tools.Plugins)
+		tools.Plugins = c.platform.enabled(tools.Plugins)
+	}
 	return ensureClaudeManagedSettings(homeDir, tools)
 }
 

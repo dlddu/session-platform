@@ -43,7 +43,7 @@ WORKDIR /opt/claude-runner
 COPY data-plane/claude-runner/package.json data-plane/claude-runner/package-lock.json ./
 # --omit=optional leaves out the SDK's own bundled CLI binary: the runner drives
 # the pinned CLI installed above, so one binary serves both the turns and the
-# plugin bootstrap.
+# agent's plugin install.
 RUN npm ci --omit=dev --omit=optional --ignore-scripts && npm cache clean --force
 COPY data-plane/claude-runner/*.mjs ./
 RUN node --test

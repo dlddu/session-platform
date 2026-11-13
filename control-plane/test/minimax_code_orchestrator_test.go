@@ -233,9 +233,9 @@ func TestMiniMaxCode_K3SMCPProxyHoldsTheToken(t *testing.T) {
 	}
 	// AC-G5: the marketplace clone needs writable scratch under a read-only
 	// root; only this container mounts it, and it is an emptyDir of the pod.
-	dir, _ := envValue(proxy, k8s.MiniMaxMarketplaceDirEnvVar)
+	dir, _ := envValue(proxy, k8s.PluginSeedMarketplaceDirEnvVar)
 	if len(proxy.VolumeMounts) != 1 || proxy.VolumeMounts[0].MountPath != dir || dir == "" {
-		t.Errorf("k3s mcp proxy mounts = %+v, %s = %q; want one scratch mount at that path", proxy.VolumeMounts, k8s.MiniMaxMarketplaceDirEnvVar, dir)
+		t.Errorf("k3s mcp proxy mounts = %+v, %s = %q; want one scratch mount at that path", proxy.VolumeMounts, k8s.PluginSeedMarketplaceDirEnvVar, dir)
 	} else {
 		var scratch *corev1.Volume
 		for i := range set.helper.Spec.Volumes {
@@ -488,7 +488,7 @@ func TestDefaultSecretAndConfigMapNames(t *testing.T) {
 		wantSecretRefs    int
 		wantConfigMapRefs int
 	}{
-		{"claude-code workload pod", claudePod, "claude-code-credentials", "claude-code-config", 2, 5},
+		{"claude-code workload pod", claudePod, "claude-code-credentials", "claude-code-config", 2, 6},
 		{"minimax-code workload pod", miniMaxSet.workload, "minimax-code-credentials", "minimax-code-config", 0, 1},
 		{"minimax-code helper pod", miniMaxSet.helper, "minimax-code-credentials", "minimax-code-config", 2, 2},
 	} {

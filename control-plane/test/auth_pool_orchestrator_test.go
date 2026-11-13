@@ -101,8 +101,8 @@ func TestCodexTask_PodShape(t *testing.T) {
 			t.Errorf("platform-default model must come from codex-task-cfg, got %+v", e)
 		}
 	}
-	proxy := container(t, pod, k8s.CodexK3SMCPProxyContainerName)
-	if got, _ := envValue(proxy, "MINIMAX_CODE_PLUGINS"); got != "" {
+	proxy := container(t, pod, k8s.K3SMCPProxyContainerName)
+	if got, _ := envValue(proxy, "PLUGIN_SEED_PLUGINS"); got != "" {
 		t.Errorf("proxy plugins = %q, want none: codex-task has no default and never takes codex-chat's", got)
 	}
 	var token string
@@ -137,8 +137,8 @@ func TestClaudeCode_SubscriptionPodShape(t *testing.T) {
 	pod := onlyPod(t, orch, func() []corev1.Pod { return listPods(t, cs) }, "cc01", k8s.WorkloadSpec{
 		Type: session.WorkloadTypeClaudeCode, Model: "opus", ReasoningEffort: "max",
 	})
-	if n := len(pod.Spec.Containers); n != 1 {
-		t.Fatalf("containers = %s, want the workload container alone (no credential proxy, AC-E7)", containerNames(pod))
+	if got := containerNames(pod); got != k8s.ContainerName+","+k8s.K3SMCPProxyContainerName {
+		t.Fatalf("containers = %s, want the workload and K3s MCP proxy, no credential proxy (AC-E7)", got)
 	}
 	for _, v := range pod.Spec.Volumes {
 		if v.PersistentVolumeClaim != nil {
@@ -163,11 +163,10 @@ func TestClaudeCode_SubscriptionPodShape(t *testing.T) {
 			t.Errorf("agent %s = %q, want %q", name, got, want)
 		}
 	}
-	var k3sToken bool
 	var oauth *corev1.SecretKeySelector
 	for _, e := range agent.Env {
-		if e.Name == k8s.K3SMCPTokenEnvVar && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil {
-			k3sToken = true
+		if e.Name == k8s.K3SMCPTokenEnvVar {
+			t.Error("subscription agent receives the K3s MCP token; the sidecar holds it")
 		}
 		if e.Name == k8s.ClaudeCodeOAuthTokenEnvVar {
 			if e.Value != "" || e.ValueFrom == nil {
@@ -175,9 +174,6 @@ func TestClaudeCode_SubscriptionPodShape(t *testing.T) {
 			}
 			oauth = e.ValueFrom.SecretKeyRef
 		}
-	}
-	if !k3sToken {
-		t.Error("subscription agent lost its K3s MCP token for the plugin bootstrap")
 	}
 	if oauth == nil || oauth.Name != "claude-code-credentials" || oauth.Key != k8s.ClaudeCodeOAuthTokenSecretKey ||
 		(oauth.Optional != nil && *oauth.Optional) {
@@ -193,8 +189,8 @@ func TestClaudeCode_GatewayPodUnchanged(t *testing.T) {
 	pod := onlyPod(t, orch, func() []corev1.Pod { return listPods(t, cs) }, "cc03", k8s.WorkloadSpec{
 		Type: session.WorkloadTypeClaudeCode, ReasoningEffort: "low",
 	})
-	if n := len(pod.Spec.Containers); n != 2 {
-		t.Fatalf("containers = %s, want agent + credential proxy (AC-E6)", containerNames(pod))
+	if n := len(pod.Spec.Containers); n != 3 {
+		t.Fatalf("containers = %s, want agent + credential proxy + K3s MCP proxy (AC-E6)", containerNames(pod))
 	}
 	for _, v := range pod.Spec.Volumes {
 		if v.PersistentVolumeClaim != nil {

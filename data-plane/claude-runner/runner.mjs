@@ -2,7 +2,8 @@
 // workload (docs/prd/claude-code-workload.md, AC-E2/E4). The agent runs
 //
 //   claude-runner [--model <model|platform-default>] [--effort <effort>]
-//                 [--permission-mode <auto|acceptEdits>] [--resume] -- <prompt>
+//                 [--permission-mode <auto|acceptEdits>] [--k3s-mcp-url <url>]
+//                 [--resume] -- <prompt>
 //
 // in the session workspace with HOME set to the session HOME, and projects the
 // JSON lines written here (data-plane/cmd/agent/claude_stream.go). Every SDK
@@ -138,7 +139,7 @@ async function main(argv) {
 
   const plugins = readPlugins(home);
   const canUseTool = async (toolName, input) => {
-    const verdict = decideTool(toolName, plugins);
+    const verdict = decideTool(toolName, plugins, { k3s: Boolean(args.k3sMcpUrl) });
     if (verdict.allow) {
       return { behavior: "allow", updatedInput: input };
     }
@@ -149,6 +150,7 @@ async function main(argv) {
     model: args.model,
     effort: args.effort,
     permissionMode: args.permissionMode,
+    k3sMcpUrl: args.k3sMcpUrl,
     cwd,
     claudeBin,
     plan,

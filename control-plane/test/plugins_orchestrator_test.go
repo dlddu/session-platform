@@ -45,15 +45,23 @@ func TestPlugins_ClaudeCodeWorkloadContainer(t *testing.T) {
 				t.Errorf("sidecar %s receives %s", c.Name, k8s.ClaudeCodePluginsEnvVar)
 			}
 		}
+		// The K3s MCP sidecar seeds the same selection for the agent to install.
+		if got, _ := envOf(container(t, pod, k8s.K3SMCPProxyContainerName), "PLUGIN_SEED_PLUGINS"); got != "development,session-platform" {
+			t.Errorf("K3s MCP sidecar PLUGIN_SEED_PLUGINS = %q, want development,session-platform", got)
+		}
 	})
 
-	t.Run("omitted leaves the entrypoint default", func(t *testing.T) {
+	t.Run("omitted seeds and enables none", func(t *testing.T) {
 		orch, cs := newOrch(t)
 		if _, err := orch.Start(context.Background(), "pl-cc-default", k8s.WorkloadSpec{Type: session.WorkloadTypeClaudeCode}); err != nil {
 			t.Fatalf("start: %v", err)
 		}
-		if _, ok := envVarOf(container(t, listPods(t, cs)[0], k8s.ContainerName), k8s.ClaudeCodePluginsEnvVar); ok {
+		pod := listPods(t, cs)[0]
+		if _, ok := envVarOf(container(t, pod, k8s.ContainerName), k8s.ClaudeCodePluginsEnvVar); ok {
 			t.Errorf("%s set for a session that chose no plugins", k8s.ClaudeCodePluginsEnvVar)
+		}
+		if got, _ := envOf(container(t, pod, k8s.K3SMCPProxyContainerName), "PLUGIN_SEED_PLUGINS"); got != "" {
+			t.Errorf("K3s MCP sidecar PLUGIN_SEED_PLUGINS = %q, want none: claude-code has no default", got)
 		}
 	})
 
@@ -113,18 +121,18 @@ func TestPlugins_MiniMaxCodeHelperSeeder(t *testing.T) {
 		}
 		set := newPodSet(t, listPods(t, cs), started)
 		proxy := container(t, set.helper, k8s.MiniMaxK3SMCPProxyContainerName)
-		if got, ok := envOf(proxy, "MINIMAX_CODE_PLUGINS"); !ok || got != "mcp-servers,development" {
-			t.Errorf("MINIMAX_CODE_PLUGINS = %q (set %v), want mcp-servers,development", got, ok)
+		if got, ok := envOf(proxy, "PLUGIN_SEED_PLUGINS"); !ok || got != "mcp-servers,development" {
+			t.Errorf("PLUGIN_SEED_PLUGINS = %q (set %v), want mcp-servers,development", got, ok)
 		}
-		if _, ok := envVarOf(container(t, set.workload, k8s.ContainerName), "MINIMAX_CODE_PLUGINS"); ok {
+		if _, ok := envVarOf(container(t, set.workload, k8s.ContainerName), "PLUGIN_SEED_PLUGINS"); ok {
 			t.Error("the workload container must not choose plugins; the helper seeder does")
 		}
 	})
 
 	t.Run("omitted leaves the seeder default", func(t *testing.T) {
 		_, set := startMiniMax(t, "pl-mm-default")
-		if _, ok := envVarOf(container(t, set.helper, k8s.MiniMaxK3SMCPProxyContainerName), "MINIMAX_CODE_PLUGINS"); ok {
-			t.Error("MINIMAX_CODE_PLUGINS set for a session that chose no plugins")
+		if _, ok := envVarOf(container(t, set.helper, k8s.MiniMaxK3SMCPProxyContainerName), "PLUGIN_SEED_PLUGINS"); ok {
+			t.Error("PLUGIN_SEED_PLUGINS set for a session that chose no plugins")
 		}
 	})
 }
@@ -143,14 +151,14 @@ func TestPlugins_CodexSidecarSeeder(t *testing.T) {
 		if _, err := orch.Start(context.Background(), id, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexChat, Plugins: plugins, AuthSlot: &slot}); err != nil {
 			t.Fatalf("start: %v", err)
 		}
-		got, _ := envOf(container(t, listPods(t, cs)[0], k8s.CodexK3SMCPProxyContainerName), "MINIMAX_CODE_PLUGINS")
+		got, _ := envOf(container(t, listPods(t, cs)[0], k8s.K3SMCPProxyContainerName), "PLUGIN_SEED_PLUGINS")
 		return got
 	}
 	if got := start(t, "pl-cx", []string{"learning"}); got != "learning" {
-		t.Errorf("selection: MINIMAX_CODE_PLUGINS = %q, want learning (replaces CODEX_PLUGINS)", got)
+		t.Errorf("selection: PLUGIN_SEED_PLUGINS = %q, want learning (replaces CODEX_PLUGINS)", got)
 	}
 	if got := start(t, "pl-cx-default", nil); got != "codex-session,extra" {
-		t.Errorf("omitted: MINIMAX_CODE_PLUGINS = %q, want the deployment's codex-session,extra", got)
+		t.Errorf("omitted: PLUGIN_SEED_PLUGINS = %q, want the deployment's codex-session,extra", got)
 	}
 }
 
@@ -168,13 +176,13 @@ func TestPlugins_CodexTaskSidecarSeeder(t *testing.T) {
 		if _, err := orch.Start(context.Background(), id, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexTask, Plugins: plugins, AuthSlot: &slot}); err != nil {
 			t.Fatalf("start: %v", err)
 		}
-		got, _ := envOf(container(t, listPods(t, cs)[0], k8s.CodexK3SMCPProxyContainerName), "MINIMAX_CODE_PLUGINS")
+		got, _ := envOf(container(t, listPods(t, cs)[0], k8s.K3SMCPProxyContainerName), "PLUGIN_SEED_PLUGINS")
 		return got
 	}
 	if got := start(t, "pl-ct", []string{"learning"}); got != "learning" {
-		t.Errorf("selection: MINIMAX_CODE_PLUGINS = %q, want learning", got)
+		t.Errorf("selection: PLUGIN_SEED_PLUGINS = %q, want learning", got)
 	}
 	if got := start(t, "pl-ct-default", nil); got != "" {
-		t.Errorf("omitted: MINIMAX_CODE_PLUGINS = %q, want none", got)
+		t.Errorf("omitted: PLUGIN_SEED_PLUGINS = %q, want none", got)
 	}
 }
