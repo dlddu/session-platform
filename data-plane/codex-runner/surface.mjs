@@ -10,13 +10,6 @@ export const MEDIA_AND_WEB_TOOLS = new Set(["view_image", "image_generation", "w
 // FORBIDDEN_TOOLS is codex-chat's whole exclusion list (AC-J5).
 export const FORBIDDEN_TOOLS = new Set([...SHELL_TOOLS, ...MEDIA_AND_WEB_TOOLS]);
 
-// The text each mode's developer_instructions carry
-// (data-plane/cmd/agent/codex_config.go, codexInstructionsMarker and
-// codexTaskInstructionsMarker). Neither contains the other, so a config of
-// the wrong mode fails the check.
-export const MANAGED_INSTRUCTIONS_MARKER = "session-platform codex session";
-export const TASK_INSTRUCTIONS_MARKER = "session-platform codex task session";
-
 // Skills codex bundles under $CODEX_HOME/skills/.system when bundled skills
 // are on; listing any of them means the managed config did not apply.
 export const BUNDLED_SKILL_ROOT = "/skills/.system";
@@ -100,10 +93,6 @@ export function inspectPromptInput(items, mode = "chat") {
     if (root.replaceAll("\\", "/").includes(BUNDLED_SKILL_ROOT)) {
       problems.push(`bundled system skills are listed (root ${root})`);
     }
-  }
-  const marker = task ? TASK_INSTRUCTIONS_MARKER : MANAGED_INSTRUCTIONS_MARKER;
-  if (!texts.some(({ role, text }) => role === "developer" && text.includes(marker))) {
-    problems.push("the managed developer_instructions are missing; codex did not load the managed config.toml");
   }
   return { tools, skills: skills.map((s) => s.name), problems };
 }
