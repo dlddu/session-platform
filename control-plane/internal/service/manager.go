@@ -56,6 +56,11 @@ const defaultLeaseRenewInterval = 5 * time.Second
 // reachability check, fit well inside it.
 const createRoundTimeout = 15 * time.Minute
 
+// restoreRoundTimeout backstops a Restore detached from its caller, for the
+// same reason and with the same budget as createRoundTimeout: the pods' ready
+// bounds, the archive download and the agent's own restore work fit inside it.
+const restoreRoundTimeout = 15 * time.Minute
+
 type agentCheckpointAborter interface {
 	AbortCheckpoint(context.Context, string, string) error
 }
@@ -849,6 +854,17 @@ func cloneSnapshotTransaction(txn *session.SnapshotTransaction) *session.Snapsho
 // (AC-B2). Guarded by the per-session lock so concurrent restores are atomic
 // (AC-C1).
 func (s *Service) Restore(ctx context.Context, id string) (result *session.Session, retErr error) {
+	// A restore outlives the caller's connection, as a Create does: a restore
+	// pod that waits for an image pull or a node, then the archive and the
+	// agent's own restore, can take longer than a caller keeps a request open.
+	// Tied to the request, the caller's timeout cancelled the round and
+	// reclaimed the pods, so every retry started over and none finished.
+	// Detached, the session turns active once the round completes and the
+	// caller finds it with Get or List; a caller that gives up early is told
+	// nothing it can act on, which is why the K3s MCP offers a restore tool
+	// that answers "pending" instead.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), restoreRoundTimeout)
+	defer cancel()
 	token, err := newID()
 	if err != nil {
 		return nil, err
