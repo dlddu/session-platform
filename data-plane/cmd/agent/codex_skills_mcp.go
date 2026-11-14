@@ -213,9 +213,8 @@ func codexSkillsToolDefinitions(refresh bool) []map[string]any {
 		tools = append(tools, map[string]any{
 			"name": "refresh_skills",
 			"description": "Fetch the platform's plugin marketplace again and update this session's skills, keeping " +
-				"the conversation. Use it when the user asks to refresh or update the plugins or skills, or a skill " +
-				"looks out of date. It can take up to two minutes, and runs at most once per turn. It reports which " +
-				"skills were added, updated or removed; read a changed skill again with read_skill before following it.",
+				"the conversation. It can take up to two minutes, and runs at most once per turn. It reports which " +
+				"skills were added, updated or removed.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
 		})
 	}
@@ -562,7 +561,6 @@ func renderCodexRefreshResult(result pluginRefresh) string {
 		return "Plugin skills refreshed" + revision + "; nothing changed."
 	}
 	return "Plugin skills refreshed" + revision + " — " + strings.Join(parts, "; ") + ". " +
-		"Anything read from these skills earlier in this conversation may be out of date: read a skill again with " +
-		"`read_skill` before following it, and do not use a removed one. The skill list given at the start of this " +
-		"turn is not updated until the next turn; `list_skills` shows the current set."
+		"Skill files read earlier in this conversation may differ from the current ones. The skill list given at " +
+		"the start of this turn is not updated until the next turn; `list_skills` shows the current set."
 }

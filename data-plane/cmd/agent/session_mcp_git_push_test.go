@@ -257,8 +257,8 @@ func TestGitPushFailuresAreRedactedAndNamed(t *testing.T) {
 		return fmt.Errorf("%w: ! [rejected] main -> main (fetch first) sent %s token %s", errPushRejected, value, testGitHubToken)
 	}
 	isError, text := m.call(t, gitPushTool, map[string]any{"path": dir, "branch": "main"})
-	if !isError || !strings.Contains(text, "was rejected") || !strings.Contains(text, gitCloneTool) {
-		t.Fatalf("result = %v %q, want the rejection with the recovery hint", isError, text)
+	if !isError || !strings.Contains(text, "was rejected") || !strings.Contains(text, "commits this clone lacks") {
+		t.Fatalf("result = %v %q, want the rejection and its cause, stated as a fact (AC-A5)", isError, text)
 	}
 	if !strings.Contains(text, redactedLiteral) {
 		t.Errorf("failure text = %q, want the secret redacted", text)

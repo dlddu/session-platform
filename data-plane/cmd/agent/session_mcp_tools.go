@@ -105,7 +105,7 @@ func (c sessionMCPConfig) toolDefinitions() []any {
 	if c.repoAccess != nil {
 		cloneDescription = "Clone a GitHub repository (https://github.com/owner/repo) that a person has put on " +
 			"the allow list into this session's shared volume, public or private. Needs no approval: a " +
-			"repository off the list is refused — use " + requestRepoAccessTool + " to ask for it. The " +
+			"repository off the list is refused; " + requestRepoAccessTool + " asks for one. The " +
 			"destination directory is chosen by this server and returned in the result."
 		cloneURLDescription = "https://github.com/owner/repo of a repository on the allow list."
 	}
@@ -182,8 +182,7 @@ func (c sessionMCPConfig) toolDefinitions() []any {
 			"description": "Push one branch of a clone that " + gitCloneTool + " made back to its GitHub repository " +
 				"(the clone's origin). The repository must be on the allow list, exactly as for " + gitCloneTool +
 				"; needs no approval. Only a fast-forward of that one branch is pushed — no force, no delete, " +
-				"no tags. When the remote has moved on, the push is rejected: clone again, re-apply the change " +
-				"and push from the new clone.",
+				"no tags. When the remote has moved on, the push is rejected.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{

@@ -110,7 +110,6 @@ func main() {
 		k8s.WithWorkloadImage(session.WorkloadTypeCodexChat, cfg.codex.image),
 		k8s.WithCodexCredentialsSecret(cfg.codex.credentialsSecret),
 		k8s.WithCodexConfigConfigMap(cfg.codex.configConfigMap),
-		k8s.WithCodexPlugins(cfg.codex.plugins),
 		k8s.WithWorkloadImage(session.WorkloadTypeCodexTask, cfg.codexTask.image),
 		k8s.WithCodexTaskCredentialsSecret(cfg.codexTask.credentialsSecret),
 		k8s.WithCodexTaskConfigConfigMap(cfg.codexTask.configConfigMap),

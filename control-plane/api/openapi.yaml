@@ -1192,10 +1192,9 @@ components:
             Optional marketplace plugins for this session (AC-L1), by plugin name
             in the platform marketplace (no `@marketplace` suffix). Valid when
             workloadType is `claude-code`, `minimax-code`, `codex-chat` or
-            `codex-task`. Omitted, a codex-chat session gets the deployment's
-            `CODEX_PLUGINS` and every other type runs without plugins. Given, it
-            replaces that default outright — list the default too if the session
-            should keep it.
+            `codex-task`. Omitted, the session runs without plugins — no type
+            has a platform default (AC-A5). Given, the list is every plugin the
+            session gets.
             Names are not checked against the marketplace here: a name it does
             not list fails the pod's plugin bootstrap, which for `claude-code`
             fails the create (its agent never becomes reachable) and for

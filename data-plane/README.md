@@ -45,11 +45,11 @@ interactive shell and Claude Code workloads.
   question lives only as long as its turn.
   The turn's input stays open after its result while background tasks it
   started are still running, so they finish inside the turn and the model sees
-  their completion; a task still running after `CLAUDE_RUNNER_BACKGROUND_WAIT_MS`
-  (default 10 minutes) gets one platform message asking the model to stop it
-  with `TaskStop`, and the input closes two minutes later regardless. Closing
-  earlier would kill the task and make the next resumed turn open with a
-  "stopped" notice glued to its prompt.
+  their completion. The runner sets no wait of its own and writes nothing
+  after the prompt: only the agent's turn timeout (`CLAUDE_CODE_RUN_TIMEOUT`)
+  ends a turn whose work keeps running. Closing earlier would kill the task
+  and make the next resumed turn open with a "stopped" notice glued to its
+  prompt.
   `CLAUDE_CODE_EFFORT` (`low`, `medium`, `high`, `xhigh` or `max`, AC-E8) adds
   `--effort`; empty leaves the CLI default and any other value refuses start.
   The runner writes every SDK message as one JSONL line; the agent projects
@@ -153,14 +153,13 @@ interactive shell and Claude Code workloads.
   thread the app server attaches and writes its start, its K3s MCP and skills
   calls and its end as notice lines (never as assistant messages). When the
   main thread's turn ends with sub-agents still running, the runner waits for
-  them, then starts a follow-up turn on the main thread whose prompt opens
-  with `[session-platform] Background agents you started have ended …` and
-  carries each agent's final message (8 KiB at most each, keeping its
-  beginning and end), so the main agent
-  reports the results itself. The wait is
-  `CODEX_RUNNER_BACKGROUND_WAIT_MS` (default 10 minutes); agents still
-  running then are interrupted and reported as stopped. A follow-up turn may
-  start more agents; after five follow-ups the runner stops what is left.
+  them so their work is not cut short, then writes one notice line naming
+  each agent and its final message (8 KiB at most each, keeping its
+  beginning and end) — to the session output only. The platform opens no
+  turn of its own: the model sees those results only if a later prompt asks
+  for them. The wait is `CODEX_RUNNER_BACKGROUND_WAIT_MS` (default 10
+  minutes); agents still running then are interrupted and reported as
+  stopped.
   All of it is one job, so the whole invocation, waits included, stays
   under `CLAUDE_CODE_RUN_TIMEOUT`, and the next prompt waits in the queue.
   The agent projects notices, finished `agent_message` text, a

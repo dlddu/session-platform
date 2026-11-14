@@ -6,6 +6,7 @@
 - **V1 세션 격리** — 세션별 전용 워크로드 pod 모델로 격리를 구조적으로 보장
 - **V2 유휴 자원 회수** — control plane이 pod 생명주기를 단일 관리하여 회수 가능
 - **V5 일관된 세션 상태** — control plane이 세션 메타데이터의 단일 진입점 역할
+- **V8 목적에 맞는 작업 환경 선택** — 고른 에이전트가 플랫폼이 덧씌운 프롬프트 없이 그 CLI·SDK 그대로 동작한다 (AC-A5)
 
 ## Acceptance Criteria
 
@@ -32,3 +33,19 @@
 - **달성 가치**: V5
 - **검증 방법**: 이미 취소된 요청 컨텍스트로 생성을 호출해도 세션이 만들어져 목록에 나타남을, 이미 취소된 요청 컨텍스트로 스냅샷 세션의 복원을 호출해도 세션이 `active`로 저장됨을 확인한다.
 - **자동화**: Go 단위 `control-plane/internal/service/create_detached_test.go`(`TestCreateOutlivesTheCallersContext`, `TestRestoreOutlivesTheCallersContext`)
+
+### AC-A5: 플랫폼은 프롬프트로 하네스를 만들지 않는다 (*2026-11-14 신설, 사용자 결정*)
+- **설명**: 에이전트 워크로드(`claude-code`·`minimax-code`·`codex-chat`·`codex-task`, 앞으로 생길 타입 포함)에서 **모델이 받는 입력에 플랫폼이 쓴 문장을 넣지 않는다.** 플랫폼(control plane·에이전트 바이너리·러너·사이드카·헬퍼 파드)이 모델의 동작을 바꾸려 할 때는 프롬프트가 아니라 **도구 표면·권한 판정·설정·턴의 경계**로 한다. 금지하는 것은 다음과 같다.
+  1. **시스템·개발자 지시** — 시스템 프롬프트 덧붙이기(`appendSystemPrompt` 따위), Codex `developer_instructions`·`instructions`, 플랫폼이 써넣는 `CLAUDE.md`·`AGENTS.md`·출력 스타일, MCP 서버가 `initialize`에서 내놓는 `instructions`.
+  2. **사용자 프롬프트 손대기** — write된 프롬프트 앞뒤에 안내·표식·머리말을 붙이거나 바꾸는 것. 예약 회차(AC-P2)도 등록된 프롬프트를 그대로 넣는다.
+  3. **턴 안에 끼워 넣기** — 턴 도중에 플랫폼이 사용자 메시지를 더 보내는 것(예: 오래 도는 작업을 멈추라는 메시지).
+  4. **플랫폼이 여는 턴** — 사용자의 write나 사용자가 등록한 예약 회차가 아닌 계기로 플랫폼이 스스로 턴을 시작하는 것(예: 하위 에이전트 결과를 전하는 후속 턴).
+- **경계 — 하네스가 아닌 것**:
+  - 에이전트 CLI·SDK가 **스스로** 넣는 입력(Claude Code 프리셋 시스템 프롬프트, Codex 기본 지시·환경 맥락·스킬 목록, CLI가 붙이는 작업 알림)은 플랫폼이 쓴 것이 아니다. 플랫폼은 그 입력을 고르는 설정(프리셋 선택·기능 끄기)만 쓴다.
+  - **도구 정의와 도구 결과**는 모델이 도구를 볼 때·부를 때 받는 계약이다. 도구 설명은 **기능과 제약만** — 그 도구가 무엇을 하고, 어떻게 부르며(인자·형식·한도), 결과를 어떻게 읽는지만 적는다. 「사용자에게 시각을 알려라」「이럴 때 써라」「따르기 전에 다시 읽어라」처럼 언제 쓰고 결과로 무엇을 할지 정하는 문장은 넣지 않는다(*2026-11-14 사용자 결정*). 도구 결과와 권한 거부 메시지도 **일어난 일을 사실로 전할 뿐**, 「스스로 정하라」「다시 클론해서 다시 적용하라」처럼 모델이 다음에 어떻게 할지를 지시하지 않는다 — 다른 도구가 그 일을 한다는 사실(「`request_repo_access`가 요청을 기록한다」)은 사실이므로 적을 수 있다.
+  - 사람이 고른 것 — write된 프롬프트, 사람·모델이 등록한 예약의 프롬프트, 사람이 `AskUserQuestion`에 준 답(AC-E2), 그리고 **세션을 만든 쪽이 생성 시 고른 플러그인**(AC-L1)의 스킬 내용은 플랫폼이 쓴 문장이 아니다. 플랫폼은 플러그인을 **기본값으로 고르지 않는다** — 생성 시 `plugins`를 주지 않은 세션은 어느 타입이든 플러그인 없이 돈다(*2026-11-14 사용자 결정*: 이전에는 `codex-chat`만 배포의 `CODEX_PLUGINS`, 기본 `codex-session`을 받았다). 스킬이 필요한 호출자는 `plugins`를 명시한다.
+  - 세션 **출력**에 남기는 `[session-platform: …]` 안내 줄과 러너 안내(로그인 안내 따위)는 사람이 읽는 기록이지 모델 입력이 아니므로 허용한다. 다만 **일어난 일만** 적는다 — 「프롬프트를 다시 보내라」「…에서 결정하라」 같은 지시 문장은 넣지 않는다(*2026-11-14 사용자 결정*). 그 줄이 모델 입력으로 흘러 들어가서는 안 된다.
+- **새 기능의 기준**: 모델에게 무언가를 알려야 할 것 같으면 먼저 도구 결과(모델이 부른 도구가 돌려주는 사실)나 세션 출력(사람에게)으로 풀 수 있는지 본다. 그래도 프롬프트가 필요하다면 이 AC를 먼저 개정해야 한다 — 코드가 이 AC를 앞질러서는 안 된다.
+- **달성 가치**: V8 — 사용자가 고른 작업 환경이, 플랫폼이 몰래 덧씌운 지시 없이 그 CLI·SDK 그대로 동작한다. 플랫폼 보장(V1~V5)은 도구 표면·권한·설정·경계로 지킨다.
+- **검증 방법**: 각 에이전트 타입에서 플랫폼이 만드는 모델 입력(러너가 SDK·app server에 넘기는 입력, 관리형 설정, 플랫폼 MCP 서버의 `initialize` 응답)에 플랫폼 문장이 없음을 단위 테스트로 확인한다 — 턴 입력은 write된 프롬프트 하나뿐이고 그 뒤에 아무것도 오지 않으며, 플랫폼이 스스로 턴을 열지 않고, 관리형 설정에 지시 키가 없고, 권한 거부 메시지와 도구 설명에 지시가 없고, `plugins`를 주지 않은 세션이 플러그인을 받지 않음을. 실 모델 대화 기록(Codex rollout)에서 플랫폼 문장이 없음은 사람이 확인한다(로그인이 필요한 실 공급자 턴이라 e2e가 아니다).
+- **자동화**: `data-plane/claude-runner/runner.test.mjs`(턴 입력이 프롬프트 뒤에 아무것도 내지 않음, 거부 메시지에 지시 없음), `data-plane/codex-runner/runner.test.mjs`(하위 에이전트가 남아도 플랫폼이 턴을 열지 않음), `data-plane/cmd/agent/codex_test.go`·`codex_task_test.go`(관리형 `config.toml`에 `developer_instructions` 없음), `data-plane/cmd/agent/scheduler_test.go`(예약 회차가 등록한 프롬프트 그대로), `data-plane/cmd/agent/codex_plugin_refresh_test.go`(스킬 새로고침 뒤 다음 턴 프롬프트가 사용자의 것 그대로), `data-plane/cmd/agent/prompt_harness_guard_test.go`(플랫폼 소스에 지시 키·시스템 프롬프트 덧붙이기·`CLAUDE.md`·`AGENTS.md`·MCP `instructions`가 없고 claude-code 시스템 프롬프트는 `claude_code` 프리셋 그대로 — `TestNoPromptHarnessInPlatformSources`; 플랫폼 MCP 도구 설명에 지시 문장이 없음 — `TestToolDescriptionsStateFunctionOnly`), `control-plane/test/plugins_orchestrator_test.go`(`plugins`를 주지 않은 `codex-chat`·`codex-task` 세션의 시더가 아무 플러그인도 받지 않음)

@@ -93,7 +93,7 @@ func ledgerToolDefinitions() []map[string]any {
 			props["task"] = map[string]any{"type": "object", "description": "Full replacement: title, status (planned/running/blocked/review/completed/unknown), stage, owner (parent ID), sessions [{id, ownership: owned/reused/unknown, purpose, nextOffset, seq?, end_seq?, cleanup: pending/retained/deleting/deleted, reason?, next_action?}], details object for approval/result/PR/validation/notification/preservation/observations. Max 64KiB. No credentials or transcript.", "required": []string{"title", "status", "stage", "owner", "sessions", "details"}}
 			required = append(required, "task")
 		}
-		out = append(out, map[string]any{"name": name, "description": "Chat-slot task ledger (kept across chat sessions on the same slot); never calls platform session create/delete or sends notifications. put is full replacement with atomic expected_version (0=create); mutation request_id replays the original committed response, changed payload conflicts. list is ID-keyset pagination (next_cursor -> after_id), not a snapshot. Errors carry code invalid_argument/not_found/conflict/storage_error/schema_version. Get before update; preserve unrelated fields.", "inputSchema": map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": false}})
+		out = append(out, map[string]any{"name": name, "description": "Chat-slot task ledger (kept across chat sessions on the same slot); never calls platform session create/delete or sends notifications. put is full replacement with atomic expected_version (0=create); mutation request_id replays the original committed response, changed payload conflicts. list is ID-keyset pagination (next_cursor -> after_id), not a snapshot. Errors carry code invalid_argument/not_found/conflict/storage_error/schema_version.", "inputSchema": map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": false}})
 	}
 	return out
 }
@@ -377,7 +377,7 @@ func (s *sessionDB) callLedger(ctx context.Context, name string, raw json.RawMes
 	if err != nil {
 		var e ledgerError
 		if !errors.As(err, &e) {
-			e = ledgerError{"storage_error", "ledger storage operation failed; reconcile with get or retry identical request"}
+			e = ledgerError{"storage_error", "ledger storage operation failed; whether it committed is unknown"}
 		}
 		return sessionDBToolResult(e, true), nil
 	}

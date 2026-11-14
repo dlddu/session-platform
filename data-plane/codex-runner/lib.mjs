@@ -415,7 +415,6 @@ export class TurnTranslator {
 // left running before it stops them — claude-runner's background wait
 // (AC-J8, AC-E2).
 export const DEFAULT_BACKGROUND_WAIT_MS = 10 * 60 * 1000;
-export const MAX_FOLLOW_UP_TURNS = 5;
 export const MAX_AGENT_MESSAGE_CHARS = 8 * 1024;
 
 export function backgroundWaitFromEnv(env) {
@@ -433,9 +432,9 @@ export function backgroundWaitFromEnv(env) {
 // spawnAgent call or subAgentActivity item that names it, or else from the
 // first event of a thread that is not the main one. An agent is busy from its
 // spawn (before its first turn) until its turn ends; an agent whose turn ends
-// while the main thread has no turn running is unreported until a follow-up
-// turn tells the main thread about it — a turn in progress learns of its
-// agents itself.
+// while the main thread has no turn running is unreported until the runner
+// reports it in the session output — a turn in progress learns of its agents
+// itself.
 export class AgentTracker {
   #agents = new Map();
   #mainBusy = true;
@@ -549,20 +548,24 @@ function clip(text, max) {
   return `${text.slice(0, head)}\n[… ${text.length - max} characters cut …]\n${text.slice(-tail)}`;
 }
 
-export function followUpPrompt(agents, { stoppedAfterMs = null } = {}) {
-  const lines = ["[session-platform] Background agents you started have ended since your last answer:"];
+// endedAgentsReport is the session-output line for sub-agents that ended
+// after the main thread's answer (AC-J8). It goes to the person reading the
+// session, never to the model: the platform opens no turn of its own
+// (2026-11-14), so the model sees these results only if a later prompt asks it
+// to look at them.
+export function endedAgentsReport(agents, { stoppedAfterMs = null } = {}) {
+  const lines = ["Background agents ended after this turn's answer (not passed to the model):"];
   for (const agent of agents) {
     const label = agent.name === agent.id ? agent.id : `${agent.name} (${agent.id})`;
     if (agent.status === "completed") {
-      lines.push(`- ${label}: completed.${agent.message ? ` Its final message:\n${clip(agent.message, MAX_AGENT_MESSAGE_CHARS)}` : ""}`);
+      lines.push(`- ${label}: completed.${agent.message ? ` Final message:\n${clip(agent.message, MAX_AGENT_MESSAGE_CHARS)}` : ""}`);
     } else if (agent.status === "interrupted") {
       const minutes = stoppedAfterMs === null ? null : Math.round(stoppedAfterMs / 60000);
-      lines.push(`- ${label}: stopped by the platform${minutes === null ? "" : ` after waiting ${minutes} minute(s)`}.${agent.message ? ` Its last message:\n${clip(agent.message, MAX_AGENT_MESSAGE_CHARS)}` : ""}`);
+      lines.push(`- ${label}: stopped by the platform${minutes === null ? "" : ` after waiting ${minutes} minute(s)`}.${agent.message ? ` Last message:\n${clip(agent.message, MAX_AGENT_MESSAGE_CHARS)}` : ""}`);
     } else {
       lines.push(`- ${label}: failed${agent.error ? `: ${agent.error}` : "."}`);
     }
   }
-  lines.push("Tell the user what they found. Do not wait for these agents again.");
   return lines.join("\n");
 }
 

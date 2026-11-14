@@ -4,7 +4,6 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import os from "node:os";
 import path from "node:path";
 import {
-  DEFAULT_BACKGROUND_WAIT_MS,
   DEFAULT_QUESTION_WAIT_MS,
   DEFAULT_PERMISSION_MODE,
   HEADLESS_DENIAL,
@@ -13,8 +12,6 @@ import {
   TurnInput,
   UsageError,
   askPerson,
-  backgroundWaitFromEnv,
-  stopNote,
   classify,
   decideTool,
   noticeLine,
@@ -191,6 +188,10 @@ test("decideTool denies everything else with a reason the model can act on", () 
   const foreign = decideTool("mcp__repo-server__exfiltrate", plugins);
   assert.equal(foreign.allow, false);
   assert.match(foreign.message, /not part of this session's tool surface/);
+  // AC-A5: a denial reports what happened; it does not steer the model.
+  for (const message of [foreign.message, HEADLESS_DENIAL]) {
+    assert.doesNotMatch(message, /\b(Use|Decide|decide|instead|continue)\b/, message);
+  }
   // A plugin the session did not choose is not the session's either.
   assert.equal(decideTool("mcp__plugin_other_x__y", plugins).allow, false);
   assert.equal(decideTool("mcp__plugin_session-platformx_k__y", plugins).allow, false);
@@ -323,33 +324,17 @@ test("activity during the quiet spell keeps the input open", () => {
   assert.equal(input.closed, false);
 });
 
-test("background work still running after the wait is stopped, then the input closes", () => {
+test("background work with no end keeps the input open, and the platform writes nothing after the prompt", async () => {
   const clock = fakeClock();
-  const expired = [];
-  const input = new TurnInput({ prompt: "p", waitMs: 1_000, graceMs: 500, ...clock, onExpire: (ids) => expired.push(ids) });
+  const input = new TurnInput({ prompt: "p", ...clock });
+  const { rest } = await firstAndRest(input);
   input.observe(tasks("t1", "t2"));
   input.observe(result);
-  clock.advance(999);
-  assert.deepEqual(expired, []);
-  clock.advance(1);
-  assert.deepEqual(expired, [["t1", "t2"]]);
-  assert.equal(input.closed, false, "the stop gets its grace to reach the model");
-  clock.advance(500);
-  assert.equal(input.closed, true, "the grace bounds the turn even if nothing settles");
-});
-
-test("the wait is measured from the first result that left work running", () => {
-  const clock = fakeClock();
-  const expired = [];
-  const input = new TurnInput({ prompt: "p", waitMs: 1_000, graceMs: 500, ...clock, onExpire: (ids) => expired.push(ids) });
-  input.observe(tasks("t1"));
-  input.observe(result);
-  clock.advance(600);
-  input.observe({ type: "assistant" });
-  input.observe(tasks("t1", "t2"));
-  input.observe(result);
-  clock.advance(400);
-  assert.deepEqual(expired, [["t1", "t2"]], "a later result does not restart the wait");
+  clock.advance(24 * 60 * 60 * 1000);
+  assert.equal(input.closed, false, "only the agent's turn timeout ends a turn whose work keeps running");
+  assert.equal(clock.pending(), 0, "the runner sets no wait of its own");
+  input.close();
+  assert.deepEqual(await rest, { value: undefined, done: true }, "no message follows the prompt");
 });
 
 test("closing early clears every timer and ends the input", async () => {
@@ -358,61 +343,14 @@ test("closing early clears every timer and ends the input", async () => {
   const { rest } = await firstAndRest(input);
   input.observe(tasks("t1"));
   input.observe(result);
-  assert.equal(clock.pending(), 1);
+  input.observe(tasks());
+  assert.equal(clock.pending(), 1, "the quiet spell is the one timer");
   input.close();
   input.close();
   assert.equal(clock.pending(), 0);
   assert.equal((await rest).done, true);
   input.observe(result);
   assert.equal(clock.pending(), 0, "nothing reopens a closed input");
-});
-
-test("the background wait comes from the environment only as a positive integer", () => {
-  assert.equal(backgroundWaitFromEnv({}), DEFAULT_BACKGROUND_WAIT_MS);
-  assert.equal(backgroundWaitFromEnv({ CLAUDE_RUNNER_BACKGROUND_WAIT_MS: "1500" }), 1500);
-  for (const bad of ["", "0", "-5", "1.5", "10m", " 10"]) {
-    assert.equal(backgroundWaitFromEnv({ CLAUDE_RUNNER_BACKGROUND_WAIT_MS: bad }), DEFAULT_BACKGROUND_WAIT_MS, bad);
-  }
-});
-
-test("background work outliving the wait gets the stop note, and the turn settles on its answer", async () => {
-  const clock = fakeClock();
-  const expired = [];
-  const input = new TurnInput({ prompt: "p", waitMs: 60_000, graceMs: 120_000, ...clock, onExpire: (ids) => expired.push(ids) });
-  const it = input.messages();
-  await it.next();
-  const second = it.next();
-  input.observe(tasks("t1", "t2"));
-  input.observe(result);
-  clock.advance(60_000);
-  assert.deepEqual(expired, [["t1", "t2"]]);
-  const note = await second;
-  assert.equal(note.done, false);
-  assert.deepEqual(note.value, {
-    type: "user",
-    message: { role: "user", content: stopNote(["t1", "t2"], 60_000) },
-    parent_tool_use_id: null,
-  });
-  const end = it.next();
-  input.observe({ type: "system", subtype: "init" });
-  input.observe({ type: "assistant" });
-  input.observe(tasks());
-  input.observe({ type: "system", subtype: "task_notification", status: "stopped" });
-  input.observe({ type: "user" });
-  input.observe({ type: "assistant" });
-  input.observe(result);
-  clock.advance(2_000);
-  assert.equal(input.closed, true);
-  assert.equal((await end).done, true);
-});
-
-test("the stop note names the tasks, the wait and the tool", () => {
-  const note = stopNote(["a1", "b2"], 600_000);
-  assert.match(note, /^\[session-platform\] /);
-  assert.match(note, /a1, b2/);
-  assert.match(note, /10 minute/);
-  assert.match(note, /TaskStop/);
-  assert.match(note, /do not start them again/);
 });
 
 // askPerson's agent, in memory: POST /questions/ask opens, GET polls, DELETE
@@ -494,7 +432,7 @@ test("askPerson gives up after the wait and tells the model to decide", async ()
   });
   assert.equal(result.behavior, "deny");
   assert.match(result.message, /Nobody answered within 0\.1 minute/);
-  assert.match(result.message, /Decide on your own/);
+  assert.doesNotMatch(result.message, /Decide|decide|should|must/, "a denial states what happened, nothing more");
   assert.equal(agent.calls.at(-1).method, "DELETE");
   assert.equal(agent.calls.at(-1).url, "http://127.0.0.1:8090/questions/ask/q_1");
 });

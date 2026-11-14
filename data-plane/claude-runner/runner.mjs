@@ -10,8 +10,8 @@
 // message is one line — the same shapes the CLI's stream-json printed — and
 // the runner's own messages are {"type":"session_platform.notice","text":...}
 // lines. The turn's input stays open while background tasks it started are
-// running (TurnInput), so their work finishes inside the turn;
-// CLAUDE_RUNNER_BACKGROUND_WAIT_MS bounds that wait. With --questions-url, an
+// running (TurnInput), so their work finishes inside the turn; only the
+// agent's turn timeout bounds that wait. With --questions-url, an
 // AskUserQuestion waits inside the turn for a person's answer through the
 // agent (askPerson); CLAUDE_RUNNER_QUESTION_WAIT_MS bounds that wait.
 import { spawnSync } from "node:child_process";
@@ -29,7 +29,6 @@ import {
   TurnInput,
   UsageError,
   askPerson,
-  backgroundWaitFromEnv,
   classify,
   decideTool,
   noticeLine,
@@ -177,13 +176,7 @@ async function main(argv) {
   });
 
   let outcome = null;
-  const input = new TurnInput({
-    prompt: args.prompt,
-    waitMs: backgroundWaitFromEnv(process.env),
-    onExpire: (taskIds) => {
-      notice(`background work still running after the turn's wait (${taskIds.join(", ")}); asking the model to stop it`).catch(() => {});
-    },
-  });
+  const input = new TurnInput({ prompt: args.prompt });
   try {
     for await (const message of query({ prompt: input.messages(), options })) {
       await emit(JSON.stringify(message) + "\n");

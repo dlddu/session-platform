@@ -59,15 +59,15 @@ export const PLATFORM_TOOLS = new Set([
 ]);
 
 // Tools that wait for a person. Plan mode has nobody to approve the plan, so
-// it is denied with a message that tells the model to decide for itself.
-// AskUserQuestion is relayed to a person through the agent when the turn has
-// a questions URL (askPerson), and denied the same way when it has none.
+// it is denied. AskUserQuestion is relayed to a person through the agent when
+// the turn has a questions URL (askPerson), and denied the same way when it
+// has none. A denial states what happened and nothing more: the platform does
+// not tell the model how to behave (docs/prd/architecture.md AC-A5).
 export const HEADLESS_TOOLS = new Set(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"]);
 export const QUESTION_TOOL = "AskUserQuestion";
 
 export const HEADLESS_DENIAL =
-  "This session runs headless: nobody can answer a question or approve a plan during the turn. " +
-  "Decide on your own, say which assumption you made, and continue.";
+  "This session runs headless: nobody can answer a question or approve a plan during the turn.";
 
 export class UsageError extends Error {}
 
@@ -261,8 +261,7 @@ export function decideTool(toolName, plugins = [], { k3s = false } = {}) {
   return {
     allow: false,
     message:
-      `${toolName} is not part of this session's tool surface. ` +
-      "Use the built-in coding tools or the session's own plugins instead.",
+      `${toolName} is not part of this session's tool surface.`,
   };
 }
 
@@ -329,84 +328,38 @@ export function classify(message) {
   return {};
 }
 
-// How long a turn waits, after a result that left background tasks running,
-// before it asks the model to stop them; how long it then waits before closing
-// anyway; and the quiet spell that lets a finished task's notification start
+// The quiet spell that lets a finished background task's notification start
 // the model's follow-up before the input closes (AC-E2).
-export const DEFAULT_BACKGROUND_WAIT_MS = 10 * 60 * 1000;
-export const BACKGROUND_STOP_GRACE_MS = 2 * 60 * 1000;
 export const BACKGROUND_QUIET_MS = 2 * 1000;
 
-// backgroundWaitFromEnv reads CLAUDE_RUNNER_BACKGROUND_WAIT_MS, falling back to
-// the default for anything that is not a positive integer.
-export function backgroundWaitFromEnv(env) {
-  const raw = env.CLAUDE_RUNNER_BACKGROUND_WAIT_MS;
-  if (raw && /^[1-9][0-9]*$/.test(raw)) {
-    return Number(raw);
-  }
-  return DEFAULT_BACKGROUND_WAIT_MS;
-}
-
-// stopNote is the platform's message when a turn's background work outlives
-// the wait. The model stops it with TaskStop rather than the runner through the
-// SDK, because only a stop the model makes is recorded in the transcript: one
-// the runner makes leaves no record, and the next resumed turn would again open
-// with a "stopped" notice in front of its prompt.
-export function stopNote(taskIds, waitMs) {
-  const minutes = Math.round((waitMs / 60000) * 10) / 10;
-  return (
-    `[session-platform] Background task(s) ${taskIds.join(", ")} are still running ${minutes} minute(s) ` +
-    "after this turn's answer, which is as long as a turn waits. Stop them now with the TaskStop tool, then " +
-    "say briefly what they were doing and what is left undone; do not start them again in this turn."
-  );
-}
-
-// TurnInput is the input a turn hands the SDK (AC-E2): the prompt, and at most
-// one platform message after it. Closing it ends the CLI process, and a
+// TurnInput is the input a turn hands the SDK (AC-E2): the prompt, and nothing
+// the platform writes after it. Closing it ends the CLI process, and a
 // background task still running then is killed — its work is lost, and the
 // next resumed turn opens with a "stopped, no completion record" notice in the
 // same user message as its prompt, which the model reads as an injected
 // instruction. So the input stays open after a result while tasks the turn
 // started are running: they finish inside the turn, the CLI hands their
-// completion to the model, and the input closes after the follow-up result. If
-// tasks are still running waitMs after the first such result, stopNote goes in
-// (and onExpire is told), and the input closes graceMs later regardless.
+// completion to the model, and the input closes after the follow-up result.
+// There is no wait of its own (2026-11-14): the agent's turn timeout is the
+// only bound, and a turn it cuts short ends as an error.
 export class TurnInput {
   #prompt;
-  #waitMs;
-  #graceMs;
   #quietMs;
   #setTimer;
   #clearTimer;
-  #onExpire;
   #resolveClosed;
   #closed;
   #isClosed = false;
   #settled = false;
   #sawBackground = false;
   #running = new Set();
-  #waitTimer = null;
-  #graceTimer = null;
   #quietTimer = null;
-  #wakeNote = null;
-  #pendingNote = null;
 
-  constructor({
-    prompt,
-    waitMs = DEFAULT_BACKGROUND_WAIT_MS,
-    graceMs = BACKGROUND_STOP_GRACE_MS,
-    quietMs = BACKGROUND_QUIET_MS,
-    setTimer = setTimeout,
-    clearTimer = clearTimeout,
-    onExpire = () => {},
-  }) {
+  constructor({ prompt, quietMs = BACKGROUND_QUIET_MS, setTimer = setTimeout, clearTimer = clearTimeout }) {
     this.#prompt = prompt;
-    this.#waitMs = waitMs;
-    this.#graceMs = graceMs;
     this.#quietMs = quietMs;
     this.#setTimer = setTimer;
     this.#clearTimer = clearTimer;
-    this.#onExpire = onExpire;
     this.#closed = new Promise((resolve) => {
       this.#resolveClosed = resolve;
     });
@@ -418,18 +371,7 @@ export class TurnInput {
 
   async *messages() {
     yield userMessage(this.#prompt);
-    const note =
-      this.#pendingNote ??
-      (await Promise.race([
-        this.#closed.then(() => null),
-        new Promise((resolve) => {
-          this.#wakeNote = resolve;
-        }),
-      ]));
-    if (note !== null && !this.#isClosed) {
-      yield userMessage(note);
-      await this.#closed;
-    }
+    await this.#closed;
   }
 
   // observe feeds every SDK message of the turn, in order.
@@ -457,10 +399,8 @@ export class TurnInput {
       return;
     }
     this.#isClosed = true;
-    for (const timer of [this.#waitTimer, this.#graceTimer, this.#quietTimer]) {
-      if (timer !== null) {
-        this.#clearTimer(timer);
-      }
+    if (this.#quietTimer !== null) {
+      this.#clearTimer(this.#quietTimer);
     }
     this.#resolveClosed();
   }
@@ -470,37 +410,14 @@ export class TurnInput {
       this.#clearTimer(this.#quietTimer);
       this.#quietTimer = null;
     }
-    if (!this.#settled) {
+    if (!this.#settled || this.#running.size > 0) {
       return;
     }
-    if (this.#running.size === 0) {
-      if (!this.#sawBackground) {
-        this.close();
-        return;
-      }
-      this.#quietTimer = this.#setTimer(() => this.close(), this.#quietMs);
+    if (!this.#sawBackground) {
+      this.close();
       return;
     }
-    if (this.#waitTimer === null) {
-      this.#waitTimer = this.#setTimer(() => this.#expire(), this.#waitMs);
-    }
-  }
-
-  #expire() {
-    if (this.#isClosed) {
-      return;
-    }
-    if (this.#running.size > 0) {
-      const taskIds = [...this.#running];
-      this.#onExpire(taskIds);
-      const note = stopNote(taskIds, this.#waitMs);
-      if (this.#wakeNote) {
-        this.#wakeNote(note);
-      } else {
-        this.#pendingNote = note;
-      }
-    }
-    this.#graceTimer = this.#setTimer(() => this.close(), this.#graceMs);
+    this.#quietTimer = this.#setTimer(() => this.close(), this.#quietMs);
   }
 }
 
@@ -525,10 +442,6 @@ export function questionWaitFromEnv(env) {
   return DEFAULT_QUESTION_WAIT_MS;
 }
 
-function decideAlone(why) {
-  return `${why} Decide on your own, say which assumption you made, and continue.`;
-}
-
 function abortableSleep(ms, signal) {
   return new Promise((resolve) => {
     if (signal && signal.aborted) {
@@ -550,8 +463,8 @@ function abortableSleep(ms, signal) {
 // and returns the permission result the SDK expects — allow with the answers
 // added to the tool input, so the tool reports them to the model. A question
 // nobody answers in waitMs, one the agent closes (the session is being
-// frozen), or one the agent cannot take is denied with a message that tells
-// the model to decide for itself.
+// frozen), or one the agent cannot take is denied with a message that says
+// what happened — and, like every denial, tells the model nothing more (AC-A5).
 export async function askPerson({
   url,
   input,
@@ -565,7 +478,7 @@ export async function askPerson({
   const deny = (message) => ({ behavior: "deny", message });
   const questions = input && Array.isArray(input.questions) ? input.questions : null;
   if (!questions) {
-    return deny(decideAlone("The question had no questions to show."));
+    return deny("The question had no questions to show.");
   }
   let id;
   try {
@@ -584,11 +497,11 @@ export async function askPerson({
     });
     if (resp.status !== 201) {
       const detail = (await resp.text()).trim();
-      return deny(decideAlone(`The question could not be shown to a person (${resp.status}: ${detail}).`));
+      return deny(`The question could not be shown to a person (${resp.status}: ${detail}).`);
     }
     ({ id } = await resp.json());
   } catch (err) {
-    return deny(decideAlone(`The question could not be shown to a person (${err && err.message ? err.message : err}).`));
+    return deny(`The question could not be shown to a person (${err && err.message ? err.message : err}).`);
   }
 
   const deadline = now() + waitMs;
@@ -603,7 +516,7 @@ export async function askPerson({
     try {
       const resp = await fetchImpl(`${url}/questions/ask/${encodeURIComponent(id)}`, { signal });
       if (resp.status === 404) {
-        return deny(decideAlone("The question is no longer open."));
+        return deny("The question is no longer open.");
       }
       if (resp.ok) {
         const status = await resp.json();
@@ -611,7 +524,7 @@ export async function askPerson({
           return { behavior: "allow", updatedInput: { ...input, answers: status.answers } };
         }
         if (status.state === "cancelled") {
-          return deny(decideAlone(`The question was closed before anyone answered (${status.reason || "no reason given"}).`));
+          return deny(`The question was closed before anyone answered (${status.reason || "no reason given"}).`);
         }
       }
     } catch {
@@ -620,7 +533,7 @@ export async function askPerson({
     if (now() >= deadline) {
       await giveUp();
       const minutes = Math.round((waitMs / 60000) * 10) / 10;
-      return deny(decideAlone(`Nobody answered within ${minutes} minute(s).`));
+      return deny(`Nobody answered within ${minutes} minute(s).`);
     }
     await sleep(Math.min(pollMs, Math.max(0, deadline - now())), signal);
   }
