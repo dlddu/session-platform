@@ -221,7 +221,7 @@ test("thread file round-trips and tolerates garbage", () => {
   }
 });
 
-test("inspectPromptInput flags shell tools, bundled skills and a missing config", () => {
+test("inspectPromptInput flags shell tools and bundled skills", () => {
   const exec = { type: "function", name: "exec", description: "### `apply_patch`\n### `exec_command`\n" };
   const items = [
     { type: "additional_tools", tools: [{ type: "namespace", name: "functions", tools: [exec, { name: "view_image" }] }] },
@@ -236,7 +236,7 @@ test("inspectPromptInput flags shell tools, bundled skills and a missing config"
   const report = inspectPromptInput(items);
   assert.ok(report.tools.includes("functions.exec>exec_command"));
   assert.deepEqual(report.skills, ["imagegen"]);
-  assert.equal(report.problems.length, 4, report.problems.join("\n"));
+  assert.equal(report.problems.length, 3, report.problems.join("\n"));
 
   const clean = [
     { type: "additional_tools", tools: [{ type: "namespace", name: "functions", tools: [{ ...exec, description: "### `apply_patch`\n" }] }] },
@@ -244,29 +244,27 @@ test("inspectPromptInput flags shell tools, bundled skills and a missing config"
       type: "message",
       role: "developer",
       content: [
-        { type: "input_text", text: "You are a session-platform codex session." },
         { type: "input_text", text: "<skills_instructions>\n- `r0` = `/h/.agents/skills`\n- p--s: Demo. (file: r0/p--s/SKILL.md)\n</skills_instructions>" },
       ],
     },
   ];
   assert.deepEqual(inspectPromptInput(clean).problems, []);
   assert.deepEqual(inspectPromptInput(clean).skills, ["p--s"]);
-  // The chat config fails the task check twice: no shell, wrong marker.
-  assert.equal(inspectPromptInput(clean, "task").problems.length, 2, inspectPromptInput(clean, "task").problems.join("\n"));
+  // The chat config fails the task check: it has no shell.
+  assert.equal(inspectPromptInput(clean, "task").problems.length, 1, inspectPromptInput(clean, "task").problems.join("\n"));
 });
 
-test("inspectPromptInput requires a shell and the task marker in task mode", () => {
+test("inspectPromptInput requires a shell in task mode", () => {
   const exec = { type: "function", name: "exec", description: "### `apply_patch`\n### `exec_command`\n" };
   const task = [
     { type: "additional_tools", tools: [{ type: "namespace", name: "functions", tools: [exec] }] },
-    { type: "message", role: "developer", content: [{ type: "input_text", text: "You are a session-platform codex task session." }] },
   ];
   assert.deepEqual(inspectPromptInput(task, "task").problems, []);
   const leaky = structuredClone(task);
   leaky[0].tools[0].tools.push({ name: "view_image" }, { name: "web_search" });
   assert.equal(inspectPromptInput(leaky, "task").problems.length, 2);
-  // A task config must never pass the chat check.
-  assert.ok(inspectPromptInput(task).problems.length >= 2);
+  // A task config must never pass the chat check: its shell is model-visible.
+  assert.ok(inspectPromptInput(task).problems.length >= 1);
 });
 
 // The end-to-end cases drive runner.mjs against a fake codex: a node script

@@ -512,8 +512,9 @@ paths:
       description: >
         Codex sessions only. The session's K3s MCP sidecar clones the plugin
         marketplace again and the agent makes the session's platform-managed
-        skills match it; the conversation and thread are untouched, and the
-        next resumed turn opens with a note naming what changed. It runs only
+        skills match it; the conversation and thread are untouched, and
+        nothing is written into the conversation — the next turn's prompt is
+        the user's own, and the refresh leaves one transcript line. It runs only
         between turns. Like a write, it brings an idle session active and
         restores a snapshotted one first (which by itself already starts from
         the current marketplace). A refresh that cannot reach the marketplace

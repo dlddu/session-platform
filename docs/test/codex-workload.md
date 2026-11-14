@@ -61,11 +61,11 @@
 - **기대 결과**: (a) Actions 패널에 `Refresh plugin skills` 버튼이 있다(`shell`·다른 에이전트 세션에는 없다). (b) 세션이 `active`로 남고 결과가 알림으로 보이며, 세션 출력에 새로고침 안내 한 줄이 남는다 — 마켓플레이스가 없는 SUT에서는 "새로 받을 마켓플레이스가 없다"는 결과다. (c) 422로 거절된다
 - **검증 AC**: AC-J7
 
-> 실 마켓플레이스의 추가·수정·삭제가 같은 세션에 반영되고 다음 재개 턴이 안내를 받는 것은 data plane 단위 테스트
+> 실 마켓플레이스의 추가·수정·삭제가 같은 세션에 반영되고 다음 턴의 프롬프트에 플랫폼 문구가 붙지 않는 것은 data plane 단위 테스트
 > (`codex_plugin_refresh_test.go`·`minimax_marketplace_test.go`)와 운영 프리뷰 확인이 맡는다 — kind SUT 에는 마켓플레이스 토큰이 없다.
 >
 > 턴 안 새로고침(`refresh_skills`, 2026-11-08)도 같은 이유로 단위 테스트가 맡는다 — `TestCodexPluginRefreshInTurn`(턴당 한 번·턴 밖 409·
-> 안내 줄이 `end` 표식 뒤·성공 턴은 기록을 지우고 실패 턴은 남김)·`TestFromLoopback`(파드 IP 403)·`TestCodexSkillsMCPRefreshSkills`
+> 안내 줄이 `end` 표식 뒤·성공·실패와 무관하게 다음 턴 프롬프트는 사용자의 것 그대로)·`TestFromLoopback`(파드 IP 403)·`TestCodexSkillsMCPRefreshSkills`
 > (에이전트 URL이 있을 때만 도구가 보이고 결과·거절을 도구 결과로 돌려줌)·`TestRenderCodexConfig`/`TestCodexEnsureHome`(마켓플레이스가
 > 있을 때만 스킬 MCP env에 에이전트 URL·도구 시간 상한). 실 ChatGPT 턴이 필요해 e2e 로 돌리지 않는다.
 

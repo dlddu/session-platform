@@ -160,13 +160,7 @@ func (c codexCLI) ensureHome(homeDir string, _ toolSurface) error {
 	sidecar := c.sidecar()
 	skillsDir := codexSkillsDir(homeDir)
 	skills := codexSkillsFromSeed(sidecar.plugins, c.log())
-	changes, err := syncCodexSkills(skillsDir, skills, c.log())
-	if err != nil {
-		return err
-	}
-	// A restore into a pod whose marketplace moved changes skills under a
-	// conversation that already read them; the next turn is told (AC-J7).
-	if err := recordCodexSkillChanges(homeDir, sidecar.revision, changes); err != nil {
+	if _, err := syncCodexSkills(skillsDir, skills, c.log()); err != nil {
 		return err
 	}
 	cfg := codexConfig{
