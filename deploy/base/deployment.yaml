@@ -38,7 +38,7 @@ spec:
       containers:
         - name: control-plane
           # ⚙️ CI가 관리하는 줄입니다(image.yml 의 `pin` job).
-          image: ghcr.io/dlddu/session-platform:cc4615f73c4db0df6151680d65ee6390a0e5ee52
+          image: ghcr.io/dlddu/session-platform:1629098d2f438062145521109b141ae5e191e92a
           ports:
             - containerPort: 8080
           env:
@@ -49,7 +49,7 @@ spec:
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다(env value 라 kustomize 의
             # images 변환이 닿지 않는 자리다).
             - name: DATA_PLANE_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:cc4615f73c4db0df6151680d65ee6390a0e5ee52"
+              value: "ghcr.io/dlddu/session-platform-data-plane:1629098d2f438062145521109b141ae5e191e92a"
             # Shell data-transfer gate. When enabled, a shell session's home
             # directory and scrollback are archived to the S3 destination below
             # on snapshot; off, a shell refuses to freeze and keeps its pod.
@@ -60,7 +60,7 @@ spec:
               value: "true"
             # ⚙️ 아래 value 도 CI의 `pin` job 이 관리한다.
             - name: DATA_PLANE_CLAUDE_CODE_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:cc4615f73c4db0df6151680d65ee6390a0e5ee52"
+              value: "ghcr.io/dlddu/session-platform-data-plane:1629098d2f438062145521109b141ae5e191e92a"
             # This Secret holds credentials only: the required auth-token,
             # referenced only by the localhost credential-proxy sidecar, and the
             # optional k3s-mcp-token, referenced only by the loopback
@@ -138,7 +138,7 @@ spec:
             # 이미지는 같은 멀티 워크로드 data plane 이미지다(DATA_PLANE_WORKLOAD 로 분기).
             # 문자열이 위 이미지와 같아서 CI `pin` job 의 sed 가 이 자리도 함께 SHA 로 고정한다.
             - name: DATA_PLANE_MINIMAX_CODE_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:cc4615f73c4db0df6151680d65ee6390a0e5ee52"
+              value: "ghcr.io/dlddu/session-platform-data-plane:1629098d2f438062145521109b141ae5e191e92a"
             # 이 Secret 은 자격 증명만 담는다 — 필수 auth-token(헬퍼 파드 credential-proxy)과
             # 선택 k3s-mcp-token(헬퍼 파드 k3s-mcp-proxy). 필수 base-url·선택 ca-cert(credential-proxy)
             # 와 선택 model(platform-default 세션의 주 컨테이너)은 ConfigMap `minimax-code-config`
@@ -178,7 +178,7 @@ spec:
             # 이 다섯 항목도 env 목록 맨 끝에 둔다 — deploy/overlays/e2e/ 오버레이가 env/19(이미지)를 인덱스로 잡는다.
             # 이미지 문자열이 위와 같아서 CI `pin` job 의 sed 가 이 자리도 함께 SHA 로 고정한다.
             - name: DATA_PLANE_CODEX_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:cc4615f73c4db0df6151680d65ee6390a0e5ee52"
+              value: "ghcr.io/dlddu/session-platform-data-plane:1629098d2f438062145521109b141ae5e191e92a"
             # codex 세션은 ChatGPT 로그인을 세션마다 스스로 한다(AC-J3) — 공급자 Secret 이 없다.
             # Secret `codex-credentials` 는 선택 k3s-mcp-token 하나만, ConfigMap `codex-config` 는
             # 선택 model·models·k3s-mcp-url·plugin-marketplace-url 만 담는다. 둘 다 없어도 세션은
@@ -214,7 +214,7 @@ spec:
             # env 목록 맨 끝에 둔다 — deploy/overlays/e2e/ 오버레이가 env/24(이미지)·env/29(인증 모드)를 인덱스로 잡는다.
             # 이미지 문자열이 위와 같아서 CI `pin` job 의 sed 가 이 자리도 함께 SHA 로 고정한다.
             - name: DATA_PLANE_CODEX_TASK_IMAGE
-              value: "ghcr.io/dlddu/session-platform-data-plane:cc4615f73c4db0df6151680d65ee6390a0e5ee52"
+              value: "ghcr.io/dlddu/session-platform-data-plane:1629098d2f438062145521109b141ae5e191e92a"
             # codex-task 의 모델 카탈로그(AC-M4). Secret `codex-task-credentials` 는 선택 k3s-mcp-token
             # 하나만, ConfigMap `codex-task-config` 는 선택 model·models·k3s-mcp-url·plugin-marketplace-url
             # 만 담는다. 이름은 codex-chat 의 것과 겹치면 안 된다(AC-M1). deploy/base/codex-task-*.example.yaml 참고.
