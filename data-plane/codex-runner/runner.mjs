@@ -23,7 +23,6 @@ import {
   EXIT_OK,
   EXIT_TURN_FAILED,
   EXIT_USAGE,
-  MAX_FOLLOW_UP_TURNS,
   THREAD_FILE,
   TurnTranslator,
   UsageError,
@@ -31,11 +30,11 @@ import {
   backgroundWaitFromEnv,
   cleanLoginLine,
   codexHomeFor,
+  endedAgentsReport,
   minimalEnv,
   noticeLine,
   parseArgs,
   parseThreadFile,
-  followUpPrompt,
   forbiddenAction,
   resolveCodexBin,
   serverRequestResponse,
@@ -248,8 +247,8 @@ class AppServer {
 }
 
 // Session drives one invocation: the main thread's turn, then, while
-// sub-agents it started are still running, a wait and a follow-up turn that
-// hands their results to the main thread (AC-J8).
+// sub-agents it started are still running, a wait whose outcome goes to the
+// session output only (AC-J8).
 class Session {
   #server;
   #mode;
@@ -376,35 +375,30 @@ class Session {
     }
   }
 
+  // run is one turn: the prompt and nothing the platform writes after it.
+  // Sub-agents the main thread left running get waitMs to finish so their
+  // work is not cut short; then they are stopped, and what they ended with
+  // goes to the session output only (AC-J8, 2026-11-14).
   async run(prompt, waitMs) {
-    let outcome = await this.#turn(prompt);
-    let followUps = 0;
-    while (outcome === "completed" && this.#agents.busy().length > 0) {
-      if (followUps === MAX_FOLLOW_UP_TURNS) {
-        const left = this.#agents.busy();
-        await notice(`Stopping ${left.length} background agent(s) after ${MAX_FOLLOW_UP_TURNS} follow-up turns: ${left.map((a) => a.name).join(", ")}.`);
-        await this.#stopAgents(left);
-        break;
-      }
-      const busy = this.#agents.busy();
-      await notice(`Waiting for ${busy.length} background agent(s) before this turn ends: ${busy.map((a) => a.name).join(", ")}.`);
-      let stoppedAfterMs = null;
-      if (!(await this.#waitForAgents(waitMs))) {
-        const left = this.#agents.busy();
-        await notice(`Background agent(s) still running after ${Math.round(waitMs / 60000)} minute(s), which is as long as a turn waits; stopping ${left.map((a) => a.name).join(", ")}.`);
-        await this.#stopAgents(left);
-        stoppedAfterMs = waitMs;
-      }
-      if (this.#killed) {
-        break;
-      }
-      const ended = this.#agents.takeUnreported();
-      if (ended.length === 0) {
-        break;
-      }
-      followUps++;
-      await notice("Background agents ended; the main agent continues with their results.");
-      outcome = await this.#turn(followUpPrompt(ended, { stoppedAfterMs }));
+    const outcome = await this.#turn(prompt);
+    if (outcome !== "completed" || this.#agents.busy().length === 0) {
+      return outcome;
+    }
+    const busy = this.#agents.busy();
+    await notice(`Waiting for ${busy.length} background agent(s) before this turn ends: ${busy.map((a) => a.name).join(", ")}.`);
+    let stoppedAfterMs = null;
+    if (!(await this.#waitForAgents(waitMs))) {
+      const left = this.#agents.busy();
+      await notice(`Background agent(s) still running after ${Math.round(waitMs / 60000)} minute(s), which is as long as a turn waits; stopping ${left.map((a) => a.name).join(", ")}.`);
+      await this.#stopAgents(left);
+      stoppedAfterMs = waitMs;
+    }
+    if (this.#killed) {
+      return outcome;
+    }
+    const ended = this.#agents.takeUnreported();
+    if (ended.length > 0) {
+      await notice(endedAgentsReport(ended, { stoppedAfterMs }));
     }
     return outcome;
   }

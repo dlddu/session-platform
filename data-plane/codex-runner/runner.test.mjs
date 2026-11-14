@@ -20,7 +20,7 @@ import {
   backgroundWaitFromEnv,
   cleanLoginLine,
   execItem,
-  followUpPrompt,
+  endedAgentsReport,
   forbiddenAction,
   minimalEnv,
   parseArgs,
@@ -176,19 +176,20 @@ test("AgentTracker learns agents from spawns, activity items and unknown threads
   assert.deepEqual(agents.observe("configWarning", { summary: "x" }), []);
 });
 
-test("followUpPrompt hands each ended agent's result to the main thread", () => {
-  const text = followUpPrompt([
+test("endedAgentsReport tells the person what each ended agent finished with", () => {
+  const text = endedAgentsReport([
     { id: "a", name: "Ada", status: "completed", message: "found it" },
     { id: "b", name: "b", status: "interrupted", message: null },
     { id: "c", name: "Cy", status: "failed", error: "boom" },
   ], { stoppedAfterMs: 600000 });
-  assert.match(text, /^\[session-platform\]/);
-  assert.match(text, /Ada \(a\): completed\. Its final message:\nfound it/);
+  assert.doesNotMatch(text, /session-platform\]/);
+  assert.match(text, /not passed to the model/);
+  assert.match(text, /Ada \(a\): completed\. Final message:\nfound it/);
   assert.match(text, /- b: stopped by the platform after waiting 10 minute\(s\)\./);
   assert.match(text, /Cy \(c\): failed: boom/);
-  const long = followUpPrompt([{ id: "a", name: "a", status: "completed", message: `${"x".repeat(9000)}\nTHE-END` }]);
+  const long = endedAgentsReport([{ id: "a", name: "a", status: "completed", message: `${"x".repeat(9000)}\nTHE-END` }]);
   assert.match(long, /\[… 816 characters cut …\]/);
-  assert.match(long, /THE-END\n/, "the end of a long message survives");
+  assert.match(long, /THE-END$/, "the end of a long message survives");
 });
 
 test("serverRequestResponse cancels elicitations and refuses the rest, as exec did", () => {
@@ -491,7 +492,7 @@ test("runner reports a failed turn and a failed sign-in", () => {
   });
 });
 
-test("runner waits for sub-agents the turn left running and hands their results to a follow-up turn", () => {
+test("runner waits for sub-agents the turn left running and reports them without a turn of its own", () => {
   withHome((home) => {
     signedIn(home);
     const result = runRunner(home, ["--", "research"], {
@@ -510,7 +511,6 @@ test("runner waits for sub-agents the turn left running and hands their results 
           done("child", "tc"),
           item("th-1", "t1", { id: "act-done", type: "subAgentActivity", kind: "completed", agentThreadId: "child", agentPath: "/root/Ada" }),
         ] },
-        { id: "t2", steps: [started("th-1", "t2"), item("th-1", "t2", message("m2", "Ada found: findings")), done("th-1", "t2")] },
       ],
     });
     assert.equal(result.status, EXIT_OK, result.stderr);
@@ -520,8 +520,6 @@ test("runner waits for sub-agents the turn left running and hands their results 
       "notice:Waiting for 1 background agent(s) before this turn ends: Ada.",
       "notice:· Ada: k3s.ping",
       "notice:Background agent Ada finished.",
-      "notice:Background agents ended; the main agent continues with their results.",
-      "item.completed:Ada found: findings",
     ];
     let at = -1;
     for (const want of order) {
@@ -529,29 +527,27 @@ test("runner waits for sub-agents the turn left running and hands their results 
       assert.ok(next > at, `${want} after position ${at} in:\n${texts.join("\n")}`);
       at = next;
     }
+    assert.ok(texts.slice(at).some((t) => /^notice:Background agents ended after this turn's answer \(not passed to the model\):\n- Ada \(child\): completed\. Final message:\nAda's findings/.test(t)), texts.join("\n"));
     assert.ok(!texts.includes("item.completed:Ada's findings"), "a sub-agent's messages are not the main thread's");
-    const followUp = turnStarts(result.requests)[1].params;
-    assert.equal(followUp.threadId, "th-1");
-    assert.match(followUp.input[0].text, /Ada \(child\): completed\. Its final message:\nAda's findings/);
+    assert.equal(turnStarts(result.requests).length, 1, "the platform opens no turn of its own");
   });
 });
 
-test("runner stops sub-agents that outlast the wait and still lets the main thread answer", () => {
+test("runner stops sub-agents that outlast the wait and reports them in the output", () => {
   withHome((home) => {
     signedIn(home);
     const result = runRunner(home, ["--", "research"], {
       threadId: "th-1",
       turns: [
         { id: "t1", steps: [spawned("slow-agent"), started("slow-agent", "ts"), done("th-1", "t1")] },
-        { id: "t2", steps: [item("th-1", "t2", message("m2", "slow was stopped")), done("th-1", "t2")] },
       ],
       interrupts: { "slow-agent": [done("slow-agent", "ts", "interrupted")] },
     }, { CODEX_RUNNER_BACKGROUND_WAIT_MS: "200" });
     assert.equal(result.status, EXIT_OK, result.stderr);
     assert.ok(result.requests.some((r) => r.method === "turn/interrupt" && r.params.threadId === "slow-agent" && r.params.turnId === "ts"));
     assert.ok(notices(result.lines).some((t) => /still running after .* stopping ow-agent/.test(t)), notices(result.lines).join("\n"));
-    assert.match(turnStarts(result.requests)[1].params.input[0].text, /- ow-agent \(slow-agent\): stopped by the platform after waiting 0 minute\(s\)\./);
-    assert.ok(result.lines.some((l) => l.item && l.item.text === "slow was stopped"));
+    assert.ok(notices(result.lines).some((t) => /- ow-agent \(slow-agent\): stopped by the platform after waiting 0 minute\(s\)\./.test(t)), notices(result.lines).join("\n"));
+    assert.equal(turnStarts(result.requests).length, 1, "the platform opens no turn of its own");
   });
 });
 
