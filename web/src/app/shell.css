@@ -865,6 +865,111 @@ article.card {
   font-size: 11px;
   line-height: 1.5;
 }
+/* AC-E2 — a claude-code turn's AskUserQuestion, answered while the turn waits */
+.question-card {
+  border-top: 1px solid var(--line);
+  background: var(--ink-2);
+  padding: 12px 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.question-head .eyebrow {
+  color: var(--frozen);
+}
+.question {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.question legend {
+  padding: 0;
+  margin-bottom: 8px;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.question-tag {
+  display: inline-block;
+  margin-right: 8px;
+  border-radius: 6px;
+  background: var(--frozen-soft);
+  color: var(--frozen);
+  padding: 1px 7px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10.5px;
+  font-weight: 500;
+  vertical-align: 1px;
+}
+.question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.question-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 10px;
+  align-items: baseline;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: border-color 0.18s var(--ease);
+}
+.question-option:hover {
+  border-color: var(--line-2);
+}
+.question-option.chosen {
+  border-color: var(--frozen);
+  background: var(--frozen-soft);
+}
+.question-option input {
+  accent-color: var(--frozen);
+  margin: 0;
+}
+.question-label {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 13px;
+}
+.question-desc {
+  grid-column: 2;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.question-other {
+  width: 100%;
+  margin-top: 6px;
+  height: 34px;
+  border-radius: var(--r-sm);
+  background: var(--ink);
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 0 12px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12.5px;
+}
+.question-other::placeholder {
+  color: var(--text-faint);
+}
+.question-other:focus {
+  outline: none;
+  border-color: var(--frozen);
+}
+.question-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.question-error {
+  color: var(--danger);
+  font-size: 12px;
+  margin-right: auto;
+}
 .ws-body {
   display: grid;
   grid-template-columns: 1fr 320px;

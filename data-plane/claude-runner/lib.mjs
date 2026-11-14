@@ -58,9 +58,12 @@ export const PLATFORM_TOOLS = new Set([
   "WebSearch",
 ]);
 
-// Tools that wait for a person. A one-shot turn has nobody to answer, so they
-// are denied with a message that tells the model to decide for itself.
+// Tools that wait for a person. Plan mode has nobody to approve the plan, so
+// it is denied with a message that tells the model to decide for itself.
+// AskUserQuestion is relayed to a person through the agent when the turn has
+// a questions URL (askPerson), and denied the same way when it has none.
 export const HEADLESS_TOOLS = new Set(["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"]);
+export const QUESTION_TOOL = "AskUserQuestion";
 
 export const HEADLESS_DENIAL =
   "This session runs headless: nobody can answer a question or approve a plan during the turn. " +
@@ -70,13 +73,14 @@ export class UsageError extends Error {}
 
 // parseArgs reads the agent's argv:
 // [--model <m>] [--effort <e>] [--permission-mode <p>] [--k3s-mcp-url <u>]
-// [--resume] -- <prompt>.
+// [--questions-url <u>] [--resume] -- <prompt>.
 // The prompt is the one argument after "--", so nothing in it is a flag.
 export function parseArgs(argv) {
   let model = PLATFORM_DEFAULT_MODEL;
   let effort = null;
   let permissionMode = DEFAULT_PERMISSION_MODE;
   let k3sMcpUrl = null;
+  let questionsUrl = null;
   let resume = false;
   let checkCli = false;
   const value = (i, flag) => {
@@ -92,7 +96,7 @@ export function parseArgs(argv) {
       if (rest.length !== 1) {
         throw new UsageError("expected exactly one prompt argument after --");
       }
-      return { model, effort, permissionMode, k3sMcpUrl, resume, prompt: rest[0], checkCli };
+      return { model, effort, permissionMode, k3sMcpUrl, questionsUrl, resume, prompt: rest[0], checkCli };
     }
     if (arg === "--model") {
       model = value(i++, "--model");
@@ -107,7 +111,9 @@ export function parseArgs(argv) {
         throw new UsageError(`unknown permission mode ${JSON.stringify(permissionMode)}`);
       }
     } else if (arg === "--k3s-mcp-url") {
-      k3sMcpUrl = loopbackHttpUrl(value(i++, "--k3s-mcp-url"));
+      k3sMcpUrl = loopbackHttpUrl(value(i++, "--k3s-mcp-url"), "--k3s-mcp-url");
+    } else if (arg === "--questions-url") {
+      questionsUrl = loopbackHttpUrl(value(i++, "--questions-url"), "--questions-url").replace(/\/+$/, "");
     } else if (arg === "--resume") {
       resume = true;
     } else if (arg === "--check-cli") {
@@ -117,22 +123,23 @@ export function parseArgs(argv) {
     }
   }
   if (checkCli) {
-    return { model, effort, permissionMode, k3sMcpUrl, resume, prompt: null, checkCli };
+    return { model, effort, permissionMode, k3sMcpUrl, questionsUrl, resume, prompt: null, checkCli };
   }
   throw new UsageError("missing -- <prompt>");
 }
 
-// loopbackHttpUrl accepts the K3s MCP proxy sidecar's address only: the agent
-// never points a turn's K3s MCP anywhere but this pod's own sidecar (AC-E6).
-function loopbackHttpUrl(raw) {
+// loopbackHttpUrl accepts an address inside the pod only: the agent never
+// points a turn's K3s MCP anywhere but this pod's own sidecar (AC-E6), nor its
+// questions anywhere but itself (AC-E2).
+function loopbackHttpUrl(raw, flag) {
   let parsed;
   try {
     parsed = new URL(raw);
   } catch {
-    throw new UsageError(`--k3s-mcp-url is not a URL: ${JSON.stringify(raw)}`);
+    throw new UsageError(`${flag} is not a URL: ${JSON.stringify(raw)}`);
   }
   if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1" || parsed.username || parsed.password) {
-    throw new UsageError(`--k3s-mcp-url must be the loopback sidecar, got ${JSON.stringify(raw)}`);
+    throw new UsageError(`${flag} must be a loopback address, got ${JSON.stringify(raw)}`);
   }
   return raw;
 }
@@ -499,4 +506,124 @@ export class TurnInput {
 
 function userMessage(text) {
   return { type: "user", message: { role: "user", content: text }, parent_tool_use_id: null };
+}
+
+// How long a turn waits for a person to answer an AskUserQuestion (AC-E2),
+// and how often it asks the agent. The wait stays under the agent's default
+// 30-minute turn limit so an unanswered question still leaves the model time
+// to go on.
+export const DEFAULT_QUESTION_WAIT_MS = 20 * 60 * 1000;
+export const QUESTION_POLL_MS = 1000;
+
+// questionWaitFromEnv reads CLAUDE_RUNNER_QUESTION_WAIT_MS, falling back to the
+// default for anything that is not a positive integer.
+export function questionWaitFromEnv(env) {
+  const raw = env.CLAUDE_RUNNER_QUESTION_WAIT_MS;
+  if (raw && /^[1-9][0-9]*$/.test(raw)) {
+    return Number(raw);
+  }
+  return DEFAULT_QUESTION_WAIT_MS;
+}
+
+function decideAlone(why) {
+  return `${why} Decide on your own, say which assumption you made, and continue.`;
+}
+
+function abortableSleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal && signal.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener("abort", done);
+      resolve();
+    }
+    if (signal) signal.addEventListener("abort", done, { once: true });
+  });
+}
+
+// askPerson relays one AskUserQuestion call to a person through the agent
+// (AC-E2): it posts the questions, polls until the agent reports an answer,
+// and returns the permission result the SDK expects — allow with the answers
+// added to the tool input, so the tool reports them to the model. A question
+// nobody answers in waitMs, one the agent closes (the session is being
+// frozen), or one the agent cannot take is denied with a message that tells
+// the model to decide for itself.
+export async function askPerson({
+  url,
+  input,
+  signal = null,
+  waitMs = DEFAULT_QUESTION_WAIT_MS,
+  pollMs = QUESTION_POLL_MS,
+  fetchImpl = fetch,
+  sleep = abortableSleep,
+  now = Date.now,
+}) {
+  const deny = (message) => ({ behavior: "deny", message });
+  const questions = input && Array.isArray(input.questions) ? input.questions : null;
+  if (!questions) {
+    return deny(decideAlone("The question had no questions to show."));
+  }
+  let id;
+  try {
+    const resp = await fetchImpl(`${url}/questions/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        questions: questions.map((q) => ({
+          question: q.question,
+          header: q.header || "",
+          multiSelect: Boolean(q.multiSelect),
+          options: (q.options || []).map((o) => ({ label: o.label, description: o.description || "" })),
+        })),
+      }),
+      signal,
+    });
+    if (resp.status !== 201) {
+      const detail = (await resp.text()).trim();
+      return deny(decideAlone(`The question could not be shown to a person (${resp.status}: ${detail}).`));
+    }
+    ({ id } = await resp.json());
+  } catch (err) {
+    return deny(decideAlone(`The question could not be shown to a person (${err && err.message ? err.message : err}).`));
+  }
+
+  const deadline = now() + waitMs;
+  const giveUp = async () => {
+    try {
+      await fetchImpl(`${url}/questions/ask/${encodeURIComponent(id)}`, { method: "DELETE" });
+    } catch {
+      // The turn ends soon and the agent drops the question with it.
+    }
+  };
+  while (!(signal && signal.aborted)) {
+    try {
+      const resp = await fetchImpl(`${url}/questions/ask/${encodeURIComponent(id)}`, { signal });
+      if (resp.status === 404) {
+        return deny(decideAlone("The question is no longer open."));
+      }
+      if (resp.ok) {
+        const status = await resp.json();
+        if (status.state === "answered" && status.answers && typeof status.answers === "object") {
+          return { behavior: "allow", updatedInput: { ...input, answers: status.answers } };
+        }
+        if (status.state === "cancelled") {
+          return deny(decideAlone(`The question was closed before anyone answered (${status.reason || "no reason given"}).`));
+        }
+      }
+    } catch {
+      // A missed poll is retried; the deadline still bounds the wait.
+    }
+    if (now() >= deadline) {
+      await giveUp();
+      const minutes = Math.round((waitMs / 60000) * 10) / 10;
+      return deny(decideAlone(`Nobody answered within ${minutes} minute(s).`));
+    }
+    await sleep(Math.min(pollMs, Math.max(0, deadline - now())), signal);
+  }
+  await giveUp();
+  return deny("The turn was interrupted while waiting for an answer.");
 }

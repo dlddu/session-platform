@@ -4,6 +4,7 @@ import type {
   AllowlistEntry,
   CreateSessionRequest,
   PlatformConfig,
+  PendingQuestion,
   PluginRefreshResult,
   ReadResult,
   RepoAccessState,
@@ -134,6 +135,19 @@ export const api = {
   refreshPlugins: (id: string) =>
     req<PluginRefreshResult>(`/sessions/${id}/plugins/refresh`, { method: "POST" }).then(
       withSession,
+    ),
+
+  /** AC-E2 — claude-code only: what the running turn asked a person. */
+  listQuestions: (id: string) =>
+    req<{ questions: PendingQuestion[] }>(`/sessions/${id}/questions`, {
+      cache: "no-store",
+    }).then((r) => r.questions ?? []),
+
+  /** AC-E2 — one answer per question, keyed by the question's text. */
+  answerQuestion: (id: string, questionId: string, answers: Record<string, string>) =>
+    req<{ status: string }>(
+      `/sessions/${id}/questions/${encodeURIComponent(questionId)}/answer`,
+      { method: "POST", body: JSON.stringify({ answers }) },
     ),
 
   getRepoAccess: () =>

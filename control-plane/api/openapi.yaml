@@ -566,6 +566,104 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "503": { $ref: "#/components/responses/AuthPoolExhausted" }
+  /sessions/{id}/questions:
+    get:
+      summary: Questions a claude-code session's running turn waits on (AC-E2)
+      operationId: listSessionQuestions
+      description: >
+        claude-code sessions only. When the model calls AskUserQuestion, the
+        turn keeps running and waits for a person's answer; each such call is
+        listed here until it is answered, the runner stops waiting for it, a
+        checkpoint closes it, or its turn ends. Passive like the stream: it
+        does not restore a snapshotted session or count as an access, and a
+        session without a live pod lists nothing.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: The waiting questions, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [questions]
+                properties:
+                  questions:
+                    type: array
+                    items: { $ref: "#/components/schemas/PendingQuestion" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Not found, or another tenant's session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: The session is not claude-code
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /sessions/{id}/questions/{questionId}/answer:
+    post:
+      summary: Answer a question the running turn waits on (AC-E2)
+      operationId: answerSessionQuestion
+      description: >
+        Answers every question of one AskUserQuestion call at once: one
+        non-empty answer per question, keyed by the question's text. A
+        multi-select answer is the chosen labels joined by ", "; an answer
+        outside the offered labels is the person's own words. The turn goes on
+        with the answers as the tool's result. Answering counts as an access.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - name: questionId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [answers]
+              properties:
+                answers:
+                  type: object
+                  additionalProperties: { type: string, minLength: 1, maxLength: 4000 }
+      responses:
+        "200":
+          description: The answer reached the turn
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [answered] }
+        "400":
+          description: Malformed body, or the answers do not match the questions one to one
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Not found, another tenant's session, or the question is no longer waiting
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "422":
+          description: The session is not claude-code
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /repo-access:
     get:
       summary: Allow list and pending requests (AC-H1/AC-H4)
@@ -1217,6 +1315,33 @@ components:
         removed:
           type: array
           items: { type: string }
+    PendingQuestion:
+      type: object
+      required: [id, questions, askedAt]
+      properties:
+        id: { type: string, description: "`q_` and 16 hex digits" }
+        askedAt: { type: string, format: date-time }
+        questions:
+          type: array
+          minItems: 1
+          maxItems: 4
+          items:
+            type: object
+            required: [question, header, options, multiSelect]
+            properties:
+              question: { type: string }
+              header: { type: string, description: Short label; may be empty }
+              multiSelect: { type: boolean }
+              options:
+                type: array
+                minItems: 2
+                maxItems: 4
+                items:
+                  type: object
+                  required: [label, description]
+                  properties:
+                    label: { type: string }
+                    description: { type: string }
     Error:
       type: object
       properties:

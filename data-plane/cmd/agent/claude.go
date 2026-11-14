@@ -220,6 +220,9 @@ type claudeWorkload struct {
 
 	// approvals is what AC-F3's idle exception is decided from.
 	approvals approvalWaits
+	// questions are the running turn's AskUserQuestion calls waiting on a
+	// person (AC-E2).
+	questions questionDesk
 
 	mu                      sync.Mutex
 	cond                    *sync.Cond
@@ -524,6 +527,7 @@ func (c *claudeWorkload) runWorker() {
 		err = errors.Join(err, stderr.Close())
 		err = errors.Join(err, output.Close())
 		c.endTurn(seq, claudeTurnStatus(err, timedOut))
+		c.dropTurnQuestions(seq)
 		c.mu.Lock()
 		refreshNotice := c.turnRefreshNotice
 		c.turnRefreshNotice = ""
@@ -745,7 +749,10 @@ func (c *claudeWorkload) argv(prompt string, resume bool, permissionMode string)
 // run; the runner then resumes the session id it recorded. Partial messages and
 // the system prompt are the runner's, not flags here, so no argv can change
 // them, and the runner itself refuses a mode outside its allowlist.
-func claudeRunnerArgv(binary, model, effort, permissionMode, k3sMCPURL, prompt string, resume bool) []string {
+//
+// questionsURL is this agent on loopback; with it the runner relays the
+// model's AskUserQuestion to a person instead of denying it.
+func claudeRunnerArgv(binary, model, effort, permissionMode, k3sMCPURL, questionsURL, prompt string, resume bool) []string {
 	argv := []string{binary}
 	if model != "" && model != platformDefaultModel {
 		argv = append(argv, "--model", model)
@@ -758,6 +765,9 @@ func claudeRunnerArgv(binary, model, effort, permissionMode, k3sMCPURL, prompt s
 	}
 	if k3sMCPURL != "" {
 		argv = append(argv, "--k3s-mcp-url", k3sMCPURL)
+	}
+	if questionsURL != "" {
+		argv = append(argv, "--questions-url", questionsURL)
 	}
 	if resume {
 		argv = append(argv, "--resume")
@@ -795,6 +805,9 @@ func (c *claudeWorkload) beginCheckpoint(ctx context.Context, requestedID string
 	c.checkpointing = true
 	c.checkpointReady = false
 	c.checkpointID = checkpointID
+	// A turn waiting on a person would hold the checkpoint for the runner's
+	// whole wait; its questions close and the turn goes on without them.
+	c.closeQuestionsForCheckpoint()
 	for !c.stopping && ctx.Err() == nil && (c.active || c.refreshing || c.queue.Len() != 0) {
 		c.cond.Wait()
 	}
@@ -1464,6 +1477,8 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(result)
 	})
+
+	registerQuestionRoutes(mux, c)
 
 	mux.HandleFunc("POST /checkpoint", func(w http.ResponseWriter, r *http.Request) {
 		archive, err := os.CreateTemp("", "claude-checkpoint-*.tar")

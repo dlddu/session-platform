@@ -36,12 +36,15 @@ type claudeCLI struct {
 	// platform is the K3s MCP proxy sidecar's offer (AC-E6); nil runs with
 	// neither the K3s MCP nor plugins.
 	platform *claudePlatform
+	// agentURL is this agent on loopback, where the runner relays an
+	// AskUserQuestion to a person (AC-E2); empty denies the tool instead.
+	agentURL string
 }
 
 func (claudeCLI) workloadName() string { return workloadClaudeCode }
 
 func (c claudeCLI) argv(binary, model, prompt string, resume bool) []string {
-	return claudeRunnerArgv(binary, model, c.effort, "", c.platform.mcpURL(), prompt, resume)
+	return claudeRunnerArgv(binary, model, c.effort, "", c.platform.mcpURL(), c.agentURL, prompt, resume)
 }
 
 // permissionModer is an agentCLI whose turns run in a permission mode the write
@@ -69,8 +72,13 @@ func (claudeCLI) validPermissionMode(mode string) bool {
 }
 
 func (c claudeCLI) argvWithPermissionMode(binary, model, prompt string, resume bool, mode string) []string {
-	return claudeRunnerArgv(binary, model, c.effort, mode, c.platform.mcpURL(), prompt, resume)
+	return claudeRunnerArgv(binary, model, c.effort, mode, c.platform.mcpURL(), c.agentURL, prompt, resume)
 }
+
+var _ questionAsker = claudeCLI{}
+
+// asksQuestions is true when the runner has somewhere to relay a question.
+func (c claudeCLI) asksQuestions() bool { return c.agentURL != "" }
 
 func (claudeCLI) newProjector(dst io.Writer) io.WriteCloser {
 	return newClaudeStreamProjector(dst)

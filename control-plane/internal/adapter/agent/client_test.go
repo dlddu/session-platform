@@ -45,6 +45,9 @@ type fakeAgent struct {
 	refreshStatus       int // non-200 to force a plugin refresh error
 	refreshCalls        int
 	schedulerBody       string // GET /scheduler response; empty answers 503
+	answerStatus        int    // non-200 to force an answer error
+	answerPath          string
+	answerBody          string
 }
 
 func (a *fakeAgent) handler() http.Handler {
@@ -101,6 +104,20 @@ func (a *fakeAgent) handler() http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"state":"ready","revision":"abc","added":["p--new"],"updated":[],"removed":["p--old"]}`))
+	})
+	mux.HandleFunc("GET /questions", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"questions":[{"id":"q_1","askedAt":"2026-11-14T00:00:00Z","questions":[{"question":"Which?","header":"H","multiSelect":true,"options":[{"label":"A","description":"a"},{"label":"B","description":"b"}]}]}]}`))
+	})
+	mux.HandleFunc("POST /questions/{id}/answer", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		a.answerPath = r.URL.Path
+		a.answerBody = string(body)
+		if a.answerStatus != 0 && a.answerStatus != http.StatusOK {
+			http.Error(w, "refused", a.answerStatus)
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"answered"}`))
 	})
 	mux.HandleFunc("GET /scheduler", func(w http.ResponseWriter, r *http.Request) {
 		if a.schedulerBody == "" {
@@ -455,5 +472,39 @@ func TestHTTPClientActiveSchedules(t *testing.T) {
 		if _, err := c.ActiveSchedules(context.Background(), "sess-cx"); err == nil {
 			t.Errorf("body %q: no error", body)
 		}
+	}
+}
+
+// AC-E2: the client lists a turn's questions and relays a person's answer,
+// mapping the agent's refusals onto the session errors the API answers with.
+func TestHTTPClientQuestions(t *testing.T) {
+	c, fa := harness(t, "sess-q")
+	questions, err := c.PendingQuestions(context.Background(), "sess-q")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(questions) != 1 || questions[0].ID != "q_1" || !questions[0].Questions[0].MultiSelect ||
+		len(questions[0].Questions[0].Options) != 2 || questions[0].AskedAt.IsZero() {
+		t.Fatalf("questions = %+v", questions)
+	}
+
+	if err := c.AnswerQuestion(context.Background(), "sess-q", "q_1", map[string]string{"Which?": "A, B"}); err != nil {
+		t.Fatal(err)
+	}
+	if fa.answerPath != "/questions/q_1/answer" || fa.answerBody != `{"answers":{"Which?":"A, B"}}` {
+		t.Fatalf("agent got %s %s", fa.answerPath, fa.answerBody)
+	}
+	for status, want := range map[int]error{
+		http.StatusBadRequest: session.ErrInvalidInput,
+		http.StatusNotFound:   session.ErrQuestionNotFound,
+	} {
+		fa.answerStatus = status
+		if err := c.AnswerQuestion(context.Background(), "sess-q", "q_1", map[string]string{"Which?": "A"}); !errors.Is(err, want) {
+			t.Errorf("agent %d: err = %v, want %v", status, err, want)
+		}
+	}
+	fa.answerStatus = http.StatusInternalServerError
+	if err := c.AnswerQuestion(context.Background(), "sess-q", "q_1", map[string]string{"Which?": "A"}); err == nil {
+		t.Error("an agent failure must be an error")
 	}
 }

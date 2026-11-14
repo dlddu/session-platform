@@ -268,6 +268,76 @@ func (c *HTTPClient) RefreshPlugins(ctx context.Context, pod string) (session.Pl
 	return changes, nil
 }
 
+// PendingQuestions lists the AskUserQuestion calls a claude-code turn waits on
+// (AC-E2). Like AwaitingApproval it is an optional capability, not part of
+// the Client interface.
+func (c *HTTPClient) PendingQuestions(ctx context.Context, pod string) ([]session.PendingQuestion, error) {
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL(ip)+"/questions", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("list questions in session pod %s: %w", pod, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("list questions in session pod %s: agent returned %d: %s",
+			pod, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var out struct {
+		Questions []session.PendingQuestion `json:"questions"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
+		return nil, fmt.Errorf("list questions in session pod %s: decode: %w", pod, err)
+	}
+	if out.Questions == nil {
+		out.Questions = []session.PendingQuestion{}
+	}
+	return out.Questions, nil
+}
+
+// AnswerQuestion hands a person's answer to the turn waiting on it (AC-E2).
+func (c *HTTPClient) AnswerQuestion(ctx context.Context, pod, questionID string, answers map[string]string) error {
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(map[string]any{"answers": answers})
+	if err != nil {
+		return err
+	}
+	target := c.baseURL(ip) + "/questions/" + url.PathEscape(questionID) + "/answer"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("answer question in session pod %s: %w", pod, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	detail, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	message := strings.TrimSpace(string(detail))
+	switch resp.StatusCode {
+	case http.StatusBadRequest:
+		return fmt.Errorf("%w: %s", session.ErrInvalidInput, message)
+	case http.StatusNotFound:
+		return fmt.Errorf("%w: %s", session.ErrQuestionNotFound, message)
+	default:
+		return fmt.Errorf("answer question in session pod %s: agent returned %d: %s", pod, resp.StatusCode, message)
+	}
+}
+
 // Read fetches workload output after offset from the agent (AC-D3/AC-E3).
 func (c *HTTPClient) Read(ctx context.Context, pod string, offset int64) (string, int64, error) {
 	ip, err := c.resolve(ctx, pod)

@@ -6,11 +6,13 @@ import type {
   OutputStreamEvent,
   OutputStreamResetEvent,
   OutputStreamState,
+  PendingQuestion,
   PluginRefreshResult,
   Session,
 } from "../api/types";
 import { renderAgentTranscript } from "../app/agentTranscript";
 import { DeleteSessionDialog } from "../app/DeleteSessionDialog";
+import { QuestionCard } from "../app/QuestionCard";
 import { StateBadge } from "../app/StateBadge";
 import { useToast } from "../app/Toast";
 import {
@@ -20,6 +22,9 @@ import {
 } from "../app/workloadKind";
 
 const SHELL_READ_DELAYS_MS = [250, 700] as const;
+// AC-E2 — how often the workspace asks whether a claude-code turn waits on a
+// person. A question waits minutes, so a couple of seconds is quick enough.
+const QUESTION_POLL_MS = 2_000;
 const STREAM_RECONNECT_BASE_MS = 250;
 const STREAM_RECONNECT_MAX_MS = 5_000;
 const STREAM_STATE_LABEL: Record<OutputStreamState, string> = {
@@ -87,6 +92,8 @@ export function Workspace() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [refreshingPlugins, setRefreshingPlugins] = useState(false);
+  const [questions, setQuestions] = useState<PendingQuestion[]>([]);
+  const [questionPoll, setQuestionPoll] = useState(0);
   const offsetRef = useRef(0);
   const readQueueRef = useRef<Promise<void>>(Promise.resolve());
   const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -458,6 +465,32 @@ export function Workspace() {
     };
   }, [appendSys, id, navigate, readDelta]);
 
+  // AC-E2 — a claude-code turn's AskUserQuestion waits here for an answer.
+  const asksQuestions =
+    sess?.workloadType === "claude-code" && sess.state !== "snapshot" && !archiving;
+  useEffect(() => {
+    if (!asksQuestions) {
+      setQuestions([]);
+      return;
+    }
+    let disposed = false;
+    let timer: number | null = null;
+    const poll = async () => {
+      try {
+        const pending = await api.listQuestions(id);
+        if (!disposed) setQuestions(pending);
+      } catch {
+        // The next poll tries again; the transcript still shows the question.
+      }
+      if (!disposed) timer = window.setTimeout(() => void poll(), QUESTION_POLL_MS);
+    };
+    void poll();
+    return () => {
+      disposed = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [asksQuestions, id, questionPoll]);
+
   useEffect(() => {
     const element = termRef.current;
     if (element) element.scrollTop = element.scrollHeight;
@@ -723,6 +756,22 @@ export function Workspace() {
               term
             )}
           </div>
+          {questions.map((pending) => (
+            <QuestionCard
+              key={pending.id}
+              sessionId={id}
+              pending={pending}
+              onAnswered={() => {
+                setQuestions((current) => current.filter((q) => q.id !== pending.id));
+                setQuestionPoll((n) => n + 1);
+              }}
+              onGone={(message) => {
+                toast(message, "warm");
+                setQuestions((current) => current.filter((q) => q.id !== pending.id));
+                setQuestionPoll((n) => n + 1);
+              }}
+            />
+          ))}
           <form
             className="input-row"
             onSubmit={(event) => {
