@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -20,6 +21,17 @@ import (
 // defaultSessionName is the STS role session name when none is configured. It
 // tags the assumed-role sessions the control plane opens (visible in CloudTrail).
 const defaultSessionName = "session-platform-checkpointer"
+
+// roleSessionDuration needs the checkpointer role's MaxSessionDuration at least
+// this long (infrastructure stage2/session-platform.tf).
+const roleSessionDuration = 3 * time.Hour
+
+// MinSigningLifetime is how long cached role credentials must still live to be
+// handed out, so a URL presigned with them can stay valid that long.
+const MinSigningLifetime = 2 * time.Hour
+
+// The cache reports Expires this much earlier than the real expiry.
+const credentialsExpiryWindow = MinSigningLifetime + 5*time.Minute
 
 // defaultPrefix is the key prefix under which archives are stored.
 const defaultPrefix = "checkpoints"
@@ -71,9 +83,7 @@ func NewS3(ctx context.Context, cfg Config) (*S3, error) {
 		if sessionName == "" {
 			sessionName = defaultSessionName
 		}
-		provider := stscreds.NewAssumeRoleProvider(sts.NewFromConfig(base), cfg.RoleARN,
-			func(o *stscreds.AssumeRoleOptions) { o.RoleSessionName = sessionName })
-		base.Credentials = aws.NewCredentialsCache(provider)
+		base.Credentials = roleCredentials(sts.NewFromConfig(base), cfg.RoleARN, sessionName)
 	}
 
 	client := s3.NewFromConfig(base, func(o *s3.Options) {
@@ -86,6 +96,16 @@ func NewS3(ctx context.Context, cfg Config) (*S3, error) {
 		}
 	})
 	return newWithAPI(client, cfg.Bucket, cfg.Prefix), nil
+}
+
+func roleCredentials(client stscreds.AssumeRoleAPIClient, roleARN, sessionName string) *aws.CredentialsCache {
+	provider := stscreds.NewAssumeRoleProvider(client, roleARN, func(o *stscreds.AssumeRoleOptions) {
+		o.RoleSessionName = sessionName
+		o.Duration = roleSessionDuration
+	})
+	return aws.NewCredentialsCache(provider, func(o *aws.CredentialsCacheOptions) {
+		o.ExpiryWindow = credentialsExpiryWindow
+	})
 }
 
 // newWithAPI builds an S3 store over an injected object API (tests).
