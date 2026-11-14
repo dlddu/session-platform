@@ -2,9 +2,8 @@
 // surface — codex-chat's (docs/prd/codex-workload.md, AC-J5) or codex-task's
 // (docs/prd/codex-task-workload.md, AC-M1). It renders what the model would be
 // sent with `codex debug prompt-input` and fails on an image or web tool, on a
-// shell tool in chat or a missing one in task, on a bundled system skill, or
-// when the mode's managed instructions are missing (which would mean codex did
-// not load the managed config).
+// shell tool in chat or a missing one in task, or on a bundled system skill
+// (which would mean codex did not load the managed config).
 //
 //   node surface-check.mjs --home <HOME> [--mode chat|task]
 //                                            (CODEX_HOME = <HOME>/.codex)

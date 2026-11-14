@@ -41,13 +41,6 @@ const (
 	codexSkillsToolTimeout = codexSkillsRefreshTimeout + 15*time.Second
 	// Scheduler calls only touch the sidecar's memory (AC-P1).
 	codexSchedulerToolTimeout = 30 * time.Second
-
-	// codexInstructionsMarker and codexTaskInstructionsMarker are what the
-	// image's surface check looks for to prove the managed config of the
-	// mode it checks was the one codex loaded. Neither contains the other.
-	// Keep in sync with codex-runner/surface.mjs.
-	codexInstructionsMarker     = "session-platform codex session"
-	codexTaskInstructionsMarker = "session-platform codex task session"
 )
 
 // codexDisabledFeatures are the codex features that would give the model a
@@ -64,33 +57,6 @@ var codexTaskDisabledFeatures = []string{
 	"apps", "plugins", "remote_plugin", "computer_use", "browser_use", "in_app_browser",
 	"sleep_tool", "goals", "hooks", "memories", "tool_suggest", "skill_mcp_dependency_install",
 }
-
-const codexDeveloperInstructions = "You are a " + codexInstructionsMarker + ". " +
-	"You have no shell, no file editing, no web search and no image tools: an attempt to run a command, " +
-	"change a file or search the web ends the turn. " +
-	"Skills are listed with a file path, but you cannot open that path yourself. " +
-	"Read a skill with the `read_skill` tool of the `skills` MCP server: pass the skill's name, or its directory " +
-	"(the path segment before /SKILL.md, for example `session-platform--example`), as `name`, and a file " +
-	"inside that directory as `file` when the skill refers to one. `list_skills` lists them. " +
-	codexRefreshInstructions + codexSchedulerInstructions +
-	"When the `k3s` MCP server is present, its tools act on the homelab cluster; it asks a human before any write. " +
-	"When the `db` MCP server is present, it is this session's own SQLite database, kept across restarts: " +
-	"`raw_query` runs a statement that returns rows, `raw_exec` one that changes data. Discover `ledger_get/list/put/delete` for task bookkeeping that carries over to the next chat session on this slot; never share this DB with workers. Raw counters are not committed totals; open raw transactions roll back at call end."
-
-const codexTaskDeveloperInstructions = "You are a " + codexTaskInstructionsMarker + ": a coding agent with a shell " +
-	"and file editing in this session's own workspace, which is a dedicated pod. Web search and image tools are off. " +
-	"Skills are listed with a file path; open SKILL.md there, or read it with the `read_skill` tool of the `skills` " +
-	"MCP server (`list_skills` lists them). " +
-	codexRefreshInstructions + codexSchedulerInstructions +
-	"When the `k3s` MCP server is present, its tools act on the homelab cluster; it asks a human before any write."
-
-// codexRefreshInstructions is shared by both modes (AC-J7).
-const codexRefreshInstructions = "When the user asks to refresh or update the plugins or skills, call `refresh_skills` " +
-	"of the `skills` MCP server, when it is offered, and read again any changed skill you rely on. "
-
-// codexSchedulerInstructions is shared by both modes (AC-P1).
-const codexSchedulerInstructions = "To run a prompt later or repeatedly in this session, use the `scheduler` MCP server, " +
-	"when it is offered: pass times as ISO 8601 durations or RFC 3339 times, and tell the user the time it returns. "
 
 // codexConfig is what varies between pods.
 type codexConfig struct {
@@ -113,9 +79,9 @@ type codexConfig struct {
 func renderCodexConfig(cfg codexConfig) []byte {
 	doc := &tomlDocument{}
 	doc.comment("Managed by session-platform and rewritten on every start; local edits do not persist.")
-	sandbox, instructions, disabled := "read-only", codexDeveloperInstructions, codexDisabledFeatures
+	sandbox, disabled := "read-only", codexDisabledFeatures
 	if cfg.task {
-		sandbox, instructions, disabled = "danger-full-access", codexTaskDeveloperInstructions, codexTaskDisabledFeatures
+		sandbox, disabled = "danger-full-access", codexTaskDisabledFeatures
 	}
 	doc.set("approval_policy", tomlString("never"))
 	doc.set("sandbox_mode", tomlString(sandbox))
@@ -125,7 +91,6 @@ func renderCodexConfig(cfg codexConfig) []byte {
 	doc.set("cli_auth_credentials_store", tomlString("file"))
 	doc.set("forced_login_method", tomlString("chatgpt"))
 	doc.set("check_for_update_on_startup", tomlBool(false))
-	doc.set("developer_instructions", tomlString(instructions))
 
 	doc.table("features")
 	if cfg.task {

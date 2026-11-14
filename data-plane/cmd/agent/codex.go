@@ -15,14 +15,14 @@ import (
 	"time"
 )
 
-// The two Codex workloads run the Codex SDK through a small Node runner,
+// The two Codex workloads run codex's app server through a small Node runner,
 // codex-runner (data-plane/codex-runner), on the claude-code runner
 // (AC-E2~E5): queue, bounds, cursor, archive and resume flag are
 // claudeWorkload's. This file is the CLI-specific half; the managed config is
 // codex_config.go's, the plugin skills codex_skills.go's, the skills MCP
 // codex_skills_mcp.go's and the output projection codex_stream.go's.
 //
-// codex-chat (docs/prd/codex-workload.md, AC-J1~J7) is the long-lived chat
+// codex-chat (docs/prd/codex-workload.md, AC-J1~J8) is the long-lived chat
 // session: no shell, a ChatGPT login made through a device code the runner
 // forwards (AC-J3) and kept in the pool slot this pod mounts, and a session
 // database the sidecar serves from the same slot (AC-N6). codex-task (docs/prd/codex-task-workload.md,
@@ -160,13 +160,7 @@ func (c codexCLI) ensureHome(homeDir string, _ toolSurface) error {
 	sidecar := c.sidecar()
 	skillsDir := codexSkillsDir(homeDir)
 	skills := codexSkillsFromSeed(sidecar.plugins, c.log())
-	changes, err := syncCodexSkills(skillsDir, skills, c.log())
-	if err != nil {
-		return err
-	}
-	// A restore into a pod whose marketplace moved changes skills under a
-	// conversation that already read them; the next turn is told (AC-J7).
-	if err := recordCodexSkillChanges(homeDir, sidecar.revision, changes); err != nil {
+	if _, err := syncCodexSkills(skillsDir, skills, c.log()); err != nil {
 		return err
 	}
 	cfg := codexConfig{

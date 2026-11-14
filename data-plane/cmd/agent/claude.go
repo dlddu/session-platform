@@ -497,7 +497,6 @@ func (c *claudeWorkload) runWorker() {
 		c.mu.Unlock()
 
 		prompt := c.openTurn(seq, job.prompt)
-		prompt, noticed := c.withTurnNotice(prompt, resume)
 		output := newClaudeOutputSink(
 			&c.out,
 			c.redact,
@@ -542,11 +541,6 @@ func (c *claudeWorkload) runWorker() {
 		succeeded := err == nil || errors.Is(err, exec.ErrWaitDelay)
 		nextHasRun := resume || succeeded
 		persistErr := persistClaudeRuntimeState(c.stateDir, nextHasRun)
-		// A turn that refreshed its own skills was told what changed in the
-		// tool result, so its success settles the note as a told turn does.
-		if succeeded && (noticed || refreshNotice != "") {
-			c.clearTurnNotice()
-		}
 		c.mu.Lock()
 		c.hasRun = nextHasRun
 		c.active = false
@@ -605,37 +599,6 @@ func (c *claudeWorkload) archiveExclusions() []string {
 		return nil
 	}
 	return []string{c.authSlot.archiveExclusion()}
-}
-
-// withTurnNotice prepends AC-J7's skill-change note to a resumed turn. A first
-// turn starts a conversation that reads the skills as they are now, so it is
-// not told; either way a turn that succeeds settles the note. noticed reports
-// whether there was one to settle.
-func (c *claudeWorkload) withTurnNotice(prompt string, resume bool) (string, bool) {
-	refresher, ok := c.cli.(pluginRefresher)
-	if !ok {
-		return prompt, false
-	}
-	notice, err := refresher.turnNotice(c.homeDir)
-	if err != nil {
-		c.logger.Warn("read the pending plugin skill note", "err", c.redactString(err.Error()))
-		return prompt, false
-	}
-	if notice == "" {
-		return prompt, false
-	}
-	if resume {
-		prompt = notice + "\n\n" + prompt
-	}
-	return prompt, true
-}
-
-func (c *claudeWorkload) clearTurnNotice() {
-	if refresher, ok := c.cli.(pluginRefresher); ok {
-		if err := refresher.clearTurnNotice(c.homeDir); err != nil {
-			c.logger.Warn("clear the plugin skill note", "err", c.redactString(err.Error()))
-		}
-	}
 }
 
 // refreshPlugins is AC-J7: fetch the platform plugins again without leaving

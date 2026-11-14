@@ -188,7 +188,7 @@ func (s *scheduler) tick(ctx context.Context) {
 	sched.runs++
 	run = &schedulerRun{id: sched.id, planned: sched.nextRun, finished: state.Finished, epoch: state.Epoch}
 	s.running = run
-	prompt := schedulerRunHeader(sched) + "\n" + sched.prompt
+	prompt := sched.prompt
 	s.mu.Unlock()
 
 	if err := s.agent.write(callCtx, prompt); err != nil {
@@ -262,21 +262,6 @@ func (s *scheduler) finishRunLocked(run *schedulerRun, now time.Time) {
 	if !sched.nextRun.Before(sched.expiresAt) {
 		delete(s.schedules, sched.id)
 		s.logger.Info("scheduler: loop ended at its expiry", "schedule", sched.id)
-	}
-}
-
-func schedulerRunHeader(sched *schedule) string {
-	const lead = "[session-platform scheduler] "
-	switch sched.kind {
-	case scheduleOnce:
-		return lead + "one-time schedule " + sched.id + " — it will not run again."
-	case scheduleFixed:
-		return fmt.Sprintf("%sloop %s run %d — runs every %s until %s; schedule_cancel ends it.",
-			lead, sched.id, sched.runs, isoDuration(sched.interval), formatScheduleTime(sched.expiresAt))
-	default:
-		return fmt.Sprintf("%sself-paced loop %s run %d — before you finish, call loop_next with id %s and when to run again, "+
-			"or schedule_cancel to end it; otherwise it runs again %s after this run.",
-			lead, sched.id, sched.runs, sched.id, isoDuration(sched.interval))
 	}
 }
 
