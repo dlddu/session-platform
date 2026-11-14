@@ -71,3 +71,43 @@ func TestNoPromptHarnessInPlatformSources(t *testing.T) {
 		t.Error(`claude-runner must pass the plain claude_code preset as its system prompt (AC-A5)`)
 	}
 }
+
+// AC-A5's boundary for tool definitions: a description says what the tool does,
+// how it is called and how its result reads — never when to use it or what to
+// do with the answer. The phrases below are the directive shapes the
+// descriptions used to carry ("tell the user that time", "use it when …",
+// "read it again before following it").
+func TestToolDescriptionsStateFunctionOnly(t *testing.T) {
+	directives := []string{"tell the user", "use it when", "before following", "you should", "you must", "remember to", "make sure", "always "}
+	var walk func(where string, v any)
+	walk = func(where string, v any) {
+		switch v := v.(type) {
+		case map[string]any:
+			for key, child := range v {
+				if text, ok := child.(string); ok && key == "description" {
+					lower := strings.ToLower(text)
+					for _, d := range directives {
+						if strings.Contains(lower, d) {
+							t.Errorf("%s: description %q directs the model (%q) — state function and constraints only (AC-A5)", where, text, d)
+						}
+					}
+					continue
+				}
+				walk(where, child)
+			}
+		case []any:
+			for _, child := range v {
+				walk(where, child)
+			}
+		case []map[string]any:
+			for _, child := range v {
+				walk(where, child)
+			}
+		}
+	}
+	session := sessionMCPConfig{gateway: &approvalGateway{}, repoAccess: &repoAccessClient{}, drop: newDropClient("http://drop.example", "")}
+	walk("session MCP", session.toolDefinitions())
+	walk("skills MCP", codexSkillsToolDefinitions(true))
+	walk("scheduler MCP", schedulerToolDefinitions())
+	walk("session DB MCP", sessionDBToolDefinitions())
+}

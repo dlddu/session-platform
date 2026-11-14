@@ -71,7 +71,6 @@ func TestCodexTask_PodShape(t *testing.T) {
 		k8s.WithWorkloadImage(session.WorkloadTypeCodexTask, codexImage),
 		k8s.WithCodexTaskCredentialsSecret("codex-task-k3s"),
 		k8s.WithCodexTaskConfigConfigMap("codex-task-cfg"),
-		k8s.WithCodexPlugins("chat-bundle"),
 	)
 	pod := onlyPod(t, orch, func() []corev1.Pod { return listPods(t, cs) }, "ct01", k8s.WorkloadSpec{
 		Type: session.WorkloadTypeCodexTask, Model: session.PlatformDefaultModel, ReasoningEffort: "high", AuthSlot: slot(1),
@@ -103,7 +102,7 @@ func TestCodexTask_PodShape(t *testing.T) {
 	}
 	proxy := container(t, pod, k8s.K3SMCPProxyContainerName)
 	if got, _ := envValue(proxy, "PLUGIN_SEED_PLUGINS"); got != "" {
-		t.Errorf("proxy plugins = %q, want none: codex-task has no default and never takes codex-chat's", got)
+		t.Errorf("proxy plugins = %q, want none: a session that chose no plugins gets none (AC-A5)", got)
 	}
 	var token string
 	for _, e := range proxy.Env {

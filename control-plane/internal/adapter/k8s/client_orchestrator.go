@@ -233,7 +233,6 @@ type ClientOrchestrator struct {
 	miniMaxConfigConfigMap   string
 	codexCredentialsSecret   string
 	codexConfigConfigMap     string
-	codexPlugins             string
 	codexTask                codexProfile
 	claudeAuthMode           ClaudeCodeAuthMode
 	// AC-F5's per-session shared claim — see shared_volume.go.
@@ -348,7 +347,6 @@ func NewClientOrchestrator(client kubernetes.Interface, namespace string, opts .
 		miniMaxConfigConfigMap:   defaultMiniMaxConfigConfigMap,
 		codexCredentialsSecret:   defaultCodexCredentialsSecret,
 		codexConfigConfigMap:     defaultCodexConfigConfigMap,
-		codexPlugins:             DefaultCodexPlugins,
 		codexTask: codexProfile{
 			credentialsSecret: defaultCodexTaskCredentialsSecret,
 			configConfigMap:   defaultCodexTaskConfigConfigMap,

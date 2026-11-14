@@ -293,7 +293,7 @@ func TestCodexSkillsMCPRefreshSkills(t *testing.T) {
 	status, body = http.StatusOK, `{"state":"ready","revision":"0123456789abcdef","added":["p--new"],"updated":["p--alpha"],"removed":[]}`
 	text, isError := call()
 	if isError || !strings.Contains(text, "revision 0123456789ab") || !strings.Contains(text, "added: `p--new`; updated: `p--alpha`") ||
-		!strings.Contains(text, "read_skill") {
+		!strings.Contains(text, "list_skills") || strings.Contains(text, "before following") {
 		t.Errorf("refresh result = %q (error %v)", text, isError)
 	}
 	if !reflect.DeepEqual(paths, []string{"POST " + pluginRefreshTurnPath}) {

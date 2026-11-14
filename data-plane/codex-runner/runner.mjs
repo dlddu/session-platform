@@ -99,7 +99,7 @@ async function ensureLogin(bin, env) {
     return true;
   }
   await notice("This Codex session is not signed in to ChatGPT yet.");
-  await notice("Open the link below in a browser, sign in with your ChatGPT account and enter the one-time code. The prompt runs once sign-in completes.");
+  await notice("Sign-in uses the device code below: the link and the one-time code. The prompt runs once sign-in completes.");
   const login = await run(bin, ["login", "--device-auth"], env, {
     timeoutMs: LOGIN_TIMEOUT_MS,
     onLine: async (line) => {
@@ -110,7 +110,7 @@ async function ensureLogin(bin, env) {
     },
   });
   if (login.code !== 0) {
-    await notice(`ChatGPT sign-in did not complete${login.error ? ` (${login.error.message})` : ""}. Send the prompt again to retry.`);
+    await notice(`ChatGPT sign-in did not complete${login.error ? ` (${login.error.message})` : ""}; the prompt did not run.`);
     return false;
   }
   await notice("Signed in to ChatGPT.");

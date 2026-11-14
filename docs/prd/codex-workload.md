@@ -65,7 +65,7 @@
 ### AC-J5: 도구 표면 — 대화, 플랫폼 플러그인 스킬, K3s MCP, 세션 DB뿐
 - **설명**: 이 타입의 에이전트가 쓸 수 있는 것은 넷뿐이다 (2026-11-05 사용자 결정, 4는 2026-11-09).
   1. **대화** — 모델 응답.
-  2. **플러그인으로 연결된 스킬** — K3s MCP 프록시 사이드카가 마켓플레이스에서 받아 온 플랫폼 플러그인(`CODEX_PLUGINS`, 기본 `codex-session` — 이 타입의 표면에서 동작하는 스킬만 모은 마켓플레이스 전용 번들, 2026-11-05 사용자 결정)의 스킬만 — 플러그인 매니페스트의 `skills` 필드가 가리키는 디렉터리, 없으면 `skills/<이름>/` — `$HOME/.agents/skills/<플러그인>--<스킬>/`에 관리 표식과 함께 설치한다. `read_skill`은 디렉터리 이름과 SKILL.md 머리말의 이름 둘 다로 찾는다(Codex가 머리말 이름으로 목록을 보이므로). 셸이 없으므로 모델은 SKILL.md를 파일로 열 수 없다 — 대신 에이전트 바이너리가 stdio MCP 서버 `skills`(`list_skills`·`read_skill`)로 그 디렉터리 안의 일반 파일만, 크기 상한 안에서 읽어 준다. 마켓플레이스가 있는 파드에서는 같은 서버가 `refresh_skills`도 낸다(AC-J7 턴 안 새로고침). 플랫폼은 개발자 지시를 넣지 않는다 — 모델은 `skills` MCP의 도구 설명으로 `read_skill`을 안다(*2026-11-14 개정*). 사용자가 손으로 둔 스킬(표식 없음)은 동기화가 지우지 않는다.
+  2. **플러그인으로 연결된 스킬** — K3s MCP 프록시 사이드카가 마켓플레이스에서 받아 온 플러그인의 스킬만 — 세션을 만든 쪽이 `plugins`로 고른 것(AC-L1. 장기 채팅은 이 타입의 표면에서 동작하는 스킬만 모은 `codex-session` 번들을 고른다. *2026-11-14부터 플랫폼 기본값 `CODEX_PLUGINS`는 없다* — AC-A5) — 플러그인 매니페스트의 `skills` 필드가 가리키는 디렉터리, 없으면 `skills/<이름>/` — `$HOME/.agents/skills/<플러그인>--<스킬>/`에 관리 표식과 함께 설치한다. `read_skill`은 디렉터리 이름과 SKILL.md 머리말의 이름 둘 다로 찾는다(Codex가 머리말 이름으로 목록을 보이므로). 셸이 없으므로 모델은 SKILL.md를 파일로 열 수 없다 — 대신 에이전트 바이너리가 stdio MCP 서버 `skills`(`list_skills`·`read_skill`)로 그 디렉터리 안의 일반 파일만, 크기 상한 안에서 읽어 준다. 마켓플레이스가 있는 파드에서는 같은 서버가 `refresh_skills`도 낸다(AC-J7 턴 안 새로고침). 플랫폼은 개발자 지시를 넣지 않는다 — 모델은 `skills` MCP의 도구 설명으로 `read_skill`을 안다(*2026-11-14 개정*). 사용자가 손으로 둔 스킬(표식 없음)은 동기화가 지우지 않는다.
   3. **K3s MCP** — AC-J6의 사이드카를 거친다. 프록시가 토큰을 갖지 않으면 등록하지 않는다.
   4. **세션 DB** — 사이드카가 슬롯의 `db/`에서 서빙하는 SQLite MCP(`agent-auth-pool.md` AC-N6)를 `db` 서버로 등록한다(`raw_query`·`raw_exec`·`ledger_get/list/put/delete`). 주 컨테이너가 `SESSION_DB_MCP_URL`(loopback 주소만 받는다)을 받았을 때만 등록한다. DB 도구는 그 서버의 도구 설명이 알린다(*2026-11-14 개정*: 개발자 지시 제거). 파드 밖에 닿는 새 경로는 없다 — DB 파일은 그 세션의 슬롯에 있다.
 
@@ -75,6 +75,7 @@
 - **검증 방법**: 관리형 설정으로 렌더한 모델 도구 목록에 `exec_command`·`write_stdin`·`view_image`와 번들 스킬이 없음을 확인한다(이미지 빌드 검사 + 배포 파드 안 실측). 스킬 동기화(표식·오래된 관리 스킬 제거·사용자 스킬 보존)와 `read_skill`의 경로 경계·크기 상한을 확인한다. 금지 아이템 이벤트가 오면 러너가 턴을 중단함을 확인한다.
 
 > 📌 **2026-11-07 (AC-L1)**: 배포의 `CODEX_PLUGINS`는 이제 **타입 기본값**이다 — 세션이 생성 시 `plugins`를 고르면 사이드카 시더는 그 목록을 받는다(`session-plugins.md`).
+> 📌 **2026-11-14 (AC-A5)**: `CODEX_PLUGINS`와 그 기본값을 없앴다 — `plugins`를 주지 않은 `codex-chat` 세션은 플러그인 없이 뜬다. PocketAide 채팅은 `["codex-session"]`을 명시한다.
 
 ### AC-J6: K3s MCP 토큰은 loopback 사이드카에만
 - **설명**: 선택 `k3s-mcp-token`은 Secret `codex-credentials`(control plane `CODEX_CREDENTIALS_SECRET`)에 두고, 세션 파드의 `k3s-mcp-proxy` 사이드카에만 투영한다. 사이드카는 같은 포트의 `/session-db/mcp`에서 세션 DB도 서빙한다(AC-J5 4, AC-N6) — 그 경로만 가로채고 나머지 요청은 그대로 K3s MCP로 넘긴다. 사이드카는 `minimax-code`의 K3s MCP 프록시(AC-G5)를 헬퍼 파드 대신 **같은 파드의 loopback**(`127.0.0.1:8093`)에 띄운 것이다 — 같은 헤더 허용 목록, 같은 마켓플레이스 시드. 단 **도구 거부 목록은 걸지 않는다**(2026-11-06 사용자 결정): 사이드카가 도구 정책 `K3S_MCP_TOOL_POLICY=allow-all`을 받아 쓰기·exec·`session_*`·`opensearch_*`를 포함한 K3s MCP 도구 전부를 그대로 넘긴다. 정책 값은 `allow-all`·`deny-list` 둘이고, 비었거나 모르는 값은 `deny-list`다(다른 타입은 이 env 없이 `deny-list`). 쓰기는 K3s MCP 자체의 승인 게이트가 막는다. 주 컨테이너는 그 주소만 받고 Secret 참조를 하나도 갖지 않는다. 워크로드 파드는 Kubernetes API 자격 증명도 받지 않는다(`automountServiceAccountToken: false`) — 다른 에이전트 타입은 셸로 클러스터를 조회하지만 이 타입에는 그 도구가 없다. Secret·ConfigMap 이름은 다른 에이전트 타입과 겹치면 control plane이 기동을 거부한다(키 이름이 같아 겹치면 다른 타입의 토큰이 조용히 넘어온다).

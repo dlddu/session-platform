@@ -12,7 +12,7 @@
 #                           https://homelab-k3s-mcp.llkm.nl/mcp).
 #   plugin-marketplace-url  Git remote of the plugin marketplace whose skills
 #                           sessions get (default the dlddu plugin-marketplace).
-#                           Which plugins is the control plane's CODEX_PLUGINS.
+#                           Which plugins is each session's own `plugins` choice.
 #
 # Named by CODEX_CONFIG_CONFIGMAP (default `codex-config`). EXAMPLE-ONLY, not in
 # kustomization.yaml.
