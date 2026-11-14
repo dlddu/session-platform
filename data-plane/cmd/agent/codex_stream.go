@@ -8,7 +8,8 @@ import (
 )
 
 // codexStreamProjector turns codex-runner's stdout — one JSON record per line,
-// the Codex SDK's thread events plus the runner's own notices — into the
+// the main thread's events in `codex exec`'s format plus the runner's own
+// notices (sub-agent progress among them, AC-J8) — into the
 // user-facing text stream (AC-J2), the counterpart of claudeStreamProjector.
 // What the user sees is the conversation and what happens around it: the
 // runner's notices (the ChatGPT sign-in steps of AC-J3, the kill switch), each
@@ -192,7 +193,7 @@ func jsonString(raw json.RawMessage) string {
 	return s
 }
 
-// errorMessage reads the SDK's {"message": ...} error shape, and a bare string
+// errorMessage reads the runner's {"message": ...} error shape, and a bare string
 // as well.
 func errorMessage(raw json.RawMessage) string {
 	if s := jsonString(raw); s != "" {

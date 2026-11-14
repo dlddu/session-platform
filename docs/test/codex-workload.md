@@ -1,20 +1,21 @@
-# 테스트 문서: 세션 워크로드 — Codex SDK 채팅용 (codex-chat)
+# 테스트 문서: 세션 워크로드 — Codex 채팅용 (codex-chat)
 
 > 📌 **2026-11-07**: 타입 이름이 `codex`에서 `codex-chat`으로 바뀌었다(AC-J1). 아래 시나리오의 「`codex` 세션」은 `codex-chat` 세션이다. 작업용 `codex-task`는 `codex-task-workload.md`.
 
 ## 검증 대상 AC
 - AC-J1: 워크로드 타입 `codex-chat` 선택 (옛 이름 `codex`) (PRD: Codex 워크로드)
-- AC-J2: write = Codex SDK 턴 1회, read = 에이전트 메시지 텍스트 (PRD: Codex 워크로드)
+- AC-J2: write = Codex 턴 1회, read = 에이전트 메시지 텍스트 (PRD: Codex 워크로드)
 - AC-J3: ChatGPT 로그인(device code), 로그인은 슬롯에 남는다 (PRD: Codex 워크로드)
 - AC-J4: 파일시스템 아카이브, 전용 게이트 (PRD: Codex 워크로드)
 - AC-J5: 도구 표면 — 대화, 플랫폼 플러그인 스킬, K3s MCP, 세션 DB뿐 (PRD: Codex 워크로드)
 - AC-J6: K3s MCP 토큰은 loopback 사이드카에만 (PRD: Codex 워크로드)
 - AC-J7: 수동 플러그인 새로고침 — 대화를 유지한 채 스킬을 다시 받는다 (PRD: Codex 워크로드)
+- AC-J8: 턴이 띄운 하위 에이전트는 답 뒤에도 마저 돌고, 결과는 같은 대화로 돌아온다 (PRD: Codex 워크로드)
 
 > ⚠️ **e2e 범위 주의**: kind SUT는 codex 세션 파드를 실물로 띄울 수 있지만(같은 로컬 빌드 data plane 이미지,
 > 오버레이가 `DATA_PLANE_CODEX_IMAGE`를 그 이미지로 바꾼다) **ChatGPT 로그인은 할 수 없다** — device code 승인은
-> 사람의 브라우저와 실 ChatGPT 계정이 필요하다. 그래서 로그인 뒤의 대화 왕복·복원 후 로그인 유지(시나리오 3·5)는
-> `e2e.md`의 예외이고, 그 부분의 현재 검증은 data plane 단위 테스트(러너 투영·킬 스위치·아카이브 대상 트리·슬롯 동기화)다.
+> 사람의 브라우저와 실 ChatGPT 계정이 필요하다. 그래서 로그인 뒤의 대화 왕복·복원 후 로그인 유지·하위 에이전트 왕복(시나리오 3·5·8)은
+> `e2e.md`의 예외이고, 그 부분의 현재 검증은 data plane 단위 테스트(러너 투영·킬 스위치·하위 에이전트 대기·아카이브 대상 트리·슬롯 동기화)다.
 
 ## 테스트 시나리오
 
@@ -67,3 +68,13 @@
 > 안내 줄이 `end` 표식 뒤·성공·실패와 무관하게 다음 턴 프롬프트는 사용자의 것 그대로)·`TestFromLoopback`(파드 IP 403)·`TestCodexSkillsMCPRefreshSkills`
 > (에이전트 URL이 있을 때만 도구가 보이고 결과·거절을 도구 결과로 돌려줌)·`TestRenderCodexConfig`/`TestCodexEnsureHome`(마켓플레이스가
 > 있을 때만 스킬 MCP env에 에이전트 URL·도구 시간 상한). 실 ChatGPT 턴이 필요해 e2e 로 돌리지 않는다.
+
+### 시나리오 8: 답 뒤에도 하위 에이전트가 마저 돌고, 그 결과로 메인 에이전트가 다시 답한다
+- **사전 조건**: 로그인된 `codex` 세션(시나리오 3을 마친 세션)
+- **실행 단계**: (a) 「하위 에이전트를 하나 띄워 K3s MCP `ping`을 부르게 하고, 기다리지 말고 바로 답해」라는 프롬프트를 보낸다 → (b) 출력을 끝까지 읽는다 → (c) 이어서 프롬프트 하나를 보낸다
+- **기대 결과**: (a) 메인 에이전트의 첫 답이 출력된다. (b) 첫 답 뒤에 하위 에이전트를 기다린다는 안내 줄, 하위 에이전트의 `k3s.ping` 호출 안내 줄과 끝 안내 줄이 오고, 이어서 메인 에이전트가 그 결과를 전하는 두 번째 답이 같은 턴에 출력된다. 하위 에이전트의 메시지는 그대로 출력되지 않는다. (c) 앞 대화(하위 에이전트의 결과 포함)를 이어 답한다
+- **검증 AC**: AC-J8, AC-J2
+
+> 러너 쪽 계약(기다림·후속 턴 프롬프트·대기 상한의 중단·메인 턴 중에 끝난 에이전트는 싣지 않음·하위 에이전트의 금지 아이템)은
+> `data-plane/codex-runner`의 `node --test`가 가짜 app server로 확인한다. 실 모델이 하위 에이전트를 띄우는 왕복은 실 ChatGPT
+> 로그인 뒤의 턴이라 e2e 로 돌리지 않는다(`e2e.md` 예외).
