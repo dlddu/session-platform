@@ -48,7 +48,7 @@ func (a *autoAgent) kill(pod string) {
 	a.dead[pod] = true
 }
 
-func (a *autoAgent) Write(_ context.Context, pod, _, _ string) error { return a.fail(pod) }
+func (a *autoAgent) Write(_ context.Context, pod, _ string) error { return a.fail(pod) }
 func (a *autoAgent) Read(_ context.Context, pod string, offset int64) (string, int64, error) {
 	if err := a.fail(pod); err != nil {
 		return "", 0, err
@@ -280,7 +280,7 @@ func TestLostPodWithAutomaticArchiveIsRestored(t *testing.T) {
 			if op == "read" {
 				_, err = f.svc.Read(ctx, sess.ID, 0)
 			} else {
-				_, err = f.svc.Write(ctx, sess.ID, "hello", session.WriteOptions{})
+				_, err = f.svc.Write(ctx, sess.ID, "hello")
 			}
 			if err != nil {
 				t.Fatalf("%s after losing the pod: %v", op, err)
