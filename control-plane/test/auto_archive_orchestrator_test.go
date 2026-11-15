@@ -16,7 +16,7 @@ type autoArchiveBases struct{ asked []string }
 
 func (b *autoArchiveBases) base(sessionID, pod string) (string, error) {
 	b.asked = append(b.asked, pod)
-	return "https://bucket.s3/auto/" + sessionID + "/" + pod + "/checkpoint.tar", nil
+	return "https://bucket.s3/sessions/" + sessionID + "/checkpoint.tar", nil
 }
 
 func assertAutoArchive(t *testing.T, pod corev1.Pod, wantBase, wantPath string) {
@@ -43,7 +43,7 @@ func TestAutoArchive_WorkloadPodArchivesBeforeStopping(t *testing.T) {
 	bases := &autoArchiveBases{}
 	orch, cs := newReadyOrchestrator(t, k8s.WithAutoArchive(bases.base, session.WorkloadTypeShell))
 	const id = "0123456789abcdef0123456789abcdef"
-	started, err := orch.Start(context.Background(), id, k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
+	_, err := orch.Start(context.Background(), id, k8s.WorkloadSpec{Type: session.WorkloadTypeShell})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestAutoArchive_WorkloadPodArchivesBeforeStopping(t *testing.T) {
 	if len(pods) != 1 {
 		t.Fatalf("pods = %d, want 1", len(pods))
 	}
-	assertAutoArchive(t, pods[0], "https://bucket.s3/auto/"+id+"/"+started.Workload.Name+"/checkpoint.tar", k8s.AutoArchiveRunPath)
+	assertAutoArchive(t, pods[0], "https://bucket.s3/sessions/"+id+"/checkpoint.tar", k8s.AutoArchiveRunPath)
 }
 
 // A type the option does not cover keeps the plain pod.
@@ -73,7 +73,7 @@ func TestAutoArchive_GatedHelperHoldsForItsWorkloadPod(t *testing.T) {
 	bases := &autoArchiveBases{}
 	const id = "fedcba9876543210fedcba9876543210"
 	_, set := startMiniMax(t, id, k8s.WithAutoArchive(bases.base, session.WorkloadTypeMiniMaxCode))
-	want := "https://bucket.s3/auto/" + id + "/" + set.workload.Name + "/checkpoint.tar"
+	want := "https://bucket.s3/sessions/" + id + "/checkpoint.tar"
 	assertAutoArchive(t, set.workload, want, k8s.AutoArchiveRunPath)
 	assertAutoArchive(t, set.helper, want, k8s.AutoArchiveHoldPath)
 }

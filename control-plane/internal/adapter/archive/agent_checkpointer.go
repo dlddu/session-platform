@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
@@ -57,7 +58,7 @@ func (c *AgentCheckpointer) Enabled() bool { return true }
 // transaction. The generation must already be stored before this method closes
 // the data-plane admission barrier. A failure after the agent answered is left
 // for the service to roll back: it owns the decision between abort and commit.
-func (c *AgentCheckpointer) CheckpointWithGeneration(ctx context.Context, ref k8s.PodRef, generation string) (*session.Checkpoint, error) {
+func (c *AgentCheckpointer) CheckpointWithGeneration(ctx context.Context, sessionID string, ref k8s.PodRef, generation string) (*session.Checkpoint, error) {
 	if !validArchiveGeneration(generation) {
 		return nil, fmt.Errorf("checkpoint pod %s: durable archive generation is unavailable", ref.Name)
 	}
@@ -74,7 +75,8 @@ func (c *AgentCheckpointer) CheckpointWithGeneration(ctx context.Context, ref k8
 	}
 
 	counting := &countingReader{r: rc}
-	uri, err := c.store.Put(ctx, agentCheckpointKey(ref.Name, generation), counting)
+	writer := session.SnapshotWriter(generation)
+	uri, err := c.store.Put(ctx, session.ArchiveKey(sessionID), writer, counting)
 	closeErr := rc.Close()
 	if err != nil {
 		return nil, fmt.Errorf("store checkpoint archive for pod %s: %w", ref.Name, err)
@@ -87,6 +89,7 @@ func (c *AgentCheckpointer) CheckpointWithGeneration(ctx context.Context, ref k8
 		SizeBytes:  counting.n,
 		CreatedAt:  c.now(),
 		Reclaimed:  "pod " + ref.Name,
+		Writer:     writer,
 		AbortToken: checkpointID,
 	}, nil
 }
@@ -110,23 +113,20 @@ func (c *AgentCheckpointer) Restore(ctx context.Context, cp *session.Checkpoint,
 	if c.store == nil {
 		return fmt.Errorf("restore into pod %s requires a durable store (CHECKPOINT_S3_*)", into.Name)
 	}
-	rc, err := c.store.Get(ctx, cp.Ref)
+	rc, writer, err := c.store.Get(ctx, cp.Ref)
 	if err != nil {
 		return fmt.Errorf("fetch checkpoint %s: %w", cp.Ref, err)
 	}
 	defer rc.Close()
+	if cp.Writer != "" && writer != cp.Writer {
+		// The session's key was overwritten after this record was made. The
+		// archive there is still the session's own, so it is restored.
+		slog.Warn("restoring an archive another writer overwrote", "ref", cp.Ref, "recorded", cp.Writer, "found", writer)
+	}
 	if err := c.client.Restore(ctx, into.Name, rc); err != nil {
 		return fmt.Errorf("restore checkpoint %s into pod %s: %w", cp.Ref, into.Name, err)
 	}
 	return nil
-}
-
-// agentCheckpointKey is the durable object key for a pod's checkpoint archive.
-// The pod name is unique per restore cycle (RestoreInto mints a fresh name) and
-// the generation is unique per attempt, so keys never collide across a
-// session's snapshot→restore history.
-func agentCheckpointKey(pod, generation string) string {
-	return pod + "/" + generation + "/checkpoint.tar"
 }
 
 func validArchiveGeneration(generation string) bool {

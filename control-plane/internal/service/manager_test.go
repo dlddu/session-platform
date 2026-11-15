@@ -137,7 +137,7 @@ type abortTrackingCheckpointer struct {
 
 func (*abortTrackingCheckpointer) Enabled() bool { return true }
 
-func (c *abortTrackingCheckpointer) CheckpointWithGeneration(ctx context.Context, _ k8s.PodRef, generation string) (*session.Checkpoint, error) {
+func (c *abortTrackingCheckpointer) CheckpointWithGeneration(ctx context.Context, sessionID string, _ k8s.PodRef, generation string) (*session.Checkpoint, error) {
 	c.checkpointCalls++
 	c.checkpointGeneration = generation
 	if c.onCheckpoint != nil {

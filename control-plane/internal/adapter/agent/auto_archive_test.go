@@ -21,7 +21,11 @@ import (
 
 func TestHTTPClientAutoArchiveTargetRoundTrip(t *testing.T) {
 	var seen []string
-	var body map[string]string
+	var body struct {
+		URL       string            `json:"url"`
+		ExpiresAt string            `json:"expiresAt"`
+		Headers   map[string]string `json:"headers"`
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = append(seen, r.Method+" "+r.URL.Path)
 		if r.Method == http.MethodPut {
@@ -40,7 +44,8 @@ func TestHTTPClientAutoArchiveTargetRoundTrip(t *testing.T) {
 	c := agent.NewHTTPClient(cs, "sessions", agent.WithPort(port))
 
 	expires := time.Date(2026, 11, 15, 11, 0, 0, 0, time.UTC)
-	if err := c.SetAutoArchiveTarget(context.Background(), "sess-a", "https://b.s3/k?sig=1", expires); err != nil {
+	if err := c.SetAutoArchiveTarget(context.Background(), "sess-a", "https://b.s3/k?sig=1", expires,
+		map[string]string{"X-Amz-Meta-Writer": "pod:sess-a"}); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	if err := c.ClearAutoArchiveTarget(context.Background(), "sess-a"); err != nil {
@@ -50,7 +55,7 @@ func TestHTTPClientAutoArchiveTargetRoundTrip(t *testing.T) {
 	if strings.Join(seen, ",") != strings.Join(want, ",") {
 		t.Fatalf("requests = %v, want %v", seen, want)
 	}
-	if body["url"] != "https://b.s3/k?sig=1" || body["expiresAt"] != "2026-11-15T11:00:00Z" {
+	if body.URL != "https://b.s3/k?sig=1" || body.ExpiresAt != "2026-11-15T11:00:00Z" || body.Headers["X-Amz-Meta-Writer"] != "pod:sess-a" {
 		t.Fatalf("pushed body = %v", body)
 	}
 }

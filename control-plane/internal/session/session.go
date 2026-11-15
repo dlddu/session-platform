@@ -224,6 +224,9 @@ type Checkpoint struct {
 	SizeBytes int64     `json:"sizeBytes"`           // checkpoint image size
 	CreatedAt time.Time `json:"createdAt"`           // when the snapshot was taken
 	Reclaimed string    `json:"reclaimed,omitempty"` // human-readable reclaimed resources, e.g. "2 vCPU · 4 GB"
+	// Writer names who wrote the archive at Ref (ArchiveWriter); the object
+	// carries the same name, so a later overwrite of the key shows (AC-B5).
+	Writer string `json:"writer,omitempty"`
 	// AbortToken identifies the in-flight data-plane archive generation. It is
 	// intentionally transient: the service only needs it until the source pod is
 	// reclaimed, and it must never become API or durable session metadata.

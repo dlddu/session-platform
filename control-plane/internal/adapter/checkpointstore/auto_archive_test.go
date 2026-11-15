@@ -18,19 +18,17 @@ import (
 
 const autoSession = "0123456789abcdef0123456789abcdef"
 
-func TestAutoArchiveRefIsPerPod(t *testing.T) {
+func TestArchiveRefIsOnePerSession(t *testing.T) {
 	store := newWithAPI(&fakeS3{}, "b", "p")
-	ref, err := store.AutoArchiveRef(autoSession, "sess-abc-r1")
+	ref, err := store.ArchiveRef(autoSession)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "s3://b/p/auto/" + autoSession + "/sess-abc-r1/checkpoint.tar"; ref != want {
+	if want := "s3://b/p/sessions/" + autoSession + "/checkpoint.tar"; ref != want {
 		t.Fatalf("ref = %q, want %q", ref, want)
 	}
-	for _, bad := range [][2]string{{"not-a-session", "pod"}, {autoSession, "../x"}, {autoSession, "Pod"}, {autoSession, ""}} {
-		if _, err := store.AutoArchiveRef(bad[0], bad[1]); err == nil {
-			t.Errorf("AutoArchiveRef(%q, %q) succeeded; want a refusal", bad[0], bad[1])
-		}
+	if _, err := store.ArchiveRef("not-a-session"); err == nil {
+		t.Error("ArchiveRef accepted a malformed session id")
 	}
 }
 
@@ -38,25 +36,26 @@ func responseError(status int) error {
 	return &smithyhttp.ResponseError{Response: &smithyhttp.Response{Response: &http.Response{StatusCode: status}}, Err: errors.New("x")}
 }
 
-func TestExistsTellsMissingFromForbidden(t *testing.T) {
-	ref := "s3://b/p/auto/" + autoSession + "/pod/checkpoint.tar"
+func TestArchiveWriterTellsMissingFromForbidden(t *testing.T) {
+	ref := "s3://b/p/sessions/" + autoSession + "/checkpoint.tar"
 	for _, tc := range []struct {
-		name    string
-		headErr error
-		want    bool
-		wantErr bool
+		name       string
+		headErr    error
+		wantWriter string
+		wantExists bool
+		wantErr    bool
 	}{
-		{"present", nil, true, false},
-		{"missing", responseError(http.StatusNotFound), false, false},
-		{"forbidden", responseError(http.StatusForbidden), false, true},
+		{"present", nil, "pod:sess-x", true, false},
+		{"missing", responseError(http.StatusNotFound), "", false, false},
+		{"forbidden", responseError(http.StatusForbidden), "", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fake := &fakeS3{headErr: tc.headErr}
-			got, err := newWithAPI(fake, "b", "p").Exists(context.Background(), ref)
-			if got != tc.want || (err != nil) != tc.wantErr {
-				t.Fatalf("Exists = %v, %v; want %v, error %v", got, err, tc.want, tc.wantErr)
+			fake := &fakeS3{headErr: tc.headErr, headWriter: "pod:sess-x"}
+			writer, exists, err := newWithAPI(fake, "b", "p").ArchiveWriter(context.Background(), ref)
+			if writer != tc.wantWriter || exists != tc.wantExists || (err != nil) != tc.wantErr {
+				t.Fatalf("ArchiveWriter = %q, %v, %v; want %q, %v, error %v", writer, exists, err, tc.wantWriter, tc.wantExists, tc.wantErr)
 			}
-			if aws.ToString(fake.headIn.Key) != "p/auto/"+autoSession+"/pod/checkpoint.tar" {
+			if aws.ToString(fake.headIn.Key) != "p/sessions/"+autoSession+"/checkpoint.tar" {
 				t.Fatalf("head key = %q", aws.ToString(fake.headIn.Key))
 			}
 		})
@@ -73,7 +72,10 @@ type fakePresign struct{ key string }
 
 func (f *fakePresign) PresignPutObject(_ context.Context, in *s3.PutObjectInput, _ ...func(*s3.PresignOptions)) (*v4.PresignedHTTPRequest, error) {
 	f.key = aws.ToString(in.Key)
-	return &v4.PresignedHTTPRequest{URL: "https://b.s3/" + f.key + "?X-Amz-Signature=sig"}, nil
+	return &v4.PresignedHTTPRequest{
+		URL:          "https://b.s3/" + f.key + "?X-Amz-Signature=sig",
+		SignedHeader: http.Header{"Host": {"b.s3"}, "X-Amz-Meta-Writer": {in.Metadata["writer"]}},
+	}, nil
 }
 
 // The URL must not outlive the credentials that signed it. The cache's
@@ -97,15 +99,18 @@ func TestAutoArchiveTargetRefusesShortLivedCredentials(t *testing.T) {
 				creds:   fixedCreds{expires: now.Add(tc.realLeft - credentialsExpiryWindow)},
 				now:     func() time.Time { return now },
 			}
-			got, expires, err := store.AutoArchiveTarget(context.Background(), autoSession, "pod")
+			got, expires, headers, err := store.AutoArchiveTarget(context.Background(), autoSession, "pod")
 			if (err != nil) != tc.wantError {
 				t.Fatalf("AutoArchiveTarget err = %v, want error %v", err, tc.wantError)
 			}
 			if err != nil {
 				return
 			}
-			if !strings.Contains(got, "/p/auto/"+autoSession+"/pod/checkpoint.tar?") || !expires.Equal(now.Add(2*time.Hour)) {
+			if !strings.Contains(got, "/p/sessions/"+autoSession+"/checkpoint.tar?") || !expires.Equal(now.Add(2*time.Hour)) {
 				t.Fatalf("target = %q until %s", got, expires)
+			}
+			if len(headers) != 1 || headers["X-Amz-Meta-Writer"] != "pod:pod" {
+				t.Fatalf("headers = %v, want only the signed writer", headers)
 			}
 		})
 	}
@@ -123,15 +128,21 @@ func TestAutoArchiveURLIsSignedForTwoHoursWithoutChecksum(t *testing.T) {
 		o.BaseEndpoint = aws.String("http://minio:9000")
 		o.UsePathStyle = true
 	})
-	signed, _, err := store.AutoArchiveTarget(context.Background(), autoSession, "pod")
+	signed, _, headers, err := store.AutoArchiveTarget(context.Background(), autoSession, "pod")
 	if err != nil {
 		t.Fatalf("sign: %v", err)
+	}
+	if headers["X-Amz-Meta-Writer"] != "pod:pod" {
+		t.Fatalf("headers = %v, want the writer the signature covers", headers)
 	}
 	u, err := url.Parse(signed)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.Path != "/bucket/prefix/auto/"+autoSession+"/pod/checkpoint.tar" {
+	if !strings.Contains(q0(u), "x-amz-meta-writer") {
+		t.Fatalf("signed headers = %q, want the writer among them", q0(u))
+	}
+	if u.Path != "/bucket/prefix/sessions/"+autoSession+"/checkpoint.tar" {
 		t.Fatalf("path = %q", u.Path)
 	}
 	q := u.Query()
@@ -147,3 +158,5 @@ func TestAutoArchiveURLIsSignedForTwoHoursWithoutChecksum(t *testing.T) {
 		t.Fatalf("base = %q, %v", got, err)
 	}
 }
+
+func q0(u *url.URL) string { return u.Query().Get("X-Amz-SignedHeaders") }

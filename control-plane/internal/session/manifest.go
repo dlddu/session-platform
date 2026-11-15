@@ -93,3 +93,15 @@ func (m *Manifest) SnapshotSession(now time.Time) *Session {
 		Checkpoint:      &cp,
 	}
 }
+
+// ArchiveKey is the session's one archive object, relative to the store's
+// prefix. A snapshot and the pod's automatic archive both overwrite it (AC-B5).
+func ArchiveKey(id string) string {
+	return "sessions/" + id + "/checkpoint.tar"
+}
+
+// SnapshotWriter names a snapshot's archive by its generation.
+func SnapshotWriter(generation string) string { return "generation:" + generation }
+
+// PodWriter names a pod's automatic archive by the pod.
+func PodWriter(pod string) string { return "pod:" + pod }

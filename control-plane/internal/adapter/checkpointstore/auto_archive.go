@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -20,6 +21,17 @@ import (
 const AutoArchiveURLLifetime = MinSigningLifetime
 
 var podNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+
+// writerMetadataKey is the object metadata naming the archive's writer
+// (session.SnapshotWriter, session.PodWriter); S3 sends it as x-amz-meta-writer.
+const writerMetadataKey = "writer"
+
+func writerMetadata(writer string) map[string]string {
+	if writer == "" {
+		return nil
+	}
+	return map[string]string{writerMetadataKey: writer}
+}
 
 type presignAPI interface {
 	PresignPutObject(ctx context.Context, in *s3.PutObjectInput, opts ...func(*s3.PresignOptions)) (*v4.PresignedHTTPRequest, error)
@@ -40,74 +52,87 @@ func newAutoArchiveSigner(base aws.Config, endpoint func(*s3.Options)) *autoArch
 	return &autoArchiveSigner{presign: s3.NewPresignClient(client), creds: base.Credentials, now: time.Now}
 }
 
-func autoArchiveKey(sessionID, pod string) (string, error) {
-	if !session.ValidSessionID(sessionID) || !podNamePattern.MatchString(pod) {
-		return "", fmt.Errorf("automatic archive key for session %q pod %q: malformed name", sessionID, pod)
+func archiveKey(sessionID string) (string, error) {
+	if !session.ValidSessionID(sessionID) {
+		return "", fmt.Errorf("archive key for malformed session id %q", sessionID)
 	}
-	return "auto/" + sessionID + "/" + pod + "/checkpoint.tar", nil
+	return session.ArchiveKey(sessionID), nil
 }
 
-// AutoArchiveRef is the durable ref of the pod's automatic archive. Every
-// upload from the same pod overwrites it.
-func (s *S3) AutoArchiveRef(sessionID, pod string) (string, error) {
-	key, err := autoArchiveKey(sessionID, pod)
+// ArchiveRef is the durable ref of the session's archive, the one key its
+// snapshots and its pods' automatic archives overwrite.
+func (s *S3) ArchiveRef(sessionID string) (string, error) {
+	key, err := archiveKey(sessionID)
 	if err != nil {
 		return "", err
 	}
 	return "s3://" + s.bucket + "/" + s.key(key), nil
 }
 
-// AutoArchiveTarget signs a URL that can upload the pod's automatic archive
-// and nothing else, valid for AutoArchiveURLLifetime from the returned time.
-func (s *S3) AutoArchiveTarget(ctx context.Context, sessionID, pod string) (string, time.Time, error) {
+// AutoArchiveTarget signs a URL that can upload pod's automatic archive to
+// the session's archive key and nothing else, valid for
+// AutoArchiveURLLifetime from the returned time. The upload must carry
+// headers, which name pod as the writer.
+func (s *S3) AutoArchiveTarget(ctx context.Context, sessionID, pod string) (string, time.Time, map[string]string, error) {
 	if s.auto == nil {
-		return "", time.Time{}, errors.New("automatic archive signing is not configured")
+		return "", time.Time{}, nil, errors.New("automatic archive signing is not configured")
 	}
 	now := s.auto.now()
 	if s.auto.creds != nil {
 		creds, err := s.auto.creds.Retrieve(ctx)
 		if err != nil {
-			return "", time.Time{}, fmt.Errorf("credentials for an automatic archive URL: %w", err)
+			return "", time.Time{}, nil, fmt.Errorf("credentials for an automatic archive URL: %w", err)
 		}
 		// The cache reports Expires credentialsExpiryWindow early (store.go).
 		if creds.CanExpire && creds.Expires.Add(credentialsExpiryWindow).Sub(now) < AutoArchiveURLLifetime {
-			return "", time.Time{}, fmt.Errorf("credentials expire at %s, before a URL signed now would",
+			return "", time.Time{}, nil, fmt.Errorf("credentials expire at %s, before a URL signed now would",
 				creds.Expires.Add(credentialsExpiryWindow).UTC().Format(time.RFC3339))
 		}
 	}
-	signed, err := s.signAutoArchive(ctx, sessionID, pod)
+	req, err := s.signAutoArchive(ctx, sessionID, pod)
 	if err != nil {
-		return "", time.Time{}, err
+		return "", time.Time{}, nil, err
 	}
-	return signed, now.Add(AutoArchiveURLLifetime), nil
+	headers := map[string]string{}
+	for name, values := range req.SignedHeader {
+		if strings.EqualFold(name, "host") || len(values) == 0 {
+			continue
+		}
+		headers[name] = values[0]
+	}
+	return req.URL, now.Add(AutoArchiveURLLifetime), headers, nil
 }
 
-// AutoArchiveBase is the pod's upload URL without its signature: the only
-// destination the pod accepts a URL for.
+// AutoArchiveBase is the session's archive URL without a signature: the only
+// destination its pods accept a URL for.
 func (s *S3) AutoArchiveBase(ctx context.Context, sessionID, pod string) (string, error) {
 	if s.auto == nil {
 		return "", errors.New("automatic archive signing is not configured")
 	}
-	signed, err := s.signAutoArchive(ctx, sessionID, pod)
+	req, err := s.signAutoArchive(ctx, sessionID, pod)
 	if err != nil {
 		return "", err
 	}
-	return URLBase(signed)
+	return URLBase(req.URL)
 }
 
-func (s *S3) signAutoArchive(ctx context.Context, sessionID, pod string) (string, error) {
-	key, err := autoArchiveKey(sessionID, pod)
+func (s *S3) signAutoArchive(ctx context.Context, sessionID, pod string) (*v4.PresignedHTTPRequest, error) {
+	key, err := archiveKey(sessionID)
 	if err != nil {
-		return "", err
+		return nil, err
+	}
+	if !podNamePattern.MatchString(pod) {
+		return nil, fmt.Errorf("automatic archive for malformed pod name %q", pod)
 	}
 	req, err := s.auto.presign.PresignPutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(s.key(key)),
+		Bucket:   aws.String(s.bucket),
+		Key:      aws.String(s.key(key)),
+		Metadata: writerMetadata(session.PodWriter(pod)),
 	}, s3.WithPresignExpires(AutoArchiveURLLifetime))
 	if err != nil {
-		return "", fmt.Errorf("sign automatic archive upload for pod %s: %w", pod, err)
+		return nil, fmt.Errorf("sign automatic archive upload for pod %s: %w", pod, err)
 	}
-	return req.URL, nil
+	return req, nil
 }
 
 // URLBase strips the query and fragment from raw.
@@ -120,20 +145,22 @@ func URLBase(raw string) (string, error) {
 	return u.String(), nil
 }
 
-// Exists reports whether the object at ref is there.
-func (s *S3) Exists(ctx context.Context, ref string) (bool, error) {
+// ArchiveWriter reports who last wrote the object at ref, and whether there
+// is an object at all.
+func (s *S3) ArchiveWriter(ctx context.Context, ref string) (string, bool, error) {
 	bucket, key, err := parseRef(ref)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
-	if _, err := s.api.HeadObject(ctx, &s3.HeadObjectInput{
+	out, err := s.api.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
-	}); err != nil {
+	})
+	if err != nil {
 		if isMissingObject(err) {
-			return false, nil
+			return "", false, nil
 		}
-		return false, fmt.Errorf("head %s: %w", ref, err)
+		return "", false, fmt.Errorf("head %s: %w", ref, err)
 	}
-	return true, nil
+	return out.Metadata[writerMetadataKey], true, nil
 }

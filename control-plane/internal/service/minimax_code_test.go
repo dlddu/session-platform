@@ -24,9 +24,9 @@ type generationRecorder struct {
 	generations int
 }
 
-func (g *generationRecorder) CheckpointWithGeneration(ctx context.Context, ref k8s.PodRef, generation string) (*session.Checkpoint, error) {
+func (g *generationRecorder) CheckpointWithGeneration(ctx context.Context, sessionID string, ref k8s.PodRef, generation string) (*session.Checkpoint, error) {
 	g.generations++
-	return g.StubCheckpointer.CheckpointWithGeneration(ctx, ref, generation)
+	return g.StubCheckpointer.CheckpointWithGeneration(ctx, sessionID, ref, generation)
 }
 
 // newMiniMaxService wires the archive checkpointer for minimax-code only when

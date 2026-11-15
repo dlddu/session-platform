@@ -17,14 +17,15 @@ import (
 const AutoArchiveTargetPath = "/auto-archive/target"
 
 type autoArchiveTarget struct {
-	URL       string    `json:"url"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	URL       string            `json:"url"`
+	ExpiresAt time.Time         `json:"expiresAt"`
+	Headers   map[string]string `json:"headers,omitempty"`
 }
 
 // SetAutoArchiveTarget hands the pod's agent the upload URL it may use until
-// expires.
-func (c *HTTPClient) SetAutoArchiveTarget(ctx context.Context, pod, url string, expires time.Time) error {
-	body, err := json.Marshal(autoArchiveTarget{URL: url, ExpiresAt: expires.UTC()})
+// expires, with the headers its signature covers.
+func (c *HTTPClient) SetAutoArchiveTarget(ctx context.Context, pod, url string, expires time.Time, headers map[string]string) error {
+	body, err := json.Marshal(autoArchiveTarget{URL: url, ExpiresAt: expires.UTC(), Headers: headers})
 	if err != nil {
 		return err
 	}

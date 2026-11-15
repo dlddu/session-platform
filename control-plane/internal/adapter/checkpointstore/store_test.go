@@ -20,12 +20,14 @@ type fakeS3 struct {
 	putBody []byte
 	putErr  error
 
-	getIn   *s3.GetObjectInput
-	getBody string
-	getErr  error
+	getIn     *s3.GetObjectInput
+	getBody   string
+	getWriter string
+	getErr    error
 
-	headIn  *s3.HeadObjectInput
-	headErr error
+	headIn     *s3.HeadObjectInput
+	headErr    error
+	headWriter string
 }
 
 func (f *fakeS3) HeadObject(_ context.Context, in *s3.HeadObjectInput, _ ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
@@ -33,7 +35,7 @@ func (f *fakeS3) HeadObject(_ context.Context, in *s3.HeadObjectInput, _ ...func
 	if f.headErr != nil {
 		return nil, f.headErr
 	}
-	return &s3.HeadObjectOutput{}, nil
+	return &s3.HeadObjectOutput{Metadata: map[string]string{"writer": f.headWriter}}, nil
 }
 
 func (f *fakeS3) PutObject(_ context.Context, in *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
@@ -49,7 +51,10 @@ func (f *fakeS3) GetObject(_ context.Context, in *s3.GetObjectInput, _ ...func(*
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
-	return &s3.GetObjectOutput{Body: io.NopCloser(strings.NewReader(f.getBody))}, nil
+	return &s3.GetObjectOutput{
+		Body:     io.NopCloser(strings.NewReader(f.getBody)),
+		Metadata: map[string]string{"writer": f.getWriter},
+	}, nil
 }
 
 var _ objectAPI = (*fakeS3)(nil)
@@ -58,7 +63,7 @@ func TestS3_PutStoresUnderPrefixAndReturnsRef(t *testing.T) {
 	fake := &fakeS3{}
 	store := newWithAPI(fake, "ckpt-bucket", "checkpoints")
 
-	ref, err := store.Put(context.Background(), "sessions/sess-abcd/checkpoint-1.tar", strings.NewReader("ARCHIVE-BYTES"))
+	ref, err := store.Put(context.Background(), "sessions/sess-abcd/checkpoint-1.tar", "generation:g", strings.NewReader("ARCHIVE-BYTES"))
 	if err != nil {
 		t.Fatalf("put: %v", err)
 	}
@@ -73,6 +78,9 @@ func TestS3_PutStoresUnderPrefixAndReturnsRef(t *testing.T) {
 	}
 	if string(fake.putBody) != "ARCHIVE-BYTES" {
 		t.Errorf("uploaded body = %q, want the archive bytes verbatim", fake.putBody)
+	}
+	if got := fake.putIn.Metadata["writer"]; got != "generation:g" {
+		t.Errorf("writer metadata = %q, want generation:g", got)
 	}
 	if store.Bucket() != "ckpt-bucket" {
 		t.Errorf("Bucket() = %q, want ckpt-bucket", store.Bucket())
@@ -93,7 +101,7 @@ func TestS3_PutSpoolsUnseekableStream(t *testing.T) {
 	store := newWithAPI(fake, "b", "p")
 
 	archive := strings.Repeat("FILESYSTEM-ARCHIVE-", 1000)
-	ref, err := store.Put(context.Background(), "sess-abcd/checkpoint.tar",
+	ref, err := store.Put(context.Background(), "sess-abcd/checkpoint.tar", "generation:g",
 		unseekableReader{r: strings.NewReader(archive)})
 	if err != nil {
 		t.Fatalf("put of an unseekable stream: %v", err)
@@ -111,7 +119,7 @@ func TestS3_PutSpoolsUnseekableStream(t *testing.T) {
 func TestS3_PutDefaultsPrefix(t *testing.T) {
 	fake := &fakeS3{}
 	store := newWithAPI(fake, "b", "")
-	if _, err := store.Put(context.Background(), "k.tar", strings.NewReader("x")); err != nil {
+	if _, err := store.Put(context.Background(), "k.tar", "generation:g", strings.NewReader("x")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	if got := *fake.putIn.Key; got != defaultPrefix+"/k.tar" {
@@ -122,18 +130,21 @@ func TestS3_PutDefaultsPrefix(t *testing.T) {
 func TestS3_PutSurfacesError(t *testing.T) {
 	fake := &fakeS3{putErr: errors.New("access denied")}
 	store := newWithAPI(fake, "b", "p")
-	if _, err := store.Put(context.Background(), "k.tar", strings.NewReader("x")); err == nil {
+	if _, err := store.Put(context.Background(), "k.tar", "generation:g", strings.NewReader("x")); err == nil {
 		t.Fatal("put succeeded despite PutObject failure; want error")
 	}
 }
 
 func TestS3_GetParsesRefAndStreams(t *testing.T) {
-	fake := &fakeS3{getBody: "RESTORED-ARCHIVE"}
+	fake := &fakeS3{getBody: "RESTORED-ARCHIVE", getWriter: "pod:sess-x"}
 	store := newWithAPI(fake, "b", "p")
 
-	rc, err := store.Get(context.Background(), "s3://other-bucket/checkpoints/sessions/sess-x/c.tar")
+	rc, writer, err := store.Get(context.Background(), "s3://other-bucket/checkpoints/sessions/sess-x/c.tar")
 	if err != nil {
 		t.Fatalf("get: %v", err)
+	}
+	if writer != "pod:sess-x" {
+		t.Errorf("writer = %q, want the object's writer metadata", writer)
 	}
 	defer rc.Close()
 	body, _ := io.ReadAll(rc)
@@ -152,7 +163,7 @@ func TestS3_GetParsesRefAndStreams(t *testing.T) {
 func TestS3_GetRejectsBadRef(t *testing.T) {
 	store := newWithAPI(&fakeS3{}, "b", "p")
 	for _, ref := range []string{"", "not-s3", "s3://", "s3://bucket-only", "s3://bucket/"} {
-		if _, err := store.Get(context.Background(), ref); err == nil {
+		if _, _, err := store.Get(context.Background(), ref); err == nil {
 			t.Errorf("Get(%q) succeeded; want error for a malformed ref", ref)
 		}
 	}
