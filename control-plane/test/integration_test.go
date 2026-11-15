@@ -186,29 +186,36 @@ func realService(t *testing.T) *service.Service {
 }
 
 type memStore struct {
-	mu    sync.Mutex
-	blobs map[string][]byte
+	mu      sync.Mutex
+	blobs   map[string][]byte
+	writers map[string]string
 }
 
-func (m *memStore) Put(_ context.Context, key string, r io.Reader) (string, error) {
+func (m *memStore) Put(_ context.Context, key, writer string, r io.Reader) (string, error) {
 	b, err := io.ReadAll(r)
 	if err != nil {
 		return "", err
 	}
 	m.mu.Lock()
 	m.blobs[key] = b
+	if m.writers == nil {
+		m.writers = map[string]string{}
+	}
+	m.writers[key] = writer
 	m.mu.Unlock()
 	return "mem://" + key, nil
 }
 
-func (m *memStore) Get(_ context.Context, ref string) (io.ReadCloser, error) {
+func (m *memStore) Get(_ context.Context, ref string) (io.ReadCloser, string, error) {
+	key := strings.TrimPrefix(ref, "mem://")
 	m.mu.Lock()
-	b, ok := m.blobs[strings.TrimPrefix(ref, "mem://")]
+	b, ok := m.blobs[key]
+	writer := m.writers[key]
 	m.mu.Unlock()
 	if !ok {
-		return nil, fmt.Errorf("mem store: %s not found", ref)
+		return nil, "", fmt.Errorf("mem store: %s not found", ref)
 	}
-	return io.NopCloser(bytes.NewReader(b)), nil
+	return io.NopCloser(bytes.NewReader(b)), writer, nil
 }
 
 func createReal(t *testing.T, svc *service.Service, name string) *session.Session {

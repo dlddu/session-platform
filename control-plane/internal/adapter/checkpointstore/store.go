@@ -128,14 +128,14 @@ func newWithAPI(api objectAPI, bucket, prefix string) *S3 {
 func (s *S3) Bucket() string { return s.bucket }
 
 // Put uploads the archive read from r under key (joined with the configured
-// prefix) and returns its durable s3:// ref.
+// prefix), recording writer on the object, and returns its durable s3:// ref.
 //
 // The archive arrives as an unseekable stream of unknown length — the pod agent
 // produces it while archiving — which S3 cannot take directly: the SDK needs a
 // seekable body to compute the request checksum and Content-Length, and its
 // fallback (trailing checksums over an aws-chunked body) requires TLS. So spool
 // the stream to a temp file first and upload that.
-func (s *S3) Put(ctx context.Context, key string, r io.Reader) (string, error) {
+func (s *S3) Put(ctx context.Context, key, writer string, r io.Reader) (string, error) {
 	full := s.key(key)
 
 	spool, err := os.CreateTemp("", "checkpoint-*.tar")
@@ -154,30 +154,31 @@ func (s *S3) Put(ctx context.Context, key string, r io.Reader) (string, error) {
 	}
 
 	if _, err := s.api.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(full),
-		Body:   spool,
+		Bucket:   aws.String(s.bucket),
+		Key:      aws.String(full),
+		Body:     spool,
+		Metadata: writerMetadata(writer),
 	}); err != nil {
 		return "", fmt.Errorf("put s3://%s/%s: %w", s.bucket, full, err)
 	}
 	return "s3://" + s.bucket + "/" + full, nil
 }
 
-// Get opens the archive at ref (an s3:// URI) for reading. The caller closes the
-// returned reader.
-func (s *S3) Get(ctx context.Context, ref string) (io.ReadCloser, error) {
+// Get opens the archive at ref (an s3:// URI) for reading, with the object's
+// writer metadata. The caller closes the returned reader.
+func (s *S3) Get(ctx context.Context, ref string) (io.ReadCloser, string, error) {
 	bucket, key, err := parseRef(ref)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	out, err := s.api.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("get %s: %w", ref, err)
+		return nil, "", fmt.Errorf("get %s: %w", ref, err)
 	}
-	return out.Body, nil
+	return out.Body, out.Metadata[writerMetadataKey], nil
 }
 
 // key joins the configured prefix with a per-archive key.

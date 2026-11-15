@@ -48,6 +48,7 @@ var (
 	errAutoArchiveNoBase      = errors.New("this pod takes no automatic archive URL")
 	errAutoArchiveDestination = errors.New("the URL does not point at this pod's automatic archive")
 	errAutoArchiveExpired     = errors.New("the URL has already expired")
+	errAutoArchiveHeader      = errors.New("only x-amz-meta-* headers can accompany the URL")
 )
 
 // autoArchiveTarget holds the URL the control plane pushed, checked against
@@ -57,6 +58,7 @@ type autoArchiveTarget struct {
 
 	mu      sync.Mutex
 	url     string
+	headers http.Header
 	expires time.Time
 }
 
@@ -64,7 +66,7 @@ func newAutoArchiveTarget(base string) *autoArchiveTarget {
 	return &autoArchiveTarget{base: strings.TrimSpace(base)}
 }
 
-func (t *autoArchiveTarget) set(raw string, expires, now time.Time) error {
+func (t *autoArchiveTarget) set(raw string, headers map[string]string, expires, now time.Time) error {
 	if t.base == "" {
 		return errAutoArchiveNoBase
 	}
@@ -74,25 +76,49 @@ func (t *autoArchiveTarget) set(raw string, expires, now time.Time) error {
 	if base, err := urlWithoutQuery(raw); err != nil || base != t.base {
 		return errAutoArchiveDestination
 	}
+	signed, err := metadataHeaders(headers)
+	if err != nil {
+		return err
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.url, t.expires = raw, expires
+	t.url, t.headers, t.expires = raw, signed, expires
 	return nil
+}
+
+// metadataHeaders admits only the object metadata the URL's signature covers.
+func metadataHeaders(in map[string]string) (http.Header, error) {
+	out := http.Header{}
+	for name, value := range in {
+		if !strings.HasPrefix(strings.ToLower(name), "x-amz-meta-") || strings.ContainsAny(value, "\r\n") {
+			return nil, errAutoArchiveHeader
+		}
+		out.Set(name, value)
+	}
+	return out, nil
+}
+
+func copyMetadataHeaders(dst, src http.Header) {
+	for name, values := range src {
+		if strings.HasPrefix(strings.ToLower(name), "x-amz-meta-") && len(values) > 0 {
+			dst.Set(name, values[0])
+		}
+	}
 }
 
 func (t *autoArchiveTarget) clear() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.url, t.expires = "", time.Time{}
+	t.url, t.headers, t.expires = "", nil, time.Time{}
 }
 
-func (t *autoArchiveTarget) current(now time.Time) (string, bool) {
+func (t *autoArchiveTarget) current(now time.Time) (string, http.Header, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.url == "" || !t.expires.After(now) {
-		return "", false
+		return "", nil, false
 	}
-	return t.url, true
+	return t.url, t.headers.Clone(), true
 }
 
 func (t *autoArchiveTarget) matches(raw string) bool {
@@ -133,14 +159,15 @@ func withAutoArchive(next http.Handler, run *autoArchiveRunner) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("PUT "+autoArchiveTargetPath, func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			URL       string    `json:"url"`
-			ExpiresAt time.Time `json:"expiresAt"`
+			URL       string            `json:"url"`
+			ExpiresAt time.Time         `json:"expiresAt"`
+			Headers   map[string]string `json:"headers"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, maxAutoArchiveTargetLen)).Decode(&body); err != nil {
 			http.Error(w, "decode automatic archive target: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := run.target.set(body.URL, body.ExpiresAt, run.now()); err != nil {
+		if err := run.target.set(body.URL, body.Headers, body.ExpiresAt, run.now()); err != nil {
 			status := http.StatusBadRequest
 			if errors.Is(err, errAutoArchiveNoBase) {
 				status = http.StatusConflict
@@ -170,7 +197,7 @@ func withAutoArchive(next http.Handler, run *autoArchiveRunner) http.Handler {
 // run archives and uploads once, reporting what happened in one line. Any
 // failure leaves the pod to terminate without an archive.
 func (r *autoArchiveRunner) run(ctx context.Context) string {
-	target, ok := r.target.current(r.now())
+	target, headers, ok := r.target.current(r.now())
 	if !ok {
 		r.logger.Info("automatic archive skipped: no valid upload URL")
 		return "skipped: no valid upload URL"
@@ -206,7 +233,7 @@ func (r *autoArchiveRunner) run(ctx context.Context) string {
 	if _, err := spool.Seek(0, io.SeekStart); err != nil {
 		return r.fail("rewind", err)
 	}
-	if err := r.upload(ctx, target, spool, size); err != nil {
+	if err := r.upload(ctx, target, headers, spool, size); err != nil {
 		return r.fail("upload", err)
 	}
 	r.logger.Info("automatic archive uploaded", "bytes", size, "relay", r.relay != "")
@@ -218,7 +245,7 @@ func (r *autoArchiveRunner) fail(step string, err error) string {
 	return "failed: " + step + ": " + err.Error()
 }
 
-func (r *autoArchiveRunner) upload(ctx context.Context, target string, body io.Reader, size int64) error {
+func (r *autoArchiveRunner) upload(ctx context.Context, target string, headers http.Header, body io.Reader, size int64) error {
 	dest := target
 	if r.relay != "" {
 		dest = strings.TrimRight(r.relay, "/") + autoArchiveRelayPath
@@ -229,6 +256,7 @@ func (r *autoArchiveRunner) upload(ctx context.Context, target string, body io.R
 	}
 	req.ContentLength = size
 	req.Header.Set("Content-Type", "application/x-tar")
+	copyMetadataHeaders(req.Header, headers)
 	if r.relay != "" {
 		req.Header.Set(autoArchiveURLHeader, target)
 	}
@@ -350,6 +378,7 @@ func withAutoArchiveRelay(next http.Handler, relay *autoArchiveRelay) http.Handl
 		}
 		req.ContentLength = r.ContentLength
 		req.Header.Set("Content-Type", "application/x-tar")
+		copyMetadataHeaders(req.Header, r.Header)
 		if err := doUpload(relay.client, req); err != nil {
 			relay.logger.Error("automatic archive relay failed", "err", err)
 			http.Error(w, err.Error(), http.StatusBadGateway)

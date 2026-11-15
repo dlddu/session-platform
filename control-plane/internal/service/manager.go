@@ -677,7 +677,7 @@ func (s *Service) snapshotWithTransactionLocked(
 		return nil, err
 	}
 
-	cp, err := ckpt.CheckpointWithGeneration(ctx, podRef, generation)
+	cp, err := ckpt.CheckpointWithGeneration(ctx, sess.ID, podRef, generation)
 	if err != nil {
 		if ctx.Err() != nil {
 			// Renewal loss (or caller cancellation) leaves the durable prepare for
@@ -1104,11 +1104,13 @@ func (s *Service) Recover(ctx context.Context, id string, admit func(*session.Se
 		return nil, fmt.Errorf("manifest for %s names session %s", id, m.ID)
 	}
 	if m.AutoArchive != nil && s.autoArchives != nil {
-		exists, err := s.autoArchives.Exists(ctx, m.AutoArchive.Ref)
+		// The automatic archive wins when its pod's upload is what the key
+		// holds; otherwise the key still holds the last snapshot (AC-B5).
+		writer, exists, err := s.autoArchives.ArchiveWriter(ctx, m.AutoArchive.Ref)
 		if err != nil {
 			return nil, err
 		}
-		if exists {
+		if exists && (writer == m.AutoArchive.Writer || m.AutoArchive.Writer == "" || m.Checkpoint.Ref == "") {
 			m.Checkpoint = *m.AutoArchive
 		}
 	}

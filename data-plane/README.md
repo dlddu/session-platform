@@ -343,9 +343,12 @@ tree and reopens writes. A process that daemonized out of the shell's tree is
 not paused.
 
 Every workload agent also archives itself when its pod is terminated (AC-B5).
-The control plane pushes an upload URL signed for this pod's key alone with
-`PUT /auto-archive/target` (`{url, expiresAt}`; the agent refuses any URL whose
-address differs from `AUTO_ARCHIVE_URL_BASE`, set at pod creation) and takes it
+The control plane pushes an upload URL signed for the session's one archive key
+(`sessions/<id>/checkpoint.tar`, which snapshots also overwrite) with
+`PUT /auto-archive/target` (`{url, expiresAt, headers}`; the agent refuses any URL
+whose address differs from `AUTO_ARCHIVE_URL_BASE`, set at pod creation, and any
+header other than the `x-amz-meta-*` the signature covers — `x-amz-meta-writer:
+pod:<name>`, sent with the upload) and takes it
 back with `DELETE` before reclaiming the pod after a committed snapshot. The
 pod's exec preStop hook (`/agent auto-archive-prestop /auto-archive/run`) calls
 `GET /auto-archive/run` on loopback: with a valid URL the agent stops the running

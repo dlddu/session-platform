@@ -59,21 +59,25 @@ func (f *fakeAgentClient) AbortCheckpoint(_ context.Context, pod, checkpointID s
 var _ archive.AgentCheckpointClient = (*fakeAgentClient)(nil)
 
 type fakeStore struct {
-	ref      string
-	err      error
-	gotKey   string
-	gotBytes []byte
+	ref       string
+	err       error
+	gotKey    string
+	gotWriter string
+	gotBytes  []byte
 }
 
-func (f *fakeStore) Put(_ context.Context, key string, r io.Reader) (string, error) {
+func (f *fakeStore) Put(_ context.Context, key, writer string, r io.Reader) (string, error) {
 	f.gotKey = key
+	f.gotWriter = writer
 	f.gotBytes, _ = io.ReadAll(r)
 	return f.ref, f.err
 }
 
-func (f *fakeStore) Get(_ context.Context, _ string) (io.ReadCloser, error) {
-	return io.NopCloser(bytes.NewReader(f.gotBytes)), nil
+func (f *fakeStore) Get(_ context.Context, _ string) (io.ReadCloser, string, error) {
+	return io.NopCloser(bytes.NewReader(f.gotBytes)), f.gotWriter, nil
 }
+
+const testSessionID = "0123456789abcdef0123456789abcdef"
 
 var _ archive.CheckpointStore = (*fakeStore)(nil)
 
@@ -86,7 +90,7 @@ func TestAgentCheckpointer_CheckpointStreamsToStore(t *testing.T) {
 	if !c.Enabled() {
 		t.Fatal("agent checkpointer must report Enabled() == true")
 	}
-	cp, err := c.CheckpointWithGeneration(context.Background(), k8s.PodRef{Name: "sess-abcd"}, testGeneration)
+	cp, err := c.CheckpointWithGeneration(context.Background(), testSessionID, k8s.PodRef{Name: "sess-abcd"}, testGeneration)
 	if err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -112,7 +116,7 @@ func TestAgentCheckpointer_UsesControlPlaneGeneration(t *testing.T) {
 	store := &fakeStore{ref: "s3://bucket/archive.tar"}
 	c := archive.NewAgentCheckpointer(client, store)
 
-	cp, err := c.CheckpointWithGeneration(context.Background(), k8s.PodRef{Name: "agent-pod"}, testGeneration)
+	cp, err := c.CheckpointWithGeneration(context.Background(), testSessionID, k8s.PodRef{Name: "agent-pod"}, testGeneration)
 	if err != nil {
 		t.Fatalf("checkpoint with generation: %v", err)
 	}
@@ -122,8 +126,13 @@ func TestAgentCheckpointer_UsesControlPlaneGeneration(t *testing.T) {
 	if cp.AbortToken != testGeneration {
 		t.Fatalf("checkpoint abort token = %q, want %q", cp.AbortToken, testGeneration)
 	}
-	if want := "agent-pod/" + testGeneration + "/checkpoint.tar"; store.gotKey != want {
+	// Every snapshot of a session overwrites its one archive key, recording
+	// its generation as the writer (AC-B5).
+	if want := "sessions/" + testSessionID + "/checkpoint.tar"; store.gotKey != want {
 		t.Fatalf("archive key = %q, want %q", store.gotKey, want)
+	}
+	if want := "generation:" + testGeneration; store.gotWriter != want || cp.Writer != want {
+		t.Fatalf("writer stored %q recorded %q, want %q", store.gotWriter, cp.Writer, want)
 	}
 }
 
@@ -132,7 +141,7 @@ func TestAgentCheckpointer_RejectsInvalidGenerationBeforeAgent(t *testing.T) {
 	c := archive.NewAgentCheckpointer(client, &fakeStore{})
 	for _, generation := range []string{"", "short", "0123456789ABCDEF0123456789ABCDEF"} {
 		if _, err := c.CheckpointWithGeneration(
-			context.Background(), k8s.PodRef{Name: "agent-pod"}, generation,
+			context.Background(), testSessionID, k8s.PodRef{Name: "agent-pod"}, generation,
 		); err == nil {
 			t.Fatalf("generation %q was accepted", generation)
 		}
@@ -146,7 +155,7 @@ func TestAgentCheckpointer_RejectsMismatchedAgentGeneration(t *testing.T) {
 	client := &fakeAgentClient{archive: []byte("archive"), checkpointID: "ffffffffffffffffffffffffffffffff"}
 	store := &fakeStore{}
 	c := archive.NewAgentCheckpointer(client, store)
-	if _, err := c.CheckpointWithGeneration(context.Background(), k8s.PodRef{Name: "agent-pod"}, testGeneration); err == nil {
+	if _, err := c.CheckpointWithGeneration(context.Background(), testSessionID, k8s.PodRef{Name: "agent-pod"}, testGeneration); err == nil {
 		t.Fatal("checkpoint accepted an archive echoing a different generation")
 	}
 	if store.gotKey != "" {
@@ -156,7 +165,7 @@ func TestAgentCheckpointer_RejectsMismatchedAgentGeneration(t *testing.T) {
 
 func TestAgentCheckpointer_CheckpointRequiresStore(t *testing.T) {
 	c := archive.NewAgentCheckpointer(&fakeAgentClient{archive: []byte("x")}, nil)
-	if _, err := c.CheckpointWithGeneration(context.Background(), k8s.PodRef{Name: "p"}, testGeneration); err == nil {
+	if _, err := c.CheckpointWithGeneration(context.Background(), testSessionID, k8s.PodRef{Name: "p"}, testGeneration); err == nil {
 		t.Fatal("checkpoint without a store succeeded; want error")
 	}
 }
@@ -164,7 +173,7 @@ func TestAgentCheckpointer_CheckpointRequiresStore(t *testing.T) {
 func TestAgentCheckpointer_CheckpointSurfacesClientError(t *testing.T) {
 	client := &fakeAgentClient{checkpointErr: errors.New("agent unreachable")}
 	c := archive.NewAgentCheckpointer(client, &fakeStore{})
-	if _, err := c.CheckpointWithGeneration(context.Background(), k8s.PodRef{Name: "p"}, testGeneration); err == nil {
+	if _, err := c.CheckpointWithGeneration(context.Background(), testSessionID, k8s.PodRef{Name: "p"}, testGeneration); err == nil {
 		t.Fatal("checkpoint succeeded despite agent failure; want error")
 	}
 }
@@ -175,7 +184,7 @@ func TestAgentCheckpointer_StoreFailureDefersAbortToService(t *testing.T) {
 	c := archive.NewAgentCheckpointer(client, store)
 
 	if _, err := c.CheckpointWithGeneration(
-		context.Background(), k8s.PodRef{Name: "agent-pod"}, testGeneration,
+		context.Background(), testSessionID, k8s.PodRef{Name: "agent-pod"}, testGeneration,
 	); !errors.Is(err, store.err) {
 		t.Fatalf("checkpoint error = %v, want store failure", err)
 	}
@@ -224,5 +233,20 @@ func TestAgentCheckpointer_RestoreRejectsEmpty(t *testing.T) {
 	}
 	if err := c.Restore(context.Background(), &session.Checkpoint{Ref: ""}, k8s.PodRef{Name: "p"}); err == nil {
 		t.Error("restore with empty ref succeeded; want error")
+	}
+}
+
+// AC-B5: an archive another writer overwrote is still the session's own, so
+// the restore goes ahead.
+func TestAgentCheckpointer_RestoresAnOverwrittenArchive(t *testing.T) {
+	store := &fakeStore{gotBytes: []byte("NEWER"), gotWriter: "pod:sess-abcd-r2"}
+	client := &fakeAgentClient{}
+	c := archive.NewAgentCheckpointer(client, store)
+	cp := &session.Checkpoint{Ref: "s3://ckpt/p/sessions/x/checkpoint.tar", Writer: "generation:" + testGeneration}
+	if err := c.Restore(context.Background(), cp, k8s.PodRef{Name: "sess-abcd-r3"}); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if string(client.gotRestoreBytes) != "NEWER" {
+		t.Fatalf("agent received %q, want what the key holds", client.gotRestoreBytes)
 	}
 }

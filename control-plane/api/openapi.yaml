@@ -1095,6 +1095,12 @@ components:
         sizeBytes: { type: integer, format: int64 }
         createdAt: { type: string, format: date-time }
         reclaimed: { type: string }
+        writer:
+          type: string
+          description: >
+            Who wrote the archive: `generation:<id>` for a snapshot, `pod:<name>`
+            for a pod's automatic archive (AC-B5). Absent for archives written
+            before it was recorded.
     Session:
       type: object
       required: [id, name, state, workloadType, createdAt, lastAccess]

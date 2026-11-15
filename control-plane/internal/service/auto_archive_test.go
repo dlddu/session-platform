@@ -62,7 +62,10 @@ func (a *autoAgent) RefreshPlugins(context.Context, string) (session.PluginChang
 	return session.PluginChanges{}, nil
 }
 
-func (a *autoAgent) SetAutoArchiveTarget(_ context.Context, pod, url string, _ time.Time) error {
+func (a *autoAgent) SetAutoArchiveTarget(_ context.Context, pod, url string, _ time.Time, headers map[string]string) error {
+	if headers["X-Amz-Meta-Writer"] != session.PodWriter(pod) {
+		return fmt.Errorf("pushed headers %v do not name pod %s", headers, pod)
+	}
 	if err := a.fail(pod); err != nil {
 		return err
 	}
@@ -85,38 +88,44 @@ func (a *autoAgent) pushes(pod string) []string {
 	return append([]string(nil), a.pushed[pod]...)
 }
 
-// memAutoArchives signs numbered URLs and keeps the set of uploaded refs.
+// memAutoArchives signs numbered URLs and keeps the writer of each
+// session's one archive key.
 type memAutoArchives struct {
 	mu      sync.Mutex
 	now     func() time.Time
 	signed  int
-	present map[string]bool
+	writers map[string]string
 }
 
-func (m *memAutoArchives) AutoArchiveTarget(_ context.Context, id, pod string) (string, time.Time, error) {
+func (m *memAutoArchives) AutoArchiveTarget(_ context.Context, id, pod string) (string, time.Time, map[string]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.signed++
-	return fmt.Sprintf("https://bucket.s3/auto/%s/%s/checkpoint.tar?sig=%d", id, pod, m.signed), m.now().Add(2 * time.Hour), nil
+	return fmt.Sprintf("https://bucket.s3/sessions/%s/checkpoint.tar?sig=%d", id, m.signed), m.now().Add(2 * time.Hour),
+		map[string]string{"X-Amz-Meta-Writer": session.PodWriter(pod)}, nil
 }
 
-func (m *memAutoArchives) AutoArchiveRef(id, pod string) (string, error) {
-	return "s3://bucket/auto/" + id + "/" + pod + "/checkpoint.tar", nil
+func (m *memAutoArchives) ArchiveRef(id string) (string, error) {
+	return "s3://bucket/sessions/" + id + "/checkpoint.tar", nil
 }
 
-func (m *memAutoArchives) Exists(_ context.Context, ref string) (bool, error) {
+func (m *memAutoArchives) ArchiveWriter(_ context.Context, ref string) (string, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.present[ref], nil
+	writer, ok := m.writers[ref]
+	return writer, ok, nil
 }
 
-func (m *memAutoArchives) upload(id, pod string) string {
-	ref, _ := m.AutoArchiveRef(id, pod)
+// write overwrites the session's archive key as writer would.
+func (m *memAutoArchives) write(id, writer string) string {
+	ref, _ := m.ArchiveRef(id)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.present[ref] = true
+	m.writers[ref] = writer
 	return ref
 }
+
+func (m *memAutoArchives) upload(id, pod string) string { return m.write(id, session.PodWriter(pod)) }
 
 func (m *memAutoArchives) signatures() int {
 	m.mu.Lock()
@@ -168,7 +177,7 @@ func newAutoFixture() *autoFixture {
 		ckpt:      &restoreRecorder{StubCheckpointer: archive.NewStubCheckpointer(true)},
 		clock:     time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC),
 	}
-	f.archives = &memAutoArchives{now: f.now, present: map[string]bool{}}
+	f.archives = &memAutoArchives{now: f.now, writers: map[string]string{}}
 	f.svc = service.New(f.orch, f.store, f.ckpt, f.agent,
 		service.WithSessionManifests(f.manifests),
 		service.WithAutoArchives(f.archives),
@@ -215,7 +224,7 @@ func TestAutoArchiveURLIsDeliveredOnCreate(t *testing.T) {
 	f := newAutoFixture()
 	sess := f.create(t, "armed")
 	got := f.agent.pushes(sess.Pod)
-	if len(got) != 1 || !strings.Contains(got[0], "/auto/"+sess.ID+"/"+sess.Pod+"/") {
+	if len(got) != 1 || !strings.Contains(got[0], "/sessions/"+sess.ID+"/checkpoint.tar") {
 		t.Fatalf("pushed URLs = %v, want one for the session's pod", got)
 	}
 }
@@ -265,7 +274,7 @@ func TestLostPodWithAutomaticArchiveIsRestored(t *testing.T) {
 			f := newAutoFixture()
 			sess := f.create(t, "spot-"+op)
 			f.losePod(t, sess, true)
-			want, _ := f.archives.AutoArchiveRef(sess.ID, sess.Pod)
+			want, _ := f.archives.ArchiveRef(sess.ID)
 
 			var err error
 			if op == "read" {
@@ -372,11 +381,31 @@ func TestDeletedSessionRecoversFromItsAutomaticArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	autoRef, _ := f.archives.AutoArchiveRef(sess.ID, live.Pod)
-	if m.AutoArchive == nil || m.AutoArchive.Ref != autoRef || m.Checkpoint.Ref != snapRef {
+	autoRef, _ := f.archives.ArchiveRef(sess.ID)
+	if m.AutoArchive == nil || m.AutoArchive.Ref != autoRef || m.AutoArchive.Writer != session.PodWriter(live.Pod) || m.Checkpoint.Ref != snapRef {
 		t.Fatalf("manifest = %+v, want auto %q over snapshot %q", m, autoRef, snapRef)
 	}
 
+	t.Run("key still holding an older write falls back to the snapshot", func(t *testing.T) {
+		f.archives.write(sess.ID, "generation:older")
+		if _, err := f.svc.Recover(ctx, sess.ID, nil); err != nil {
+			t.Fatalf("recover: %v", err)
+		}
+		if f.ckpt.last() != snapRef {
+			t.Fatalf("restored %q, want the snapshot %q", f.ckpt.last(), snapRef)
+		}
+		again, err := f.svc.Get(ctx, sess.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.svc.Terminate(ctx, sess.ID); err != nil {
+			t.Fatal(err)
+		}
+		f.archives.mu.Lock()
+		delete(f.archives.writers, autoRef)
+		f.archives.mu.Unlock()
+		live = again
+	})
 	t.Run("upload missing falls back to the snapshot", func(t *testing.T) {
 		if _, err := f.svc.Recover(ctx, sess.ID, nil); err != nil {
 			t.Fatalf("recover: %v", err)
@@ -422,5 +451,18 @@ func TestNeverFrozenDeletedSessionNeedsItsUpload(t *testing.T) {
 	}
 	if got.State != session.StateActive || got.Pod == sess.Pod {
 		t.Fatalf("recovered = %+v, want active in a new pod", got)
+	}
+}
+
+// AC-B5: the key still holding the last snapshot (the pod's upload never
+// landed) is not taken for the lost pod's archive; AC-C5 applies.
+func TestLostPodIsNotAdoptedFromAnOlderWrite(t *testing.T) {
+	ctx := context.Background()
+	f := newAutoFixture()
+	sess := f.create(t, "stale")
+	f.archives.write(sess.ID, "generation:earlier")
+	f.losePod(t, sess, false)
+	if _, err := f.svc.Read(ctx, sess.ID, 0); !errors.Is(err, session.ErrNotFound) {
+		t.Fatalf("read = %v, want ErrNotFound", err)
 	}
 }

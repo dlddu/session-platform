@@ -12,11 +12,12 @@ import (
 )
 
 // AutoArchives is the durable side of AC-B5's automatic archive: the pod
-// uploads straight to storage through a URL signed for it alone.
+// uploads straight to the session's archive key through a URL signed for it,
+// naming itself as the object's writer.
 type AutoArchives interface {
-	AutoArchiveTarget(ctx context.Context, sessionID, pod string) (url string, expires time.Time, err error)
-	AutoArchiveRef(sessionID, pod string) (string, error)
-	Exists(ctx context.Context, ref string) (bool, error)
+	AutoArchiveTarget(ctx context.Context, sessionID, pod string) (url string, expires time.Time, headers map[string]string, err error)
+	ArchiveRef(sessionID string) (string, error)
+	ArchiveWriter(ctx context.Context, ref string) (writer string, exists bool, err error)
 }
 
 // WithAutoArchives turns on AC-B5 for every type whose archive gate is on.
@@ -35,12 +36,13 @@ const autoArchiveRepushAfter = 10 * time.Minute
 const autoArchiveCallTimeout = 10 * time.Second
 
 type autoArchiveTargeter interface {
-	SetAutoArchiveTarget(ctx context.Context, pod, url string, expires time.Time) error
+	SetAutoArchiveTarget(ctx context.Context, pod, url string, expires time.Time, headers map[string]string) error
 	ClearAutoArchiveTarget(ctx context.Context, pod string) error
 }
 
 type autoArchiveTarget struct {
 	url      string
+	headers  map[string]string
 	expires  time.Time
 	pushedAt time.Time
 }
@@ -108,13 +110,13 @@ func (s *Service) armAutoArchive(ctx context.Context, sess *session.Session) err
 		return nil
 	}
 	if !held || target.expires.Sub(now) <= autoArchiveRenewBefore {
-		url, expires, err := s.autoArchives.AutoArchiveTarget(ctx, sess.ID, sess.Pod)
+		url, expires, headers, err := s.autoArchives.AutoArchiveTarget(ctx, sess.ID, sess.Pod)
 		if err != nil {
 			return err
 		}
-		target = autoArchiveTarget{url: url, expires: expires}
+		target = autoArchiveTarget{url: url, headers: headers, expires: expires}
 	}
-	if err := targeter.SetAutoArchiveTarget(ctx, sess.Pod, target.url, target.expires); err != nil {
+	if err := targeter.SetAutoArchiveTarget(ctx, sess.Pod, target.url, target.expires, target.headers); err != nil {
 		return err
 	}
 	target.pushedAt = now
@@ -171,7 +173,7 @@ func (s *Service) recordAutoArchiveOnDelete(ctx context.Context, sess *session.S
 	if s.manifests == nil || sess.Pod == "" || sess.State == session.StateSnapshot || !s.autoArchiveFor(sess.WorkloadType) {
 		return
 	}
-	ref, err := s.autoArchives.AutoArchiveRef(sess.ID, sess.Pod)
+	ref, err := s.autoArchives.ArchiveRef(sess.ID)
 	if err != nil {
 		slog.Warn("automatic archive not recorded for a deleted session", "session", sess.ID, "err", err)
 		return
@@ -182,7 +184,10 @@ func (s *Service) recordAutoArchiveOnDelete(ctx context.Context, sess *session.S
 	} else if !errors.Is(err, session.ErrNotFound) {
 		slog.Warn("previous manifest unreadable; the deleted session keeps only its automatic archive", "session", sess.ID, "err", err)
 	}
-	m.AutoArchive = &session.Checkpoint{Ref: ref, CreatedAt: s.now(), Reclaimed: "pod " + sess.Pod + " (automatic archive)"}
+	m.AutoArchive = &session.Checkpoint{
+		Ref: ref, CreatedAt: s.now(), Writer: session.PodWriter(sess.Pod),
+		Reclaimed: "pod " + sess.Pod + " (automatic archive)",
+	}
 	if err := s.manifests.PutManifest(ctx, m); err != nil {
 		slog.Warn("automatic archive not recorded for a deleted session", "session", sess.ID, "err", err)
 	}
@@ -228,7 +233,9 @@ func (s *Service) ReconcileLostPod(ctx context.Context, sess *session.Session) (
 }
 
 // adoptAutoArchive freezes the session onto lostPod's automatic archive when
-// that archive exists. It reports false, changing nothing, otherwise.
+// the session's archive key holds one lostPod wrote. It reports false,
+// changing nothing, otherwise — including when the key still holds an older
+// snapshot because the pod's upload never landed.
 func (s *Service) adoptAutoArchive(ctx context.Context, id, lostPod string) (adopted bool, retErr error) {
 	if s.autoArchives == nil {
 		return false, nil
@@ -261,15 +268,18 @@ func (s *Service) adoptAutoArchive(ctx context.Context, id, lostPod string) (ado
 		// A committed snapshot is already durable; its recovery finishes it.
 		return false, nil
 	}
-	ref, err := s.autoArchives.AutoArchiveRef(id, lostPod)
+	ref, err := s.autoArchives.ArchiveRef(id)
 	if err != nil {
 		return false, err
 	}
-	exists, err := s.autoArchives.Exists(ctx, ref)
-	if err != nil || !exists {
+	writer, exists, err := s.autoArchives.ArchiveWriter(ctx, ref)
+	if err != nil || !exists || writer != session.PodWriter(lostPod) {
 		return false, err
 	}
-	cp := &session.Checkpoint{Ref: ref, CreatedAt: s.now(), Reclaimed: "pod " + lostPod + " (automatic archive)"}
+	cp := &session.Checkpoint{
+		Ref: ref, CreatedAt: s.now(), Writer: writer,
+		Reclaimed: "pod " + lostPod + " (automatic archive)",
+	}
 	if s.manifests != nil {
 		if err := s.manifests.PutManifest(ctx, session.ManifestFor(sess, cp)); err != nil {
 			return false, err

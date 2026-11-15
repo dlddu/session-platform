@@ -329,9 +329,9 @@ type generationCountingCheckpointer struct {
 	generations []string
 }
 
-func (g *generationCountingCheckpointer) CheckpointWithGeneration(ctx context.Context, ref k8s.PodRef, generation string) (*session.Checkpoint, error) {
+func (g *generationCountingCheckpointer) CheckpointWithGeneration(ctx context.Context, sessionID string, ref k8s.PodRef, generation string) (*session.Checkpoint, error) {
 	g.generations = append(g.generations, generation)
-	return g.StubCheckpointer.CheckpointWithGeneration(ctx, ref, generation)
+	return g.StubCheckpointer.CheckpointWithGeneration(ctx, sessionID, ref, generation)
 }
 
 // Every workload type — shell included — freezes through the

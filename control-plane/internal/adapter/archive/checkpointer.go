@@ -27,7 +27,7 @@ type Checkpointer interface {
 	// CheckpointWithGeneration closes the workload's admission barrier under a
 	// control-plane generation that is already durably recorded, and returns
 	// the durable archive ref.
-	CheckpointWithGeneration(ctx context.Context, ref k8s.PodRef, generation string) (*session.Checkpoint, error)
+	CheckpointWithGeneration(ctx context.Context, sessionID string, ref k8s.PodRef, generation string) (*session.Checkpoint, error)
 	// AbortCheckpoint reopens the workload for the generation in cp.AbortToken.
 	AbortCheckpoint(ctx context.Context, ref k8s.PodRef, cp *session.Checkpoint) error
 	// Restore applies an archive to an already-provisioned restore pod.
@@ -39,10 +39,12 @@ type Checkpointer interface {
 // back with Get. Defined consumer-side so this package carries no cloud SDK
 // dependency; the S3 implementation lives in internal/adapter/checkpointstore.
 type CheckpointStore interface {
-	// Put uploads the archive read from r under key and returns its durable ref.
-	Put(ctx context.Context, key string, r io.Reader) (ref string, err error)
-	// Get opens the archive at ref (as returned by Put) for reading.
-	Get(ctx context.Context, ref string) (io.ReadCloser, error)
+	// Put uploads the archive read from r under key, stored with writer as its
+	// writer metadata, and returns its durable ref.
+	Put(ctx context.Context, key, writer string, r io.Reader) (ref string, err error)
+	// Get opens the archive at ref (as returned by Put) for reading, with the
+	// writer recorded on the object ("" when there is none).
+	Get(ctx context.Context, ref string) (io.ReadCloser, string, error)
 }
 
 // StubCheckpointer is a no-op test adapter. main injects it with enabled=false
@@ -62,7 +64,7 @@ func NewStubCheckpointer(enabled bool) *StubCheckpointer {
 
 func (c *StubCheckpointer) Enabled() bool { return c.enabled }
 
-func (c *StubCheckpointer) CheckpointWithGeneration(_ context.Context, _ k8s.PodRef, generation string) (*session.Checkpoint, error) {
+func (c *StubCheckpointer) CheckpointWithGeneration(_ context.Context, _ string, _ k8s.PodRef, generation string) (*session.Checkpoint, error) {
 	return &session.Checkpoint{
 		Ref:        "stub-checkpoint",
 		SizeBytes:  0,

@@ -16,10 +16,11 @@ import (
 
 // uploadSink stands in for the object store: it keeps what each PUT carried.
 type uploadSink struct {
-	mu     sync.Mutex
-	bodies [][]byte
-	paths  []string
-	length []int64
+	mu      sync.Mutex
+	bodies  [][]byte
+	paths   []string
+	length  []int64
+	writers []string
 }
 
 func newUploadSink(t *testing.T) (*uploadSink, *httptest.Server) {
@@ -35,6 +36,7 @@ func newUploadSink(t *testing.T) (*uploadSink, *httptest.Server) {
 		sink.bodies = append(sink.bodies, body)
 		sink.paths = append(sink.paths, r.URL.Path)
 		sink.length = append(sink.length, r.ContentLength)
+		sink.writers = append(sink.writers, r.Header.Get("X-Amz-Meta-Writer"))
 		sink.mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -68,7 +70,8 @@ func newTestAutoArchiveRunner(base string, produce autoArchiveProducer) *autoArc
 
 func putAutoArchiveTarget(t *testing.T, srv *httptest.Server, url string, expires time.Time) int {
 	t.Helper()
-	body := `{"url":"` + url + `","expiresAt":"` + expires.UTC().Format(time.RFC3339) + `"}`
+	body := `{"url":"` + url + `","expiresAt":"` + expires.UTC().Format(time.RFC3339) +
+		`","headers":{"X-Amz-Meta-Writer":"pod:sess-x"}}`
 	req, _ := http.NewRequest(http.MethodPut, srv.URL+autoArchiveTargetPath, strings.NewReader(body))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -96,13 +99,18 @@ func TestAutoArchiveTargetAcceptsOnlyItsDestination(t *testing.T) {
 		{"not http", "file://" + autoArchiveTestPath, now.Add(time.Hour), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := target.set(tc.url, tc.expires, now); (err == nil) != tc.ok {
+			if err := target.set(tc.url, nil, tc.expires, now); (err == nil) != tc.ok {
 				t.Fatalf("set(%q) err = %v, want accepted %v", tc.url, err, tc.ok)
 			}
 		})
 	}
-	if err := newAutoArchiveTarget("").set(base, now.Add(time.Hour), now); err != errAutoArchiveNoBase {
+	if err := newAutoArchiveTarget("").set(base, nil, now.Add(time.Hour), now); err != errAutoArchiveNoBase {
 		t.Fatalf("set without a base = %v, want errAutoArchiveNoBase", err)
+	}
+	for _, headers := range []map[string]string{{"Authorization": "x"}, {"X-Amz-Meta-Writer": "a\r\nb"}} {
+		if err := target.set(base+"?sig=1", headers, now.Add(time.Hour), now); err != errAutoArchiveHeader {
+			t.Fatalf("set with headers %q = %v, want errAutoArchiveHeader", headers, err)
+		}
 	}
 }
 
@@ -130,8 +138,8 @@ func TestAutoArchiveShellUploadRestores(t *testing.T) {
 	if !strings.HasPrefix(string(result), "uploaded:") || sink.uploads() != 1 {
 		t.Fatalf("run = %q with %d uploads, want one upload", result, sink.uploads())
 	}
-	if sink.length[0] != int64(len(sink.last())) || sink.paths[0] != autoArchiveTestPath {
-		t.Fatalf("upload length=%d path=%q for %d bytes", sink.length[0], sink.paths[0], len(sink.last()))
+	if sink.length[0] != int64(len(sink.last())) || sink.paths[0] != autoArchiveTestPath || sink.writers[0] != "pod:sess-x" {
+		t.Fatalf("upload length=%d path=%q writer=%q for %d bytes", sink.length[0], sink.paths[0], sink.writers[0], len(sink.last()))
 	}
 	writeViaHTTP(t, srv, "echo after\n", http.StatusConflict)
 
@@ -177,7 +185,7 @@ func TestAutoArchiveSkips(t *testing.T) {
 		sink, store := newUploadSink(t)
 		a, _ := newRestoreAgentServer(t)
 		run := newTestAutoArchiveRunner(store.URL+autoArchiveTestPath, a.autoArchiveTo)
-		if err := run.target.set(store.URL+autoArchiveTestPath+"?sig=1", time.Now().Add(time.Hour), time.Now()); err != nil {
+		if err := run.target.set(store.URL+autoArchiveTestPath+"?sig=1", nil, time.Now().Add(time.Hour), time.Now()); err != nil {
 			t.Fatal(err)
 		}
 		if got := run.run(context.Background()); !strings.HasPrefix(got, "skipped") || sink.uploads() != 0 {
@@ -245,6 +253,8 @@ func TestAutoArchiveRelay(t *testing.T) {
 	put := func(target string) int {
 		req, _ := http.NewRequest(http.MethodPut, helper.URL+autoArchiveRelayPath, strings.NewReader("tar-bytes"))
 		req.Header.Set(autoArchiveURLHeader, target)
+		req.Header.Set("X-Amz-Meta-Writer", "pod:sess-x")
+		req.Header.Set("Authorization", "not-forwarded")
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -255,8 +265,8 @@ func TestAutoArchiveRelay(t *testing.T) {
 	if code := put("https://elsewhere.example/steal?sig=1"); code != http.StatusForbidden || sink.uploads() != 0 {
 		t.Fatalf("foreign destination: status %d, uploads %d", code, sink.uploads())
 	}
-	if code := put(store.URL + autoArchiveTestPath + "?sig=1"); code != http.StatusNoContent || string(sink.last()) != "tar-bytes" {
-		t.Fatalf("own destination: status %d", code)
+	if code := put(store.URL + autoArchiveTestPath + "?sig=1"); code != http.StatusNoContent || string(sink.last()) != "tar-bytes" || sink.writers[0] != "pod:sess-x" {
+		t.Fatalf("own destination: status %d, writer %q", code, sink.writers)
 	}
 
 	quiet := autoArchiveQuietWait
@@ -301,10 +311,10 @@ func TestAutoArchiveUploadsThroughTheRelay(t *testing.T) {
 		return false, err
 	})
 	run.relay = helper.URL
-	if err := run.target.set(base+"?sig=1", time.Now().Add(time.Hour), time.Now()); err != nil {
+	if err := run.target.set(base+"?sig=1", map[string]string{"X-Amz-Meta-Writer": "pod:sess-x"}, time.Now().Add(time.Hour), time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if got := run.run(context.Background()); !strings.HasPrefix(got, "uploaded:") || string(sink.last()) != "gated-archive" {
+	if got := run.run(context.Background()); !strings.HasPrefix(got, "uploaded:") || string(sink.last()) != "gated-archive" || sink.writers[0] != "pod:sess-x" {
 		t.Fatalf("run = %q", got)
 	}
 	if announced, pending, _ := relay.state(); !announced || pending != 0 {
