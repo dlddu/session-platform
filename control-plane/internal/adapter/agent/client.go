@@ -27,11 +27,6 @@ import (
 
 const checkpointIDHeader = "X-Session-Checkpoint-ID"
 
-// PermissionModeParam is the agent's /write query parameter for a claude-code
-// turn's permission mode (AC-E2). Keep in sync with data-plane/cmd/agent
-// (claudePermissionModeParam).
-const PermissionModeParam = "permissionMode"
-
 // Client is the workload I/O port onto a session's data plane agent, addressed by
 // pod name (the only pod handle sessions store).
 //
@@ -42,7 +37,7 @@ const PermissionModeParam = "permissionMode"
 //   - Stream → the same append-only output as resumable SSE events.
 //   - RefreshPlugins → AC-J7: the agent fetches its platform plugins again.
 type Client interface {
-	Write(ctx context.Context, pod, payload, permissionMode string) error
+	Write(ctx context.Context, pod, payload string) error
 	Read(ctx context.Context, pod string, offset int64) (payload string, nextOffset int64, err error)
 	Stream(ctx context.Context, pod string, offset int64) (io.ReadCloser, error)
 	RefreshPlugins(ctx context.Context, pod string) (session.PluginChanges, error)
@@ -191,19 +186,13 @@ func (c *HTTPClient) baseURL(ip string) string {
 	return "http://" + net.JoinHostPort(ip, strconv.Itoa(c.port))
 }
 
-// Write forwards shell stdin or a Claude prompt to the agent (AC-D2/AC-E2). A
-// non-empty permissionMode rides as a query parameter, so the body stays the
-// raw payload.
-func (c *HTTPClient) Write(ctx context.Context, pod, payload, permissionMode string) error {
+// Write forwards shell stdin or a Claude prompt to the agent (AC-D2/AC-E2).
+func (c *HTTPClient) Write(ctx context.Context, pod, payload string) error {
 	ip, err := c.resolve(ctx, pod)
 	if err != nil {
 		return err
 	}
-	target := c.baseURL(ip) + "/write"
-	if permissionMode != "" {
-		target += "?" + url.Values{PermissionModeParam: {permissionMode}}.Encode()
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL(ip)+"/write", strings.NewReader(payload))
 	if err != nil {
 		return err
 	}
@@ -266,6 +255,76 @@ func (c *HTTPClient) RefreshPlugins(ctx context.Context, pod string) (session.Pl
 		return session.PluginChanges{}, fmt.Errorf("refresh plugins in session pod %s: decode: %w", pod, err)
 	}
 	return changes, nil
+}
+
+// PendingQuestions lists the AskUserQuestion calls a claude-code turn waits on
+// (AC-E2). Like AwaitingApproval it is an optional capability, not part of
+// the Client interface.
+func (c *HTTPClient) PendingQuestions(ctx context.Context, pod string) ([]session.PendingQuestion, error) {
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL(ip)+"/questions", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("list questions in session pod %s: %w", pod, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("list questions in session pod %s: agent returned %d: %s",
+			pod, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var out struct {
+		Questions []session.PendingQuestion `json:"questions"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
+		return nil, fmt.Errorf("list questions in session pod %s: decode: %w", pod, err)
+	}
+	if out.Questions == nil {
+		out.Questions = []session.PendingQuestion{}
+	}
+	return out.Questions, nil
+}
+
+// AnswerQuestion hands a person's answer to the turn waiting on it (AC-E2).
+func (c *HTTPClient) AnswerQuestion(ctx context.Context, pod, questionID string, answers map[string]string) error {
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(map[string]any{"answers": answers})
+	if err != nil {
+		return err
+	}
+	target := c.baseURL(ip) + "/questions/" + url.PathEscape(questionID) + "/answer"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("answer question in session pod %s: %w", pod, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	detail, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	message := strings.TrimSpace(string(detail))
+	switch resp.StatusCode {
+	case http.StatusBadRequest:
+		return fmt.Errorf("%w: %s", session.ErrInvalidInput, message)
+	case http.StatusNotFound:
+		return fmt.Errorf("%w: %s", session.ErrQuestionNotFound, message)
+	default:
+		return fmt.Errorf("answer question in session pod %s: agent returned %d: %s", pod, resp.StatusCode, message)
+	}
 }
 
 // Read fetches workload output after offset from the agent (AC-D3/AC-E3).

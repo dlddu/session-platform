@@ -91,10 +91,9 @@ docs/                 value / PRD·AC / journeys / mockups / retired CRIU verifi
 - **Workloads**: `shell` (default) runs one PTY shell; `claude-code` runs one
   Claude Agent SDK turn per prompt (`claude-runner`, which drives the pinned
   Claude Code CLI) through a bounded serial queue. Each turn resumes the SDK
-  session id it recorded and runs in the `auto` permission mode (the CLI's
-  model classifier decides what the settings rules leave open) unless its write
-  chose `acceptEdits` through the optional `permissionMode` field, for that turn
-  only. Tool requests that would ask a person go to the SDK's `canUseTool`
+  session id it recorded and always runs in the `auto` permission mode (the
+  CLI's model classifier decides what the settings rules leave open); a write
+  cannot choose another mode. Tool requests that would ask a person go to the SDK's `canUseTool`
   callback, where the platform allows its built-in tools and the session's own
   plugin tools and denies the rest; partial messages are
   enabled and the data plane incrementally redacts and UTF-8-normalizes assistant
@@ -135,8 +134,9 @@ docs/                 value / PRD·AC / journeys / mockups / retired CRIU verifi
   plugin bootstrap; its archive sits behind its own
   `MINIMAX_CODE_ARCHIVE_ENABLED` gate. See
   [`docs/prd/minimax-code-workload.md`](docs/prd/minimax-code-workload.md).
-  `codex` runs the Codex SDK (`@openai/codex-sdk`, pinned) on that same
-  one-shot runner, queue, cursor and archive (AC-J1~J7). There is no provider
+  `codex` runs Codex (the pinned `@openai/codex` binary's app server, driven
+  by a small Node runner) on that same one-shot runner, queue, cursor and
+  archive (AC-J1~J8). There is no provider
   Secret: each session signs in to ChatGPT itself — its first prompt prints a
   device-code URL and one-time code into the transcript, and the resulting
   `~/.codex/auth.json` is part of the session state, so it survives
@@ -146,17 +146,18 @@ docs/                 value / PRD·AC / journeys / mockups / retired CRIU verifi
   loopback `k3s-mcp-proxy` sidecar that alone holds the optional token; shell,
   file-edit, web-search and image tools are off, writes are blocked by a
   read-only sandbox, and the runner aborts a turn on any shell/file/web item.
-  A long-lived session takes a plugin update without losing its conversation
+  Sub-agents the model starts keep running after its answer: the turn waits
+  for them (10 minutes at most) and the main agent then reports their results
+  in a follow-up turn (AC-J8). A long-lived session takes a plugin update without losing its conversation
   through the workspace's `Refresh plugin skills` button
   (`POST /api/v1/sessions/{id}/plugins/refresh`, AC-J7); nothing refreshes on
   its own. See [`docs/prd/codex-workload.md`](docs/prd/codex-workload.md).
 - **Per-session plugins** (AC-L1, [`docs/prd/session-plugins.md`](docs/prd/session-plugins.md)):
   `POST /api/v1/sessions` takes an optional `plugins` list of plugin names from
   the platform marketplace for `claude-code`, `codex` and `minimax-code`.
-  Omitted, a codex-chat session gets the deployment's `CODEX_PLUGINS` and
-  every other type runs without plugins; given, the list **replaces** that
-  default and is fixed for the session's lifetime, snapshot/restore
-  included. It reaches the `k3s-mcp-proxy` seeder of every type as
+  Omitted, the session runs without plugins — no type has a platform
+  default (AC-A5); given, the list is all the session gets and is fixed for
+  the session's lifetime, snapshot/restore included. It reaches the `k3s-mcp-proxy` seeder of every type as
   `PLUGIN_SEED_PLUGINS`, and claude-code's workload container as
   `CLAUDE_CODE_PLUGINS` too (agent install + managed settings). `GET /api/v1/config` reports
   `takesPlugins` per type.

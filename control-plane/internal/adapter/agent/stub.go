@@ -28,7 +28,7 @@ func NewStubClient() *StubClient {
 	return &StubClient{bufs: map[string][]byte{}}
 }
 
-func (c *StubClient) Write(_ context.Context, pod, payload, _ string) error {
+func (c *StubClient) Write(_ context.Context, pod, payload string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.bufs[pod] = append(c.bufs[pod], payload...)
@@ -39,6 +39,16 @@ func (c *StubClient) Write(_ context.Context, pod, payload, _ string) error {
 // sidecar to clone one.
 func (c *StubClient) RefreshPlugins(context.Context, string) (session.PluginChanges, error) {
 	return session.PluginChanges{State: "unconfigured", Added: []string{}, Updated: []string{}, Removed: []string{}}, nil
+}
+
+// PendingQuestions reports none: the stub runs no turn that could ask.
+func (c *StubClient) PendingQuestions(context.Context, string) ([]session.PendingQuestion, error) {
+	return []session.PendingQuestion{}, nil
+}
+
+// AnswerQuestion finds nothing waiting, for the same reason.
+func (c *StubClient) AnswerQuestion(context.Context, string, string, map[string]string) error {
+	return session.ErrQuestionNotFound
 }
 
 func (c *StubClient) Read(_ context.Context, pod string, offset int64) (string, int64, error) {

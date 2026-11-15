@@ -26,6 +26,10 @@ type Manifest struct {
 	Tenant          string       `json:"tenant,omitempty"`
 	CreatedAt       time.Time    `json:"createdAt"`
 	Checkpoint      Checkpoint   `json:"checkpoint"`
+	// AutoArchive is the automatic archive the session's last pod was asked to
+	// write when the session was deleted (AC-B5). It is newer than Checkpoint
+	// when it exists.
+	AutoArchive *Checkpoint `json:"autoArchive,omitempty"`
 }
 
 var sessionIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -68,7 +72,7 @@ func DecodeManifest(wire []byte) (*Manifest, error) {
 	if m.Version != ManifestVersion {
 		return nil, fmt.Errorf("session manifest version %d is not supported", m.Version)
 	}
-	if !ValidSessionID(m.ID) || m.Checkpoint.Ref == "" {
+	if !ValidSessionID(m.ID) || (m.Checkpoint.Ref == "" && (m.AutoArchive == nil || m.AutoArchive.Ref == "")) {
 		return nil, fmt.Errorf("session manifest for %q is incomplete", m.ID)
 	}
 	return &m, nil
@@ -92,3 +96,15 @@ func (m *Manifest) SnapshotSession(now time.Time) *Session {
 		Checkpoint:      &cp,
 	}
 }
+
+// ArchiveKey is the session's one archive object, relative to the store's
+// prefix. A snapshot and the pod's automatic archive both overwrite it (AC-B5).
+func ArchiveKey(id string) string {
+	return "sessions/" + id + "/checkpoint.tar"
+}
+
+// SnapshotWriter names a snapshot's archive by its generation.
+func SnapshotWriter(generation string) string { return "generation:" + generation }
+
+// PodWriter names a pod's automatic archive by the pod.
+func PodWriter(pod string) string { return "pod:" + pod }

@@ -98,7 +98,15 @@ func main() {
 		logger.Warn("DATA_PLANE_IMAGE is not set; falling back to a placeholder image that cannot run session shells")
 	}
 
+	// The store is built below; pods are only built once it is set.
+	var autoArchiveStore *checkpointstore.S3
 	orch := k8s.NewClientOrchestrator(client, namespace,
+		k8s.WithAutoArchive(func(sessionID, pod string) (string, error) {
+			if autoArchiveStore == nil {
+				return "", errors.New("automatic archive needs the S3 checkpoint store")
+			}
+			return autoArchiveStore.AutoArchiveBase(context.Background(), sessionID, pod)
+		}, cfg.autoArchiveTypes()...),
 		k8s.WithImage(cfg.dataPlaneImage), k8s.WithShell(cfg.dataPlaneShell),
 		// Per-type image (AC-E1); empty is a no-op — see the config fields.
 		k8s.WithWorkloadImage(session.WorkloadTypeClaudeCode, cfg.dataPlaneClaudeCodeImage),
@@ -110,7 +118,6 @@ func main() {
 		k8s.WithWorkloadImage(session.WorkloadTypeCodexChat, cfg.codex.image),
 		k8s.WithCodexCredentialsSecret(cfg.codex.credentialsSecret),
 		k8s.WithCodexConfigConfigMap(cfg.codex.configConfigMap),
-		k8s.WithCodexPlugins(cfg.codex.plugins),
 		k8s.WithWorkloadImage(session.WorkloadTypeCodexTask, cfg.codexTask.image),
 		k8s.WithCodexTaskCredentialsSecret(cfg.codexTask.credentialsSecret),
 		k8s.WithCodexTaskConfigConfigMap(cfg.codexTask.configConfigMap),
@@ -193,6 +200,11 @@ func main() {
 	if manifests, ok := cstore.(service.SessionManifests); ok {
 		serviceOpts = append(serviceOpts, service.WithSessionManifests(manifests))
 	}
+	if s3store, ok := cstore.(*checkpointstore.S3); ok && len(cfg.autoArchiveTypes()) > 0 {
+		autoArchiveStore = s3store
+		serviceOpts = append(serviceOpts, service.WithAutoArchives(s3store))
+		logger.Info("automatic archive on pod termination enabled (AC-B5)", "types", cfg.autoArchiveTypes())
+	}
 	mgr := service.New(orch, store, shellCkpt, agentClient, serviceOpts...)
 	snapshotEnabled := cfg.anyArchiveEnabled()
 
@@ -273,7 +285,10 @@ type config struct {
 	// shellArchiveEnabled permits a shell's home directory and scrollback to
 	// be archived to CHECKPOINT_S3_* (default false). A restored shell is a
 	// fresh process started in that home directory.
-	shellArchiveEnabled     bool
+	shellArchiveEnabled bool
+	// autoArchiveEnabled has pods of every archive-gated type upload their own
+	// archive when terminated (AC-B5).
+	autoArchiveEnabled      bool
 	claudeCredentialsSecret string
 	claudeConfigConfigMap   string
 	// claudeCodeDefaultModel is the effective, public default shown by the SPA.
@@ -316,6 +331,27 @@ func (c config) offeredWorkloadTypes() []session.WorkloadType {
 	} {
 		if offered {
 			types = append(types, w)
+		}
+	}
+	return types
+}
+
+// autoArchiveTypes are the types AC-B5 covers: every type whose archive gate
+// is on, since an automatic archive restores through the same checkpointer.
+func (c config) autoArchiveTypes() []session.WorkloadType {
+	if !c.autoArchiveEnabled {
+		return nil
+	}
+	var types []session.WorkloadType
+	for t, on := range map[session.WorkloadType]bool{
+		session.WorkloadTypeShell:       c.shellArchiveEnabled,
+		session.WorkloadTypeClaudeCode:  c.claudeArchiveEnabled,
+		session.WorkloadTypeMiniMaxCode: c.miniMax.archiveEnabled,
+		session.WorkloadTypeCodexChat:   c.codex.archiveEnabled,
+		session.WorkloadTypeCodexTask:   c.codexTask.archiveEnabled,
+	} {
+		if on {
+			types = append(types, t)
 		}
 	}
 	return types
@@ -404,6 +440,7 @@ func loadConfig() (config, error) {
 		claudeCodeDefaultModel:   claudeCodeDefaultModel,
 		claudeCodeModels:         claudeCodeModels,
 		shellArchiveEnabled:      envBool("SHELL_ARCHIVE_ENABLED", false),
+		autoArchiveEnabled:       envBool("AUTO_ARCHIVE_ENABLED", false),
 		idleScanInterval:         envDuration("IDLE_SCAN_INTERVAL", time.Minute),
 		checkpointS3Endpoint:     env("CHECKPOINT_S3_ENDPOINT", ""),
 		checkpointS3Bucket:       env("CHECKPOINT_S3_BUCKET", ""),

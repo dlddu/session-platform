@@ -27,7 +27,6 @@ const testCheckpointIDHeader = "X-Session-Checkpoint-ID"
 type fakeAgent struct {
 	buf         []byte
 	writeStatus int
-	writeQuery  string // raw query of the last /write
 
 	streamOffset      string
 	streamStatus      int
@@ -45,6 +44,9 @@ type fakeAgent struct {
 	refreshStatus       int // non-200 to force a plugin refresh error
 	refreshCalls        int
 	schedulerBody       string // GET /scheduler response; empty answers 503
+	answerStatus        int    // non-200 to force an answer error
+	answerPath          string
+	answerBody          string
 }
 
 func (a *fakeAgent) handler() http.Handler {
@@ -52,7 +54,6 @@ func (a *fakeAgent) handler() http.Handler {
 	mux.HandleFunc("POST /write", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		a.buf = append(a.buf, body...)
-		a.writeQuery = r.URL.RawQuery
 		if a.writeStatus != 0 && a.writeStatus != http.StatusOK {
 			http.Error(w, http.StatusText(a.writeStatus), a.writeStatus)
 			return
@@ -101,6 +102,20 @@ func (a *fakeAgent) handler() http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"state":"ready","revision":"abc","added":["p--new"],"updated":[],"removed":["p--old"]}`))
+	})
+	mux.HandleFunc("GET /questions", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"questions":[{"id":"q_1","askedAt":"2026-11-14T00:00:00Z","questions":[{"question":"Which?","header":"H","multiSelect":true,"options":[{"label":"A","description":"a"},{"label":"B","description":"b"}]}]}]}`))
+	})
+	mux.HandleFunc("POST /questions/{id}/answer", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		a.answerPath = r.URL.Path
+		a.answerBody = string(body)
+		if a.answerStatus != 0 && a.answerStatus != http.StatusOK {
+			http.Error(w, "refused", a.answerStatus)
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"answered"}`))
 	})
 	mux.HandleFunc("GET /scheduler", func(w http.ResponseWriter, r *http.Request) {
 		if a.schedulerBody == "" {
@@ -160,30 +175,11 @@ func harness(t *testing.T, podName string) (*agent.HTTPClient, *fakeAgent) {
 func TestHTTPClientWriteForwardsPayload(t *testing.T) {
 	c, fa := harness(t, "sess-ab12")
 
-	if err := c.Write(context.Background(), "sess-ab12", "echo hello\n", ""); err != nil {
+	if err := c.Write(context.Background(), "sess-ab12", "echo hello\n"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if got := string(fa.buf); got != "echo hello\n" {
 		t.Fatalf("agent received %q, want the verbatim payload", got)
-	}
-	if fa.writeQuery != "" {
-		t.Fatalf("write without a permission mode sent query %q, want none", fa.writeQuery)
-	}
-}
-
-// AC-E2: a turn's permission mode rides as a query parameter beside the
-// unchanged raw prompt body.
-func TestHTTPClientWriteSendsPermissionMode(t *testing.T) {
-	c, fa := harness(t, "sess-ab12")
-
-	if err := c.Write(context.Background(), "sess-ab12", "edit it", "acceptEdits"); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	if got := string(fa.buf); got != "edit it" {
-		t.Fatalf("agent received %q, want the verbatim payload", got)
-	}
-	if want := agent.PermissionModeParam + "=acceptEdits"; fa.writeQuery != want {
-		t.Fatalf("write query = %q, want %q", fa.writeQuery, want)
 	}
 }
 
@@ -247,7 +243,7 @@ func TestHTTPClientStreamValidatesAgentResponse(t *testing.T) {
 
 func TestHTTPClientUnknownPod(t *testing.T) {
 	c := agent.NewHTTPClient(fake.NewSimpleClientset(), "sessions")
-	if err := c.Write(context.Background(), "sess-gone", "x", ""); err == nil {
+	if err := c.Write(context.Background(), "sess-gone", "x"); err == nil {
 		t.Fatal("write to unknown pod succeeded, want error")
 	}
 	if _, _, err := c.Read(context.Background(), "sess-gone", 0); err == nil {
@@ -263,7 +259,7 @@ func TestHTTPClientPodNotRunning(t *testing.T) {
 		Status:     corev1.PodStatus{Phase: corev1.PodPending},
 	})
 	c := agent.NewHTTPClient(cs, "sessions")
-	if err := c.Write(context.Background(), "sess-cold", "x", ""); err == nil {
+	if err := c.Write(context.Background(), "sess-cold", "x"); err == nil {
 		t.Fatal("write to pending pod succeeded, want error")
 	}
 }
@@ -283,7 +279,7 @@ func TestHTTPClientAgentErrorSurfaces(t *testing.T) {
 	})
 	c := agent.NewHTTPClient(cs, "sessions", agent.WithPort(port))
 
-	err := c.Write(context.Background(), "sess-dead", "x", "")
+	err := c.Write(context.Background(), "sess-dead", "x")
 	if err == nil || !strings.Contains(err.Error(), "503") {
 		t.Fatalf("write error = %v, want the agent's 503 surfaced", err)
 	}
@@ -297,14 +293,14 @@ func TestStubClientCursorSemantics(t *testing.T) {
 	c := agent.NewStubClient()
 	ctx := context.Background()
 
-	if err := c.Write(ctx, "p1", "one", ""); err != nil {
+	if err := c.Write(ctx, "p1", "one"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	full, next, err := c.Read(ctx, "p1", 0)
 	if err != nil || full != "one" || next != 3 {
 		t.Fatalf("read 0 = (%q, %d, %v), want (one, 3, nil)", full, next, err)
 	}
-	_ = c.Write(ctx, "p1", "two", "")
+	_ = c.Write(ctx, "p1", "two")
 	delta, next2, _ := c.Read(ctx, "p1", next)
 	if delta != "two" || next2 != 6 {
 		t.Fatalf("cursor read = (%q, %d), want (two, 6)", delta, next2)
@@ -404,7 +400,7 @@ func TestHTTPClientWritePreservesAdmissionErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c, fa := harness(t, "sess-limited")
 			fa.writeStatus = tc.status
-			err := c.Write(context.Background(), "sess-limited", "prompt", "")
+			err := c.Write(context.Background(), "sess-limited", "prompt")
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("write error = %v, want errors.Is(_, %v)", err, tc.want)
 			}
@@ -455,5 +451,39 @@ func TestHTTPClientActiveSchedules(t *testing.T) {
 		if _, err := c.ActiveSchedules(context.Background(), "sess-cx"); err == nil {
 			t.Errorf("body %q: no error", body)
 		}
+	}
+}
+
+// AC-E2: the client lists a turn's questions and relays a person's answer,
+// mapping the agent's refusals onto the session errors the API answers with.
+func TestHTTPClientQuestions(t *testing.T) {
+	c, fa := harness(t, "sess-q")
+	questions, err := c.PendingQuestions(context.Background(), "sess-q")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(questions) != 1 || questions[0].ID != "q_1" || !questions[0].Questions[0].MultiSelect ||
+		len(questions[0].Questions[0].Options) != 2 || questions[0].AskedAt.IsZero() {
+		t.Fatalf("questions = %+v", questions)
+	}
+
+	if err := c.AnswerQuestion(context.Background(), "sess-q", "q_1", map[string]string{"Which?": "A, B"}); err != nil {
+		t.Fatal(err)
+	}
+	if fa.answerPath != "/questions/q_1/answer" || fa.answerBody != `{"answers":{"Which?":"A, B"}}` {
+		t.Fatalf("agent got %s %s", fa.answerPath, fa.answerBody)
+	}
+	for status, want := range map[int]error{
+		http.StatusBadRequest: session.ErrInvalidInput,
+		http.StatusNotFound:   session.ErrQuestionNotFound,
+	} {
+		fa.answerStatus = status
+		if err := c.AnswerQuestion(context.Background(), "sess-q", "q_1", map[string]string{"Which?": "A"}); !errors.Is(err, want) {
+			t.Errorf("agent %d: err = %v, want %v", status, err, want)
+		}
+	}
+	fa.answerStatus = http.StatusInternalServerError
+	if err := c.AnswerQuestion(context.Background(), "sess-q", "q_1", map[string]string{"Which?": "A"}); err == nil {
+		t.Error("an agent failure must be an error")
 	}
 }

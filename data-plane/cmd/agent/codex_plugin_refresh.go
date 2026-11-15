@@ -6,26 +6,22 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
 
 // AC-J7: a long-lived codex session takes a plugin update without losing its
 // conversation. Nothing refreshes on its own; the operator asks, between turns.
-// The sidecar clones the marketplace again, the agent syncs the managed skills
-// from it, and the next resumed turn opens with a note naming what changed —
-// the conversation may hold an earlier read of a skill that is no longer what
-// the skills MCP serves.
+// The sidecar clones the marketplace again and the agent syncs the managed
+// skills from it. The platform does not write into the conversation: the
+// refresh leaves a transcript line for the user, and an in-turn refresh_skills
+// call names the changes in its own tool result.
 const (
 	// pluginRefreshPath is the agent route the control plane calls.
 	pluginRefreshPath = "/plugins/refresh"
 	// pluginRefreshTurnPath is the loopback route the skills MCP's
 	// refresh_skills calls from inside a running turn (AC-J7).
 	pluginRefreshTurnPath = "/plugins/refresh/turn"
-	codexSkillChangesFile = "session-platform-skill-changes.json"
 	// The sidecar's refresh is one clone, bounded by its own clone timeout.
 	codexPluginRefreshTimeout = miniMaxCloneTimeout + 30*time.Second
 	codexSkillChangeAdded     = "added"
@@ -48,10 +44,6 @@ type pluginRefresh struct {
 // in a running session.
 type pluginRefresher interface {
 	refreshPlugins(homeDir string) (pluginRefresh, error)
-	// turnNotice is the note the next resumed turn opens with, or "".
-	turnNotice(homeDir string) (string, error)
-	// clearTurnNotice drops it once a turn carrying it succeeded.
-	clearTurnNotice(homeDir string) error
 }
 
 var (
@@ -97,9 +89,6 @@ func (c codexCLI) refreshPlugins(homeDir string) (pluginRefresh, error) {
 	if err != nil {
 		return pluginRefresh{}, err
 	}
-	if err := recordCodexSkillChanges(homeDir, sidecar.revision, changes); err != nil {
-		return pluginRefresh{}, err
-	}
 	return pluginRefresh{
 		State:    miniMaxSeedStateReady,
 		Revision: sidecar.revision,
@@ -135,134 +124,6 @@ func postCodexSidecarRefresh(proxyURL string) (miniMaxRefreshResult, error) {
 	default:
 		return result, fmt.Errorf("%w: %s", errPluginRefreshFailed, result.Error)
 	}
-}
-
-// codexSkillChangeRecord is the pending note, kept in HOME so it survives an
-// archive: a session frozen between a refresh and its next turn is still told.
-type codexSkillChangeRecord struct {
-	Version  int               `json:"version"`
-	Revision string            `json:"revision,omitempty"`
-	Skills   map[string]string `json:"skills"`
-}
-
-func codexSkillChangesPath(homeDir string) string {
-	return filepath.Join(homeDir, codexConfigDirName, codexSkillChangesFile)
-}
-
-// recordCodexSkillChanges folds changes into the pending record. What it keeps
-// is each skill's change relative to what the conversation last saw, so a skill
-// added and then removed before any turn is no change at all.
-func recordCodexSkillChanges(homeDir, revision string, changes codexSkillChanges) error {
-	if changes.empty() {
-		return nil
-	}
-	record, err := readCodexSkillChanges(homeDir)
-	if err != nil {
-		return err
-	}
-	for kind, names := range map[string][]string{
-		codexSkillChangeAdded:   changes.Added,
-		codexSkillChangeUpdated: changes.Updated,
-		codexSkillChangeRemoved: changes.Removed,
-	} {
-		for _, name := range names {
-			if folded := foldCodexSkillChange(record.Skills[name], kind); folded == "" {
-				delete(record.Skills, name)
-			} else {
-				record.Skills[name] = folded
-			}
-		}
-	}
-	record.Revision = revision
-	if len(record.Skills) == 0 {
-		return removeCodexSkillChanges(homeDir)
-	}
-	data, err := json.Marshal(record)
-	if err != nil {
-		return err
-	}
-	path := codexSkillChangesPath(homeDir)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
-		return fmt.Errorf("record codex skill changes: %w", err)
-	}
-	return os.Rename(tmp, path)
-}
-
-func foldCodexSkillChange(earlier, later string) string {
-	switch {
-	case earlier == "":
-		return later
-	case earlier == codexSkillChangeAdded && later == codexSkillChangeRemoved:
-		return ""
-	case earlier == codexSkillChangeAdded:
-		return codexSkillChangeAdded
-	case earlier == codexSkillChangeRemoved && later == codexSkillChangeAdded:
-		return codexSkillChangeUpdated
-	default:
-		return later
-	}
-}
-
-func readCodexSkillChanges(homeDir string) (codexSkillChangeRecord, error) {
-	record := codexSkillChangeRecord{Version: 1, Skills: map[string]string{}}
-	data, err := os.ReadFile(codexSkillChangesPath(homeDir))
-	if errors.Is(err, os.ErrNotExist) {
-		return record, nil
-	}
-	if err != nil {
-		return record, fmt.Errorf("read codex skill changes: %w", err)
-	}
-	var stored codexSkillChangeRecord
-	// An unreadable record is dropped, not fatal: the note is advice.
-	if json.Unmarshal(data, &stored) != nil || stored.Version != 1 || stored.Skills == nil {
-		return record, nil
-	}
-	return stored, nil
-}
-
-func removeCodexSkillChanges(homeDir string) error {
-	if err := os.Remove(codexSkillChangesPath(homeDir)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("clear codex skill changes: %w", err)
-	}
-	return nil
-}
-
-func (codexCLI) turnNotice(homeDir string) (string, error) {
-	record, err := readCodexSkillChanges(homeDir)
-	if err != nil || len(record.Skills) == 0 {
-		return "", err
-	}
-	return renderCodexSkillNotice(record), nil
-}
-
-func (codexCLI) clearTurnNotice(homeDir string) error {
-	return removeCodexSkillChanges(homeDir)
-}
-
-func renderCodexSkillNotice(record codexSkillChangeRecord) string {
-	byKind := map[string][]string{}
-	for name, kind := range record.Skills {
-		byKind[kind] = append(byKind[kind], "`"+name+"`")
-	}
-	var parts []string
-	for _, kind := range []string{codexSkillChangeAdded, codexSkillChangeUpdated, codexSkillChangeRemoved} {
-		if names := byKind[kind]; len(names) > 0 {
-			sort.Strings(names)
-			parts = append(parts, kind+": "+strings.Join(names, ", "))
-		}
-	}
-	revision := ""
-	if record.Revision != "" {
-		revision = " (marketplace revision " + shortRevision(record.Revision) + ")"
-	}
-	return "[session-platform] The platform's plugin skills changed since your last turn" + revision + " — " +
-		strings.Join(parts, "; ") + ". Anything you read from these skills earlier in this conversation may be " +
-		"out of date: read a skill again with `read_skill` before following it, and do not use a removed one. " +
-		"The user's message follows."
 }
 
 func shortRevision(revision string) string {

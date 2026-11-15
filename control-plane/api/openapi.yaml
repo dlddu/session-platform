@@ -513,8 +513,9 @@ paths:
       description: >
         Codex sessions only. The session's K3s MCP sidecar clones the plugin
         marketplace again and the agent makes the session's platform-managed
-        skills match it; the conversation and thread are untouched, and the
-        next resumed turn opens with a note naming what changed. It runs only
+        skills match it; the conversation and thread are untouched, and
+        nothing is written into the conversation — the next turn's prompt is
+        the user's own, and the refresh leaves one transcript line. It runs only
         between turns. Like a write, it brings an idle session active and
         restores a snapshotted one first (which by itself already starts from
         the current marketplace). A refresh that cannot reach the marketplace
@@ -566,6 +567,104 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "503": { $ref: "#/components/responses/AuthPoolExhausted" }
+  /sessions/{id}/questions:
+    get:
+      summary: Questions a claude-code session's running turn waits on (AC-E2)
+      operationId: listSessionQuestions
+      description: >
+        claude-code sessions only. When the model calls AskUserQuestion, the
+        turn keeps running and waits for a person's answer; each such call is
+        listed here until it is answered, the runner stops waiting for it, a
+        checkpoint closes it, or its turn ends. Passive like the stream: it
+        does not restore a snapshotted session or count as an access, and a
+        session without a live pod lists nothing.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: The waiting questions, oldest first
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [questions]
+                properties:
+                  questions:
+                    type: array
+                    items: { $ref: "#/components/schemas/PendingQuestion" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Not found, or another tenant's session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: The session is not claude-code
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /sessions/{id}/questions/{questionId}/answer:
+    post:
+      summary: Answer a question the running turn waits on (AC-E2)
+      operationId: answerSessionQuestion
+      description: >
+        Answers every question of one AskUserQuestion call at once: one
+        non-empty answer per question, keyed by the question's text. A
+        multi-select answer is the chosen labels joined by ", "; an answer
+        outside the offered labels is the person's own words. The turn goes on
+        with the answers as the tool's result. Answering counts as an access.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - name: questionId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [answers]
+              properties:
+                answers:
+                  type: object
+                  additionalProperties: { type: string, minLength: 1, maxLength: 4000 }
+      responses:
+        "200":
+          description: The answer reached the turn
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [answered] }
+        "400":
+          description: Malformed body, or the answers do not match the questions one to one
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Not found, another tenant's session, or the question is no longer waiting
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "422":
+          description: The session is not claude-code
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /repo-access:
     get:
       summary: Allow list and pending requests (AC-H1/AC-H4)
@@ -997,6 +1096,12 @@ components:
         sizeBytes: { type: integer, format: int64 }
         createdAt: { type: string, format: date-time }
         reclaimed: { type: string }
+        writer:
+          type: string
+          description: >
+            Who wrote the archive: `generation:<id>` for a snapshot, `pod:<name>`
+            for a pod's automatic archive (AC-B5). Absent for archives written
+            before it was recorded.
     Session:
       type: object
       required: [id, name, state, workloadType, createdAt, lastAccess]
@@ -1101,10 +1206,9 @@ components:
             Optional marketplace plugins for this session (AC-L1), by plugin name
             in the platform marketplace (no `@marketplace` suffix). Valid when
             workloadType is `claude-code`, `minimax-code`, `codex-chat` or
-            `codex-task`. Omitted, a codex-chat session gets the deployment's
-            `CODEX_PLUGINS` and every other type runs without plugins. Given, it
-            replaces that default outright — list the default too if the session
-            should keep it.
+            `codex-task`. Omitted, the session runs without plugins — no type
+            has a platform default (AC-A5). Given, the list is every plugin the
+            session gets.
             Names are not checked against the marketplace here: a name it does
             not list fails the pod's plugin bootstrap, which for `claude-code`
             fails the create (its agent never becomes reachable) and for
@@ -1152,17 +1256,6 @@ components:
             minimax-code, codex-chat, codex-task) are limited to 1 MiB of UTF-8 bytes
 
             per prompt; larger writes return 413.
-        permissionMode:
-          type: string
-          enum: [auto, acceptEdits]
-          description: >
-            claude-code only (AC-E2): the permission mode of the turn this write
-            queues. Omitted runs the turn in auto, where the CLI's model
-            classifier approves or denies the tool requests the managed settings
-            leave open; acceptEdits accepts file edits. It applies to this turn
-            only — the next write without it runs in auto again. Any other value,
-            an empty string, or a permission mode on another workload type returns
-            400 without activating the session.
     ReadRequest:
       type: object
       additionalProperties: false
@@ -1233,6 +1326,33 @@ components:
         removed:
           type: array
           items: { type: string }
+    PendingQuestion:
+      type: object
+      required: [id, questions, askedAt]
+      properties:
+        id: { type: string, description: "`q_` and 16 hex digits" }
+        askedAt: { type: string, format: date-time }
+        questions:
+          type: array
+          minItems: 1
+          maxItems: 4
+          items:
+            type: object
+            required: [question, header, options, multiSelect]
+            properties:
+              question: { type: string }
+              header: { type: string, description: Short label; may be empty }
+              multiSelect: { type: boolean }
+              options:
+                type: array
+                minItems: 2
+                maxItems: 4
+                items:
+                  type: object
+                  required: [label, description]
+                  properties:
+                    label: { type: string }
+                    description: { type: string }
     Error:
       type: object
       properties:

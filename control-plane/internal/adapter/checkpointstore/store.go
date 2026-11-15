@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -20,6 +21,17 @@ import (
 // defaultSessionName is the STS role session name when none is configured. It
 // tags the assumed-role sessions the control plane opens (visible in CloudTrail).
 const defaultSessionName = "session-platform-checkpointer"
+
+// roleSessionDuration needs the checkpointer role's MaxSessionDuration at least
+// this long (infrastructure stage2/session-platform.tf).
+const roleSessionDuration = 3 * time.Hour
+
+// MinSigningLifetime is how long cached role credentials must still live to be
+// handed out, so a URL presigned with them can stay valid that long.
+const MinSigningLifetime = 2 * time.Hour
+
+// The cache reports Expires this much earlier than the real expiry.
+const credentialsExpiryWindow = MinSigningLifetime + 5*time.Minute
 
 // defaultPrefix is the key prefix under which archives are stored.
 const defaultPrefix = "checkpoints"
@@ -41,6 +53,7 @@ type Config struct {
 type objectAPI interface {
 	PutObject(ctx context.Context, in *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	GetObject(ctx context.Context, in *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	HeadObject(ctx context.Context, in *s3.HeadObjectInput, opts ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 }
 
 // S3 stores and retrieves workload snapshots in an S3 bucket and satisfies the
@@ -49,6 +62,9 @@ type S3 struct {
 	api    objectAPI
 	bucket string
 	prefix string
+	// auto signs the automatic-archive upload URLs (auto_archive.go); nil in
+	// a store built over an injected API without one.
+	auto *autoArchiveSigner
 }
 
 // NewS3 builds an S3 store whose client assumes Config.RoleARN via STS over the
@@ -71,12 +87,10 @@ func NewS3(ctx context.Context, cfg Config) (*S3, error) {
 		if sessionName == "" {
 			sessionName = defaultSessionName
 		}
-		provider := stscreds.NewAssumeRoleProvider(sts.NewFromConfig(base), cfg.RoleARN,
-			func(o *stscreds.AssumeRoleOptions) { o.RoleSessionName = sessionName })
-		base.Credentials = aws.NewCredentialsCache(provider)
+		base.Credentials = roleCredentials(sts.NewFromConfig(base), cfg.RoleARN, sessionName)
 	}
 
-	client := s3.NewFromConfig(base, func(o *s3.Options) {
+	endpoint := func(o *s3.Options) {
 		if cfg.Endpoint != "" {
 			// An S3-compatible backend (MinIO in the e2e SUT): address the bucket
 			// as a path rather than a virtual host, since these endpoints have no
@@ -84,8 +98,21 @@ func NewS3(ctx context.Context, cfg Config) (*S3, error) {
 			o.BaseEndpoint = aws.String(cfg.Endpoint)
 			o.UsePathStyle = true
 		}
+	}
+	client := s3.NewFromConfig(base, endpoint)
+	store := newWithAPI(client, cfg.Bucket, cfg.Prefix)
+	store.auto = newAutoArchiveSigner(base, endpoint)
+	return store, nil
+}
+
+func roleCredentials(client stscreds.AssumeRoleAPIClient, roleARN, sessionName string) *aws.CredentialsCache {
+	provider := stscreds.NewAssumeRoleProvider(client, roleARN, func(o *stscreds.AssumeRoleOptions) {
+		o.RoleSessionName = sessionName
+		o.Duration = roleSessionDuration
 	})
-	return newWithAPI(client, cfg.Bucket, cfg.Prefix), nil
+	return aws.NewCredentialsCache(provider, func(o *aws.CredentialsCacheOptions) {
+		o.ExpiryWindow = credentialsExpiryWindow
+	})
 }
 
 // newWithAPI builds an S3 store over an injected object API (tests).
@@ -101,14 +128,14 @@ func newWithAPI(api objectAPI, bucket, prefix string) *S3 {
 func (s *S3) Bucket() string { return s.bucket }
 
 // Put uploads the archive read from r under key (joined with the configured
-// prefix) and returns its durable s3:// ref.
+// prefix), recording writer on the object, and returns its durable s3:// ref.
 //
 // The archive arrives as an unseekable stream of unknown length — the pod agent
 // produces it while archiving — which S3 cannot take directly: the SDK needs a
 // seekable body to compute the request checksum and Content-Length, and its
 // fallback (trailing checksums over an aws-chunked body) requires TLS. So spool
 // the stream to a temp file first and upload that.
-func (s *S3) Put(ctx context.Context, key string, r io.Reader) (string, error) {
+func (s *S3) Put(ctx context.Context, key, writer string, r io.Reader) (string, error) {
 	full := s.key(key)
 
 	spool, err := os.CreateTemp("", "checkpoint-*.tar")
@@ -127,30 +154,31 @@ func (s *S3) Put(ctx context.Context, key string, r io.Reader) (string, error) {
 	}
 
 	if _, err := s.api.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(full),
-		Body:   spool,
+		Bucket:   aws.String(s.bucket),
+		Key:      aws.String(full),
+		Body:     spool,
+		Metadata: writerMetadata(writer),
 	}); err != nil {
 		return "", fmt.Errorf("put s3://%s/%s: %w", s.bucket, full, err)
 	}
 	return "s3://" + s.bucket + "/" + full, nil
 }
 
-// Get opens the archive at ref (an s3:// URI) for reading. The caller closes the
-// returned reader.
-func (s *S3) Get(ctx context.Context, ref string) (io.ReadCloser, error) {
+// Get opens the archive at ref (an s3:// URI) for reading, with the object's
+// writer metadata. The caller closes the returned reader.
+func (s *S3) Get(ctx context.Context, ref string) (io.ReadCloser, string, error) {
 	bucket, key, err := parseRef(ref)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	out, err := s.api.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("get %s: %w", ref, err)
+		return nil, "", fmt.Errorf("get %s: %w", ref, err)
 	}
-	return out.Body, nil
+	return out.Body, out.Metadata[writerMetadataKey], nil
 }
 
 // key joins the configured prefix with a per-archive key.

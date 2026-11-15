@@ -53,16 +53,6 @@ func newCodexTestServer(t *testing.T, runner commandRunner, model string, restor
 	return c, srv
 }
 
-// AC-E2: the permission mode is claude-code's; codex refuses a write naming one.
-func TestCodexRefusesPermissionMode(t *testing.T) {
-	runner := newFakeClaudeRunner()
-	_, srv := newCodexTestServer(t, runner, "gpt-6", false, t.TempDir(), codexCLI{})
-	writeWithPermissionMode(t, srv, "hi", "auto", http.StatusBadRequest)
-	if runs, _ := runner.snapshot(); len(runs) != 0 {
-		t.Fatalf("runs = %d, want 0", len(runs))
-	}
-}
-
 // AC-J2: each write is one runner invocation in the session workspace with
 // the session HOME; the model is always named, --resume follows AC-E4, and a
 // prompt that looks like a flag stays a prompt.
@@ -314,10 +304,8 @@ func TestRenderCodexConfig(t *testing.T) {
 			t.Errorf("features.%s = %#v, want false", feature, withK3S["features."+feature])
 		}
 	}
-	instructions, _ := withK3S["developer_instructions"].(string)
-	if !strings.Contains(instructions, codexInstructionsMarker) || !strings.Contains(instructions, "read_skill") ||
-		!strings.Contains(instructions, "refresh_skills") {
-		t.Errorf("developer_instructions = %q, want the marker and the read_skill and refresh_skills guidance", instructions)
+	if got, ok := withK3S["developer_instructions"]; ok {
+		t.Errorf("developer_instructions = %#v, want none: the platform adds no instructions of its own", got)
 	}
 
 	without := tomlCheck(t, string(renderCodexConfig(codexConfig{agentBinary: "/agent", skillsDir: "/s"})))
@@ -354,9 +342,6 @@ func TestRenderCodexConfigRegistersSessionDB(t *testing.T) {
 		if doc[key] != value {
 			t.Errorf("%s = %v, want %q", key, doc[key], value)
 		}
-	}
-	if instructions, _ := doc["developer_instructions"].(string); !strings.Contains(instructions, "raw_query") {
-		t.Errorf("developer_instructions = %q, want the db guidance", instructions)
 	}
 }
 
@@ -499,7 +484,7 @@ func TestNewCodexTaskWorkloadFromEnv(t *testing.T) {
 	if w.authSlot == nil || w.cli.workloadName() != workloadCodexTask {
 		t.Fatalf("slot = %v, workload = %s", w.authSlot, w.cli.workloadName())
 	}
-	got := w.argv("p", true, "")
+	got := w.argv("p", true)
 	want := []string{"/opt/runner", "--mode", "task", "--model", "gpt-6", "--effort", "xhigh", "--resume", "--", "p"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("argv = %q, want %q", got, want)

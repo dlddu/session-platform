@@ -5,6 +5,7 @@
 - AC-B2: 스냅샷 복원 (PRD: 세션 라이프사이클 & 워크로드별 스냅샷)
 - AC-B3: 스냅샷·복원 무결성 (PRD: 세션 라이프사이클 & 워크로드별 스냅샷)
 - AC-B4: 삭제된 세션 복원 (PRD: 세션 라이프사이클 & 워크로드별 스냅샷)
+- AC-B5: 파드 종료 시 자동 아카이브 (PRD: 세션 라이프사이클 & 워크로드별 스냅샷)
 
 ## 테스트 시나리오
 
@@ -39,3 +40,10 @@
 - **기대 결과**: 첫 recover가 200으로 **같은 id·이름**의 `active` 세션을 **동결 전과 다른 pod** 위에 돌려주고, 뒤이은 조회도 같다. offset 0 read가 동결 전 마커 줄을 포함한다(누적 출력 보존). 살아 있는 id의 recover는 409, 매니페스트가 없는 id는 404다
 - **검증 AC**: AC-B4 (보조 AC-B2, AC-B3)
 - **단위 수준 보조 검증**: 테넌트 범위(다른 테넌트 404 · 좁혀진 타입 403 · 운영자 허용)는 `control-plane/internal/api/recover_test.go`, 매니페스트 쓰기 실패 시 동결 롤백·게이트 꺼짐 503·거부 시 무기록은 `control-plane/internal/service/recover_test.go`, 매니페스트 키·버전·403과 404 구분은 `control-plane/internal/adapter/checkpointstore/manifest_test.go`가 검증한다.
+
+### 시나리오 6: 파드 종료 시 자동 아카이브와 채택
+- **사전 조건**: 아카이브 게이트와 자동 아카이브(`AUTO_ARCHIVE_ENABLED`)가 켜진 배포. 타입별(`shell`·`claude-code`·`minimax-code`) active 세션, 누적 출력에 마커 줄, 작업 디렉터리(홈)에 마커 파일. `claude-code`는 오래 도는 턴 하나와 대기 프롬프트 하나
+- **실행 단계**: (a) control plane을 거치지 않고 세션 파드를 지운다(스팟 회수·노드 비우기와 같은 경로) → 파드가 사라진 뒤 read (b) 다른 세션을 `POST /snapshot`으로 동결한 뒤 그 세션의 아카이브 키(`sessions/<id>/checkpoint.tar`)와 `writer`를 확인 (c) 세 번째 세션을 `DELETE`로 지운 뒤 `POST /recover` (d) 자동 아카이브를 올릴 수 없는 세션(업로드 실패)의 파드를 지운 뒤 read
+- **기대 결과**: (a) read가 200이고 세션이 **지우기 전과 다른 파드** 위의 `active`이며, 지우기 전 누적 출력 마커와 파일이 그대로다. `claude-code`는 진행 중이던 턴이 `status=canceled`로 끝나 있고 대기 프롬프트는 실행되지 않았으며 그 사실이 출력에 한 줄 남는다. `minimax-code`는 헬퍼 파드가 업로드를 중계한 뒤 사라진다 (b) 키의 `writer`가 동결의 세대(`generation:…`)다 — 동결로 회수된 파드는 자동 아카이브를 올리지 않는다. 세션마다 아카이브 객체는 하나다 (c) recover가 지우기 직전 상태로 `active`가 된다 — 한 번도 동결되지 않은 세션이어도 같다 (d) 키에 이전 동결이 남아 있어도 채택하지 않고 404이며 레코드가 지워진다(AC-C5)
+- **검증 AC**: AC-B5 (보조 AC-B2, AC-B3, AC-B4, AC-C5)
+- **단위 수준 보조 검증**: URL 전달·1시간 이하 갱신·10분 재전달, 채택과 정리, 이전 동결이 남은 키의 채택 거부, 리퍼의 채택, 동결 확정 시 URL 회수, 삭제 세션의 `writer`에 따른 복원 선택은 `control-plane/internal/service/auto_archive_test.go`, 세션당 키·`writer` 읽기(404와 403 구분)·2시간 미만 자격 거부·`writer` 헤더를 덮는 체크섬 없는 서명은 `control-plane/internal/adapter/checkpointstore/auto_archive_test.go`, 동결의 세션 키·세대 `writer`와 덮어쓰인 아카이브 복원(경고)은 `control-plane/internal/adapter/archive/agent_checkpointer_test.go`, 다른 주소 URL·메타데이터 밖 헤더 거부·`writer` 헤더 전달·`shell` 업로드 후 복원·URL 없음/회수됨/복원 전 건너뜀·턴 중단과 대기 프롬프트 폐기·헬퍼 중계와 대기는 `data-plane/cmd/agent/auto_archive_test.go`, 파드의 env·preStop·유예 시간은 통합 `control-plane/test/auto_archive_orchestrator_test.go`가 검증한다.

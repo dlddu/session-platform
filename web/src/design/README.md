@@ -41,6 +41,7 @@
 - **셸/레이아웃** — `.app` `.rail` `.rail-btn` `.rail-me` `.rail-spacer` `.mark` `.viewport` `.pad` `.h-top` `.grid` `.panel` `.bar` `.crumbs` `.back`
 - **세션 표현** — `.card` `.card-head` `.card-foot` `.c-name` `.c-id` `.badge` `.chip` `.summary` `.vit` `.lc-state` `.reclaim-lab` `.tenant-tag` `.tenant-filter` `.tenant-filter-option`
 - **콘솔/작업 영역** — `.console` `.console-bar` `.term` `.input-row` `.ws-body` `.steps` `.step` `.agent-hint`
+- **턴 중 질문 (AC-E2)** — `.question-card` `.question-head` `.question` `.question-tag` `.question-options` `.question-option` `.question-label` `.question-desc` `.question-other` `.question-foot` `.question-error` — 제출 버튼은 `.agent-send`를 그대로 쓴다
 - **스냅샷·복원** — `.crystal` `.ring` `.freeze` `.snap-body` `.snap-meta` `.snap-hint`
 - **오버레이·피드백** — `.modal` `.modal-actions` `.scrim` `.toast` `.toast-wrap` `.error` `.empty` `.field` `.tenant-line`
 

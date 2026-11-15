@@ -48,12 +48,8 @@ const (
 	// names, comma-separated. Unset means no plugins.
 	// Keep in sync with control-plane/internal/adapter/k8s
 	// (ClaudeCodePluginsEnvVar).
-	claudePluginsEnv     = "CLAUDE_CODE_PLUGINS"
-	maxClaudePromptBytes = 1 << 20
-	// claudePermissionModeParam is the /write query parameter that names the
-	// turn's permission mode (AC-E2); the body stays the raw prompt. Keep in
-	// sync with control-plane/internal/adapter/agent (PermissionModeParam).
-	claudePermissionModeParam  = "permissionMode"
+	claudePluginsEnv           = "CLAUDE_CODE_PLUGINS"
+	maxClaudePromptBytes       = 1 << 20
 	maxClaudeQueuedPrompts     = 64
 	maxClaudeQueuedBytes       = 8 << 20
 	maxClaudeRunOutputBytes    = 16 << 20
@@ -197,9 +193,6 @@ type claudeRuntimeState struct {
 
 type promptJob struct {
 	prompt string
-	// permissionMode is the mode the write chose for this turn (AC-E2), or ""
-	// for the runner's default.
-	permissionMode string
 }
 
 // claudeWorkload owns one session's one-shot Claude invocations. A single
@@ -220,6 +213,9 @@ type claudeWorkload struct {
 
 	// approvals is what AC-F3's idle exception is decided from.
 	approvals approvalWaits
+	// questions are the running turn's AskUserQuestion calls waiting on a
+	// person (AC-E2).
+	questions questionDesk
 
 	mu                      sync.Mutex
 	cond                    *sync.Cond
@@ -333,7 +329,10 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 	}
 	c.cond = sync.NewCond(&c.mu)
 
-	if !cfg.RestoreMode {
+	if cfg.RestoreMode && !awaitsRestore(cfg.RestoreMode, stateDir) {
+		logger.Info("restore already applied before this container restart; starting from the restored state", "state_dir", stateDir)
+	}
+	if !awaitsRestore(cfg.RestoreMode, stateDir) {
 		if err := c.ensureStateDirs(); err != nil {
 			cancel()
 			return nil, err
@@ -375,16 +374,7 @@ func (c *claudeWorkload) Close() {
 	<-c.workerDone
 }
 
-func (c *claudeWorkload) enqueue(prompt, permissionMode string) error {
-	if permissionMode != "" {
-		moder, ok := c.cli.(permissionModer)
-		if !ok {
-			return errPermissionModeUnsupported
-		}
-		if !moder.validPermissionMode(permissionMode) {
-			return errPermissionModeUnknown
-		}
-	}
+func (c *claudeWorkload) enqueue(prompt string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	switch {
@@ -399,7 +389,7 @@ func (c *claudeWorkload) enqueue(prompt, permissionMode string) error {
 	case c.queue.Len() >= maxClaudeQueuedPrompts || c.queuedBytes+len(prompt) > maxClaudeQueuedBytes:
 		return errClaudeQueueFull
 	}
-	c.queue.PushBack(promptJob{prompt: prompt, permissionMode: permissionMode})
+	c.queue.PushBack(promptJob{prompt: prompt})
 	c.queuedBytes += len(prompt)
 	c.cond.Signal()
 	return nil
@@ -494,7 +484,6 @@ func (c *claudeWorkload) runWorker() {
 		c.mu.Unlock()
 
 		prompt := c.openTurn(seq, job.prompt)
-		prompt, noticed := c.withTurnNotice(prompt, resume)
 		output := newClaudeOutputSink(
 			&c.out,
 			c.redact,
@@ -507,7 +496,7 @@ func (c *claudeWorkload) runWorker() {
 		stderr := newUTF8NormalizingWriter(output)
 		runCtx, cancelRun := context.WithTimeout(c.ctx, c.runTimeout)
 		stopSlotWatch := c.watchAuthSlot()
-		err := c.runner.Run(runCtx, c.argv(prompt, resume, job.permissionMode), runnerOptions{
+		err := c.runner.Run(runCtx, c.argv(prompt, resume), runnerOptions{
 			Dir:    c.workDir,
 			Env:    environmentWithHome(c.homeDir),
 			Stdout: stdout,
@@ -525,6 +514,7 @@ func (c *claudeWorkload) runWorker() {
 		err = errors.Join(err, stderr.Close())
 		err = errors.Join(err, output.Close())
 		c.endTurn(seq, claudeTurnStatus(err, timedOut))
+		c.dropTurnQuestions(seq)
 		c.mu.Lock()
 		refreshNotice := c.turnRefreshNotice
 		c.turnRefreshNotice = ""
@@ -538,11 +528,6 @@ func (c *claudeWorkload) runWorker() {
 		succeeded := err == nil || errors.Is(err, exec.ErrWaitDelay)
 		nextHasRun := resume || succeeded
 		persistErr := persistClaudeRuntimeState(c.stateDir, nextHasRun)
-		// A turn that refreshed its own skills was told what changed in the
-		// tool result, so its success settles the note as a told turn does.
-		if succeeded && (noticed || refreshNotice != "") {
-			c.clearTurnNotice()
-		}
 		c.mu.Lock()
 		c.hasRun = nextHasRun
 		c.active = false
@@ -601,37 +586,6 @@ func (c *claudeWorkload) archiveExclusions() []string {
 		return nil
 	}
 	return []string{c.authSlot.archiveExclusion()}
-}
-
-// withTurnNotice prepends AC-J7's skill-change note to a resumed turn. A first
-// turn starts a conversation that reads the skills as they are now, so it is
-// not told; either way a turn that succeeds settles the note. noticed reports
-// whether there was one to settle.
-func (c *claudeWorkload) withTurnNotice(prompt string, resume bool) (string, bool) {
-	refresher, ok := c.cli.(pluginRefresher)
-	if !ok {
-		return prompt, false
-	}
-	notice, err := refresher.turnNotice(c.homeDir)
-	if err != nil {
-		c.logger.Warn("read the pending plugin skill note", "err", c.redactString(err.Error()))
-		return prompt, false
-	}
-	if notice == "" {
-		return prompt, false
-	}
-	if resume {
-		prompt = notice + "\n\n" + prompt
-	}
-	return prompt, true
-}
-
-func (c *claudeWorkload) clearTurnNotice() {
-	if refresher, ok := c.cli.(pluginRefresher); ok {
-		if err := refresher.clearTurnNotice(c.homeDir); err != nil {
-			c.logger.Warn("clear the plugin skill note", "err", c.redactString(err.Error()))
-		}
-	}
 }
 
 // refreshPlugins is AC-J7: fetch the platform plugins again without leaving
@@ -766,23 +720,19 @@ func fromLoopback(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// argv builds the turn's invocation. enqueue has already refused a permission
-// mode the CLI does not take.
-func (c *claudeWorkload) argv(prompt string, resume bool, permissionMode string) []string {
-	if moder, ok := c.cli.(permissionModer); ok && permissionMode != "" {
-		return moder.argvWithPermissionMode(c.binary, c.model, prompt, resume, permissionMode)
-	}
+func (c *claudeWorkload) argv(prompt string, resume bool) []string {
 	return c.cli.argv(c.binary, c.model, prompt, resume)
 }
 
 // claudeRunnerArgv builds one claude-runner invocation (AC-E2). effort is
-// AC-E8's session effort, empty for the CLI default. permissionMode is the
-// write's choice, already checked against claudePermissionModes; empty leaves
-// the runner's auto. --resume follows AC-E4: only after the first successful
-// run; the runner then resumes the session id it recorded. Partial messages and
-// the system prompt are the runner's, not flags here, so no argv can change
-// them, and the runner itself refuses a mode outside its allowlist.
-func claudeRunnerArgv(binary, model, effort, permissionMode, k3sMCPURL, prompt string, resume bool) []string {
+// AC-E8's session effort, empty for the CLI default. --resume follows AC-E4:
+// only after the first successful run; the runner then resumes the session id
+// it recorded. Permission mode (always auto), partial messages and the system
+// prompt are the runner's, not flags here, so no argv can change them.
+//
+// questionsURL is this agent on loopback; with it the runner relays the
+// model's AskUserQuestion to a person instead of denying it.
+func claudeRunnerArgv(binary, model, effort, k3sMCPURL, questionsURL, prompt string, resume bool) []string {
 	argv := []string{binary}
 	if model != "" && model != platformDefaultModel {
 		argv = append(argv, "--model", model)
@@ -790,11 +740,11 @@ func claudeRunnerArgv(binary, model, effort, permissionMode, k3sMCPURL, prompt s
 	if effort != "" {
 		argv = append(argv, "--effort", effort)
 	}
-	if permissionMode != "" {
-		argv = append(argv, "--permission-mode", permissionMode)
-	}
 	if k3sMCPURL != "" {
 		argv = append(argv, "--k3s-mcp-url", k3sMCPURL)
+	}
+	if questionsURL != "" {
+		argv = append(argv, "--questions-url", questionsURL)
 	}
 	if resume {
 		argv = append(argv, "--resume")
@@ -832,6 +782,9 @@ func (c *claudeWorkload) beginCheckpoint(ctx context.Context, requestedID string
 	c.checkpointing = true
 	c.checkpointReady = false
 	c.checkpointID = checkpointID
+	// A turn waiting on a person would hold the checkpoint for the runner's
+	// whole wait; its questions close and the turn goes on without them.
+	c.closeQuestionsForCheckpoint()
 	for !c.stopping && ctx.Err() == nil && (c.active || c.refreshing || c.queue.Len() != 0) {
 		c.cond.Wait()
 	}
@@ -858,6 +811,54 @@ func (c *claudeWorkload) beginCheckpoint(ctx context.Context, requestedID string
 		return nil, "", fmt.Errorf("validate live claude state: %w", err)
 	}
 	return c.out.snapshot(), checkpointID, nil
+}
+
+// autoArchiveTo writes the session's archive for AC-B5 while its pod is being
+// removed: the running turn is stopped rather than waited for, prompts not yet
+// started are dropped, and the workload accepts nothing afterwards.
+func (c *claudeWorkload) autoArchiveTo(ctx context.Context, w io.Writer) (bool, error) {
+	c.mu.Lock()
+	if c.stopping || !c.ready || c.restoring {
+		c.mu.Unlock()
+		return true, nil
+	}
+	c.accepting = false
+	dropped := c.queue.Len()
+	c.queue.Init()
+	c.queuedBytes = 0
+	c.closeQuestionsForCheckpoint()
+	c.mu.Unlock()
+	c.cancel()
+	if dropped > 0 {
+		c.appendPlatformNotice(fmt.Sprintf("\n[session-platform: the session's pod is being removed — %d queued prompt(s) were not run]\n", dropped))
+	}
+
+	settle, cancelSettle := context.WithTimeout(ctx, autoArchiveSettleWait)
+	defer cancelSettle()
+	c.mu.Lock()
+	stopWake := context.AfterFunc(settle, func() {
+		c.mu.Lock()
+		c.cond.Broadcast()
+		c.mu.Unlock()
+	})
+	for settle.Err() == nil && (c.active || c.refreshing) {
+		c.cond.Wait()
+	}
+	settled := !c.active && !c.refreshing
+	hasRun := c.hasRun
+	c.mu.Unlock()
+	stopWake()
+	if settled {
+		if err := persistClaudeRuntimeState(c.stateDir, hasRun); err != nil {
+			return false, err
+		}
+	} else {
+		c.logger.Warn("the running turn did not stop in time; archiving its state as it is")
+	}
+	if err := c.cli.validateState(c.stateDir); err != nil {
+		return false, fmt.Errorf("validate live state: %w", err)
+	}
+	return false, writeStateArchiveExcluding(w, c.stateDir, c.tools.SharedDir, c.out.snapshot(), c.archiveExclusions())
 }
 
 func claudeCheckpointID(requested string) (string, error) {
@@ -969,6 +970,9 @@ func (c *claudeWorkload) restore(r io.Reader) error {
 		return err
 	}
 
+	if err := markRestored(c.stateDir); err != nil {
+		c.logger.Warn("restore marker not written; a container restart would wait for an archive again", "err", err)
+	}
 	c.out.restore(scrollbackBytes)
 	c.mu.Lock()
 	c.turns = bytes.Count(scrollbackBytes, []byte(claudeTurnMarkerLead+"input "))
@@ -1428,10 +1432,8 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 			http.Error(w, "read prompt: "+c.redactString(err.Error()), http.StatusBadRequest)
 			return
 		}
-		if err := c.enqueue(string(prompt), r.URL.Query().Get(claudePermissionModeParam)); err != nil {
+		if err := c.enqueue(string(prompt)); err != nil {
 			switch {
-			case errors.Is(err, errPermissionModeUnsupported), errors.Is(err, errPermissionModeUnknown):
-				http.Error(w, err.Error(), http.StatusBadRequest)
 			case errors.Is(err, errClaudeQueueFull):
 				http.Error(w, err.Error(), http.StatusTooManyRequests)
 			case errors.Is(err, errClaudeOutputFull):
@@ -1501,6 +1503,8 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(result)
 	})
+
+	registerQuestionRoutes(mux, c)
 
 	mux.HandleFunc("POST /checkpoint", func(w http.ResponseWriter, r *http.Request) {
 		archive, err := os.CreateTemp("", "claude-checkpoint-*.tar")

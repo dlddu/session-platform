@@ -94,9 +94,12 @@ func main() {
 			os.Exit(1)
 		}
 		a.stateDir = stateDir
-		if restoreMode {
+		if awaitsRestore(restoreMode, stateDir) {
 			logger.Info("shell agent started in restore mode; awaiting archive", "addr", addr, "state_dir", stateDir)
 		} else {
+			if restoreMode {
+				logger.Info("restore already applied before this container restart; starting a shell on the restored home", "state_dir", stateDir)
+			}
 			if err := os.MkdirAll(a.homeDir(), 0o700); err != nil {
 				logger.Error("failed to create shell home", "home", a.homeDir(), "err", err)
 				os.Exit(1)
@@ -136,7 +139,7 @@ func main() {
 			Redact:      credentialLiteralsFromEnv(),
 			RunTimeout:  runTimeout,
 			Tools:       auth.tools,
-			CLI:         claudeCLI{effort: auth.effort, platform: platform},
+			CLI:         claudeCLI{effort: auth.effort, platform: platform, agentURL: loopbackAgentURL(addr)},
 		})
 		if err != nil {
 			logger.Error("failed to initialise agent workload", "workload", workload, "err", err)
@@ -188,7 +191,10 @@ func main() {
 			}
 		}
 		drop := newDropClient(os.Getenv(dropURLEnv), os.Getenv(dropTokenFileEnv))
-		handler = sessionMCPRoutes(logger, newSessionMCPConfig(gateway, shared, repoAccess, k3sProxyMCP, drop))
+		handler = withAutoArchiveRelay(
+			sessionMCPRoutes(logger, newSessionMCPConfig(gateway, shared, repoAccess, k3sProxyMCP, drop)),
+			newAutoArchiveRelay(os.Getenv(autoArchiveURLBaseEnv), &http.Client{}, logger),
+		)
 		logger.Info("session MCP started", "addr", addr, "gated", gateway != nil, "shared_dir", shared,
 			"repo_access", repoAccess != nil, "k3s_mcp_proxy", k3sProxyMCP != "", "drop", drop != nil)
 	case workloadCredentialProxy:
@@ -264,6 +270,20 @@ func main() {
 	}
 	if handler == nil {
 		handler = routes(logger, a)
+		run := &autoArchiveRunner{
+			target:  newAutoArchiveTarget(os.Getenv(autoArchiveURLBaseEnv)),
+			produce: a.autoArchiveTo,
+			client:  &http.Client{},
+			logger:  logger,
+			now:     time.Now,
+		}
+		if a.claude != nil {
+			run.produce = a.claude.autoArchiveTo
+		}
+		if workload == workloadMiniMaxCode {
+			run.relay = os.Getenv(sessionMCPURLEnv)
+		}
+		handler = withAutoArchive(handler, run)
 	}
 
 	srv := &http.Server{

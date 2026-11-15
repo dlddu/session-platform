@@ -2,16 +2,17 @@
 // workload (docs/prd/claude-code-workload.md, AC-E2/E4). The agent runs
 //
 //   claude-runner [--model <model|platform-default>] [--effort <effort>]
-//                 [--permission-mode <auto|acceptEdits>] [--k3s-mcp-url <url>]
-//                 [--resume] -- <prompt>
+//                 [--k3s-mcp-url <url>] [--questions-url <url>] [--resume] -- <prompt>
 //
 // in the session workspace with HOME set to the session HOME, and projects the
 // JSON lines written here (data-plane/cmd/agent/claude_stream.go). Every SDK
 // message is one line — the same shapes the CLI's stream-json printed — and
 // the runner's own messages are {"type":"session_platform.notice","text":...}
 // lines. The turn's input stays open while background tasks it started are
-// running (TurnInput), so their work finishes inside the turn;
-// CLAUDE_RUNNER_BACKGROUND_WAIT_MS bounds that wait.
+// running (TurnInput), so their work finishes inside the turn; only the
+// agent's turn timeout bounds that wait. With --questions-url, an
+// AskUserQuestion waits inside the turn for a person's answer through the
+// agent (askPerson); CLAUDE_RUNNER_QUESTION_WAIT_MS bounds that wait.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -21,11 +22,12 @@ import {
   EXIT_OK,
   EXIT_TURN_FAILED,
   EXIT_USAGE,
+  QUESTION_TOOL,
   SESSION_FILE,
   SETTINGS_FILE,
   TurnInput,
   UsageError,
-  backgroundWaitFromEnv,
+  askPerson,
   classify,
   decideTool,
   noticeLine,
@@ -33,6 +35,7 @@ import {
   parseSessionFile,
   pluginsFromSettings,
   queryOptions,
+  questionWaitFromEnv,
   resolveClaudeBin,
   resumePlan,
   sameCliVersion,
@@ -138,7 +141,20 @@ async function main(argv) {
   }
 
   const plugins = readPlugins(home);
-  const canUseTool = async (toolName, input) => {
+  const questionWaitMs = questionWaitFromEnv(process.env);
+  const canUseTool = async (toolName, input, context = {}) => {
+    if (toolName === QUESTION_TOOL && args.questionsUrl) {
+      const result = await askPerson({
+        url: args.questionsUrl,
+        input,
+        signal: context.signal || null,
+        waitMs: questionWaitMs,
+      });
+      if (result.behavior === "deny") {
+        await notice(`AskUserQuestion: ${result.message}`);
+      }
+      return result;
+    }
     const verdict = decideTool(toolName, plugins, { k3s: Boolean(args.k3sMcpUrl) });
     if (verdict.allow) {
       return { behavior: "allow", updatedInput: input };
@@ -149,7 +165,6 @@ async function main(argv) {
   const options = queryOptions({
     model: args.model,
     effort: args.effort,
-    permissionMode: args.permissionMode,
     k3sMcpUrl: args.k3sMcpUrl,
     cwd,
     claudeBin,
@@ -159,13 +174,7 @@ async function main(argv) {
   });
 
   let outcome = null;
-  const input = new TurnInput({
-    prompt: args.prompt,
-    waitMs: backgroundWaitFromEnv(process.env),
-    onExpire: (taskIds) => {
-      notice(`background work still running after the turn's wait (${taskIds.join(", ")}); asking the model to stop it`).catch(() => {});
-    },
-  });
+  const input = new TurnInput({ prompt: args.prompt });
   try {
     for await (const message of query({ prompt: input.messages(), options })) {
       await emit(JSON.stringify(message) + "\n");

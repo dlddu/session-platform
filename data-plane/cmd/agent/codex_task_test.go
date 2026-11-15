@@ -5,7 +5,6 @@ import (
 	"io"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -45,9 +44,8 @@ func TestRenderCodexTaskConfig(t *testing.T) {
 			t.Errorf("features.%s = %#v, want false", feature, doc["features."+feature])
 		}
 	}
-	instructions, _ := doc["developer_instructions"].(string)
-	if !strings.Contains(instructions, codexTaskInstructionsMarker) || strings.Contains(instructions, codexInstructionsMarker) {
-		t.Errorf("developer_instructions = %q, want only the task marker", instructions)
+	if got, ok := doc["developer_instructions"]; ok {
+		t.Errorf("developer_instructions = %#v, want none", got)
 	}
 }
 

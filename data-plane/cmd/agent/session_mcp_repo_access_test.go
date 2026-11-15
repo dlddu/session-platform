@@ -382,7 +382,7 @@ func TestRequestRepoAccessRecordsAPendingRequestWithoutTheGate(t *testing.T) {
 		t.Fatalf("notices = %+v, want one access-requested notice", notices)
 	}
 	got := collectMarkers(t, m.server.URL, 1)
-	if want := "\n[session-platform: access requested — dlddu/private-repo · decide in the control plane's Repo access screen]\n"; got != want {
+	if want := "\n[session-platform: access requested — dlddu/private-repo · pending in the control plane's Repo access screen]\n"; got != want {
 		t.Errorf("marker = %q, want %q", got, want)
 	}
 }

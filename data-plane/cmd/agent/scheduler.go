@@ -188,7 +188,7 @@ func (s *scheduler) tick(ctx context.Context) {
 	sched.runs++
 	run = &schedulerRun{id: sched.id, planned: sched.nextRun, finished: state.Finished, epoch: state.Epoch}
 	s.running = run
-	prompt := schedulerRunHeader(sched) + "\n" + sched.prompt
+	prompt := sched.prompt
 	s.mu.Unlock()
 
 	if err := s.agent.write(callCtx, prompt); err != nil {
@@ -262,21 +262,6 @@ func (s *scheduler) finishRunLocked(run *schedulerRun, now time.Time) {
 	if !sched.nextRun.Before(sched.expiresAt) {
 		delete(s.schedules, sched.id)
 		s.logger.Info("scheduler: loop ended at its expiry", "schedule", sched.id)
-	}
-}
-
-func schedulerRunHeader(sched *schedule) string {
-	const lead = "[session-platform scheduler] "
-	switch sched.kind {
-	case scheduleOnce:
-		return lead + "one-time schedule " + sched.id + " — it will not run again."
-	case scheduleFixed:
-		return fmt.Sprintf("%sloop %s run %d — runs every %s until %s; schedule_cancel ends it.",
-			lead, sched.id, sched.runs, isoDuration(sched.interval), formatScheduleTime(sched.expiresAt))
-	default:
-		return fmt.Sprintf("%sself-paced loop %s run %d — before you finish, call loop_next with id %s and when to run again, "+
-			"or schedule_cancel to end it; otherwise it runs again %s after this run.",
-			lead, sched.id, sched.runs, sched.id, isoDuration(sched.interval))
 	}
 }
 
@@ -463,7 +448,7 @@ func (s *scheduler) loopNext(a loopNextArgs) (scheduleView, error) {
 	}
 	next := s.now().Add(d)
 	if !next.Before(sched.expiresAt) {
-		return scheduleView{}, fmt.Errorf("%s expires at %s, before that run; use schedule_cancel to end it",
+		return scheduleView{}, fmt.Errorf("%s expires at %s, before that run",
 			a.ID, formatScheduleTime(sched.expiresAt))
 	}
 	sched.nextRun = next
@@ -594,8 +579,8 @@ func schedulerToolDefinitions() []map[string]any {
 		{
 			"name": "schedule_once",
 			"description": "Run a prompt in this session once, later. Give delay as an ISO 8601 duration (PT30M, PT2H, P1D) or at " +
-				"as an RFC 3339 time with an offset; between 1 minute and 7 days ahead. Returns the id and the UTC time it will run — " +
-				"tell the user that time." + schedulerVolatileNote,
+				"as an RFC 3339 time with an offset; between 1 minute and 7 days ahead. Returns the id and the UTC time it will run." +
+				schedulerVolatileNote,
 			"inputSchema": object(map[string]any{
 				"prompt": prompt,
 				"delay":  str("How long from now, as an ISO 8601 duration, e.g. PT30M."),
@@ -608,7 +593,7 @@ func schedulerToolDefinitions() []map[string]any {
 				"With interval (ISO 8601, 1 minute to 24 hours) it runs at that fixed interval. Without interval it is self-paced: " +
 				"each run decides the next with loop_next, or ends the loop with schedule_cancel; a run that does neither runs again " +
 				"after fallback_interval (default PT10M). Loops end after expires_in (default and maximum P7D). Runs only start while " +
-				"the session is idle, one at a time. Tell the user the returned times." + schedulerVolatileNote,
+				"the session is idle, one at a time. Returns the id and the next run time (UTC)." + schedulerVolatileNote,
 			"inputSchema": object(map[string]any{
 				"prompt":            prompt,
 				"interval":          str("Fixed interval between runs, e.g. PT5M. Omit for a self-paced loop."),

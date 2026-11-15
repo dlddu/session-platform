@@ -189,8 +189,7 @@ func TestSchedulerOnceRunsWhenIdleAndOnlyOnce(t *testing.T) {
 	if agent.writeCount() != 1 {
 		t.Fatalf("writes = %d, want 1", agent.writeCount())
 	}
-	if !strings.HasPrefix(agent.writes[0], "[session-platform scheduler] one-time schedule sch_00000001") ||
-		!strings.HasSuffix(agent.writes[0], "\ncheck the PR") {
+	if agent.writes[0] != "check the PR" {
 		t.Fatalf("run prompt = %q", agent.writes[0])
 	}
 	if views := s.list(); len(views) != 1 || !views[0].Running {
@@ -210,16 +209,15 @@ func TestSchedulerOnceRunsWhenIdleAndOnlyOnce(t *testing.T) {
 func TestSchedulerFixedLoopSkipsOverrunSlots(t *testing.T) {
 	s, agent, clock := newTestScheduler(t)
 	ctx := context.Background()
-	view, err := s.loopCreate(loopCreateArgs{Prompt: "poll", Interval: "PT5M"})
-	if err != nil {
+	if _, err := s.loopCreate(loopCreateArgs{Prompt: "poll", Interval: "PT5M"}); err != nil {
 		t.Fatal(err)
 	}
 	s.tick(ctx) // first run right away
 	if agent.writeCount() != 1 {
 		t.Fatalf("writes = %d", agent.writeCount())
 	}
-	if !strings.Contains(agent.writes[0], "loop "+view.ID+" run 1 — runs every PT5M") {
-		t.Fatalf("header = %q", agent.writes[0])
+	if agent.writes[0] != "poll" {
+		t.Fatalf("run prompt = %q, want the schedule's prompt alone", agent.writes[0])
 	}
 	clock.advance(17 * time.Minute) // the turn overran three slots
 	agent.finishTurn()
@@ -233,7 +231,7 @@ func TestSchedulerFixedLoopSkipsOverrunSlots(t *testing.T) {
 	}
 	clock.set(time.Date(2026, 11, 9, 0, 20, 0, 0, time.UTC))
 	s.tick(ctx)
-	if agent.writeCount() != 2 || !strings.Contains(agent.writes[1], " run 2 ") {
+	if agent.writeCount() != 2 || s.list()[0].Runs != 2 {
 		t.Fatalf("second run missing: %v", agent.writes)
 	}
 }
@@ -246,8 +244,8 @@ func TestSchedulerSelfPacedLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.tick(ctx)
-	if !strings.Contains(agent.writes[0], "call loop_next with id "+view.ID) {
-		t.Fatalf("self-paced header = %q", agent.writes[0])
+	if agent.writes[0] != "watch the rollout" {
+		t.Fatalf("run prompt = %q, want the schedule's prompt alone", agent.writes[0])
 	}
 	// The run asks for two minutes, then finishes.
 	clock.advance(time.Minute)
@@ -457,8 +455,7 @@ func TestRenderCodexConfigRegistersScheduler(t *testing.T) {
 	for _, task := range []bool{false, true} {
 		doc := string(renderCodexConfig(codexConfig{task: task, agentBinary: "/agent", skillsDir: "/s",
 			schedulerURL: "http://127.0.0.1:8093/scheduler/mcp"}))
-		if !strings.Contains(doc, "[mcp_servers.scheduler]\nurl = \"http://127.0.0.1:8093/scheduler/mcp\"") ||
-			!strings.Contains(doc, "use the `scheduler` MCP server") {
+		if !strings.Contains(doc, "[mcp_servers.scheduler]\nurl = \"http://127.0.0.1:8093/scheduler/mcp\"") {
 			t.Fatalf("task=%v config lacks the scheduler:\n%s", task, doc)
 		}
 		if strings.Contains(string(renderCodexConfig(codexConfig{task: task, agentBinary: "/agent", skillsDir: "/s"})), "[mcp_servers.scheduler]") {
@@ -492,8 +489,7 @@ func TestSchedulerRunsThroughTheAgentQueue(t *testing.T) {
 	ctx := context.Background()
 	s.tick(ctx)
 	run := <-runner.started
-	if prompt := run.argv[len(run.argv)-1]; !strings.HasPrefix(prompt, "[session-platform scheduler] one-time schedule") ||
-		!strings.HasSuffix(prompt, "\ncheck the PR") {
+	if prompt := run.argv[len(run.argv)-1]; prompt != "check the PR" {
 		t.Fatalf("turn prompt = %q", prompt)
 	}
 	eventually(t, "the run settles", func() bool {

@@ -22,24 +22,33 @@ interactive shell and Claude Code workloads.
   environment, cwd and shell variables/functions/aliases are not carried over.
 - `claude-code` launches no resident shell. Write asynchronously queues a
   prompt for one serial worker; each job executes
-  `claude-runner [--model MODEL] [--effort EFFORT] [--permission-mode MODE] [--resume] -- PROMPT`
+  `claude-runner [--model MODEL] [--effort EFFORT] [--resume] -- PROMPT`
   (`CLAUDE_RUNNER_BIN`, default `/usr/local/bin/claude-runner`). The runner
   ([`claude-runner/`](claude-runner/)) runs one Claude Agent SDK `query()`
   that drives the pinned Claude Code CLI (`CLAUDE_CODE_BIN`, default `claude`
   on `PATH`) with Claude Code's own system prompt, all setting sources,
-  partial messages and `permissionMode: auto` — or `acceptEdits` when the
-  write that queued the turn chose it through `POST /write?permissionMode=…`
-  (no other mode is accepted, and the body stays the raw prompt). Tool requests
+  partial messages and `permissionMode: auto` for every turn (no write can
+  choose another mode). Tool requests
   that would ask a person go to the SDK's `canUseTool` callback, which allows the
   platform's built-in tools and the session's own plugin MCP tools and denies
   the rest with a `[session-platform: denied …]` line in the output.
+  `AskUserQuestion` is not denied: the agent passes its own loopback address
+  as `--questions-url`, the runner posts the questions to the loopback-only
+  `POST /questions/ask` and polls `GET /questions/ask/{id}` while the turn
+  keeps running, and a person answers through the control plane
+  (`GET /questions`, `POST /questions/{id}/answer` — refused from inside the
+  pod, so the model cannot answer itself). The answers go back as the tool's
+  input `answers`. A question nobody answers within
+  `CLAUDE_RUNNER_QUESTION_WAIT_MS` (default 20 minutes), one a checkpoint
+  closes, or one the agent refuses is denied with a note to decide alone; a
+  question lives only as long as its turn.
   The turn's input stays open after its result while background tasks it
   started are still running, so they finish inside the turn and the model sees
-  their completion; a task still running after `CLAUDE_RUNNER_BACKGROUND_WAIT_MS`
-  (default 10 minutes) gets one platform message asking the model to stop it
-  with `TaskStop`, and the input closes two minutes later regardless. Closing
-  earlier would kill the task and make the next resumed turn open with a
-  "stopped" notice glued to its prompt.
+  their completion. The runner sets no wait of its own and writes nothing
+  after the prompt: only the agent's turn timeout (`CLAUDE_CODE_RUN_TIMEOUT`)
+  ends a turn whose work keeps running. Closing earlier would kill the task
+  and make the next resumed turn open with a "stopped" notice glued to its
+  prompt.
   `CLAUDE_CODE_EFFORT` (`low`, `medium`, `high`, `xhigh` or `max`, AC-E8) adds
   `--effort`; empty leaves the CLI default and any other value refuses start.
   The runner writes every SDK message as one JSONL line; the agent projects
@@ -112,24 +121,46 @@ interactive shell and Claude Code workloads.
   reach it. The K3s MCP tools are not behind the session gate because the K3s
   MCP gates its own writes.
 - `codex-chat` (formerly `codex`, still accepted as `DATA_PLANE_WORKLOAD`)
-  runs the Codex SDK on the same one-shot runner as `claude-code`
+  runs Codex on the same one-shot runner as `claude-code`
   (AC-J1/J2): queue, bounds, cursor, resume flag and archive are shared. Each
   job executes `codex-runner --model MODEL [--resume] -- PROMPT`
   (`CODEX_RUNNER_BIN`, default `/usr/local/bin/codex-runner`, a shim for
   `node /opt/codex-runner/runner.mjs`). `MODEL` is `CODEX_MODEL` or
   `platform-default`, which lets codex pick its own default. The runner
-  (`codex-runner/`, `@openai/codex-sdk` pinned to 0.166.0 by its lockfile)
-  first checks `codex login status`. If the session is not signed in, it runs
+  (`codex-runner/`, the `@openai/codex` binary pinned to 0.166.0 by its
+  lockfile) first checks `codex login status`. If the session is not signed in, it runs
   `codex login --device-auth` and forwards the ChatGPT verification URL and
   one-time code as notice lines, then runs the turn once sign-in completes. A
-  failed sign-in exits 2 (AC-J3). It starts a thread, or resumes the one
-  recorded in `$CODEX_HOME/session-platform-thread.json`, with
-  `sandboxMode: read-only`, `approvalPolicy: never`, web search and sandbox
-  network off and `skipGitRepoCheck`. It writes every SDK event as one JSON
-  line and exits 0 on `turn.completed` and 1 on `turn.failed` or `error`. Its
-  codex child gets only `HOME`, `CODEX_HOME`, `PATH`, `LANG`, `TZ` and
-  `SSL_CERT_FILE`. A `command_execution`, `file_change` or `web_search` item
-  trips a kill switch: the runner writes a notice, aborts the turn and exits 3.
+  failed sign-in exits 2 (AC-J3). It then starts `codex app-server` on stdio
+  with web search off, `approval_policy = "never"` and sandbox network off,
+  and, as client `codex_sdk_ts` (the originator the SDK gave `codex exec`),
+  starts a thread, or resumes the one recorded in
+  `$CODEX_HOME/session-platform-thread.json`, with `sandbox: read-only`. It
+  writes the main thread's notifications as the JSON event lines `codex exec`
+  printed (`thread.started`, `turn.started`, `item.*`, `turn.completed`,
+  `turn.failed`, `error`) and exits 0 when the last main-thread turn completes
+  and 1 when it fails. It answers the app server's own requests as `codex
+  exec` did: an MCP elicitation is cancelled as non-interactive and any
+  approval or user-input request is refused. Its codex child gets only `HOME`,
+  `CODEX_HOME`, `PATH`, `LANG`, `TZ` and `SSL_CERT_FILE`. A
+  `command_execution`, `file_change` or `web_search` item of any thread,
+  sub-agents included, trips a kill switch: the runner writes a notice, kills
+  the app server and exits 3.
+  The runner uses the app server rather than `codex exec` because exec shuts
+  codex down as soon as the main thread's turn ends, which kills the
+  sub-agents that turn started (AC-J8). The runner follows every sub-agent
+  thread the app server attaches and writes its start, its K3s MCP and skills
+  calls and its end as notice lines (never as assistant messages). When the
+  main thread's turn ends with sub-agents still running, the runner waits for
+  them so their work is not cut short, then writes one notice line naming
+  each agent and its final message (8 KiB at most each, keeping its
+  beginning and end) — to the session output only. The platform opens no
+  turn of its own: the model sees those results only if a later prompt asks
+  for them. The wait is `CODEX_RUNNER_BACKGROUND_WAIT_MS` (default 10
+  minutes); agents still running then are interrupted and reported as
+  stopped.
+  All of it is one job, so the whole invocation, waits included, stays
+  under `CLAUDE_CODE_RUN_TIMEOUT`, and the next prompt waits in the queue.
   The agent projects notices, finished `agent_message` text, a
   `· server.tool` line per MCP call (plus an `error:` line if it fails) and
   `error:` lines for failed turns, and drops everything else, including
@@ -140,8 +171,10 @@ interactive shell and Claude Code workloads.
   `forced_login_method = "chatgpt"`) and no update check. It turns off the
   shell, `unified_exec`, `view_image`, image generation, apps, plugins, browser
   and computer use, memories, hooks and the other side-channel features, and
-  the bundled system skills. It sets `developer_instructions` that tell the
-  model to read skills through the skills MCP. It registers two MCP servers:
+  the bundled system skills. It sets no `developer_instructions`: the
+  platform adds no text of its own to the model's input, and the MCP servers'
+  tool descriptions are what tell the model how to use them. It registers two
+  MCP servers:
   `skills` (`/agent skills-mcp`, a stdio MCP serving `list_skills` and
   `read_skill{name, file?}` from `CODEX_SKILLS_DIR`, with regular files only,
   no symlinks, nothing outside the directory and a 256 KiB cap per file, plus
@@ -149,9 +182,11 @@ interactive shell and Claude Code workloads.
   `SESSION_PLATFORM_AGENT_URL` names this agent on loopback) and,
   only when the sidecar's `/healthz` reports `configured: true`, `k3s` at
   `K3S_MCP_PROXY_URL/mcp`. Codex is left with conversation, plugin skills and
-  the K3s MCP (AC-J5). `apply_patch` and the collaboration tools stay
-  model-visible because the remote model catalog forces code mode on. The
-  read-only sandbox and the kill switch are what stop them. Plugin skills come
+  the K3s MCP (AC-J5). `apply_patch` and the collaboration (sub-agent) tools
+  stay model-visible because the remote model catalog forces code mode and
+  multi-agent on. The read-only sandbox and the kill switch are what stop
+  `apply_patch`; sub-agents are allowed and run under the same config,
+  sandbox and kill switch (AC-J8). Plugin skills come
   from the sidecar's `/plugin-seed` bundle (the `minimax-code` format). Each
   `skills/<name>/` directory a seeded plugin names is installed as
   `$HOME/.agents/skills/<plugin>--<name>/` with the managed marker; stale
@@ -164,17 +199,13 @@ interactive shell and Claude Code workloads.
   clone the marketplace once more, re-syncs the managed skills from the new
   bundle and answers `{state, revision, added, updated, removed}`. A refresh
   that cannot fetch or read the new bundle answers 502 and leaves the skills as
-  they were. Every sync that changes skills — a refresh, or a restore into a
-  newer marketplace — folds the change into
-  `$HOME/.codex/session-platform-skill-changes.json`; the next resumed turn's
-  prompt opens with a note naming those skills and asking the model to re-read
-  them, and the record is cleared once a turn succeeds. Nothing refreshes on
-  its own. The model's `refresh_skills` posts to the loopback-only
+  they were. Nothing is written into the conversation: the next turn's prompt
+  is the user's own, and the refresh leaves only a transcript line. Nothing
+  refreshes on its own. The model's `refresh_skills` posts to the loopback-only
   `POST /plugins/refresh/turn`, which does the same refresh from inside the
   running turn: once per turn (429 after), 409 outside a turn or while a
   checkpoint waits, 403 from anything but loopback. The tool result names the
-  changes, so a turn that refreshed and succeeded clears the record; the
-  transcript line is written after that turn's end marker.
+  changes; the transcript line is written after that turn's end marker.
   Both codex types also get `scheduler` at `SESSION_SCHEDULER_MCP_URL`
   (the sidecar's `/scheduler/mcp`, docs/prd/session-scheduler.md AC-P1~P3):
   `schedule_once`, `loop_create` (fixed `interval`, or self-paced with
@@ -184,7 +215,7 @@ interactive shell and Claude Code workloads.
   life. The sidecar (enabled by `SESSION_SCHEDULER_AGENT_URL`, this agent on
   loopback) keeps the schedules in memory and, when the loopback-only
   `GET /queue` reports the agent idle, puts one run at a time on the queue
-  with `POST /write`, its first line `[session-platform scheduler] <id> …`.
+  with `POST /write` — the registered prompt as it is, with nothing added.
   `GET /scheduler` relays the sidecar's schedule count; the control plane's
   idle reaper holds a codex session while it is above zero (AC-P3).
   The pod has no provider credential: `K3S_MCP_PROXY_URL` must be
@@ -202,21 +233,21 @@ interactive shell and Claude Code workloads.
   surface, K3s MCP included) and runs `codex-runner/surface-check.mjs` against
   it. The check runs `codex debug prompt-input` and fails the build if
   `exec_command`, `write_stdin`, `view_image` or another shell, image or web
-  tool is model-visible, if bundled system skills are listed, or if the
-  managed instructions are missing. That rendering does not include MCP
+  tool is model-visible or if bundled system skills are listed (which would
+  mean codex did not load the managed config). That rendering does not include MCP
   tools, because codex does not wait for MCP servers there, so the check
   covers what the config removes.
 - `codex-task` (`docs/prd/codex-task-workload.md`) is `codex-chat`'s pod and
   runner with claude-code's tool level (AC-M1). Each job executes
   `codex-runner --mode task --model MODEL [--effort EFFORT] [--resume] --
   PROMPT`; `CODEX_REASONING_EFFORT` (`minimal`, `low`, `medium`, `high` or
-  `xhigh`, AC-M4) sets the SDK's `modelReasoningEffort`, and `codex-chat`
-  refuses to start with it set. Task mode runs with `sandboxMode:
-  danger-full-access`, `approvalPolicy: never`, sandbox network on and web
-  search off, and has no kill switch. Its managed `config.toml` leaves the
+  `xhigh`, AC-M4) sets codex's `model_reasoning_effort`, and `codex-chat`
+  refuses to start with it set. Task mode runs with sandbox
+  `danger-full-access`, approval policy `never`, sandbox network on and web
+  search off, and has no kill switch; it waits for its sub-agents the same
+  way (AC-J8). Its managed `config.toml` leaves the
   shell and `unified_exec` on, opens the sandbox, keeps every other
-  `codex-chat` switch, and carries its own developer instructions (marker
-  `session-platform codex task session`). The ChatGPT login is the auth
+  `codex-chat` switch; like it, it sets no developer instructions. The ChatGPT login is the auth
   slot's `auth.json` (`AGENT_AUTH_SLOT_DIR`), kept in sync with
   `$HOME/.codex/auth.json` — copied into HOME before every turn (HOME's copy
   removed when the slot has none), back every second while the runner works
@@ -228,8 +259,7 @@ interactive shell and Claude Code workloads.
   `codex-chat`, and the end-of-turn copy keeps it for the next session. The
   image build renders both modes (`/agent codex-render-config <home>
   chat|task`) and runs `surface-check.mjs --mode chat|task`: task mode must
-  show a shell tool and its own marker, and no image or web tool or bundled
-  skill.
+  show a shell tool, and no image or web tool or bundled skill.
 - `k3s-mcp-proxy` is the `minimax-code` helper pod's K3s MCP proxy, and the
   `claude-code`, `codex-chat` and `codex-task` pods' loopback sidecar (`DATA_PLANE_PROXY_PLACEMENT=sidecar`,
   `127.0.0.1:8093`): the
@@ -303,13 +333,40 @@ the archive also carries that volume under `shared/` and restore copies it into
 the next round's freshly mounted volume; an archive with shared files refuses to
 restore into a pod without one rather than dropping them (AC-F5).
 
+A restore target keeps `DATA_PLANE_RESTORE_MODE=1` for its whole life, so a
+landed restore also writes `/session/.session-restored` beside the state tree
+(never inside it, so no archive carries it). An agent container that restarts
+in that pod — an OOM kill, say — sees the marker and starts from the restored
+state on the volume, like any other container restart (the in-memory
+scrollback starts empty), instead of waiting for an archive the control plane
+will not send again. Without the marker a restarted restore target waits as
+before.
+
 The shell's state tree sits at the same place (`SHELL_STATE_DIR`, default
 `/session/state`, volume at `/session`). Its checkpoint closes write admission
 (409) and SIGSTOPs the shell and its descendants so the home directory holds
 still, archives `home/` plus the scrollback, and keeps both paused until the
 control plane reclaims the pod or calls `/checkpoint/abort`, which SIGCONTs the
 tree and reopens writes. A process that daemonized out of the shell's tree is
-not paused. The image includes the official
+not paused.
+
+Every workload agent also archives itself when its pod is terminated (AC-B5).
+The control plane pushes an upload URL signed for the session's one archive key
+(`sessions/<id>/checkpoint.tar`, which snapshots also overwrite) with
+`PUT /auto-archive/target` (`{url, expiresAt, headers}`; the agent refuses any URL
+whose address differs from `AUTO_ARCHIVE_URL_BASE`, set at pod creation, and any
+header other than the `x-amz-meta-*` the signature covers — `x-amz-meta-writer:
+pod:<name>`, sent with the upload) and takes it
+back with `DELETE` before reclaiming the pod after a committed snapshot. The
+pod's exec preStop hook (`/agent auto-archive-prestop /auto-archive/run`) calls
+`GET /auto-archive/run` on loopback: with a valid URL the agent stops the running
+turn instead of waiting for it (queued prompts are dropped and counted in the
+output) or pauses the shell's tree, writes the same archive a checkpoint would,
+and uploads it within 100 s of the pod's 110 s grace period. A `minimax-code`
+workload uploads through its helper pod's session MCP container
+(`/auto-archive/announce`, `PUT /auto-archive/relay`), whose own preStop
+(`/auto-archive/hold`) keeps the helper up until an announced upload is through.
+The image includes the official
 `@anthropic-ai/claude-code` npm package. `entrypoint.sh` only execs the agent.
 A `claude-code` agent reads its loopback `k3s-mcp-proxy` sidecar
 (`K3S_MCP_PROXY_URL`, above) once per pod, on boot or after a restore: when the
@@ -363,8 +420,8 @@ that enables only the session's chosen `<name>@dlddu-plugins` plugins (none
 unless it chose some) and allows only the coding
 tools `Read`, `Write`, `Edit`, `Glob`, `Grep`, and `Bash`; the agent does not use
 `--dangerously-skip-permissions`. Every invocation starts Claude Code in `auto`
-permission mode unless its write chose `acceptEdits`; the runner sets the mode
-as an SDK option, so no prompt can change it.
+permission mode; the runner sets the mode as an SDK option, so neither a write
+nor a prompt can change it.
 
 Projected assistant text plus diagnostic stderr from one Claude invocation is
 capped at 16 MiB after incremental redaction, including the terminal line

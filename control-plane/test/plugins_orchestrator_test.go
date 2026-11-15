@@ -145,7 +145,6 @@ func TestPlugins_CodexSidecarSeeder(t *testing.T) {
 			k8s.WithWorkloadImage(session.WorkloadTypeCodexChat, codexImage),
 			k8s.WithCodexCredentialsSecret("codex-k3s"),
 			k8s.WithCodexConfigConfigMap("codex-cfg"),
-			k8s.WithCodexPlugins("codex-session,extra"),
 		)
 		slot := 0
 		if _, err := orch.Start(context.Background(), id, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexChat, Plugins: plugins, AuthSlot: &slot}); err != nil {
@@ -155,22 +154,23 @@ func TestPlugins_CodexSidecarSeeder(t *testing.T) {
 		return got
 	}
 	if got := start(t, "pl-cx", []string{"learning"}); got != "learning" {
-		t.Errorf("selection: PLUGIN_SEED_PLUGINS = %q, want learning (replaces CODEX_PLUGINS)", got)
+		t.Errorf("selection: PLUGIN_SEED_PLUGINS = %q, want learning", got)
 	}
-	if got := start(t, "pl-cx-default", nil); got != "codex-session,extra" {
-		t.Errorf("omitted: PLUGIN_SEED_PLUGINS = %q, want the deployment's codex-session,extra", got)
+	// AC-A5: no type has a platform default — a codex-chat session that chose
+	// no plugins gets none, like every other type.
+	if got := start(t, "pl-cx-default", nil); got != "" {
+		t.Errorf("omitted: PLUGIN_SEED_PLUGINS = %q, want none", got)
 	}
 }
 
-// codex-task seeds from its own sidecar the same way, but has no default: a
-// session that chose none gets no plugins, never codex-chat's (AC-L1, AC-M1).
+// codex-task seeds from its own sidecar the same way: a session that chose
+// none gets no plugins (AC-L1, AC-A5).
 func TestPlugins_CodexTaskSidecarSeeder(t *testing.T) {
 	start := func(t *testing.T, id string, plugins []string) string {
 		t.Helper()
 		orch, cs := newReadyOrchestrator(t,
 			k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
 			k8s.WithWorkloadImage(session.WorkloadTypeCodexTask, codexImage),
-			k8s.WithCodexPlugins("codex-session,extra"),
 		)
 		slot := 0
 		if _, err := orch.Start(context.Background(), id, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexTask, Plugins: plugins, AuthSlot: &slot}); err != nil {

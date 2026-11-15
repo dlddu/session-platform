@@ -4,15 +4,14 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import os from "node:os";
 import path from "node:path";
 import {
-  DEFAULT_BACKGROUND_WAIT_MS,
-  DEFAULT_PERMISSION_MODE,
+  DEFAULT_QUESTION_WAIT_MS,
+  PERMISSION_MODE,
   HEADLESS_DENIAL,
   NOTICE_TYPE,
   PLATFORM_DEFAULT_MODEL,
   TurnInput,
   UsageError,
-  backgroundWaitFromEnv,
-  stopNote,
+  askPerson,
   classify,
   decideTool,
   noticeLine,
@@ -21,6 +20,7 @@ import {
   pluginToolPrefix,
   pluginsFromSettings,
   queryOptions,
+  questionWaitFromEnv,
   resolveClaudeBin,
   resumePlan,
   sameCliVersion,
@@ -34,10 +34,10 @@ test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
       "claude-opus-5-5",
       "--effort",
       "max",
-      "--permission-mode",
-      "acceptEdits",
       "--k3s-mcp-url",
       "http://127.0.0.1:8093/mcp",
+      "--questions-url",
+      "http://127.0.0.1:8090/",
       "--resume",
       "--",
       "--help me",
@@ -45,8 +45,8 @@ test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
     {
       model: "claude-opus-5-5",
       effort: "max",
-      permissionMode: "acceptEdits",
       k3sMcpUrl: "http://127.0.0.1:8093/mcp",
+      questionsUrl: "http://127.0.0.1:8090",
       resume: true,
       prompt: "--help me",
       checkCli: false,
@@ -56,10 +56,8 @@ test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
   assert.equal(bare.model, PLATFORM_DEFAULT_MODEL);
   assert.equal(bare.effort, null);
   assert.equal(bare.resume, false);
-  assert.equal(bare.permissionMode, DEFAULT_PERMISSION_MODE);
   assert.equal(bare.k3sMcpUrl, null);
-  assert.equal(DEFAULT_PERMISSION_MODE, "auto");
-  assert.equal(parseArgs(["--permission-mode", "auto", "--", "x"]).permissionMode, "auto");
+  assert.equal(bare.questionsUrl, null);
   assert.equal(parseArgs(["--check-cli"]).checkCli, true);
 });
 
@@ -70,16 +68,18 @@ test("parseArgs refuses what the agent never sends", () => {
     ["--model"],
     ["--model", "", "--", "x"],
     ["--effort", "turbo", "--", "x"],
-    ["--permission-mode", "--", "x"],
-    ["--permission-mode", "default", "--", "x"],
+    // The permission mode is the runner's own (always auto), not a flag.
+    ["--permission-mode", "auto", "--", "x"],
+    ["--permission-mode", "acceptEdits", "--", "x"],
     ["--permission-mode", "bypassPermissions", "--", "x"],
-    ["--permission-mode", "plan", "--", "x"],
-    ["--permission-mode", "dontAsk", "--", "x"],
     ["--continue", "--", "x"],
     ["--k3s-mcp-url", "--", "x"],
     ["--k3s-mcp-url", "not a url", "--", "x"],
     ["--k3s-mcp-url", "https://homelab-k3s-mcp.llkm.nl/mcp", "--", "x"],
     ["--k3s-mcp-url", "http://10.0.0.5:8093/mcp", "--", "x"],
+    ["--questions-url", "--", "x"],
+    ["--questions-url", "http://10.0.0.5:8090", "--", "x"],
+    ["--questions-url", "https://127.0.0.1:8090", "--", "x"],
     ["hello"],
   ]) {
     assert.throws(() => parseArgs(argv), UsageError, JSON.stringify(argv));
@@ -117,6 +117,7 @@ test("queryOptions spells out what the SDK defaults differently from the CLI", (
   assert.deepEqual(base.systemPrompt, { type: "preset", preset: "claude_code" });
   assert.deepEqual(base.settingSources, ["user", "project", "local"]);
   assert.equal(base.permissionMode, "auto");
+  assert.equal(PERMISSION_MODE, "auto");
   assert.equal(base.includePartialMessages, true);
   assert.equal(base.canUseTool, canUseTool);
   assert.equal(base.pathToClaudeCodeExecutable, "/usr/local/bin/claude");
@@ -130,9 +131,8 @@ test("queryOptions spells out what the SDK defaults differently from the CLI", (
     cwd: "/w",
     claudeBin: "/c",
     plan: { kind: "resume", sessionId: "s" },
-    permissionMode: "acceptEdits",
   });
-  assert.equal(resumed.permissionMode, "acceptEdits");
+  assert.equal(resumed.permissionMode, "auto");
   assert.equal(resumed.model, "claude-opus-5-5");
   assert.equal(resumed.effort, "high");
   assert.equal(resumed.resume, "s");
@@ -181,6 +181,10 @@ test("decideTool denies everything else with a reason the model can act on", () 
   const foreign = decideTool("mcp__repo-server__exfiltrate", plugins);
   assert.equal(foreign.allow, false);
   assert.match(foreign.message, /not part of this session's tool surface/);
+  // AC-A5: a denial reports what happened; it does not steer the model.
+  for (const message of [foreign.message, HEADLESS_DENIAL]) {
+    assert.doesNotMatch(message, /\b(Use|Decide|decide|instead|continue)\b/, message);
+  }
   // A plugin the session did not choose is not the session's either.
   assert.equal(decideTool("mcp__plugin_other_x__y", plugins).allow, false);
   assert.equal(decideTool("mcp__plugin_session-platformx_k__y", plugins).allow, false);
@@ -313,33 +317,17 @@ test("activity during the quiet spell keeps the input open", () => {
   assert.equal(input.closed, false);
 });
 
-test("background work still running after the wait is stopped, then the input closes", () => {
+test("background work with no end keeps the input open, and the platform writes nothing after the prompt", async () => {
   const clock = fakeClock();
-  const expired = [];
-  const input = new TurnInput({ prompt: "p", waitMs: 1_000, graceMs: 500, ...clock, onExpire: (ids) => expired.push(ids) });
+  const input = new TurnInput({ prompt: "p", ...clock });
+  const { rest } = await firstAndRest(input);
   input.observe(tasks("t1", "t2"));
   input.observe(result);
-  clock.advance(999);
-  assert.deepEqual(expired, []);
-  clock.advance(1);
-  assert.deepEqual(expired, [["t1", "t2"]]);
-  assert.equal(input.closed, false, "the stop gets its grace to reach the model");
-  clock.advance(500);
-  assert.equal(input.closed, true, "the grace bounds the turn even if nothing settles");
-});
-
-test("the wait is measured from the first result that left work running", () => {
-  const clock = fakeClock();
-  const expired = [];
-  const input = new TurnInput({ prompt: "p", waitMs: 1_000, graceMs: 500, ...clock, onExpire: (ids) => expired.push(ids) });
-  input.observe(tasks("t1"));
-  input.observe(result);
-  clock.advance(600);
-  input.observe({ type: "assistant" });
-  input.observe(tasks("t1", "t2"));
-  input.observe(result);
-  clock.advance(400);
-  assert.deepEqual(expired, [["t1", "t2"]], "a later result does not restart the wait");
+  clock.advance(24 * 60 * 60 * 1000);
+  assert.equal(input.closed, false, "only the agent's turn timeout ends a turn whose work keeps running");
+  assert.equal(clock.pending(), 0, "the runner sets no wait of its own");
+  input.close();
+  assert.deepEqual(await rest, { value: undefined, done: true }, "no message follows the prompt");
 });
 
 test("closing early clears every timer and ends the input", async () => {
@@ -348,7 +336,8 @@ test("closing early clears every timer and ends the input", async () => {
   const { rest } = await firstAndRest(input);
   input.observe(tasks("t1"));
   input.observe(result);
-  assert.equal(clock.pending(), 1);
+  input.observe(tasks());
+  assert.equal(clock.pending(), 1, "the quiet spell is the one timer");
   input.close();
   input.close();
   assert.equal(clock.pending(), 0);
@@ -357,51 +346,142 @@ test("closing early clears every timer and ends the input", async () => {
   assert.equal(clock.pending(), 0, "nothing reopens a closed input");
 });
 
-test("the background wait comes from the environment only as a positive integer", () => {
-  assert.equal(backgroundWaitFromEnv({}), DEFAULT_BACKGROUND_WAIT_MS);
-  assert.equal(backgroundWaitFromEnv({ CLAUDE_RUNNER_BACKGROUND_WAIT_MS: "1500" }), 1500);
-  for (const bad of ["", "0", "-5", "1.5", "10m", " 10"]) {
-    assert.equal(backgroundWaitFromEnv({ CLAUDE_RUNNER_BACKGROUND_WAIT_MS: bad }), DEFAULT_BACKGROUND_WAIT_MS, bad);
+// askPerson's agent, in memory: POST /questions/ask opens, GET polls, DELETE
+// gives up. answerAfter is how many polls go by before the answer appears.
+function fakeQuestionAgent({ answerAfter = 0, answers = null, cancelReason = null, askStatus = 201 } = {}) {
+  const calls = [];
+  let polls = 0;
+  const fetchImpl = async (url, init = {}) => {
+    const method = init.method || "GET";
+    calls.push({ method, url, body: init.body ? JSON.parse(init.body) : undefined });
+    const reply = (status, body) => ({
+      status,
+      ok: status >= 200 && status < 300,
+      json: async () => body,
+      text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
+    });
+    if (method === "POST") {
+      return askStatus === 201 ? reply(201, { id: "q_1" }) : reply(askStatus, "no turn is running");
+    }
+    if (method === "DELETE") {
+      return reply(204, "");
+    }
+    polls++;
+    if (cancelReason) {
+      return reply(200, { state: "cancelled", reason: cancelReason });
+    }
+    if (answers && polls > answerAfter) {
+      return reply(200, { state: "answered", answers });
+    }
+    return reply(200, { state: "pending" });
+  };
+  return { fetchImpl, calls };
+}
+
+const askInput = {
+  questions: [
+    {
+      question: "Which database?",
+      header: "DB",
+      multiSelect: false,
+      options: [
+        { label: "SQLite", description: "file", preview: "x" },
+        { label: "Postgres", description: "server" },
+      ],
+    },
+  ],
+};
+
+test("askPerson relays the questions and returns the person's answers as the tool input", async () => {
+  const agent = fakeQuestionAgent({ answerAfter: 2, answers: { "Which database?": "Postgres" } });
+  const result = await askPerson({
+    url: "http://127.0.0.1:8090",
+    input: askInput,
+    fetchImpl: agent.fetchImpl,
+    sleep: async () => {},
+  });
+  assert.deepEqual(result, { behavior: "allow", updatedInput: { ...askInput, answers: { "Which database?": "Postgres" } } });
+  const ask = agent.calls[0];
+  assert.equal(ask.url, "http://127.0.0.1:8090/questions/ask");
+  // Only the shape the agent takes goes over; previews stay with the model.
+  assert.deepEqual(ask.body.questions[0].options[0], { label: "SQLite", description: "file" });
+  assert.equal(agent.calls.filter((c) => c.method === "GET").length, 3);
+  assert.ok(agent.calls.every((c) => c.method !== "DELETE"));
+});
+
+test("askPerson gives up after the wait and tells the model to decide", async () => {
+  const agent = fakeQuestionAgent();
+  let clock = 0;
+  const result = await askPerson({
+    url: "http://127.0.0.1:8090",
+    input: askInput,
+    waitMs: 5000,
+    pollMs: 1000,
+    fetchImpl: agent.fetchImpl,
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    now: () => clock,
+  });
+  assert.equal(result.behavior, "deny");
+  assert.match(result.message, /Nobody answered within 0\.1 minute/);
+  assert.doesNotMatch(result.message, /Decide|decide|should|must/, "a denial states what happened, nothing more");
+  assert.equal(agent.calls.at(-1).method, "DELETE");
+  assert.equal(agent.calls.at(-1).url, "http://127.0.0.1:8090/questions/ask/q_1");
+});
+
+test("askPerson reports a question the agent closed or could not take", async () => {
+  const closed = await askPerson({
+    url: "http://127.0.0.1:8090",
+    input: askInput,
+    fetchImpl: fakeQuestionAgent({ cancelReason: "the session is being frozen" }).fetchImpl,
+    sleep: async () => {},
+  });
+  assert.equal(closed.behavior, "deny");
+  assert.match(closed.message, /the session is being frozen/);
+
+  const refused = await askPerson({
+    url: "http://127.0.0.1:8090",
+    input: askInput,
+    fetchImpl: fakeQuestionAgent({ askStatus: 409 }).fetchImpl,
+    sleep: async () => {},
+  });
+  assert.equal(refused.behavior, "deny");
+  assert.match(refused.message, /could not be shown to a person \(409/);
+
+  const unreachable = await askPerson({
+    url: "http://127.0.0.1:8090",
+    input: askInput,
+    fetchImpl: async () => {
+      throw new Error("connect ECONNREFUSED");
+    },
+    sleep: async () => {},
+  });
+  assert.match(unreachable.message, /ECONNREFUSED/);
+
+  const empty = await askPerson({ url: "http://127.0.0.1:8090", input: {}, fetchImpl: async () => assert.fail("no call") });
+  assert.equal(empty.behavior, "deny");
+});
+
+test("askPerson stops waiting when the turn is interrupted", async () => {
+  const agent = fakeQuestionAgent();
+  const controller = new AbortController();
+  const result = await askPerson({
+    url: "http://127.0.0.1:8090",
+    input: askInput,
+    signal: controller.signal,
+    fetchImpl: agent.fetchImpl,
+    sleep: async () => controller.abort(),
+  });
+  assert.equal(result.behavior, "deny");
+  assert.match(result.message, /interrupted/);
+  assert.equal(agent.calls.at(-1).method, "DELETE");
+});
+
+test("the question wait comes from the environment only as a positive integer", () => {
+  assert.equal(questionWaitFromEnv({}), DEFAULT_QUESTION_WAIT_MS);
+  assert.equal(questionWaitFromEnv({ CLAUDE_RUNNER_QUESTION_WAIT_MS: "60000" }), 60000);
+  for (const bad of ["0", "-5", "1.5", "abc", ""]) {
+    assert.equal(questionWaitFromEnv({ CLAUDE_RUNNER_QUESTION_WAIT_MS: bad }), DEFAULT_QUESTION_WAIT_MS, bad);
   }
 });
-
-test("background work outliving the wait gets the stop note, and the turn settles on its answer", async () => {
-  const clock = fakeClock();
-  const expired = [];
-  const input = new TurnInput({ prompt: "p", waitMs: 60_000, graceMs: 120_000, ...clock, onExpire: (ids) => expired.push(ids) });
-  const it = input.messages();
-  await it.next();
-  const second = it.next();
-  input.observe(tasks("t1", "t2"));
-  input.observe(result);
-  clock.advance(60_000);
-  assert.deepEqual(expired, [["t1", "t2"]]);
-  const note = await second;
-  assert.equal(note.done, false);
-  assert.deepEqual(note.value, {
-    type: "user",
-    message: { role: "user", content: stopNote(["t1", "t2"], 60_000) },
-    parent_tool_use_id: null,
-  });
-  const end = it.next();
-  input.observe({ type: "system", subtype: "init" });
-  input.observe({ type: "assistant" });
-  input.observe(tasks());
-  input.observe({ type: "system", subtype: "task_notification", status: "stopped" });
-  input.observe({ type: "user" });
-  input.observe({ type: "assistant" });
-  input.observe(result);
-  clock.advance(2_000);
-  assert.equal(input.closed, true);
-  assert.equal((await end).done, true);
-});
-
-test("the stop note names the tasks, the wait and the tool", () => {
-  const note = stopNote(["a1", "b2"], 600_000);
-  assert.match(note, /^\[session-platform\] /);
-  assert.match(note, /a1, b2/);
-  assert.match(note, /10 minute/);
-  assert.match(note, /TaskStop/);
-  assert.match(note, /do not start them again/);
-});
-

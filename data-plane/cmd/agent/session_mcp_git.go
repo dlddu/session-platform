@@ -130,8 +130,8 @@ func (c sessionMCPConfig) cloneFromAllowList(ctx context.Context, logger *slog.L
 	}
 	if !allowed {
 		logger.Info("not on the allow list", "tool", gitCloneTool, "repo", repo.fullName())
-		return mcpToolError(fmt.Sprintf("repository %s is not on the allow list. Ask for it with %s; a person "+
-			"decides in the control plane, and nothing is cloned until then.", repo.fullName(), requestRepoAccessTool)), nil
+		return mcpToolError(fmt.Sprintf("repository %s is not on the allow list, so nothing was cloned. A person "+
+			"puts repositories on it in the control plane; %s records a request.", repo.fullName(), requestRepoAccessTool)), nil
 	}
 
 	requestID, err := newApprovalRequestID()

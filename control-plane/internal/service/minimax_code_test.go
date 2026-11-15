@@ -24,9 +24,9 @@ type generationRecorder struct {
 	generations int
 }
 
-func (g *generationRecorder) CheckpointWithGeneration(ctx context.Context, ref k8s.PodRef, generation string) (*session.Checkpoint, error) {
+func (g *generationRecorder) CheckpointWithGeneration(ctx context.Context, sessionID string, ref k8s.PodRef, generation string) (*session.Checkpoint, error) {
 	g.generations++
-	return g.StubCheckpointer.CheckpointWithGeneration(ctx, ref, generation)
+	return g.StubCheckpointer.CheckpointWithGeneration(ctx, sessionID, ref, generation)
 }
 
 // newMiniMaxService wires the archive checkpointer for minimax-code only when
@@ -133,7 +133,7 @@ func TestMiniMaxCodeOversizedPromptIsRejectedBeforeRestore(t *testing.T) {
 	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
-	if _, err := svc.Write(ctx, sess.ID, strings.Repeat("x", session.MaxClaudePromptBytes+1), session.WriteOptions{}); !errors.Is(err, session.ErrWorkloadPromptTooLarge) {
+	if _, err := svc.Write(ctx, sess.ID, strings.Repeat("x", session.MaxClaudePromptBytes+1)); !errors.Is(err, session.ErrWorkloadPromptTooLarge) {
 		t.Fatalf("write error = %v, want %v", err, session.ErrWorkloadPromptTooLarge)
 	}
 	if got := orch.RunningCount(); got != 0 {

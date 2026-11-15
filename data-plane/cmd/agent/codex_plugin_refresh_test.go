@@ -62,60 +62,6 @@ func skillSeed(skills map[string]string) []miniMaxSeedPlugin {
 	return []miniMaxSeedPlugin{seedPlugin("p", files)}
 }
 
-// AC-J7: what the conversation last saw is what a change is measured from, so
-// changes made before the next turn fold into one note.
-func TestRecordCodexSkillChangesFolds(t *testing.T) {
-	home := t.TempDir()
-	steps := []codexSkillChanges{
-		{Added: []string{"p--new", "p--brief"}, Updated: []string{"p--kept"}, Removed: []string{"p--old"}},
-		{Updated: []string{"p--new"}, Removed: []string{"p--brief"}},
-		{Added: []string{"p--old"}},
-	}
-	for _, step := range steps {
-		if err := recordCodexSkillChanges(home, "0123456789abcdef", step); err != nil {
-			t.Fatal(err)
-		}
-	}
-	record, err := readCodexSkillChanges(home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]string{"p--new": "added", "p--kept": "updated", "p--old": "updated"}
-	if !reflect.DeepEqual(record.Skills, want) || record.Revision != "0123456789abcdef" {
-		t.Fatalf("record = %+v, want %v", record, want)
-	}
-	notice, err := (codexCLI{}).turnNotice(home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, part := range []string{"0123456789ab)", "added: `p--new`", "updated: `p--kept`, `p--old`", "read_skill"} {
-		if !strings.Contains(notice, part) {
-			t.Errorf("notice %q lacks %q", notice, part)
-		}
-	}
-	if err := (codexCLI{}).clearTurnNotice(home); err != nil {
-		t.Fatal(err)
-	}
-	if notice, err := (codexCLI{}).turnNotice(home); err != nil || notice != "" {
-		t.Fatalf("notice after clear = %q, %v", notice, err)
-	}
-
-	// Changes that cancel out leave nothing to tell.
-	_ = recordCodexSkillChanges(home, "r", codexSkillChanges{Added: []string{"p--x"}})
-	_ = recordCodexSkillChanges(home, "r", codexSkillChanges{Removed: []string{"p--x"}})
-	if _, err := os.Stat(codexSkillChangesPath(home)); !os.IsNotExist(err) {
-		t.Errorf("a cancelled-out change left a record: %v", err)
-	}
-
-	// An unreadable record is advice lost, not a broken session.
-	if err := os.WriteFile(codexSkillChangesPath(home), []byte("{"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if notice, err := (codexCLI{}).turnNotice(home); err != nil || notice != "" {
-		t.Fatalf("notice from a corrupt record = %q, %v", notice, err)
-	}
-}
-
 // AC-J7: a refresh asks the sidecar to clone again, syncs the skills from the
 // new seed and reports what changed; when it cannot read a new seed it leaves
 // the session's skills alone instead of syncing them away.
@@ -125,10 +71,6 @@ func TestCodexRefreshPlugins(t *testing.T) {
 	sidecar.set(skillSeed(map[string]string{"keep": "v1\n", "edit": "v1\n", "drop": "v1\n"}), "rev-1")
 	cli := sidecar.cli(t)
 	if err := cli.ensureHome(home, toolSurface{}); err != nil {
-		t.Fatal(err)
-	}
-	// As a first turn would.
-	if err := cli.clearTurnNotice(home); err != nil {
 		t.Fatal(err)
 	}
 
@@ -146,9 +88,6 @@ func TestCodexRefreshPlugins(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(codexSkillsDir(home), "p--drop")); !os.IsNotExist(err) {
 		t.Error("a skill the marketplace dropped is still installed")
-	}
-	if notice, _ := cli.turnNotice(home); !strings.Contains(notice, "removed: `p--drop`") {
-		t.Errorf("notice = %q", notice)
 	}
 
 	if result, err := cli.refreshPlugins(home); err != nil || len(result.Added)+len(result.Updated)+len(result.Removed) != 0 || result.Added == nil {
@@ -202,8 +141,7 @@ func TestPostCodexSidecarRefresh(t *testing.T) {
 }
 
 // AC-J7 on the agent: the route refreshes only between turns, leaves a line
-// in the transcript, and the next resumed turn — not a first one — opens with
-// the note, which a successful turn then settles.
+// in the transcript, and writes nothing into the next turn's prompt.
 func TestCodexPluginRefreshRoute(t *testing.T) {
 	sidecar := &refreshableCodexCLI{}
 	sidecar.set(skillSeed(map[string]string{"s": "v1\n"}), "rev-1")
@@ -231,11 +169,9 @@ func TestCodexPluginRefreshRoute(t *testing.T) {
 	}
 	lastPrompt := func(run recordedClaudeRun) string { return run.argv[len(run.argv)-1] }
 
-	// The boot sync recorded every skill as added; a first turn reads them as
-	// they are and is not told, and its success settles the note.
 	writeViaHTTP(t, srv, "first", http.StatusOK)
 	if got := lastPrompt(receiveClaudeRun(t, runner.started)); got != "first" {
-		t.Fatalf("first turn prompt = %q, want it untold", got)
+		t.Fatalf("first turn prompt = %q", got)
 	}
 	waitClaudeIdle(t, c)
 
@@ -247,25 +183,11 @@ func TestCodexPluginRefreshRoute(t *testing.T) {
 		t.Errorf("transcript lacks the refresh line: %q", payload)
 	}
 
-	runner.runErr = func(index int) error {
-		if index == 1 {
-			return errors.New("turn failed")
-		}
-		return nil
-	}
+	// The platform writes nothing into the conversation: the next turn's
+	// prompt is the user's own.
 	writeViaHTTP(t, srv, "second", http.StatusOK)
-	if got := lastPrompt(receiveClaudeRun(t, runner.started)); !strings.HasPrefix(got, "[session-platform] The platform's plugin skills changed") || !strings.HasSuffix(got, "\n\nsecond") {
-		t.Fatalf("resumed turn prompt = %q, want the note first", got)
-	}
-	waitClaudeIdle(t, c)
-	writeViaHTTP(t, srv, "third", http.StatusOK)
-	if got := lastPrompt(receiveClaudeRun(t, runner.started)); !strings.Contains(got, "updated: `p--s`") {
-		t.Fatalf("after a failed turn the note must be carried again, got %q", got)
-	}
-	waitClaudeIdle(t, c)
-	writeViaHTTP(t, srv, "fourth", http.StatusOK)
-	if got := lastPrompt(receiveClaudeRun(t, runner.started)); got != "fourth" {
-		t.Fatalf("after a successful turn the note must be gone, got %q", got)
+	if got := lastPrompt(receiveClaudeRun(t, runner.started)); got != "second" {
+		t.Fatalf("resumed turn prompt = %q, want the user's prompt alone", got)
 	}
 	waitClaudeIdle(t, c)
 
@@ -362,11 +284,11 @@ func TestCodexPluginRefreshInTurn(t *testing.T) {
 	runner.release = nil
 	writeViaHTTP(t, srv, "after", http.StatusOK)
 	if got := lastPrompt(receiveClaudeRun(t, runner.started)); got != "after" {
-		t.Fatalf("a turn that refreshed and succeeded was told already, got %q", got)
+		t.Fatalf("the next turn's prompt = %q, want the user's prompt alone", got)
 	}
 	waitClaudeIdle(t, c)
 
-	// A turn that refreshes and then fails leaves the note for the next.
+	// A turn that refreshes and then fails leaves nothing in the next prompt.
 	sidecar.set(skillSeed(map[string]string{"s": "v3\n"}), "rev-3")
 	runner.release = make(chan struct{})
 	runner.runErr = func(index int) error {
@@ -382,8 +304,8 @@ func TestCodexPluginRefreshInTurn(t *testing.T) {
 	waitClaudeIdle(t, c)
 	runner.release = nil
 	writeViaHTTP(t, srv, "next", http.StatusOK)
-	if got := lastPrompt(receiveClaudeRun(t, runner.started)); !strings.Contains(got, "updated: `p--s`") || !strings.HasSuffix(got, "\n\nnext") {
-		t.Fatalf("after a failed turn the note must be carried, got %q", got)
+	if got := lastPrompt(receiveClaudeRun(t, runner.started)); got != "next" {
+		t.Fatalf("after a failed turn the prompt = %q, want the user's prompt alone", got)
 	}
 	waitClaudeIdle(t, c)
 

@@ -227,13 +227,13 @@ func sessionDBToolDefinitions() []map[string]any {
 		{
 			"name": "raw_query",
 			"description": fmt.Sprintf("Run one SQL statement on this session's SQLite database and return its columns and rows "+
-				"(at most %d rows). Use it for SELECT and other statements that return rows.", sessionDBMaxRows),
+				"(at most %d rows): SELECT and other statements that return rows.", sessionDBMaxRows),
 			"inputSchema": statement("The SQLite statement to run."),
 		},
 		{
 			"name": "raw_exec",
 			"description": "Run SQL that changes this session's SQLite database (CREATE, INSERT, UPDATE, DELETE, ...) and " +
-				"return the rows affected and the last insert rowid. These are SQLite connection counters, NOT committed change totals (DDL/ROLLBACK can retain old values). Without params, several statements separated by ; run in order. Open transactions are rolled back at call end; use BEGIN/COMMIT in one call.",
+				"return the rows affected and the last insert rowid. These are SQLite connection counters, NOT committed change totals (DDL/ROLLBACK can retain old values). Without params, several statements separated by ; run in order. Open transactions are rolled back at call end, so a transaction begins and commits within one call.",
 			"inputSchema": statement("The SQLite statement or statements to run."),
 		},
 	}, ledgerToolDefinitions()...)

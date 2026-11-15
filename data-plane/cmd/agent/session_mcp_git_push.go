@@ -101,8 +101,8 @@ func (c sessionMCPConfig) callGitPush(ctx context.Context, logger *slog.Logger, 
 	}
 	if !allowed {
 		logger.Info("not on the allow list", "tool", gitPushTool, "repo", repo.fullName())
-		return mcpToolError(fmt.Sprintf("repository %s is not on the allow list. Ask for it with %s; a person "+
-			"decides in the control plane, and nothing is pushed until then.", repo.fullName(), requestRepoAccessTool)), nil
+		return mcpToolError(fmt.Sprintf("repository %s is not on the allow list, so nothing was pushed. A person "+
+			"puts repositories on it in the control plane; %s records a request.", repo.fullName(), requestRepoAccessTool)), nil
 	}
 
 	// No anonymous fallback, unlike git_clone: an anonymous push cannot succeed.
@@ -129,8 +129,8 @@ func (c sessionMCPConfig) callGitPush(ctx context.Context, logger *slog.Logger, 
 		logger.Error("push failed", "tool", gitPushTool, "repo", repo.fullName(), "branch", branch, "err", reason)
 		if errors.Is(err, errPushRejected) {
 			return mcpToolError(fmt.Sprintf("push of %s to %s was rejected: %s. The remote has commits this clone "+
-				"lacks; clone again with %s, re-apply the change and push from the new clone.",
-				branch, repo.fullName(), reason, gitCloneTool)), nil
+				"lacks.",
+				branch, repo.fullName(), reason)), nil
 		}
 		return mcpToolError(fmt.Sprintf("push of %s to %s failed: %s", branch, repo.fullName(), reason)), nil
 	}

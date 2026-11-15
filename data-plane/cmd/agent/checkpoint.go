@@ -15,6 +15,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -219,6 +220,9 @@ func (a *agent) handleRestore(logger *slog.Logger) http.HandlerFunc {
 			return
 		}
 		a.adopt(sh)
+		if err := markRestored(a.stateDir); err != nil {
+			logger.Warn("restore marker not written; a container restart would wait for an archive again", "err", err)
+		}
 		logger.Info("shell archive restored", "pid", sh.pid, "scrollback_bytes", len(sb))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"restored"}`))
@@ -353,4 +357,23 @@ func procStatFields(pid int) ([]string, bool) {
 		return nil, false
 	}
 	return strings.Fields(string(line[end+1:])), true
+}
+
+// autoArchiveTo writes the shell's archive for AC-B5. The pod is going away,
+// so the tree stays paused and writes stay refused afterwards.
+func (a *agent) autoArchiveTo(_ context.Context, w io.Writer) (bool, error) {
+	a.admission.Lock()
+	a.mu.Lock()
+	sh := a.sh
+	if sh == nil || !sh.alive.Load() {
+		a.mu.Unlock()
+		a.admission.Unlock()
+		return true, nil
+	}
+	if !a.ckpt.active {
+		a.ckpt = shellCheckpoint{active: true, paused: pauseTree(sh.pid)}
+	}
+	a.mu.Unlock()
+	a.admission.Unlock()
+	return false, writeStateArchive(w, a.stateDir, "", sh.out.snapshot())
 }

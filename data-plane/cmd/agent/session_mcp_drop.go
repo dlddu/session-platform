@@ -861,7 +861,7 @@ func dropToolDefinitions() []any {
 				"properties": map[string]any{
 					"paths": map[string]any{
 						"type":        "array",
-						"description": "Regular files on the shared volume, relative to it or absolute under its mount path. Directories are not accepted; list their files instead.",
+						"description": "Regular files on the shared volume, relative to it or absolute under its mount path. Directories are not accepted.",
 						"items":       map[string]any{"type": "string"},
 						"minItems":    1,
 						"maxItems":    dropMaxFiles,

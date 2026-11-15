@@ -23,10 +23,9 @@ func startCodex(t *testing.T, sessionID, model string) (corev1.Pod, k8s.SessionP
 		k8s.WithWorkloadImage(session.WorkloadTypeCodexChat, codexImage),
 		k8s.WithCodexCredentialsSecret("codex-k3s"),
 		k8s.WithCodexConfigConfigMap("codex-cfg"),
-		k8s.WithCodexPlugins("session-platform,extra"),
 	)
 	slot := 0
-	started, err := orch.Start(context.Background(), sessionID, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexChat, Model: model, AuthSlot: &slot})
+	started, err := orch.Start(context.Background(), sessionID, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexChat, Model: model, Plugins: []string{"session-platform", "extra"}, AuthSlot: &slot})
 	if err != nil {
 		t.Fatalf("start codex session: %v", err)
 	}

@@ -27,8 +27,6 @@ type codexConfig struct {
 	// configConfigMap holds model, models, k3s-mcp-url and
 	// plugin-marketplace-url, all optional.
 	configConfigMap string
-	// plugins names the marketplace plugins whose skills sessions get (AC-J5).
-	plugins string
 	// archiveEnabled is this type's own data-transfer gate. Its archive no
 	// longer carries the ChatGPT login, which lives in the slot (AC-J3, AC-N6).
 	archiveEnabled bool
@@ -58,7 +56,6 @@ func loadCodexConfig() (codexConfig, error) {
 		image:             env("DATA_PLANE_CODEX_IMAGE", ""),
 		credentialsSecret: env("CODEX_CREDENTIALS_SECRET", "codex-credentials"),
 		configConfigMap:   env("CODEX_CONFIG_CONFIGMAP", "codex-config"),
-		plugins:           env("CODEX_PLUGINS", k8s.DefaultCodexPlugins),
 		archiveEnabled:    envBool("CODEX_ARCHIVE_ENABLED", false),
 		defaultModel:      defaultModel,
 		models:            models,

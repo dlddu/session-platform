@@ -12,7 +12,7 @@ func TestLoadCodexConfigDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.image != "" || cfg.credentialsSecret != "codex-credentials" || cfg.configConfigMap != "codex-config" ||
-		cfg.plugins != "codex-session" || cfg.archiveEnabled || cfg.defaultModel != session.PlatformDefaultModel {
+		cfg.archiveEnabled || cfg.defaultModel != session.PlatformDefaultModel {
 		t.Fatalf("defaults = %+v", cfg)
 	}
 }

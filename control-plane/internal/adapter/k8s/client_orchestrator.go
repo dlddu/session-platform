@@ -238,7 +238,6 @@ type ClientOrchestrator struct {
 	miniMaxConfigConfigMap   string
 	codexCredentialsSecret   string
 	codexConfigConfigMap     string
-	codexPlugins             string
 	codexTask                codexProfile
 	claudeAuthMode           ClaudeCodeAuthMode
 	// AC-F5's per-session shared claim — see shared_volume.go.
@@ -249,6 +248,8 @@ type ClientOrchestrator struct {
 	agentPort                int
 	pollInterval             time.Duration
 	readyTimeout             time.Duration
+	autoArchiveBase          AutoArchiveBase
+	autoArchiveTypes         map[session.WorkloadType]bool
 }
 
 var _ PodOrchestrator = (*ClientOrchestrator)(nil)
@@ -353,7 +354,6 @@ func NewClientOrchestrator(client kubernetes.Interface, namespace string, opts .
 		miniMaxConfigConfigMap:   defaultMiniMaxConfigConfigMap,
 		codexCredentialsSecret:   defaultCodexCredentialsSecret,
 		codexConfigConfigMap:     defaultCodexConfigConfigMap,
-		codexPlugins:             DefaultCodexPlugins,
 		codexTask: codexProfile{
 			credentialsSecret: defaultCodexTaskCredentialsSecret,
 			configConfigMap:   defaultCodexTaskConfigConfigMap,
@@ -739,7 +739,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 	// claude-code's level and gets it (AC-M1).
 	automountServiceAccountToken := workloadType != session.WorkloadTypeCodexChat
 
-	return &corev1.Pod{
+	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
 			Namespace:   o.namespace,
@@ -760,7 +760,11 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 			Containers:                   containers,
 			Volumes:                      volumes,
 		},
-	}, nil
+	}
+	if err := o.applyAutoArchive(pod, workloadType, sessionID, name, AutoArchiveRunPath); err != nil {
+		return nil, err
+	}
+	return pod, nil
 }
 
 // helperPodSpec assembles a gated session's helper pod: the session
@@ -835,7 +839,7 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 		return nil, err
 	}
 
-	return &corev1.Pod{
+	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: o.namespace,
@@ -853,7 +857,15 @@ func (o *ClientOrchestrator) helperPodSpec(sessionID, suffix string, workloadTyp
 			Containers:                   append([]corev1.Container{mcp}, proxies...),
 			Volumes:                      append(helperVolumes, helperProxyVolumes(workloadType)...),
 		},
-	}, nil
+	}
+	workloadPod := podName(sessionID)
+	if suffix != "" {
+		workloadPod = restorePodName(sessionID, suffix)
+	}
+	if err := o.applyAutoArchive(pod, workloadType, sessionID, workloadPod, AutoArchiveHoldPath); err != nil {
+		return nil, err
+	}
+	return pod, nil
 }
 
 // approvalGatewayTokenVolumeSource is the only token in the helper pod: the

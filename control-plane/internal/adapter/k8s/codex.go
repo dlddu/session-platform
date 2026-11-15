@@ -22,11 +22,6 @@ const (
 	defaultCodexConfigConfigMap       = "codex-config"
 	defaultCodexTaskCredentialsSecret = "codex-task-credentials"
 	defaultCodexTaskConfigConfigMap   = "codex-task-config"
-	// DefaultCodexPlugins is the marketplace plugin whose skills a codex-chat
-	// session gets when it chooses none and the deployment names none (AC-J5).
-	// codex-task has no default: a session that chooses none gets no plugins.
-	DefaultCodexPlugins = "codex-session"
-
 	// CodexModelEnvVar carries the session's model, or the ConfigMap's optional
 	// `model` key for platform-default sessions.
 	// Keep in sync with data-plane/cmd/agent (codexModelEnv).
@@ -80,16 +75,6 @@ func WithCodexConfigConfigMap(name string) Option {
 	}
 }
 
-// WithCodexPlugins names the marketplace plugins (comma-separated) whose
-// skills codex sessions get.
-func WithCodexPlugins(plugins string) Option {
-	return func(o *ClientOrchestrator) {
-		if plugins = strings.TrimSpace(plugins); plugins != "" {
-			o.codexPlugins = plugins
-		}
-	}
-}
-
 // WithCodexTaskCredentialsSecret selects the Secret whose optional
 // k3s-mcp-token reaches the codex-task sidecar (AC-M1).
 func WithCodexTaskCredentialsSecret(name string) Option {
@@ -110,13 +95,11 @@ func WithCodexTaskConfigConfigMap(name string) Option {
 }
 
 // codexProfile is what the two codex types configure separately: their own
-// Secret, ConfigMap and default plugin bundle (codex-chat's alone; codex-task
-// has none), so a codex-task deployment never hands a chat session its token
-// or skills (AC-M1).
+// Secret and ConfigMap, so a codex-task deployment never hands a chat session
+// its token (AC-M1).
 type codexProfile struct {
 	credentialsSecret string
 	configConfigMap   string
-	plugins           string
 }
 
 func (o *ClientOrchestrator) codexProfileFor(workload session.WorkloadType) codexProfile {
@@ -126,7 +109,6 @@ func (o *ClientOrchestrator) codexProfileFor(workload session.WorkloadType) code
 	return codexProfile{
 		credentialsSecret: o.codexCredentialsSecret,
 		configConfigMap:   o.codexConfigConfigMap,
-		plugins:           o.codexPlugins,
 	}
 }
 
@@ -161,14 +143,10 @@ func (o *ClientOrchestrator) codexPod(container *corev1.Container, sessionID str
 
 // codexK3SMCPProxy is the loopback K3s MCP proxy (AC-J6) with codex's
 // additions. Its seeder clones the marketplace for the plugin skills (AC-J5):
-// the session's own selection when it made one (AC-L1), otherwise the type's
-// default — codex-chat's CODEX_PLUGINS, and for codex-task nothing.
+// the session's own selection (AC-L1), and nothing when it chose none — no type
+// has a platform default (AC-A5).
 func (o *ClientOrchestrator) codexK3SMCPProxy(sessionID, image string, profile codexProfile, plugins []string) corev1.Container {
-	selected := profile.plugins
-	if plugins != nil {
-		selected = strings.Join(plugins, ",")
-	}
-	proxy := o.loopbackK3SMCPProxy(sessionID, image, profile.credentialsSecret, profile.configConfigMap, selected)
+	proxy := o.loopbackK3SMCPProxy(sessionID, image, profile.credentialsSecret, profile.configConfigMap, strings.Join(plugins, ","))
 	proxy.Env = append(proxy.Env, corev1.EnvVar{
 		Name: SchedulerAgentURLEnvVar, Value: "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(o.agentPort)),
 	})
