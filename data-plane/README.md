@@ -333,6 +333,15 @@ the archive also carries that volume under `shared/` and restore copies it into
 the next round's freshly mounted volume; an archive with shared files refuses to
 restore into a pod without one rather than dropping them (AC-F5).
 
+A restore target keeps `DATA_PLANE_RESTORE_MODE=1` for its whole life, so a
+landed restore also writes `/session/.session-restored` beside the state tree
+(never inside it, so no archive carries it). An agent container that restarts
+in that pod — an OOM kill, say — sees the marker and starts from the restored
+state on the volume, like any other container restart (the in-memory
+scrollback starts empty), instead of waiting for an archive the control plane
+will not send again. Without the marker a restarted restore target waits as
+before.
+
 The shell's state tree sits at the same place (`SHELL_STATE_DIR`, default
 `/session/state`, volume at `/session`). Its checkpoint closes write admission
 (409) and SIGSTOPs the shell and its descendants so the home directory holds

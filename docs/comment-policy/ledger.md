@@ -230,6 +230,8 @@
 | 2026-11-15 | `data-plane/cmd/agent/auto_archive.go` | 27 | `f4d3043cd07a` | — | 등록 — 2026-11-15 신규 파일(파드 종료 시 자동 아카이브, AC-B5). 필요성 기준 판정 대기. |
 | 2026-11-15 | `data-plane/cmd/agent/auto_archive_test.go` | 12 | `f85be8af9ea1` | — | 등록 — 2026-11-15 신규 파일(파드 종료 시 자동 아카이브, AC-B5). 필요성 기준 판정 대기. |
 | 2026-11-15 | `control-plane/internal/adapter/archive/agent_checkpointer_test.go` | 4 | `7e461fd40f52` | — | 등록 — 2026-11-15 처음 주석이 생김(세션당 아카이브 키, AC-B5). 필요성 기준 판정 대기. |
+| 2026-11-15 | `data-plane/cmd/agent/restored_marker.go` | 8 | `129e3db2b323` | — | 등록 — 2026-11-15 신규 파일(복원된 파드의 컨테이너 재시작이 복원 대기로 멈추던 문제 수정). 필요성 기준 판정 대기. |
+| 2026-11-15 | `data-plane/cmd/agent/restored_marker_test.go` | 5 | `bda0315bf6c6` | — | 등록 — 2026-11-15 신규 파일(복원된 파드의 컨테이너 재시작이 복원 대기로 멈추던 문제 수정). 필요성 기준 판정 대기. |
 <!-- /판정-원장 -->
 
 **이 표의 행이 담는 것**: 판정 범위(파일 단위) · 그 범위의 현재 주석 줄 수 · 지문 · 판정 칸 ·
