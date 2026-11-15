@@ -6,8 +6,12 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
+	ststypes "github.com/aws/aws-sdk-go-v2/service/sts/types"
 )
 
 // fakeS3 records the requests the store makes and returns canned results.
@@ -178,5 +182,62 @@ func TestNewS3_RoleOptionalAndEndpointOverride(t *testing.T) {
 	}
 	if store.Bucket() != "checkpoints" {
 		t.Fatalf("bucket = %q, want checkpoints", store.Bucket())
+	}
+}
+
+type fakeAssumeRole struct {
+	lifetime  time.Duration
+	calls     int
+	durations []int32
+}
+
+func (f *fakeAssumeRole) AssumeRole(_ context.Context, in *sts.AssumeRoleInput, _ ...func(*sts.Options)) (*sts.AssumeRoleOutput, error) {
+	f.calls++
+	f.durations = append(f.durations, aws.ToInt32(in.DurationSeconds))
+	return &sts.AssumeRoleOutput{Credentials: &ststypes.Credentials{
+		AccessKeyId:     aws.String("AKID"),
+		SecretAccessKey: aws.String("SECRET"),
+		SessionToken:    aws.String("TOKEN"),
+		Expiration:      aws.Time(time.Now().Add(f.lifetime)),
+	}}, nil
+}
+
+func TestRoleCredentials_AssumesForThreeHours(t *testing.T) {
+	fake := &fakeAssumeRole{lifetime: roleSessionDuration}
+	creds, err := roleCredentials(fake, "arn:aws:iam::123:role/r", "s").Retrieve(context.Background())
+	if err != nil {
+		t.Fatalf("Retrieve: %v", err)
+	}
+	if len(fake.durations) != 1 || fake.durations[0] != int32((3*time.Hour).Seconds()) {
+		t.Fatalf("DurationSeconds = %v, want [10800]", fake.durations)
+	}
+	if left := time.Until(creds.Expires) + credentialsExpiryWindow; left < MinSigningLifetime {
+		t.Fatalf("handed-out credentials live %s, want at least %s", left, MinSigningLifetime)
+	}
+}
+
+func TestRoleCredentials_ReusesWhileTwoHoursRemain(t *testing.T) {
+	fake := &fakeAssumeRole{lifetime: roleSessionDuration}
+	cache := roleCredentials(fake, "arn:aws:iam::123:role/r", "s")
+	for i := 0; i < 3; i++ {
+		if _, err := cache.Retrieve(context.Background()); err != nil {
+			t.Fatalf("Retrieve #%d: %v", i, err)
+		}
+	}
+	if fake.calls != 1 {
+		t.Fatalf("AssumeRole calls = %d, want 1 while more than %s remains", fake.calls, MinSigningLifetime)
+	}
+}
+
+func TestRoleCredentials_RefreshesBelowTwoHours(t *testing.T) {
+	fake := &fakeAssumeRole{lifetime: MinSigningLifetime}
+	cache := roleCredentials(fake, "arn:aws:iam::123:role/r", "s")
+	for i := 0; i < 2; i++ {
+		if _, err := cache.Retrieve(context.Background()); err != nil {
+			t.Fatalf("Retrieve #%d: %v", i, err)
+		}
+	}
+	if fake.calls != 2 {
+		t.Fatalf("AssumeRole calls = %d, want 2: credentials with less than %s left must not be reused", fake.calls, credentialsExpiryWindow)
 	}
 }
