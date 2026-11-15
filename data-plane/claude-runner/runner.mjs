@@ -2,8 +2,7 @@
 // workload (docs/prd/claude-code-workload.md, AC-E2/E4). The agent runs
 //
 //   claude-runner [--model <model|platform-default>] [--effort <effort>]
-//                 [--permission-mode <auto|acceptEdits>] [--k3s-mcp-url <url>]
-//                 [--questions-url <url>] [--resume] -- <prompt>
+//                 [--k3s-mcp-url <url>] [--questions-url <url>] [--resume] -- <prompt>
 //
 // in the session workspace with HOME set to the session HOME, and projects the
 // JSON lines written here (data-plane/cmd/agent/claude_stream.go). Every SDK
@@ -166,7 +165,6 @@ async function main(argv) {
   const options = queryOptions({
     model: args.model,
     effort: args.effort,
-    permissionMode: args.permissionMode,
     k3sMcpUrl: args.k3sMcpUrl,
     cwd,
     claudeBin,

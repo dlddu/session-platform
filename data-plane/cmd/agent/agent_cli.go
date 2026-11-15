@@ -1,9 +1,6 @@
 package main
 
-import (
-	"errors"
-	"io"
-)
+import "io"
 
 // agentCLI is everything that differs between the one-shot agent CLIs that run
 // on claudeWorkload. The execution model around it — bounded serial queue,
@@ -44,35 +41,7 @@ type claudeCLI struct {
 func (claudeCLI) workloadName() string { return workloadClaudeCode }
 
 func (c claudeCLI) argv(binary, model, prompt string, resume bool) []string {
-	return claudeRunnerArgv(binary, model, c.effort, "", c.platform.mcpURL(), c.agentURL, prompt, resume)
-}
-
-// permissionModer is an agentCLI whose turns run in a permission mode the write
-// that queued them may choose (AC-E2). Only claude-code is one; a write naming a
-// mode to any other workload is refused.
-type permissionModer interface {
-	validPermissionMode(mode string) bool
-	argvWithPermissionMode(binary, model, prompt string, resume bool, mode string) []string
-}
-
-var (
-	errPermissionModeUnsupported = errors.New("this workload takes no permission mode")
-	errPermissionModeUnknown     = errors.New("unknown permission mode; use auto or acceptEdits")
-)
-
-var _ permissionModer = claudeCLI{}
-
-// claudePermissionModes are the modes a write may choose. The runner starts a
-// turn in auto when the write chose none, and offers no mode that skips
-// permission checks.
-var claudePermissionModes = map[string]bool{"auto": true, "acceptEdits": true}
-
-func (claudeCLI) validPermissionMode(mode string) bool {
-	return claudePermissionModes[mode]
-}
-
-func (c claudeCLI) argvWithPermissionMode(binary, model, prompt string, resume bool, mode string) []string {
-	return claudeRunnerArgv(binary, model, c.effort, mode, c.platform.mcpURL(), c.agentURL, prompt, resume)
+	return claudeRunnerArgv(binary, model, c.effort, c.platform.mcpURL(), c.agentURL, prompt, resume)
 }
 
 var _ questionAsker = claudeCLI{}

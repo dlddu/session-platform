@@ -21,18 +21,17 @@ export const EXIT_USAGE = 64;
 // AC-E8's list for claude-code; the SDK's EffortLevel.
 export const EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 
-// AC-E2's permission modes a write may choose for its turn. "auto" lets the
-// CLI's model classifier approve or deny what the settings rules leave open;
-// "acceptEdits" accepts file edits and leaves the rest to canUseTool. No mode
-// that skips permission checks is offered.
-export const DEFAULT_PERMISSION_MODE = "auto";
-export const PERMISSION_MODES = new Set([DEFAULT_PERMISSION_MODE, "acceptEdits"]);
+// AC-E2's permission mode: every turn runs in auto, where the CLI's model
+// classifier approves or denies what the settings rules leave open. It is the
+// runner's own, not a flag, so neither the agent nor a prompt can change it, and
+// no mode that skips permission checks is ever used.
+export const PERMISSION_MODE = "auto";
 
 // AC-E2's permission policy: the built-in tools the platform lets a
 // claude-code turn use. Read-only and bookkeeping tools never ask; the rest
-// reach canUseTool only when neither a settings rule nor the turn's permission
-// mode already decided them. Anything a turn asks for that is not here, not a
-// tool of the session's own plugins and not a headless question is denied.
+// reach canUseTool only when neither a settings rule nor the auto classifier
+// already decided them. Anything a turn asks for that is not here, not a tool of
+// the session's own plugins and not a headless question is denied.
 export const PLATFORM_TOOLS = new Set([
   "Read",
   "Write",
@@ -72,13 +71,12 @@ export const HEADLESS_DENIAL =
 export class UsageError extends Error {}
 
 // parseArgs reads the agent's argv:
-// [--model <m>] [--effort <e>] [--permission-mode <p>] [--k3s-mcp-url <u>]
-// [--questions-url <u>] [--resume] -- <prompt>.
+// [--model <m>] [--effort <e>] [--k3s-mcp-url <u>] [--questions-url <u>]
+// [--resume] -- <prompt>.
 // The prompt is the one argument after "--", so nothing in it is a flag.
 export function parseArgs(argv) {
   let model = PLATFORM_DEFAULT_MODEL;
   let effort = null;
-  let permissionMode = DEFAULT_PERMISSION_MODE;
   let k3sMcpUrl = null;
   let questionsUrl = null;
   let resume = false;
@@ -96,7 +94,7 @@ export function parseArgs(argv) {
       if (rest.length !== 1) {
         throw new UsageError("expected exactly one prompt argument after --");
       }
-      return { model, effort, permissionMode, k3sMcpUrl, questionsUrl, resume, prompt: rest[0], checkCli };
+      return { model, effort, k3sMcpUrl, questionsUrl, resume, prompt: rest[0], checkCli };
     }
     if (arg === "--model") {
       model = value(i++, "--model");
@@ -104,11 +102,6 @@ export function parseArgs(argv) {
       effort = value(i++, "--effort");
       if (!EFFORTS.has(effort)) {
         throw new UsageError(`unknown effort ${JSON.stringify(effort)}`);
-      }
-    } else if (arg === "--permission-mode") {
-      permissionMode = value(i++, "--permission-mode");
-      if (!PERMISSION_MODES.has(permissionMode)) {
-        throw new UsageError(`unknown permission mode ${JSON.stringify(permissionMode)}`);
       }
     } else if (arg === "--k3s-mcp-url") {
       k3sMcpUrl = loopbackHttpUrl(value(i++, "--k3s-mcp-url"), "--k3s-mcp-url");
@@ -123,7 +116,7 @@ export function parseArgs(argv) {
     }
   }
   if (checkCli) {
-    return { model, effort, permissionMode, k3sMcpUrl, questionsUrl, resume, prompt: null, checkCli };
+    return { model, effort, k3sMcpUrl, questionsUrl, resume, prompt: null, checkCli };
   }
   throw new UsageError("missing -- <prompt>");
 }
@@ -268,23 +261,13 @@ export function decideTool(toolName, plugins = [], { k3s = false } = {}) {
 // queryOptions are the SDK options of one turn. The system prompt and the
 // setting sources are spelled out because the SDK's defaults differ from the
 // CLI's: without the preset it sends an empty system prompt.
-export function queryOptions({
-  model,
-  effort,
-  permissionMode = DEFAULT_PERMISSION_MODE,
-  k3sMcpUrl = null,
-  cwd,
-  claudeBin,
-  plan,
-  canUseTool,
-  stderr,
-}) {
+export function queryOptions({ model, effort, k3sMcpUrl = null, cwd, claudeBin, plan, canUseTool, stderr }) {
   const options = {
     cwd,
     pathToClaudeCodeExecutable: claudeBin,
     systemPrompt: { type: "preset", preset: "claude_code" },
     settingSources: ["user", "project", "local"],
-    permissionMode,
+    permissionMode: PERMISSION_MODE,
     includePartialMessages: true,
     canUseTool,
     stderr,

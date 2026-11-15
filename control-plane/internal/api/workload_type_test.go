@@ -261,9 +261,10 @@ func TestModelSurvivesSnapshotRestoreOverHTTP(t *testing.T) {
 	}
 }
 
-// AC-E2: a write may choose a claude-code turn's permission mode — auto or
-// acceptEdits — and nothing else, on no other type, and never as an empty value.
-func TestWritePermissionMode(t *testing.T) {
+// AC-E2: every claude-code turn runs in auto. A write cannot choose another
+// permission mode — the request body has no such field, so naming one is an
+// unknown field and the write is refused.
+func TestWriteRefusesPermissionMode(t *testing.T) {
 	srv, _, _ := newServerWithOrchestrator()
 	defer srv.Close()
 
@@ -271,37 +272,23 @@ func TestWritePermissionMode(t *testing.T) {
 	if status != http.StatusCreated {
 		t.Fatalf("create claude-code status = %d, want 201", status)
 	}
-	status, shell := createRaw(t, srv.URL, map[string]any{"name": "pm-shell"})
-	if status != http.StatusCreated {
-		t.Fatalf("create shell status = %d, want 201", status)
-	}
 
-	write := func(id string, body map[string]any) int {
+	write := func(body map[string]any) int {
 		t.Helper()
 		b, _ := json.Marshal(body)
-		resp, err := http.Post(srv.URL+"/api/v1/sessions/"+id+"/write", "application/json", bytes.NewReader(b))
+		resp, err := http.Post(srv.URL+"/api/v1/sessions/"+claude.ID+"/write", "application/json", bytes.NewReader(b))
 		if err != nil {
 			t.Fatalf("write: %v", err)
 		}
 		resp.Body.Close()
 		return resp.StatusCode
 	}
-	for _, tc := range []struct {
-		id   string
-		body map[string]any
-		want int
-	}{
-		{claude.ID, map[string]any{"payload": "a"}, http.StatusOK},
-		{claude.ID, map[string]any{"payload": "a", "permissionMode": "auto"}, http.StatusOK},
-		{claude.ID, map[string]any{"payload": "a", "permissionMode": "acceptEdits"}, http.StatusOK},
-		{claude.ID, map[string]any{"payload": "a", "permissionMode": ""}, http.StatusBadRequest},
-		{claude.ID, map[string]any{"payload": "a", "permissionMode": "default"}, http.StatusBadRequest},
-		{claude.ID, map[string]any{"payload": "a", "permissionMode": "bypassPermissions"}, http.StatusBadRequest},
-		{claude.ID, map[string]any{"payload": "a", "permissionMode": 1}, http.StatusBadRequest},
-		{shell.ID, map[string]any{"payload": "a\n", "permissionMode": "auto"}, http.StatusBadRequest},
-	} {
-		if got := write(tc.id, tc.body); got != tc.want {
-			t.Fatalf("write %v status = %d, want %d", tc.body, got, tc.want)
+	if got := write(map[string]any{"payload": "a"}); got != http.StatusOK {
+		t.Fatalf("write without permissionMode status = %d, want 200", got)
+	}
+	for _, mode := range []any{"auto", "acceptEdits", "default", ""} {
+		if got := write(map[string]any{"payload": "a", "permissionMode": mode}); got != http.StatusBadRequest {
+			t.Fatalf("write with permissionMode %q status = %d, want 400", mode, got)
 		}
 	}
 }

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   DEFAULT_QUESTION_WAIT_MS,
-  DEFAULT_PERMISSION_MODE,
+  PERMISSION_MODE,
   HEADLESS_DENIAL,
   NOTICE_TYPE,
   PLATFORM_DEFAULT_MODEL,
@@ -34,8 +34,6 @@ test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
       "claude-opus-5-5",
       "--effort",
       "max",
-      "--permission-mode",
-      "acceptEdits",
       "--k3s-mcp-url",
       "http://127.0.0.1:8093/mcp",
       "--questions-url",
@@ -47,7 +45,6 @@ test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
     {
       model: "claude-opus-5-5",
       effort: "max",
-      permissionMode: "acceptEdits",
       k3sMcpUrl: "http://127.0.0.1:8093/mcp",
       questionsUrl: "http://127.0.0.1:8090",
       resume: true,
@@ -59,11 +56,8 @@ test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
   assert.equal(bare.model, PLATFORM_DEFAULT_MODEL);
   assert.equal(bare.effort, null);
   assert.equal(bare.resume, false);
-  assert.equal(bare.permissionMode, DEFAULT_PERMISSION_MODE);
   assert.equal(bare.k3sMcpUrl, null);
   assert.equal(bare.questionsUrl, null);
-  assert.equal(DEFAULT_PERMISSION_MODE, "auto");
-  assert.equal(parseArgs(["--permission-mode", "auto", "--", "x"]).permissionMode, "auto");
   assert.equal(parseArgs(["--check-cli"]).checkCli, true);
 });
 
@@ -74,11 +68,10 @@ test("parseArgs refuses what the agent never sends", () => {
     ["--model"],
     ["--model", "", "--", "x"],
     ["--effort", "turbo", "--", "x"],
-    ["--permission-mode", "--", "x"],
-    ["--permission-mode", "default", "--", "x"],
+    // The permission mode is the runner's own (always auto), not a flag.
+    ["--permission-mode", "auto", "--", "x"],
+    ["--permission-mode", "acceptEdits", "--", "x"],
     ["--permission-mode", "bypassPermissions", "--", "x"],
-    ["--permission-mode", "plan", "--", "x"],
-    ["--permission-mode", "dontAsk", "--", "x"],
     ["--continue", "--", "x"],
     ["--k3s-mcp-url", "--", "x"],
     ["--k3s-mcp-url", "not a url", "--", "x"],
@@ -124,6 +117,7 @@ test("queryOptions spells out what the SDK defaults differently from the CLI", (
   assert.deepEqual(base.systemPrompt, { type: "preset", preset: "claude_code" });
   assert.deepEqual(base.settingSources, ["user", "project", "local"]);
   assert.equal(base.permissionMode, "auto");
+  assert.equal(PERMISSION_MODE, "auto");
   assert.equal(base.includePartialMessages, true);
   assert.equal(base.canUseTool, canUseTool);
   assert.equal(base.pathToClaudeCodeExecutable, "/usr/local/bin/claude");
@@ -137,9 +131,8 @@ test("queryOptions spells out what the SDK defaults differently from the CLI", (
     cwd: "/w",
     claudeBin: "/c",
     plan: { kind: "resume", sessionId: "s" },
-    permissionMode: "acceptEdits",
   });
-  assert.equal(resumed.permissionMode, "acceptEdits");
+  assert.equal(resumed.permissionMode, "auto");
   assert.equal(resumed.model, "claude-opus-5-5");
   assert.equal(resumed.effort, "high");
   assert.equal(resumed.resume, "s");
