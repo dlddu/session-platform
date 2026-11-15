@@ -33,6 +33,9 @@ type Service struct {
 	// (AC-N2): codex-task and codex-chat.
 	authPools map[session.WorkloadType]k8s.AuthPool
 	manifests SessionManifests
+	// autoArchives enables AC-B5; autoTargets is the URL each live pod holds.
+	autoArchives AutoArchives
+	autoTargets  autoArchiveTargets
 }
 
 // SessionManifests keeps each session's manifest in durable storage beside its
@@ -291,6 +294,7 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 		return nil, err
 	}
 	created = true
+	s.armAutoArchiveBestEffort(sess)
 	return sess, nil
 }
 
@@ -383,7 +387,10 @@ func (s *Service) Read(ctx context.Context, id string, offset int64) (*session.R
 	}
 	payload, next, err := s.agent.Read(ctx, sess.Pod, offset)
 	if err != nil {
-		return nil, s.podLost(ctx, id, sess, err)
+		if adopted, lostErr := s.podLost(ctx, id, sess, err); !adopted {
+			return nil, lostErr
+		}
+		return s.Read(ctx, id, offset)
 	}
 	s.touch(ctx, id)
 	return &session.ReadResult{
@@ -396,22 +403,24 @@ func (s *Service) Read(ctx context.Context, id string, offset int64) (*session.R
 
 // podLost answers a failed agent call. When the session's workload pod no
 // longer exists (its node was reclaimed or it was evicted), the session can
-// never be served again: it is terminated — freeing its auth slot — and
-// reported as not found, so a client opens a new session instead of retrying
-// a dead one forever (AC-C5). Any other failure, and a pod whose state cannot
-// be read, returns the original error.
-func (s *Service) podLost(ctx context.Context, id string, sess *session.Session, cause error) error {
-	if sess.Pod == "" {
-		return cause
+// never be served from it again: it becomes a snapshot of the pod's automatic
+// archive when there is one (AC-B5), and the caller retries through restore;
+// otherwise it is terminated — freeing its auth slot — and reported as not
+// found, so a client opens a new session instead of retrying a dead one
+// forever (AC-C5). Any other failure, and a pod whose state cannot be read,
+// returns the original error.
+func (s *Service) podLost(ctx context.Context, id string, sess *session.Session, cause error) (bool, error) {
+	outcome, err := s.handleLostPod(ctx, sess)
+	switch {
+	case err != nil:
+		return false, errors.Join(cause, err)
+	case outcome == lostPodAdopted:
+		return true, nil
+	case outcome == lostPodTerminated:
+		return false, fmt.Errorf("%w: session %s lost its pod %s", session.ErrNotFound, id, sess.Pod)
+	default:
+		return false, cause
 	}
-	gone, err := s.orch.Gone(ctx, k8s.PodRef{Name: sess.Pod})
-	if err != nil || !gone {
-		return cause
-	}
-	if err := s.Terminate(context.WithoutCancel(ctx), id); err != nil && !errors.Is(err, session.ErrNotFound) {
-		return errors.Join(cause, err)
-	}
-	return fmt.Errorf("%w: session %s lost its pod %s", session.ErrNotFound, id, sess.Pod)
 }
 
 // Stream passively observes the retained pod's append-only output. Deliberately
@@ -450,7 +459,10 @@ func (s *Service) Write(ctx context.Context, id, payload string, opts session.Wr
 		return nil, err
 	}
 	if err := s.agent.Write(ctx, sess.Pod, payload, mode); err != nil {
-		return nil, s.podLost(ctx, id, sess, err)
+		if adopted, lostErr := s.podLost(ctx, id, sess, err); !adopted {
+			return nil, lostErr
+		}
+		return s.Write(ctx, id, payload, opts)
 	}
 	s.touch(ctx, id)
 	return &session.WriteResult{
@@ -714,6 +726,7 @@ func (s *Service) snapshotWithTransactionLocked(
 	}
 	// Ask the slot's login state while the pod still answers (AC-N4).
 	signedIn := s.authSlotSignedIn(ctx, sess)
+	s.disarmAutoArchiveBestEffort(sess, sess.Pod)
 	if err := s.orch.Stop(ctx, sessionPodRefs(sess)...); err != nil {
 		// DELETE errors are outcome-ambiguous. The durable commit record makes a
 		// retry safe, whereas aborting here could reopen a pod already terminating.
@@ -809,6 +822,7 @@ func (s *Service) recoverSnapshotLocked(ctx context.Context, sess *session.Sessi
 		if txn.Checkpoint == nil || txn.Checkpoint.Ref == "" {
 			return nil, session.ErrInvalidState
 		}
+		s.disarmAutoArchiveBestEffort(sess, txn.SourcePod)
 		if err := s.orch.Stop(ctx, sessionReclaimRefs(sess, txn.SourcePod)...); err != nil {
 			return nil, err
 		}
@@ -1068,6 +1082,7 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 		return nil, errors.Join(err, getErr)
 	}
 	keepSlot = true
+	s.armAutoArchiveBestEffort(&next)
 	return &next, nil
 }
 
@@ -1087,6 +1102,18 @@ func (s *Service) Recover(ctx context.Context, id string, admit func(*session.Se
 	}
 	if m.ID != id {
 		return nil, fmt.Errorf("manifest for %s names session %s", id, m.ID)
+	}
+	if m.AutoArchive != nil && s.autoArchives != nil {
+		exists, err := s.autoArchives.Exists(ctx, m.AutoArchive.Ref)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			m.Checkpoint = *m.AutoArchive
+		}
+	}
+	if m.Checkpoint.Ref == "" {
+		return nil, fmt.Errorf("%w: session %s left no archive", session.ErrNotFound, id)
 	}
 	frozen := m.SnapshotSession(s.now())
 	if frozen.WorkloadType, err = session.NormalizeStoredWorkloadType(frozen.WorkloadType); err != nil {
@@ -1179,7 +1206,13 @@ func (s *Service) unlockBestEffort(id, token string) {
 // the same per-session Lease as snapshot/restore so deletion cannot race a
 // restore target into existence or remove metadata underneath a snapshot
 // transaction.
-func (s *Service) Terminate(ctx context.Context, id string) (retErr error) {
+func (s *Service) Terminate(ctx context.Context, id string) error {
+	return s.terminate(ctx, id, true)
+}
+
+// terminate is Terminate; recordAutoArchive is false for a session whose pod
+// is already gone without an archive.
+func (s *Service) terminate(ctx context.Context, id string, recordAutoArchive bool) (retErr error) {
 	token, err := newID()
 	if err != nil {
 		return err
@@ -1223,6 +1256,9 @@ func (s *Service) Terminate(ctx context.Context, id string) (retErr error) {
 		sourcePod = txn.SourcePod
 	}
 	signedIn := s.authSlotSignedIn(ctx, sess)
+	if recordAutoArchive {
+		s.recordAutoArchiveOnDelete(ctx, sess)
+	}
 	for _, ref := range sessionReclaimRefs(sess, sourcePod) {
 		if ref.Name == "" {
 			continue

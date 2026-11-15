@@ -340,7 +340,22 @@ The shell's state tree sits at the same place (`SHELL_STATE_DIR`, default
 still, archives `home/` plus the scrollback, and keeps both paused until the
 control plane reclaims the pod or calls `/checkpoint/abort`, which SIGCONTs the
 tree and reopens writes. A process that daemonized out of the shell's tree is
-not paused. The image includes the official
+not paused.
+
+Every workload agent also archives itself when its pod is terminated (AC-B5).
+The control plane pushes an upload URL signed for this pod's key alone with
+`PUT /auto-archive/target` (`{url, expiresAt}`; the agent refuses any URL whose
+address differs from `AUTO_ARCHIVE_URL_BASE`, set at pod creation) and takes it
+back with `DELETE` before reclaiming the pod after a committed snapshot. The
+pod's exec preStop hook (`/agent auto-archive-prestop /auto-archive/run`) calls
+`GET /auto-archive/run` on loopback: with a valid URL the agent stops the running
+turn instead of waiting for it (queued prompts are dropped and counted in the
+output) or pauses the shell's tree, writes the same archive a checkpoint would,
+and uploads it within 100 s of the pod's 110 s grace period. A `minimax-code`
+workload uploads through its helper pod's session MCP container
+(`/auto-archive/announce`, `PUT /auto-archive/relay`), whose own preStop
+(`/auto-archive/hold`) keeps the helper up until an announced upload is through.
+The image includes the official
 `@anthropic-ai/claude-code` npm package. `entrypoint.sh` only execs the agent.
 A `claude-code` agent reads its loopback `k3s-mcp-proxy` sidecar
 (`K3S_MCP_PROXY_URL`, above) once per pod, on boot or after a restore: when the

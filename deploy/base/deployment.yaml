@@ -273,6 +273,11 @@ spec:
               value: "1"
             - name: CODEX_CHAT_AUTH_STORAGE_CLASS
               value: "efs"
+            # 파드 종료 시 자동 아카이브(AC-B5). 아카이브 게이트가 켜진 타입의 파드가 지워질 때
+            # 스스로 상태를 묶어 위 CHECKPOINT_S3_* 저장소에 직접 올린다(control plane 이 서명한 2시간 URL).
+            # 오버레이의 env 인덱스 패치를 밀지 않도록 목록 맨 끝에 둔다.
+            - name: AUTO_ARCHIVE_ENABLED
+              value: "true"
           readinessProbe:
             httpGet:
               path: /api/v1/healthz

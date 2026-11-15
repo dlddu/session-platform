@@ -26,6 +26,17 @@ type idleSnapshotManager interface {
 	SnapshotIfIdle(context.Context, string, time.Time) (*session.Session, bool, error)
 }
 
+// lostPodReconciler resolves sessions whose pod disappeared (AC-C5, AC-B5)
+// without waiting for a client to touch them.
+type lostPodReconciler interface {
+	ReconcileLostPod(context.Context, *session.Session) (bool, error)
+}
+
+// autoArchiveRefresher keeps live pods' automatic-archive URLs valid (AC-B5).
+type autoArchiveRefresher interface {
+	RefreshAutoArchiveTargets(context.Context, []*session.Session)
+}
+
 // NewIdleReaper builds a reaper over the session manager. now defaults to
 // time.Now().UTC() and log to slog.Default() when nil.
 func NewIdleReaper(mgr session.Manager, maxIdle, interval time.Duration, now func() time.Time, log *slog.Logger) *IdleReaper {
@@ -62,12 +73,27 @@ func (r *IdleReaper) ScanOnce(ctx context.Context) (int, error) {
 		r.log.Warn("idle reaper: list sessions failed", "err", err)
 		return 0, err
 	}
+	if refresher, ok := r.mgr.(autoArchiveRefresher); ok {
+		refresher.RefreshAutoArchiveTargets(ctx, sessions)
+	}
+	lost, _ := r.mgr.(lostPodReconciler)
 	now := r.now()
 	cutoff := now.Add(-r.maxIdle)
 	snapshotted := 0
 	for _, sess := range sessions {
 		if sess.State == session.StateSnapshot {
 			continue // already frozen
+		}
+		if lost != nil {
+			handled, err := lost.ReconcileLostPod(ctx, sess)
+			if err != nil {
+				r.log.Warn("idle reaper: lost pod unresolved", "session", sess.ID, "pod", sess.Pod, "err", err)
+				continue
+			}
+			if handled {
+				r.log.Info("idle reaper: resolved a session that lost its pod (AC-C5, AC-B5)", "session", sess.ID, "pod", sess.Pod)
+				continue
+			}
 		}
 		idle := sess.IdleFor(now)
 		if idle < r.maxIdle {

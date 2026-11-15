@@ -348,6 +348,8 @@ func runAgentSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer
 		return 0, false
 	}
 	switch args[0] {
+	case autoArchivePreStopCmd:
+		return runAutoArchivePreStop(args[1:], stdout, stderr), true
 	case codexSkillsMCPCommand:
 		logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 		if err := serveCodexSkillsMCP(stdin, stdout, os.Getenv(codexSkillsDirEnv), os.Getenv(codexAgentURLEnv), logger); err != nil {

@@ -53,6 +53,7 @@ type Config struct {
 type objectAPI interface {
 	PutObject(ctx context.Context, in *s3.PutObjectInput, opts ...func(*s3.Options)) (*s3.PutObjectOutput, error)
 	GetObject(ctx context.Context, in *s3.GetObjectInput, opts ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	HeadObject(ctx context.Context, in *s3.HeadObjectInput, opts ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 }
 
 // S3 stores and retrieves workload snapshots in an S3 bucket and satisfies the
@@ -61,6 +62,9 @@ type S3 struct {
 	api    objectAPI
 	bucket string
 	prefix string
+	// auto signs the automatic-archive upload URLs (auto_archive.go); nil in
+	// a store built over an injected API without one.
+	auto *autoArchiveSigner
 }
 
 // NewS3 builds an S3 store whose client assumes Config.RoleARN via STS over the
@@ -86,7 +90,7 @@ func NewS3(ctx context.Context, cfg Config) (*S3, error) {
 		base.Credentials = roleCredentials(sts.NewFromConfig(base), cfg.RoleARN, sessionName)
 	}
 
-	client := s3.NewFromConfig(base, func(o *s3.Options) {
+	endpoint := func(o *s3.Options) {
 		if cfg.Endpoint != "" {
 			// An S3-compatible backend (MinIO in the e2e SUT): address the bucket
 			// as a path rather than a virtual host, since these endpoints have no
@@ -94,8 +98,11 @@ func NewS3(ctx context.Context, cfg Config) (*S3, error) {
 			o.BaseEndpoint = aws.String(cfg.Endpoint)
 			o.UsePathStyle = true
 		}
-	})
-	return newWithAPI(client, cfg.Bucket, cfg.Prefix), nil
+	}
+	client := s3.NewFromConfig(base, endpoint)
+	store := newWithAPI(client, cfg.Bucket, cfg.Prefix)
+	store.auto = newAutoArchiveSigner(base, endpoint)
+	return store, nil
 }
 
 func roleCredentials(client stscreds.AssumeRoleAPIClient, roleARN, sessionName string) *aws.CredentialsCache {
