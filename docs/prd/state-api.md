@@ -43,9 +43,9 @@
 - **검증 방법**: 여러 세션을 오가며 전환 시 매번 대상 세션이 올바른 상태로 활성화되고, 이전 세션의 상태가 보존됨을 확인한다.
 
 ### AC-C5: pod를 잃은 세션은 not found로 정리된다
-- **설명**: `active`·`idle` 세션의 워크로드 pod가 control plane 모르게 사라질 수 있다(노드 축소·교체로 노드와 함께 사라짐, eviction). 이런 세션에 read/write가 agent 호출에 실패하면 control plane은 그 pod가 실제로 없는지(없음, 또는 `Failed`/`Succeeded`로 다시 돌지 않음) 확인하고, 사라졌으면 세션을 Terminate(AC-A3)해 레코드를 지우고 로그인 슬롯을 놓은 뒤(AC-N2) 404로 답한다. 클라이언트는 404를 「세션이 없어졌다」로 받아 새 세션을 연다. pod가 아직 있거나 상태를 읽지 못하면 원래 오류를 그대로 돌려주고 세션을 유지한다 — 일시적인 연결 실패로 세션을 지우지 않는다. *2026-11-11 추가*: 이전에는 레코드가 `active`로 남아 read/write가 영원히 500을 냈고, 같은 슬롯·이름을 쓰는 클라이언트(pocket-aide 채팅 탭)가 새 세션을 열지 못했다.
+- **설명**: `active`·`idle` 세션의 워크로드 pod가 control plane 모르게 사라질 수 있다(노드 축소·교체로 노드와 함께 사라짐, eviction). 이런 세션에 read/write가 agent 호출에 실패하면 control plane은 그 pod가 실제로 없는지(없음, 또는 `Failed`/`Succeeded`로 다시 돌지 않음) 확인하고, 사라졌으면 세션을 Terminate(AC-A3)해 레코드를 지우고 로그인 슬롯을 놓은 뒤(AC-N2) 404로 답한다. 클라이언트는 404를 「세션이 없어졌다」로 받아 새 세션을 연다. pod가 아직 있거나 상태를 읽지 못하면 원래 오류를 그대로 돌려주고 세션을 유지한다 — 일시적인 연결 실패로 세션을 지우지 않는다. *2026-11-11 추가*: 이전에는 레코드가 `active`로 남아 read/write가 영원히 500을 냈고, 같은 슬롯·이름을 쓰는 클라이언트(pocket-aide 채팅 탭)가 새 세션을 열지 못했다. *2026-11-15 개정 (AC-B5)*: 사라진 파드가 자동 아카이브를 올렸으면 지우지 않는다 — 세션을 그 아카이브의 `snapshot`으로 전이하고 read/write는 복원 뒤의 결과로 답한다. 404는 자동 아카이브가 없을 때만이다. 같은 판단을 유휴 리퍼가 주기 스캔마다 해서, 아무도 접근하지 않는 세션도 파드를 잃으면 곧 채택되거나 정리된다(이전에는 다음 접근까지 레코드가 남아 리퍼가 매 스캔 동결에 실패했다).
 - **달성 가치**: V5
-- **검증 방법**: active 세션의 pod를 control plane을 거치지 않고 지운 뒤 read와 write가 각각 404를 반환하고 레코드가 없어짐을 확인한다. pod가 살아 있는데 agent 호출만 실패하면 원래 오류가 나고 레코드가 남음을 확인한다.
+- **검증 방법**: 자동 아카이브가 없는 active 세션의 pod를 control plane을 거치지 않고 지운 뒤 read와 write가 각각 404를 반환하고 레코드가 없어짐을 확인한다(자동 아카이브가 있을 때는 AC-B5). pod가 살아 있는데 agent 호출만 실패하면 원래 오류가 나고 레코드가 남음을 확인한다.
 - **자동화**: Go 단위 `control-plane/internal/service/lost_pod_test.go`, 통합 `control-plane/test/client_orchestrator_gone_test.go`
 
 > 📌 **HTTP body 계약**: read/write/switch는 body 생략을 허용한다(read=`offset:0`, write=빈 payload,

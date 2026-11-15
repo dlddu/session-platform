@@ -188,7 +188,10 @@ func main() {
 			}
 		}
 		drop := newDropClient(os.Getenv(dropURLEnv), os.Getenv(dropTokenFileEnv))
-		handler = sessionMCPRoutes(logger, newSessionMCPConfig(gateway, shared, repoAccess, k3sProxyMCP, drop))
+		handler = withAutoArchiveRelay(
+			sessionMCPRoutes(logger, newSessionMCPConfig(gateway, shared, repoAccess, k3sProxyMCP, drop)),
+			newAutoArchiveRelay(os.Getenv(autoArchiveURLBaseEnv), &http.Client{}, logger),
+		)
 		logger.Info("session MCP started", "addr", addr, "gated", gateway != nil, "shared_dir", shared,
 			"repo_access", repoAccess != nil, "k3s_mcp_proxy", k3sProxyMCP != "", "drop", drop != nil)
 	case workloadCredentialProxy:
@@ -264,6 +267,20 @@ func main() {
 	}
 	if handler == nil {
 		handler = routes(logger, a)
+		run := &autoArchiveRunner{
+			target:  newAutoArchiveTarget(os.Getenv(autoArchiveURLBaseEnv)),
+			produce: a.autoArchiveTo,
+			client:  &http.Client{},
+			logger:  logger,
+			now:     time.Now,
+		}
+		if a.claude != nil {
+			run.produce = a.claude.autoArchiveTo
+		}
+		if workload == workloadMiniMaxCode {
+			run.relay = os.Getenv(sessionMCPURLEnv)
+		}
+		handler = withAutoArchive(handler, run)
 	}
 
 	srv := &http.Server{

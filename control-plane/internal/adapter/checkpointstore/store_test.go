@@ -23,6 +23,17 @@ type fakeS3 struct {
 	getIn   *s3.GetObjectInput
 	getBody string
 	getErr  error
+
+	headIn  *s3.HeadObjectInput
+	headErr error
+}
+
+func (f *fakeS3) HeadObject(_ context.Context, in *s3.HeadObjectInput, _ ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+	f.headIn = in
+	if f.headErr != nil {
+		return nil, f.headErr
+	}
+	return &s3.HeadObjectOutput{}, nil
 }
 
 func (f *fakeS3) PutObject(_ context.Context, in *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {

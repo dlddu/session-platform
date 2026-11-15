@@ -836,6 +836,54 @@ func (c *claudeWorkload) beginCheckpoint(ctx context.Context, requestedID string
 	return c.out.snapshot(), checkpointID, nil
 }
 
+// autoArchiveTo writes the session's archive for AC-B5 while its pod is being
+// removed: the running turn is stopped rather than waited for, prompts not yet
+// started are dropped, and the workload accepts nothing afterwards.
+func (c *claudeWorkload) autoArchiveTo(ctx context.Context, w io.Writer) (bool, error) {
+	c.mu.Lock()
+	if c.stopping || !c.ready || c.restoring {
+		c.mu.Unlock()
+		return true, nil
+	}
+	c.accepting = false
+	dropped := c.queue.Len()
+	c.queue.Init()
+	c.queuedBytes = 0
+	c.closeQuestionsForCheckpoint()
+	c.mu.Unlock()
+	c.cancel()
+	if dropped > 0 {
+		c.appendPlatformNotice(fmt.Sprintf("\n[session-platform: the session's pod is being removed — %d queued prompt(s) were not run]\n", dropped))
+	}
+
+	settle, cancelSettle := context.WithTimeout(ctx, autoArchiveSettleWait)
+	defer cancelSettle()
+	c.mu.Lock()
+	stopWake := context.AfterFunc(settle, func() {
+		c.mu.Lock()
+		c.cond.Broadcast()
+		c.mu.Unlock()
+	})
+	for settle.Err() == nil && (c.active || c.refreshing) {
+		c.cond.Wait()
+	}
+	settled := !c.active && !c.refreshing
+	hasRun := c.hasRun
+	c.mu.Unlock()
+	stopWake()
+	if settled {
+		if err := persistClaudeRuntimeState(c.stateDir, hasRun); err != nil {
+			return false, err
+		}
+	} else {
+		c.logger.Warn("the running turn did not stop in time; archiving its state as it is")
+	}
+	if err := c.cli.validateState(c.stateDir); err != nil {
+		return false, fmt.Errorf("validate live state: %w", err)
+	}
+	return false, writeStateArchiveExcluding(w, c.stateDir, c.tools.SharedDir, c.out.snapshot(), c.archiveExclusions())
+}
+
 func claudeCheckpointID(requested string) (string, error) {
 	if requested == "" {
 		return newClaudeCheckpointID()

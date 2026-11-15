@@ -25,6 +25,10 @@ type Manifest struct {
 	Tenant          string       `json:"tenant,omitempty"`
 	CreatedAt       time.Time    `json:"createdAt"`
 	Checkpoint      Checkpoint   `json:"checkpoint"`
+	// AutoArchive is the automatic archive the session's last pod was asked to
+	// write when the session was deleted (AC-B5). It is newer than Checkpoint
+	// when it exists.
+	AutoArchive *Checkpoint `json:"autoArchive,omitempty"`
 }
 
 var sessionIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -66,7 +70,7 @@ func DecodeManifest(wire []byte) (*Manifest, error) {
 	if m.Version != ManifestVersion {
 		return nil, fmt.Errorf("session manifest version %d is not supported", m.Version)
 	}
-	if !ValidSessionID(m.ID) || m.Checkpoint.Ref == "" {
+	if !ValidSessionID(m.ID) || (m.Checkpoint.Ref == "" && (m.AutoArchive == nil || m.AutoArchive.Ref == "")) {
 		return nil, fmt.Errorf("session manifest for %q is incomplete", m.ID)
 	}
 	return &m, nil
