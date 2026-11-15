@@ -336,7 +336,10 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 	}
 	c.cond = sync.NewCond(&c.mu)
 
-	if !cfg.RestoreMode {
+	if cfg.RestoreMode && !awaitsRestore(cfg.RestoreMode, stateDir) {
+		logger.Info("restore already applied before this container restart; starting from the restored state", "state_dir", stateDir)
+	}
+	if !awaitsRestore(cfg.RestoreMode, stateDir) {
 		if err := c.ensureStateDirs(); err != nil {
 			cancel()
 			return nil, err
@@ -993,6 +996,9 @@ func (c *claudeWorkload) restore(r io.Reader) error {
 		return err
 	}
 
+	if err := markRestored(c.stateDir); err != nil {
+		c.logger.Warn("restore marker not written; a container restart would wait for an archive again", "err", err)
+	}
 	c.out.restore(scrollbackBytes)
 	c.mu.Lock()
 	c.turns = bytes.Count(scrollbackBytes, []byte(claudeTurnMarkerLead+"input "))

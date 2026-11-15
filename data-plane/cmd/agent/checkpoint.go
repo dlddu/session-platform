@@ -220,6 +220,9 @@ func (a *agent) handleRestore(logger *slog.Logger) http.HandlerFunc {
 			return
 		}
 		a.adopt(sh)
+		if err := markRestored(a.stateDir); err != nil {
+			logger.Warn("restore marker not written; a container restart would wait for an archive again", "err", err)
+		}
 		logger.Info("shell archive restored", "pid", sh.pid, "scrollback_bytes", len(sb))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"restored"}`))

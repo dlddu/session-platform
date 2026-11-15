@@ -94,9 +94,12 @@ func main() {
 			os.Exit(1)
 		}
 		a.stateDir = stateDir
-		if restoreMode {
+		if awaitsRestore(restoreMode, stateDir) {
 			logger.Info("shell agent started in restore mode; awaiting archive", "addr", addr, "state_dir", stateDir)
 		} else {
+			if restoreMode {
+				logger.Info("restore already applied before this container restart; starting a shell on the restored home", "state_dir", stateDir)
+			}
 			if err := os.MkdirAll(a.homeDir(), 0o700); err != nil {
 				logger.Error("failed to create shell home", "home", a.homeDir(), "err", err)
 				os.Exit(1)
