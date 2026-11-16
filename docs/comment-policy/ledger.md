@@ -242,6 +242,7 @@
 | 2026-11-16 | `control-plane/internal/session/tool_approvals.go` | 38 | `7213bb0314b2` | — | 등록 — 2026-11-16 AC-E2 「턴 중 도구 승인」 슬라이스가 새로 둔 파일. 필요성 기준(한 문장 필요 사유) 판정 대기. |
 | 2026-11-16 | `data-plane/cmd/agent/claude_approvals.go` | 119 | `f2a58cae2ee8` | — | 등록 — 2026-11-16 AC-E2 「턴 중 도구 승인」 슬라이스가 새로 둔 파일. 필요성 기준(한 문장 필요 사유) 판정 대기. |
 | 2026-11-16 | `data-plane/cmd/agent/claude_approvals_test.go` | 52 | `353f70235438` | — | 등록 — 2026-11-16 AC-E2 「턴 중 도구 승인」 슬라이스가 새로 둔 파일. 필요성 기준(한 문장 필요 사유) 판정 대기. |
+| 2026-11-16 | `scripts/experiments/pretooluse-probe/classifier-probe.mjs` | 26 | `c589059b0be5` | — | 등록 — 2026-11-16 AC-E2 「턴 중 도구 승인」의 미증명 전제(분류기 거절 vs `ask`)를 재는 격리 하네스(제품 코드 아님). 실측 결과와 남은 한계는 같은 디렉터리의 `README.md` (4) 가 갖는다. 필요성 기준 판정 대기. |
 | 2026-11-16 | `scripts/experiments/pretooluse-probe/probe.mjs` | 41 | `691b0655f3af` | — | 등록 — 2026-11-16 AC-E2 「턴 중 도구 승인」의 미증명 전제를 재는 격리 하네스(제품 코드 아님). 실측 결과와 남은 한계는 같은 디렉터리의 `README.md` 가 갖는다. 필요성 기준 판정 대기. |
 | 2026-11-16 | `scripts/experiments/pretooluse-probe/recorder-selftest.mjs` | 12 | `9511bf9f6a7d` | — | 등록 — 2026-11-16 AC-E2 「턴 중 도구 승인」의 미증명 전제를 재는 격리 하네스(제품 코드 아님). 실측 결과와 남은 한계는 같은 디렉터리의 `README.md` 가 갖는다. 필요성 기준 판정 대기. |
 <!-- /판정-원장 -->
