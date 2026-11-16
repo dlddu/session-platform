@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
@@ -90,6 +91,8 @@ func main() {
 		"claude_code_models", len(cfg.claudeCodeModels),
 		"repo_access_enabled", cfg.repoAccess.enabled,
 		"drop_url", cfg.dropURL,
+		"high_memory_node_selector", cfg.highMemoryNodeSelector,
+		"high_memory_tolerations", len(cfg.highMemoryTolerations),
 	)
 	if cfg.dataPlaneImage == "" {
 		// The in-code fallback image has no session agent, so session pods will
@@ -124,6 +127,7 @@ func main() {
 		k8s.WithClaudeCodeAuthMode(cfg.claudeAuth.mode),
 		k8s.WithApprovalGatewayURL(cfg.approvalGatewayURL),
 		k8s.WithSharedVolume(cfg.sharedVolumeStorageClass, cfg.sharedVolumeSize),
+		k8s.WithHighMemoryPlacement(cfg.highMemoryNodeSelector, cfg.highMemoryTolerations),
 		k8s.WithRepoAccess(cfg.repoAccess.helperURL(namespace)),
 		k8s.WithDropURL(cfg.dropURL))
 	store := configmap.NewStore(client, namespace)
@@ -279,6 +283,11 @@ type config struct {
 	// of its classes serves ReadWriteMany can ask for one that will bind.
 	sharedVolumeStorageClass string
 	sharedVolumeSize         resource.Quantity
+	// highMemoryNodeSelector and highMemoryTolerations place a session whose
+	// memory tier is above 1 (see WithHighMemoryPlacement). Empty leaves every
+	// tier scheduling like tier 1.
+	highMemoryNodeSelector map[string]string
+	highMemoryTolerations  []corev1.Toleration
 	// claudeArchiveEnabled explicitly permits workspace/conversation/output
 	// archives to be written to CHECKPOINT_S3_* (default false).
 	claudeArchiveEnabled bool
@@ -408,6 +417,16 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("SESSION_SHARED_VOLUME_SIZE: %w", err)
 	}
+	// Like the volume size, a bad placement fails startup: a session landing
+	// on interruptible nodes it was meant to avoid would go unnoticed.
+	highMemoryNodeSelector, err := parseNodeSelector(os.Getenv("SESSION_HIGH_MEMORY_NODE_SELECTOR"))
+	if err != nil {
+		return config{}, fmt.Errorf("SESSION_HIGH_MEMORY_NODE_SELECTOR: %w", err)
+	}
+	highMemoryTolerations, err := parseTolerations(os.Getenv("SESSION_HIGH_MEMORY_TOLERATIONS"))
+	if err != nil {
+		return config{}, fmt.Errorf("SESSION_HIGH_MEMORY_TOLERATIONS: %w", err)
+	}
 	codex, err := loadCodexConfig()
 	if err != nil {
 		return config{}, err
@@ -434,6 +453,8 @@ func loadConfig() (config, error) {
 		approvalGatewayURL:       env("APPROVAL_GATEWAY_URL", ""),
 		sharedVolumeStorageClass: env("SESSION_SHARED_VOLUME_STORAGE_CLASS", ""),
 		sharedVolumeSize:         sharedVolumeSize,
+		highMemoryNodeSelector:   highMemoryNodeSelector,
+		highMemoryTolerations:    highMemoryTolerations,
 		claudeArchiveEnabled:     envBool("CLAUDE_CODE_ARCHIVE_ENABLED", false),
 		claudeCredentialsSecret:  env("CLAUDE_CODE_CREDENTIALS_SECRET", "claude-code-credentials"),
 		claudeConfigConfigMap:    env("CLAUDE_CODE_CONFIG_CONFIGMAP", "claude-code-config"),

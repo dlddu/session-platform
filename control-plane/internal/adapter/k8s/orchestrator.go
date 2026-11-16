@@ -70,9 +70,10 @@ type WorkloadSpec struct {
 	Plugins []string
 	// ReasoningEffort is the session's effort, empty when unset (AC-E8).
 	ReasoningEffort string
-	// DoubleMemory selects the doubled workload container memory
-	// request/limit over the platform default (see WorkloadMemoryRequest).
-	DoubleMemory bool
+	// MemoryMultiplier is the session's memory tier (session.MemoryMultipliers;
+	// 0 means 1): the workload container gets WorkloadMemoryRequest/Limit times
+	// it, and a tier above 1 is placed by WithHighMemoryPlacement.
+	MemoryMultiplier int
 	// AuthSlot is the auth pool slot the service leased for this pod, nil for
 	// a type without a pool (AC-N2). It is per provisioning round, not part of
 	// the session: a restore may run on a different slot (AC-N3).

@@ -15,17 +15,17 @@ const ManifestVersion = 1
 // ConfigMap record is deleted with the session and the archive alone does not
 // say which workload, model or tenant it belongs to.
 type Manifest struct {
-	Version         int          `json:"version"`
-	ID              string       `json:"id"`
-	Name            string       `json:"name"`
-	WorkloadType    WorkloadType `json:"workloadType"`
-	Model           string       `json:"model,omitempty"`
-	Plugins         []string     `json:"plugins,omitempty"`
-	ReasoningEffort string       `json:"reasoningEffort,omitempty"`
-	DoubleMemory    bool         `json:"doubleMemory,omitempty"`
-	Tenant          string       `json:"tenant,omitempty"`
-	CreatedAt       time.Time    `json:"createdAt"`
-	Checkpoint      Checkpoint   `json:"checkpoint"`
+	Version          int          `json:"version"`
+	ID               string       `json:"id"`
+	Name             string       `json:"name"`
+	WorkloadType     WorkloadType `json:"workloadType"`
+	Model            string       `json:"model,omitempty"`
+	Plugins          []string     `json:"plugins,omitempty"`
+	ReasoningEffort  string       `json:"reasoningEffort,omitempty"`
+	MemoryMultiplier int          `json:"memoryMultiplier,omitempty"`
+	Tenant           string       `json:"tenant,omitempty"`
+	CreatedAt        time.Time    `json:"createdAt"`
+	Checkpoint       Checkpoint   `json:"checkpoint"`
 	// AutoArchive is the automatic archive the session's last pod was asked to
 	// write when the session was deleted (AC-B5). It is newer than Checkpoint
 	// when it exists.
@@ -51,10 +51,10 @@ func ManifestFor(sess *Session, cp *Checkpoint) Manifest {
 		Model:           sess.Model,
 		Plugins:         append([]string(nil), sess.Plugins...),
 		ReasoningEffort: sess.ReasoningEffort,
-		DoubleMemory:    sess.DoubleMemory,
 		Tenant:          sess.Tenant,
 		CreatedAt:       sess.CreatedAt,
 	}
+	m.MemoryMultiplier = sess.MemoryMultiplier
 	if cp != nil {
 		m.Checkpoint = *cp
 		m.Checkpoint.AbortToken = ""
@@ -69,6 +69,11 @@ func DecodeManifest(wire []byte) (*Manifest, error) {
 	if err := json.Unmarshal(wire, &m); err != nil {
 		return nil, fmt.Errorf("decode session manifest: %w", err)
 	}
+	var legacy LegacyDoubleMemory
+	if err := json.Unmarshal(wire, &legacy); err != nil {
+		return nil, fmt.Errorf("decode session manifest: %w", err)
+	}
+	legacy.Fold(&m.MemoryMultiplier)
 	if m.Version != ManifestVersion {
 		return nil, fmt.Errorf("session manifest version %d is not supported", m.Version)
 	}
@@ -82,18 +87,18 @@ func DecodeManifest(wire []byte) (*Manifest, error) {
 func (m *Manifest) SnapshotSession(now time.Time) *Session {
 	cp := m.Checkpoint
 	return &Session{
-		ID:              m.ID,
-		WorkloadType:    m.WorkloadType,
-		Model:           m.Model,
-		Plugins:         append([]string(nil), m.Plugins...),
-		ReasoningEffort: m.ReasoningEffort,
-		DoubleMemory:    m.DoubleMemory,
-		Tenant:          m.Tenant,
-		Name:            m.Name,
-		State:           StateSnapshot,
-		CreatedAt:       m.CreatedAt,
-		LastAccess:      now,
-		Checkpoint:      &cp,
+		ID:               m.ID,
+		WorkloadType:     m.WorkloadType,
+		Model:            m.Model,
+		Plugins:          append([]string(nil), m.Plugins...),
+		ReasoningEffort:  m.ReasoningEffort,
+		MemoryMultiplier: m.MemoryMultiplier,
+		Tenant:           m.Tenant,
+		Name:             m.Name,
+		State:            StateSnapshot,
+		CreatedAt:        m.CreatedAt,
+		LastAccess:       now,
+		Checkpoint:       &cp,
 	}
 }
 

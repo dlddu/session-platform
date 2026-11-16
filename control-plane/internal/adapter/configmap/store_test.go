@@ -479,3 +479,36 @@ func TestDeleteRejectsStaleHolderAfterTakeover(t *testing.T) {
 		t.Fatalf("unlock current holder: %v", err)
 	}
 }
+
+// A record written while the tier was the boolean doubleMemory reads as tier
+// 2, and the next write stores memoryMultiplier in its place.
+func TestLegacyDoubleMemoryRecordReadsAsTierTwo(t *testing.T) {
+	ctx := context.Background()
+	store, cs := newStore(t)
+	if err := store.Put(ctx, sampleSession("c3d4")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	cm, err := cs.CoreV1().ConfigMaps(testNS).Get(ctx, "session-c3d4", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cm.Data["session"] = strings.Replace(cm.Data["session"], `"name":`, `"doubleMemory":true,"name":`, 1)
+	if _, err := cs.CoreV1().ConfigMaps(testNS).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.Get(ctx, "c3d4")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.MemoryTier() != 2 {
+		t.Fatalf("legacy record tier = %d, want 2", got.MemoryTier())
+	}
+	if err := store.Put(ctx, got); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	cm, _ = cs.CoreV1().ConfigMaps(testNS).Get(ctx, "session-c3d4", metav1.GetOptions{})
+	if raw := cm.Data["session"]; strings.Contains(raw, "doubleMemory") || !strings.Contains(raw, `"memoryMultiplier":2`) {
+		t.Fatalf("rewritten record = %s, want memoryMultiplier 2 and no doubleMemory", raw)
+	}
+}
