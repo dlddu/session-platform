@@ -13,6 +13,12 @@
 #   plugin-marketplace-url  Git remote of the plugin marketplace whose skills
 #                           sessions get (default the dlddu plugin-marketplace).
 #                           Which plugins is each session's own `plugins` choice.
+#   session-db-raw-sql      Debug opt-in for the codex-chat session DB MCP,
+#                           projected into the sidecar as SESSION_DB_RAW_SQL.
+#                           Omit it and the MCP offers the task ledger alone;
+#                           the only accepted value is `debug`, which adds
+#                           raw_query/raw_exec (any other value fails the
+#                           sidecar's start rather than reading as off).
 #
 # Named by CODEX_CONFIG_CONFIGMAP (default `codex-config`). EXAMPLE-ONLY, not in
 # kustomization.yaml.

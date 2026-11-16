@@ -4,7 +4,9 @@
 // mounts that directory; it reaches the database only through this endpoint,
 // which the managed config.toml registers as the `db` MCP server.
 //
-// Raw SQL remains available alongside the versioned task ledger.
+// The versioned task ledger is the whole surface a chat session gets. Raw SQL
+// is a debug tool: it is neither listed nor callable unless the deployment
+// opts the sidecar in with SESSION_DB_RAW_SQL=debug.
 package main
 
 import (
@@ -31,7 +33,13 @@ const (
 	// SessionDBMCPURLEnvVar, sessionDBMCPPath).
 	sessionDBDirEnv    = "SESSION_DB_DIR"
 	sessionDBMCPURLEnv = "SESSION_DB_MCP_URL"
+	sessionDBRawSQLEnv = "SESSION_DB_RAW_SQL"
 	sessionDBMCPPath   = "/session-db/mcp"
+
+	// sessionDBRawSQLDebug is the only value that turns raw SQL on. A spelling
+	// the operator meant as "on" (true, 1, yes) is refused rather than read as
+	// off, so a debug session never starts without the tools it was given.
+	sessionDBRawSQLDebug = "debug"
 
 	sessionDBFileName      = "session.db"
 	sessionDBMCPServerName = "session-platform-session-db"
@@ -49,14 +57,18 @@ const (
 // a directory that was not ready when the sidecar started costs a tool error,
 // not the sidecar (which also carries the K3s MCP).
 type sessionDB struct {
-	path   string
+	path string
+	// rawSQL is the debug opt-in: false leaves raw_query and raw_exec out of
+	// tools/list and refuses them in tools/call. The ledger does not read it —
+	// its own statements are this type's methods, not model-supplied SQL.
+	rawSQL bool
 	logger *slog.Logger
 
 	mu sync.Mutex
 	db *sql.DB
 }
 
-func newSessionDB(dir string, logger *slog.Logger) (*sessionDB, error) {
+func newSessionDB(dir string, rawSQL bool, logger *slog.Logger) (*sessionDB, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" || !filepath.IsAbs(dir) {
 		return nil, fmt.Errorf("%s must be an absolute path", sessionDBDirEnv)
@@ -64,7 +76,11 @@ func newSessionDB(dir string, logger *slog.Logger) (*sessionDB, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &sessionDB{path: filepath.Join(filepath.Clean(dir), sessionDBFileName), logger: logger}, nil
+	return &sessionDB{
+		path:   filepath.Join(filepath.Clean(dir), sessionDBFileName),
+		rawSQL: rawSQL,
+		logger: logger,
+	}, nil
 }
 
 // handle returns the open database. journal_mode stays DELETE: the slot lives
@@ -207,7 +223,13 @@ func sessionDBValue(v any) any {
 	}
 }
 
-func sessionDBToolDefinitions() []map[string]any {
+// sessionDBToolDefinitions lists the ledger, and the raw SQL pair only for a
+// sidecar opted into debug: a tool the model cannot see is one it cannot be
+// talked into using.
+func sessionDBToolDefinitions(rawSQL bool) []map[string]any {
+	if !rawSQL {
+		return ledgerToolDefinitions()
+	}
 	statement := func(what string) map[string]any {
 		return map[string]any{
 			"type": "object",
@@ -226,13 +248,14 @@ func sessionDBToolDefinitions() []map[string]any {
 	return append([]map[string]any{
 		{
 			"name": "raw_query",
-			"description": fmt.Sprintf("Run one SQL statement on this session's SQLite database and return its columns and rows "+
-				"(at most %d rows): SELECT and other statements that return rows.", sessionDBMaxRows),
+			"description": fmt.Sprintf("Debug tool (this sidecar is opted in with %s=%s). Run one SQL statement on this session's SQLite database "+
+				"and return its columns and rows (at most %d rows): SELECT and other statements that return rows.",
+				sessionDBRawSQLEnv, sessionDBRawSQLDebug, sessionDBMaxRows),
 			"inputSchema": statement("The SQLite statement to run."),
 		},
 		{
 			"name": "raw_exec",
-			"description": "Run SQL that changes this session's SQLite database (CREATE, INSERT, UPDATE, DELETE, ...) and " +
+			"description": "Debug tool. Run SQL that changes this session's SQLite database (CREATE, INSERT, UPDATE, DELETE, ...) and " +
 				"return the rows affected and the last insert rowid. These are SQLite connection counters, NOT committed change totals (DDL/ROLLBACK can retain old values). Without params, several statements separated by ; run in order. Open transactions are rolled back at call end, so a transaction begins and commits within one call.",
 			"inputSchema": statement("The SQLite statement or statements to run."),
 		},
@@ -253,6 +276,16 @@ func (s *sessionDB) callTool(ctx context.Context, params json.RawMessage) (any, 
 	if strings.HasPrefix(call.Name, "ledger_") {
 		return s.callLedger(ctx, call.Name, call.Arguments)
 	}
+	// The name is checked before the arguments: a raw call on a sidecar that is
+	// not opted in has to say so, not fail on the SQL it was never going to run.
+	if call.Name != "raw_query" && call.Name != "raw_exec" {
+		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: "unknown tool " + call.Name}
+	}
+	if !s.rawSQL {
+		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: call.Name +
+			" is off: this session database offers the ledger tools, and raw SQL only where the sidecar has " +
+			sessionDBRawSQLEnv + "=" + sessionDBRawSQLDebug}
+	}
 	var stmt sessionDBStatement
 	if len(call.Arguments) > 0 {
 		decoder := json.NewDecoder(strings.NewReader(string(call.Arguments)))
@@ -272,13 +305,10 @@ func (s *sessionDB) callTool(ctx context.Context, params json.RawMessage) (any, 
 		result any
 		err    error
 	)
-	switch call.Name {
-	case "raw_query":
+	if call.Name == "raw_query" {
 		result, err = s.query(ctx, stmt)
-	case "raw_exec":
+	} else {
 		result, err = s.exec(ctx, stmt)
-	default:
-		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: "unknown tool " + call.Name}
 	}
 	if err != nil {
 		s.logger.Info("session database statement failed", "tool", call.Name, "err", err)
@@ -354,7 +384,7 @@ func (s *sessionDB) serveMCP(w http.ResponseWriter, r *http.Request) {
 			"serverInfo":      map[string]any{"name": sessionDBMCPServerName, "version": sessionMCPServerVersion},
 		})
 	case "tools/list":
-		writeJSONRPCResult(w, req.ID, map[string]any{"tools": sessionDBToolDefinitions()})
+		writeJSONRPCResult(w, req.ID, map[string]any{"tools": sessionDBToolDefinitions(s.rawSQL)})
 	case "tools/call":
 		result, rpcErr := s.callTool(r.Context(), req.Params)
 		if rpcErr != nil {
@@ -395,4 +425,18 @@ func sessionDBMCPURLFromEnv() (string, error) {
 		return "", errSessionDBMCPURL
 	}
 	return raw, nil
+}
+
+// sessionDBRawSQLFromEnv reads the debug opt-in. Unset is off; any value other
+// than the one that means debug is an error, because a typo that silently
+// served the ledger alone would look like the tools had been removed.
+func sessionDBRawSQLFromEnv() (bool, error) {
+	switch raw := strings.TrimSpace(os.Getenv(sessionDBRawSQLEnv)); raw {
+	case "":
+		return false, nil
+	case sessionDBRawSQLDebug:
+		return true, nil
+	default:
+		return false, fmt.Errorf("%s must be unset or %q, not %q", sessionDBRawSQLEnv, sessionDBRawSQLDebug, raw)
+	}
 }

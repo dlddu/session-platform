@@ -65,11 +65,11 @@
   2. `k3s-mcp-proxy` 사이드카는 `db/`만 `/var/run/session-platform/session-db`에 받고(`SESSION_DB_DIR`), 같은 포트의 `/session-db/mcp`에서 **세션 DB MCP**를 서빙한다. 주 컨테이너는 그 주소만 받는다(`SESSION_DB_MCP_URL`). 사이드카는 로그인 파일에, 주 컨테이너는 DB 파일에 닿지 않는다 — 그래서 AC-N4의 「사이드카에 슬롯을 마운트하지 않는다」는 「사이드카에 로그인을 마운트하지 않는다」로 읽는다.
   3. 초기화 컨테이너 `slot-init`(root, `CHOWN`·`FOWNER`만)이 슬롯 전체를 마운트해 두 디렉터리를 만들고 `db/`를 사이드카 사용자(65532)에게 넘긴다 — kubelet이 만드는 subPath는 root 소유 0750이라 non-root 사이드카가 쓰지 못한다. `efs` access point처럼 소유자를 하나로 매핑하는 볼륨에서는 chown이 실패하지만, 그 볼륨은 이미 사이드카가 쓸 수 있으므로 실패를 무시한다.
 
-  세션 DB MCP의 raw 도구는 둘이다: `raw_query`(행을 돌려주는 문장, 최대 1000행·약 1MiB, 넘으면 `truncated`)와 `raw_exec`(바꾸는 문장, `rowsAffected`·`lastInsertId`; 매개변수가 없으면 `;`로 이은 여러 문장). 둘 다 `{sql, params?}`를 받고 `params`는 `?` 자리에 순서대로 묶인다. SQLite가 거부한 문장은 `isError` 도구 결과로 메시지를 돌려준다. 한 문장은 30초로 끊는다. DB는 `journal_mode=DELETE`로 연다 — 운영 `efs`는 NFS라 WAL의 공유 메모리가 동작하지 않고, 파일을 여는 프로세스는 사이드카 하나다. 사이드카가 뜰 때 디렉터리가 준비되지 않았으면 그 호출만 실패하고 다음 호출이 다시 연다(사이드카는 K3s MCP도 맡으므로 죽지 않는다). DB는 아카이브에 들어가지 않는다 — 슬롯에 있으므로 동결·복원·재생성을 건너 남는다.
+  세션 DB MCP가 기본으로 내놓는 것은 **원장 네 도구**(`ledger_get/list/put/delete`)뿐이다. raw 도구 둘은 **디버그 전용**이다 (2026-11-16 사용자 결정) — 배포가 사이드카에 `SESSION_DB_RAW_SQL=debug`를 주지 않으면 `tools/list`에 **서지 않고**(기본 비노출), 이름을 알고 불러도 그 스위치를 가리키는 오류로 **거절된다**(기본 비활성). 세션이 켤 수 있는 스위치가 아니다 — 값은 배포의 `codex-config` ConfigMap 키 `session-db-raw-sql`에서 와 사이드카 env로만 들어가고, 주 컨테이너는 받지 않는다. `debug` 말고 다른 값(`true`·`1`)은 off로 읽지 않고 사이드카 기동을 실패시킨다 — 오타가 조용히 off가 되면 도구가 제거된 것처럼 보이기 때문이다. 옵트인된 사이드카에서 raw 도구는 둘이다: `raw_query`(행을 돌려주는 문장, 최대 1000행·약 1MiB, 넘으면 `truncated`)와 `raw_exec`(바꾸는 문장, `rowsAffected`·`lastInsertId`; 매개변수가 없으면 `;`로 이은 여러 문장). 둘 다 `{sql, params?}`를 받고 `params`는 `?` 자리에 순서대로 묶인다. SQLite가 거부한 문장은 `isError` 도구 결과로 메시지를 돌려준다. 한 문장은 30초로 끊는다. DB는 `journal_mode=DELETE`로 연다 — 운영 `efs`는 NFS라 WAL의 공유 메모리가 동작하지 않고, 파일을 여는 프로세스는 사이드카 하나다. 사이드카가 뜰 때 디렉터리가 준비되지 않았으면 그 호출만 실패하고 다음 호출이 다시 연다(사이드카는 K3s MCP도 맡으므로 죽지 않는다). DB는 아카이브에 들어가지 않는다 — 슬롯에 있으므로 동결·복원·재생성을 건너 남는다.
   DB가 있는 codex-chat은 스냅샷/복구/복원 실패에도 슬롯을 유지하며 frozen holder 재회수 대상이 아니다. 삭제 시 반납하고, 동결 중에도 풀 용량을 차지한다. 다른 타입의 스냅샷 반납 규칙은 유지한다. 상위 작업 관리 도구와 raw 트랜잭션 경계는 [세션 원장 계약](../session-ledger.md)을 따른다. 한때(PR #216) DB가 `db/<sessionID>/`로 세션마다 나뉘어 재생성한 채팅이 빈 DB를 열었으므로, 슬롯 단위로 되돌린다; 그 사이 남은 `db/<sessionID>/` 디렉터리는 자동으로 합치지 않고 보존한다.
 - **달성 가치**: V3(장기 세션), V1
 - **구체화 대상**: AC-N1(슬롯)·AC-N4(로그인 배치) — 슬롯에 세션 DB를 더하고 컨테이너별로 나눠 마운트한 것, `codex-workload.md` AC-J5(도구 표면)·AC-J6(사이드카)
-- **검증 방법**: 제출된 `codex-chat` pod spec에서 PVC가 자기 슬롯 하나이고, 주 컨테이너는 subPath `auth`, 사이드카는 subPath `db`, `slot-init`만 슬롯 전체를 마운트함을 확인한다(`control-plane/test/codex_orchestrator_test.go`). 세션 DB MCP 단위 테스트로 `raw_exec` → `raw_query` 왕복, SQLite 오류가 `isError`, 행 상한과 `truncated`, 늦게 생긴 디렉터리를 다음 호출이 여는 것, `/session-db/mcp` 밖의 요청은 K3s MCP 프록시로 가는 것을 확인한다(`data-plane/cmd/agent/session_db_mcp_test.go`).
+- **검증 방법**: 제출된 `codex-chat` pod spec에서 PVC가 자기 슬롯 하나이고, 주 컨테이너는 subPath `auth`, 사이드카는 subPath `db`, `slot-init`만 슬롯 전체를 마운트함을 확인한다(`control-plane/test/codex_orchestrator_test.go`). 세션 DB MCP 단위 테스트로 옵트인 없는 사이드카의 `tools/list`가 원장 넷뿐이고 raw 호출이 스위치 이름과 함께 거절되는 것(원장 호출은 그대로 되는 것), `debug` 아닌 값이 오류인 것, 그리고 옵트인된 사이드카에서 `raw_exec` → `raw_query` 왕복, SQLite 오류가 `isError`, 행 상한과 `truncated`, 늦게 생긴 디렉터리를 다음 호출이 여는 것, `/session-db/mcp` 밖의 요청은 K3s MCP 프록시로 가는 것을 확인한다(`data-plane/cmd/agent/session_db_mcp_test.go`). 제출된 pod spec에서 그 스위치가 사이드카에만, ConfigMap 키 참조(optional)로 붙음을 확인한다(`control-plane/internal/adapter/k8s/session_db_test.go`).
 
 ### AC-N5: 권한 — control plane은 PVC·Lease만, 세션은 자기 슬롯만
 - **설명**: control plane Role은 이미 가진 `persistentvolumeclaims` create/get/list/watch와 `leases` 전체 동사로 풀을 다룬다 — 새 권한이 없다. 세션 파드는 자기 슬롯 PVC 하나만 마운트하고, 다른 슬롯에 닿는 Kubernetes 자격 증명을 받지 않는다(타입별 SA 권한은 바뀌지 않는다). 슬롯 파일은 셸이 있는 주 컨테이너가 읽을 수 있다 — 프록시로 숨기지 않기로 했다(2026-11-07 사용자 결정): 세션 안 에이전트가 그 계정의 토큰을 읽을 수 있다는 것이 이 풀의 알려진 대가다.
@@ -88,7 +88,12 @@
 - **세션 DB는 슬롯에 남는다**: 슬롯을 다음 세션이 받으면 DB도 이어받는다 — 새 세션이라고 비우지 않는다.
 - **기존 세션은 다시 로그인**: 슬롯 도입 전 `codex-chat` 세션의 로그인은 아카이브된 HOME에 있지만 슬롯으로 옮기지 않는다. 빈 슬롯은 AC-N4 1번대로 HOME의 로그인을 지우고, 다음 프롬프트가 로그인 흐름을 돈다.
 - **슬롯 0이면 타입을 내놓지 않는다**: `codex-task`와 같은 규칙. 운영은 1이다.
-- **DB 도구는 raw 두 개**: `raw_query`·`raw_exec`만 둔다. 도메인 도구는 쓰임이 정해지면 그때 더한다.
+- **DB 도구는 raw 두 개**: `raw_query`·`raw_exec`만 둔다. 도메인 도구는 쓰임이 정해지면 그때 더한다. *(2026-11-16 개정: 원장 도구가 들어선 뒤 raw 둘은 디버그 전용이 됐다 — 아래 결정 참고)*
+
+## 결정 사항 (2026-11-16, 사용자)
+- **raw SQL은 디버그 전용**: 채팅 세션의 기본 DB 표면은 버전이 있는 원장 네 도구다. `raw_query`·`raw_exec`는 기본으로 보이지도, 불러지지도 않는다. 원장이 쓰임을 가져간 뒤로 raw는 그 스키마를 우회해 깨뜨릴 수 있는 길이기도 해서, 평소에 모델이 볼 이유가 없다.
+- **옵트인은 배포의 명시적 플래그 하나**: 사이드카 env `SESSION_DB_RAW_SQL=debug`(ConfigMap 키 `session-db-raw-sql`). 세션 생성 옵션도, 모델이 부를 수 있는 전환 도구도 두지 않는다 — 디버깅은 사람이 배포를 만지는 일이다.
+- **원장 API는 그대로**: 도구·인자·오류 코드·`sp_ledger_*` 스키마는 바뀌지 않는다. 옵트인 여부는 원장 동작에 닿지 않는다.
 
 ## 남은 일
 - 슬롯 이용률·로그인 상태를 보여 주는 운영 화면은 없다. Lease 주석과 `kubectl get lease -l session-platform.dev/auth-pool`로 본다.

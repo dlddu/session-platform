@@ -51,9 +51,16 @@ func sessionDBTool(t *testing.T, h http.Handler, name, sql string, params ...any
 	return payload, result["isError"].(bool)
 }
 
+// newTestSessionDB builds the default sidecar: the ledger alone, raw SQL off.
 func newTestSessionDB(t *testing.T) (*sessionDB, http.Handler) {
 	t.Helper()
-	db, err := newSessionDB(t.TempDir(), testLogger())
+	return newTestSessionDBWithRawSQL(t, false)
+}
+
+// newTestSessionDBWithRawSQL builds the debug sidecar (SESSION_DB_RAW_SQL=debug).
+func newTestSessionDBWithRawSQL(t *testing.T, rawSQL bool) (*sessionDB, http.Handler) {
+	t.Helper()
+	db, err := newSessionDB(t.TempDir(), rawSQL, testLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,20 +68,72 @@ func newTestSessionDB(t *testing.T) (*sessionDB, http.Handler) {
 	return db, http.HandlerFunc(db.serveMCP)
 }
 
-// AC-N6: raw tools remain available alongside the task ledger.
-func TestSessionDBMCP_RawExecThenRawQuery(t *testing.T) {
-	db, h := newTestSessionDB(t)
-
-	init := sessionDBCall(t, h, "initialize", map[string]any{})
-	if init.Error != nil || init.Result.(map[string]any)["serverInfo"].(map[string]any)["name"] != sessionDBMCPServerName {
-		t.Fatalf("initialize = %+v", init)
-	}
+// sessionDBToolNames is what the model is offered by one sidecar.
+func sessionDBToolNames(t *testing.T, h http.Handler) []string {
+	t.Helper()
 	list := sessionDBCall(t, h, "tools/list", map[string]any{})
 	var names []string
 	for _, tool := range list.Result.(map[string]any)["tools"].([]any) {
 		names = append(names, tool.(map[string]any)["name"].(string))
 	}
-	if strings.Join(names, ",") != "raw_query,raw_exec,ledger_get,ledger_list,ledger_put,ledger_delete" {
+	return names
+}
+
+// AC-N6: raw SQL is neither listed nor callable without the debug opt-in; the
+// ledger is the whole surface a chat session gets.
+func TestSessionDBMCP_RawSQLIsDebugOnly(t *testing.T) {
+	_, h := newTestSessionDB(t)
+	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != "ledger_get,ledger_list,ledger_put,ledger_delete" {
+		t.Fatalf("tools = %v, want the ledger alone", names)
+	}
+	for _, name := range []string{"raw_query", "raw_exec"} {
+		resp := sessionDBCall(t, h, "tools/call", map[string]any{
+			"name": name, "arguments": map[string]any{"sql": "SELECT 1"},
+		})
+		if resp.Error == nil || resp.Error.Code != jsonRPCInvalidParams || !strings.Contains(resp.Error.Message, sessionDBRawSQLEnv) {
+			t.Fatalf("%s = %+v, want a refusal naming the opt-in", name, resp.Error)
+		}
+	}
+	// A raw call carrying no arguments is refused for being raw, not for the
+	// SQL it never carried.
+	resp := sessionDBCall(t, h, "tools/call", map[string]any{"name": "raw_exec"})
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, "raw_exec is off") {
+		t.Fatalf("argument-less raw_exec = %+v", resp.Error)
+	}
+	if r := sessionDBCall(t, h, "tools/call", map[string]any{
+		"name": "ledger_get", "arguments": map[string]any{"id": "absent"},
+	}); r.Error != nil {
+		t.Fatalf("ledger_get = %+v, want a tool result: the ledger does not need the opt-in", r.Error)
+	}
+}
+
+// The opt-in is the deployment's exact value: unset is off, and a value that
+// was meant as "on" is an error rather than a silent off.
+func TestSessionDBRawSQLFromEnv(t *testing.T) {
+	for raw, want := range map[string]bool{"": false, " debug ": true} {
+		t.Setenv(sessionDBRawSQLEnv, raw)
+		got, err := sessionDBRawSQLFromEnv()
+		if err != nil || got != want {
+			t.Errorf("%q = %v, %v; want %v, no error", raw, got, err, want)
+		}
+	}
+	for _, raw := range []string{"true", "1", "yes", "DEBUG", "off"} {
+		t.Setenv(sessionDBRawSQLEnv, raw)
+		if _, err := sessionDBRawSQLFromEnv(); err == nil {
+			t.Errorf("%q was accepted", raw)
+		}
+	}
+}
+
+// AC-N6: with the debug opt-in the raw pair is back, ahead of the ledger.
+func TestSessionDBMCP_RawExecThenRawQuery(t *testing.T) {
+	db, h := newTestSessionDBWithRawSQL(t, true)
+
+	init := sessionDBCall(t, h, "initialize", map[string]any{})
+	if init.Error != nil || init.Result.(map[string]any)["serverInfo"].(map[string]any)["name"] != sessionDBMCPServerName {
+		t.Fatalf("initialize = %+v", init)
+	}
+	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != "raw_query,raw_exec,ledger_get,ledger_list,ledger_put,ledger_delete" {
 		t.Fatalf("tools = %v, want raw and ledger tools", names)
 	}
 
@@ -111,7 +170,7 @@ func TestSessionDBMCP_RawExecThenRawQuery(t *testing.T) {
 // A statement SQLite refuses is a tool result the model can read, not a
 // protocol failure; a malformed call is the protocol failure.
 func TestSessionDBMCP_Errors(t *testing.T) {
-	_, h := newTestSessionDB(t)
+	_, h := newTestSessionDBWithRawSQL(t, true)
 	out, isErr := sessionDBTool(t, h, "raw_query", "SELECT * FROM missing")
 	if !isErr || !strings.Contains(out["error"].(string), "missing") {
 		t.Fatalf("missing table = %v (isError %v), want SQLite's message", out, isErr)
@@ -128,7 +187,7 @@ func TestSessionDBMCP_Errors(t *testing.T) {
 }
 
 func TestSessionDBMCP_QueryIsBounded(t *testing.T) {
-	_, h := newTestSessionDB(t)
+	_, h := newTestSessionDBWithRawSQL(t, true)
 	if out, isErr := sessionDBTool(t, h, "raw_exec",
 		"CREATE TABLE n (v INTEGER); "+
 			"WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 1500) INSERT INTO n SELECT x FROM c"); isErr {
@@ -141,7 +200,7 @@ func TestSessionDBMCP_QueryIsBounded(t *testing.T) {
 }
 
 func TestSessionDBMCP_BlobsAreJSONSafe(t *testing.T) {
-	_, h := newTestSessionDB(t)
+	_, h := newTestSessionDBWithRawSQL(t, true)
 	out, isErr := sessionDBTool(t, h, "raw_query", "SELECT x'ff00' AS b, CAST('text' AS BLOB) AS t")
 	if isErr {
 		t.Fatal(out)
@@ -156,7 +215,7 @@ func TestSessionDBMCP_BlobsAreJSONSafe(t *testing.T) {
 // K3s MCP meanwhile).
 func TestSessionDBMCP_OpensLazily(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "db")
-	db, err := newSessionDB(dir, testLogger())
+	db, err := newSessionDB(dir, true, testLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +230,7 @@ func TestSessionDBMCP_OpensLazily(t *testing.T) {
 	if out, isErr := sessionDBTool(t, h, "raw_query", "SELECT 1 AS one"); isErr {
 		t.Fatalf("after mkdir: %v", out)
 	}
-	if _, err := newSessionDB("relative", testLogger()); err == nil {
+	if _, err := newSessionDB("relative", false, testLogger()); err == nil {
 		t.Fatal("a relative directory must be refused")
 	}
 }
