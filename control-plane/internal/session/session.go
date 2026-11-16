@@ -281,13 +281,12 @@ type Session struct {
 	// catalog entry lists efforts (AC-E8, AC-M4). Empty leaves it to the CLI;
 	// like the model it is fixed at creation and carried across a restore.
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
-	// DoubleMemory selects the workload container's doubled memory
-	// request/limit over the platform default. It is set at creation and
-	// carried across snapshot/restore; unlike Model and ReasoningEffort, a
-	// restore from snapshot may change it (RestoreOptions), since that is
-	// when a new pod starts. False (the omitted default) keeps every
-	// client's existing behavior.
-	DoubleMemory bool `json:"doubleMemory,omitempty"`
+	// MemoryMultiplier is the session's memory tier (MemoryMultipliers): the
+	// workload container's memory request/limit is the platform default times
+	// it. It is set at creation and carried across snapshot/restore; unlike
+	// Model and ReasoningEffort, a restore from snapshot may change it
+	// (RestoreOptions), since that is when a new pod starts. Absent means 1.
+	MemoryMultiplier int `json:"memoryMultiplier,omitempty"`
 	// Tenant is the tenant that owns the session (docs/prd/multitenancy.md,
 	// AC-K2), fixed at creation. Empty means operator-owned: sessions created
 	// before tenancy existed, or by the operator without naming a tenant.

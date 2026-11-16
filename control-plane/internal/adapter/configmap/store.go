@@ -567,6 +567,7 @@ func ensureLabels(cm *corev1.ConfigMap, id string) {
 type storedSession struct {
 	session.Session
 	SnapshotTransaction *session.SnapshotTransaction `json:"snapshotTxn,omitempty"`
+	session.LegacyDoubleMemory
 }
 
 func decode(cm *corev1.ConfigMap) (*session.Session, error) {
@@ -579,6 +580,7 @@ func decode(cm *corev1.ConfigMap) (*session.Session, error) {
 		return nil, fmt.Errorf("decode session from configmap %s: %w", cm.Name, err)
 	}
 	stored.Session.SnapshotTransaction = stored.SnapshotTransaction
+	stored.LegacyDoubleMemory.Fold(&stored.Session.MemoryMultiplier)
 	return &stored.Session, nil
 }
 

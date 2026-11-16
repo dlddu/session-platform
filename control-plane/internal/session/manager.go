@@ -22,11 +22,10 @@ type CreateRequest struct {
 	// ReasoningEffort is the session's reasoning effort (AC-E8). Empty leaves
 	// it unset; NormalizeReasoningEffort decides which types take one.
 	ReasoningEffort string
-	// DoubleMemory doubles the workload container's memory request/limit over
-	// the platform default. False (the default) keeps existing behavior; it
+	// MemoryMultiplier is the memory tier (MemoryMultipliers); 0 means 1. It
 	// applies regardless of workload type and changes afterwards only through
 	// a restore from snapshot (RestoreOptions).
-	DoubleMemory bool
+	MemoryMultiplier int
 	// Tenant names the owning tenant (AC-K2). The API fills it from the
 	// caller; the manager stores it verbatim.
 	Tenant string
@@ -35,11 +34,11 @@ type CreateRequest struct {
 // RestoreOptions changes what a restore from snapshot brings back. A nil
 // field keeps the value the session already holds.
 type RestoreOptions struct {
-	// DoubleMemory sets the memory tier of the pod the snapshot is restored
-	// into and keeps it for later restores. A session that already holds a
-	// pod cannot change it: asking for the other tier there is
+	// MemoryMultiplier sets the memory tier of the pod the snapshot is
+	// restored into and keeps it for later restores. A session that already
+	// holds a pod cannot change it: asking for another tier there is
 	// ErrInvalidState, asking for the tier it has is a no-op.
-	DoubleMemory *bool
+	MemoryMultiplier *int
 }
 
 // ReadResult is the state-branched result of a Read (AC-C2).

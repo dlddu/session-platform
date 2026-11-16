@@ -122,24 +122,60 @@ func TestClientOrchestrator_WorkloadContainerHasMemoryRequestAndLimit(t *testing
 	}
 }
 
-func TestClientOrchestrator_DoubleMemoryOptionDoublesRequestAndLimit(t *testing.T) {
-	orch, cs := newReadyOrchestrator(t)
-	if _, err := orch.Start(context.Background(), "mem2", k8s.WorkloadSpec{Type: session.WorkloadTypeShell, DoubleMemory: true}); err != nil {
-		t.Fatalf("start: %v", err)
+func TestClientOrchestrator_MemoryMultiplierScalesRequestAndLimit(t *testing.T) {
+	for _, tc := range []struct {
+		tier           int
+		request, limit string
+	}{{2, "1Gi", "2Gi"}, {4, "2Gi", "4Gi"}, {8, "4Gi", "8Gi"}} {
+		orch, cs := newReadyOrchestrator(t)
+		if _, err := orch.Start(context.Background(), "mem"+strconv.Itoa(tc.tier), k8s.WorkloadSpec{Type: session.WorkloadTypeShell, MemoryMultiplier: tc.tier}); err != nil {
+			t.Fatalf("tier %d start: %v", tc.tier, err)
+		}
+		c := listPods(t, cs)[0].Spec.Containers[0]
+		if got := c.Resources.Requests.Memory().String(); got != tc.request {
+			t.Errorf("tier %d memory request=%q want %q", tc.tier, got, tc.request)
+		}
+		if got := c.Resources.Limits.Memory().String(); got != tc.limit {
+			t.Errorf("tier %d memory limit=%q want %q", tc.tier, got, tc.limit)
+		}
+		// The tier scales memory only; CPU is out of scope and must stay unset.
+		if got := c.Resources.Requests.Cpu().String(); got != "0" {
+			t.Errorf("tier %d cpu request=%q want unset (0)", tc.tier, got)
+		}
+		if got := c.Resources.Limits.Cpu().String(); got != "0" {
+			t.Errorf("tier %d cpu limit=%q want unset (0)", tc.tier, got)
+		}
 	}
-	c := listPods(t, cs)[0].Spec.Containers[0]
-	if got := c.Resources.Requests.Memory().String(); got != k8s.WorkloadMemoryRequestDouble {
-		t.Fatalf("memory request=%q want %q", got, k8s.WorkloadMemoryRequestDouble)
-	}
-	if got := c.Resources.Limits.Memory().String(); got != k8s.WorkloadMemoryLimitDouble {
-		t.Fatalf("memory limit=%q want %q", got, k8s.WorkloadMemoryLimitDouble)
-	}
-	// DoubleMemory scales memory only; CPU is out of scope and must stay unset.
-	if got := c.Resources.Requests.Cpu().String(); got != "0" {
-		t.Fatalf("cpu request=%q want unset (0)", got)
-	}
-	if got := c.Resources.Limits.Cpu().String(); got != "0" {
-		t.Fatalf("cpu limit=%q want unset (0)", got)
+}
+
+// A tier above 1 goes where WithHighMemoryPlacement says; tier 1 and helper
+// pods keep scheduling as before, and without the option nothing moves.
+func TestClientOrchestrator_HighMemoryPlacement(t *testing.T) {
+	selector := map[string]string{"node.kubernetes.io/lifecycle": "on-demand"}
+	toleration := corev1.Toleration{Key: "lifecycle", Operator: corev1.TolerationOpEqual, Value: "on-demand", Effect: corev1.TaintEffectNoSchedule}
+	placed := k8s.WithHighMemoryPlacement(selector, []corev1.Toleration{toleration})
+
+	for _, tc := range []struct {
+		name  string
+		opts  []k8s.Option
+		tier  int
+		moved bool
+	}{
+		{"tier 1", []k8s.Option{placed}, 1, false},
+		{"tier 2", []k8s.Option{placed}, 2, true},
+		{"tier 8", []k8s.Option{placed}, 8, true},
+		{"unconfigured tier 8", nil, 8, false},
+	} {
+		orch, cs := newReadyOrchestrator(t, tc.opts...)
+		if _, err := orch.Start(context.Background(), "place", k8s.WorkloadSpec{Type: session.WorkloadTypeShell, MemoryMultiplier: tc.tier}); err != nil {
+			t.Fatalf("%s start: %v", tc.name, err)
+		}
+		p := listPods(t, cs)[0]
+		gotSelector := p.Spec.NodeSelector["node.kubernetes.io/lifecycle"] == "on-demand"
+		gotToleration := len(p.Spec.Tolerations) == 1 && p.Spec.Tolerations[0] == toleration
+		if gotSelector != tc.moved || gotToleration != tc.moved {
+			t.Errorf("%s: nodeSelector %v tolerations %v, want placed=%v", tc.name, p.Spec.NodeSelector, p.Spec.Tolerations, tc.moved)
+		}
 	}
 }
 
