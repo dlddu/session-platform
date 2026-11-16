@@ -145,10 +145,37 @@ node probe.mjs > /tmp/pretooluse-probe.json # 실제 실행 (인증 필요)
 거부는 전과 같이 `canUseTool` 에서 일어나고 출력에 한 줄을 남긴다. 승인을 고르지 않은 턴의 SDK
 옵션에는 `hooks` 키 자체가 없다.
 
+## 2026-11-16 (3) 실측 — 제품 러너 통합 (비운영 loopback 승인 데스크)
+
+위 둘이 SDK 의 성질을 잰 것이라면, 이것은 **제품 러너 자체**를 돌린 것이다. 원격
+`d269365` 를 clone 해 `data-plane/claude-runner/runner.mjs` 를 **고치지 않고**(설치된 SDK
+`node_modules` 심링크만 걸었다) 실행하고, `--approvals-url` 이 가리키는 자리에 테스트 대역
+승인 데스크를 loopback 으로 띄웠다. 네 케이스 모두 **exit 0 · 최종 `success` · stderr 없음**.
+
+| 케이스 | 데스크가 받은 요청 | 턴의 결과 |
+|---|---|---|
+| allow | `POST /approvals/ask` 1 · `GET` 1 | `tool_result` `is_error=false` 1 |
+| deny | `POST` 1 · `GET` 1 | `tool_result` `is_error=true` 1 |
+| timeout (`CLAUDE_RUNNER_APPROVAL_WAIT_MS=1000`) | `POST` 1 · `GET` 2 · **`DELETE` 1** | `tool_result` `is_error=true` 1 |
+| noapproval (`--approvals-url` 없음) | **0건** | Read 성공 1 |
+
+읽히는 것: 승인을 고른 턴만 데스크를 부르고(마지막 행이 0건), 올리기·조회·철회가 설계대로
+한 번씩 돌며, 결정이 그 턴 안에서 도구 결과가 된다. 러너의 대기 상한이 지나면 러너가 스스로
+요청을 **철회**(`DELETE`)하고 거부로 닫는다.
+
+안전 범위: 격리 임시 cwd 의 무해한 파일 하나, 프로젝트 설정 deny 로 `Bash`·`Write`·`Edit`·
+`Agent`·`Task`·`WebFetch`·`WebSearch`·`NotebookEdit` 를 막았고, 데스크는 **그 정확한 Read/파일만**
+승인하며 최대 1건만 허용했다. JSON 원문과 토큰은 기록하지 않았다. 원본은 셸 쪽
+`runner-integration.py` · `runner-integration-result.json` 에 있다.
+
+> ⚠️ **데스크는 테스트 대역이다.** 이 실측은 러너 ↔ 승인 경로의 왕복을 보인 것이고, 운영
+> control-plane·세션 MCP·공개 API 를 지나는 전체 e2e 가 아니다. 그쪽으로 넓혀 읽지 말 것.
+
 ## 이 하네스가 답하지 못하는 것
 
 - 분류기 vs 훅의 **선점 관계**(위 실측에서 분류기 거절이 재현되지 않았다).
 - **관리형 설정·다른 도구에서의 deny 우선순위** — 위 (2) 실측은 `Read(파일)` 규칙 하나의 범위다.
-- 운영 러너에서의 동작. 여기서는 `settingSources: []` 이고 플러그인·K3s MCP 가 없다.
+- 운영 전체 경로. (3) 이 제품 러너를 돌렸지만 승인 데스크는 테스트 대역이고, 운영
+  control-plane·세션 MCP·공개 API 는 지나지 않았다.
 - 승인 만료·중복 요청 재전달 같은 데스크 쪽 성질 — 그것은 이미
   `data-plane/cmd/agent/claude_approvals_test.go` 가 덮는다.
