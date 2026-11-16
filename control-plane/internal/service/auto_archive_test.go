@@ -388,7 +388,7 @@ func TestDeletedSessionRecoversFromItsAutomaticArchive(t *testing.T) {
 
 	t.Run("key still holding an older write falls back to the snapshot", func(t *testing.T) {
 		f.archives.write(sess.ID, "generation:older")
-		if _, err := f.svc.Recover(ctx, sess.ID, nil); err != nil {
+		if _, err := f.svc.Recover(ctx, sess.ID, session.RestoreOptions{}, nil); err != nil {
 			t.Fatalf("recover: %v", err)
 		}
 		if f.ckpt.last() != snapRef {
@@ -407,7 +407,7 @@ func TestDeletedSessionRecoversFromItsAutomaticArchive(t *testing.T) {
 		live = again
 	})
 	t.Run("upload missing falls back to the snapshot", func(t *testing.T) {
-		if _, err := f.svc.Recover(ctx, sess.ID, nil); err != nil {
+		if _, err := f.svc.Recover(ctx, sess.ID, session.RestoreOptions{}, nil); err != nil {
 			t.Fatalf("recover: %v", err)
 		}
 		if f.ckpt.last() != snapRef {
@@ -423,7 +423,7 @@ func TestDeletedSessionRecoversFromItsAutomaticArchive(t *testing.T) {
 			t.Fatal(err)
 		}
 		autoRef := f.archives.upload(sess.ID, again.Pod)
-		if _, err := f.svc.Recover(ctx, sess.ID, nil); err != nil {
+		if _, err := f.svc.Recover(ctx, sess.ID, session.RestoreOptions{}, nil); err != nil {
 			t.Fatalf("recover: %v", err)
 		}
 		if f.ckpt.last() != autoRef {
@@ -441,11 +441,11 @@ func TestNeverFrozenDeletedSessionNeedsItsUpload(t *testing.T) {
 	if err := f.svc.Terminate(ctx, sess.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.svc.Recover(ctx, sess.ID, nil); !errors.Is(err, session.ErrNotFound) {
+	if _, err := f.svc.Recover(ctx, sess.ID, session.RestoreOptions{}, nil); !errors.Is(err, session.ErrNotFound) {
 		t.Fatalf("recover without upload = %v, want ErrNotFound", err)
 	}
 	f.archives.upload(sess.ID, sess.Pod)
-	got, err := f.svc.Recover(ctx, sess.ID, nil)
+	got, err := f.svc.Recover(ctx, sess.ID, session.RestoreOptions{}, nil)
 	if err != nil {
 		t.Fatalf("recover with upload: %v", err)
 	}

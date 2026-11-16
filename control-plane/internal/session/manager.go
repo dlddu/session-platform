@@ -24,11 +24,22 @@ type CreateRequest struct {
 	ReasoningEffort string
 	// DoubleMemory doubles the workload container's memory request/limit over
 	// the platform default. False (the default) keeps existing behavior; it
-	// is immutable after creation and applies regardless of workload type.
+	// applies regardless of workload type and changes afterwards only through
+	// a restore from snapshot (RestoreOptions).
 	DoubleMemory bool
 	// Tenant names the owning tenant (AC-K2). The API fills it from the
 	// caller; the manager stores it verbatim.
 	Tenant string
+}
+
+// RestoreOptions changes what a restore from snapshot brings back. A nil
+// field keeps the value the session already holds.
+type RestoreOptions struct {
+	// DoubleMemory sets the memory tier of the pod the snapshot is restored
+	// into and keeps it for later restores. A session that already holds a
+	// pod cannot change it: asking for the other tier there is
+	// ErrInvalidState, asking for the tier it has is a no-op.
+	DoubleMemory *bool
 }
 
 // ReadResult is the state-branched result of a Read (AC-C2).
@@ -96,7 +107,7 @@ type Manager interface {
 	Read(ctx context.Context, id string, offset int64) (*ReadResult, error)
 	Stream(ctx context.Context, id string, offset int64) (io.ReadCloser, error)
 	Write(ctx context.Context, id, payload string) (*WriteResult, error)
-	Switch(ctx context.Context, id string) (*Session, error)
+	Switch(ctx context.Context, id string, opts RestoreOptions) (*Session, error)
 	Snapshot(ctx context.Context, id string) (*Session, error)
 	Restore(ctx context.Context, id string) (*Session, error)
 	Terminate(ctx context.Context, id string) error
@@ -107,5 +118,5 @@ type Manager interface {
 	AnswerQuestion(ctx context.Context, id, questionID string, answers map[string]string) error
 	// Recover calls admit with the recovered record before anything is
 	// written, so the caller decides who may see it (AC-K2).
-	Recover(ctx context.Context, id string, admit func(*Session) error) (*Session, error)
+	Recover(ctx context.Context, id string, opts RestoreOptions, admit func(*Session) error) (*Session, error)
 }

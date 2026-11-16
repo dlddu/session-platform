@@ -343,7 +343,7 @@ func normalizeStoredSession(sess *session.Session) (*session.Session, error) {
 // activate ensures the target session is active so a read/write can be served
 // from a live pod, and reports which branch brought it there. This is the
 // shared core of the uniform "resume-on-access" policy (AC-C2/AC-C3/AC-C4).
-func (s *Service) activate(ctx context.Context, id string) (*session.Session, string, error) {
+func (s *Service) activate(ctx context.Context, id string, opts session.RestoreOptions) (*session.Session, string, error) {
 	sess, err := s.Get(ctx, id)
 	if err != nil {
 		return nil, "", err
@@ -356,8 +356,14 @@ func (s *Service) activate(ctx context.Context, id string) (*session.Session, st
 	}
 	switch sess.State {
 	case session.StateActive:
+		if err := memoryTierFixed(sess, opts); err != nil {
+			return nil, "", err
+		}
 		return sess, "active", nil
 	case session.StateIdle:
+		if err := memoryTierFixed(sess, opts); err != nil {
+			return nil, "", err
+		}
 		// idle still holds its pod; resume it to active atomically (AC-C1).
 		if err := s.store.CompareAndSwapState(ctx, id, session.StateIdle, session.StateActive); err != nil {
 			return nil, "", err
@@ -369,7 +375,7 @@ func (s *Service) activate(ctx context.Context, id string) (*session.Session, st
 		return sess, "idle->active", nil
 	case session.StateSnapshot:
 		// pod was reclaimed at freeze; restore it into a fresh one (AC-B2).
-		sess, err = s.Restore(ctx, id)
+		sess, err = s.restore(ctx, id, opts)
 		if err != nil {
 			return nil, "", err
 		}
@@ -382,7 +388,7 @@ func (s *Service) activate(ctx context.Context, id string) (*session.Session, st
 // Read brings the session active and returns workload output accumulated after
 // offset, plus the nextOffset cursor (AC-C2, AC-D3/E3).
 func (s *Service) Read(ctx context.Context, id string, offset int64) (*session.ReadResult, error) {
-	sess, branch, err := s.activate(ctx, id)
+	sess, branch, err := s.activate(ctx, id, session.RestoreOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -449,7 +455,7 @@ func (s *Service) Write(ctx context.Context, id, payload string) (*session.Write
 	if current.WorkloadType.QueuesPrompts() && len(payload) > session.MaxClaudePromptBytes {
 		return nil, session.ErrWorkloadPromptTooLarge
 	}
-	sess, branch, err := s.activate(ctx, id)
+	sess, branch, err := s.activate(ctx, id, session.RestoreOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -478,7 +484,7 @@ func (s *Service) RefreshPlugins(ctx context.Context, id string) (*session.Plugi
 	if !current.WorkloadType.IsCodex() {
 		return nil, fmt.Errorf("%w: plugin refresh is offered for codex-chat and codex-task sessions only", session.ErrInvalidState)
 	}
-	sess, branch, err := s.activate(ctx, id)
+	sess, branch, err := s.activate(ctx, id, session.RestoreOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -558,8 +564,9 @@ func (s *Service) questionTarget(ctx context.Context, id string) (*session.Sessi
 
 // Switch makes the target session active — promoting idle or restoring a
 // snapshot as needed — and is a no-op for an already-active session (AC-C4).
-func (s *Service) Switch(ctx context.Context, id string) (*session.Session, error) {
-	sess, branch, err := s.activate(ctx, id)
+// opts applies only when a snapshot is restored.
+func (s *Service) Switch(ctx context.Context, id string, opts session.RestoreOptions) (*session.Session, error) {
+	sess, branch, err := s.activate(ctx, id, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -924,7 +931,21 @@ func cloneSnapshotTransaction(txn *session.SnapshotTransaction) *session.Snapsho
 // Restore restores a snapshotted session into a new pod and marks it active
 // (AC-B2). Guarded by the per-session lock so concurrent restores are atomic
 // (AC-C1).
-func (s *Service) Restore(ctx context.Context, id string) (result *session.Session, retErr error) {
+func (s *Service) Restore(ctx context.Context, id string) (*session.Session, error) {
+	return s.restore(ctx, id, session.RestoreOptions{})
+}
+
+// memoryTierFixed refuses a memory tier change for a session that already
+// holds a pod: only a restore starts a new pod, so only a restore can change
+// the tier, and a silent no-op would leave the caller believing it had.
+func memoryTierFixed(sess *session.Session, opts session.RestoreOptions) error {
+	if opts.DoubleMemory != nil && *opts.DoubleMemory != sess.DoubleMemory {
+		return fmt.Errorf("%w: doubleMemory can change only when a snapshotted session is restored", session.ErrInvalidState)
+	}
+	return nil
+}
+
+func (s *Service) restore(ctx context.Context, id string, opts session.RestoreOptions) (result *session.Session, retErr error) {
 	// A restore outlives the caller's connection, as a Create does: a restore
 	// pod that waits for an image pull or a node, then the archive and the
 	// agent's own restore, can take longer than a caller keeps a request open.
@@ -964,7 +985,11 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 		}
 	}
 	if sess.State != session.StateSnapshot {
-		return sess, nil // already live; nothing to restore
+		// already live; nothing to restore
+		if err := memoryTierFixed(sess, opts); err != nil {
+			return nil, err
+		}
+		return sess, nil
 	}
 
 	// RestoreInto shapes the new pod as a restore target from the snapshot ref.
@@ -1000,7 +1025,11 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	spec := k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins, ReasoningEffort: effort, DoubleMemory: sess.DoubleMemory}
+	doubleMemory := sess.DoubleMemory
+	if opts.DoubleMemory != nil {
+		doubleMemory = *opts.DoubleMemory
+	}
+	spec := k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins, ReasoningEffort: effort, DoubleMemory: doubleMemory}
 	// codex-chat retains its DB slot across snapshots; other types can use
 	// any free login slot (AC-N3). A full pool leaves the session frozen.
 	if spec.AuthSlot, err = s.acquireAuthSlot(ctx, workload, id); err != nil {
@@ -1046,6 +1075,7 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 	next.Pod = pods.Workload.Name
 	next.AuxiliaryPods = pods.Names()
 	next.Model = model
+	next.DoubleMemory = doubleMemory
 	next.Checkpoint = nil
 	next.LastAccess = now
 	if err := s.store.CompareAndSwapSession(
@@ -1084,7 +1114,7 @@ func (s *Service) Restore(ctx context.Context, id string) (result *session.Sessi
 // Recover puts a deleted session back from the manifest its last committed
 // snapshot left, then restores it like any snapshot (AC-B4). The id must not
 // name a session that still exists.
-func (s *Service) Recover(ctx context.Context, id string, admit func(*session.Session) error) (*session.Session, error) {
+func (s *Service) Recover(ctx context.Context, id string, opts session.RestoreOptions, admit func(*session.Session) error) (*session.Session, error) {
 	if s.manifests == nil {
 		return nil, session.ErrCheckpointDisabled
 	}
@@ -1127,7 +1157,7 @@ func (s *Service) Recover(ctx context.Context, id string, admit func(*session.Se
 	if err := s.reinstate(ctx, frozen); err != nil {
 		return nil, err
 	}
-	return s.Restore(ctx, id)
+	return s.restore(ctx, id, opts)
 }
 
 // reinstate writes the frozen record under the session lock, refusing an id

@@ -392,3 +392,74 @@ func TestShellWriteIsNotPromptBounded(t *testing.T) {
 		t.Fatalf("shell write: %v", err)
 	}
 }
+
+// A restore from snapshot may change the memory tier: the restored pod runs
+// at the asked tier and the session keeps it for later restores.
+func TestRestoreChangesTheMemoryTier(t *testing.T) {
+	ctx := context.Background()
+	svc, orch, _ := newServiceWithOrch()
+	on, off := true, false
+
+	sess, err := svc.Create(ctx, session.CreateRequest{Name: "grow"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	raised, err := svc.Switch(ctx, sess.ID, session.RestoreOptions{DoubleMemory: &on})
+	if err != nil {
+		t.Fatalf("switch raising the tier: %v", err)
+	}
+	if !raised.DoubleMemory || !orch.SpecFor(sess.ID).DoubleMemory {
+		t.Fatalf("raised: session %v, pod %v; want true, true", raised.DoubleMemory, orch.SpecFor(sess.ID).DoubleMemory)
+	}
+
+	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
+		t.Fatalf("second snapshot: %v", err)
+	}
+	kept, err := svc.Restore(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("plain restore: %v", err)
+	}
+	if !kept.DoubleMemory || !orch.SpecFor(sess.ID).DoubleMemory {
+		t.Fatalf("plain restore after raising: session %v, pod %v; want true, true", kept.DoubleMemory, orch.SpecFor(sess.ID).DoubleMemory)
+	}
+
+	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
+		t.Fatalf("third snapshot: %v", err)
+	}
+	lowered, err := svc.Switch(ctx, sess.ID, session.RestoreOptions{DoubleMemory: &off})
+	if err != nil {
+		t.Fatalf("switch lowering the tier: %v", err)
+	}
+	if lowered.DoubleMemory || orch.SpecFor(sess.ID).DoubleMemory {
+		t.Fatalf("lowered: session %v, pod %v; want false, false", lowered.DoubleMemory, orch.SpecFor(sess.ID).DoubleMemory)
+	}
+}
+
+// A session that holds a pod cannot change its memory tier: asking for the
+// other tier is refused and starts nothing, asking for its own is a no-op.
+func TestLiveSessionRefusesAMemoryTierChange(t *testing.T) {
+	ctx := context.Background()
+	svc, orch, _ := newServiceWithOrch()
+	on, off := true, false
+
+	sess, err := svc.Create(ctx, session.CreateRequest{Name: "live"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	before := orch.RunningCount()
+	if _, err := svc.Switch(ctx, sess.ID, session.RestoreOptions{DoubleMemory: &on}); !errors.Is(err, session.ErrInvalidState) {
+		t.Fatalf("switch to the other tier on a live session: err %v, want %v", err, session.ErrInvalidState)
+	}
+	if got, _ := svc.Get(ctx, sess.ID); got.DoubleMemory {
+		t.Fatalf("refused change was stored")
+	}
+	if after := orch.RunningCount(); after != before {
+		t.Fatalf("refused change started pods: %d -> %d", before, after)
+	}
+	if _, err := svc.Switch(ctx, sess.ID, session.RestoreOptions{DoubleMemory: &off}); err != nil {
+		t.Fatalf("switch to the tier it already has: %v", err)
+	}
+}

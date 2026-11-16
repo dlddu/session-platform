@@ -282,9 +282,11 @@ type Session struct {
 	// like the model it is fixed at creation and carried across a restore.
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 	// DoubleMemory selects the workload container's doubled memory
-	// request/limit over the platform default, fixed at creation and carried
-	// across snapshot/restore exactly like Model and ReasoningEffort. False
-	// (the omitted default) keeps every client's existing behavior.
+	// request/limit over the platform default. It is set at creation and
+	// carried across snapshot/restore; unlike Model and ReasoningEffort, a
+	// restore from snapshot may change it (RestoreOptions), since that is
+	// when a new pod starts. False (the omitted default) keeps every
+	// client's existing behavior.
 	DoubleMemory bool `json:"doubleMemory,omitempty"`
 	// Tenant is the tenant that owns the session (docs/prd/multitenancy.md,
 	// AC-K2), fixed at creation. Empty means operator-owned: sessions created

@@ -100,6 +100,16 @@ func (a *API) Routes(mux *http.ServeMux) {
 
 // ---- request/response DTOs ----
 
+// restoreReq is the optional body of switch and recover: what the restore
+// from snapshot should change. Absent keeps the session as it was.
+type restoreReq struct {
+	DoubleMemory *bool `json:"doubleMemory"`
+}
+
+func (r restoreReq) options() session.RestoreOptions {
+	return session.RestoreOptions{DoubleMemory: r.DoubleMemory}
+}
+
 type createReq struct {
 	Name string `json:"name"`
 	// WorkloadType stays raw so omitted can differ from explicit empty/null.
@@ -483,11 +493,12 @@ func (a *API) switchSession(w http.ResponseWriter, r *http.Request) {
 	if !a.authorizeSession(w, r) {
 		return
 	}
-	if err := decodeRequestBody(r.Body, &struct{}{}, false); err != nil {
+	var req restoreReq
+	if err := decodeRequestBody(r.Body, &req, false); err != nil {
 		writeErr(w, err)
 		return
 	}
-	sess, err := a.mgr.Switch(r.Context(), r.PathValue("id"))
+	sess, err := a.mgr.Switch(r.Context(), r.PathValue("id"), req.options())
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -519,11 +530,12 @@ func (a *API) recoverSession(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := decodeRequestBody(r.Body, &struct{}{}, false); err != nil {
+	var req restoreReq
+	if err := decodeRequestBody(r.Body, &req, false); err != nil {
 		writeErr(w, err)
 		return
 	}
-	sess, err := a.mgr.Recover(r.Context(), r.PathValue("id"), func(rec *session.Session) error {
+	sess, err := a.mgr.Recover(r.Context(), r.PathValue("id"), req.options(), func(rec *session.Session) error {
 		if !caller.Sees(rec.Tenant) {
 			return session.ErrNotFound
 		}
