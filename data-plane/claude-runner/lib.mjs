@@ -1,6 +1,7 @@
 // Pure helpers of claude-runner (docs/prd/claude-code-workload.md, AC-E2/E4),
 // kept apart from runner.mjs so `node --test` can exercise them without the
 // SDK, a claude binary or a provider.
+import { createHash } from "node:crypto";
 import { accessSync, constants, realpathSync } from "node:fs";
 import path from "node:path";
 
@@ -72,13 +73,14 @@ export class UsageError extends Error {}
 
 // parseArgs reads the agent's argv:
 // [--model <m>] [--effort <e>] [--k3s-mcp-url <u>] [--questions-url <u>]
-// [--resume] -- <prompt>.
+// [--approvals-url <u>] [--resume] -- <prompt>.
 // The prompt is the one argument after "--", so nothing in it is a flag.
 export function parseArgs(argv) {
   let model = PLATFORM_DEFAULT_MODEL;
   let effort = null;
   let k3sMcpUrl = null;
   let questionsUrl = null;
+  let approvalsUrl = null;
   let resume = false;
   let checkCli = false;
   const value = (i, flag) => {
@@ -94,7 +96,7 @@ export function parseArgs(argv) {
       if (rest.length !== 1) {
         throw new UsageError("expected exactly one prompt argument after --");
       }
-      return { model, effort, k3sMcpUrl, questionsUrl, resume, prompt: rest[0], checkCli };
+      return { model, effort, k3sMcpUrl, questionsUrl, approvalsUrl, resume, prompt: rest[0], checkCli };
     }
     if (arg === "--model") {
       model = value(i++, "--model");
@@ -107,6 +109,8 @@ export function parseArgs(argv) {
       k3sMcpUrl = loopbackHttpUrl(value(i++, "--k3s-mcp-url"), "--k3s-mcp-url");
     } else if (arg === "--questions-url") {
       questionsUrl = loopbackHttpUrl(value(i++, "--questions-url"), "--questions-url").replace(/\/+$/, "");
+    } else if (arg === "--approvals-url") {
+      approvalsUrl = loopbackHttpUrl(value(i++, "--approvals-url"), "--approvals-url").replace(/\/+$/, "");
     } else if (arg === "--resume") {
       resume = true;
     } else if (arg === "--check-cli") {
@@ -116,14 +120,14 @@ export function parseArgs(argv) {
     }
   }
   if (checkCli) {
-    return { model, effort, k3sMcpUrl, questionsUrl, resume, prompt: null, checkCli };
+    return { model, effort, k3sMcpUrl, questionsUrl, approvalsUrl, resume, prompt: null, checkCli };
   }
   throw new UsageError("missing -- <prompt>");
 }
 
 // loopbackHttpUrl accepts an address inside the pod only: the agent never
 // points a turn's K3s MCP anywhere but this pod's own sidecar (AC-E6), nor its
-// questions anywhere but itself (AC-E2).
+// questions and tool approvals anywhere but itself (AC-E2).
 function loopbackHttpUrl(raw, flag) {
   let parsed;
   try {
@@ -256,6 +260,27 @@ export function decideTool(toolName, plugins = [], { k3s = false } = {}) {
     message:
       `${toolName} is not part of this session's tool surface.`,
   };
+}
+
+// planToolDecision is the order the turn's two human paths sit in around
+// AC-E2's policy, kept here so it is one testable decision rather than
+// control flow in the runner's callback:
+//
+//   question — AskUserQuestion with somewhere to ask (askPerson).
+//   deny     — whatever decideTool denies. A denial is never put to a person:
+//              the owner decides what the policy allows, not what it refuses.
+//   approval — a call the policy allows, in a turn whose write asked for the
+//              owner's decision (askApproval).
+//   allow    — a call the policy allows in any other turn, as before.
+export function planToolDecision(toolName, plugins = [], { k3s = false, questions = false, approvals = false } = {}) {
+  if (toolName === QUESTION_TOOL && questions) {
+    return { kind: "question" };
+  }
+  const verdict = decideTool(toolName, plugins, { k3s });
+  if (!verdict.allow) {
+    return { kind: "deny", message: verdict.message };
+  }
+  return { kind: approvals ? "approval" : "allow" };
 }
 
 // queryOptions are the SDK options of one turn. The system prompt and the
@@ -522,4 +547,139 @@ export async function askPerson({
   }
   await giveUp();
   return deny("The turn was interrupted while waiting for an answer.");
+}
+
+// How long a turn waits for the session owner to decide one tool call
+// (AC-E2, 「턴 중 도구 승인」), and how often it asks the agent. Like the
+// question wait it stays under the agent's 30-minute turn limit.
+export const DEFAULT_APPROVAL_WAIT_MS = 20 * 60 * 1000;
+export const APPROVAL_POLL_MS = 1000;
+
+// approvalWaitFromEnv reads CLAUDE_RUNNER_APPROVAL_WAIT_MS, falling back to the
+// default for anything that is not a positive integer.
+export function approvalWaitFromEnv(env) {
+  const raw = env.CLAUDE_RUNNER_APPROVAL_WAIT_MS;
+  if (raw && /^[1-9][0-9]*$/.test(raw)) {
+    return Number(raw);
+  }
+  return DEFAULT_APPROVAL_WAIT_MS;
+}
+
+// canonicalJSON renders a tool input as the one string a hash can be taken
+// over: object keys in code-unit order, arrays in their own order, and nothing
+// else about the shape changed. Two JSON bodies that differ only in key order
+// hash the same; any difference in a value does not.
+export function canonicalJSON(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJSON).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJSON(value[key])}`).join(",")}}`;
+  }
+  return value === undefined ? "null" : JSON.stringify(value);
+}
+
+// toolArgsHash names one exact call: the tool and the arguments the model
+// asked for. A decision carries this hash back, so an approval of one call
+// cannot be applied to a call with other arguments.
+export function toolArgsHash(toolName, input) {
+  const digest = createHash("sha256").update(`${toolName}\n${canonicalJSON(input ?? null)}`).digest("hex");
+  return `sha256:${digest}`;
+}
+
+// askApproval puts one tool call to the session owner through the agent and
+// waits inside the turn for the decision (AC-E2, 「턴 중 도구 승인」). It is
+// reached only for calls the platform's own policy (decideTool) would allow,
+// so a person decides what is already within this session's tool surface and
+// nothing else.
+//
+// The call is allowed only on an explicit approval whose tool and argument
+// hash are the ones that were asked about. Everything else — a denial, a
+// request nobody decided, one the agent closed, a hash that does not match, a
+// relay that failed — denies the call with a message that says what happened
+// and nothing more (AC-A5). The arguments are never rewritten: the decision is
+// about this call as the model made it, so the allow carries the input back
+// unchanged.
+//
+// requestId is the SDK's control-request id. The SDK redelivers a permission
+// request with the same id after a transport gap, so the ask is keyed on it:
+// a redelivery joins the request already waiting instead of opening a second
+// one, and the owner's single decision is used once.
+export async function askApproval({
+  url,
+  toolName,
+  input,
+  toolUseId = "",
+  requestId = "",
+  signal = null,
+  waitMs = DEFAULT_APPROVAL_WAIT_MS,
+  pollMs = APPROVAL_POLL_MS,
+  fetchImpl = fetch,
+  sleep = abortableSleep,
+  now = Date.now,
+}) {
+  const deny = (message) => ({ behavior: "deny", message });
+  const argsHash = toolArgsHash(toolName, input);
+  let id;
+  try {
+    const resp = await fetchImpl(`${url}/approvals/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool: toolName, toolUseId, requestId, argsHash, input: input ?? null }),
+      signal,
+    });
+    if (resp.status !== 201 && resp.status !== 200) {
+      const detail = (await resp.text()).trim();
+      return deny(`This call could not be put to the session owner (${resp.status}: ${detail}).`);
+    }
+    ({ id } = await resp.json());
+  } catch (err) {
+    return deny(`This call could not be put to the session owner (${err && err.message ? err.message : err}).`);
+  }
+
+  const deadline = now() + waitMs;
+  const withdraw = async () => {
+    try {
+      await fetchImpl(`${url}/approvals/ask/${encodeURIComponent(id)}`, { method: "DELETE" });
+    } catch {
+      // The turn ends soon and the agent drops the request with it.
+    }
+  };
+  while (!(signal && signal.aborted)) {
+    try {
+      const resp = await fetchImpl(`${url}/approvals/ask/${encodeURIComponent(id)}`, { signal });
+      if (resp.status === 404) {
+        return deny("The approval request is no longer open.");
+      }
+      if (resp.ok) {
+        const status = await resp.json();
+        if (status.state === "approved") {
+          if (status.argsHash !== argsHash || (status.tool && status.tool !== toolName)) {
+            // Belt and braces: the agent binds the decision to the request,
+            // so this says the two disagree, and an unclear decision denies.
+            await withdraw();
+            return deny("The decision on record is for another call.");
+          }
+          return { behavior: "allow", updatedInput: input };
+        }
+        if (status.state === "denied") {
+          return deny(`The session owner denied this call${status.reason ? ` (${status.reason})` : ""}.`);
+        }
+        if (status.state === "cancelled") {
+          return deny(`The approval request was closed before anyone decided (${status.reason || "no reason given"}).`);
+        }
+      }
+    } catch {
+      // A missed poll is retried; the deadline still bounds the wait.
+    }
+    if (now() >= deadline) {
+      await withdraw();
+      const minutes = Math.round((waitMs / 60000) * 10) / 10;
+      return deny(`Nobody decided within ${minutes} minute(s).`);
+    }
+    await sleep(Math.min(pollMs, Math.max(0, deadline - now())), signal);
+  }
+  await withdraw();
+  return deny("The turn was interrupted while waiting for a decision.");
 }

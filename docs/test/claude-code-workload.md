@@ -89,3 +89,21 @@
 - **실행 단계**: (a) `GET /config`를 읽는다 → (b) `reasoningEffort=max`로 `claude-code` 세션을 만든다 → (c) 같은 필드를 `shell`·`minimax-code`·`codex-chat` 생성에 준다
 - **기대 결과**: (a) `claude-code` 항목의 `reasoningEfforts`가 `low`·`medium`·`high`·`xhigh`·`max`이고, 받지 않는 타입은 빈 배열이다. (b) 조회 응답의 `reasoningEffort`가 `max`이고 주 컨테이너가 `CLAUDE_CODE_EFFORT=max`를 받는다. (c) 모두 400이고 파드가 없다
 - **검증 AC**: AC-E8
+
+### 시나리오 12: 턴 중 도구 승인 — 소유자가 호출 하나를 결정한다
+- **사전 조건**: active `claude-code` 세션, 그 세션을 보는 테넌트 토큰
+- **실행 단계**: (a) `toolApprovals: true`로 write 한다 → (b) 턴이 도구 호출을 올린 뒤 `GET /sessions/{id}/tool-approvals`를 읽는다 → (c) 목록의 `argsHash`·`epoch`로 `decide`에 `approve`를 보낸다 → (d) 같은 호출에 두 번째 결정을 보낸다 → (e) 다른 호출을 `deny`로 결정한다
+- **기대 결과**: (a) 그 턴의 argv에만 `--approvals-url`이 붙는다. (b) 올린 호출이 도구 이름·모델이 만든 인자·`argsHash`·`expiresAt`과 함께 보이고, 응답의 `epoch`가 이 실행을 가리킨다. (c) 200이고 호출이 인자 그대로 허용돼 턴이 이어지며, 출력에 「approved by …」 안내와 사유가 남는다. (d) 404 — 결정은 한 번이다. (e) 호출이 사유와 함께 거부되고 턴은 그 거부를 받아 이어진다
+- **검증 AC**: AC-E2
+
+### 시나리오 13: 결정은 그 호출·그 실행에만 묶인다
+- **사전 조건**: 시나리오 12의 (b)까지 진행한 세션
+- **실행 단계**: (a) 다른 `argsHash`로 결정한다 → (b) `epoch`를 빼고 결정한다 → (c) 다른 `epoch`로 결정한다 → (d) 결정 창(30분)이 지난 뒤 결정한다 → (e) 세션을 복원한 뒤 복원 전 목록의 `epoch`로 결정한다
+- **기대 결과**: (a) 409이고 호출은 그대로 기다린다 — 소유자가 읽은 뒤 바뀐 인자는 그 호출이 아니다. (b) 400. (c) 409. (d) 404이고 출력에 「expired undecided」가 남는다. (e) 409 — 복원은 새 실행이고 데스크는 비어 있다
+- **검증 AC**: AC-E2
+
+### 시나리오 14: 모델은 자기 호출을 승인하지 못하고, 정책의 거부는 사람에게 가지 않는다
+- **사전 조건**: 시나리오 12의 (b)까지 진행한 세션, 파드 안의 셸
+- **실행 단계**: (a) 파드 안에서 결정 경로를 부른다 → (b) 파드 자신의 IP로 부른다 → (c) 러너로서 `AskUserQuestion`·`EnterPlanMode`·`ExitPlanMode`를 승인 데스크에 올린다 → (d) 파드 밖에서 올리기·상태 조회를 부른다 → (e) `shell` 세션에 `toolApprovals: true`로 write 한다
+- **기대 결과**: (a)(b) 403 — 결정은 control plane을 거친 소유자만 한다. (c) 모두 403이고 그 도구의 판정은 정책 그대로다. (d) 403 — 올리기·조회는 세션 자신의 러너만 한다. (e) 400이고 아무것도 쓰이지 않는다
+- **검증 AC**: AC-E2

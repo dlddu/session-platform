@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import os from "node:os";
 import path from "node:path";
 import {
+  DEFAULT_APPROVAL_WAIT_MS,
   DEFAULT_QUESTION_WAIT_MS,
   PERMISSION_MODE,
   HEADLESS_DENIAL,
@@ -11,12 +12,16 @@ import {
   PLATFORM_DEFAULT_MODEL,
   TurnInput,
   UsageError,
+  approvalWaitFromEnv,
+  askApproval,
   askPerson,
+  canonicalJSON,
   classify,
   decideTool,
   noticeLine,
   parseArgs,
   parseSessionFile,
+  planToolDecision,
   pluginToolPrefix,
   pluginsFromSettings,
   queryOptions,
@@ -25,6 +30,7 @@ import {
   resumePlan,
   sameCliVersion,
   sessionFileContent,
+  toolArgsHash,
 } from "./lib.mjs";
 
 test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
@@ -38,6 +44,8 @@ test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
       "http://127.0.0.1:8093/mcp",
       "--questions-url",
       "http://127.0.0.1:8090/",
+      "--approvals-url",
+      "http://127.0.0.1:8090/",
       "--resume",
       "--",
       "--help me",
@@ -47,6 +55,7 @@ test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
       effort: "max",
       k3sMcpUrl: "http://127.0.0.1:8093/mcp",
       questionsUrl: "http://127.0.0.1:8090",
+      approvalsUrl: "http://127.0.0.1:8090",
       resume: true,
       prompt: "--help me",
       checkCli: false,
@@ -58,6 +67,7 @@ test("parseArgs reads the agent's argv and keeps the prompt whole", () => {
   assert.equal(bare.resume, false);
   assert.equal(bare.k3sMcpUrl, null);
   assert.equal(bare.questionsUrl, null);
+  assert.equal(bare.approvalsUrl, null);
   assert.equal(parseArgs(["--check-cli"]).checkCli, true);
 });
 
@@ -80,6 +90,10 @@ test("parseArgs refuses what the agent never sends", () => {
     ["--questions-url", "--", "x"],
     ["--questions-url", "http://10.0.0.5:8090", "--", "x"],
     ["--questions-url", "https://127.0.0.1:8090", "--", "x"],
+    ["--approvals-url", "--", "x"],
+    ["--approvals-url", "http://10.0.0.5:8090", "--", "x"],
+    ["--approvals-url", "https://127.0.0.1:8090", "--", "x"],
+    ["--approvals-url", "http://user:pw@127.0.0.1:8090", "--", "x"],
     ["hello"],
   ]) {
     assert.throws(() => parseArgs(argv), UsageError, JSON.stringify(argv));
@@ -484,4 +498,261 @@ test("the question wait comes from the environment only as a positive integer", 
   for (const bad of ["0", "-5", "1.5", "abc", ""]) {
     assert.equal(questionWaitFromEnv({ CLAUDE_RUNNER_QUESTION_WAIT_MS: bad }), DEFAULT_QUESTION_WAIT_MS, bad);
   }
+});
+
+test("planToolDecision puts the owner after the policy, never over it", () => {
+  const plugins = ["session-platform"];
+  // A policy denial stays a denial even in a turn that can ask the owner.
+  for (const tool of ["mcp__repo__anything", "EnterPlanMode", "ExitPlanMode"]) {
+    const plan = planToolDecision(tool, plugins, { approvals: true, questions: true });
+    assert.equal(plan.kind, "deny", tool);
+    assert.ok(plan.message);
+  }
+  // What the policy allows is what the owner decides.
+  assert.equal(planToolDecision("Bash", plugins, { approvals: true }).kind, "approval");
+  assert.equal(planToolDecision("mcp__k3s__resource_get", plugins, { k3s: true, approvals: true }).kind, "approval");
+  assert.equal(planToolDecision(`${pluginToolPrefix("session-platform")}mcp__x`, plugins, { approvals: true }).kind, "approval");
+  // A turn that did not ask for approvals behaves exactly as before.
+  assert.equal(planToolDecision("Bash", plugins, {}).kind, "allow");
+  assert.equal(planToolDecision("mcp__k3s__resource_get", plugins, { k3s: true }).kind, "allow");
+  assert.equal(planToolDecision("Bash", plugins, { questions: true }).kind, "allow");
+  // A question is a question in either turn, and a denial without a desk.
+  assert.equal(planToolDecision("AskUserQuestion", plugins, { questions: true, approvals: true }).kind, "question");
+  assert.equal(planToolDecision("AskUserQuestion", plugins, { approvals: true }).kind, "deny");
+});
+
+test("the approval wait comes from the environment only as a positive integer", () => {
+  assert.equal(approvalWaitFromEnv({}), DEFAULT_APPROVAL_WAIT_MS);
+  assert.equal(approvalWaitFromEnv({ CLAUDE_RUNNER_APPROVAL_WAIT_MS: "60000" }), 60000);
+  for (const bad of ["0", "-5", "1.5", "abc", ""]) {
+    assert.equal(approvalWaitFromEnv({ CLAUDE_RUNNER_APPROVAL_WAIT_MS: bad }), DEFAULT_APPROVAL_WAIT_MS, bad);
+  }
+});
+
+test("toolArgsHash names one exact call and ignores only key order", () => {
+  const a = toolArgsHash("Bash", { command: "ls /tmp", timeout: 1000 });
+  assert.equal(a, toolArgsHash("Bash", { timeout: 1000, command: "ls /tmp" }));
+  assert.match(a, /^sha256:[0-9a-f]{64}$/);
+  // Anything else about the call is another call.
+  assert.notEqual(a, toolArgsHash("Bash", { command: "ls /tmp", timeout: 1001 }));
+  assert.notEqual(a, toolArgsHash("Bash", { command: "ls /tmp " }));
+  assert.notEqual(a, toolArgsHash("Write", { command: "ls /tmp", timeout: 1000 }));
+  assert.notEqual(toolArgsHash("Bash", { a: [1, 2] }), toolArgsHash("Bash", { a: [2, 1] }));
+  // Nested keys are ordered too, and a missing input is not an error.
+  assert.equal(toolArgsHash("X", { a: { b: 1, c: 2 } }), toolArgsHash("X", { a: { c: 2, b: 1 } }));
+  assert.match(toolArgsHash("X", undefined), /^sha256:/);
+  assert.equal(canonicalJSON({ b: 1, a: [true, null, "s"] }), '{"a":[true,null,"s"],"b":1}');
+});
+
+// askApproval's agent, in memory: POST /approvals/ask opens (or joins, for a
+// redelivered requestId), GET polls, DELETE withdraws. decideAfter is how many
+// polls go by before the decision appears.
+function fakeApprovalAgent({
+  decideAfter = 0,
+  decision = null,
+  reason = null,
+  argsHash = null,
+  tool = null,
+  askStatus = 201,
+  pollStatus = 200,
+} = {}) {
+  const calls = [];
+  let polls = 0;
+  let asked = null;
+  const fetchImpl = async (url, init = {}) => {
+    const method = init.method || "GET";
+    const body = init.body ? JSON.parse(init.body) : undefined;
+    calls.push({ method, url, body });
+    const reply = (status, payload) => ({
+      status,
+      ok: status >= 200 && status < 300,
+      json: async () => payload,
+      text: async () => (typeof payload === "string" ? payload : JSON.stringify(payload)),
+    });
+    if (method === "POST") {
+      if (askStatus !== 201) {
+        return reply(askStatus, "the arguments of this call changed");
+      }
+      // The same control request joins the request already waiting.
+      const rejoin = asked !== null && asked === body.requestId;
+      asked = body.requestId;
+      return reply(rejoin ? 200 : 201, { id: "ap_1", expiresAt: "2026-11-15T13:00:00Z" });
+    }
+    if (method === "DELETE") {
+      return reply(204, "");
+    }
+    polls++;
+    if (pollStatus !== 200) {
+      return reply(pollStatus, "no such approval request");
+    }
+    if (decision && polls > decideAfter) {
+      return reply(200, {
+        state: decision,
+        reason,
+        tool: tool ?? calls[0].body.tool,
+        argsHash: argsHash ?? calls[0].body.argsHash,
+      });
+    }
+    return reply(200, { state: "pending" });
+  };
+  return { fetchImpl, calls };
+}
+
+const approvalCall = {
+  url: "http://127.0.0.1:8090",
+  toolName: "Bash",
+  input: { command: "rm -rf /tmp/scratch" },
+  toolUseId: "toolu_1",
+  requestId: "req_1",
+};
+
+test("askApproval allows a call the owner approved, with the arguments untouched", async () => {
+  const agent = fakeApprovalAgent({ decideAfter: 1, decision: "approved" });
+  const result = await askApproval({ ...approvalCall, fetchImpl: agent.fetchImpl, sleep: async () => {} });
+  assert.deepEqual(result, { behavior: "allow", updatedInput: approvalCall.input });
+  const ask = agent.calls[0];
+  assert.equal(ask.url, "http://127.0.0.1:8090/approvals/ask");
+  assert.equal(ask.body.tool, "Bash");
+  assert.equal(ask.body.toolUseId, "toolu_1");
+  assert.equal(ask.body.requestId, "req_1");
+  assert.equal(ask.body.argsHash, toolArgsHash("Bash", approvalCall.input));
+  assert.deepEqual(ask.body.input, approvalCall.input);
+  assert.ok(agent.calls.every((c) => c.method !== "DELETE"));
+});
+
+test("askApproval denies a call the owner refused, and says the reason", async () => {
+  const agent = fakeApprovalAgent({ decision: "denied", reason: "not on production" });
+  const result = await askApproval({ ...approvalCall, fetchImpl: agent.fetchImpl, sleep: async () => {} });
+  assert.equal(result.behavior, "deny");
+  assert.match(result.message, /owner denied this call \(not on production\)/);
+  assert.doesNotMatch(result.message, /should|must|instead/, "a denial states what happened, nothing more");
+});
+
+test("askApproval denies a decision taken on other arguments", async () => {
+  const agent = fakeApprovalAgent({ decision: "approved", argsHash: toolArgsHash("Bash", { command: "ls" }) });
+  const result = await askApproval({ ...approvalCall, fetchImpl: agent.fetchImpl, sleep: async () => {} });
+  assert.equal(result.behavior, "deny");
+  assert.match(result.message, /for another call/);
+  assert.equal(agent.calls.at(-1).method, "DELETE", "an unusable request is withdrawn, not left to be approved later");
+
+  const otherTool = fakeApprovalAgent({ decision: "approved", tool: "Write" });
+  const mixed = await askApproval({ ...approvalCall, fetchImpl: otherTool.fetchImpl, sleep: async () => {} });
+  assert.equal(mixed.behavior, "deny");
+});
+
+test("askApproval gives up after the wait and withdraws the request", async () => {
+  const agent = fakeApprovalAgent();
+  let clock = 0;
+  const result = await askApproval({
+    ...approvalCall,
+    waitMs: 5000,
+    pollMs: 1000,
+    fetchImpl: agent.fetchImpl,
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    now: () => clock,
+  });
+  assert.equal(result.behavior, "deny");
+  assert.match(result.message, /Nobody decided within 0\.1 minute/);
+  assert.equal(agent.calls.at(-1).method, "DELETE");
+  assert.equal(agent.calls.at(-1).url, "http://127.0.0.1:8090/approvals/ask/ap_1");
+});
+
+test("askApproval denies when the request is closed, gone or unreachable", async () => {
+  const closed = await askApproval({
+    ...approvalCall,
+    fetchImpl: fakeApprovalAgent({ decision: "cancelled", reason: "the session is being frozen" }).fetchImpl,
+    sleep: async () => {},
+  });
+  assert.equal(closed.behavior, "deny");
+  assert.match(closed.message, /the session is being frozen/);
+
+  const gone = await askApproval({
+    ...approvalCall,
+    fetchImpl: fakeApprovalAgent({ pollStatus: 404 }).fetchImpl,
+    sleep: async () => {},
+  });
+  assert.equal(gone.behavior, "deny");
+  assert.match(gone.message, /no longer open/);
+
+  const refused = await askApproval({
+    ...approvalCall,
+    fetchImpl: fakeApprovalAgent({ askStatus: 409 }).fetchImpl,
+    sleep: async () => {},
+  });
+  assert.equal(refused.behavior, "deny");
+  assert.match(refused.message, /could not be put to the session owner \(409/);
+
+  const unreachable = await askApproval({
+    ...approvalCall,
+    fetchImpl: async () => {
+      throw new Error("connect ECONNREFUSED");
+    },
+    sleep: async () => {},
+  });
+  assert.equal(unreachable.behavior, "deny");
+  assert.match(unreachable.message, /ECONNREFUSED/);
+});
+
+test("askApproval keeps waiting through a missed poll, and never allows without a decision", async () => {
+  let polls = 0;
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    const method = init.method || "GET";
+    calls.push(method);
+    if (method === "POST") {
+      return { status: 201, ok: true, json: async () => ({ id: "ap_1" }), text: async () => "" };
+    }
+    if (method === "DELETE") {
+      return { status: 204, ok: true, json: async () => ({}), text: async () => "" };
+    }
+    polls++;
+    if (polls === 1) {
+      throw new Error("read ECONNRESET");
+    }
+    return { status: 200, ok: true, json: async () => ({ state: "pending" }), text: async () => "" };
+  };
+  let clock = 0;
+  const result = await askApproval({
+    ...approvalCall,
+    waitMs: 3000,
+    pollMs: 1000,
+    fetchImpl,
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    now: () => clock,
+  });
+  assert.equal(result.behavior, "deny");
+  assert.ok(polls > 1, "a missed poll is retried");
+  assert.equal(calls.at(-1), "DELETE");
+});
+
+test("askApproval stops waiting when the turn is interrupted", async () => {
+  const agent = fakeApprovalAgent();
+  const controller = new AbortController();
+  const result = await askApproval({
+    ...approvalCall,
+    signal: controller.signal,
+    fetchImpl: agent.fetchImpl,
+    sleep: async () => controller.abort(),
+  });
+  assert.equal(result.behavior, "deny");
+  assert.match(result.message, /interrupted/);
+  assert.equal(agent.calls.at(-1).method, "DELETE");
+});
+
+test("a redelivered permission request joins the one approval already waiting", async () => {
+  const agent = fakeApprovalAgent({ decision: "approved" });
+  const first = await askApproval({ ...approvalCall, fetchImpl: agent.fetchImpl, sleep: async () => {} });
+  const again = await askApproval({ ...approvalCall, fetchImpl: agent.fetchImpl, sleep: async () => {} });
+  assert.equal(first.behavior, "allow");
+  assert.equal(again.behavior, "allow");
+  const asks = agent.calls.filter((c) => c.method === "POST");
+  assert.equal(asks.length, 2);
+  assert.ok(asks.every((c) => c.body.requestId === "req_1"));
+  // Both asks are answered with the same request id, so one decision serves
+  // the redelivery too — the agent is what refuses to open a second request.
+  assert.ok(agent.calls.filter((c) => c.method === "GET").every((c) => c.url.endsWith("/approvals/ask/ap_1")));
 });

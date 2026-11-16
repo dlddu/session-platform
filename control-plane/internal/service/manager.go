@@ -448,6 +448,13 @@ func (s *Service) Stream(ctx context.Context, id string, offset int64) (io.ReadC
 // Write validates workload-specific limits, brings the session active, and
 // sends the payload to the agent (AC-C3, AC-D2/E2).
 func (s *Service) Write(ctx context.Context, id, payload string) (*session.WriteResult, error) {
+	return s.WriteTurn(ctx, id, payload, session.WriteOptions{})
+}
+
+// WriteTurn is Write with what the caller chose for the turn this write
+// queues (AC-E2). A choice the session's workload cannot honour is refused
+// before anything is sent, so a turn never quietly runs without it.
+func (s *Service) WriteTurn(ctx context.Context, id, payload string, opts session.WriteOptions) (*session.WriteResult, error) {
 	current, err := s.Get(ctx, id)
 	if err != nil {
 		return nil, err
@@ -455,21 +462,41 @@ func (s *Service) Write(ctx context.Context, id, payload string) (*session.Write
 	if current.WorkloadType.QueuesPrompts() && len(payload) > session.MaxClaudePromptBytes {
 		return nil, session.ErrWorkloadPromptTooLarge
 	}
+	writer, err := s.turnWriter(current, opts)
+	if err != nil {
+		return nil, err
+	}
 	sess, branch, err := s.activate(ctx, id, session.RestoreOptions{})
 	if err != nil {
 		return nil, err
 	}
-	if err := s.agent.Write(ctx, sess.Pod, payload); err != nil {
+	if err := writer(ctx, sess.Pod, payload); err != nil {
 		if adopted, lostErr := s.podLost(ctx, id, sess, err); !adopted {
 			return nil, lostErr
 		}
-		return s.Write(ctx, id, payload)
+		return s.WriteTurn(ctx, id, payload, opts)
 	}
 	s.touch(ctx, id)
 	return &session.WriteResult{
 		Session: sess,
 		Path:    dispatchPath(branch, "write"),
 	}, nil
+}
+
+// turnWriter is how this write reaches the agent: the plain write, or the one
+// that asks for the owner's decision on the turn's tool calls.
+func (s *Service) turnWriter(sess *session.Session, opts session.WriteOptions) (func(context.Context, string, string) error, error) {
+	if !opts.ToolApprovals {
+		return s.agent.Write, nil
+	}
+	if sess.WorkloadType != session.WorkloadTypeClaudeCode {
+		return nil, fmt.Errorf("%w: only claude-code sessions put their tool calls to the session owner", session.ErrToolApprovalsUnsupported)
+	}
+	writer, ok := s.agent.(toolApprovalWriter)
+	if !ok {
+		return nil, session.ErrToolApprovalsUnsupported
+	}
+	return writer.WriteWithToolApprovals, nil
 }
 
 // RefreshPlugins fetches a codex session's plugin skills again without ending
@@ -540,6 +567,77 @@ func (s *Service) AnswerQuestion(ctx context.Context, id, questionID string, ans
 	}
 	s.touch(ctx, id)
 	return nil
+}
+
+// toolApprovalAgent is the agent capability behind a claude-code turn's tool
+// calls waiting on the session owner (AC-E2, 「턴 중 도구 승인」).
+type toolApprovalAgent interface {
+	PendingToolApprovals(ctx context.Context, pod string) (session.ToolApprovalPage, error)
+	DecideToolApproval(ctx context.Context, pod, approvalID string, decision session.ToolApprovalDecision) error
+}
+
+// toolApprovalWriter is the agent capability behind a write that asks for the
+// owner's decision on every tool call of the turn it queues (AC-E2).
+type toolApprovalWriter interface {
+	WriteWithToolApprovals(ctx context.Context, pod, payload string) error
+}
+
+// ToolApprovals lists the tool calls a claude-code session's running turn put
+// to its owner (AC-E2). Like Questions it is passive: it neither restores a
+// snapshot nor counts as an access, and a session without a live pod has no
+// running turn, so nothing waits.
+func (s *Service) ToolApprovals(ctx context.Context, id string) (session.ToolApprovalPage, error) {
+	sess, err := s.Get(ctx, id)
+	if err != nil {
+		return session.ToolApprovalPage{}, err
+	}
+	agentA, err := s.toolApprovalAgentFor(sess)
+	if err != nil || agentA == nil {
+		return session.ToolApprovalPage{Approvals: []session.PendingToolApproval{}}, err
+	}
+	return agentA.PendingToolApprovals(ctx, sess.Pod)
+}
+
+// DecideToolApproval relays the owner's decision to the turn waiting on it
+// (AC-E2). Deciding is an access, like a write. The decision must name the
+// call it was taken on; the agent binds it to that call and refuses anything
+// else, so nothing here has to trust the caller's reading of what is waiting.
+func (s *Service) DecideToolApproval(ctx context.Context, id, approvalID string, decision session.ToolApprovalDecision) error {
+	if approvalID == "" || !decision.Valid() {
+		return fmt.Errorf("%w: decide approve or deny and name the call with its argsHash and epoch", session.ErrInvalidInput)
+	}
+	sess, err := s.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	agentA, err := s.toolApprovalAgentFor(sess)
+	if err != nil {
+		return err
+	}
+	if agentA == nil {
+		return session.ErrToolApprovalNotFound
+	}
+	if err := agentA.DecideToolApproval(ctx, sess.Pod, approvalID, decision); err != nil {
+		return err
+	}
+	s.touch(ctx, id)
+	return nil
+}
+
+// toolApprovalAgentFor is the session's agent when a turn could be waiting on
+// the owner there, and nil when the session has no live pod to ask.
+func (s *Service) toolApprovalAgentFor(sess *session.Session) (toolApprovalAgent, error) {
+	if sess.WorkloadType != session.WorkloadTypeClaudeCode {
+		return nil, fmt.Errorf("%w: only claude-code sessions put their tool calls to the session owner", session.ErrInvalidState)
+	}
+	if sess.State == session.StateSnapshot || sess.Pod == "" {
+		return nil, nil
+	}
+	agentA, ok := s.agent.(toolApprovalAgent)
+	if !ok {
+		return nil, nil
+	}
+	return agentA, nil
 }
 
 // questionTarget is the session a question route acts on, and its agent when

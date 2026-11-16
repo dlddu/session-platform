@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,8 +49,13 @@ const (
 	// names, comma-separated. Unset means no plugins.
 	// Keep in sync with control-plane/internal/adapter/k8s
 	// (ClaudeCodePluginsEnvVar).
-	claudePluginsEnv           = "CLAUDE_CODE_PLUGINS"
-	maxClaudePromptBytes       = 1 << 20
+	claudePluginsEnv     = "CLAUDE_CODE_PLUGINS"
+	maxClaudePromptBytes = 1 << 20
+	// claudeToolApprovalsParam is the /write query parameter that asks for
+	// every tool call of this turn to wait for the session owner's decision
+	// (AC-E2); the body stays the raw prompt. Keep in sync with
+	// control-plane/internal/adapter/agent (ToolApprovalsParam).
+	claudeToolApprovalsParam   = "toolApprovals"
 	maxClaudeQueuedPrompts     = 64
 	maxClaudeQueuedBytes       = 8 << 20
 	maxClaudeRunOutputBytes    = 16 << 20
@@ -193,6 +199,11 @@ type claudeRuntimeState struct {
 
 type promptJob struct {
 	prompt string
+	// toolApprovals is the write's ask for every tool call of this turn that
+	// the platform policy allows to wait for the session owner's decision
+	// (AC-E2). The policy's denials stay denials: they are never put to a
+	// person.
+	toolApprovals bool
 }
 
 // claudeWorkload owns one session's one-shot Claude invocations. A single
@@ -216,6 +227,10 @@ type claudeWorkload struct {
 	// questions are the running turn's AskUserQuestion calls waiting on a
 	// person (AC-E2).
 	questions questionDesk
+	// toolApprovals are the running turn's tool calls waiting on the session
+	// owner's decision (AC-E2, claude_approvals.go) — not the approval gate's
+	// waits above.
+	toolApprovals toolApprovalDesk
 
 	mu                      sync.Mutex
 	cond                    *sync.Cond
@@ -374,7 +389,10 @@ func (c *claudeWorkload) Close() {
 	<-c.workerDone
 }
 
-func (c *claudeWorkload) enqueue(prompt string) error {
+func (c *claudeWorkload) enqueue(prompt string, toolApprovals bool) error {
+	if toolApprovals && !c.relaysToolApprovals() {
+		return errToolApprovalsUnsupported
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	switch {
@@ -389,7 +407,7 @@ func (c *claudeWorkload) enqueue(prompt string) error {
 	case c.queue.Len() >= maxClaudeQueuedPrompts || c.queuedBytes+len(prompt) > maxClaudeQueuedBytes:
 		return errClaudeQueueFull
 	}
-	c.queue.PushBack(promptJob{prompt: prompt})
+	c.queue.PushBack(promptJob{prompt: prompt, toolApprovals: toolApprovals})
 	c.queuedBytes += len(prompt)
 	c.cond.Signal()
 	return nil
@@ -496,7 +514,7 @@ func (c *claudeWorkload) runWorker() {
 		stderr := newUTF8NormalizingWriter(output)
 		runCtx, cancelRun := context.WithTimeout(c.ctx, c.runTimeout)
 		stopSlotWatch := c.watchAuthSlot()
-		err := c.runner.Run(runCtx, c.argv(prompt, resume), runnerOptions{
+		err := c.runner.Run(runCtx, c.argv(prompt, resume, job.toolApprovals), runnerOptions{
 			Dir:    c.workDir,
 			Env:    environmentWithHome(c.homeDir),
 			Stdout: stdout,
@@ -515,6 +533,7 @@ func (c *claudeWorkload) runWorker() {
 		err = errors.Join(err, output.Close())
 		c.endTurn(seq, claudeTurnStatus(err, timedOut))
 		c.dropTurnQuestions(seq)
+		c.dropTurnToolApprovals(seq)
 		c.mu.Lock()
 		refreshNotice := c.turnRefreshNotice
 		c.turnRefreshNotice = ""
@@ -720,7 +739,27 @@ func fromLoopback(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func (c *claudeWorkload) argv(prompt string, resume bool) []string {
+// claudeToolApprovalsChosen reads whether a write asked for the owner's
+// decision on this turn's tool calls. It is a flag: only "true" asks for it,
+// and any other spelling is a mistake rather than a turn that quietly runs
+// without it.
+func claudeToolApprovalsChosen(query url.Values) (bool, error) {
+	switch raw := query.Get(claudeToolApprovalsParam); raw {
+	case "":
+		return false, nil
+	case "true":
+		return true, nil
+	default:
+		return false, fmt.Errorf("%s takes true or nothing", claudeToolApprovalsParam)
+	}
+}
+
+// argv builds the turn's invocation. enqueue has already refused a turn whose
+// CLI cannot relay approvals.
+func (c *claudeWorkload) argv(prompt string, resume bool, toolApprovals bool) []string {
+	if relay, ok := c.cli.(toolApprovalRelay); ok && toolApprovals {
+		return relay.argvWithToolApprovals(c.binary, c.model, prompt, resume)
+	}
 	return c.cli.argv(c.binary, c.model, prompt, resume)
 }
 
@@ -731,8 +770,10 @@ func (c *claudeWorkload) argv(prompt string, resume bool) []string {
 // prompt are the runner's, not flags here, so no argv can change them.
 //
 // questionsURL is this agent on loopback; with it the runner relays the
-// model's AskUserQuestion to a person instead of denying it.
-func claudeRunnerArgv(binary, model, effort, k3sMCPURL, questionsURL, prompt string, resume bool) []string {
+// model's AskUserQuestion to a person instead of denying it. approvalsURL is
+// the same agent, and only the write that chose it gets one: with it every
+// tool call the runner's policy allows waits for the session owner's decision.
+func claudeRunnerArgv(binary, model, effort, k3sMCPURL, questionsURL, approvalsURL, prompt string, resume bool) []string {
 	argv := []string{binary}
 	if model != "" && model != platformDefaultModel {
 		argv = append(argv, "--model", model)
@@ -745,6 +786,9 @@ func claudeRunnerArgv(binary, model, effort, k3sMCPURL, questionsURL, prompt str
 	}
 	if questionsURL != "" {
 		argv = append(argv, "--questions-url", questionsURL)
+	}
+	if approvalsURL != "" {
+		argv = append(argv, "--approvals-url", approvalsURL)
 	}
 	if resume {
 		argv = append(argv, "--resume")
@@ -785,6 +829,7 @@ func (c *claudeWorkload) beginCheckpoint(ctx context.Context, requestedID string
 	// A turn waiting on a person would hold the checkpoint for the runner's
 	// whole wait; its questions close and the turn goes on without them.
 	c.closeQuestionsForCheckpoint()
+	c.closeToolApprovalsForCheckpoint()
 	for !c.stopping && ctx.Err() == nil && (c.active || c.refreshing || c.queue.Len() != 0) {
 		c.cond.Wait()
 	}
@@ -827,6 +872,7 @@ func (c *claudeWorkload) autoArchiveTo(ctx context.Context, w io.Writer) (bool, 
 	c.queue.Init()
 	c.queuedBytes = 0
 	c.closeQuestionsForCheckpoint()
+	c.closeToolApprovalsForCheckpoint()
 	c.mu.Unlock()
 	c.cancel()
 	if dropped > 0 {
@@ -973,6 +1019,10 @@ func (c *claudeWorkload) restore(r io.Reader) error {
 	if err := markRestored(c.stateDir); err != nil {
 		c.logger.Warn("restore marker not written; a container restart would wait for an archive again", "err", err)
 	}
+	// The restored state is another run of the session: its turn count starts
+	// again from the archive, so a decision taken on what the pre-restore run
+	// put up must not land on this one (AC-E2, 「턴 중 도구 승인」).
+	c.toolApprovals.rotateEpoch()
 	c.out.restore(scrollbackBytes)
 	c.mu.Lock()
 	c.turns = bytes.Count(scrollbackBytes, []byte(claudeTurnMarkerLead+"input "))
@@ -1432,8 +1482,15 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 			http.Error(w, "read prompt: "+c.redactString(err.Error()), http.StatusBadRequest)
 			return
 		}
-		if err := c.enqueue(string(prompt)); err != nil {
+		toolApprovals, err := claudeToolApprovalsChosen(r.URL.Query())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := c.enqueue(string(prompt), toolApprovals); err != nil {
 			switch {
+			case errors.Is(err, errToolApprovalsUnsupported):
+				http.Error(w, err.Error(), http.StatusBadRequest)
 			case errors.Is(err, errClaudeQueueFull):
 				http.Error(w, err.Error(), http.StatusTooManyRequests)
 			case errors.Is(err, errClaudeOutputFull):
@@ -1505,6 +1562,7 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 	})
 
 	registerQuestionRoutes(mux, c)
+	registerToolApprovalRoutes(mux, c)
 
 	mux.HandleFunc("POST /checkpoint", func(w http.ResponseWriter, r *http.Request) {
 		archive, err := os.CreateTemp("", "claude-checkpoint-*.tar")

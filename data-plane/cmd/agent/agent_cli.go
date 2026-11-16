@@ -1,6 +1,9 @@
 package main
 
-import "io"
+import (
+	"errors"
+	"io"
+)
 
 // agentCLI is everything that differs between the one-shot agent CLIs that run
 // on claudeWorkload. The execution model around it — bounded serial queue,
@@ -34,20 +37,37 @@ type claudeCLI struct {
 	// neither the K3s MCP nor plugins.
 	platform *claudePlatform
 	// agentURL is this agent on loopback, where the runner relays an
-	// AskUserQuestion to a person (AC-E2); empty denies the tool instead.
+	// AskUserQuestion to a person and puts a tool call to the session owner
+	// (AC-E2); empty denies the question and leaves the policy to decide the
+	// call on its own.
 	agentURL string
 }
 
 func (claudeCLI) workloadName() string { return workloadClaudeCode }
 
 func (c claudeCLI) argv(binary, model, prompt string, resume bool) []string {
-	return claudeRunnerArgv(binary, model, c.effort, c.platform.mcpURL(), c.agentURL, prompt, resume)
+	return claudeRunnerArgv(binary, model, c.effort, c.platform.mcpURL(), c.agentURL, "", prompt, resume)
+}
+
+var errToolApprovalsUnsupported = errors.New("this workload cannot put its tool calls to the session owner")
+
+var _ toolApprovalRelay = claudeCLI{}
+
+// argvWithToolApprovals builds the invocation for a write that asked for the
+// owner's decision. The approvals go to this agent on loopback, the same place
+// a question goes; the permission mode stays the runner's own auto.
+func (c claudeCLI) argvWithToolApprovals(binary, model, prompt string, resume bool) []string {
+	return claudeRunnerArgv(binary, model, c.effort, c.platform.mcpURL(), c.agentURL, c.agentURL, prompt, resume)
 }
 
 var _ questionAsker = claudeCLI{}
 
 // asksQuestions is true when the runner has somewhere to relay a question.
 func (c claudeCLI) asksQuestions() bool { return c.agentURL != "" }
+
+// relaysToolApprovals is true when the runner has somewhere to put a tool call
+// to the session owner — the same loopback agent that takes its questions.
+func (c claudeCLI) relaysToolApprovals() bool { return c.agentURL != "" }
 
 func (claudeCLI) newProjector(dst io.Writer) io.WriteCloser {
 	return newClaudeStreamProjector(dst)

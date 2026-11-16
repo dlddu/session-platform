@@ -188,11 +188,21 @@ func (c *HTTPClient) baseURL(ip string) string {
 
 // Write forwards shell stdin or a Claude prompt to the agent (AC-D2/AC-E2).
 func (c *HTTPClient) Write(ctx context.Context, pod, payload string) error {
+	return c.write(ctx, pod, payload, nil)
+}
+
+// write is one /write call. The body is the raw payload either way; query
+// carries what the caller chose for the turn it queues.
+func (c *HTTPClient) write(ctx context.Context, pod, payload string, query url.Values) error {
 	ip, err := c.resolve(ctx, pod)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL(ip)+"/write", strings.NewReader(payload))
+	target := c.baseURL(ip) + "/write"
+	if len(query) > 0 {
+		target += "?" + query.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(payload))
 	if err != nil {
 		return err
 	}
@@ -255,6 +265,90 @@ func (c *HTTPClient) RefreshPlugins(ctx context.Context, pod string) (session.Pl
 		return session.PluginChanges{}, fmt.Errorf("refresh plugins in session pod %s: decode: %w", pod, err)
 	}
 	return changes, nil
+}
+
+// ToolApprovalsParam is the agent's /write query parameter for a turn whose
+// tool calls wait for the session owner's decision (AC-E2). Keep in sync with
+// data-plane/cmd/agent (claudeToolApprovalsParam).
+const ToolApprovalsParam = "toolApprovals"
+
+// WriteWithToolApprovals queues one prompt whose turn puts every tool call the
+// platform policy allows to the session owner (AC-E2). Like PendingQuestions
+// it is an optional capability, not part of the Client interface.
+func (c *HTTPClient) WriteWithToolApprovals(ctx context.Context, pod, payload string) error {
+	return c.write(ctx, pod, payload, url.Values{ToolApprovalsParam: {"true"}})
+}
+
+// PendingToolApprovals lists the tool calls a claude-code turn put to the
+// session owner, with the epoch of the run that put them up (AC-E2).
+func (c *HTTPClient) PendingToolApprovals(ctx context.Context, pod string) (session.ToolApprovalPage, error) {
+	page := session.ToolApprovalPage{Approvals: []session.PendingToolApproval{}}
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return page, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL(ip)+"/approvals", nil)
+	if err != nil {
+		return page, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return page, fmt.Errorf("list tool approvals in session pod %s: %w", pod, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return page, fmt.Errorf("list tool approvals in session pod %s: agent returned %d: %s",
+			pod, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&page); err != nil {
+		return session.ToolApprovalPage{Approvals: []session.PendingToolApproval{}},
+			fmt.Errorf("list tool approvals in session pod %s: decode: %w", pod, err)
+	}
+	if page.Approvals == nil {
+		page.Approvals = []session.PendingToolApproval{}
+	}
+	return page, nil
+}
+
+// DecideToolApproval relays the owner's decision to the turn waiting on it
+// (AC-E2). The agent binds the decision to the call it names, so a refusal
+// here is a decision that does not match what the turn is waiting on.
+func (c *HTTPClient) DecideToolApproval(ctx context.Context, pod, approvalID string, decision session.ToolApprovalDecision) error {
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(decision)
+	if err != nil {
+		return err
+	}
+	target := c.baseURL(ip) + "/approvals/" + url.PathEscape(approvalID) + "/decide"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("decide tool approval in session pod %s: %w", pod, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	detail, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	message := strings.TrimSpace(string(detail))
+	switch resp.StatusCode {
+	case http.StatusBadRequest:
+		return fmt.Errorf("%w: %s", session.ErrInvalidInput, message)
+	case http.StatusConflict:
+		return fmt.Errorf("%w: %s", session.ErrToolApprovalStale, message)
+	case http.StatusForbidden, http.StatusNotFound:
+		return fmt.Errorf("%w: %s", session.ErrToolApprovalNotFound, message)
+	default:
+		return fmt.Errorf("decide tool approval in session pod %s: agent returned %d: %s", pod, resp.StatusCode, message)
+	}
 }
 
 // PendingQuestions lists the AskUserQuestion calls a claude-code turn waits on

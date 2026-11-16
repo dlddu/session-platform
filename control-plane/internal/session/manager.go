@@ -107,6 +107,9 @@ type Manager interface {
 	Read(ctx context.Context, id string, offset int64) (*ReadResult, error)
 	Stream(ctx context.Context, id string, offset int64) (io.ReadCloser, error)
 	Write(ctx context.Context, id, payload string) (*WriteResult, error)
+	// WriteTurn is Write with what the caller chose for the one turn the
+	// write queues (AC-E2).
+	WriteTurn(ctx context.Context, id, payload string, opts WriteOptions) (*WriteResult, error)
 	Switch(ctx context.Context, id string, opts RestoreOptions) (*Session, error)
 	Snapshot(ctx context.Context, id string) (*Session, error)
 	Restore(ctx context.Context, id string) (*Session, error)
@@ -116,6 +119,10 @@ type Manager interface {
 	// person; AnswerQuestion answers one (AC-E2).
 	Questions(ctx context.Context, id string) ([]PendingQuestion, error)
 	AnswerQuestion(ctx context.Context, id, questionID string, answers map[string]string) error
+	// ToolApprovals lists the tool calls a claude-code session's running turn
+	// put to its owner; DecideToolApproval relays one decision (AC-E2).
+	ToolApprovals(ctx context.Context, id string) (ToolApprovalPage, error)
+	DecideToolApproval(ctx context.Context, id, approvalID string, decision ToolApprovalDecision) error
 	// Recover calls admit with the recovered record before anything is
 	// written, so the caller decides who may see it (AC-K2).
 	Recover(ctx context.Context, id string, opts RestoreOptions, admit func(*Session) error) (*Session, error)
