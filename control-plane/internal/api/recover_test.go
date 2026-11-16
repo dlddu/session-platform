@@ -139,3 +139,23 @@ func TestRecoverSessionRouteRechecksTheTypeGrant(t *testing.T) {
 		t.Fatalf("operator recover: %d %s", resp.StatusCode, raw)
 	}
 }
+
+// recover takes the same optional doubleMemory as switch.
+func TestRecoverSessionRouteDoubleMemory(t *testing.T) {
+	srv := newRecoverServers(t, recoverTenants)[0]
+	gone := freezeAndDelete(t, srv, "alpha", map[string]any{"name": "a1"})
+	path := "/api/v1/sessions/" + gone.ID + "/recover"
+
+	if resp, raw := tenantCall(t, srv, http.MethodPost, path, "alpha", map[string]any{"doubleMemory": 1}); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("non-boolean doubleMemory: %d %s, want 400", resp.StatusCode, raw)
+	}
+	resp, raw := tenantCall(t, srv, http.MethodPost, path, "alpha", map[string]any{"doubleMemory": true})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("recover with doubleMemory: %d %s", resp.StatusCode, raw)
+	}
+	var got session.Session
+	_ = json.Unmarshal(raw, &got)
+	if !got.DoubleMemory {
+		t.Fatalf("recovered DoubleMemory = false, want true")
+	}
+}

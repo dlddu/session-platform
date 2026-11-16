@@ -95,7 +95,7 @@ func TestRecoverBringsBackADeletedSessionFromItsLastSnapshot(t *testing.T) {
 	}
 
 	var admitted *session.Session
-	got, err := f.svc.Recover(ctx, created.ID, func(s *session.Session) error {
+	got, err := f.svc.Recover(ctx, created.ID, session.RestoreOptions{}, func(s *session.Session) error {
 		admitted = s
 		return nil
 	})
@@ -140,7 +140,7 @@ func TestRecoverKeepsTheDoubledMemoryTier(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := f.svc.Recover(ctx, created.ID, func(*session.Session) error { return nil })
+	got, err := f.svc.Recover(ctx, created.ID, session.RestoreOptions{}, func(*session.Session) error { return nil })
 	if err != nil {
 		t.Fatalf("recover: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestRecoverRefusesWhatItCannotOrMustNotRecover(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := f.svc.Recover(ctx, tc.id, nil)
+			_, err := f.svc.Recover(ctx, tc.id, session.RestoreOptions{}, nil)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("recover err = %v, want %v", err, tc.want)
 			}
@@ -214,7 +214,7 @@ func TestRecoverAdmitRejectionWritesNothing(t *testing.T) {
 	if err := f.svc.Terminate(ctx, created.ID); err != nil {
 		t.Fatal(err)
 	}
-	_, err = f.svc.Recover(ctx, created.ID, func(*session.Session) error { return session.ErrNotFound })
+	_, err = f.svc.Recover(ctx, created.ID, session.RestoreOptions{}, func(*session.Session) error { return session.ErrNotFound })
 	if !errors.Is(err, session.ErrNotFound) {
 		t.Fatalf("recover err = %v, want the admit error", err)
 	}
@@ -229,7 +229,7 @@ func TestRecoverAdmitRejectionWritesNothing(t *testing.T) {
 func TestRecoverNeedsManifestsAndAnArchiveGate(t *testing.T) {
 	ctx := context.Background()
 	t.Run("no manifest store", func(t *testing.T) {
-		if _, err := newService().Recover(ctx, "0123456789abcdef0123456789abcdef", nil); !errors.Is(err, session.ErrCheckpointDisabled) {
+		if _, err := newService().Recover(ctx, "0123456789abcdef0123456789abcdef", session.RestoreOptions{}, nil); !errors.Is(err, session.ErrCheckpointDisabled) {
 			t.Fatalf("recover err = %v, want checkpoint disabled", err)
 		}
 	})
@@ -248,7 +248,7 @@ func TestRecoverNeedsManifestsAndAnArchiveGate(t *testing.T) {
 		gateOff := service.New(f.orch, f.store, archive.NewStubCheckpointer(true), agent.NewStubClient(),
 			service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, archive.NewStubCheckpointer(false)),
 			service.WithSessionManifests(f.manifests))
-		if _, err := gateOff.Recover(ctx, created.ID, nil); !errors.Is(err, session.ErrCheckpointDisabled) {
+		if _, err := gateOff.Recover(ctx, created.ID, session.RestoreOptions{}, nil); !errors.Is(err, session.ErrCheckpointDisabled) {
 			t.Fatalf("recover err = %v, want checkpoint disabled", err)
 		}
 		if _, err := f.store.Get(ctx, created.ID); !errors.Is(err, session.ErrNotFound) {
@@ -274,5 +274,30 @@ func TestSnapshotManifestWriteFailureRollsBack(t *testing.T) {
 	}
 	if stored.State != session.StateActive || stored.Pod != created.Pod || stored.SnapshotTransaction != nil || f.orch.RunningCount() != 1 {
 		t.Fatalf("session after failed manifest = %+v running=%d, want it live and untouched", stored, f.orch.RunningCount())
+	}
+}
+
+// Recovery restores like any snapshot, so it may change the memory tier too.
+func TestRecoverChangesTheMemoryTier(t *testing.T) {
+	ctx := context.Background()
+	f := newRecoverFixture()
+	on := true
+	created, err := f.svc.Create(ctx, session.CreateRequest{Name: "grown"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Snapshot(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.Terminate(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := f.svc.Recover(ctx, created.ID, session.RestoreOptions{DoubleMemory: &on}, func(*session.Session) error { return nil })
+	if err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	if !got.DoubleMemory || !f.orch.SpecFor(created.ID).DoubleMemory {
+		t.Fatalf("recovered: session %v, pod %v; want true, true", got.DoubleMemory, f.orch.SpecFor(created.ID).DoubleMemory)
 	}
 }

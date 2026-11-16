@@ -367,15 +367,20 @@ paths:
     post:
       summary: Switch to a session, restoring from snapshot if needed (AC-C4)
       operationId: switchSession
+      description: >
+        Optional `doubleMemory` changes the memory tier of the pod a
+        snapshotted session is restored into, and the session keeps the new
+        tier for later restores. A session that already holds a pod (active
+        or idle) cannot change tier: the other tier is answered 422 and
+        nothing changes, its own tier is a no-op. Absent keeps the tier the
+        session has.
       parameters:
         - $ref: "#/components/parameters/SessionId"
       requestBody:
         required: false
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: false
+            schema: { $ref: "#/components/schemas/RestoreRequest" }
       responses:
         "200":
           description: The now-active session
@@ -383,7 +388,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Session" }
         "400":
-          description: Malformed body, trailing JSON, or a non-empty request object
+          description: Malformed body, trailing JSON, an unknown field, or a non-boolean doubleMemory
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -396,6 +401,11 @@ paths:
           $ref: "#/components/responses/RequestEntityTooLarge"
         "409":
           description: Concurrent state change
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: doubleMemory asks for the other tier on a session that already holds a pod
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -463,16 +473,15 @@ paths:
         can recover only its own tenant's sessions and needs the workload type
         granted; any other id answers 404 exactly like an unknown one. If the
         restore itself fails, the session stays in snapshot state and the next
-        access retries it.
+        access retries it. Optional `doubleMemory` changes the memory tier of
+        the restored pod, as on switch.
       parameters:
         - $ref: "#/components/parameters/SessionId"
       requestBody:
         required: false
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: false
+            schema: { $ref: "#/components/schemas/RestoreRequest" }
       responses:
         "200":
           description: The recovered, restored session
@@ -480,7 +489,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Session" }
         "400":
-          description: Malformed body, trailing JSON, or a non-empty request object
+          description: Malformed body, trailing JSON, an unknown field, or a non-boolean doubleMemory
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -1102,6 +1111,21 @@ components:
             Who wrote the archive: `generation:<id>` for a snapshot, `pod:<name>`
             for a pod's automatic archive (AC-B5). Absent for archives written
             before it was recorded.
+    RestoreRequest:
+      type: object
+      additionalProperties: false
+      description: >
+        Optional body of switch and recover: what a restore from snapshot
+        should change. An empty object or no body keeps the session as it
+        was.
+      properties:
+        doubleMemory:
+          type: boolean
+          description: >
+            The memory tier of the restored pod (true doubles the platform
+            default request/limit, false keeps it), kept for later restores.
+            On a session that already holds a pod only its current tier is
+            accepted.
     Session:
       type: object
       required: [id, name, state, workloadType, createdAt, lastAccess]
@@ -1145,9 +1169,10 @@ components:
           type: boolean
           description: >
             Whether the workload container runs with doubled memory
-            request/limit over the platform default, fixed at creation and
-            carried across snapshot/restore. Absent or false means the
-            platform default; applies to every workload type.
+            request/limit over the platform default, set at creation and
+            carried across snapshot/restore; a restore from snapshot (switch
+            or recover) may change it. Absent or false means the platform
+            default; applies to every workload type.
         pod:
           type: string
           description: >
@@ -1225,7 +1250,8 @@ components:
           description: >
             Optional. Doubles the workload container's memory request/limit
             over the platform default (currently 512Mi/1Gi -> 1Gi/2Gi),
-            fixed at creation and carried across snapshot/restore. Omitted or
+            carried across snapshot/restore and changeable only when a
+            snapshot is restored (switch or recover). Omitted or
             false keeps every existing client's behavior unchanged; applies
             to every workload type. A non-boolean value is rejected with 400
             before any pod is provisioned.
