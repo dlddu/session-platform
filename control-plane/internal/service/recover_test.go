@@ -123,6 +123,42 @@ func TestRecoverBringsBackADeletedSessionFromItsLastSnapshot(t *testing.T) {
 	}
 }
 
+// The doubled memory option lives in the manifest, not only in the ConfigMap
+// record the delete takes away, so a recovered session comes back on the same
+// memory tier it was created with — pod spec included.
+func TestRecoverKeepsTheDoubledMemoryTier(t *testing.T) {
+	ctx := context.Background()
+	f := newRecoverFixture()
+	created, err := f.svc.Create(ctx, session.CreateRequest{Name: "hungry", DoubleMemory: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Snapshot(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.Terminate(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := f.svc.Recover(ctx, created.ID, func(*session.Session) error { return nil })
+	if err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	if !got.DoubleMemory {
+		t.Errorf("recovered session DoubleMemory = false, want true")
+	}
+	if !f.orch.SpecFor(created.ID).DoubleMemory {
+		t.Errorf("recovery provisioned with DoubleMemory = false, want true")
+	}
+	man, err := f.manifests.GetManifest(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("manifest: %v", err)
+	}
+	if !man.DoubleMemory {
+		t.Errorf("manifest DoubleMemory = false, want true")
+	}
+}
+
 func TestRecoverRefusesWhatItCannotOrMustNotRecover(t *testing.T) {
 	ctx := context.Background()
 	f := newRecoverFixture()
