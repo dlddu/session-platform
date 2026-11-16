@@ -615,6 +615,100 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+  /sessions/{id}/tool-approvals:
+    get:
+      summary: Tool calls a claude-code session's running turn put to its owner (AC-E2)
+      operationId: listSessionToolApprovals
+      description: >
+        claude-code sessions only, and only for a turn a write queued with
+        `toolApprovals`. Each tool call the platform policy allows is listed
+        here, with the arguments the model asked for, until it is decided, the
+        runner stops waiting for it, a checkpoint closes it, its turn ends, or
+        its window passes. `epoch` names the run of the session that put them
+        up and is what a decision carries back. Passive like the stream: it
+        does not restore a snapshotted session or count as an access, and a
+        session without a live pod lists nothing.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: The waiting tool calls, oldest first
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ToolApprovalPage" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Not found, or another tenant's session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: The session is not claude-code
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /sessions/{id}/tool-approvals/{approvalId}/decide:
+    post:
+      summary: Decide one tool call the running turn waits on (AC-E2)
+      operationId: decideSessionToolApproval
+      description: >
+        Approves or denies exactly the call named by the path id, the
+        `argsHash` the listing showed and the `epoch` of the run that put it
+        up. The agent binds the decision to all three: a decision taken on
+        arguments the model has since changed, or on an earlier run of the
+        session, is refused with 409 rather than applied. An approval allows
+        that one call as the model made it — the arguments are never rewritten
+        — and a denial refuses it with the reason. The turn goes on with the
+        decision either way. Deciding counts as an access. Who decided is the
+        identity this request authenticated as, not anything in the body.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+        - name: approvalId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ToolApprovalDecision" }
+      responses:
+        "200":
+          description: The decision reached the turn
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [approved, denied] }
+        "400":
+          description: Malformed body, or a decision that does not name approve/deny with an argsHash and an epoch
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Not found, another tenant's session, or the call is no longer waiting
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The decision was taken on another call or an earlier run of the session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: The session is not claude-code
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /sessions/{id}/questions/{questionId}/answer:
     post:
       summary: Answer a question the running turn waits on (AC-E2)
@@ -1285,6 +1379,21 @@ components:
             minimax-code, codex-chat, codex-task) are limited to 1 MiB of UTF-8 bytes
 
             per prompt; larger writes return 413.
+        toolApprovals:
+          type: boolean
+          description: >
+            claude-code sessions only. Asks for every tool call of the one turn
+
+            this write queues that the platform policy allows to wait for the
+
+            session owner's decision (AC-E2); the policy's own denials stay
+
+            denials and are never put to a person. Omitted or false runs the
+
+            turn the platform's own way. Asking it of any other workload type
+            is
+
+            refused with 400 and nothing is written.
     ReadRequest:
       type: object
       additionalProperties: false
@@ -1382,6 +1491,59 @@ components:
                   properties:
                     label: { type: string }
                     description: { type: string }
+    ToolApprovalPage:
+      type: object
+      required: [epoch, approvals]
+      properties:
+        epoch:
+          type: string
+          description: >
+            `ep_` and 16 hex digits — the run of the session these calls were
+
+            put up in. A decision carries it back; a restore starts a new one.
+        approvals:
+          type: array
+          items: { $ref: "#/components/schemas/PendingToolApproval" }
+    PendingToolApproval:
+      type: object
+      required: [id, tool, input, argsHash, toolUseId, epoch, askedAt, expiresAt]
+      properties:
+        id: { type: string, description: "`ap_` and 16 hex digits" }
+        tool:
+          type: string
+          description: The tool the model asked to use
+        input:
+          description: The arguments the model asked for, as it made them
+        argsHash:
+          type: string
+          pattern: "^sha256:[0-9a-f]{64}$"
+          description: sha256 over the tool and its arguments; names this exact call
+        toolUseId:
+          type: string
+          description: The SDK's own id for the call; may be empty
+        epoch: { type: string }
+        askedAt: { type: string, format: date-time }
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the request closes itself if nobody decided
+    ToolApprovalDecision:
+      type: object
+      additionalProperties: false
+      required: [decision, argsHash, epoch]
+      properties:
+        decision: { type: string, enum: [approve, deny] }
+        argsHash:
+          type: string
+          pattern: "^sha256:[0-9a-f]{64}$"
+          description: The hash the listing showed for this call
+        epoch:
+          type: string
+          description: The epoch the listing showed for this run
+        reason:
+          type: string
+          maxLength: 2000
+          description: Why, for the session's record and for the model on a denial
     Error:
       type: object
       properties:

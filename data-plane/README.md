@@ -28,7 +28,8 @@ interactive shell and Claude Code workloads.
   that drives the pinned Claude Code CLI (`CLAUDE_CODE_BIN`, default `claude`
   on `PATH`) with Claude Code's own system prompt, all setting sources,
   partial messages and `permissionMode: auto` for every turn (no write can
-  choose another mode). Tool requests
+  choose another mode; `toolApprovals` is the one turn-level choice a write
+  has, below). Tool requests
   that would ask a person go to the SDK's `canUseTool` callback, which allows the
   platform's built-in tools and the session's own plugin MCP tools and denies
   the rest with a `[session-platform: denied …]` line in the output.
@@ -42,6 +43,29 @@ interactive shell and Claude Code workloads.
   `CLAUDE_RUNNER_QUESTION_WAIT_MS` (default 20 minutes), one a checkpoint
   closes, or one the agent refuses is denied with a note to decide alone; a
   question lives only as long as its turn.
+  A write may also ask for the turn's tool calls to wait for the **session
+  owner** (`POST /write?toolApprovals=true`, AC-E2). Only that turn gets
+  `--approvals-url` and a `PreToolUse` hook, and that hook only ever returns
+  `ask` — for a call `decideTool` already allows — so the call reaches
+  `canUseTool` instead of being settled by the auto classifier. It never
+  returns `allow` (that would route around the settings' deny rules) and never
+  `deny` (a policy refusal belongs in `canUseTool`, where it leaves a line in
+  the output). A turn that did not ask for approvals gets no `hooks` at all.
+  Only calls `decideTool` already allows reach the desk: the
+  runner puts one call on the loopback-only `POST /approvals/ask` with a
+  `sha256` over the tool and its arguments, polls `GET /approvals/ask/{id}`
+  while the turn keeps running, and allows the call unchanged on an approval
+  whose tool and hash match. The owner reads `GET /approvals` and decides
+  through the control plane (`POST /approvals/{id}/decide` — refused from
+  inside the pod, so the model cannot approve its own call), naming the call
+  by id, `argsHash` and the run's `epoch`; any other combination is refused
+  rather than applied, a restore rotates the epoch, and a decided call takes
+  no second decision. The tools the policy decides itself (`AskUserQuestion`
+  and the plan-mode pair) are refused by the desk, so a standing denial never
+  becomes a decision for a person. A call nobody decides within
+  `CLAUDE_RUNNER_APPROVAL_WAIT_MS` (default 20 minutes), one past the desk's
+  own 30-minute window, one a checkpoint closes, or one whose turn ended is
+  denied with what happened; a call lives only as long as its turn.
   The turn's input stays open after its result while background tasks it
   started are still running, so they finish inside the turn and the model sees
   their completion. The runner sets no wait of its own and writes nothing

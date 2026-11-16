@@ -95,6 +95,8 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/sessions/{id}/plugins/refresh", a.refreshPlugins)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/questions", a.listQuestions)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/questions/{questionId}/answer", a.answerQuestion)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/tool-approvals", a.listToolApprovals)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/tool-approvals/{approvalId}/decide", a.decideToolApproval)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/recover", a.recoverSession)
 }
 
@@ -136,6 +138,10 @@ type createReq struct {
 
 type writeReq struct {
 	Payload string `json:"payload"`
+	// ToolApprovals asks for the one turn this write queues to put every tool
+	// call the platform policy allows to the session owner (AC-E2). Omitted or
+	// false runs the turn the platform's own way.
+	ToolApprovals bool `json:"toolApprovals"`
 }
 
 type readReq struct {
@@ -488,7 +494,8 @@ func (a *API) writeSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	res, err := a.mgr.Write(r.Context(), r.PathValue("id"), req.Payload)
+	res, err := a.mgr.WriteTurn(r.Context(), r.PathValue("id"), req.Payload,
+		session.WriteOptions{ToolApprovals: req.ToolApprovals})
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -622,6 +629,61 @@ func (a *API) answerQuestion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, answerQuestionResp{Status: "answered"})
 }
 
+// listToolApprovals lists the tool calls a claude-code session's running turn
+// put to its owner (AC-E2).
+func (a *API) listToolApprovals(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
+	page, err := a.mgr.ToolApprovals(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+// decideToolApproval relays the owner's decision on one waiting call; the turn
+// goes on with it (AC-E2). The decision has to name the call it was taken on,
+// and the agent refuses one that names any other.
+func (a *API) decideToolApproval(w http.ResponseWriter, r *http.Request) {
+	caller, ok := a.authorizedCaller(w, r)
+	if !ok {
+		return
+	}
+	var req decideToolApprovalReq
+	if err := decodeRequestBody(r.Body, &req, true); err != nil {
+		writeErr(w, err)
+		return
+	}
+	// Who decided is the control plane's word, not the caller's: it is the
+	// identity this request authenticated as, and the body has no field for
+	// it to claim another.
+	decision := session.ToolApprovalDecision{
+		Decision:  req.Decision,
+		ArgsHash:  req.ArgsHash,
+		Epoch:     req.Epoch,
+		Reason:    req.Reason,
+		DecidedBy: callerName(caller),
+	}
+	if err := a.mgr.DecideToolApproval(r.Context(), r.PathValue("id"), r.PathValue("approvalId"), decision); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, decideToolApprovalResp{Status: decision.Decision + "d"})
+}
+
+type decideToolApprovalReq struct {
+	Decision string `json:"decision"`
+	ArgsHash string `json:"argsHash"`
+	Epoch    string `json:"epoch"`
+	Reason   string `json:"reason"`
+}
+
+type decideToolApprovalResp struct {
+	Status string `json:"status"`
+}
+
 type questionsResp struct {
 	Questions []session.PendingQuestion `json:"questions"`
 }
@@ -654,12 +716,19 @@ func (a *API) caller(w http.ResponseWriter, r *http.Request) (tenancy.Caller, bo
 // session. Another tenant's session answers exactly like a missing one, so a
 // tenant cannot learn which ids exist (AC-K2).
 func (a *API) authorizeSession(w http.ResponseWriter, r *http.Request) bool {
+	_, ok := a.authorizedCaller(w, r)
+	return ok
+}
+
+// authorizedCaller is authorizeSession for a route that also has to say who
+// the caller is — the identity it proved, not one it sent in a body.
+func (a *API) authorizedCaller(w http.ResponseWriter, r *http.Request) (tenancy.Caller, bool) {
 	caller, ok := a.caller(w, r)
 	if !ok {
-		return false
+		return tenancy.Caller{}, false
 	}
 	if caller.Operator {
-		return true
+		return caller, true
 	}
 	sess, err := a.mgr.Get(r.Context(), r.PathValue("id"))
 	if err == nil && !caller.Sees(sess.Tenant) {
@@ -667,9 +736,18 @@ func (a *API) authorizeSession(w http.ResponseWriter, r *http.Request) bool {
 	}
 	if err != nil {
 		writeErr(w, err)
-		return false
+		return tenancy.Caller{}, false
 	}
-	return true
+	return caller, true
+}
+
+// callerName is how the session's record names who acted: the tenant that
+// owns the session, or the operator when no token names one (AC-K2/K4).
+func callerName(caller tenancy.Caller) string {
+	if caller.Tenant != nil {
+		return "tenant " + caller.Tenant.Name
+	}
+	return "the platform operator"
 }
 
 // createTenant decides the tenant a new session belongs to (AC-K2, AC-K3). A
@@ -776,17 +854,19 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func writeErr(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	switch {
-	case errors.Is(err, session.ErrNotFound), errors.Is(err, session.ErrQuestionNotFound):
+	case errors.Is(err, session.ErrNotFound), errors.Is(err, session.ErrQuestionNotFound),
+		errors.Is(err, session.ErrToolApprovalNotFound):
 		status = http.StatusNotFound
 	case errors.Is(err, session.ErrUnauthenticated):
 		status = http.StatusUnauthorized
 	case errors.Is(err, session.ErrForbidden):
 		status = http.StatusForbidden
-	case errors.Is(err, session.ErrInvalidInput):
+	case errors.Is(err, session.ErrInvalidInput), errors.Is(err, session.ErrToolApprovalsUnsupported):
 		status = http.StatusBadRequest
 	case errors.Is(err, session.ErrInvalidState):
 		status = http.StatusUnprocessableEntity
-	case errors.Is(err, session.ErrConflict), errors.Is(err, session.ErrAlreadyExists):
+	case errors.Is(err, session.ErrConflict), errors.Is(err, session.ErrAlreadyExists),
+		errors.Is(err, session.ErrToolApprovalStale):
 		status = http.StatusConflict
 	case errors.Is(err, session.ErrWorkloadQueueFull):
 		status = http.StatusTooManyRequests

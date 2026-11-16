@@ -52,7 +52,7 @@
     claude-runner [--model <선택된 모델>] [--effort <추론 수준>] [--resume] -- "<payload>"
   ```
 
-  `claude-runner`(`data-plane/claude-runner`)는 Claude Agent SDK의 `query()`를 한 번 부르고, SDK는 이미지에 고정 설치된 Claude Code CLI를 자식 프로세스로 구동한다. 러너가 SDK에 고정으로 주는 옵션은 Claude Code 기본 시스템 프롬프트(`systemPrompt: {type: "preset", preset: "claude_code"}`), 모든 설정 원천(`user`·`project`·`local` — CLI 기본과 같다), 권한 모드 `permissionMode: "auto"`, partial message, 그리고 도구 권한 콜백 `canUseTool`(아래 「구현 결정 (headless 권한 정책)」)이다. 이 값들은 argv 플래그가 아니므로 에이전트나 프롬프트가 바꿀 수 없다. 권한 모드는 **모든 턴이 `auto`로 고정**이다 — write가 고를 수 없고(write 본문에 `permissionMode` 필드가 없어 실어 보내면 모르는 필드로 `400`), 러너도 `--permission-mode` argv를 받지 않는다 *(2026-11-15 개정)*.
+  `claude-runner`(`data-plane/claude-runner`)는 Claude Agent SDK의 `query()`를 한 번 부르고, SDK는 이미지에 고정 설치된 Claude Code CLI를 자식 프로세스로 구동한다. 러너가 SDK에 고정으로 주는 옵션은 Claude Code 기본 시스템 프롬프트(`systemPrompt: {type: "preset", preset: "claude_code"}`), 모든 설정 원천(`user`·`project`·`local` — CLI 기본과 같다), 권한 모드 `permissionMode: "auto"`, partial message, 그리고 도구 권한 콜백 `canUseTool`(아래 「구현 결정 (headless 권한 정책)」)이다. 이 값들은 argv 플래그가 아니므로 에이전트나 프롬프트가 바꿀 수 없다. 권한 모드는 **모든 턴이 `auto`로 고정**이다 — write가 고를 수 없고(write 본문에 `permissionMode` 필드가 없어 실어 보내면 모르는 필드로 `400`), 러너도 `--permission-mode` argv를 받지 않는다 *(2026-11-15 개정)*. write가 그 턴에 대해 고를 수 있는 것은 하나뿐이다 — `toolApprovals: true`는 그 턴의 도구 호출을 **세션 소유자의 결정**에 건다(아래 「구현 결정 (턴 중 도구 승인)」). 모드와 달리 이것은 정책을 넓히지 않는다: 정책이 거부하는 호출은 사람에게 가지 않고 그대로 거부되므로, 고를 수 있는 것은 「정책이 허용하는 호출을 사람이 한 번 더 본다」뿐이다 *(2026-11-16 추가)*.
 
   실제 공급자 HTTPS URL·토큰은 별도 credential-proxy sidecar에만 ConfigMapKeyRef·SecretKeyRef로 주입된다. CLI와 도구가 실행되는 주 컨테이너는 localhost proxy와 비밀이 아닌 placeholder만 보며, proxy가 HTTPS 목적지를 고정하고 요청 자격 증명을 실제 토큰으로 교체한다. 평문 HTTP upstream은 같은 pod 네트워크에서의 패킷 관찰 위험 때문에 시작 시 거부한다.
 
@@ -61,7 +61,7 @@
   각 invocation에서 증분 redaction 후 저장되는 **assistant text + diagnostic stderr는 marker를 포함해 16 MiB**로 제한한다. raw stream-json framing은 이 quota나 cursor에 포함하지 않는다. 넘친 tail은 버리고 이미 노출한 bytes를 고치지 않은 채 보존된 prefix 끝에 `[session-platform: invocation output truncated at 16 MiB]`를 붙인다. 해당 invocation과 이미 받아 둔 후속 queue는 정상적으로 직렬 실행한다.
 - **달성 가치**: V3
 - **구체화 대상**: AC-C3(Write API 상태별 분기)의 "write" 시맨틱 — `claude-code` 타입 버전
-- **검증 방법**: active 세션에 `payload="1+1은?"`로 write 후 pod에서 위 exact argv의 `claude-runner` 프로세스가 1회 기동되고 응답 출력 후 종료함을 확인한다. write가 실행 완료를 기다리지 않고 반환하며, fake runner가 첫 delta 뒤 대기하는 동안에도 그 delta가 read와 SSE에 보이는지 확인한다. 연속 2회 write 시 두 실행이 겹치지 않고 순서대로 수행됨을 확인한다. 첫 실행 실패·timeout 뒤에는 `--resume`이 붙지 않고 첫 성공 뒤에만 붙음을 확인한다. 러너 단위 테스트로 SDK 옵션(시스템 프롬프트 preset·설정 원천·고정 `permissionMode: "auto"`·partial message)과 권한 판정을, 그리고 턴 입력(`TurnInput`)이 백그라운드 작업이 없으면 result에서 바로 닫히고, 있으면 그 작업의 완료 후속 result까지 열려 있으며, 러너 자신의 대기 상한이 없고 프롬프트 뒤에 아무 메시지도 내지 않는지를 확인한다(*2026-11-14 개정*, AC-A5). 어떤 턴의 argv에도 `--permission-mode`가 없고, write 본문에 `permissionMode`를 실으면 값과 무관하게 400임을 확인한다. prompt가 1 MiB를 넘으면 public API까지 413이고 실행되지 않으며, queue 포화 시 429, invocation 출력 초과 시 16 MiB 경계 안의 append-only truncation marker를 확인한다. *2026-11-14 추가 (턴 중 질문)*: 실행 중인 턴이 올린 `AskUserQuestion`이 control plane 목록에 보이고, 답하면 러너의 조회가 답을 받아 도구 입력에 `answers`로 얹혀 허용되며 질문·답이 출력에 안내로 남음을, 파드 안에서 온 답·턴 밖의 질문·모양이 틀린 질문·답 수가 맞지 않는 답이 거절됨을, 러너의 대기 상한·동결 시작·턴 종료가 질문을 닫고 모델이 일어난 일만 적힌 거부를 받음을 확인한다(AC-A5).
+- **검증 방법**: active 세션에 `payload="1+1은?"`로 write 후 pod에서 위 exact argv의 `claude-runner` 프로세스가 1회 기동되고 응답 출력 후 종료함을 확인한다. write가 실행 완료를 기다리지 않고 반환하며, fake runner가 첫 delta 뒤 대기하는 동안에도 그 delta가 read와 SSE에 보이는지 확인한다. 연속 2회 write 시 두 실행이 겹치지 않고 순서대로 수행됨을 확인한다. 첫 실행 실패·timeout 뒤에는 `--resume`이 붙지 않고 첫 성공 뒤에만 붙음을 확인한다. 러너 단위 테스트로 SDK 옵션(시스템 프롬프트 preset·설정 원천·고정 `permissionMode: "auto"`·partial message)과 권한 판정을, 그리고 턴 입력(`TurnInput`)이 백그라운드 작업이 없으면 result에서 바로 닫히고, 있으면 그 작업의 완료 후속 result까지 열려 있으며, 러너 자신의 대기 상한이 없고 프롬프트 뒤에 아무 메시지도 내지 않는지를 확인한다(*2026-11-14 개정*, AC-A5). 어떤 턴의 argv에도 `--permission-mode`가 없고, write 본문에 `permissionMode`를 실으면 값과 무관하게 400임을 확인한다. prompt가 1 MiB를 넘으면 public API까지 413이고 실행되지 않으며, queue 포화 시 429, invocation 출력 초과 시 16 MiB 경계 안의 append-only truncation marker를 확인한다. *2026-11-14 추가 (턴 중 질문)*: 실행 중인 턴이 올린 `AskUserQuestion`이 control plane 목록에 보이고, 답하면 러너의 조회가 답을 받아 도구 입력에 `answers`로 얹혀 허용되며 질문·답이 출력에 안내로 남음을, 파드 안에서 온 답·턴 밖의 질문·모양이 틀린 질문·답 수가 맞지 않는 답이 거절됨을, 러너의 대기 상한·동결 시작·턴 종료가 질문을 닫고 모델이 일어난 일만 적힌 거부를 받음을 확인한다(AC-A5). *2026-11-16 추가 (턴 중 도구 승인)*: `toolApprovals: true`로 queue된 턴의 argv에만 `--approvals-url`이 붙고, 그 턴이 올린 도구 호출이 control plane 목록에 인자·`argsHash`·`epoch`와 함께 보이며, 소유자의 승인이 그 호출을 인자 그대로 허용하고 거절이 사유와 함께 거부함을, 같은 id에 다른 `argsHash`·다른 `epoch`·두 번째 결정·창이 지난 결정이 거절됨을, 파드 안에서 온 결정과 파드 자신의 IP에서 온 결정이 403임을, 정책이 스스로 정하는 도구(`AskUserQuestion`·플랜 모드 쌍)는 데스크가 403으로 거절함을, 중계할 곳이 없는 워크로드에 `toolApprovals`를 실으면 아무것도 쓰이지 않고 400임을, 한 턴에 열린 호출이 8개로 묶이고 재전달된 같은 요청이 하나로 합쳐짐을, 동결·턴 종료·복원이 열린 호출을 닫음을 확인한다.
 
 > ✅ **구현 결정 (headless 권한 정책, 2026-08-08; 2026-11-12 개정·재개정; 2026-11-15 개정)**: 전용 session pod를 실행 경계로 삼는다. 세션 HOME의 플랫폼 관리 `.claude/settings.json`에는 코딩에 필요한 `Read`·`Write`·`Edit`·`Glob`·`Grep`·`Bash`만 허용 규칙으로 두며, 설정 파일은 파일시스템 아카이브에 포함해 복원 후에도 동일 정책을 유지한다. `--dangerously-skip-permissions`(SDK의 `bypassPermissions`)는 사용하지 않는다.
 >
@@ -74,6 +74,7 @@
 > - **사람에게 묻고 기다림 (`AskUserQuestion`, 2026-11-14 개정, 사용자 결정)**: 아래 「턴 중 질문」대로 턴을 유지한 채 사람의 답을 기다리고, 답을 도구 결과로 돌려준다. 이전에는 거부했다.
 > - **사실만 적어 거부**: 플랜 모드(`EnterPlanMode`·`ExitPlanMode`) — 원샷 턴에는 플랜을 승인할 사람이 없으므로 「턴 중에는 아무도 질문에 답하거나 플랜을 승인할 수 없다」는 사실을 도구 결과로 돌려준다. 질문을 사람에게 전할 길이 없는 러너(`--questions-url` 없음)에서는 `AskUserQuestion`도 같은 결과로 거부한다. *2026-11-14 개정 (AC-A5)*: 거부 메시지는 일어난 일만 적는다 — 이전의 「스스로 정하고 가정을 밝힌 뒤 계속하라」, 허용 밖 도구에 붙던 「내장 도구나 세션 플러그인을 써라」 같은 지시는 뺐다.
 > - **거부**: 그 밖의 모든 것 — 예컨대 클론한 저장소의 `.mcp.json`이 들여온 MCP 서버나 세션이 고르지 않은 플러그인의 도구. 모델은 「이 세션의 도구 표면이 아니다」는 도구 결과를 받는다.
+> - **소유자의 결정을 기다림 (`toolApprovals`를 고른 턴, 2026-11-16 추가, 사용자 결정)**: 위 「허용」에 해당하는 호출은 아래 「턴 중 도구 승인」대로 턴을 유지한 채 세션 소유자의 승인·거절을 기다린다. **이 경로는 판정을 넓히지 않는다** — 이 목록이 거부하는 것은 그대로 거부되고, `AskUserQuestion`과 플랜 모드 쌍은 각자의 판정을 그대로 유지한다(묻는 쪽도 데스크가 거절한다).
 >
 > 콜백의 거부는 모두 출력에 `[session-platform: denied <도구>: <사유>]` 한 줄로 남는다. 이 안내는 러너 stdout으로 나오므로 assistant text와 같은 경로(증분 redaction·실행당 16 MiB quota)를 지난다. 묻는 경로에 결정적 목록을 쓰는 이유는 답할 사람이 없는 원샷 턴에서 그 요청이 실행마다 다르게 판정되지 않게 하고, 무엇이 왜 막혔는지를 사용자가 출력에서 바로 보게 하기 위해서다. 설정 원천은 CLI 기본과 같게 셋 다 읽으므로, 작업 디렉터리의 프로젝트 설정이 둔 허용 규칙은 콜백보다 먼저 적용된다(CLI 시절과 같다).
 
@@ -83,6 +84,49 @@
 > - **질문의 수명은 그 턴이다**: 턴이 끝나면 질문은 사라진다. 러너는 **20분**(`CLAUDE_RUNNER_QUESTION_WAIT_MS`로 조정 — 턴 timeout 30분 안에 모델이 이어갈 시간을 남긴다) 안에 답이 없으면 질문을 거두고 「N분 안에 아무도 답하지 않았다」로 거부한다(*2026-11-14*: 지시 문장은 뺐다, AC-A5). 동결(checkpoint)이 시작되면 열린 질문을 닫아 턴이 그 대기 때문에 동결을 붙잡지 않게 하고, 그 동안 새 질문은 409다. 한 턴에 열린 질문은 4개까지다.
 > - **출력**: 질문과 답은 세션 출력에 플랫폼 안내(`[session-platform: question <id> — …]` 다음 줄마다 `? [머리말] 질문 (선택지 / …)`, 답하면 `[session-platform: question <id> answered]`와 `→ 질문: 답`)로 남고, 증분 redaction을 거친다. 작업 화면은 `claude-code` 세션이 동결되지 않은 동안 2초마다 질문을 묻고, 기다리는 질문을 콘솔 안 카드(선택지 + 「Other」 입력)로 보여 준다.
 > - **유휴 판정**: 질문 대기는 유휴 예외가 아니다 — 대기가 턴 timeout(30분)보다 짧아 유휴 기준(60분)에 닿지 않는다. 답은 write처럼 접근으로 센다. 목록 조회는 stream처럼 수동적이라 동결된 세션을 깨우지 않는다.
+
+> ✅ **구현 결정 (턴 중 도구 승인 — 도구 호출 하나를 세션 소유자가 턴 안에서 결정한다, 2026-11-16, 사용자 결정)**: write가 `toolApprovals: true`로 queue한 턴은, 정책이 허용하는 도구 호출마다 **그 턴 안에서** 세션 소유자의 결정을 기다린다 — 승인은 그 호출 하나를 모델이 만든 인자 그대로 허용하고, 거절은 사유와 함께 거부한다. 어느 쪽이든 턴은 그 결정을 받아 이어진다.
+> - **경로**: 에이전트가 러너 argv에 자기 loopback 주소(`--approvals-url http://127.0.0.1:<port>`)를 주고, 이것은 그 턴을 고른 write에만 붙는다. 러너의 `canUseTool`이 호출(도구 이름·인자·`argsHash`)을 loopback 전용 `POST /approvals/ask`에 올리고 `GET /approvals/ask/{id}`를 1초마다 묻는다. 소유자는 control plane의 `GET /api/v1/sessions/{id}/tool-approvals`로 기다리는 호출을 보고 `POST /api/v1/sessions/{id}/tool-approvals/{approvalId}/decide`(`{"decision": "approve"|"deny", "argsHash": …, "epoch": …, "reason": …}`)로 결정한다.
+> - **결정은 그 호출 하나에 묶인다**: 결정은 자신이 선 호출을 세 가지로 지목한다 — 요청 id, 인자 해시(`argsHash` = 도구 이름과 인자에 대한 sha256), 그리고 그 호출을 올린 **실행의 epoch**. 셋 중 하나라도 다르면 결정이 아니다(`409`) — 소유자가 읽은 뒤 모델이 인자를 바꾼 호출, 복원·재시작 이전 실행에서 읽은 목록으로 내린 결정이 여기서 걸린다. 이미 결정·종료된 호출은 두 번째 결정을 받지 않으므로(`404`) 재전송은 아무것도 바꾸지 않는다. 승인은 인자를 **고쳐 쓰지 않는다** — 소유자가 본 그 호출이 그대로 돌거나 돌지 않는다.
+> - **모델이 스스로 승인하지 못한다**: 결정 경로는 파드 안(loopback·파드 자신의 IP)에서 온 요청을 403으로 거절한다 — 모델의 셸로는 자기 호출을 승인할 수 없고 control plane을 거친 소유자만 결정한다. 올리기·상태 조회는 반대로 loopback만 받는다. 「누가 결정했는지」는 control plane이 **그 요청이 인증한 신원**으로 적어 보내며 요청 본문에는 그 칸이 없다.
+> - **정책의 거부는 그대로 거부다**: 사람에게 가는 것은 정책이 이미 허용한 호출뿐이다. 러너는 정책이 스스로 정하는 도구(`AskUserQuestion`·플랜 모드 쌍)를 묻지 않고, 데스크도 그 도구를 403으로 거절한다 — 그래서 어떤 러너도 상시 거부를 소유자의 결정거리로 바꿀 수 없다.
+> - **분류기가 스스로 정하는 호출을 소유자에게 보내는 길 (PreToolUse `ask`, 2026-11-16, 사용자 결정)**:
+>   `canUseTool` 에 닿는 것은 설정 규칙도 `auto` 분류기도 판정하지 못해 넘어온 호출뿐이라, 분류기가
+>   스스로 승인·거절한 호출은 콜백을 건너뛰어 승인 데스크에 올라오지 않았다. 그래서 **이 턴에만**
+>   SDK 의 `PreToolUse` 훅을 하나 붙인다 — 러너의 정책(`decideTool`)이 **이미 허용하는** 호출에
+>   `permissionDecision: "ask"` 를 돌려주어 그 호출을 `canUseTool` 로 끌어오고, 거기서 소유자에게
+>   묻는다. 훅은 **`ask` 외에는 아무것도 말하지 않는다**: `allow` 를 돌려주지 않으므로 설정의 deny
+>   규칙이나 `decideTool` 을 돌아가는 길이 되지 않고, `deny` 도 돌려주지 않으므로 정책의 거부는
+>   전과 같이 `canUseTool` 에서 거부되며 출력에 한 줄을 남긴다. 승인을 고르지 않은 턴에는 훅이
+>   **붙지 않는다**(SDK 옵션에 `hooks` 키가 없다).
+>   - **실측 근거 (SDK 0.3.220 / CLI 2.1.220, `scripts/experiments/pretooluse-probe`)**: `ask` 는
+>     실제로 `canUseTool` 로 온다(같은 무해한 호출에서 baseline 콜백 0 → ask 케이스 1). 그리고
+>     프로젝트 설정에 `permissions.deny: ["Read(./파일)"]` 을 둔 턴에서는 **훅도 콜백도 불리지 않은 채**
+>     호출이 거부됐다(훅 0 · 콜백 0 · `tool_result` error 1). 같은 파일에 규칙이 없는 대조군은 성공했으므로
+>     차단은 그 규칙 때문이다 — **이 버전의 `Read(파일)` 규칙에서 deny 는 훅보다 앞선다.**
+>   - **제품 러너 통합 실측 (2026-11-16)**: 원격 `d269365` 를 clone 해 제품 `runner.mjs` 를 고치지 않고
+>     돌리고 `--approvals-url` 자리에 테스트 대역 데스크를 두었다. 네 케이스 모두 exit 0 · 최종 `success`
+>     — 승인은 `POST`1·`GET`1 뒤 도구 결과 성공, 거절은 같은 왕복 뒤 오류, 러너 대기 상한이 지나면
+>     `GET`2 뒤 **`DELETE`1** 로 스스로 철회하고 거부로 닫으며, 승인을 고르지 않은 턴은 데스크를
+>     **0건** 부르고 전과 같이 돈다. 데스크는 테스트 대역이므로 운영 control-plane·세션 MCP·공개 API 를
+>     지나는 전체 e2e 로 넓혀 읽지 않는다.
+>   - **일반화하지 않는다**: ⑴ 그 경로에서 `permission_denied` 시스템 메시지가 나오지 않아
+>     `decision_reason_type="rule"` 을 직접 관측하지는 못했다. ⑵ 도구 이름 전체를 막는
+>     `deny: ["Read"]` 는 도구 자체가 사라져(`tool_use` 0) 우선순위의 증거가 아니다. ⑶ 관리형
+>     설정·다른 도구·`auto` 분류기의 자동 거절로는 넓히지 않는다 — **분류기 거절을 `ask` 가 선점하는지는
+>     여전히 미증명**이다(무해한 호출로는 분류기 거절이 재현되지 않았다). 선점하지 않는다면 그 호출은
+>     소유자에게 가지 않고 **거부로 끝난다** — 실행되는 쪽이 아니라 막히는 쪽이라, 남는 것은 소유자가 그
+>     거절을 뒤집을 수 없다는 제한이지 안전 공백이 아니다.
+>   - **분류기가 허용했을 Bash 호출 (2026-11-16 (4) 실측, `classifier-probe.mjs`)**: 판정 없는 훅만 둔
+>     대조군에서 분류기가 스스로 허용해 바로 실행한 Bash 호출(콜백 0)이, `ask` 를 돌려준 턴에서는 4/4 모두
+>     훅 → `canUseTool` 순으로 와서 실행되지 않았다(콜백 1). 분류기가 **허용**했을 호출을 `ask` 가 소유자
+>     경로로 끌어오는 것은 `Read` 에 이어 `Bash` 에서도 보였다. 분류기 거절을 만들려던 「외부로 키 파일을
+>     올리는」 모양의 요청은 모델이 도구 호출 자체를 하지 않아(훅 0 · 콜백 0) 분류기까지 가지 않았다.
+> - **호출의 수명은 그 턴이다**: 턴이 끝나면 호출은 사라진다. 러너는 **20분**(`CLAUDE_RUNNER_APPROVAL_WAIT_MS`로 조정) 안에 결정이 없으면 호출을 거두고 거부하며, 데스크 자신의 창은 30분이라 러너가 사라진 요청도 닫힌다. 동결(checkpoint)이 시작되면 열린 호출을 닫아 턴이 그 대기 때문에 동결을 붙잡지 않게 하고, 그 동안 새 호출은 409다. 복원은 epoch를 새로 돌리고 데스크를 비운다. 한 턴에 열린 호출은 8개까지다(한 턴이 도구를 동시에 여러 개 부르므로 질문 데스크보다 넉넉하다).
+> - **출력**: 올린 호출과 결정은 세션 출력에 플랫폼 안내(`[session-platform: tool call <id> — …]`, `? <도구> <argsHash>`, `? <인자>`, 결정 뒤 `[session-platform: tool call <id> approved|denied by <누가>]`와 사유)로 남고 증분 redaction을 거친다.
+> - **유휴 판정**: 결정 대기는 유휴 예외가 아니다(질문과 같은 이유). 결정은 write처럼 접근으로 세고, 목록 조회는 stream처럼 수동적이라 동결된 세션을 깨우지 않는다.
+>
+> 이것은 `docs/prd/approval-gate.md`의 승인 게이트가 아니다 — 그쪽은 다른 타입의 세션 MCP가 자기 게이트웨이에 묻는 것이고, 여기는 claude-code 턴의 도구 호출을 세션 소유자가 결정하는 것이다.
 
 > ✅ **구현 결정 (Agent SDK 러너, 2026-11-12, 사용자 결정)**: `claude-code`의 한 턴을 Claude Code CLI 직접 실행에서 Claude Agent SDK(`@anthropic-ai/claude-agent-sdk`, TypeScript) 러너로 바꿨다. 목적은 둘이다 — 대화를 「최근 대화」(`--continue`)가 아니라 **기록한 세션 ID**로 재개하는 것(AC-E4)과, 사람에게 물어야 할 도구 요청을 **플랫폼 콜백**으로 판정하는 것(위 권한 정책). 러너는 `codex-runner`와 같은 모양의 작은 Node 스크립트이고 큐·바운드·커서·turn 마커·아카이브·자격 증명 배치(AC-E2~E6)는 그대로 공용 원샷 러너의 것이다. SDK는 CLI를 자식으로 구동하는 얇은 계층이라, 이미지는 SDK를 그 번들 CLI 없이(`--omit=optional`) 설치하고 `pathToClaudeCodeExecutable`로 이미 고정 설치된 CLI를 가리킨다 — 한 바이너리가 턴과 플러그인 부트스트랩을 함께 맡는다. 구독 모드(AC-E7)의 `CLAUDE_CODE_OAUTH_TOKEN`은 러너가 받은 환경 그대로 CLI에 전해진다. SDK와 CLI는 비공개 프로토콜로 말하므로 릴리스를 함께 고정한다(SDK `0.3.N` ↔ CLI `2.1.N`, 현재 `0.3.220` ↔ `2.1.220`). 이미지 빌드가 `claude-runner --check-cli`로 두 버전이 어긋나면 실패한다. SDK의 기본값이 CLI와 다른 둘(시스템 프롬프트를 주지 않으면 빈 프롬프트, `permissionMode`)은 러너가 명시한다 — `permissionMode`는 write가 고른 값, 없으면 `auto`다.
 >

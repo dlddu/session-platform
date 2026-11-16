@@ -559,6 +559,9 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 | `session-scheduler.md#시나리오 2` | **차단 — codex 러너 대역 없음.** 회차가 턴으로 도는 것을 보려면 codex 러너가 실제로 돌아야 하고, 그 러너는 세션의 ChatGPT 로그인을 요구한다. kind SUT 에는 codex 공급자 대역이 없다. | 없음 | 이 모델 | codex 공급자 대역(`CLAUDE-PROVIDER` 와 같은 EXT 등재)이 서면 전용 spec 을 둔다. | 현재 검증은 단위 테스트 `data-plane/cmd/agent/scheduler_test.go` — 실제 `claudeWorkload` 큐를 지나는 `TestSchedulerRunsThroughTheAgentQueue` 와 한가할 때만 시작·밀린 칸 건너뛰기·자체 페이싱 규칙의 표 테스트. |
 | `session-scheduler.md#시나리오 3` | **SUT 설정 의존 — 짧은 유휴 기준.** 기대 결과가 유휴 회수 스캔이라 운영 기준(60분)으로는 스위트 시간 안에 밟을 수 없고, 사이드카 정지는 kube 관측(exec)이 필요하다. | 없음 | 이 모델 | 유휴 기준을 줄인 SUT 와 세션 파드 exec 단계가 하네스에 서면 전용 spec 을 둔다. | 현재 검증은 단위 테스트 `control-plane/internal/service/schedule_idle_test.go`(회수 경로의 보류·해제, 다른 타입 미질의, 사용자 동결, 읽기 실패 시 일반 규칙)와 `internal/adapter/agent/client_test.go` 의 `TestHTTPClientActiveSchedules`. |
 | `lifecycle.md#시나리오 6` | **전용 spec 미저작.** 기능은 2026-11-15 착지했고 예외 사유도 없다. 배포 SUT 에서 세션 파드를 control plane 밖에서 지우고(스팟 회수와 같은 경로) 그 파드의 preStop 이 MinIO 의 세션 아카이브 키(`sessions/<id>/checkpoint.tar`)에 덮어쓴 자동 아카이브로 세션이 되살아나는지 단언하려면 하네스의 kube 접근이 필요하다 — `state-api.md#시나리오 4-1` 과 같은 선행에 막혀 있다. | 판정·URL·채택 로직은 Go 단위 `control-plane/internal/service/auto_archive_test.go`·`control-plane/internal/adapter/checkpointstore/auto_archive_test.go`·`data-plane/cmd/agent/auto_archive_test.go`, 파드 형태는 통합 `control-plane/test/auto_archive_orchestrator_test.go`(매칭 단위 아님 — e2e 헤더 선언이 없다). 실 S3 서명 URL 업로드·존재 확인·왕복, 세션 키 덮어쓰기와 `writer` 메타데이터(서명 헤더 없는 업로드는 403)는 2026-11-15 수동으로 확인했고, 운영 스모크(파드 삭제 → read 복원 → 삭제 → recover)도 같은 날 통과했다. | 이 모델 | `web/e2e/` 최상위 전용 spec 착지. Playwright `request` 픽스처로 세션을 만들고 하네스의 kube 접근으로 파드를 지운 뒤, read 가 200 으로 새 파드 위의 `active` 를 돌려주고 offset 0 read 에 지우기 전 마커가 있음을 단언한다. | AC-B5 (2026-11-15 신설) |
+| `claude-code-workload.md#시나리오 12` | **전용 spec 미저작 — 두 번째 행위자가 필요하다.** 기대 결과가 「턴이 올린 호출을 **소유자가** 결정한다」라서, 턴이 호출을 올려 둔 동안 다른 신원으로 control plane 을 부르는 단계가 하네스에 있어야 한다. 모델이 자기 호출을 승인하지 못하는 것이 이 기능의 요점이므로 한 행위자만으로는 밟을 수 없다. | 없음 | 이 모델 | 하네스에 「턴을 띄운 채 다른 토큰으로 결정한다」 단계가 서면 `web/e2e/` 최상위 전용 spec 을 둔다. 그때 이 행을 같은 PR 에서 제거한다. | AC-E2 (2026-11-16 신설). 현재 검증은 매칭 공간 밖의 단위 테스트다 — 데스크·경로·출력은 `data-plane/cmd/agent/claude_approvals_test.go` 의 `TestClaudeToolApprovalRoundTrip`·`TestClaudeToolApprovalDenial`, control plane 경로는 `control-plane/internal/service/tool_approvals_test.go`·`control-plane/internal/api/tool_approvals_test.go`. |
+| `claude-code-workload.md#시나리오 13` | **전용 spec 미저작 — 시나리오 12 와 같은 선행.** 결정의 결속(인자·실행)을 밟으려면 먼저 소유자 결정 단계가 하네스에 서야 하고, 창 만료는 운영 기준(30분)으로 스위트 시간 안에 밟을 수 없다. | 없음 | 이 모델 | 시나리오 12 의 단계와 창을 줄인 SUT 가 서면 전용 spec 을 둔다. | AC-E2 (2026-11-16 신설). 현재 검증은 단위 테스트 `data-plane/cmd/agent/claude_approvals_test.go` 의 `TestClaudeToolApprovalBindsToTheArguments`·`TestClaudeToolApprovalBindsToTheRun`·`TestClaudeToolApprovalExpires` 와 `control-plane/internal/service/tool_approvals_test.go` 의 `TestToolApprovalDecisionIsBound`. |
+| `claude-code-workload.md#시나리오 14` | **전용 spec 미저작 — 파드 안 관측 의존.** 「모델이 자기 호출을 승인하지 못한다」는 세션 파드 안에서 loopback·파드 IP 로 결정 경로를 부르는 단계(exec)가 필요해 브라우저로도 control-plane HTTP API 로도 닿지 않는다. 규칙 4 의 **예외 전환 후보**다. | 없음 | 이 모델 | 세션 파드 exec 단계가 하네스에 서면 전용 spec 착지 **또는** 규칙 4 예외로 전환. 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | AC-E2 (2026-11-16 신설). 현재 검증은 단위 테스트 `data-plane/cmd/agent/claude_approvals_test.go` 의 `TestClaudeToolApprovalPermissionBoundary` 와 `TestClaudeTurnWithoutApprovalsHasNoRelay`. |
 <!-- scenario-deferred:end -->
 
 > **이 표가 비는 날 완전 1:1이다.** 현재 잔여는 두 갈래다 — 이관 26(매칭 공간 축소가 만든 부채, 검증은
@@ -598,9 +601,9 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 ## 집계
 
 <!-- scenario-summary:begin -->
-- 시나리오 총계: 80
+- 시나리오 총계: 83
 - 예외: 13
-- 유예: 61
+- 유예: 64
 - 시나리오 매칭 파일: 6
 - 공백: 0
 <!-- scenario-summary:end -->

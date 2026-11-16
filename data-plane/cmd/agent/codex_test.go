@@ -484,7 +484,7 @@ func TestNewCodexTaskWorkloadFromEnv(t *testing.T) {
 	if w.authSlot == nil || w.cli.workloadName() != workloadCodexTask {
 		t.Fatalf("slot = %v, workload = %s", w.authSlot, w.cli.workloadName())
 	}
-	got := w.argv("p", true)
+	got := w.argv("p", true, false)
 	want := []string{"/opt/runner", "--mode", "task", "--model", "gpt-6", "--effort", "xhigh", "--resume", "--", "p"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("argv = %q, want %q", got, want)
