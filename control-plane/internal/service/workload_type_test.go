@@ -205,8 +205,8 @@ func TestMemoryTierSurvivesSnapshotRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if sess.MemoryTier() != 8 || sess.DoubleMemory {
-		t.Fatalf("created session tier %d doubleMemory %v, want 8 false", sess.MemoryTier(), sess.DoubleMemory)
+	if sess.MemoryTier() != 8 {
+		t.Fatalf("created session tier = %d, want 8", sess.MemoryTier())
 	}
 	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
 		t.Fatalf("snapshot: %v", err)

@@ -140,25 +140,24 @@ func TestRecoverSessionRouteRechecksTheTypeGrant(t *testing.T) {
 	}
 }
 
-// recover takes the same optional memoryMultiplier/doubleMemory as switch.
-func TestRecoverSessionRouteDoubleMemory(t *testing.T) {
+// recover takes the same optional memoryMultiplier as switch.
+func TestRecoverSessionRouteMemoryMultiplier(t *testing.T) {
 	srv := newRecoverServers(t, recoverTenants)[0]
 	gone := freezeAndDelete(t, srv, "alpha", map[string]any{"name": "a1"})
 	path := "/api/v1/sessions/" + gone.ID + "/recover"
 
-	if resp, raw := tenantCall(t, srv, http.MethodPost, path, "alpha", map[string]any{"doubleMemory": 1}); resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("non-boolean doubleMemory: %d %s, want 400", resp.StatusCode, raw)
+	for _, body := range []map[string]any{{"memoryMultiplier": 3}, {"memoryMultiplier": "4"}, {"doubleMemory": true}} {
+		if resp, raw := tenantCall(t, srv, http.MethodPost, path, "alpha", body); resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%v: %d %s, want 400", body, resp.StatusCode, raw)
+		}
 	}
-	if resp, raw := tenantCall(t, srv, http.MethodPost, path, "alpha", map[string]any{"memoryMultiplier": 3}); resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("unknown memoryMultiplier: %d %s, want 400", resp.StatusCode, raw)
-	}
-	resp, raw := tenantCall(t, srv, http.MethodPost, path, "alpha", map[string]any{"doubleMemory": true})
+	resp, raw := tenantCall(t, srv, http.MethodPost, path, "alpha", map[string]any{"memoryMultiplier": 4})
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("recover with doubleMemory: %d %s", resp.StatusCode, raw)
+		t.Fatalf("recover with memoryMultiplier: %d %s", resp.StatusCode, raw)
 	}
 	var got session.Session
 	_ = json.Unmarshal(raw, &got)
-	if !got.DoubleMemory {
-		t.Fatalf("recovered DoubleMemory = false, want true")
+	if got.MemoryMultiplier != 4 {
+		t.Fatalf("recovered memoryMultiplier = %d, want 4", got.MemoryMultiplier)
 	}
 }

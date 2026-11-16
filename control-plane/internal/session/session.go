@@ -286,12 +286,7 @@ type Session struct {
 	// it. It is set at creation and carried across snapshot/restore; unlike
 	// Model and ReasoningEffort, a restore from snapshot may change it
 	// (RestoreOptions), since that is when a new pod starts. Absent means 1.
-	// Read and write it through MemoryTier/SetMemoryTier, which keep
-	// DoubleMemory in step.
 	MemoryMultiplier int `json:"memoryMultiplier,omitempty"`
-	// DoubleMemory is the tier field this record had before MemoryMultiplier:
-	// true means tier 2. Older records and clients carry only this one.
-	DoubleMemory bool `json:"doubleMemory,omitempty"`
 	// Tenant is the tenant that owns the session (docs/prd/multitenancy.md,
 	// AC-K2), fixed at creation. Empty means operator-owned: sessions created
 	// before tenancy existed, or by the operator without naming a tenant.

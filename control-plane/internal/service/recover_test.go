@@ -154,8 +154,8 @@ func TestRecoverKeepsTheMemoryTier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manifest: %v", err)
 	}
-	if man.MemoryMultiplier != 4 || man.DoubleMemory {
-		t.Errorf("manifest memoryMultiplier %d doubleMemory %v, want 4 false", man.MemoryMultiplier, man.DoubleMemory)
+	if man.MemoryMultiplier != 4 {
+		t.Errorf("manifest memoryMultiplier = %d, want 4", man.MemoryMultiplier)
 	}
 }
 

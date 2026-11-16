@@ -103,39 +103,14 @@ func (a *API) Routes(mux *http.ServeMux) {
 // restoreReq is the optional body of switch and recover: what the restore
 // from snapshot should change. Absent keeps the session as it was.
 type restoreReq struct {
-	memoryReq
+	MemoryMultiplier *int `json:"memoryMultiplier"`
 }
 
 func (r restoreReq) options() (session.RestoreOptions, error) {
-	m, err := r.multiplier()
-	return session.RestoreOptions{MemoryMultiplier: m}, err
-}
-
-// memoryReq is the memory tier of a create or restore. doubleMemory is the
-// field clients used before memoryMultiplier existed: true is tier 2, false
-// tier 1. Given together, the two must name the same tier.
-type memoryReq struct {
-	MemoryMultiplier *int  `json:"memoryMultiplier"`
-	DoubleMemory     *bool `json:"doubleMemory"`
-}
-
-// multiplier is the requested tier, nil when neither field was given.
-func (r memoryReq) multiplier() (*int, error) {
-	m := r.MemoryMultiplier
-	if r.DoubleMemory != nil {
-		legacy := 1
-		if *r.DoubleMemory {
-			legacy = 2
-		}
-		if m != nil && *m != legacy {
-			return nil, session.ErrInvalidInput
-		}
-		m = &legacy
+	if r.MemoryMultiplier != nil && !session.ValidMemoryMultiplier(*r.MemoryMultiplier) {
+		return session.RestoreOptions{}, session.ErrInvalidInput
 	}
-	if m != nil && !session.ValidMemoryMultiplier(*m) {
-		return nil, session.ErrInvalidInput
-	}
-	return m, nil
+	return session.RestoreOptions{MemoryMultiplier: r.MemoryMultiplier}, nil
 }
 
 type createReq struct {
@@ -152,7 +127,9 @@ type createReq struct {
 	// ReasoningEffort is raw for the same reason; its contract is AC-E8.
 	ReasoningEffort json.RawMessage `json:"reasoningEffort"`
 
-	memoryReq
+	// MemoryMultiplier is a pointer only so an explicit 0 is refused rather
+	// than read as omitted.
+	MemoryMultiplier *int `json:"memoryMultiplier"`
 
 	Tenant json.RawMessage `json:"tenant"`
 }
@@ -353,9 +330,8 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	memory, err := req.multiplier()
-	if err != nil {
-		writeErr(w, err)
+	if req.MemoryMultiplier != nil && !session.ValidMemoryMultiplier(*req.MemoryMultiplier) {
+		writeErr(w, session.ErrInvalidInput)
 		return
 	}
 	tenant, err := a.createTenant(caller, req.Tenant, workload)
@@ -365,7 +341,7 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, err := a.mgr.Create(r.Context(), session.CreateRequest{
 		Name: req.Name, WorkloadType: workload, Model: model, Plugins: plugins, ReasoningEffort: effort,
-		MemoryMultiplier: valueOr(memory, 0), Tenant: tenant,
+		MemoryMultiplier: valueOr(req.MemoryMultiplier, 0), Tenant: tenant,
 	})
 	if err != nil {
 		writeErr(w, err)
