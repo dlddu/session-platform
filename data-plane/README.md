@@ -45,7 +45,13 @@ interactive shell and Claude Code workloads.
   question lives only as long as its turn.
   A write may also ask for the turn's tool calls to wait for the **session
   owner** (`POST /write?toolApprovals=true`, AC-E2). Only that turn gets
-  `--approvals-url`, and only calls `decideTool` already allows reach it: the
+  `--approvals-url` and a `PreToolUse` hook, and that hook only ever returns
+  `ask` — for a call `decideTool` already allows — so the call reaches
+  `canUseTool` instead of being settled by the auto classifier. It never
+  returns `allow` (that would route around the settings' deny rules) and never
+  `deny` (a policy refusal belongs in `canUseTool`, where it leaves a line in
+  the output). A turn that did not ask for approvals gets no `hooks` at all.
+  Only calls `decideTool` already allows reach the desk: the
   runner puts one call on the loopback-only `POST /approvals/ask` with a
   `sha256` over the tool and its arguments, polls `GET /approvals/ask/{id}`
   while the turn keeps running, and allows the call unchanged on an approval

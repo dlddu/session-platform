@@ -30,6 +30,7 @@ import {
   SETTINGS_FILE,
   TurnInput,
   UsageError,
+  approvalHookDecision,
   approvalWaitFromEnv,
   askApproval,
   askPerson,
@@ -189,6 +190,42 @@ async function main(argv) {
         return { behavior: "allow", updatedInput: input };
     }
   };
+  // A turn that asked for the owner's decision gets one hook, and that hook
+  // only ever says "ask". Without it the auto classifier can settle a call on
+  // its own and the owner never sees it; with it the call comes to canUseTool,
+  // where askApproval puts it to the owner. The hook never allows and never
+  // denies — a policy denial stays in canUseTool (where it leaves a line in the
+  // output), and the settings' own deny rules are untouched: with a matching
+  // deny rule the call was refused before the hook ran at all (2026-11-16 실측,
+  // scripts/experiments/pretooluse-probe).
+  const approvalHooks = args.approvalsUrl
+    ? {
+        PreToolUse: [
+          {
+            hooks: [
+              async ({ tool_name: toolName }) => {
+                const decision = approvalHookDecision(toolName, plugins, {
+                  k3s: Boolean(args.k3sMcpUrl),
+                  questions: Boolean(args.questionsUrl),
+                  approvals: true,
+                });
+                if (!decision) {
+                  return { continue: true };
+                }
+                return {
+                  continue: true,
+                  hookSpecificOutput: {
+                    hookEventName: "PreToolUse",
+                    permissionDecision: decision,
+                    permissionDecisionReason: "this turn puts its tool calls to the session owner",
+                  },
+                };
+              },
+            ],
+          },
+        ],
+      }
+    : null;
   const options = queryOptions({
     model: args.model,
     effort: args.effort,
@@ -197,6 +234,7 @@ async function main(argv) {
     claudeBin,
     plan,
     canUseTool,
+    hooks: approvalHooks,
     stderr: (data) => process.stderr.write(data),
   });
 

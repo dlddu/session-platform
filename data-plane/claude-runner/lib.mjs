@@ -272,6 +272,26 @@ export function decideTool(toolName, plugins = [], { k3s = false } = {}) {
 //   approval — a call the policy allows, in a turn whose write asked for the
 //              owner's decision (askApproval).
 //   allow    — a call the policy allows in any other turn, as before.
+// approvalHookDecision is what the turn's PreToolUse hook returns, and it
+// returns one thing or nothing: "ask" for a call this session's policy already
+// allows in a turn that asked for the owner's decision, and null otherwise.
+//
+// Never "allow". The hook exists to route an allowed call to a person, not to
+// grant anything — a hook that could allow would be a way around the settings'
+// own deny rules and around decideTool. Never "deny" either: a call the policy
+// refuses is already denied in canUseTool, where the refusal leaves a line in
+// the session's output.
+//
+// 2026-11-16 실측 (SDK 0.3.220 / CLI 2.1.220, `scripts/experiments/pretooluse-probe`):
+// "ask" 는 실제로 canUseTool 로 오고(baseline 콜백 0 → ask 케이스 1), 프로젝트 설정의
+// `permissions.deny: ["Read(./파일)"]` 이 있는 턴에서는 훅도 콜백도 **불리지 않은 채**
+// 호출이 거부됐다(훅 0 · 콜백 0 · tool_result error 1, 같은 파일 규칙 없는 대조군은 성공).
+// 그 범위에서 deny 규칙이 훅보다 앞선다. 다른 도구·관리형 설정·분류기 자동 거절로는
+// 일반화되지 않는다.
+export function approvalHookDecision(toolName, plugins = [], opts = {}) {
+  return planToolDecision(toolName, plugins, opts).kind === "approval" ? "ask" : null;
+}
+
 export function planToolDecision(toolName, plugins = [], { k3s = false, questions = false, approvals = false } = {}) {
   if (toolName === QUESTION_TOOL && questions) {
     return { kind: "question" };
@@ -286,7 +306,7 @@ export function planToolDecision(toolName, plugins = [], { k3s = false, question
 // queryOptions are the SDK options of one turn. The system prompt and the
 // setting sources are spelled out because the SDK's defaults differ from the
 // CLI's: without the preset it sends an empty system prompt.
-export function queryOptions({ model, effort, k3sMcpUrl = null, cwd, claudeBin, plan, canUseTool, stderr }) {
+export function queryOptions({ model, effort, k3sMcpUrl = null, cwd, claudeBin, plan, canUseTool, hooks = null, stderr }) {
   const options = {
     cwd,
     pathToClaudeCodeExecutable: claudeBin,
@@ -306,6 +326,11 @@ export function queryOptions({ model, effort, k3sMcpUrl = null, cwd, claudeBin, 
   if (k3sMcpUrl) {
     // The sidecar injects the token; the CLI sends none of its own.
     options.mcpServers = { [K3S_MCP_SERVER]: { type: "http", url: k3sMcpUrl } };
+  }
+  if (hooks) {
+    // Only a turn that asked for the owner's decision gets hooks at all; every
+    // other turn runs the shape it ran before.
+    options.hooks = hooks;
   }
   if (plan.kind === "resume") {
     options.resume = plan.sessionId;

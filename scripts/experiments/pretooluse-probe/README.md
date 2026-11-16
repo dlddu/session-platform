@@ -113,39 +113,42 @@ node probe.mjs > /tmp/pretooluse-probe.json # 실제 실행 (인증 필요)
 > ⚠️ 이 실측은 **설정 원천이 없는 환경**(`settingSources: []`)의 것이다. 명시적 deny 규칙이
 > 있는 환경에서 훅의 `ask` 가 어떻게 되는지는 **아직 재지 않았다** — 아래 「남은 최소 실험」.
 
-## 남은 최소 실험 — 명시적 deny 보존 (제품 연결의 전제)
+## 2026-11-16 (2) 실측 — 명시적 deny 보존 (같은 SDK/CLI, 로그인된 셸)
 
-제품(`toolApprovals` opt-in)에 PreToolUse `ask` 를 잇기 전에 **반드시** 답해야 하는 질문:
-**설정의 `permissions.deny` 가 막는 호출을 훅의 `ask` 가 되살려 사람 앞에 세울 수 있는가?**
-그럴 수 있다면 승인 경로가 명시적 deny 를 우회하는 길이 되므로, 그 전에는 잇지 않는다.
+제품에 훅을 잇기 전에 답해야 했던 질문: **설정의 `permissions.deny` 가 막는 호출을 훅의 `ask` 가
+되살려 사람 앞에 세울 수 있는가?** 네 변형을 돌렸다.
 
-SDK 계약에도 CLI 문자열에도 **훅 결정과 deny 규칙의 우선순위는 적혀 있지 않다**
-(`decision_reason_type` 이 `'rule' | 'hook' | 'classifier' | …` 로 **병렬 열거**될 뿐이다).
-그래서 실측해야 한다.
+| 변형 | 규칙 | 결과 | 채택 |
+|---|---|---|---|
+| (A) | `options.settings` 의 `deny: ["Read"]` (도구 전체) | `tool_use` 0 · 훅 0 · 콜백 0 | ❌ 도구 자체가 사라진 것이라 **우선순위의 증거가 아니다** |
+| (B) | `Read(/tmp/… )` 단일 슬래시 절대경로형 | baseline 이 **성공** | ❌ 규칙이 매칭되지 않았다 — 무효 |
+| (C) | `options.settings` 의 `deny: ["Read(./probe-input.txt)"]` | baseline·ask 모두 Read 요청 1 → `tool_result` error 1, **훅 0 · 콜백 0** | ✅ |
+| (D) | 임시 cwd `.claude/settings.json` 같은 규칙 + `settingSources: ["project"]` | 네 케이스 모두 Read 요청 1 → `tool_result` error 1, **훅 0 · 콜백 0**, `result success` | ✅ |
 
-비운영·무해하게 재는 법(로그인된 셸에서, 이 하네스를 조금 고쳐서):
+같은 파일에 규칙이 **없는** 대조군은 baseline·ask 모두 Read 성공 1이었다. 그래서 차단은 그 규칙
+때문이고, **이 버전의 `Read(파일)` 규칙에서 deny 는 훅보다 앞선다** — 훅이 불리기도 전에 호출이
+끝난다. 원본은 셸 쪽 `result-projectdeny.json` · `result-pathdeny-relative.json` 에 있다.
 
-1. 격리 cwd 에 `.claude/settings.json` 을 쓴다 —
-   `{"permissions":{"deny":["Read(./probe-input.txt)"]}}` (그 파일 하나만 막는다).
-2. `settingSources: ["project"]` 로 바꾼다. 나머지는 그대로.
-3. 두 케이스를 돌린다:
-   - **`deny-rule-baseline`** (훅 없음): 호출이 거부되는지, `permission_denied` 의
-     `decision_reason_type` 이 `"rule"` 인지 확인한다. 이 선행이 성립해야 2단계가 의미를 갖는다.
-   - **`deny-rule-vs-ask`** (훅이 `ask`): `canUseTool` 이 **불리는지**를 본다.
-4. 판정:
-   - `canUseTool` **0회** → deny 규칙이 훅보다 세다. **명시적 deny 보존 확인** → 제품 연결 가능.
-   - `canUseTool` **1회** → 훅의 `ask` 가 deny 규칙을 뚫고 사람에게 묻는다.
-     **제품 연결 불가** — 승인 경로가 명시적 deny 의 우회로가 된다.
-   - 1 단계가 거부를 재현하지 못하면(규칙 문법 불일치 등) **아무 결론도 내리지 않는다**.
+### 이 결과로 말하지 않는 것
+- **`decision_reason_type="rule"` 을 직접 관측하지 못했다.** 이 Read 규칙 경로에서는 SDK 의
+  `permission_denied` 시스템 메시지가 나오지 않았다. 거부는 `tool_result` error 로만 보였다.
+- (A) 의 도구 전체 금지는 **우선순위가 아니라 도구 제거**다.
+- 관리형(managed) 설정·다른 도구·`auto` 분류기 자동 거절로 **일반화하지 않는다**.
+- 하네스의 `hook-deny` 판정값 `hardDenyPreserved` 는 「훅이 불렸고 콜백이 0」을 보는 것이라,
+  **훅조차 불리지 않는 이 deny 규칙 경로에는 적용되지 않는다**. 그 경로는 `rule-before-hook`
+  이라는 **별도 판정**으로 읽어야 하고, `hardDenyPreserved === false` 를 위반으로 읽으면 안 된다.
 
-`.claude/settings.json` 은 임시 cwd 안에만 쓰고, 끝나면 cwd 째로 지운다. 사용자·운영 설정은
-건드리지 않는다.
+### 그래서 제품에 무엇이 들어갔나
+`toolApprovals` 를 고른 턴에만 `PreToolUse` 훅 하나가 붙고, 그 훅은 **`ask` 외에는 말하지 않는다**
+(`lib.mjs` 의 `approvalHookDecision`). 정책이 허용하는 호출만 `ask` 로 끌어오고, 정책이 거부하는
+것·정책이 스스로 정하는 것(`AskUserQuestion`·플랜 모드)은 `null` 이라 훅이 아무 판정도 싣지 않는다 —
+거부는 전과 같이 `canUseTool` 에서 일어나고 출력에 한 줄을 남긴다. 승인을 고르지 않은 턴의 SDK
+옵션에는 `hooks` 키 자체가 없다.
 
 ## 이 하네스가 답하지 못하는 것
 
 - 분류기 vs 훅의 **선점 관계**(위 실측에서 분류기 거절이 재현되지 않았다).
-- **명시적 deny 규칙 vs 훅의 `ask`** — 위 「남은 최소 실험」이 답한다. 그 전까지 제품 연결은
-  막혀 있다.
+- **관리형 설정·다른 도구에서의 deny 우선순위** — 위 (2) 실측은 `Read(파일)` 규칙 하나의 범위다.
 - 운영 러너에서의 동작. 여기서는 `settingSources: []` 이고 플러그인·K3s MCP 가 없다.
 - 승인 만료·중복 요청 재전달 같은 데스크 쪽 성질 — 그것은 이미
   `data-plane/cmd/agent/claude_approvals_test.go` 가 덮는다.

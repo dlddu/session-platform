@@ -12,6 +12,7 @@ import {
   PLATFORM_DEFAULT_MODEL,
   TurnInput,
   UsageError,
+  approvalHookDecision,
   approvalWaitFromEnv,
   askApproval,
   askPerson,
@@ -755,4 +756,42 @@ test("a redelivered permission request joins the one approval already waiting", 
   // Both asks are answered with the same request id, so one decision serves
   // the redelivery too — the agent is what refuses to open a second request.
   assert.ok(agent.calls.filter((c) => c.method === "GET").every((c) => c.url.endsWith("/approvals/ask/ap_1")));
+});
+
+// AC-E2 「턴 중 도구 승인」의 훅: 이 훅이 말할 수 있는 것은 "ask" 하나뿐이다.
+test("the approval hook only ever asks, and only for what the policy already allows", () => {
+  const plugins = ["session-platform"];
+  const inApprovalTurn = { approvals: true, questions: true, k3s: true };
+
+  // 정책이 허용하는 호출만 사람에게 간다.
+  for (const tool of ["Bash", "Read", "mcp__k3s__resource_get", `${pluginToolPrefix("session-platform")}mcp__x`]) {
+    assert.equal(approvalHookDecision(tool, plugins, inApprovalTurn), "ask", tool);
+  }
+  // 정책이 거부하는 것과 정책이 스스로 정하는 것은 훅이 건드리지 않는다 — null 이면
+  // 훅은 아무 판정도 싣지 않고, 기존 canUseTool 이 그대로 거부한다.
+  for (const tool of ["mcp__repo__anything", "EnterPlanMode", "ExitPlanMode", "AskUserQuestion"]) {
+    assert.equal(approvalHookDecision(tool, plugins, inApprovalTurn), null, tool);
+  }
+  // 승인을 고르지 않은 턴에서는 어떤 도구도 훅의 몫이 아니다.
+  for (const tool of ["Bash", "Read", "mcp__k3s__resource_get"]) {
+    assert.equal(approvalHookDecision(tool, plugins, { k3s: true, questions: true }), null, tool);
+  }
+  // 이 훅이 "allow" 나 "deny" 를 내놓는 입력은 없다 — 있으면 설정의 deny 규칙과
+  // decideTool 을 돌아가는 길이 된다.
+  const everything = ["Bash", "Read", "Write", "WebFetch", "AskUserQuestion", "EnterPlanMode", "mcp__repo__x", "mcp__k3s__y"];
+  for (const tool of everything) {
+    for (const opts of [{}, { approvals: true }, { approvals: true, k3s: true, questions: true }, { k3s: true }]) {
+      const decision = approvalHookDecision(tool, plugins, opts);
+      assert.ok(decision === "ask" || decision === null, `${tool} -> ${decision}`);
+    }
+  }
+});
+
+// 훅은 승인을 고른 턴에만 붙는다 — 다른 턴의 SDK 옵션은 이전과 한 자도 같다.
+test("queryOptions carries hooks only for the turn that asked for them", () => {
+  const base = { cwd: "/w", claudeBin: "/c", plan: { kind: "new" } };
+  assert.equal("hooks" in queryOptions(base), false);
+  assert.equal("hooks" in queryOptions({ ...base, hooks: null }), false);
+  const hooks = { PreToolUse: [{ hooks: [async () => ({ continue: true })] }] };
+  assert.deepEqual(queryOptions({ ...base, hooks }).hooks, hooks);
 });
