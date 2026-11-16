@@ -123,13 +123,13 @@ func TestRecoverBringsBackADeletedSessionFromItsLastSnapshot(t *testing.T) {
 	}
 }
 
-// The doubled memory option lives in the manifest, not only in the ConfigMap
+// The memory tier lives in the manifest, not only in the ConfigMap
 // record the delete takes away, so a recovered session comes back on the same
 // memory tier it was created with — pod spec included.
-func TestRecoverKeepsTheDoubledMemoryTier(t *testing.T) {
+func TestRecoverKeepsTheMemoryTier(t *testing.T) {
 	ctx := context.Background()
 	f := newRecoverFixture()
-	created, err := f.svc.Create(ctx, session.CreateRequest{Name: "hungry", DoubleMemory: true})
+	created, err := f.svc.Create(ctx, session.CreateRequest{Name: "hungry", MemoryMultiplier: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,18 +144,18 @@ func TestRecoverKeepsTheDoubledMemoryTier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recover: %v", err)
 	}
-	if !got.DoubleMemory {
-		t.Errorf("recovered session DoubleMemory = false, want true")
+	if got.MemoryTier() != 4 {
+		t.Errorf("recovered session tier = %d, want 4", got.MemoryTier())
 	}
-	if !f.orch.SpecFor(created.ID).DoubleMemory {
-		t.Errorf("recovery provisioned with DoubleMemory = false, want true")
+	if m := f.orch.SpecFor(created.ID).MemoryMultiplier; m != 4 {
+		t.Errorf("recovery provisioned with MemoryMultiplier = %d, want 4", m)
 	}
 	man, err := f.manifests.GetManifest(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("manifest: %v", err)
 	}
-	if !man.DoubleMemory {
-		t.Errorf("manifest DoubleMemory = false, want true")
+	if man.MemoryMultiplier != 4 || man.DoubleMemory {
+		t.Errorf("manifest memoryMultiplier %d doubleMemory %v, want 4 false", man.MemoryMultiplier, man.DoubleMemory)
 	}
 }
 
@@ -281,7 +281,7 @@ func TestSnapshotManifestWriteFailureRollsBack(t *testing.T) {
 func TestRecoverChangesTheMemoryTier(t *testing.T) {
 	ctx := context.Background()
 	f := newRecoverFixture()
-	on := true
+	eight := 8
 	created, err := f.svc.Create(ctx, session.CreateRequest{Name: "grown"})
 	if err != nil {
 		t.Fatal(err)
@@ -293,11 +293,11 @@ func TestRecoverChangesTheMemoryTier(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := f.svc.Recover(ctx, created.ID, session.RestoreOptions{DoubleMemory: &on}, func(*session.Session) error { return nil })
+	got, err := f.svc.Recover(ctx, created.ID, session.RestoreOptions{MemoryMultiplier: &eight}, func(*session.Session) error { return nil })
 	if err != nil {
 		t.Fatalf("recover: %v", err)
 	}
-	if !got.DoubleMemory || !f.orch.SpecFor(created.ID).DoubleMemory {
-		t.Fatalf("recovered: session %v, pod %v; want true, true", got.DoubleMemory, f.orch.SpecFor(created.ID).DoubleMemory)
+	if got.MemoryTier() != 8 || f.orch.SpecFor(created.ID).MemoryMultiplier != 8 {
+		t.Fatalf("recovered: session %d, pod %d; want 8, 8", got.MemoryTier(), f.orch.SpecFor(created.ID).MemoryMultiplier)
 	}
 }

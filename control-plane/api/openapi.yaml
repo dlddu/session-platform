@@ -1119,13 +1119,21 @@ components:
         should change. An empty object or no body keeps the session as it
         was.
       properties:
+        memoryMultiplier:
+          type: integer
+          enum: [1, 2, 4, 8]
+          description: >
+            The memory tier of the restored pod (see
+            CreateSessionRequest.memoryMultiplier), kept for later restores.
+            On a session that already holds a pod only its current tier is
+            accepted (another → 422). Any other value → 400.
         doubleMemory:
           type: boolean
+          deprecated: true
           description: >
-            The memory tier of the restored pod (true doubles the platform
-            default request/limit, false keeps it), kept for later restores.
-            On a session that already holds a pod only its current tier is
-            accepted.
+            Alias kept for existing clients: true is memoryMultiplier 2,
+            false is 1. Given with memoryMultiplier, both must name the same
+            tier, otherwise 400.
     Session:
       type: object
       required: [id, name, state, workloadType, createdAt, lastAccess]
@@ -1165,14 +1173,21 @@ components:
             named one (AC-E8). `claude-code` takes low, medium, high, xhigh or
             max; `codex-task` takes minimal, low, medium, high or xhigh (AC-M4).
             Absent means the CLI's own default. A restore keeps it.
+        memoryMultiplier:
+          type: integer
+          enum: [2, 4, 8]
+          description: >
+            The session's memory tier: the workload container's memory
+            request/limit is the platform default times this value. Set at
+            creation and carried across snapshot/restore; a restore from
+            snapshot (switch or recover) may change it. Absent means 1.
         doubleMemory:
           type: boolean
+          deprecated: true
           description: >
-            Whether the workload container runs with doubled memory
-            request/limit over the platform default, set at creation and
-            carried across snapshot/restore; a restore from snapshot (switch
-            or recover) may change it. Absent or false means the platform
-            default; applies to every workload type.
+            True exactly when memoryMultiplier is 2, for clients that predate
+            it; absent at every other tier, including 4 and 8. Read
+            memoryMultiplier instead.
         pod:
           type: string
           description: >
@@ -1245,16 +1260,25 @@ components:
             installed again on every restore: a `claude-code` session whose
             plugin has since left the marketplace cannot be restored. `null`, an empty list, a duplicate or an
             invalid name → 400, as is a list on `shell`.
+        memoryMultiplier:
+          type: integer
+          enum: [1, 2, 4, 8]
+          description: >
+            Optional memory tier: the workload container's memory
+            request/limit is the platform default (currently 512Mi/1Gi) times
+            this value — 2 → 1Gi/2Gi, 4 → 2Gi/4Gi, 8 → 4Gi/8Gi. Carried across
+            snapshot/restore and changeable only when a snapshot is restored
+            (switch or recover). Omitted means 1; applies to every workload
+            type. A deployment may schedule tiers above 1 onto dedicated
+            nodes (SESSION_HIGH_MEMORY_NODE_SELECTOR / _TOLERATIONS). Any
+            other value is rejected with 400 before any pod is provisioned.
         doubleMemory:
           type: boolean
+          deprecated: true
           description: >
-            Optional. Doubles the workload container's memory request/limit
-            over the platform default (currently 512Mi/1Gi -> 1Gi/2Gi),
-            carried across snapshot/restore and changeable only when a
-            snapshot is restored (switch or recover). Omitted or
-            false keeps every existing client's behavior unchanged; applies
-            to every workload type. A non-boolean value is rejected with 400
-            before any pod is provisioned.
+            Alias kept for existing clients: true is memoryMultiplier 2,
+            false is 1. Given with memoryMultiplier, both must name the same
+            tier, otherwise 400.
         reasoningEffort:
           type: string
           minLength: 1

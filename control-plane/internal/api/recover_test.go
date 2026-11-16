@@ -140,7 +140,7 @@ func TestRecoverSessionRouteRechecksTheTypeGrant(t *testing.T) {
 	}
 }
 
-// recover takes the same optional doubleMemory as switch.
+// recover takes the same optional memoryMultiplier/doubleMemory as switch.
 func TestRecoverSessionRouteDoubleMemory(t *testing.T) {
 	srv := newRecoverServers(t, recoverTenants)[0]
 	gone := freezeAndDelete(t, srv, "alpha", map[string]any{"name": "a1"})
@@ -148,6 +148,9 @@ func TestRecoverSessionRouteDoubleMemory(t *testing.T) {
 
 	if resp, raw := tenantCall(t, srv, http.MethodPost, path, "alpha", map[string]any{"doubleMemory": 1}); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("non-boolean doubleMemory: %d %s, want 400", resp.StatusCode, raw)
+	}
+	if resp, raw := tenantCall(t, srv, http.MethodPost, path, "alpha", map[string]any{"memoryMultiplier": 3}); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unknown memoryMultiplier: %d %s, want 400", resp.StatusCode, raw)
 	}
 	resp, raw := tenantCall(t, srv, http.MethodPost, path, "alpha", map[string]any{"doubleMemory": true})
 	if resp.StatusCode != http.StatusOK {

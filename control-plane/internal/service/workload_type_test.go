@@ -195,18 +195,18 @@ func TestWorkloadTypeSurvivesSnapshotRestore(t *testing.T) {
 	}
 }
 
-// The doubled memory option is fixed at creation and must reach the restored
-// pod's spec exactly like model and workload type do.
-func TestDoubleMemorySurvivesSnapshotRestore(t *testing.T) {
+// The memory tier is fixed at creation and must reach the restored pod's
+// spec exactly like model and workload type do.
+func TestMemoryTierSurvivesSnapshotRestore(t *testing.T) {
 	ctx := context.Background()
 	svc, orch, _ := newServiceWithOrch()
 
-	sess, err := svc.Create(ctx, session.CreateRequest{Name: "double-mem", DoubleMemory: true})
+	sess, err := svc.Create(ctx, session.CreateRequest{Name: "big-mem", MemoryMultiplier: 8})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if !sess.DoubleMemory {
-		t.Fatalf("created session DoubleMemory = false, want true")
+	if sess.MemoryTier() != 8 || sess.DoubleMemory {
+		t.Fatalf("created session tier %d doubleMemory %v, want 8 false", sess.MemoryTier(), sess.DoubleMemory)
 	}
 	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
 		t.Fatalf("snapshot: %v", err)
@@ -215,11 +215,24 @@ func TestDoubleMemorySurvivesSnapshotRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	if !restored.DoubleMemory {
-		t.Errorf("restored session DoubleMemory = false, want true")
+	if restored.MemoryTier() != 8 {
+		t.Errorf("restored session tier = %d, want 8", restored.MemoryTier())
 	}
-	if got := orch.SpecFor(sess.ID).DoubleMemory; !got {
-		t.Errorf("restore provisioned with DoubleMemory = %v, want true", got)
+	if got := orch.SpecFor(sess.ID).MemoryMultiplier; got != 8 {
+		t.Errorf("restore provisioned with MemoryMultiplier = %d, want 8", got)
+	}
+}
+
+// A tier outside session.MemoryMultipliers is refused before a pod exists.
+func TestCreateRefusesAnUnknownMemoryTier(t *testing.T) {
+	svc, orch, _ := newServiceWithOrch()
+	for _, m := range []int{-1, 3, 16} {
+		if _, err := svc.Create(context.Background(), session.CreateRequest{Name: "odd", MemoryMultiplier: m}); !errors.Is(err, session.ErrInvalidInput) {
+			t.Errorf("tier %d: err %v, want %v", m, err, session.ErrInvalidInput)
+		}
+	}
+	if n := orch.RunningCount(); n != 0 {
+		t.Fatalf("refused creates started %d pods", n)
 	}
 }
 
@@ -398,7 +411,7 @@ func TestShellWriteIsNotPromptBounded(t *testing.T) {
 func TestRestoreChangesTheMemoryTier(t *testing.T) {
 	ctx := context.Background()
 	svc, orch, _ := newServiceWithOrch()
-	on, off := true, false
+	four, one := 4, 1
 
 	sess, err := svc.Create(ctx, session.CreateRequest{Name: "grow"})
 	if err != nil {
@@ -407,12 +420,12 @@ func TestRestoreChangesTheMemoryTier(t *testing.T) {
 	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
-	raised, err := svc.Switch(ctx, sess.ID, session.RestoreOptions{DoubleMemory: &on})
+	raised, err := svc.Switch(ctx, sess.ID, session.RestoreOptions{MemoryMultiplier: &four})
 	if err != nil {
 		t.Fatalf("switch raising the tier: %v", err)
 	}
-	if !raised.DoubleMemory || !orch.SpecFor(sess.ID).DoubleMemory {
-		t.Fatalf("raised: session %v, pod %v; want true, true", raised.DoubleMemory, orch.SpecFor(sess.ID).DoubleMemory)
+	if raised.MemoryTier() != 4 || orch.SpecFor(sess.ID).MemoryMultiplier != 4 {
+		t.Fatalf("raised: session %d, pod %d; want 4, 4", raised.MemoryTier(), orch.SpecFor(sess.ID).MemoryMultiplier)
 	}
 
 	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
@@ -422,19 +435,19 @@ func TestRestoreChangesTheMemoryTier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plain restore: %v", err)
 	}
-	if !kept.DoubleMemory || !orch.SpecFor(sess.ID).DoubleMemory {
-		t.Fatalf("plain restore after raising: session %v, pod %v; want true, true", kept.DoubleMemory, orch.SpecFor(sess.ID).DoubleMemory)
+	if kept.MemoryTier() != 4 || orch.SpecFor(sess.ID).MemoryMultiplier != 4 {
+		t.Fatalf("plain restore after raising: session %d, pod %d; want 4, 4", kept.MemoryTier(), orch.SpecFor(sess.ID).MemoryMultiplier)
 	}
 
 	if _, err := svc.Snapshot(ctx, sess.ID); err != nil {
 		t.Fatalf("third snapshot: %v", err)
 	}
-	lowered, err := svc.Switch(ctx, sess.ID, session.RestoreOptions{DoubleMemory: &off})
+	lowered, err := svc.Switch(ctx, sess.ID, session.RestoreOptions{MemoryMultiplier: &one})
 	if err != nil {
 		t.Fatalf("switch lowering the tier: %v", err)
 	}
-	if lowered.DoubleMemory || orch.SpecFor(sess.ID).DoubleMemory {
-		t.Fatalf("lowered: session %v, pod %v; want false, false", lowered.DoubleMemory, orch.SpecFor(sess.ID).DoubleMemory)
+	if lowered.MemoryTier() != 1 || lowered.MemoryMultiplier != 0 || orch.SpecFor(sess.ID).MemoryMultiplier != 1 {
+		t.Fatalf("lowered: session %d (stored %d), pod %d; want 1 (0), 1", lowered.MemoryTier(), lowered.MemoryMultiplier, orch.SpecFor(sess.ID).MemoryMultiplier)
 	}
 }
 
@@ -443,23 +456,23 @@ func TestRestoreChangesTheMemoryTier(t *testing.T) {
 func TestLiveSessionRefusesAMemoryTierChange(t *testing.T) {
 	ctx := context.Background()
 	svc, orch, _ := newServiceWithOrch()
-	on, off := true, false
+	two, one := 2, 1
 
 	sess, err := svc.Create(ctx, session.CreateRequest{Name: "live"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	before := orch.RunningCount()
-	if _, err := svc.Switch(ctx, sess.ID, session.RestoreOptions{DoubleMemory: &on}); !errors.Is(err, session.ErrInvalidState) {
+	if _, err := svc.Switch(ctx, sess.ID, session.RestoreOptions{MemoryMultiplier: &two}); !errors.Is(err, session.ErrInvalidState) {
 		t.Fatalf("switch to the other tier on a live session: err %v, want %v", err, session.ErrInvalidState)
 	}
-	if got, _ := svc.Get(ctx, sess.ID); got.DoubleMemory {
+	if got, _ := svc.Get(ctx, sess.ID); got.MemoryTier() != 1 {
 		t.Fatalf("refused change was stored")
 	}
 	if after := orch.RunningCount(); after != before {
 		t.Fatalf("refused change started pods: %d -> %d", before, after)
 	}
-	if _, err := svc.Switch(ctx, sess.ID, session.RestoreOptions{DoubleMemory: &off}); err != nil {
+	if _, err := svc.Switch(ctx, sess.ID, session.RestoreOptions{MemoryMultiplier: &one}); err != nil {
 		t.Fatalf("switch to the tier it already has: %v", err)
 	}
 }

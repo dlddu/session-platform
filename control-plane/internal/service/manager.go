@@ -244,12 +244,19 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 	if err != nil {
 		return nil, err
 	}
+	memory := req.MemoryMultiplier
+	if memory == 0 {
+		memory = 1
+	}
+	if !session.ValidMemoryMultiplier(memory) {
+		return nil, session.ErrInvalidInput
+	}
 	id, err := newID()
 	if err != nil {
 		return nil, err
 	}
 
-	spec := k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins, ReasoningEffort: effort, DoubleMemory: req.DoubleMemory}
+	spec := k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins, ReasoningEffort: effort, MemoryMultiplier: memory}
 	// The slot is leased before the pod exists and given back on every
 	// failure below, so an aborted create never strands one (AC-N2).
 	if spec.AuthSlot, err = s.acquireAuthSlot(ctx, workload, id); err != nil {
@@ -280,7 +287,6 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 		Model:           model,
 		Plugins:         plugins,
 		ReasoningEffort: effort,
-		DoubleMemory:    req.DoubleMemory,
 		Tenant:          req.Tenant,
 		Name:            name,
 		State:           session.StateActive,
@@ -289,6 +295,7 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 		CreatedAt:       now,
 		LastAccess:      now,
 	}
+	sess.SetMemoryTier(memory)
 	if err := s.store.Put(ctx, sess); err != nil {
 		// best-effort rollback of every pod we just started
 		_ = s.orch.Stop(ctx, pods.All()...)
@@ -344,6 +351,9 @@ func normalizeStoredSession(sess *session.Session) (*session.Session, error) {
 // from a live pod, and reports which branch brought it there. This is the
 // shared core of the uniform "resume-on-access" policy (AC-C2/AC-C3/AC-C4).
 func (s *Service) activate(ctx context.Context, id string, opts session.RestoreOptions) (*session.Session, string, error) {
+	if err := validRestoreOptions(opts); err != nil {
+		return nil, "", err
+	}
 	sess, err := s.Get(ctx, id)
 	if err != nil {
 		return nil, "", err
@@ -939,13 +949,23 @@ func (s *Service) Restore(ctx context.Context, id string) (*session.Session, err
 // holds a pod: only a restore starts a new pod, so only a restore can change
 // the tier, and a silent no-op would leave the caller believing it had.
 func memoryTierFixed(sess *session.Session, opts session.RestoreOptions) error {
-	if opts.DoubleMemory != nil && *opts.DoubleMemory != sess.DoubleMemory {
-		return fmt.Errorf("%w: doubleMemory can change only when a snapshotted session is restored", session.ErrInvalidState)
+	if opts.MemoryMultiplier != nil && *opts.MemoryMultiplier != sess.MemoryTier() {
+		return fmt.Errorf("%w: memoryMultiplier can change only when a snapshotted session is restored", session.ErrInvalidState)
+	}
+	return nil
+}
+
+func validRestoreOptions(opts session.RestoreOptions) error {
+	if opts.MemoryMultiplier != nil && !session.ValidMemoryMultiplier(*opts.MemoryMultiplier) {
+		return session.ErrInvalidInput
 	}
 	return nil
 }
 
 func (s *Service) restore(ctx context.Context, id string, opts session.RestoreOptions) (result *session.Session, retErr error) {
+	if err := validRestoreOptions(opts); err != nil {
+		return nil, err
+	}
 	// A restore outlives the caller's connection, as a Create does: a restore
 	// pod that waits for an image pull or a node, then the archive and the
 	// agent's own restore, can take longer than a caller keeps a request open.
@@ -1025,11 +1045,11 @@ func (s *Service) restore(ctx context.Context, id string, opts session.RestoreOp
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	doubleMemory := sess.DoubleMemory
-	if opts.DoubleMemory != nil {
-		doubleMemory = *opts.DoubleMemory
+	memory := sess.MemoryTier()
+	if opts.MemoryMultiplier != nil {
+		memory = *opts.MemoryMultiplier
 	}
-	spec := k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins, ReasoningEffort: effort, DoubleMemory: doubleMemory}
+	spec := k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins, ReasoningEffort: effort, MemoryMultiplier: memory}
 	// codex-chat retains its DB slot across snapshots; other types can use
 	// any free login slot (AC-N3). A full pool leaves the session frozen.
 	if spec.AuthSlot, err = s.acquireAuthSlot(ctx, workload, id); err != nil {
@@ -1075,7 +1095,7 @@ func (s *Service) restore(ctx context.Context, id string, opts session.RestoreOp
 	next.Pod = pods.Workload.Name
 	next.AuxiliaryPods = pods.Names()
 	next.Model = model
-	next.DoubleMemory = doubleMemory
+	next.SetMemoryTier(memory)
 	next.Checkpoint = nil
 	next.LastAccess = now
 	if err := s.store.CompareAndSwapSession(
@@ -1115,6 +1135,9 @@ func (s *Service) restore(ctx context.Context, id string, opts session.RestoreOp
 // snapshot left, then restores it like any snapshot (AC-B4). The id must not
 // name a session that still exists.
 func (s *Service) Recover(ctx context.Context, id string, opts session.RestoreOptions, admit func(*session.Session) error) (*session.Session, error) {
+	if err := validRestoreOptions(opts); err != nil {
+		return nil, err
+	}
 	if s.manifests == nil {
 		return nil, session.ErrCheckpointDisabled
 	}

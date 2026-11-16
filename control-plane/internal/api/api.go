@@ -103,11 +103,39 @@ func (a *API) Routes(mux *http.ServeMux) {
 // restoreReq is the optional body of switch and recover: what the restore
 // from snapshot should change. Absent keeps the session as it was.
 type restoreReq struct {
-	DoubleMemory *bool `json:"doubleMemory"`
+	memoryReq
 }
 
-func (r restoreReq) options() session.RestoreOptions {
-	return session.RestoreOptions{DoubleMemory: r.DoubleMemory}
+func (r restoreReq) options() (session.RestoreOptions, error) {
+	m, err := r.multiplier()
+	return session.RestoreOptions{MemoryMultiplier: m}, err
+}
+
+// memoryReq is the memory tier of a create or restore. doubleMemory is the
+// field clients used before memoryMultiplier existed: true is tier 2, false
+// tier 1. Given together, the two must name the same tier.
+type memoryReq struct {
+	MemoryMultiplier *int  `json:"memoryMultiplier"`
+	DoubleMemory     *bool `json:"doubleMemory"`
+}
+
+// multiplier is the requested tier, nil when neither field was given.
+func (r memoryReq) multiplier() (*int, error) {
+	m := r.MemoryMultiplier
+	if r.DoubleMemory != nil {
+		legacy := 1
+		if *r.DoubleMemory {
+			legacy = 2
+		}
+		if m != nil && *m != legacy {
+			return nil, session.ErrInvalidInput
+		}
+		m = &legacy
+	}
+	if m != nil && !session.ValidMemoryMultiplier(*m) {
+		return nil, session.ErrInvalidInput
+	}
+	return m, nil
 }
 
 type createReq struct {
@@ -124,9 +152,7 @@ type createReq struct {
 	// ReasoningEffort is raw for the same reason; its contract is AC-E8.
 	ReasoningEffort json.RawMessage `json:"reasoningEffort"`
 
-	// DoubleMemory has no omitted/false ambiguity to preserve, so it decodes
-	// directly: both omitted and false mean the platform default memory.
-	DoubleMemory bool `json:"doubleMemory"`
+	memoryReq
 
 	Tenant json.RawMessage `json:"tenant"`
 }
@@ -327,6 +353,11 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	memory, err := req.multiplier()
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	tenant, err := a.createTenant(caller, req.Tenant, workload)
 	if err != nil {
 		writeErr(w, err)
@@ -334,7 +365,7 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, err := a.mgr.Create(r.Context(), session.CreateRequest{
 		Name: req.Name, WorkloadType: workload, Model: model, Plugins: plugins, ReasoningEffort: effort,
-		DoubleMemory: req.DoubleMemory, Tenant: tenant,
+		MemoryMultiplier: valueOr(memory, 0), Tenant: tenant,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -498,7 +529,12 @@ func (a *API) switchSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	sess, err := a.mgr.Switch(r.Context(), r.PathValue("id"), req.options())
+	opts, err := req.options()
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	sess, err := a.mgr.Switch(r.Context(), r.PathValue("id"), opts)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -535,7 +571,12 @@ func (a *API) recoverSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	sess, err := a.mgr.Recover(r.Context(), r.PathValue("id"), req.options(), func(rec *session.Session) error {
+	opts, err := req.options()
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	sess, err := a.mgr.Recover(r.Context(), r.PathValue("id"), opts, func(rec *session.Session) error {
 		if !caller.Sees(rec.Tenant) {
 			return session.ErrNotFound
 		}
@@ -690,6 +731,13 @@ func (a *API) createTenant(caller tenancy.Caller, raw json.RawMessage, requested
 }
 
 // ---- helpers ----
+
+func valueOr[T any](p *T, fallback T) T {
+	if p == nil {
+		return fallback
+	}
+	return *p
+}
 
 func decodeRequestBody(body io.Reader, dst any, required bool) error {
 	wire, err := io.ReadAll(io.LimitReader(body, maxRequestBodyBytes+1))
