@@ -241,14 +241,19 @@ func main() {
 		}
 		// A codex-chat sidecar also serves the session DB from its slot (AC-N6).
 		if dir := os.Getenv(sessionDBDirEnv); dir != "" {
-			db, err := newSessionDB(dir, logger)
+			rawSQL, err := sessionDBRawSQLFromEnv()
+			if err != nil {
+				logger.Error("invalid session database raw SQL setting", "err", err)
+				os.Exit(1)
+			}
+			db, err := newSessionDB(dir, rawSQL, logger)
 			if err != nil {
 				logger.Error("invalid session database directory", "err", err)
 				os.Exit(1)
 			}
 			defer db.Close()
 			handler = withSessionDBMCP(proxy, db)
-			logger.Info("session db mcp enabled", "path", sessionDBMCPPath)
+			logger.Info("session db mcp enabled", "path", sessionDBMCPPath, "raw_sql", rawSQL)
 		}
 		// A codex sidecar also keeps the session's schedules (AC-P1~P3).
 		if raw := os.Getenv(schedulerAgentURLEnv); raw != "" {
