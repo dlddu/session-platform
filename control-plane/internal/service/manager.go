@@ -579,6 +579,43 @@ func (s *Service) AnswerQuestion(ctx context.Context, id, questionID string, ans
 	return nil
 }
 
+// steerAgent is the agent capability behind a mid-turn message (AC-J9).
+type steerAgent interface {
+	Steer(ctx context.Context, pod, text string) (session.Steered, error)
+}
+
+// Steer hands text to the session's running turn instead of the queue behind
+// it (AC-J9). Passive like Questions: it neither restores a snapshot nor
+// promotes an idle session — a session with no pod has no running turn, so
+// there is nothing to steer and the answer says so.
+func (s *Service) Steer(ctx context.Context, id, text string) (session.Steered, error) {
+	if text == "" {
+		return session.Steered{}, fmt.Errorf("%w: text is required", session.ErrInvalidInput)
+	}
+	sess, err := s.Get(ctx, id)
+	if err != nil {
+		return session.Steered{}, err
+	}
+	if !session.SteerableWorkload(sess.WorkloadType) {
+		return session.Steered{}, fmt.Errorf("%w: mid-turn messages are taken by codex sessions only", session.ErrInvalidState)
+	}
+	if sess.State == session.StateSnapshot || sess.Pod == "" {
+		return session.Steered{Status: "rejected", Reason: "no turn is running"}, nil
+	}
+	agentS, ok := s.agent.(steerAgent)
+	if !ok {
+		return session.Steered{Status: "rejected", Reason: "no turn is running"}, nil
+	}
+	steered, err := agentS.Steer(ctx, sess.Pod, text)
+	if err != nil {
+		return session.Steered{}, err
+	}
+	if steered.Applied() {
+		s.touch(ctx, id)
+	}
+	return steered, nil
+}
+
 // toolApprovalAgent is the agent capability behind a claude-code turn's tool
 // calls waiting on the session owner (AC-E2, 「턴 중 도구 승인」).
 type toolApprovalAgent interface {

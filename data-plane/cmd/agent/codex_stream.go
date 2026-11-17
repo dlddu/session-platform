@@ -23,6 +23,8 @@ type codexStreamProjector struct {
 	buf []byte
 	// discarding is set while the rest of an oversized line is skipped.
 	discarding bool
+	// steer, when set, receives the runner's turn/steer replies (AC-J9).
+	steer *steerDesk
 }
 
 const (
@@ -39,6 +41,14 @@ const (
 
 func newCodexStreamProjector(dst io.Writer) *codexStreamProjector {
 	return &codexStreamProjector{dst: dst}
+}
+
+// withSteerDesk routes the runner's steer replies (AC-J9) to the desk. The
+// replies stay out of the session output either way — this only decides
+// whether anyone hears them.
+func (p *codexStreamProjector) withSteerDesk(desk *steerDesk) *codexStreamProjector {
+	p.steer = desk
+	return p
 }
 
 func (p *codexStreamProjector) Write(chunk []byte) (int, error) {
@@ -125,6 +135,16 @@ func (p *codexStreamProjector) projectLine(line []byte) error {
 		return nil
 	}
 	switch record.Type {
+	case codexSteerType:
+		// A protocol line for the platform, not a line of the conversation:
+		// it is routed and never written to the session output.
+		if p.steer != nil {
+			var reply steerReply
+			if json.Unmarshal(line, &reply) == nil && reply.ID != "" {
+				p.steer.resolve(reply.ID, steerOutcome{Status: reply.Status, TurnID: reply.TurnID, Reason: reply.Reason})
+			}
+		}
+		return nil
 	case codexNoticeType:
 		if text := jsonString(record.Text); text != "" {
 			return p.writeLine(text)

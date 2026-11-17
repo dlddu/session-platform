@@ -89,6 +89,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/sessions/{id}/stream", a.streamSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/read", a.readSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/write", a.writeSession)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/steer", a.steerSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/switch", a.switchSession)
 
 	mux.HandleFunc("POST /api/v1/sessions/{id}/snapshot", a.snapshotSession)
@@ -629,6 +630,30 @@ func (a *API) answerQuestion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, answerQuestionResp{Status: "answered"})
 }
 
+// steerSession hands a message to the running turn rather than the queue
+// behind it (AC-J9). The answer tells applied from rejected: a caller that
+// wanted the running turn to see it must not treat a rejection as delivery.
+func (a *API) steerSession(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
+	var req steerReq
+	if err := decodeRequestBody(r.Body, &req, true); err != nil {
+		writeErr(w, err)
+		return
+	}
+	steered, err := a.mgr.Steer(r.Context(), r.PathValue("id"), strings.TrimSpace(req.Text))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	status := http.StatusOK
+	if !steered.Applied() {
+		status = http.StatusConflict
+	}
+	writeJSON(w, status, steered)
+}
+
 // listToolApprovals lists the tool calls a claude-code session's running turn
 // put to its owner (AC-E2).
 func (a *API) listToolApprovals(w http.ResponseWriter, r *http.Request) {
@@ -690,6 +715,11 @@ type questionsResp struct {
 
 type answerQuestionReq struct {
 	Answers map[string]string `json:"answers"`
+}
+
+// steerReq is one mid-turn message (AC-J9).
+type steerReq struct {
+	Text string `json:"text"`
 }
 
 type answerQuestionResp struct {
