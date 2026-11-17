@@ -71,16 +71,16 @@ func TestParseEmptyMeansNoTenants(t *testing.T) {
 
 func TestParseRejects(t *testing.T) {
 	for name, raw := range map[string]string{
-		"not json":           `{`,
-		"unknown field":      `{"tenants":[],"extra":1}`,
-		"bad name":           `{"tenants":[{"name":"Bad_Name","serviceAccounts":["a/b"],"workloadTypes":[]}]}`,
-		"duplicate name":     `{"tenants":[{"name":"a","serviceAccounts":["a/b"]},{"name":"a","serviceAccounts":["a/c"]}]}`,
-		"no accounts":        `{"tenants":[{"name":"a","serviceAccounts":[]}]}`,
-		"bad account":        `{"tenants":[{"name":"a","serviceAccounts":["just-a-name"]}]}`,
-		"shared account":     `{"tenants":[{"name":"a","serviceAccounts":["n/sa"]},{"name":"b","serviceAccounts":["n/sa"]}]}`,
-		"unknown type":       `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["vim"]}]}`,
-		"duplicate type":     `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["shell","shell"]}]}`,
-		"legacy codex":       `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["codex"]}]}`,
+		"not json":       `{`,
+		"unknown field":  `{"tenants":[],"extra":1}`,
+		"bad name":       `{"tenants":[{"name":"Bad_Name","serviceAccounts":["a/b"],"workloadTypes":[]}]}`,
+		"duplicate name": `{"tenants":[{"name":"a","serviceAccounts":["a/b"]},{"name":"a","serviceAccounts":["a/c"]}]}`,
+		"no accounts":    `{"tenants":[{"name":"a","serviceAccounts":[]}]}`,
+		"bad account":    `{"tenants":[{"name":"a","serviceAccounts":["just-a-name"]}]}`,
+		"shared account": `{"tenants":[{"name":"a","serviceAccounts":["n/sa"]},{"name":"b","serviceAccounts":["n/sa"]}]}`,
+		"unknown type":   `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["vim"]}]}`,
+		"duplicate type": `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["shell","shell"]}]}`,
+		"legacy codex":   `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["codex"]}]}`,
 		// Both names of one type is the same grant twice (AC-J1).
 		"type and its alias": `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["codex-manager","codex-chat"]}]}`,
 		"empty type literal": `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":[""]}]}`,
