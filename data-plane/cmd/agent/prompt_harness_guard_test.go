@@ -109,5 +109,5 @@ func TestToolDescriptionsStateFunctionOnly(t *testing.T) {
 	walk("session MCP", session.toolDefinitions())
 	walk("skills MCP", codexSkillsToolDefinitions(true))
 	walk("scheduler MCP", schedulerToolDefinitions())
-	walk("session DB MCP", sessionDBToolDefinitions())
+	walk("session DB MCP", sessionDBToolDefinitions(true))
 }

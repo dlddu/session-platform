@@ -506,6 +506,14 @@ const (
 	// sidecar's database MCP. Keep in sync with data-plane/cmd/agent.
 	SessionDBMCPURLEnvVar = "SESSION_DB_MCP_URL"
 	sessionDBMCPPath      = "/session-db/mcp"
+
+	// SessionDBRawSQLEnvVar carries the raw SQL debug opt-in to the sidecar,
+	// which refuses any value but `debug`. Keep in sync with
+	// data-plane/cmd/agent. It comes from the deployment's codex ConfigMap, not
+	// from the session: a chat session cannot ask for raw SQL.
+	SessionDBRawSQLEnvVar = "SESSION_DB_RAW_SQL"
+	// CodexSessionDBRawSQLConfigKey is that ConfigMap key.
+	CodexSessionDBRawSQLConfigKey = "session-db-raw-sql"
 )
 
 // CodexChatSessionDBMCPURL is the database MCP on the loopback sidecar.
@@ -554,7 +562,7 @@ func (o *ClientOrchestrator) attachAuthSlot(container *corev1.Container, workloa
 // session, so the database carries over to whichever chat session holds the
 // slot next. The workload container only learns the MCP's address. Other
 // types get nothing.
-func attachSessionDB(container *corev1.Container, sidecars []corev1.Container, workloadType session.WorkloadType, image string) ([]corev1.Container, error) {
+func attachSessionDB(container *corev1.Container, sidecars []corev1.Container, workloadType session.WorkloadType, image, configMap string) ([]corev1.Container, error) {
 	if workloadType != session.WorkloadTypeCodexManager {
 		return nil, nil
 	}
@@ -570,7 +578,9 @@ func attachSessionDB(container *corev1.Container, sidecars []corev1.Container, w
 	sidecars[proxy].VolumeMounts = append(sidecars[proxy].VolumeMounts, corev1.VolumeMount{
 		Name: AuthSlotVolumeName, MountPath: SessionDBMountPath, SubPath: codexChatSlotDBDir,
 	})
-	sidecars[proxy].Env = append(sidecars[proxy].Env, corev1.EnvVar{Name: SessionDBDirEnvVar, Value: SessionDBMountPath})
+	sidecars[proxy].Env = append(sidecars[proxy].Env,
+		corev1.EnvVar{Name: SessionDBDirEnvVar, Value: SessionDBMountPath},
+		optionalConfigMapEnv(SessionDBRawSQLEnvVar, configMap, CodexSessionDBRawSQLConfigKey))
 	container.Env = append(container.Env, corev1.EnvVar{Name: SessionDBMCPURLEnvVar, Value: CodexChatSessionDBMCPURL})
 	return []corev1.Container{slotInitContainer(image)}, nil
 }

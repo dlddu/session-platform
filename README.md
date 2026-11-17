@@ -415,7 +415,9 @@ ConfigMap (`model`, `models`, `k3s-mcp-url`, `plugin-marketplace-url`); see the
 its pool (`CODEX_CHAT_AUTH_SLOTS`, with `CODEX_CHAT_AUTH_STORAGE_CLASS` /
 `_STORAGE_SIZE`, default `1Gi`): each slot PVC holds the ChatGPT login and the
 session's SQLite database, which the sidecar serves as the `db` MCP server
-(`raw_query`, `raw_exec`, `ledger_get`, `ledger_list`, `ledger_put`, `ledger_delete`).
+(`ledger_get`, `ledger_list`, `ledger_put`, `ledger_delete`; the `raw_query`
+and `raw_exec` debug pair only where `session-db-raw-sql: debug` opts that
+deployment in).
 See [session ledger contracts and storage migration](docs/session-ledger.md). Tenancy needs the
 `session-platform-tenants` ConfigMap
 ([example](deploy/base/session-platform-tenants-configmap.example.yaml)) and a

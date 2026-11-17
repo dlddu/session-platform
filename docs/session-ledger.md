@@ -1,7 +1,11 @@
 # Session task ledger
 
 The `db` MCP on the codex-manager loopback sidecar offers `ledger_get`,
-`ledger_list`, `ledger_put`, and `ledger_delete` alongside the raw SQL tools.
+`ledger_list`, `ledger_put`, and `ledger_delete`. These four are the whole
+default surface: `raw_query` and `raw_exec` are debug tools, left out of
+`tools/list` and refused in `tools/call` unless the deployment opted that
+sidecar in with `SESSION_DB_RAW_SQL=debug` (ConfigMap key
+`session-db-raw-sql`). The ledger API is unchanged either way.
 This is the chat slot's bookkeeping, not a global task service or authoritative
 platform session inventory. No tool calls session create/delete, sends push,
 starts turns, or schedules work. codex-task and Claude workers do not receive
@@ -18,16 +22,17 @@ same `session.db` and continues the same ledger (AC-N6). The workload gets a
 loopback endpoint, not a file mount; the existing pod/network boundary is the
 authorization boundary. Ledger `owner` is a bookkeeping field, not an
 authorization claim, and records written by an earlier session on the slot
-keep that session's ID as owner. Raw SQL can modify ledger tables: these APIs
-are not a security boundary against the same slot.
+keep that session's ID as owner. Raw SQL, where a debug sidecar offers it, can
+modify ledger tables: these APIs are not a security boundary against the same
+slot.
 
 SQLite uses DELETE journaling (NFS/EFS cannot use WAL shared memory), a 5s busy
 timeout and one pooled connection. Each ledger call has a 30s deadline and a
 transaction; same-sidecar concurrent writers serialize, and expected_version
 selects one winner. External SQLite writers are unsupported. Transactions
 close/roll back on error and task mutations and idempotency receipts commit
-together. Raw SQL now rolls back any still-open transaction at call end,
-including after a statement failure. Use BEGIN/COMMIT within one raw_exec call;
+together. Raw SQL — on a debug sidecar — rolls back any still-open transaction
+at call end, including after a statement failure. Use BEGIN/COMMIT within one raw_exec call;
 transactions cannot span MCP calls. Autocommit statements before a later
 multi-statement error can already be committed. raw_exec counters are SQLite
 connection counters, **not committed totals**: ROLLBACK and DDL can report a
@@ -127,7 +132,9 @@ and list/read verification follow a confirmed merge before parent cleanup.
 
 ## Verification and rollout boundary
 
-Local tests exercise preservation of user tables/user_version, schema refusal,
+Local tests exercise the default surface (ledger only, raw calls refused with
+the opt-in named) and the debug surface, preservation of user
+tables/user_version, schema refusal,
 transaction rollback on receipt failure, single-winner CAS, replay and ID reuse,
 validation, filtering/keyset pages, raw transaction cleanup and close/reopen.
 Pod-spec tests cover the slot-level mount. These do not claim a deployed NFS restart/snapshot/restore test.

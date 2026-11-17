@@ -5,7 +5,7 @@
 
 > 📌 **개정 (2026-11-07, 사용자 결정)**: Codex를 채팅용과 작업용으로 나눴다. 이 문서의 타입은 **채팅용 `codex-chat`** 이다 — 장기 단일 세션을 가정하고 도구를 대화·스킬·K3s MCP로 좁힌 그대로다. 타입 이름이 `codex`에서 `codex-chat`으로 바뀌었고 옛 이름은 저장된 레코드에서만 읽는다(AC-J1). 작업용 `codex-task`(셸·파일·네트워크, 인증 풀 로그인)는 `codex-task-workload.md`다. 아래 본문의 「`codex` 타입」·「`codex` 세션」은 `codex-chat`으로 읽는다. 설정 이름(`DATA_PLANE_CODEX_IMAGE`·`CODEX_*`·`codex-config`·`codex-credentials`)은 바꾸지 않았다.
 
-> 📌 **개정 (2026-11-09, 사용자 결정)**: 이 타입도 **슬롯 풀**(`agent-auth-pool.md` AC-N6, 풀 `codex-chat`)을 쓴다. 슬롯 PVC에 ChatGPT 로그인과 **세션 DB**(SQLite)를 함께 두고, 사이드카가 세션 DB를 MCP(`raw_query`·`raw_exec`)로 내놓는다. 로그인은 아카이브가 아니라 슬롯에 남는다(AC-J3·J4), 도구 표면에 세션 DB가 더해진다(AC-J5).
+> 📌 **개정 (2026-11-09, 사용자 결정)**: 이 타입도 **슬롯 풀**(`agent-auth-pool.md` AC-N6, 풀 `codex-chat`)을 쓴다. 슬롯 PVC에 ChatGPT 로그인과 **세션 DB**(SQLite)를 함께 두고, 사이드카가 세션 DB를 MCP로 내놓는다(*2026-11-16 개정*: 기본 표면은 원장 네 도구이고 `raw_query`·`raw_exec`는 디버그 옵트인에서만 선다). 로그인은 아카이브가 아니라 슬롯에 남는다(AC-J3·J4), 도구 표면에 세션 DB가 더해진다(AC-J5).
 
 > 📌 **2026-11-09 (AC-P1~P3)**: 도구 표면(AC-J5)에 사이드카의 **스케줄러 MCP**(`scheduler` — 한 번·고정 루프·자체 페이싱 예약)가 더해진다. 회차는 이 세션 에이전트의 큐로 들어가고, 예약이 남은 동안은 유휴 회수가 미뤄진다(`session-scheduler.md`).
 
@@ -69,7 +69,7 @@
   1. **대화** — 모델 응답.
   2. **플러그인으로 연결된 스킬** — K3s MCP 프록시 사이드카가 마켓플레이스에서 받아 온 플러그인의 스킬만 — 세션을 만든 쪽이 `plugins`로 고른 것(AC-L1. 장기 채팅은 이 타입의 표면에서 동작하는 스킬만 모은 `codex-session` 번들을 고른다. *2026-11-14부터 플랫폼 기본값 `CODEX_PLUGINS`는 없다* — AC-A5) — 플러그인 매니페스트의 `skills` 필드가 가리키는 디렉터리, 없으면 `skills/<이름>/` — `$HOME/.agents/skills/<플러그인>--<스킬>/`에 관리 표식과 함께 설치한다. `read_skill`은 디렉터리 이름과 SKILL.md 머리말의 이름 둘 다로 찾는다(Codex가 머리말 이름으로 목록을 보이므로). 셸이 없으므로 모델은 SKILL.md를 파일로 열 수 없다 — 대신 에이전트 바이너리가 stdio MCP 서버 `skills`(`list_skills`·`read_skill`)로 그 디렉터리 안의 일반 파일만, 크기 상한 안에서 읽어 준다. 마켓플레이스가 있는 파드에서는 같은 서버가 `refresh_skills`도 낸다(AC-J7 턴 안 새로고침). 플랫폼은 개발자 지시를 넣지 않는다 — 모델은 `skills` MCP의 도구 설명으로 `read_skill`을 안다(*2026-11-14 개정*). 사용자가 손으로 둔 스킬(표식 없음)은 동기화가 지우지 않는다.
   3. **K3s MCP** — AC-J6의 사이드카를 거친다. 프록시가 토큰을 갖지 않으면 등록하지 않는다.
-  4. **세션 DB** — 사이드카가 슬롯의 `db/`에서 서빙하는 SQLite MCP(`agent-auth-pool.md` AC-N6)를 `db` 서버로 등록한다(`raw_query`·`raw_exec`·`ledger_get/list/put/delete`). 주 컨테이너가 `SESSION_DB_MCP_URL`(loopback 주소만 받는다)을 받았을 때만 등록한다. DB 도구는 그 서버의 도구 설명이 알린다(*2026-11-14 개정*: 개발자 지시 제거). 파드 밖에 닿는 새 경로는 없다 — DB 파일은 그 세션의 슬롯에 있다.
+  4. **세션 DB** — 사이드카가 슬롯의 `db/`에서 서빙하는 SQLite MCP(`agent-auth-pool.md` AC-N6)를 `db` 서버로 등록한다. 모델이 보는 것은 원장 네 도구(`ledger_get/list/put/delete`)이고, `raw_query`·`raw_exec`는 배포가 사이드카에 `SESSION_DB_RAW_SQL=debug`를 준 디버그 파드에서만 표면에 선다(*2026-11-16 개정*). 주 컨테이너가 `SESSION_DB_MCP_URL`(loopback 주소만 받는다)을 받았을 때만 등록한다. DB 도구는 그 서버의 도구 설명이 알린다(*2026-11-14 개정*: 개발자 지시 제거). 파드 밖에 닿는 새 경로는 없다 — DB 파일은 그 세션의 슬롯에 있다.
 
   그 밖은 모두 끈다 — 관리형 `~/.codex/config.toml`이 셸(`shell_tool`·`unified_exec`), 이미지 보기·생성, 앱·Codex 자체 플러그인·원격 플러그인, 브라우저·컴퓨터 사용, 메모리·훅·목표·도구 제안·스킬의 MCP 자동 설치, 번들 시스템 스킬을 끄고, 웹 검색을 `disabled`로 둔다. 원격 모델 카탈로그가 강제하는 코드 모드 안의 `apply_patch`와 하위 에이전트 도구는 설정으로 끌 수 없어(Codex 0.166.0에서 확인), 파일 쓰기는 `sandbox_mode = "read-only"` + `approval_policy = "never"`가 막고, 러너가 **킬 스위치**로 한 번 더 막는다 — 턴 중 `command_execution`·`file_change`·`web_search` 아이템이 하나라도 나타나면 안내 한 줄을 남기고 턴을 즉시 중단한다. 하위 에이전트는 막지 않는다(AC-J8) — 메인 에이전트와 같은 관리형 설정·샌드박스로 돌며, 킬 스위치는 하위 에이전트 스레드의 아이템에도 걸린다(*2026-11-13*: `codex exec`는 메인 스레드 이벤트만 보여 줘서 그 전에는 하위 에이전트의 아이템이 킬 스위치에 닿지 않았다). 이미지 빌드는 관리형 설정으로 `codex debug prompt-input`을 렌더해 셸·이미지 도구·번들 스킬이 모델에 보이면 실패한다 — Codex 버전을 올려 표면이 넓어지면 이미지가 나가지 않는다.
 - **달성 가치**: V1
