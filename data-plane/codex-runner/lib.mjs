@@ -152,6 +152,54 @@ export function noticeLine(text) {
   return JSON.stringify({ type: NOTICE_TYPE, text }) + "\n";
 }
 
+// Mid-turn steering (AC-J9). The agent writes one JSON line per message on
+// this process's stdin while a turn runs; the runner hands it to the turn
+// with `turn/steer` and answers on stdout with a line of its own. The reply
+// tells accepted (the runner took the line) from applied (codex put it into
+// the turn that was named) — only the second means the running turn saw it.
+export const STEER_TYPE = "session_platform.steer";
+export const STEER_APPLIED = "applied";
+export const STEER_REJECTED = "rejected";
+
+// parseSteerLine reads one agent control line. A line that is not a steer
+// request is ignored (null) rather than failing the turn: stdin is a control
+// channel this runner may later share.
+export function parseSteerLine(line) {
+  let message;
+  try {
+    message = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!message || message.type !== "steer") {
+    return null;
+  }
+  const id = typeof message.id === "string" ? message.id : "";
+  const text = typeof message.text === "string" ? message.text : "";
+  if (id === "" || text === "") {
+    return null;
+  }
+  return { id, text };
+}
+
+// steerParams is `turn/steer` as the app server takes it (Codex 0.166.0
+// app-server protocol v2, TurnSteerParams). expectedTurnId is the SDK's own
+// precondition — codex refuses the call when that turn is no longer the
+// active one, which is what makes a steer that loses the race to the turn's
+// end a clean rejection instead of a message delivered to nothing.
+export function steerParams(threadId, turnId, text, id) {
+  return {
+    threadId,
+    expectedTurnId: turnId,
+    input: [{ type: "text", text, text_elements: [] }],
+    clientUserMessageId: id,
+  };
+}
+
+export function steerResultLine({ id, status, turnId = null, reason = null }) {
+  return JSON.stringify({ type: STEER_TYPE, id, status, turn_id: turnId, reason }) + "\n";
+}
+
 // ANSI escapes and the codex warning about its helper links are terminal
 // noise; neither belongs in the session output.
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007]*\u0007/g;

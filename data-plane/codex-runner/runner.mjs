@@ -38,6 +38,11 @@ import {
   forbiddenAction,
   resolveCodexBin,
   serverRequestResponse,
+  parseSteerLine,
+  steerParams,
+  steerResultLine,
+  STEER_APPLIED,
+  STEER_REJECTED,
   threadFileContent,
   threadParams,
 } from "./lib.mjs";
@@ -259,9 +264,18 @@ class Session {
   #agentChanged = () => {};
   #killed = null;
   #queue = Promise.resolve();
+  // The turn steering targets: its id once turn/start answered, and a
+  // promise so a steer line that beat the answer waits instead of missing.
+  #activeTurn = null;
+  #activeTurnReady;
+  #publishTurn;
+  #turnOver = false;
 
   constructor(bin, env, args) {
     this.#mode = args.mode;
+    this.#activeTurnReady = new Promise((resolve) => {
+      this.#publishTurn = resolve;
+    });
     this.#server = new AppServer(bin, appServerArgs({ mode: args.mode, effort: args.effort }), env, {
       onNotification: (method, params) => {
         this.#queue = this.#queue.then(() => this.#onNotification(method, params));
@@ -322,23 +336,69 @@ class Session {
   async #turn(text) {
     this.#translator = new TurnTranslator(this.#threadId);
     this.#agents.setMainBusy(true);
+    this.#activeTurn = null;
     const done = new Promise((resolve, reject) => {
       this.#turnDone = { resolve, reject };
     });
     const exited = this.#server.closed.then(() => {
       throw new Error(`codex app-server exited (${this.#server.exitReason})`);
     });
-    const response = await Promise.race([
-      this.#server.request("turn/start", {
-        threadId: this.#threadId,
-        input: [{ type: "text", text, text_elements: [] }],
-      }),
-      exited,
-    ]);
+    let response;
+    try {
+      response = await Promise.race([
+        this.#server.request("turn/start", {
+          threadId: this.#threadId,
+          input: [{ type: "text", text, text_elements: [] }],
+        }),
+        exited,
+      ]);
+    } catch (err) {
+      // A turn that never started has nothing to steer into; release the
+      // waiting steer lines so they are answered instead of hanging.
+      this.#endSteerWindow();
+      throw err;
+    }
     if (response && response.turn && this.#translator.turnId === null) {
       this.#translator.turnId = response.turn.id;
     }
-    return Promise.race([done, exited]);
+    this.#activeTurn = (response && response.turn && response.turn.id) || this.#translator.turnId;
+    this.#publishTurn();
+    try {
+      return await Promise.race([done, exited]);
+    } finally {
+      // Nothing can be steered into a turn that is over: from here a steer
+      // line is rejected rather than sent for codex to refuse.
+      this.#endSteerWindow();
+    }
+  }
+
+  // endSteerWindow closes steering and releases whatever waits on the turn
+  // id, so no steer line is left hanging on a turn that will not come.
+  #endSteerWindow() {
+    this.#turnOver = true;
+    this.#activeTurn = null;
+    this.#publishTurn();
+  }
+
+  // steer hands one agent-written message to the turn in progress (AC-J9).
+  // The reply says applied only when codex took it into the turn that was
+  // named — expectedTurnId makes codex refuse anything else, so a message
+  // that arrives as the turn ends is rejected here and the platform can put
+  // it back in the queue instead of losing it.
+  async steer({ id, text }) {
+    if (!this.#turnOver && this.#activeTurnReady) {
+      await this.#activeTurnReady;
+    }
+    const turnId = this.#activeTurn;
+    if (this.#killed || this.#turnOver || !turnId) {
+      return { id, status: STEER_REJECTED, reason: "no turn is running" };
+    }
+    try {
+      const response = await this.#server.request("turn/steer", steerParams(this.#threadId, turnId, text, id));
+      return { id, status: STEER_APPLIED, turnId: (response && response.turnId) || turnId };
+    } catch (err) {
+      return { id, status: STEER_REJECTED, reason: err && err.message ? err.message : String(err) };
+    }
   }
 
   // #waitForAgents resolves true once no sub-agent is busy, false at the
@@ -408,6 +468,7 @@ class Session {
   }
 
   close() {
+    this.#endSteerWindow();
     return this.#server.close();
   }
 }
@@ -436,6 +497,23 @@ async function main(argv) {
   }
 
   const session = new Session(bin, env, args);
+  // Steering arrives on stdin, one JSON line per message, while the turn
+  // runs (AC-J9). The channel opens only after the device-code login, which
+  // has stdin of its own, and closes on every exit so the reader never keeps
+  // the runner alive. Replies are serialized: two messages cannot interleave
+  // into the same turn, and the reader never holds the turn up.
+  let steering = Promise.resolve();
+  const steerInput = readline.createInterface({ input: process.stdin });
+  steerInput.on("line", (line) => {
+    const request = parseSteerLine(line);
+    if (!request) {
+      return;
+    }
+    steering = steering
+      .then(() => session.steer(request))
+      .then((result) => emit(steerResultLine(result)))
+      .catch(() => {});
+  });
   try {
     await session.open(args.model, args.resume ? readThreadId(codexHome) : null, codexHome);
     const outcome = await session.run(args.prompt, backgroundWaitFromEnv(process.env));
@@ -450,6 +528,8 @@ async function main(argv) {
     await emit(JSON.stringify({ type: "error", message: err && err.message ? err.message : String(err) }) + "\n");
     return EXIT_TURN_FAILED;
   } finally {
+    steerInput.close();
+    await steering.catch(() => {});
     await session.close();
   }
 }

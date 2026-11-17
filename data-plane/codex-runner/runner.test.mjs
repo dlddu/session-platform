@@ -24,8 +24,11 @@ import {
   forbiddenAction,
   minimalEnv,
   parseArgs,
+  parseSteerLine,
   parseThreadFile,
   serverRequestResponse,
+  steerParams,
+  STEER_TYPE,
   threadFileContent,
   threadParams,
 } from "./lib.mjs";
@@ -313,12 +316,16 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
   const m = JSON.parse(line);
   log(m);
   if (m.method === "initialize") send({ id: m.id, result: { userAgent: "fake" } });
+  else if (m.method === "turn/start" && scenario.turnStartFails) send({ id: m.id, error: { code: -32000, message: "turn refused" } });
   else if (m.method === "thread/start") send({ id: m.id, result: { thread: thread(scenario.threadId) } });
   else if (m.method === "thread/resume") send({ id: m.id, result: { thread: thread(m.params.threadId) } });
   else if (m.method === "turn/start") {
     const turn = scenario.turns[turns++] || { id: "extra", steps: [] };
     send({ id: m.id, result: { turn: { id: turn.id, status: "inProgress", items: [] } } });
     play(turn.steps);
+  } else if (m.method === "turn/steer") {
+    if (scenario.steerFails) send({ id: m.id, error: { code: -32602, message: "expectedTurnId does not match the active turn" } });
+    else send({ id: m.id, result: { turnId: m.params.expectedTurnId } });
   } else if (m.method === "turn/interrupt") {
     send({ id: m.id, result: {} });
     play((scenario.interrupts || {})[m.params.threadId]);
@@ -330,7 +337,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
   return bin;
 }
 
-function runRunner(home, args, scenario, extraEnv = {}) {
+function runRunner(home, args, scenario, extraEnv = {}, stdin = "") {
   const codexHome = path.join(home, ".codex");
   mkdirSync(codexHome, { recursive: true });
   writeFileSync(path.join(codexHome, "scenario.json"), JSON.stringify(scenario));
@@ -340,6 +347,7 @@ function runRunner(home, args, scenario, extraEnv = {}) {
     env: { HOME: home, PATH: process.env.PATH, CODEX_BIN: fakeCodex(home), OPENAI_API_KEY: "sk-leak", ...extraEnv },
     encoding: "utf8",
     timeout: 20000,
+    ...(stdin ? { input: stdin } : {}),
   });
   const lines = result.stdout.split("\n").filter(Boolean).map((l) => JSON.parse(l));
   const requestsFile = path.join(codexHome, "requests.jsonl");
@@ -581,5 +589,96 @@ test("runner cancels MCP elicitations as non-interactive", () => {
     assert.equal(result.status, EXIT_OK, result.stderr);
     const answer = result.requests.find((r) => r.id === 1000);
     assert.deepEqual(answer.result, { action: "cancel", content: null, _meta: { codex_approval_cancellation_reason: "non_interactive" } });
+  });
+});
+
+const steerLine = (id, text) => JSON.stringify({ type: "steer", id, text }) + "\n";
+const steers = (lines) => lines.filter((l) => l.type === STEER_TYPE);
+
+// AC-J9: a message the platform writes while the turn runs goes into that
+// turn with turn/steer, and the reply says whether codex applied it.
+test("runner steers a message into the running turn", () => {
+  withHome((home) => {
+    signedIn(home);
+    const result = runRunner(
+      home,
+      ["--", "research this"],
+      {
+        threadId: "th-1",
+        turns: [{ id: "t1", steps: [started("th-1", "t1"), { delay: 150 }, item("th-1", "t1", message("1", "ok")), done("th-1", "t1")] }],
+      },
+      {},
+      steerLine("m-1", "actually, focus on the newer paper"),
+    );
+    assert.equal(result.status, EXIT_OK, result.stderr);
+    const steered = result.requests.find((r) => r.method === "turn/steer");
+    assert.ok(steered, "the runner must call turn/steer");
+    assert.equal(steered.params.threadId, "th-1");
+    // The SDK's own precondition: the id of the turn that must still be active.
+    assert.equal(steered.params.expectedTurnId, "t1");
+    assert.equal(steered.params.input[0].text, "actually, focus on the newer paper");
+    assert.equal(steered.params.clientUserMessageId, "m-1");
+    assert.deepEqual(steers(result.lines), [{ type: STEER_TYPE, id: "m-1", status: "applied", turn_id: "t1", reason: null }]);
+    // Steering is not a prompt: the turn still ran the one prompt it was given.
+    assert.equal(turnStarts(result.requests).length, 1);
+    assert.equal(turnStarts(result.requests)[0].params.input[0].text, "research this");
+  });
+});
+
+// codex refuses a steer whose expectedTurnId is no longer the active turn —
+// the race with the turn's end lands here, reported, not silently dropped.
+test("runner reports a steer codex refused", () => {
+  withHome((home) => {
+    signedIn(home);
+    const result = runRunner(
+      home,
+      ["--", "go"],
+      {
+        threadId: "th-1",
+        steerFails: true,
+        turns: [{ id: "t1", steps: [started("th-1", "t1"), { delay: 150 }, done("th-1", "t1")] }],
+      },
+      {},
+      steerLine("m-2", "too late"),
+    );
+    assert.equal(result.status, EXIT_OK, result.stderr);
+    const [reply] = steers(result.lines);
+    assert.equal(reply.status, "rejected");
+    assert.match(reply.reason, /expectedTurnId/);
+    assert.equal(reply.id, "m-2");
+  });
+});
+
+// A turn that never started has nothing to steer into: the line is answered
+// rejected rather than left waiting on a turn id that never comes.
+test("runner rejects steering when no turn is running", () => {
+  withHome((home) => {
+    signedIn(home);
+    const result = runRunner(
+      home,
+      ["--", "go"],
+      { threadId: "th-1", turnStartFails: true, turns: [] },
+      {},
+      steerLine("m-3", "hello?"),
+    );
+    assert.equal(result.status, EXIT_TURN_FAILED, result.stderr);
+    const [reply] = steers(result.lines);
+    assert.equal(reply.status, "rejected");
+    assert.equal(reply.reason, "no turn is running");
+    assert.ok(!result.requests.some((r) => r.method === "turn/steer"));
+  });
+});
+
+test("steer lines the runner cannot use are ignored", () => {
+  assert.equal(parseSteerLine("not json"), null);
+  assert.equal(parseSteerLine(JSON.stringify({ type: "other", id: "a", text: "b" })), null);
+  assert.equal(parseSteerLine(JSON.stringify({ type: "steer", id: "", text: "b" })), null);
+  assert.equal(parseSteerLine(JSON.stringify({ type: "steer", id: "a", text: "" })), null);
+  assert.deepEqual(parseSteerLine(JSON.stringify({ type: "steer", id: "a", text: "b" })), { id: "a", text: "b" });
+  assert.deepEqual(steerParams("th", "t1", "go", "m1"), {
+    threadId: "th",
+    expectedTurnId: "t1",
+    input: [{ type: "text", text: "go", text_elements: [] }],
+    clientUserMessageId: "m1",
   });
 });
