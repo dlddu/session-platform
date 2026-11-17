@@ -299,6 +299,10 @@ if (argv[0] === "login" && argv[1] === "--device-auth") {
 const scenario = JSON.parse(fs.readFileSync(path.join(home, "scenario.json"), "utf8"));
 const log = (m) => fs.appendFileSync(path.join(home, "requests.jsonl"), JSON.stringify(m) + "\\n");
 const send = (m) => process.stdout.write(JSON.stringify(m) + "\\n");
+// send2 puts both messages in one write, so the runner reads them in one
+// chunk: a scenario's \`coalesce\` makes the race where a notification is
+// handled before the response it followed deterministic instead of rare.
+const send2 = (a, b) => process.stdout.write(JSON.stringify(a) + "\\n" + JSON.stringify(b) + "\\n");
 let turns = 0;
 let nextServerRequest = 1000;
 const play = async (steps) => {
@@ -317,8 +321,14 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
   else if (m.method === "thread/resume") send({ id: m.id, result: { thread: thread(m.params.threadId) } });
   else if (m.method === "turn/start") {
     const turn = scenario.turns[turns++] || { id: "extra", steps: [] };
-    send({ id: m.id, result: { turn: { id: turn.id, status: "inProgress", items: [] } } });
-    play(turn.steps);
+    const answer = { id: m.id, result: { turn: { id: turn.id, status: "inProgress", items: [] } } };
+    if (turn.coalesce && (turn.steps || []).length) {
+      send2(answer, turn.steps[0]);
+      play(turn.steps.slice(1));
+    } else {
+      send(answer);
+      play(turn.steps);
+    }
   } else if (m.method === "turn/interrupt") {
     send({ id: m.id, result: {} });
     play((scenario.interrupts || {})[m.params.threadId]);
@@ -489,6 +499,28 @@ test("runner reports a failed turn and a failed sign-in", () => {
     const login = runRunner(home, ["--", "x"], { threadId: "t", turns: [] });
     assert.equal(login.status, EXIT_LOGIN_FAILED);
     assert.ok(notices(login.lines).some((t) => /did not complete/.test(t)));
+  });
+});
+
+// A turn that fails without a turn/started of its own only ever names its turn
+// in the turn/start response. When its turn/completed lands in the same read as
+// that response, the notification is handled first and the translator cannot
+// match it — the runner used to wait forever (≈30% of runs before the fix).
+test("a turn/completed that overtakes the turn/start response still ends the turn", () => {
+  withHome((home) => {
+    signedIn(home);
+    const failed = runRunner(home, ["--", "x"], {
+      threadId: "t",
+      turns: [
+        {
+          id: "t1",
+          coalesce: true,
+          steps: [done("t", "t1", "failed", { error: { message: "quota", additionalDetails: null } })],
+        },
+      ],
+    });
+    assert.equal(failed.status, EXIT_TURN_FAILED);
+    assert.ok(failed.lines.some((l) => l.type === "turn.failed" && l.error.message === "quota"));
   });
 });
 

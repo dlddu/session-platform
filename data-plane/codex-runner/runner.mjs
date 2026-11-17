@@ -258,6 +258,10 @@ class Session {
   #agents = null;
   #agentChanged = () => {};
   #killed = null;
+  // #turnStart is the in-flight turn/start request. A notification may not be
+  // translated while it is pending: the response names the turn, and the
+  // translator drops a completion it cannot match (see TurnTranslator).
+  #turnStart = null;
   #queue = Promise.resolve();
 
   constructor(bin, env, args) {
@@ -290,6 +294,15 @@ class Session {
         await notice(text);
       }
       this.#agentChanged();
+    }
+    // A turn/completed can overtake the turn/start response that names the
+    // turn — both land in one read, and the response's continuation is a
+    // microtask behind this queue. The translator drops a completion whose
+    // turn it cannot match, and the turn would then never end: the runner
+    // would wait for a resolve that can no longer come. Let the pending
+    // response land first; the server dying resolves the wait too.
+    if (this.#turnStart) {
+      await Promise.race([this.#turnStart, this.#server.closed]).catch(() => {});
     }
     if (this.#translator && params.threadId === this.#threadId) {
       const { events, outcome } = this.#translator.translate(method, params);
@@ -328,15 +341,17 @@ class Session {
     const exited = this.#server.closed.then(() => {
       throw new Error(`codex app-server exited (${this.#server.exitReason})`);
     });
-    const response = await Promise.race([
-      this.#server.request("turn/start", {
-        threadId: this.#threadId,
-        input: [{ type: "text", text, text_elements: [] }],
-      }),
-      exited,
-    ]);
-    if (response && response.turn && this.#translator.turnId === null) {
-      this.#translator.turnId = response.turn.id;
+    this.#turnStart = this.#server.request("turn/start", {
+      threadId: this.#threadId,
+      input: [{ type: "text", text, text_elements: [] }],
+    });
+    try {
+      const response = await Promise.race([this.#turnStart, exited]);
+      if (response && response.turn && this.#translator.turnId === null) {
+        this.#translator.turnId = response.turn.id;
+      }
+    } finally {
+      this.#turnStart = null;
     }
     return Promise.race([done, exited]);
   }
