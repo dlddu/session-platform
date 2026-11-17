@@ -86,18 +86,25 @@ func Parse(raw string) (*Config, error) {
 		if slices.Contains(t.WorkloadTypes, AnyWorkloadType) && len(t.WorkloadTypes) != 1 {
 			return nil, fmt.Errorf("tenant config: tenant %q: %q must be the only workload type", t.Name, AnyWorkloadType)
 		}
+		// Grants are stored normalized, so a tenant set naming a type's old
+		// name grants the current one: Allows compares against the normalized
+		// type a create request carries (AC-J1, "codex-chat" → codex-manager).
+		// An omitted type is still an error here — a grant must name a type,
+		// and NormalizeWorkloadType would fold "" to shell.
 		seen := map[session.WorkloadType]bool{}
-		for _, w := range t.WorkloadTypes {
+		for j, w := range t.WorkloadTypes {
 			if w == AnyWorkloadType {
 				continue
 			}
-			if w == "" || !w.Valid() {
+			normalized, err := session.NormalizeWorkloadType(w)
+			if w == "" || err != nil {
 				return nil, fmt.Errorf("tenant config: tenant %q: unknown workload type %q", t.Name, w)
 			}
-			if seen[w] {
-				return nil, fmt.Errorf("tenant config: tenant %q lists workload type %q twice", t.Name, w)
+			if seen[normalized] {
+				return nil, fmt.Errorf("tenant config: tenant %q lists workload type %q twice", t.Name, normalized)
 			}
-			seen[w] = true
+			seen[normalized] = true
+			file.Tenants[i].WorkloadTypes[j] = normalized
 		}
 		cfg.byName[t.Name] = &file.Tenants[i]
 		cfg.tenants = append(cfg.tenants, &file.Tenants[i])

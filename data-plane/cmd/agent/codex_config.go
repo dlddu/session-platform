@@ -25,7 +25,7 @@ import (
 // codex-task's config (docs/prd/codex-task-workload.md, AC-M1) is the same
 // document with the shell left on and the sandbox opened: the session pod is
 // the execution boundary, as it is for claude-code. Everything else that
-// codex-chat turns off stays off.
+// codex-manager turns off stays off.
 const (
 	codexConfigDirName  = ".codex"
 	codexConfigFileName = "config.toml"
@@ -51,7 +51,7 @@ var codexDisabledFeatures = append(slices.Clone(codexTaskEnabledFeatures), codex
 // than leaving to Codex's defaults, which a version bump can change (AC-M1).
 var codexTaskEnabledFeatures = []string{"shell_tool", "unified_exec"}
 
-// codexTaskDisabledFeatures are codex-chat's minus the shell (AC-M1).
+// codexTaskDisabledFeatures are codex-manager's minus the shell (AC-M1).
 var codexTaskDisabledFeatures = []string{
 	"view_image", "image_generation",
 	"apps", "plugins", "remote_plugin", "computer_use", "browser_use", "in_app_browser",
@@ -60,7 +60,7 @@ var codexTaskDisabledFeatures = []string{
 
 // codexConfig is what varies between pods.
 type codexConfig struct {
-	// task renders codex-task's surface (AC-M1) instead of codex-chat's.
+	// task renders codex-task's surface (AC-M1) instead of codex-manager's.
 	task bool
 	// k3sMCPURL is the sidecar's MCP endpoint, or empty when it holds no token.
 	k3sMCPURL string

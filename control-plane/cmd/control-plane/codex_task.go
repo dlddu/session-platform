@@ -55,7 +55,7 @@ func (c authPoolEnv) pool(client kubernetes.Interface, namespace, name string) (
 }
 
 // codexTaskConfig is the codex-task slice of the configuration
-// (docs/prd/codex-task-workload.md, AC-M1~M4), apart from codex-chat's so the
+// (docs/prd/codex-task-workload.md, AC-M1~M4), apart from codex-manager's so the
 // two types never share a Secret, ConfigMap, gate or pool.
 type codexTaskConfig struct {
 	image             string
@@ -106,7 +106,7 @@ func (c codexTaskConfig) objects() map[string]string {
 }
 
 // validateCodexTaskConfig refuses to share a Secret or ConfigMap with another
-// agent type, for codex-chat's reason (AC-J6): the key names are the same.
+// agent type, for codex-manager's reason (AC-J6): the key names are the same.
 func validateCodexTaskConfig(cfg codexTaskConfig, others map[string]string) error {
 	for what, name := range others {
 		for own, mine := range cfg.objects() {
@@ -176,7 +176,7 @@ func authPoolOptions(cfg config, client kubernetes.Interface, namespace string) 
 			return nil, err
 		}
 		if pool != nil {
-			opts = append(opts, service.WithAuthPool(session.WorkloadTypeCodexChat, pool))
+			opts = append(opts, service.WithAuthPool(session.WorkloadTypeCodexManager, pool))
 		}
 	}
 	if cfg.codexTask.image != "" {

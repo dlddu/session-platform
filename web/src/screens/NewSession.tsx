@@ -31,7 +31,7 @@ const WORKLOAD_ORDER: WorkloadType[] = [
   "shell",
   "claude-code",
   "minimax-code",
-  "codex-chat",
+  "codex-manager",
   "codex-task",
 ];
 
@@ -52,12 +52,12 @@ const WORKLOAD_CARDS: Record<
     description:
       "MiniMax Code CLI behind the approval gate — it cannot reach the outside on its own; external calls wait for approval.",
   },
-  "codex-chat": {
+  "codex-manager": {
     icon: "◇",
     iconClass: "agent",
     wide: true,
     description:
-      "Long-running Codex chat on your ChatGPT plan. Conversation, plugin skills and K3s MCP only.",
+      "Long-running Codex manager on your ChatGPT plan. Conversation, plugin skills and K3s MCP only.",
   },
   "codex-task": {
     icon: "◇",
@@ -506,7 +506,7 @@ export function NewSession() {
                   ? hasModelChoice(workloadType)
                     ? "Workload type and model choice are fixed for this session. The session also gets a helper pod that holds the approval gate and the only route out."
                     : "Workload type is fixed for this session. It runs the platform default model, resolved at container start, and gets a helper pod that holds the approval gate and the only route out."
-                  : workloadType === "codex-chat"
+                  : workloadType === "codex-manager"
                     ? "Workload type and model choice are fixed for this session. The first prompt signs the session in to ChatGPT, and the login is kept in its archive."
                     : workloadType === "codex-task"
                     ? "Workload type, model and reasoning effort are fixed for this session. It takes a login slot while it has a pod; an empty slot signs in on the first prompt."

@@ -8,7 +8,7 @@ import (
 func TestWorkloadTypeCatalogMatchesValidation(t *testing.T) {
 	known := []WorkloadType{
 		WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode,
-		WorkloadTypeCodexChat, WorkloadTypeCodexTask,
+		WorkloadTypeCodexManager, WorkloadTypeCodexTask,
 	}
 	catalog := WorkloadTypes()
 	if len(catalog) != len(known) {
@@ -103,7 +103,7 @@ func TestReasoningEffortsPerType(t *testing.T) {
 // AC-J1: a stored record may still say "codex"; a request may not.
 func TestLegacyCodexOnlyInStoredRecords(t *testing.T) {
 	got, err := NormalizeStoredWorkloadType("codex")
-	if err != nil || got != WorkloadTypeCodexChat {
+	if err != nil || got != WorkloadTypeCodexManager {
 		t.Fatalf("NormalizeStoredWorkloadType(codex) = %q, %v", got, err)
 	}
 	if _, err := NormalizeWorkloadType("codex"); err == nil {
@@ -113,6 +113,37 @@ func TestLegacyCodexOnlyInStoredRecords(t *testing.T) {
 		if info.Type == "codex" {
 			t.Fatal("the catalog must not offer the legacy name")
 		}
+	}
+}
+
+// AC-J1: "codex-chat" is codex-manager's previous name. Unlike "codex" it is
+// accepted wherever a type is named — the callers and the deployed tenant set
+// still say it — and is never offered or answered under the old name.
+func TestLegacyCodexChatAcceptedEverywhere(t *testing.T) {
+	for _, normalize := range []func(WorkloadType) (WorkloadType, error){
+		NormalizeWorkloadType, NormalizeStoredWorkloadType,
+	} {
+		got, err := normalize("codex-chat")
+		if err != nil || got != WorkloadTypeCodexManager {
+			t.Fatalf("normalize(codex-chat) = %q, %v", got, err)
+		}
+	}
+	// The alias is a name, not a type: it stays out of the offered catalog and
+	// out of Valid, so nothing stores or answers it.
+	if WorkloadType("codex-chat").Valid() {
+		t.Error("the alias must not pass Valid")
+	}
+	for _, info := range WorkloadTypes() {
+		if info.Type == "codex-chat" {
+			t.Fatal("the catalog must not offer the previous name")
+		}
+	}
+	// The model and plugin contracts follow the normalized type, not the alias.
+	if got, err := NormalizeModel(WorkloadTypeCodexManager, ""); err != nil || got != PlatformDefaultModel {
+		t.Errorf("codex-manager default model = %q, %v", got, err)
+	}
+	if !TakesPlugins(WorkloadTypeCodexManager) {
+		t.Error("codex-manager must still take plugins")
 	}
 }
 

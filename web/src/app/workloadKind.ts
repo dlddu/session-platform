@@ -15,7 +15,7 @@ export function isAgentWorkload(workloadType: WorkloadType): boolean {
 // AC-J1 · AC-M1. 채팅용과 작업용은 러너·플러그인 배선을 같이 쓰므로 로그인 안내와
 // 플러그인 새로고침을 함께 받는다.
 export function isCodexWorkload(workloadType: WorkloadType): boolean {
-  return workloadType === "codex-chat" || workloadType === "codex-task";
+  return workloadType === "codex-manager" || workloadType === "codex-task";
 }
 
 // 승인 게이트는 타입이 아니라 타입의 능력이다(docs/prd/approval-gate.md AC-F2~F6).

@@ -74,7 +74,7 @@ var modelNamePattern = regexp.MustCompile(`^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}
 func (w WorkloadType) Valid() bool {
 	switch w {
 	case WorkloadTypeShell, WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode,
-		WorkloadTypeCodexChat, WorkloadTypeCodexTask:
+		WorkloadTypeCodexManager, WorkloadTypeCodexTask:
 		return true
 	default:
 		return false
@@ -88,12 +88,19 @@ func (w WorkloadType) Valid() bool {
 // It doubles as the read path for stored sessions: records written before the
 // type axis existed carry no workloadType, so decoding them yields "" — which
 // this resolves to shell, the only type those sessions could have been.
-// A request or tenant grant naming "codex" is refused: every caller moved to
-// codex-chat (AC-J1); only stored records keep the old name, read through
+//
+// "codex-chat" folds to codex-manager here, so a create request or a tenant
+// grant may still name it (AC-J1): the callers and the deployed tenant set were
+// written before the 2026-11-17 rename and are not changed by it. The older
+// "codex" is still refused on both paths — every caller left that name behind
+// in 2026-11-07 — and survives only in stored records, read through
 // NormalizeStoredWorkloadType.
 func NormalizeWorkloadType(w WorkloadType) (WorkloadType, error) {
 	if w == "" {
 		return WorkloadTypeShell, nil
+	}
+	if w == legacyWorkloadTypeCodexChat {
+		return WorkloadTypeCodexManager, nil
 	}
 	if !w.Valid() {
 		return "", ErrInvalidInput
@@ -103,10 +110,10 @@ func NormalizeWorkloadType(w WorkloadType) (WorkloadType, error) {
 
 // NormalizeStoredWorkloadType is NormalizeWorkloadType for a decoded session
 // record. Records written before the codex split carry "codex", which is
-// codex-chat (AC-J1); refusing it would fail every List that meets one.
+// codex-manager (AC-J1); refusing it would fail every List that meets one.
 func NormalizeStoredWorkloadType(w WorkloadType) (WorkloadType, error) {
 	if w == legacyWorkloadTypeCodex {
-		return WorkloadTypeCodexChat, nil
+		return WorkloadTypeCodexManager, nil
 	}
 	return NormalizeWorkloadType(w)
 }
@@ -127,7 +134,7 @@ func NormalizeModel(workload WorkloadType, model string) (string, error) {
 		}
 		return "", nil
 	case WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode,
-		WorkloadTypeCodexChat, WorkloadTypeCodexTask:
+		WorkloadTypeCodexManager, WorkloadTypeCodexTask:
 		if model == "" {
 			return PlatformDefaultModel, nil
 		}
@@ -183,7 +190,7 @@ func NormalizePlugins(workload WorkloadType, plugins []string) ([]string, error)
 // workload type (AC-L1).
 func TakesPlugins(workload WorkloadType) bool {
 	switch workload {
-	case WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode, WorkloadTypeCodexChat, WorkloadTypeCodexTask:
+	case WorkloadTypeClaudeCode, WorkloadTypeMiniMaxCode, WorkloadTypeCodexManager, WorkloadTypeCodexTask:
 		return true
 	default:
 		return false

@@ -142,12 +142,12 @@ func TestPlugins_CodexSidecarSeeder(t *testing.T) {
 		t.Helper()
 		orch, cs := newReadyOrchestrator(t,
 			k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
-			k8s.WithWorkloadImage(session.WorkloadTypeCodexChat, codexImage),
+			k8s.WithWorkloadImage(session.WorkloadTypeCodexManager, codexImage),
 			k8s.WithCodexCredentialsSecret("codex-k3s"),
 			k8s.WithCodexConfigConfigMap("codex-cfg"),
 		)
 		slot := 0
-		if _, err := orch.Start(context.Background(), id, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexChat, Plugins: plugins, AuthSlot: &slot}); err != nil {
+		if _, err := orch.Start(context.Background(), id, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexManager, Plugins: plugins, AuthSlot: &slot}); err != nil {
 			t.Fatalf("start: %v", err)
 		}
 		got, _ := envOf(container(t, listPods(t, cs)[0], k8s.K3SMCPProxyContainerName), "PLUGIN_SEED_PLUGINS")
@@ -156,7 +156,7 @@ func TestPlugins_CodexSidecarSeeder(t *testing.T) {
 	if got := start(t, "pl-cx", []string{"learning"}); got != "learning" {
 		t.Errorf("selection: PLUGIN_SEED_PLUGINS = %q, want learning", got)
 	}
-	// AC-A5: no type has a platform default — a codex-chat session that chose
+	// AC-A5: no type has a platform default — a codex-manager session that chose
 	// no plugins gets none, like every other type.
 	if got := start(t, "pl-cx-default", nil); got != "" {
 		t.Errorf("omitted: PLUGIN_SEED_PLUGINS = %q, want none", got)

@@ -55,7 +55,7 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY data-plane/codex-runner/*.mjs ./
 COPY --from=build /out/agent /agent
 # Each Codex workload's managed config must give the model exactly its
-# surface: codex-chat no shell (AC-J5), codex-task a shell and still no image,
+# surface: codex-manager no shell (AC-J5), codex-task a shell and still no image,
 # web or bundled-skill tools (AC-M1). A Codex upgrade that widens either fails
 # the build here.
 RUN node --test \

@@ -1,13 +1,13 @@
 // The analysis half of surface-check.mjs, kept pure for `node --test`.
 
-// Tools that give the model a shell. codex-chat must have none (AC-J5);
+// Tools that give the model a shell. codex-manager must have none (AC-J5);
 // codex-task must have one, or it is not the coding session AC-M1 promises.
 export const SHELL_TOOLS = new Set(["exec_command", "write_stdin", "shell", "local_shell", "container.exec"]);
 
 // Tools that would give the model an image or the web — off in both modes.
 export const MEDIA_AND_WEB_TOOLS = new Set(["view_image", "image_generation", "web_search", "web_search_preview"]);
 
-// FORBIDDEN_TOOLS is codex-chat's whole exclusion list (AC-J5).
+// FORBIDDEN_TOOLS is codex-manager's whole exclusion list (AC-J5).
 export const FORBIDDEN_TOOLS = new Set([...SHELL_TOOLS, ...MEDIA_AND_WEB_TOOLS]);
 
 // Skills codex bundles under $CODEX_HOME/skills/.system when bundled skills

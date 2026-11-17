@@ -157,7 +157,7 @@ func TestCreateRejectsForeignEffort(t *testing.T) {
 		{Name: "x", WorkloadType: session.WorkloadTypeCodexTask, ReasoningEffort: "max"},
 		{Name: "x", WorkloadType: session.WorkloadTypeClaudeCode, ReasoningEffort: "minimal"},
 		{Name: "x", WorkloadType: session.WorkloadTypeShell, ReasoningEffort: "low"},
-		{Name: "x", WorkloadType: session.WorkloadTypeCodexChat, ReasoningEffort: "low"},
+		{Name: "x", WorkloadType: session.WorkloadTypeCodexManager, ReasoningEffort: "low"},
 	} {
 		if _, err := h.svc.Create(context.Background(), req); !errors.Is(err, session.ErrInvalidInput) {
 			t.Errorf("%s effort %q: err = %v, want invalid input", req.WorkloadType, req.ReasoningEffort, err)
@@ -171,7 +171,7 @@ func TestCreateRejectsForeignEffort(t *testing.T) {
 	}
 }
 
-// AC-J1: records stored before the codex split read as codex-chat.
+// AC-J1: records stored before the codex split read as codex-manager.
 func TestStoredLegacyCodexReadsAsCodexChat(t *testing.T) {
 	h := newStubPoolHarness(t, 1)
 	ctx := context.Background()
@@ -184,11 +184,11 @@ func TestStoredLegacyCodexReadsAsCodexChat(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := h.svc.Get(ctx, "legacy")
-	if err != nil || got.WorkloadType != session.WorkloadTypeCodexChat {
+	if err != nil || got.WorkloadType != session.WorkloadTypeCodexManager {
 		t.Fatalf("legacy record = %+v, %v", got, err)
 	}
 	all, err := h.svc.List(ctx)
-	if err != nil || len(all) != 1 || all[0].WorkloadType != session.WorkloadTypeCodexChat {
+	if err != nil || len(all) != 1 || all[0].WorkloadType != session.WorkloadTypeCodexManager {
 		t.Fatalf("List = %v, %v", all, err)
 	}
 }
@@ -208,8 +208,8 @@ func TestCodexChatRetainsDatabaseSlotAcrossSnapshot(t *testing.T) {
 	ckpt := archive.NewStubCheckpointer(true)
 	pool := k8s.NewMemoryAuthPool(1)
 	st := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
-	svc := service.New(stub, st, ckpt, agent.NewStubClient(), service.WithWorkloadCheckpointer(session.WorkloadTypeCodexChat, ckpt), service.WithAuthPool(session.WorkloadTypeCodexChat, pool))
-	a, err := svc.Create(ctx, session.CreateRequest{Name: "parent", WorkloadType: session.WorkloadTypeCodexChat})
+	svc := service.New(stub, st, ckpt, agent.NewStubClient(), service.WithWorkloadCheckpointer(session.WorkloadTypeCodexManager, ckpt), service.WithAuthPool(session.WorkloadTypeCodexManager, pool))
+	a, err := svc.Create(ctx, session.CreateRequest{Name: "parent", WorkloadType: session.WorkloadTypeCodexManager})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestCodexChatRetainsDatabaseSlotAcrossSnapshot(t *testing.T) {
 	if pool.Holder(0) != a.ID {
 		t.Fatal("snapshot released database slot")
 	}
-	if _, err = svc.Create(ctx, session.CreateRequest{Name: "other", WorkloadType: session.WorkloadTypeCodexChat}); !errors.Is(err, session.ErrAuthPoolExhausted) {
+	if _, err = svc.Create(ctx, session.CreateRequest{Name: "other", WorkloadType: session.WorkloadTypeCodexManager}); !errors.Is(err, session.ErrAuthPoolExhausted) {
 		t.Fatal("frozen DB slot reclaimed", err)
 	}
 	if _, err = svc.Restore(ctx, a.ID); err != nil {
@@ -250,8 +250,8 @@ func TestCodexChatFailedRestoreKeepsDatabaseSlot(t *testing.T) {
 	ckpt := archive.NewStubCheckpointer(true)
 	pool := k8s.NewMemoryAuthPool(1)
 	st := configmap.NewStore(fake.NewSimpleClientset(), "sessions")
-	svc := service.New(failingRestoreChat{stub}, st, ckpt, agent.NewStubClient(), service.WithWorkloadCheckpointer(session.WorkloadTypeCodexChat, ckpt), service.WithAuthPool(session.WorkloadTypeCodexChat, pool))
-	a, err := svc.Create(ctx, session.CreateRequest{Name: "parent", WorkloadType: session.WorkloadTypeCodexChat})
+	svc := service.New(failingRestoreChat{stub}, st, ckpt, agent.NewStubClient(), service.WithWorkloadCheckpointer(session.WorkloadTypeCodexManager, ckpt), service.WithAuthPool(session.WorkloadTypeCodexManager, pool))
+	a, err := svc.Create(ctx, session.CreateRequest{Name: "parent", WorkloadType: session.WorkloadTypeCodexManager})
 	if err != nil {
 		t.Fatal(err)
 	}

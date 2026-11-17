@@ -12,7 +12,7 @@ const WORKLOAD_TAG: Record<string, string> = {
   shell: "$ shell",
   "claude-code": "◇ claude-code",
   "minimax-code": "⏸ minimax-code",
-  "codex-chat": "◇ codex-chat",
+  "codex-manager": "◇ codex-manager",
   "codex-task": "◇ codex-task",
 
 };

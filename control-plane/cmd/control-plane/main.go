@@ -118,7 +118,7 @@ func main() {
 		k8s.WithClaudeConfigConfigMap(cfg.claudeConfigConfigMap),
 		k8s.WithMiniMaxCredentialsSecret(cfg.miniMax.credentialsSecret),
 		k8s.WithMiniMaxConfigConfigMap(cfg.miniMax.configConfigMap),
-		k8s.WithWorkloadImage(session.WorkloadTypeCodexChat, cfg.codex.image),
+		k8s.WithWorkloadImage(session.WorkloadTypeCodexManager, cfg.codex.image),
 		k8s.WithCodexCredentialsSecret(cfg.codex.credentialsSecret),
 		k8s.WithCodexConfigConfigMap(cfg.codex.configConfigMap),
 		k8s.WithWorkloadImage(session.WorkloadTypeCodexTask, cfg.codexTask.image),
@@ -220,7 +220,7 @@ func main() {
 	claudeDefaultModel, claudeModels := cfg.claudeAuth.claudeCodeModelConfig(cfg.claudeCodeDefaultModel, cfg.claudeCodeModels)
 	api.New(mgr,
 		api.WithClaudeCodeModelConfig(claudeDefaultModel, claudeModels),
-		api.WithWorkloadModelConfig(session.WorkloadTypeCodexChat, cfg.codex.defaultModel, cfg.codex.models),
+		api.WithWorkloadModelConfig(session.WorkloadTypeCodexManager, cfg.codex.defaultModel, cfg.codex.models),
 		api.WithWorkloadModelConfig(session.WorkloadTypeCodexTask, cfg.codexTask.defaultModel, cfg.codexTask.models),
 		api.WithOfferedWorkloadTypes(cfg.offeredWorkloadTypes()...),
 		cfg.tenancy.apiOption(client),
@@ -333,10 +333,10 @@ type config struct {
 func (c config) offeredWorkloadTypes() []session.WorkloadType {
 	types := []session.WorkloadType{session.WorkloadTypeShell}
 	for w, offered := range map[session.WorkloadType]bool{
-		session.WorkloadTypeClaudeCode:  c.dataPlaneClaudeCodeImage != "",
-		session.WorkloadTypeMiniMaxCode: c.miniMax.image != "",
-		session.WorkloadTypeCodexChat:   c.codex.offered(),
-		session.WorkloadTypeCodexTask:   c.codexTask.offered(),
+		session.WorkloadTypeClaudeCode:   c.dataPlaneClaudeCodeImage != "",
+		session.WorkloadTypeMiniMaxCode:  c.miniMax.image != "",
+		session.WorkloadTypeCodexManager: c.codex.offered(),
+		session.WorkloadTypeCodexTask:    c.codexTask.offered(),
 	} {
 		if offered {
 			types = append(types, w)
@@ -353,11 +353,11 @@ func (c config) autoArchiveTypes() []session.WorkloadType {
 	}
 	var types []session.WorkloadType
 	for t, on := range map[session.WorkloadType]bool{
-		session.WorkloadTypeShell:       c.shellArchiveEnabled,
-		session.WorkloadTypeClaudeCode:  c.claudeArchiveEnabled,
-		session.WorkloadTypeMiniMaxCode: c.miniMax.archiveEnabled,
-		session.WorkloadTypeCodexChat:   c.codex.archiveEnabled,
-		session.WorkloadTypeCodexTask:   c.codexTask.archiveEnabled,
+		session.WorkloadTypeShell:        c.shellArchiveEnabled,
+		session.WorkloadTypeClaudeCode:   c.claudeArchiveEnabled,
+		session.WorkloadTypeMiniMaxCode:  c.miniMax.archiveEnabled,
+		session.WorkloadTypeCodexManager: c.codex.archiveEnabled,
+		session.WorkloadTypeCodexTask:    c.codexTask.archiveEnabled,
 	} {
 		if on {
 			types = append(types, t)

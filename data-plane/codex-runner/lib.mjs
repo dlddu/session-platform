@@ -27,7 +27,7 @@ export const FORBIDDEN_ITEM_TYPES = new Map([
   ["web_search", "search the web"],
 ]);
 
-// The two session kinds the runner serves. chat is codex-chat's narrowed
+// The two session kinds the runner serves. chat is codex-manager's narrowed
 // surface (AC-J5); task is codex-task's claude-code-level surface (AC-M1),
 // where commands and file changes are the point and nothing is stopped.
 export const MODE_CHAT = "chat";
