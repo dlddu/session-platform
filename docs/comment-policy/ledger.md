@@ -55,6 +55,7 @@
 | 2026-11-12 | `control-plane/internal/api/recover_test.go` | 5 | `f1437916eb91` | — | 등록 — 2026-11-12 신규 파일(삭제된 세션 복원, AC-B4). 필요성 기준 판정 대기. *2026-11-16 재측정(복원 시 메모리 등급 변경 — switch·recover 의 선택적 `doubleMemory`): 주석 증분 4→5줄. 판정하지 않았다 — 판정 칸 `—` 유지.* *2026-11-16 재측정(메모리 등급 4·8배 — `memoryMultiplier`, `doubleMemory` 제거·저장된 옛 레코드는 읽을 때 2배로 이관, 2배 이상 온디맨드 배치 `WithHighMemoryPlacement`): 주석 증분 5→5줄, 지문 변경. 판정하지 않았다 — 판정 칸 `—` 유지.* |
 | 2026-11-16 | `control-plane/cmd/control-plane/memory_placement.go` | 5 | `0824b0d983b9` | — | 등록 — 2026-11-16 신규 파일(메모리 등급 4·8배 `memoryMultiplier`, 2배 이상 온디맨드 배치). 필요성 기준 판정 대기. |
 | 2026-11-16 | `control-plane/internal/adapter/k8s/memory_tier.go` | 7 | `91d46a01b10c` | — | 등록 — 2026-11-16 신규 파일(메모리 등급 4·8배 `memoryMultiplier`, 2배 이상 온디맨드 배치). 필요성 기준 판정 대기. |
+| 2026-11-17 | `control-plane/internal/api/steer_test.go` | 8 | `2963bc8b9c21` | — | 등록 — 2026-11-17 신규 파일(codex 턴 중간 전달 배선, AC-J9). 필요성 기준 판정 대기. |
 | 2026-11-16 | `control-plane/internal/session/memory.go` | 9 | `5a4d65e534db` | — | 등록 — 2026-11-16 신규 파일(메모리 등급 4·8배 `memoryMultiplier`, 2배 이상 온디맨드 배치). 필요성 기준 판정 대기. |
 | 2026-11-16 | `control-plane/internal/session/memory_test.go` | 3 | `298fe96b4d2c` | — | 등록 — 2026-11-16 신규 파일(메모리 등급 4·8배 `memoryMultiplier`, 2배 이상 온디맨드 배치). 필요성 기준 판정 대기. |
 | 2026-11-02 | `control-plane/internal/api/repo_access.go` | 8 | `8b8e06307fb5` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. |
@@ -114,6 +115,8 @@
 | 2026-11-14 | `data-plane/cmd/agent/claude_questions_test.go` | 12 | `0f609e0d9760` | — | 등록 — 2026-11-14 신규 파일(claude-code AskUserQuestion 턴 중 응답, AC-E2). 필요성 기준 판정 대기. |
 | 2026-11-07 | `data-plane/cmd/agent/claude_subscription.go` | 18 | `fd5f7a80701e` | — | 등록 — 2026-11-07 신규 파일(codex-chat·codex-task 분리, 에이전트 인증 풀, 추론 수준 PR). 필요성 기준 판정 대기. *2026-11-12 재측정(claude-code 구독 인증을 OAuth 토큰으로 — 로그인 흐름·`claude-code` 풀 제거): 이 범위의 주석이 바뀌었다 — 62→18줄. 판정하지 않았다 — 판정 칸 `—`.* |
 | 2026-11-07 | `data-plane/cmd/agent/claude_subscription_test.go` | 1 | `3f19bd231e72` | — | 등록 — 2026-11-07 신규 파일(codex-chat·codex-task 분리, 에이전트 인증 풀, 추론 수준 PR). 필요성 기준 판정 대기. *2026-11-12 재측정(claude-code 구독 인증을 OAuth 토큰으로 — 로그인 흐름·`claude-code` 풀 제거): 이 범위의 주석이 바뀌었다 — 18→1줄. 판정하지 않았다 — 판정 칸 `—`.* *2026-11-12 재측정(claude-code 턴 단위 권한 모드 — write 의 `permissionMode`(auto·acceptEdits), 디폴트 auto 복원): 이 범위의 주석이 바뀌었다 — 1→3줄. 판정하지 않았다 — 판정 칸 `—`.* *2026-11-15 재측정(claude-code 턴 단위 권한 모드 철회 — 모든 턴 `auto` 고정, write 의 `permissionMode` 제거): 이 범위의 주석이 바뀌었다 — 3→1줄. 판정하지 않았다 — 판정 칸 `—`.* |
+| 2026-11-17 | `data-plane/cmd/agent/codex_steer.go` | 32 | `eaef7e3c2acc` | — | 등록 — 2026-11-17 신규 파일(codex 턴 중간 전달 배선, AC-J9). 필요성 기준 판정 대기. |
+| 2026-11-17 | `data-plane/cmd/agent/codex_steer_test.go` | 16 | `e6bc06f42eca` | — | 등록 — 2026-11-17 신규 파일(codex 턴 중간 전달 배선, AC-J9). 필요성 기준 판정 대기. |
 | 2026-11-07 | `data-plane/cmd/agent/codex_task_test.go` | 2 | `f29acba9d3e9` | — | 등록 — 2026-11-07 신규 파일(codex-chat·codex-task 분리, 에이전트 인증 풀, 추론 수준 PR). 필요성 기준 판정 대기. |
 | 2026-11-10 | `data-plane/cmd/agent/credential_proxy_failure_test.go` | 6 | `4af29b49bfd6` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. session-platform#223 이 새로 만든 파일. |
 | 2026-11-02 | `data-plane/cmd/agent/k3s_mcp_proxy.go` | 33 | `817cfb311012` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. *2026-11-05 재측정(`approval-gated` 타입 제거 — 승인 게이트를 타입의 능력으로): 이 범위의 주석이 바뀌었다 — 34→33줄. 판정하지 않았다 — 판정 칸 `—`.* |
@@ -314,6 +317,7 @@ as-is 지문과 달랐다 — 포함 목록(`control-plane`·`data-plane`·`web/
 | 2026-11-04 | `control-plane/test/e2e_state_api_5_wire_validation_test.go` | 1 | `7b278100811a` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 지문 표면 개정(L + D·E)으로 판정 범위에 들어온 표면. |
 | 2026-11-04 | `control-plane/test/integration_test.go` | 1 | `b2535c63333a` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 지문 표면 개정(L + D·E)으로 판정 범위에 들어온 표면. |
 | 2026-11-04 | `data-plane/cmd/agent/checkpoint.go` | 4 | `1a96fc2c76f0` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 지문 표면 개정(L + D·E)으로 판정 범위에 들어온 표면. |
+| 2026-11-17 | `data-plane/cmd/agent/codex_steer_test.go` | 1 | `5e8778c5afae` | — | 등록 — 2026-11-17 신규 파일(codex 턴 중간 전달 배선, AC-J9). 필요성 기준 판정 대기. |
 | 2026-11-04 | `data-plane/cmd/agent/credential_proxy.go` | 1 | `98a30b860a21` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 지문 표면 개정(L + D·E)으로 판정 범위에 들어온 표면. |
 | 2026-11-04 | `data-plane/cmd/agent/main.go` | 10 | `27363cb9c504` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 지문 표면 개정(L + D·E)으로 판정 범위에 들어온 표면. |
 | 2026-11-04 | `data-plane/cmd/agent/main_test.go` | 1 | `b868df41e3ae` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 지문 표면 개정(L + D·E)으로 판정 범위에 들어온 표면. |
