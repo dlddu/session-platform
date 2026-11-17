@@ -17,8 +17,12 @@ import (
 // semantics as the real agent's scrollback (AC-D3), minus the shell actually
 // running anything.
 type StubClient struct {
-	mu   sync.Mutex
-	bufs map[string][]byte
+	// SteerOutcome overrides what Steer answers (AC-J9); nil means applied.
+	SteerOutcome *session.Steered
+
+	mu      sync.Mutex
+	bufs    map[string][]byte
+	steered map[string][]string
 }
 
 var _ Client = (*StubClient)(nil)
@@ -44,6 +48,29 @@ func (c *StubClient) RefreshPlugins(context.Context, string) (session.PluginChan
 // PendingQuestions reports none: the stub runs no turn that could ask.
 func (c *StubClient) PendingQuestions(context.Context, string) ([]session.PendingQuestion, error) {
 	return []session.PendingQuestion{}, nil
+}
+
+// Steer records the message and reports it applied, so a test can see the
+// relay reach the pod. SteerOutcome lets a test ask for the rejection path
+// instead — the one the real agent gives when no turn is running.
+func (c *StubClient) Steer(_ context.Context, pod, text string) (session.Steered, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.steered == nil {
+		c.steered = map[string][]string{}
+	}
+	c.steered[pod] = append(c.steered[pod], text)
+	if c.SteerOutcome != nil {
+		return *c.SteerOutcome, nil
+	}
+	return session.Steered{Status: session.SteerStatusApplied, TurnID: "stub-turn"}, nil
+}
+
+// Steered is what Steer was given for pod, in order.
+func (c *StubClient) Steered(pod string) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.steered[pod]...)
 }
 
 // AnswerQuestion finds nothing waiting, for the same reason.

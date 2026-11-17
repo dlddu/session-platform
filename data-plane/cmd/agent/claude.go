@@ -99,6 +99,7 @@ type commandRunner interface {
 type runnerOptions struct {
 	Dir    string
 	Env    []string
+	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
 }
@@ -115,6 +116,7 @@ func (execCommandRunner) Run(ctx context.Context, argv []string, opts runnerOpti
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = opts.Dir
 	cmd.Env = opts.Env
+	cmd.Stdin = opts.Stdin
 	cmd.Stdout = opts.Stdout
 	cmd.Stderr = opts.Stderr
 	// A tool may start a background process, so each one-shot invocation gets
@@ -231,6 +233,9 @@ type claudeWorkload struct {
 	// owner's decision (AC-E2, claude_approvals.go) — not the approval gate's
 	// waits above.
 	toolApprovals toolApprovalDesk
+	// steer carries messages into the running turn on the runner's stdin
+	// (AC-J9, codex_steer.go). Open only while a turn runs.
+	steer steerDesk
 
 	mu                      sync.Mutex
 	cond                    *sync.Cond
@@ -512,15 +517,37 @@ func (c *claudeWorkload) runWorker() {
 		stdoutUTF8 := newUTF8NormalizingWriter(output)
 		stdout := c.cli.newProjector(stdoutUTF8)
 		stderr := newUTF8NormalizingWriter(output)
+		// A workload whose turns take mid-turn messages (AC-J9) gets a pipe
+		// on the runner's stdin for as long as the turn runs. The desk holds
+		// the write end; closing it at the turn's end is what tells the
+		// runner's reader that no more messages are coming.
+		var steerIn io.Reader
+		closeSteer := func() {}
+		if steerer, ok := c.cli.(steerable); ok && steerer.takesSteering() {
+			pipeOut, pipeIn := io.Pipe()
+			steerIn = pipeOut
+			c.steer.open(pipeIn)
+			if projector, ok := stdout.(*codexStreamProjector); ok {
+				projector.withSteerDesk(&c.steer)
+			}
+			closeSteer = func() {
+				c.steer.close()
+				_ = pipeIn.Close()
+			}
+		}
 		runCtx, cancelRun := context.WithTimeout(c.ctx, c.runTimeout)
 		stopSlotWatch := c.watchAuthSlot()
 		err := c.runner.Run(runCtx, c.argv(prompt, resume, job.toolApprovals), runnerOptions{
 			Dir:    c.workDir,
 			Env:    environmentWithHome(c.homeDir),
+			Stdin:  steerIn,
 			Stdout: stdout,
 			Stderr: stderr,
 		})
 		timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
+		// The runner has exited: nothing can be steered into this turn any
+		// more, and whoever still waits is told so.
+		closeSteer()
 		cancelRun()
 		stopSlotWatch()
 		c.pushAuthSlot()
@@ -1504,6 +1531,42 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"queued"}`))
+	})
+
+	// AC-J9: a message for the turn that is running, not for the queue
+	// behind it. The answer says applied only when codex took it into that
+	// turn; anything else is a rejection with its reason.
+	mux.HandleFunc("POST "+steerPath, func(w http.ResponseWriter, r *http.Request) {
+		steerer, ok := c.cli.(steerable)
+		if !ok || !steerer.takesSteering() {
+			http.Error(w, errSteerUnsupported.Error(), http.StatusBadRequest)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxSteerBodyBytes)
+		var body struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "read steered message: "+c.redactString(err.Error()), http.StatusBadRequest)
+			return
+		}
+		outcome, err := c.steer.steer(r.Context(), strings.TrimSpace(body.Text))
+		switch {
+		case errors.Is(err, errSteerInvalid):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		case errors.Is(err, errSteerNoTurn):
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		case err != nil:
+			http.Error(w, c.redactString(err.Error()), http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if !outcome.applied() {
+			w.WriteHeader(http.StatusConflict)
+		}
+		_ = json.NewEncoder(w).Encode(outcome)
 	})
 
 	mux.HandleFunc("GET /read", func(w http.ResponseWriter, r *http.Request) {

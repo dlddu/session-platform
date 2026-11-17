@@ -118,6 +118,9 @@ type Manager interface {
 	// person; AnswerQuestion answers one (AC-E2).
 	Questions(ctx context.Context, id string) ([]PendingQuestion, error)
 	AnswerQuestion(ctx context.Context, id, questionID string, answers map[string]string) error
+	// Steer hands a message to a codex session's running turn instead of the
+	// queue behind it (AC-J9). The answer says whether that turn took it.
+	Steer(ctx context.Context, id, text string) (Steered, error)
 	// ToolApprovals lists the tool calls a claude-code session's running turn
 	// put to its owner; DecideToolApproval relays one decision (AC-E2).
 	ToolApprovals(ctx context.Context, id string) (ToolApprovalPage, error)

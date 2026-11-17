@@ -363,6 +363,52 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "503": { $ref: "#/components/responses/AuthPoolExhausted" }
+  /sessions/{id}/steer:
+    post:
+      summary: Put a message into a codex session's running turn (AC-J9)
+      operationId: steerSession
+      description: >
+        A mid-turn message: it goes into the turn that is running, not into
+        the queue behind it, so it can change that turn's direction. The
+        answer tells `applied` (the running turn took it — 200) from a
+        rejection (409 with the reason the runner gave), because a rejected
+        message never reached the turn and the caller may still queue it with
+        a write. Only the codex workloads take it; another type is 422.
+        Passive like read: a snapshotted session is not restored, it has no
+        running turn and is answered as a rejection.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SteerRequest" }
+      responses:
+        "200":
+          description: The running turn took the message
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Steered" }
+        "400":
+          description: Missing text, malformed body, or unknown field
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: No turn is running, or codex refused the message; the body carries the reason
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Steered" }
+        "422":
+          description: This workload type takes no mid-turn messages
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /sessions/{id}/switch:
     post:
       summary: Switch to a session, restoring from snapshot if needed (AC-C4)
@@ -1368,6 +1414,30 @@ components:
             (AC-K2). A tenant caller may omit it or name itself; its sessions
             always belong to it. Unknown tenant → 400; a type the owning tenant
             is not granted → 403.
+    SteerRequest:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text:
+          type: string
+          description: The message for the running turn.
+    Steered:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [applied, rejected]
+          description: >
+            `applied` means the running turn took the message. `rejected`
+            means it did not — never treat it as delivered.
+        turnId:
+          type: string
+          description: The turn the message landed in, when applied.
+        reason:
+          type: string
+          description: Why the message was rejected.
     WriteRequest:
       type: object
       additionalProperties: false
