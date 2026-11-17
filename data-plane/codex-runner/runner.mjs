@@ -1,4 +1,4 @@
-// codex-runner: one Codex turn per invocation, for the codex-chat
+// codex-runner: one Codex turn per invocation, for the codex-manager
 // (docs/prd/codex-workload.md, AC-J2/J3/J5/J8) and codex-task
 // (docs/prd/codex-task-workload.md, AC-M1/M2/M4) workloads. The agent runs
 //

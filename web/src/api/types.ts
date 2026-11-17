@@ -10,7 +10,7 @@ export type WorkloadType =
   | "shell"
   | "claude-code"
   | "minimax-code"
-  | "codex-chat"
+  | "codex-manager"
   | "codex-task";
 
 /**
@@ -128,7 +128,7 @@ export interface WriteResult {
   path: string;
 }
 
-/** AC-J7 — what a codex-chat or codex-task session's plugin refresh changed. */
+/** AC-J7 — what a codex-manager or codex-task session's plugin refresh changed. */
 export interface PluginRefreshResult {
   session: Session;
   path: string;

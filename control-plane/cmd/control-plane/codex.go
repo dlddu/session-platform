@@ -90,5 +90,5 @@ func codexArchiveOption(cfg codexConfig, client *agent.HTTPClient, store archive
 	if cfg.image == "" {
 		return nil, errors.New("CODEX_ARCHIVE_ENABLED needs DATA_PLANE_CODEX_IMAGE")
 	}
-	return service.WithWorkloadCheckpointer(session.WorkloadTypeCodexChat, archive.NewAgentCheckpointer(client, store)), nil
+	return service.WithWorkloadCheckpointer(session.WorkloadTypeCodexManager, archive.NewAgentCheckpointer(client, store)), nil
 }

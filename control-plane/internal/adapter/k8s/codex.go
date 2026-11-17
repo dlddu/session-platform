@@ -11,7 +11,7 @@ import (
 )
 
 // Codex runtime configuration (docs/prd/codex-workload.md, AC-J1~J6, and
-// docs/prd/codex-task-workload.md, AC-M1~M4). A codex-chat or codex-task
+// docs/prd/codex-task-workload.md, AC-M1~M4). A codex-manager or codex-task
 // session is one pod: the workload container running the Codex SDK runner and
 // a loopback K3s MCP proxy sidecar. There is no provider credential to hide —
 // the ChatGPT login is the session's own (AC-J3) or its auth slot's (AC-M2) —
@@ -31,7 +31,7 @@ const (
 	// Keep in sync with data-plane/cmd/agent.
 	CodexReasoningEffortEnvVar = "CODEX_REASONING_EFFORT"
 	// K3SMCPProxyContainerName is the loopback sidecar that holds the K3s MCP
-	// token in a claude-code, codex-chat or codex-task pod.
+	// token in a claude-code, codex-manager or codex-task pod.
 	K3SMCPProxyContainerName = "k3s-mcp-proxy"
 	// The K3s MCP proxy's plugin seeder reads these whichever type runs it.
 	// Keep in sync with data-plane/cmd/agent (pluginSeedPluginsEnv,
@@ -112,7 +112,7 @@ func (o *ClientOrchestrator) codexProfileFor(workload session.WorkloadType) code
 	}
 }
 
-// codexPod fills in the workload container of a codex-chat or codex-task pod
+// codexPod fills in the workload container of a codex-manager or codex-task pod
 // and returns its sidecar and volumes. The state volume and state-dir variable
 // are the other agent types' on purpose: the data plane runs every CLI on one
 // runner and archives one tree (AC-J4, AC-M3).

@@ -10,7 +10,7 @@ import (
 func TestSessionDBMountIsSlotScoped(t *testing.T) {
 	c := corev1.Container{}
 	s := []corev1.Container{{Name: K3SMCPProxyContainerName}}
-	init, err := attachSessionDB(&c, s, session.WorkloadTypeCodexChat, "image")
+	init, err := attachSessionDB(&c, s, session.WorkloadTypeCodexManager, "image")
 	if err != nil {
 		t.Fatal(err)
 	}

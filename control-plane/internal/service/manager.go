@@ -30,7 +30,7 @@ type Service struct {
 	now                func() time.Time // injectable clock for tests
 	leaseRenewInterval time.Duration
 	// authPools are the login slot pools by the type that leases from them
-	// (AC-N2): codex-task and codex-chat.
+	// (AC-N2): codex-task and codex-manager.
 	authPools map[session.WorkloadType]k8s.AuthPool
 	manifests SessionManifests
 	// autoArchives enables AC-B5; autoTargets is the URL each live pod holds.
@@ -519,7 +519,7 @@ func (s *Service) RefreshPlugins(ctx context.Context, id string) (*session.Plugi
 		return nil, err
 	}
 	if !current.WorkloadType.IsCodex() {
-		return nil, fmt.Errorf("%w: plugin refresh is offered for codex-chat and codex-task sessions only", session.ErrInvalidState)
+		return nil, fmt.Errorf("%w: plugin refresh is offered for codex-manager and codex-task sessions only", session.ErrInvalidState)
 	}
 	sess, branch, err := s.activate(ctx, id, session.RestoreOptions{})
 	if err != nil {
@@ -843,7 +843,7 @@ func (s *Service) snapshotWithTransactionLocked(
 		return nil, err
 	}
 	frozen, err := s.finalizeSnapshotLocked(ctx, sess, generation)
-	if err == nil && frozen.WorkloadType != session.WorkloadTypeCodexChat {
+	if err == nil && frozen.WorkloadType != session.WorkloadTypeCodexManager {
 		s.releaseAuthSlotBestEffort(frozen.WorkloadType, frozen.ID, signedIn)
 	}
 	return frozen, err
@@ -940,7 +940,7 @@ func (s *Service) recoverSnapshotLocked(ctx context.Context, sess *session.Sessi
 			return nil, err
 		}
 		frozen, err := s.finalizeSnapshotLocked(ctx, sess, token)
-		if err == nil && frozen.WorkloadType != session.WorkloadTypeCodexChat {
+		if err == nil && frozen.WorkloadType != session.WorkloadTypeCodexManager {
 			// The pod may already be gone, so the login state stays unknown.
 			s.releaseAuthSlotBestEffort(frozen.WorkloadType, frozen.ID, nil)
 		}
@@ -1148,14 +1148,14 @@ func (s *Service) restore(ctx context.Context, id string, opts session.RestoreOp
 		memory = *opts.MemoryMultiplier
 	}
 	spec := k8s.WorkloadSpec{Type: workload, Model: model, Plugins: plugins, ReasoningEffort: effort, MemoryMultiplier: memory}
-	// codex-chat retains its DB slot across snapshots; other types can use
+	// codex-manager retains its DB slot across snapshots; other types can use
 	// any free login slot (AC-N3). A full pool leaves the session frozen.
 	if spec.AuthSlot, err = s.acquireAuthSlot(ctx, workload, id); err != nil {
 		return nil, err
 	}
 	keepSlot := false
 	defer func() {
-		if !keepSlot && workload != session.WorkloadTypeCodexChat {
+		if !keepSlot && workload != session.WorkloadTypeCodexManager {
 			s.releaseAuthSlotBestEffort(workload, id, nil)
 		}
 	}()
@@ -1544,7 +1544,7 @@ func (s *Service) staleAuthHolder(ctx context.Context, holder string) (bool, err
 	if err != nil {
 		return false, err
 	}
-	return sess.WorkloadType != session.WorkloadTypeCodexChat && sess.State == session.StateSnapshot && sess.Pod == "", nil
+	return sess.WorkloadType != session.WorkloadTypeCodexManager && sess.State == session.StateSnapshot && sess.Pod == "", nil
 }
 
 // authSlotSignedIn asks the session's pod whether its slot holds a login, so

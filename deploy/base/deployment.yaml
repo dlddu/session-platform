@@ -217,7 +217,7 @@ spec:
               value: "ghcr.io/dlddu/session-platform-data-plane:cc4615f73c4db0df6151680d65ee6390a0e5ee52"
             # codex-task 의 모델 카탈로그(AC-M4). Secret `codex-task-credentials` 는 선택 k3s-mcp-token
             # 하나만, ConfigMap `codex-task-config` 는 선택 model·models·k3s-mcp-url·plugin-marketplace-url
-            # 만 담는다. 이름은 codex-chat 의 것과 겹치면 안 된다(AC-M1). deploy/base/codex-task-*.example.yaml 참고.
+            # 만 담는다. 이름은 codex-manager 의 것과 겹치면 안 된다(AC-M1). deploy/base/codex-task-*.example.yaml 참고.
             - name: CODEX_TASK_DEFAULT_MODEL
               valueFrom:
                 configMapKeyRef:
@@ -265,7 +265,8 @@ spec:
                   name: claude-code-config
                   key: subscription-models
                   optional: true
-            # codex-chat 슬롯 풀(AC-N6). 슬롯 i 는 Lease `codex-chat-auth-<i>` 와 PVC
+            # codex-manager 슬롯 풀(AC-N6). 풀 이름은 이미 provision 된 Lease·PVC 를 그대로 쓰려고
+            # 옛 이름 `codex-chat` 으로 남겼다. 슬롯 i 는 Lease `codex-chat-auth-<i>` 와 PVC
             # `<네임스페이스>-codex-chat-auth-<i>` 이고, 안에 ChatGPT 로그인(auth/)과 세션 DB(db/)를
             # 함께 둔다. 채팅은 장기 단일 세션이라 1 — 0 이면 이 타입은 /config 에 나오지 않는다.
             # 클래스는 다른 풀과 같은 이유로 efs. efs 는 NFS 라 세션 DB 는 WAL 을 쓰지 않는다.

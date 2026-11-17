@@ -327,7 +327,7 @@ func TestRenderCodexConfig(t *testing.T) {
 	}
 }
 
-// AC-N6: a codex-chat pod with a session DB registers the sidecar's endpoint
+// AC-N6: a codex-manager pod with a session DB registers the sidecar's endpoint
 // as the `db` server, run without asking like the others.
 func TestRenderCodexConfigRegistersSessionDB(t *testing.T) {
 	doc := tomlCheck(t, string(renderCodexConfig(codexConfig{
@@ -420,38 +420,70 @@ func TestNewCodexWorkloadFromEnv(t *testing.T) {
 	t.Setenv(authSlotDirEnv, "")
 	t.Setenv(codexReasoningEffortEnv, "")
 	t.Setenv(sessionDBMCPURLEnv, "")
-	// AC-N6: codex-chat keeps its login in a slot too.
-	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
-		t.Fatal("codex-chat without an auth slot must be refused")
+	// AC-N6: codex-manager keeps its login in a slot too.
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err == nil {
+		t.Fatal("codex-manager without an auth slot must be refused")
 	}
 	t.Setenv(authSlotDirEnv, t.TempDir())
-	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err != nil {
-		t.Fatalf("restore-mode codex-chat workload: %v", err)
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err != nil {
+		t.Fatalf("restore-mode codex-manager workload: %v", err)
 	}
 	t.Setenv(sessionDBMCPURLEnv, "http://127.0.0.1:8093/session-db/mcp")
-	if w, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err != nil {
-		t.Fatalf("codex-chat with a session DB: %v", err)
+	if w, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err != nil {
+		t.Fatalf("codex-manager with a session DB: %v", err)
 	} else if cli, ok := w.cli.(codexCLI); !ok || cli.sessionDBURL != "http://127.0.0.1:8093/session-db/mcp" {
 		t.Fatalf("session DB URL not carried to the CLI: %+v", w.cli)
 	}
 	t.Setenv(sessionDBMCPURLEnv, "http://db.example:8093/session-db/mcp")
-	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err == nil {
 		t.Fatal("a session DB MCP off loopback must be refused")
 	}
 	t.Setenv(sessionDBMCPURLEnv, "")
 	t.Setenv(codexReasoningEffortEnv, "high")
-	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
-		t.Fatal("codex-chat takes no reasoning effort (AC-E8)")
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err == nil {
+		t.Fatal("codex-manager takes no reasoning effort (AC-E8)")
 	}
 	t.Setenv(codexReasoningEffortEnv, "")
 	t.Setenv(codexModelEnv, "bad model")
-	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err == nil {
 		t.Fatal("an invalid model must be refused at start")
 	}
 	t.Setenv(codexModelEnv, "")
 	t.Setenv("OPENAI_API_KEY", "sk")
-	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err == nil {
 		t.Fatal("a credential must be refused at start")
+	}
+}
+
+// AC-J1: a pod written by a control plane older than the 2026-11-17 rename
+// carries codex-manager's previous name in DATA_PLANE_WORKLOAD. It must start
+// the same manager workload — not codex-task — and report the current name.
+func TestNewCodexWorkloadFromEnvAcceptsPreviousName(t *testing.T) {
+	for _, name := range codexCredentialEnv {
+		t.Setenv(name, "")
+	}
+	t.Setenv(k3sMCPProxyURLEnv, "http://127.0.0.1:8093")
+	t.Setenv("CLAUDE_CODE_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+	t.Setenv(codexModelEnv, "gpt-6")
+	t.Setenv(codexRunnerBinaryEnv, "/opt/runner")
+	t.Setenv(authSlotDirEnv, t.TempDir())
+	t.Setenv(codexReasoningEffortEnv, "")
+	t.Setenv(sessionDBMCPURLEnv, "")
+	w, err := newCodexWorkloadFromEnv(legacyWorkloadCodexChat, testLogger(), true)
+	if err != nil {
+		t.Fatalf("previous name refused: %v", err)
+	}
+	cli, ok := w.cli.(codexCLI)
+	if !ok || cli.task {
+		t.Fatalf("previous name did not select the manager workload: %+v", w.cli)
+	}
+	if got := cli.workloadName(); got != workloadCodexManager {
+		t.Errorf("workloadName() = %q, want %q", got, workloadCodexManager)
+	}
+	// AC-E8 still holds under the old name: this type takes no effort.
+	t.Setenv(codexReasoningEffortEnv, "high")
+	if _, err := newCodexWorkloadFromEnv(legacyWorkloadCodexChat, testLogger(), true); err == nil {
+		t.Fatal("the previous name must not loosen AC-E8")
 	}
 }
 
@@ -940,7 +972,7 @@ func TestCodexHealthzNamesWorkload(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if body["workload"] != workloadCodexChat {
-		t.Fatalf("healthz = %v, want workload %s", body, workloadCodexChat)
+	if body["workload"] != workloadCodexManager {
+		t.Fatalf("healthz = %v, want workload %s", body, workloadCodexManager)
 	}
 }

@@ -235,7 +235,7 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/env/28/value
         value: ""
-      # codex-chat 슬롯 풀(AC-N6)도 같은 이유로 클래스를 비우고, codex 시나리오가 세션을 차례로
+      # codex-manager 슬롯 풀(AC-N6)도 같은 이유로 클래스를 비우고, codex 시나리오가 세션을 차례로
       # 만들고 지우는 동안 반납이 늦어도 막히지 않게 2 슬롯을 둔다. env/31 가 CODEX_CHAT_AUTH_SLOTS,
       # env/32 이 CODEX_CHAT_AUTH_STORAGE_CLASS.
       - op: test

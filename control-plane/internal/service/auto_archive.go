@@ -296,7 +296,7 @@ func (s *Service) adoptAutoArchive(ctx context.Context, id, lostPod string) (ado
 	}
 	s.autoTargets.forget(lostPod)
 	s.stopPodsBestEffort(sessionPodRefs(sess))
-	if sess.WorkloadType != session.WorkloadTypeCodexChat {
+	if sess.WorkloadType != session.WorkloadTypeCodexManager {
 		s.releaseAuthSlotBestEffort(sess.WorkloadType, id, nil)
 	}
 	return true, nil

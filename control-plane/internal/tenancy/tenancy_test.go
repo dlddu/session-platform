@@ -15,6 +15,9 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/tenancy"
 )
 
+// The pocket-aide grant deliberately names codex-manager by its previous name
+// "codex-chat": the deployed tenant set still does, and Parse normalizes it so
+// the grant keeps matching what a create request resolves to (AC-J1).
 const sample = `{"tenants":[
  {"name":"pocket-aide","serviceAccounts":["pocket-aide/pocket-aide"],"workloadTypes":["codex-chat","claude-code"]},
  {"name":"lab","serviceAccounts":["lab/runner","lab/ci"],"workloadTypes":["shell"]}
@@ -29,14 +32,14 @@ func TestParse(t *testing.T) {
 		t.Fatalf("tenants = %d", n)
 	}
 	got, ok := cfg.ForServiceAccount("lab", "ci")
-	if !ok || got.Name != "lab" || !got.Allows(session.WorkloadTypeShell) || got.Allows(session.WorkloadTypeCodexChat) {
+	if !ok || got.Name != "lab" || !got.Allows(session.WorkloadTypeShell) || got.Allows(session.WorkloadTypeCodexManager) {
 		t.Fatalf("lab/ci = %+v, %v", got, ok)
 	}
 	if _, ok := cfg.ForServiceAccount("lab", "other"); ok {
 		t.Fatal("unlisted ServiceAccount resolved to a tenant")
 	}
-	if t2, ok := cfg.Lookup("pocket-aide"); !ok || !t2.Allows(session.WorkloadTypeCodexChat) ||
-		t2.WorkloadTypes[0] != session.WorkloadTypeCodexChat || t2.Allows(session.WorkloadTypeCodexTask) {
+	if t2, ok := cfg.Lookup("pocket-aide"); !ok || !t2.Allows(session.WorkloadTypeCodexManager) ||
+		t2.WorkloadTypes[0] != session.WorkloadTypeCodexManager || t2.Allows(session.WorkloadTypeCodexTask) {
 		t.Fatalf("lookup pocket-aide = %+v, %v", t2, ok)
 	}
 }
@@ -47,7 +50,7 @@ func TestParseWildcardGrantsEveryType(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 	lab, _ := cfg.Lookup("lab")
-	for _, w := range []session.WorkloadType{session.WorkloadTypeShell, session.WorkloadTypeClaudeCode, session.WorkloadTypeMiniMaxCode, session.WorkloadTypeCodexChat, session.WorkloadTypeCodexTask} {
+	for _, w := range []session.WorkloadType{session.WorkloadTypeShell, session.WorkloadTypeClaudeCode, session.WorkloadTypeMiniMaxCode, session.WorkloadTypeCodexManager, session.WorkloadTypeCodexTask} {
 		if !lab.Allows(w) {
 			t.Errorf("wildcard tenant refuses %q", w)
 		}
@@ -78,6 +81,8 @@ func TestParseRejects(t *testing.T) {
 		"unknown type":       `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["vim"]}]}`,
 		"duplicate type":     `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["shell","shell"]}]}`,
 		"legacy codex":       `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["codex"]}]}`,
+		// Both names of one type is the same grant twice (AC-J1).
+		"type and its alias": `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["codex-manager","codex-chat"]}]}`,
 		"empty type literal": `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":[""]}]}`,
 		"wildcard with type": `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["*","shell"]}]}`,
 		"wildcard twice":     `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["*","*"]}]}`,

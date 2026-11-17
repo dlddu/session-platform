@@ -26,6 +26,11 @@ import (
 const (
 	// AuthPoolCodexTask and AuthPoolCodexChat name the pools. claude-code
 	// signs in with an OAuth token instead of a slot (AC-E7).
+	//
+	// The codex-manager pool keeps the name "codex-chat" the type carried
+	// before the 2026-11-17 rename: the name is the Lease and PVC name, so
+	// renaming it would strand the deployed slot holding the ChatGPT login and
+	// the session database (AC-N6, AC-J1).
 	AuthPoolCodexTask = "codex-task"
 	AuthPoolCodexChat = "codex-chat"
 
@@ -467,20 +472,21 @@ func WithClaudeCodeAuthMode(mode ClaudeCodeAuthMode) Option {
 }
 
 // AuthPoolFor names the pool a session of this type leases from, if any:
-// codex-task and codex-chat (AC-M2, AC-N6). claude-code takes none in either
-// auth mode — a subscription signs in with the platform's OAuth token (AC-E7).
+// codex-task and codex-manager (AC-M2, AC-N6; the latter's pool is still named
+// "codex-chat"). claude-code takes none in either auth mode — a subscription
+// signs in with the platform's OAuth token (AC-E7).
 func AuthPoolFor(workload session.WorkloadType) (string, bool) {
 	switch workload {
 	case session.WorkloadTypeCodexTask:
 		return AuthPoolCodexTask, true
-	case session.WorkloadTypeCodexChat:
+	case session.WorkloadTypeCodexManager:
 		return AuthPoolCodexChat, true
 	default:
 		return "", false
 	}
 }
 
-// The codex-chat slot layout (AC-N6): the slot is split into a login
+// The codex-manager slot layout (AC-N6): the slot is split into a login
 // directory and a database directory, and each container mounts only its own
 // one through a subPath, so the sidecar that serves the database never sees
 // the login and the workload container never sees the database file.
@@ -506,7 +512,7 @@ const (
 var CodexChatSessionDBMCPURL = K3SMCPProxyLoopbackURL + sessionDBMCPPath
 
 // authSlotSubPath is where the login lives inside a pool's slot: the root
-// for the login-only pools, its own directory for codex-chat's.
+// for the login-only pools, its own directory for codex-manager's.
 func authSlotSubPath(pool string) string {
 	if pool == AuthPoolCodexChat {
 		return codexChatSlotAuthDir
@@ -541,7 +547,7 @@ func (o *ClientOrchestrator) attachAuthSlot(container *corev1.Container, workloa
 	}}, nil
 }
 
-// attachSessionDB gives a codex-chat pod the database part of its slot
+// attachSessionDB gives a codex-manager pod the database part of its slot
 // (AC-N6): the slot-init container that prepares both directories, and a
 // mount of the database directory in the k3s-mcp-proxy sidecar, which serves
 // it as the session DB MCP. The directory belongs to the slot, not to the
@@ -549,7 +555,7 @@ func (o *ClientOrchestrator) attachAuthSlot(container *corev1.Container, workloa
 // slot next. The workload container only learns the MCP's address. Other
 // types get nothing.
 func attachSessionDB(container *corev1.Container, sidecars []corev1.Container, workloadType session.WorkloadType, image string) ([]corev1.Container, error) {
-	if workloadType != session.WorkloadTypeCodexChat {
+	if workloadType != session.WorkloadTypeCodexManager {
 		return nil, nil
 	}
 	proxy := -1

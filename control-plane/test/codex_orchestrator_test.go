@@ -20,12 +20,12 @@ func startCodex(t *testing.T, sessionID, model string) (corev1.Pod, k8s.SessionP
 	t.Helper()
 	orch, cs := newReadyOrchestrator(t,
 		k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
-		k8s.WithWorkloadImage(session.WorkloadTypeCodexChat, codexImage),
+		k8s.WithWorkloadImage(session.WorkloadTypeCodexManager, codexImage),
 		k8s.WithCodexCredentialsSecret("codex-k3s"),
 		k8s.WithCodexConfigConfigMap("codex-cfg"),
 	)
 	slot := 0
-	started, err := orch.Start(context.Background(), sessionID, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexChat, Model: model, Plugins: []string{"session-platform", "extra"}, AuthSlot: &slot})
+	started, err := orch.Start(context.Background(), sessionID, k8s.WorkloadSpec{Type: session.WorkloadTypeCodexManager, Model: model, Plugins: []string{"session-platform", "extra"}, AuthSlot: &slot})
 	if err != nil {
 		t.Fatalf("start codex session: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestCodex_OnePodWithLoopbackK3SProxy(t *testing.T) {
 	if len(started.Auxiliary) != 0 {
 		t.Fatalf("auxiliary pods = %+v, want none", started.Auxiliary)
 	}
-	if got := pod.Labels[k8s.LabelWorkloadType]; got != string(session.WorkloadTypeCodexChat) {
+	if got := pod.Labels[k8s.LabelWorkloadType]; got != string(session.WorkloadTypeCodexManager) {
 		t.Errorf("workload label = %q", got)
 	}
 	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
@@ -51,7 +51,7 @@ func TestCodex_OnePodWithLoopbackK3SProxy(t *testing.T) {
 		t.Fatalf("containers = %d, want agent + k3s-mcp-proxy", n)
 	}
 	agent := container(t, pod, k8s.ContainerName)
-	if v, _ := envValue(agent, "DATA_PLANE_WORKLOAD"); v != "codex-chat" {
+	if v, _ := envValue(agent, "DATA_PLANE_WORKLOAD"); v != "codex-manager" {
 		t.Errorf("agent workload = %q", v)
 	}
 	if v, _ := envValue(agent, k8s.K3SMCPProxyURLEnvVar); v != "http://127.0.0.1:8093" {
@@ -107,7 +107,7 @@ func TestCodex_ConcreteModelIsLiteral(t *testing.T) {
 	}
 }
 
-// AC-N6: the codex-chat slot is split by subPath. The workload container
+// AC-N6: the codex-manager slot is split by subPath. The workload container
 // mounts only the login directory, the sidecar only the database directory,
 // and the root slot-init container that prepares both is the one place the
 // whole slot is mounted.
@@ -167,15 +167,15 @@ func TestCodexChat_SlotSplitsLoginAndDatabase(t *testing.T) {
 	}
 }
 
-// codex-chat now needs a slot like codex-task (AC-N6): a spec without one is
+// codex-manager now needs a slot like codex-task (AC-N6): a spec without one is
 // refused before any pod exists.
 func TestCodexChat_RefusesWithoutSlot(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t,
 		k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
-		k8s.WithWorkloadImage(session.WorkloadTypeCodexChat, codexImage),
+		k8s.WithWorkloadImage(session.WorkloadTypeCodexManager, codexImage),
 	)
-	if _, err := orch.Start(context.Background(), "cx04", k8s.WorkloadSpec{Type: session.WorkloadTypeCodexChat}); err == nil {
-		t.Fatal("codex-chat started without an auth slot")
+	if _, err := orch.Start(context.Background(), "cx04", k8s.WorkloadSpec{Type: session.WorkloadTypeCodexManager}); err == nil {
+		t.Fatal("codex-manager started without an auth slot")
 	}
 	if n := len(listPods(t, cs)); n != 0 {
 		t.Fatalf("pods = %d, want none", n)

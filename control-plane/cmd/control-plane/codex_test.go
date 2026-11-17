@@ -48,7 +48,7 @@ func TestCodexArchiveGateNeedsImage(t *testing.T) {
 func TestOfferedWorkloadTypesIncludesCodexOnlyWithImageAndSlot(t *testing.T) {
 	has := func(c config) bool {
 		for _, w := range c.offeredWorkloadTypes() {
-			if w == session.WorkloadTypeCodexChat {
+			if w == session.WorkloadTypeCodexManager {
 				return true
 			}
 		}
@@ -66,6 +66,8 @@ func TestOfferedWorkloadTypesIncludesCodexOnlyWithImageAndSlot(t *testing.T) {
 }
 
 func TestLoadTenancyConfig(t *testing.T) {
+	// The deployed tenant set still grants codex-manager by its previous name,
+	// so startup must accept it rather than fail (AC-J1).
 	t.Setenv("SESSION_PLATFORM_TENANTS", `{"tenants":[{"name":"a","serviceAccounts":["n/sa"],"workloadTypes":["codex-chat"]}]}`)
 	cfg, err := loadTenancyConfig()
 	if err != nil || len(cfg.tenants.Tenants()) != 1 || cfg.audience != "session-platform" {

@@ -1,6 +1,6 @@
 # Session task ledger
 
-The `db` MCP on the codex-chat loopback sidecar offers `ledger_get`,
+The `db` MCP on the codex-manager loopback sidecar offers `ledger_get`,
 `ledger_list`, `ledger_put`, and `ledger_delete` alongside the raw SQL tools.
 This is the chat slot's bookkeeping, not a global task service or authoritative
 platform session inventory. No tool calls session create/delete, sends push,
@@ -10,7 +10,7 @@ never pass a parent's token or DB access to a worker.
 
 ## Storage
 
-The codex-chat slot PVC mounts `auth/` into the workload and `db/` into the
+The codex-manager slot PVC mounts `auth/` into the workload and `db/` into the
 sidecar at `/var/run/session-platform/session-db`. Only slot-init mounts the
 whole PVC. The database belongs to the **slot**, not to a session: a chat
 session that is deleted and recreated, and lands on the same slot, opens the
@@ -33,11 +33,11 @@ multi-statement error can already be committed. raw_exec counters are SQLite
 connection counters, **not committed totals**: ROLLBACK and DDL can report a
 prior rowsAffected/lastInsertId. Query actual state when verifying raw writes.
 
-codex-chat retains its slot lease while snapshotted, including recovery and failed restore; it is not eligible for stale frozen-holder reclaim. Explicit deletion releases it. Consequently frozen chats still consume pool capacity. Other workload types continue releasing login slots on snapshot.
+codex-manager retains its slot lease while snapshotted, including recovery and failed restore; it is not eligible for stale frozen-holder reclaim. Explicit deletion releases it. Consequently frozen chats still consume pool capacity. Other workload types continue releasing login slots on snapshot.
 
 DB data is outside the workload archive. Restart, restore and recreation on
 the same slot reopen the same PVC path, not a snapshot of the DB. PVC loss or
-moving to another slot (a pool with more than one codex-chat slot) is not
+moving to another slot (a pool with more than one codex-manager slot) is not
 covered. Explicit session deletion releases the slot and keeps `db/` for the
 next session on it; deleting data is an operator concern, never implicit
 ledger CRUD.

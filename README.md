@@ -411,7 +411,7 @@ and
 Codex sessions need `DATA_PLANE_CODEX_IMAGE` (the same data-plane image) and,
 optionally, the `codex-credentials` Secret (`k3s-mcp-token`) and `codex-config`
 ConfigMap (`model`, `models`, `k3s-mcp-url`, `plugin-marketplace-url`); see the
-`deploy/base/codex-*.example.yaml` files. `codex-chat` also needs at least one slot in
+`deploy/base/codex-*.example.yaml` files. `codex-manager` also needs at least one slot in
 its pool (`CODEX_CHAT_AUTH_SLOTS`, with `CODEX_CHAT_AUTH_STORAGE_CLASS` /
 `_STORAGE_SIZE`, default `1Gi`): each slot PVC holds the ChatGPT login and the
 session's SQLite database, which the sidecar serves as the `db` MCP server

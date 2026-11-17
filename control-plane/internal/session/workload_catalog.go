@@ -70,8 +70,8 @@ var workloadTypeCatalog = []WorkloadTypeInfo{
 		ApprovalGate: true,
 	},
 	{
-		Type:         WorkloadTypeCodexChat,
-		Label:        "Codex Chat",
+		Type:         WorkloadTypeCodexManager,
+		Label:        "Codex Manager",
 		Description:  "Codex SDK agent on your ChatGPT plan. Conversation, plugin skills and K3s MCP only.",
 		TakesModel:   true,
 		TakesPlugins: true,

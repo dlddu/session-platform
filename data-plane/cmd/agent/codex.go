@@ -22,7 +22,7 @@ import (
 // codex_config.go's, the plugin skills codex_skills.go's, the skills MCP
 // codex_skills_mcp.go's and the output projection codex_stream.go's.
 //
-// codex-chat (docs/prd/codex-workload.md, AC-J1~J8) is the long-lived chat
+// codex-manager (docs/prd/codex-workload.md, AC-J1~J8) is the long-lived chat
 // session: no shell, a ChatGPT login made through a device code the runner
 // forwards (AC-J3) and kept in the pool slot this pod mounts, and a session
 // database the sidecar serves from the same slot (AC-N6). codex-task (docs/prd/codex-task-workload.md,
@@ -31,8 +31,13 @@ import (
 // In both, the only platform secret in the pod is the K3s MCP token, and it
 // stays in the loopback k3s-mcp-proxy sidecar (AC-J6).
 const (
-	workloadCodexChat = "codex-chat"
-	workloadCodexTask = "codex-task"
+	workloadCodexManager = "codex-manager"
+	workloadCodexTask    = "codex-task"
+	// legacyWorkloadCodexChat is codex-manager's name before the 2026-11-17
+	// rename. A pod written by a control plane older than the rename carries it
+	// in DATA_PLANE_WORKLOAD, so the switch in main still accepts it; the agent
+	// reports the current name either way (AC-J1).
+	legacyWorkloadCodexChat = "codex-chat"
 
 	// Keep in sync with control-plane/internal/adapter/k8s (CodexModelEnvVar).
 	codexModelEnv            = "CODEX_MODEL"
@@ -77,7 +82,7 @@ var codexReasoningEfforts = []string{"minimal", "low", "medium", "high", "xhigh"
 // no key: the runner's codex child signs in with a ChatGPT account — the
 // session's own (AC-J3) or its slot's (AC-M2).
 type codexCLI struct {
-	// task selects codex-task's surface (AC-M1) over codex-chat's (AC-J5).
+	// task selects codex-task's surface (AC-M1) over codex-manager's (AC-J5).
 	task bool
 	// effort is codex-task's session reasoning effort (AC-M4), empty for the
 	// model's default.
@@ -89,7 +94,7 @@ type codexCLI struct {
 	// agentURL is this agent on loopback, which the skills MCP's
 	// refresh_skills calls (AC-J7); empty offers no refresh tool.
 	agentURL string
-	// sessionDBURL is the sidecar's session DB MCP (AC-N6), codex-chat only;
+	// sessionDBURL is the sidecar's session DB MCP (AC-N6), codex-manager only;
 	// empty registers no `db` server.
 	sessionDBURL string
 	// schedulerURL is the sidecar's scheduler MCP (AC-P1); empty registers no
@@ -116,14 +121,14 @@ func (c codexCLI) workloadName() string {
 	if c.task {
 		return workloadCodexTask
 	}
-	return workloadCodexChat
+	return workloadCodexManager
 }
 
 // argv is one runner invocation (AC-J2). The model is always passed, the
 // platform-default sentinel included, so the runner — not this side — decides
 // what an unset model means. The prompt follows "--", so a prompt that starts
 // with "--" can never change a platform-controlled flag. --resume follows
-// AC-E4: only after the first successful run. codex-chat's argv carries no
+// AC-E4: only after the first successful run. codex-manager's argv carries no
 // mode, so the runner's default is the narrow surface.
 func (c codexCLI) argv(binary, model, prompt string, resume bool) []string {
 	if model == "" {
@@ -311,9 +316,9 @@ func newCodexWorkloadFromEnv(workload string, logger *slog.Logger, restoreMode b
 		cli.effort = effort
 	} else {
 		if effort != "" {
-			// AC-E8: codex-chat takes no effort, so one here is a spec this
+			// AC-E8: codex-manager takes no effort, so one here is a spec this
 			// agent was not built for.
-			return nil, fmt.Errorf("codex-chat does not take %s", codexReasoningEffortEnv)
+			return nil, fmt.Errorf("codex-manager does not take %s", codexReasoningEffortEnv)
 		}
 		if cli.sessionDBURL, err = sessionDBMCPURLFromEnv(); err != nil {
 			return nil, err

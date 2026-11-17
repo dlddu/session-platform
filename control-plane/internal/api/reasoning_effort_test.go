@@ -41,7 +41,7 @@ func TestCreateSessionReasoningEffort(t *testing.T) {
 		{"name": "x", "workloadType": "claude-code", "reasoningEffort": "minimal"},
 		{"name": "x", "workloadType": "codex-task", "reasoningEffort": "max"},
 		{"name": "x", "workloadType": "minimax-code", "reasoningEffort": "high"},
-		{"name": "x", "workloadType": "codex-chat", "reasoningEffort": "high"},
+		{"name": "x", "workloadType": "codex-manager", "reasoningEffort": "high"},
 		{"name": "x", "reasoningEffort": "high"},
 	} {
 		if status, _ := createRaw(t, srv.URL, body); status != http.StatusBadRequest {
@@ -53,7 +53,7 @@ func TestCreateSessionReasoningEffort(t *testing.T) {
 	}
 }
 
-// AC-J1: every caller moved to codex-chat, so a create naming the old type is
+// AC-J1: every caller moved to codex-manager, so a create naming the old type is
 // refused before any pod exists.
 func TestCreateSessionLegacyCodexNameRefused(t *testing.T) {
 	srv, orch, _ := newServerWithOrchestrator()

@@ -17,7 +17,7 @@ func TestCodex2_OnePodTokenOnlyInSidecar(t *testing.T) {
 	if !ok {
 		t.Skip("no kube credentials for the SUT")
 	}
-	s := createAs(t, "", map[string]any{"name": uniqueName(t), "workloadType": "codex-chat"})
+	s := createAs(t, "", map[string]any{"name": uniqueName(t), "workloadType": "codex-manager"})
 	resp, raw := doAs(t, "", http.MethodGet, "/api/v1/sessions/"+s.ID, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("get: %d %s", resp.StatusCode, raw)
@@ -38,7 +38,7 @@ func TestCodex2_OnePodTokenOnlyInSidecar(t *testing.T) {
 	if len(pod.Spec.Containers) != 2 {
 		t.Fatalf("containers = %d, want the agent and k3s-mcp-proxy", len(pod.Spec.Containers))
 	}
-	// AC-N6: the one claim is the session's codex-chat slot, split by subPath
+	// AC-N6: the one claim is the session's codex-manager slot, split by subPath
 	// so the agent sees only the login and the sidecar only the database.
 	var claims []string
 	for _, v := range pod.Spec.Volumes {
