@@ -105,6 +105,43 @@ state and sent/devices; preservation links/state; external operation intent
 and next action. Never store transcripts, credentials or login codes. Historical
 information starts unknown with source/time; it is not imported as running.
 
+`details.kind` names what a row is. The ledger schema has no column for it, so
+it is a convention in `details`, and the one value readers outside the session
+must honour is **`monitor`**: a row the parent's own monitoring loop keeps for
+bookkeeping. Monitor rows are not the user's work, so a reader that presents the
+ledger to a person (the app's task panel) leaves them out. A row with no
+`details.kind` is ordinary work and is shown.
+
+## Read-only HTTP view
+
+Outside the session the ledger is readable, never writable. Three hops, each
+GET: the sidecar serves `/session-db/ledger/tasks`, the workload agent relays it
+at `/ledger/tasks` (the sidecar binds loopback, so the relay is what the pod
+network can reach), and the control plane exposes
+`GET /api/v1/sessions/{id}/ledger/tasks`. It takes `limit` and `after_id` only —
+the same keyset rules as `ledger_list`, so pass `next_cursor` unchanged and an
+empty cursor means done. There is **no SQL on this path**: the view cannot read
+anything in the database but the ledger's own task rows, and nothing it serves
+changes them. The model is not involved, so a read costs no turn and never
+waits on one.
+
+Reading is **passive**, like `Questions` and `ToolApprovals`: it is not an
+access and it does not restore a snapshot, so opening a task panel never wakes
+a session or moves its idle clock. The consequences are the answers a reader
+has to distinguish:
+
+| Answer | Meaning |
+| --- | --- |
+| 200, empty `tasks` | the slot's ledger really has no tasks |
+| 409 | the session keeps a ledger but has no live pod to read it through — the rows are still on the slot's volume, so this is *not* "no tasks" |
+| 501 | the session's type keeps no session database at all |
+| 400 | a `limit` outside 1–100, or a malformed `after_id`; refused rather than clamped |
+
+The route is scoped like every other session-id route, so another tenant's
+session answers exactly like a missing one. Because the ledger belongs to the
+**slot**, reading through the pod that holds the slot now is what makes the page
+the current chat's ledger rather than a record an earlier session left.
+
 Schema v1 creates only reserved `sp_ledger_*` tables transactionally on first
 successful call. It does not change PRAGMA user_version or existing user tables.
 A namespace collision or future version is refused without destructive repair.
@@ -133,7 +170,11 @@ and list/read verification follow a confirmed merge before parent cleanup.
 ## Verification and rollout boundary
 
 Local tests exercise the default surface (ledger only, raw calls refused with
-the opt-in named) and the debug surface, preservation of user
+the opt-in named) and the debug surface, the read-only HTTP view (same pages as
+`ledger_list`, GET only, no SQL reachable, `limit` refused rather than clamped,
+non-loopback refused, proxy passthrough intact) and its control-plane route
+(pages and cursor, ownership scoping, 501/409 distinguished from an empty
+ledger, and a read leaving a snapshot untouched), preservation of user
 tables/user_version, schema refusal,
 transaction rollback on receipt failure, single-winner CAS, replay and ID reuse,
 validation, filtering/keyset pages, raw transaction cleanup and close/reopen.

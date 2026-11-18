@@ -20,6 +20,14 @@ type StubClient struct {
 	// SteerOutcome overrides what Steer answers (AC-J9); nil means applied.
 	SteerOutcome *session.Steered
 
+	// LedgerRows is the chat slot's task ledger as the stub holds it, in id
+	// order (AC-N6). LedgerTasks pages over it with the same keyset rules the
+	// sidecar uses, so a test reads pages rather than one canned answer.
+	LedgerRows []session.LedgerTaskRecord
+	// LedgerReads counts ledger pages served, so a test can show that reading
+	// a panel never turned into something else.
+	LedgerReads int
+
 	mu      sync.Mutex
 	bufs    map[string][]byte
 	steered map[string][]string
@@ -43,6 +51,30 @@ func (c *StubClient) Write(_ context.Context, pod, payload string) error {
 // sidecar to clone one.
 func (c *StubClient) RefreshPlugins(context.Context, string) (session.PluginChanges, error) {
 	return session.PluginChanges{State: "unconfigured", Added: []string{}, Updated: []string{}, Removed: []string{}}, nil
+}
+
+// LedgerTasks pages over LedgerRows the way the sidecar pages over the ledger
+// (AC-N6): ids in order, after_id as the cursor, and an empty next_cursor only
+// on the last page.
+func (c *StubClient) LedgerTasks(_ context.Context, _ string, limit int, afterID string) (session.LedgerTaskPage, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.LedgerReads++
+	if limit <= 0 {
+		limit = session.LedgerTaskPageLimitDefault
+	}
+	page := session.LedgerTaskPage{Tasks: []session.LedgerTaskRecord{}}
+	for _, row := range c.LedgerRows {
+		if afterID != "" && row.ID <= afterID {
+			continue
+		}
+		if len(page.Tasks) == limit {
+			page.NextCursor = page.Tasks[len(page.Tasks)-1].ID
+			break
+		}
+		page.Tasks = append(page.Tasks, row)
+	}
+	return page, nil
 }
 
 // PendingQuestions reports none: the stub runs no turn that could ask.

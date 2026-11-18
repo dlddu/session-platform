@@ -311,6 +311,60 @@ func (c *HTTPClient) PendingToolApprovals(ctx context.Context, pod string) (sess
 	return page, nil
 }
 
+// LedgerTasks reads one keyset page of the chat slot's task ledger (AC-N6).
+// The page comes from the session database the pod's sidecar serves, so routing
+// by pod is what makes it the slot's current ledger. The request carries only a
+// limit and a cursor — there is no SQL on this path — and it is a GET, so
+// reading a page changes nothing in the session.
+func (c *HTTPClient) LedgerTasks(ctx context.Context, pod string, limit int, afterID string) (session.LedgerTaskPage, error) {
+	page := session.LedgerTaskPage{Tasks: []session.LedgerTaskRecord{}}
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return page, err
+	}
+	query := url.Values{}
+	if limit > 0 {
+		query.Set("limit", strconv.Itoa(limit))
+	}
+	if afterID != "" {
+		query.Set("after_id", afterID)
+	}
+	target := c.baseURL(ip) + "/ledger/tasks"
+	if len(query) > 0 {
+		target += "?" + query.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return page, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return page, fmt.Errorf("read task ledger in session pod %s: %w", pod, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		message := strings.TrimSpace(string(body))
+		switch resp.StatusCode {
+		case http.StatusNotImplemented:
+			return page, fmt.Errorf("%w: %s", session.ErrLedgerUnsupported, message)
+		case http.StatusBadRequest:
+			return page, fmt.Errorf("%w: %s", session.ErrInvalidInput, message)
+		default:
+			return page, fmt.Errorf("read task ledger in session pod %s: agent returned %d: %s",
+				pod, resp.StatusCode, message)
+		}
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&page); err != nil {
+		return session.LedgerTaskPage{Tasks: []session.LedgerTaskRecord{}},
+			fmt.Errorf("read task ledger in session pod %s: decode: %w", pod, err)
+	}
+	if page.Tasks == nil {
+		page.Tasks = []session.LedgerTaskRecord{}
+	}
+	return page, nil
+}
+
 // DecideToolApproval relays the owner's decision to the turn waiting on it
 // (AC-E2). The agent binds the decision to the call it names, so a refusal
 // here is a decision that does not match what the turn is waiting on.

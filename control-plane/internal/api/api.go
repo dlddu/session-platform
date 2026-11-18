@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -99,6 +100,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/sessions/{id}/tool-approvals", a.listToolApprovals)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/tool-approvals/{approvalId}/decide", a.decideToolApproval)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/recover", a.recoverSession)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/ledger/tasks", a.listLedgerTasks)
 }
 
 // ---- request/response DTOs ----
@@ -709,6 +711,43 @@ type decideToolApprovalResp struct {
 	Status string `json:"status"`
 }
 
+// listLedgerTasks reads one page of the chat slot's task ledger (AC-N6). It is
+// read-only and passive: there is no SQL on the path, and a read neither wakes
+// the session nor counts as an access. Scoped like every other session-id
+// route, so another tenant's session answers exactly like a missing one.
+func (a *API) listLedgerTasks(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
+	limit, err := ledgerLimit(r.URL.Query().Get("limit"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	page, err := a.mgr.LedgerTasks(r.Context(), r.PathValue("id"), limit, r.URL.Query().Get("after_id"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+// ledgerLimit reads the page size. An absent limit is the ledger's own default;
+// anything that is not a number in range is refused rather than clamped, so a
+// caller never gets a different page than it asked for without being told.
+func ledgerLimit(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 1 || limit > session.LedgerTaskPageLimitMax {
+		return 0, fmt.Errorf("%w: limit must be a number from 1 to %d",
+			session.ErrInvalidInput, session.LedgerTaskPageLimitMax)
+	}
+	return limit, nil
+}
+
 type questionsResp struct {
 	Questions []session.PendingQuestion `json:"questions"`
 }
@@ -912,6 +951,12 @@ func writeErr(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	case errors.Is(err, session.ErrPluginRefreshFailed):
 		status = http.StatusBadGateway
+	case errors.Is(err, session.ErrLedgerUnsupported):
+		status = http.StatusNotImplemented
+	case errors.Is(err, session.ErrLedgerUnavailable):
+		// Not 404 and not an empty page: the ledger exists on the slot, it just
+		// cannot be read while no pod holds it. Reading never starts one.
+		status = http.StatusConflict
 	case errors.Is(err, session.ErrAuthPoolExhausted):
 		// The wrapped cause names slots and holders; clients only get the class.
 		writeJSON(w, http.StatusServiceUnavailable, errResp{Error: session.ErrAuthPoolExhausted.Error()})

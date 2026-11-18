@@ -707,6 +707,41 @@ func (s *Service) questionTarget(ctx context.Context, id string) (*session.Sessi
 	return sess, agentQ, nil
 }
 
+// ledgerAgent is the agent capability behind the read-only view of the chat
+// slot's task ledger (AC-N6).
+type ledgerAgent interface {
+	LedgerTasks(ctx context.Context, pod string, limit int, afterID string) (session.LedgerTaskPage, error)
+}
+
+// LedgerTasks reads one keyset page of the chat slot's task ledger (AC-N6).
+// Like Questions and ToolApprovals it is passive: it neither restores a
+// snapshot nor counts as an access, so reading the ledger never wakes a session
+// and never moves its idle clock.
+//
+// The ledger belongs to the slot rather than to the session, so it is read
+// through the pod holding that slot now — which is what makes the page the
+// *current* chat's ledger and not a record left by an earlier one. A session
+// with no live pod is reported as unavailable, never as an empty ledger: the
+// rows are still on the volume, and claiming "no tasks" would be wrong.
+func (s *Service) LedgerTasks(ctx context.Context, id string, limit int, afterID string) (session.LedgerTaskPage, error) {
+	empty := session.LedgerTaskPage{Tasks: []session.LedgerTaskRecord{}}
+	sess, err := s.Get(ctx, id)
+	if err != nil {
+		return empty, err
+	}
+	if sess.WorkloadType != session.WorkloadTypeCodexChat {
+		return empty, fmt.Errorf("%w: only codex-chat sessions keep one", session.ErrLedgerUnsupported)
+	}
+	if sess.State == session.StateSnapshot || sess.Pod == "" {
+		return empty, session.ErrLedgerUnavailable
+	}
+	agentL, ok := s.agent.(ledgerAgent)
+	if !ok {
+		return empty, fmt.Errorf("%w: this deployment's agent offers no ledger view", session.ErrLedgerUnsupported)
+	}
+	return agentL.LedgerTasks(ctx, sess.Pod, limit, afterID)
+}
+
 // Switch makes the target session active — promoting idle or restoring a
 // snapshot as needed — and is a no-op for an already-active session (AC-C4).
 // opts applies only when a snapshot is restored.
