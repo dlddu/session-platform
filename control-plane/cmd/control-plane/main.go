@@ -29,6 +29,7 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/configmap"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
 	"github.com/dlddu/session-platform/control-plane/internal/api"
+	"github.com/dlddu/session-platform/control-plane/internal/observability"
 	"github.com/dlddu/session-platform/control-plane/internal/service"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 	"github.com/dlddu/session-platform/control-plane/internal/static"
@@ -209,6 +210,8 @@ func main() {
 		serviceOpts = append(serviceOpts, service.WithAutoArchives(s3store))
 		logger.Info("automatic archive on pod termination enabled (AC-B5)", "types", cfg.autoArchiveTypes())
 	}
+	metrics := observability.NewMetrics()
+	serviceOpts = append(serviceOpts, service.WithObservability(logger, metrics))
 	mgr := service.New(orch, store, shellCkpt, agentClient, serviceOpts...)
 	snapshotEnabled := cfg.anyArchiveEnabled()
 
@@ -232,6 +235,10 @@ func main() {
 	}
 	defer repoAccess.close()
 	repoAccess.routes(mux, client, namespace, mgr, logger)
+	if cfg.metricsEnabled {
+		mux.Handle("GET /internal/metrics", observability.Handler(metrics))
+		logger.Info("provisioning metrics exposition mounted", "path", "/internal/metrics")
+	}
 	mux.Handle("/", static.Handler())
 
 	srv := &http.Server{
@@ -307,6 +314,10 @@ type config struct {
 	// claudeCodeModels is the ordered, public model catalog shown by the SPA.
 	// Empty preserves the free-text model input and existing API behaviour.
 	claudeCodeModels []string
+	// metricsEnabled mounts the provisioning metrics exposition. Default off:
+	// the control plane answers unauthenticated in-cluster callers, so a route
+	// is added only where someone has decided to scrape it.
+	metricsEnabled bool
 	// idleScanInterval is how often the reaper scans for sessions past their
 	// idle limit (AC-B1). The 60m limit itself is session.MaxIdle; this only
 	// bounds how promptly a newly-idle session is noticed.
@@ -462,6 +473,7 @@ func loadConfig() (config, error) {
 		claudeCodeModels:         claudeCodeModels,
 		shellArchiveEnabled:      envBool("SHELL_ARCHIVE_ENABLED", false),
 		autoArchiveEnabled:       envBool("AUTO_ARCHIVE_ENABLED", false),
+		metricsEnabled:           envBool("CP_METRICS_ENABLED", false),
 		idleScanInterval:         envDuration("IDLE_SCAN_INTERVAL", time.Minute),
 		checkpointS3Endpoint:     env("CHECKPOINT_S3_ENDPOINT", ""),
 		checkpointS3Bucket:       env("CHECKPOINT_S3_BUCKET", ""),

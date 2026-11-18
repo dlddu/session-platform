@@ -17,6 +17,7 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/archive"
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/k8s"
+	"github.com/dlddu/session-platform/control-plane/internal/observability"
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 	"github.com/dlddu/session-platform/control-plane/internal/store"
 )
@@ -36,6 +37,23 @@ type Service struct {
 	// autoArchives enables AC-B5; autoTargets is the URL each live pod holds.
 	autoArchives AutoArchives
 	autoTargets  autoArchiveTargets
+	// log and metrics record what a provisioning round did. Session and pod
+	// identifiers go to log only — see internal/observability on why they are
+	// not label values.
+	log     *slog.Logger
+	metrics *observability.Metrics
+}
+
+// WithObservability replaces the logger and attaches a metrics registry to the
+// provisioning rounds. Either may be nil: a nil logger falls back to
+// slog.Default and a nil registry discards its observations.
+func WithObservability(log *slog.Logger, m *observability.Metrics) Option {
+	return func(s *Service) {
+		if log != nil {
+			s.log = log
+		}
+		s.metrics = m
+	}
 }
 
 // SessionManifests keeps each session's manifest in durable storage beside its
@@ -53,6 +71,42 @@ func WithSessionManifests(m SessionManifests) Option {
 }
 
 const defaultLeaseRenewInterval = 5 * time.Second
+
+// defaultLeaseDuration mirrors the ConfigMap store's own validity. It is only
+// the fallback for a store that does not report its lease duration; the real
+// value comes from the adapter through leaseDurationReporter.
+const defaultLeaseDuration = 15 * time.Second
+
+// leaseRenewSafetyMaxMargin caps what is cut off the end of every retry
+// budget. A round cannot see the clock of the replica that would take its
+// lease over, nor whether a renewal it stopped waiting for is still in flight,
+// so it stops using the lease some margin before the lease would expire. The
+// margin is a fifth of the validity up to this cap, so a short lease keeps a
+// usable retry window instead of being consumed entirely by the margin.
+const leaseRenewSafetyMaxMargin = 3 * time.Second
+
+// leaseSafetyMargin is how much of leaseDur a round refuses to spend.
+func leaseSafetyMargin(leaseDur time.Duration) time.Duration {
+	if m := leaseDur / 5; m < leaseRenewSafetyMaxMargin {
+		return m
+	}
+	return leaseRenewSafetyMaxMargin
+}
+
+const (
+	leaseRenewMinBackoff      = 250 * time.Millisecond
+	leaseRenewMaxBackoffShift = 3
+)
+
+// The two verdicts that end a round. Everything else a renewal can return is
+// unconfirmed — a fact about the request, not about ownership — and is retried.
+var (
+	// errLeaseOwnershipLost means the Lease was read and someone else holds it.
+	errLeaseOwnershipLost = errors.New("lease ownership lost")
+	// errLeaseValidityLost means ownership is still unknown and the window in
+	// which it would have been safe to assume it has passed.
+	errLeaseValidityLost = errors.New("lease validity elapsed without a confirmed renewal")
+)
 
 // createRoundTimeout backstops a Create detached from its caller: a helper pod
 // and a workload pod at the orchestrator's 5-minute ready bound each, plus the
@@ -132,6 +186,7 @@ func New(orch k8s.PodOrchestrator, store store.StateStore, ckpt archive.Checkpoi
 		authPools:          map[session.WorkloadType]k8s.AuthPool{},
 		now:                func() time.Time { return time.Now().UTC() },
 		leaseRenewInterval: defaultLeaseRenewInterval,
+		log:                slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -149,18 +204,24 @@ func newID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// renewLeaseContext keeps a long snapshot's occupancy Lease alive. Losing the
-// token cancels the operation context before it can make another irreversible
-// phase transition; the durable transaction is then left for the new holder.
+// renewLeaseContext keeps a long round's occupancy Lease alive. It cancels the
+// operation context only for the two verdicts that make continuing unsafe —
+// ownership demonstrably lost, or the validity window gone without a confirmed
+// renewal — so the durable transaction is left for the new holder. An
+// unconfirmed renewal is neither, and is retried inside the validity the round
+// already holds.
 func (s *Service) renewLeaseContext(parent context.Context, id, token string) (context.Context, func() error) {
 	ctx, cancel := context.WithCancel(parent)
 	done := make(chan struct{})
 	renewErr := make(chan error, 1)
 	stop := make(chan struct{})
+	leaseDur := s.leaseDuration()
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(s.leaseRenewInterval)
 		defer ticker.Stop()
+		// Lock returned a freshly written Lease, so the first window starts here.
+		confirmed := s.now()
 		for {
 			select {
 			case <-ctx.Done():
@@ -168,26 +229,23 @@ func (s *Service) renewLeaseContext(parent context.Context, id, token string) (c
 			case <-stop:
 				return
 			case <-ticker.C:
-				// A wedged Kubernetes request must fail before the 15-second
-				// Lease can expire underneath a still-running side effect.
-				renewCtx, renewCancel := context.WithTimeout(ctx, s.leaseRenewInterval)
-				err := s.store.Renew(renewCtx, id, token)
-				renewCancel()
-				if err != nil {
-					// stopRenewal is normal shutdown, not ownership loss.
-					select {
-					case <-stop:
-						return
-					default:
-					}
-					if ctx.Err() != nil {
-						return
-					}
-					renewErr <- err
-					cancel()
-					return
-				}
 			}
+			err := s.renewWithinLease(ctx, id, token, leaseDur, &confirmed)
+			if err == nil {
+				continue
+			}
+			// stopRenewal and a cancelled parent are normal shutdown, not a verdict.
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			renewErr <- err
+			cancel()
+			return
 		}
 	}()
 	var stopped bool
@@ -205,6 +263,234 @@ func (s *Service) renewLeaseContext(parent context.Context, id, token string) (c
 			return nil
 		}
 	}
+}
+
+// renewWithinLease retries an unconfirmed renewal until the lease the round
+// already holds runs out, and never a moment longer.
+//
+// The budget is anchored on `confirmed` — the instant *before* the last
+// renewal the API server acknowledged. Anchoring there rather than on the
+// clock after it keeps the window no longer than the real one: the RenewTime
+// the other replicas read is at or after that instant, so a slow success can
+// only make this estimate more pessimistic, never optimistic. Retrying moves
+// nothing — only an acknowledged renewal advances the anchor, so a round can
+// never talk itself into a longer lease than the store granted.
+//
+// The margin covers what this process cannot observe: clock skew against the
+// replica that would take the lease over, and the flight time of a renewal the
+// API server may still be applying when we stop waiting for it.
+func (s *Service) renewWithinLease(ctx context.Context, id, token string, leaseDur time.Duration, confirmed *time.Time) error {
+	// lastErr is carried so the closing verdict still names what actually went
+	// wrong. A caller matching on the store's error has to keep matching once
+	// the retry sits between it and the round.
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		deadline := confirmed.Add(leaseDur - leaseSafetyMargin(leaseDur))
+		attemptStart := s.now()
+		if !attemptStart.Before(deadline) {
+			return validityLost(id, *confirmed, attemptStart, leaseDur, lastErr)
+		}
+		budget := deadline.Sub(attemptStart)
+		if budget > s.leaseRenewInterval {
+			budget = s.leaseRenewInterval
+		}
+		renewCtx, renewCancel := context.WithTimeout(ctx, budget)
+		err := s.store.Renew(renewCtx, id, token)
+		renewCancel()
+		switch {
+		case err == nil:
+			*confirmed = attemptStart
+			return nil
+		case errors.Is(err, session.ErrConflict):
+			return fmt.Errorf("%w: %s is held by another round: %w", errLeaseOwnershipLost, lockDesc(id), err)
+		case ctx.Err() != nil:
+			return ctx.Err()
+		}
+		lastErr = err
+		s.logLeaseRenewUnconfirmed(id, attempt, err)
+		now := s.now()
+		remaining := deadline.Sub(now)
+		if remaining <= 0 {
+			return validityLost(id, *confirmed, now, leaseDur, err)
+		}
+		backoff := leaseRenewMinBackoff << min(attempt, leaseRenewMaxBackoffShift)
+		if backoff > remaining {
+			backoff = remaining
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+	}
+}
+
+// leaseDuration is the store's own validity when the adapter reports one, so a
+// round bounds itself by the value the store actually grants instead of a
+// constant that can drift away from it.
+func (s *Service) leaseDuration() time.Duration {
+	if r, ok := s.store.(leaseDurationReporter); ok {
+		if d := r.LeaseDuration(); d > 0 {
+			return d
+		}
+	}
+	return defaultLeaseDuration
+}
+
+// leaseDurationReporter is optional on store.StateStore — a store that does
+// not implement it is read as granting defaultLeaseDuration.
+type leaseDurationReporter interface {
+	LeaseDuration() time.Duration
+}
+
+func lockDesc(id string) string { return "session " + id + " lock" }
+
+// validityLost is the verdict a round ends on when its renewals never
+// confirmed. It wraps both the verdict and the last underlying failure: the
+// verdict is what the round acts on, the cause is what an operator reads.
+func validityLost(id string, confirmed, at time.Time, leaseDur time.Duration, cause error) error {
+	held := at.Sub(confirmed).Round(time.Millisecond)
+	if cause == nil {
+		return fmt.Errorf("%w: %s unconfirmed for %s of a %s lease", errLeaseValidityLost, lockDesc(id), held, leaseDur)
+	}
+	return fmt.Errorf("%w: %s unconfirmed for %s of a %s lease: %w",
+		errLeaseValidityLost, lockDesc(id), held, leaseDur, cause)
+}
+
+// roundLog carries one provisioning round's identity through its phases. The
+// operation id is the lease token: it already fences every write the round
+// makes, so a log line and the Lease that authorised it carry the same value
+// and a reader can line them up without a second correlation key.
+type roundLog struct {
+	svc       *Service
+	operation string
+	session   string
+	opID      string
+	started   time.Time
+	phase     string
+}
+
+func (s *Service) beginRound(operation, id, token string) *roundLog {
+	r := &roundLog{svc: s, operation: operation, session: id, opID: token, started: s.now(), phase: "start"}
+	s.logger().Info("provisioning round started", r.attrs()...)
+	return r
+}
+
+// phaseDone marks a phase boundary. The phases are the places a round can stop,
+// so naming the last one that completed is what turns "it failed" into "it
+// failed waiting for the pod" without re-reading the code.
+func (r *roundLog) phaseDone(phase string, extra ...any) {
+	if r == nil {
+		return
+	}
+	r.phase = phase
+	r.svc.logger().Info("provisioning phase finished", append(r.attrs(), extra...)...)
+}
+
+// finished closes the round. result is the closed vocabulary the metrics use;
+// err is logged whole and never put in a label.
+func (r *roundLog) finished(result string, err error) {
+	if r == nil {
+		return
+	}
+	d := r.svc.now().Sub(r.started)
+	attrs := append(r.attrs(), "result", result, "duration", d.String())
+	if err != nil {
+		attrs = append(attrs, "err", err.Error())
+		r.svc.logger().Error("provisioning round failed", attrs...)
+	} else {
+		r.svc.logger().Info("provisioning round committed", attrs...)
+	}
+	r.svc.metrics.RoundFinished(r.operation, result, d)
+}
+
+// reclaimed records that this round deleted pods, and why. The actor is always
+// this round: the pods it names carry its own provisioning suffix, so it can
+// only ever reclaim what it built, never a pod a later holder provisioned.
+func (r *roundLog) reclaimed(reason string, pods []k8s.PodRef) {
+	if r == nil || len(pods) == 0 {
+		return
+	}
+	names := make([]string, 0, len(pods))
+	for _, p := range pods {
+		names = append(names, p.Name)
+	}
+	r.svc.logger().Error("reclaiming pods provisioned by this round",
+		append(r.attrs(), "reason", reason, "actor", "control-plane round", "pods", strings.Join(names, ","))...)
+	r.svc.metrics.PodsReclaimed(reason, len(pods))
+}
+
+// orchestratorReclaimed records the reclamation the orchestrator does inside
+// its own provisioning call, which the round never sees as a pod list.
+func (r *roundLog) orchestratorReclaimed(cause error) {
+	if r == nil {
+		return
+	}
+	r.svc.logger().Error("orchestrator reclaimed the pods of a round that could not finish provisioning",
+		append(r.attrs(), "reason", reclaimReason(cause), "actor", "orchestrator provision", "err", cause.Error())...)
+}
+
+func (r *roundLog) attrs() []any {
+	return []any{"operation", r.operation, "session", r.session, "operation_id", r.opID, "phase", r.phase}
+}
+
+// classifyRoundError maps a round's error to the closed result vocabulary. The
+// two lease verdicts are distinguished because they mean opposite things to an
+// operator: ownership lost is another replica doing its job, validity lost is
+// this replica unable to reach the store.
+func classifyRoundError(err error) string {
+	switch {
+	case err == nil:
+		return observability.ResultOK
+	case errors.Is(err, errLeaseOwnershipLost), errors.Is(err, session.ErrConflict):
+		return observability.ResultOwnershipLost
+	case errors.Is(err, errLeaseValidityLost):
+		return observability.ResultValidityLost
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return observability.ResultCancelled
+	default:
+		return observability.ResultWorkloadFailed
+	}
+}
+
+func (s *Service) logger() *slog.Logger {
+	if s.log != nil {
+		return s.log
+	}
+	return slog.Default()
+}
+
+// logLeaseRenewUnconfirmed records a renewal the round is about to retry. It is
+// the signal that the store is slow while a lease is held — the condition that
+// used to end rounds silently.
+// renewVerdict maps the renewal loop's closing error to the metric vocabulary.
+func renewVerdict(err error) string {
+	switch {
+	case errors.Is(err, errLeaseOwnershipLost):
+		return observability.RenewOwnershipLost
+	case errors.Is(err, errLeaseValidityLost):
+		return observability.RenewValidityLost
+	default:
+		return observability.RenewOther
+	}
+}
+
+// reclaimReason separates "we lost the lease" from "the round failed on its
+// own" so the pods_reclaimed counter answers whether reclamation was the
+// platform tidying up after itself or after a lost race.
+func reclaimReason(err error) string {
+	switch {
+	case errors.Is(err, errLeaseOwnershipLost), errors.Is(err, session.ErrConflict):
+		return observability.ReasonOwnershipLost
+	default:
+		return observability.ReasonRoundFailed
+	}
+}
+
+func (s *Service) logLeaseRenewUnconfirmed(id string, attempt int, err error) {
+	s.logger().Warn("lease renewal unconfirmed; retrying inside the held validity",
+		"session", id, "attempt", attempt, "err", err.Error())
+	s.metrics.LeaseRenewFailed(observability.RenewUnconfirmed)
 }
 
 // Create provisions a dedicated pod and registers the session as active
@@ -750,6 +1036,7 @@ func (s *Service) snapshot(ctx context.Context, id string, idleCutoff *time.Time
 	ctx = operationCtx
 	defer func() {
 		if err := stopRenewal(); err != nil {
+			s.metrics.LeaseRenewFailed(renewVerdict(err))
 			result = nil
 			retErr = errors.Join(retErr, err)
 		}
@@ -1120,10 +1407,13 @@ func (s *Service) restore(ctx context.Context, id string, opts session.RestoreOp
 		return nil, err
 	}
 	defer s.unlockBestEffort(id, token)
+	round := s.beginRound(observability.OpRestore, id, token)
+	defer func() { round.finished(classifyRoundError(retErr), retErr) }()
 	operationCtx, stopRenewal := s.renewLeaseContext(ctx, id, token)
 	ctx = operationCtx
 	defer func() {
 		if err := stopRenewal(); err != nil {
+			s.metrics.LeaseRenewFailed(renewVerdict(err))
 			result = nil
 			retErr = errors.Join(retErr, err)
 		}
@@ -1198,29 +1488,41 @@ func (s *Service) restore(ctx context.Context, id string, opts session.RestoreOp
 	}()
 	pods, err := s.orch.RestoreInto(ctx, id, checkpointRef(sess.Checkpoint), spec)
 	if err != nil {
+		// The orchestrator reclaims whatever it had provisioned before it
+		// returned, so the pods are already gone by here — say so, or the only
+		// record of the deletion is the kubelet's.
+		round.orchestratorReclaimed(err)
 		return nil, err
 	}
+	round.phaseDone("pods-provisioned", "pod", pods.Workload.Name)
 	if err := ctx.Err(); err != nil {
+		round.reclaimed(reclaimReason(err), pods.All())
 		s.stopPodsBestEffort(pods.All())
 		return nil, err
 	}
 	// The archive is applied to the workload pod; auxiliary pods hold no
 	// session state and are started fresh alongside it (AC-B2, AC-F4).
 	if err := ckpt.Restore(ctx, sess.Checkpoint, pods.Workload); err != nil {
+		round.reclaimed(reclaimReason(err), pods.All())
 		s.stopPodsBestEffort(pods.All())
 		return nil, err
 	}
+	round.phaseDone("archive-applied")
 	if err := ctx.Err(); err != nil {
+		round.reclaimed(reclaimReason(err), pods.All())
 		s.stopPodsBestEffort(pods.All())
 		return nil, err
 	}
 	// Same bar as Create: the restored session only counts as active once its
 	// workload agent is reachable again (AC-D1/E1).
 	if err := s.orch.Reach(ctx, pods.Workload); err != nil {
+		round.reclaimed(reclaimReason(err), pods.All())
 		s.stopPodsBestEffort(pods.All())
 		return nil, err
 	}
+	round.phaseDone("agent-reachable")
 	if err := ctx.Err(); err != nil {
+		round.reclaimed(reclaimReason(err), pods.All())
 		s.stopPodsBestEffort(pods.All())
 		return nil, err
 	}
@@ -1252,6 +1554,7 @@ func (s *Service) restore(ctx context.Context, id string, opts session.RestoreOp
 			errors.Is(getErr, session.ErrNotFound) {
 			// The authoritative record proves our target was not committed, or
 			// the CAS was definitively rejected.
+			round.reclaimed(observability.ReasonCommitRejected, pods.All())
 			s.stopPodsBestEffort(pods.All())
 		}
 		if getErr != nil && !errors.Is(err, session.ErrConflict) && !errors.Is(getErr, session.ErrNotFound) {

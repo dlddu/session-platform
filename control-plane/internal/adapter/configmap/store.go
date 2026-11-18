@@ -442,9 +442,16 @@ func (s *Store) claimLifecycleOwner(ctx context.Context, id, token string) error
 	return session.ErrConflict
 }
 
-// Renew extends a Lease only while token is still its holder. resourceVersion
-// makes a concurrent takeover win atomically; the stale holder receives
-// ErrConflict and must stop mutating the session.
+// Renew extends a Lease only while token is still its holder. Losing the
+// holder slot returns session.ErrConflict and the stale holder must stop
+// mutating the session; every other failure is reported as a plain error,
+// which tells the caller only that the renewal is *unconfirmed*.
+//
+// The distinction is the contract: ErrConflict is a fact about ownership read
+// off the Lease, not an inference from a failed request. A transport error, a
+// deadline, or a resourceVersion collision says nothing about who holds the
+// lock, so collapsing them into ErrConflict makes a holder that still owns its
+// lease abandon the round.
 func (s *Store) Renew(ctx context.Context, id, token string) error {
 	leases := s.client.CoordinationV1().Leases(s.namespace)
 	existing, err := leases.Get(ctx, lockName(id), metav1.GetOptions{})
@@ -457,18 +464,57 @@ func (s *Store) Renew(ctx context.Context, id, token string) error {
 	if existing.Spec.HolderIdentity == nil || *existing.Spec.HolderIdentity != token {
 		return session.ErrConflict
 	}
-	now := metav1.NewMicroTime(s.now())
-	dur := leaseSeconds(s.leaseDur)
-	existing.Spec.RenewTime = &now
-	existing.Spec.LeaseDurationSeconds = &dur
-	if _, err := leases.Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
-		if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+	if _, err := leases.Update(ctx, s.renewedLease(existing), metav1.UpdateOptions{}); err != nil {
+		if apierrors.IsNotFound(err) {
 			return session.ErrConflict
+		}
+		if apierrors.IsConflict(err) {
+			return s.renewAfterConflict(ctx, id, token)
 		}
 		return fmt.Errorf("renew lease %s: %w", lockName(id), err)
 	}
 	return nil
 }
+
+// renewAfterConflict resolves the one failure that looks like a takeover but
+// is not. A resourceVersion conflict only says the object changed between our
+// read and our write — a takeover and any other writer touching the same Lease
+// produce the identical error. Re-reading is what distinguishes them: a
+// different holder is a real loss, the same holder means the write lost a race
+// it can take again inside the lease it still owns.
+func (s *Store) renewAfterConflict(ctx context.Context, id, token string) error {
+	leases := s.client.CoordinationV1().Leases(s.namespace)
+	latest, err := leases.Get(ctx, lockName(id), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return session.ErrConflict
+		}
+		return fmt.Errorf("re-read lease %s after a renewal conflict: %w", lockName(id), err)
+	}
+	if latest.Spec.HolderIdentity == nil || *latest.Spec.HolderIdentity != token {
+		return session.ErrConflict
+	}
+	if _, err := leases.Update(ctx, s.renewedLease(latest), metav1.UpdateOptions{}); err != nil {
+		if apierrors.IsNotFound(err) {
+			return session.ErrConflict
+		}
+		return fmt.Errorf("renew lease %s after a conflict re-read: %w", lockName(id), err)
+	}
+	return nil
+}
+
+func (s *Store) renewedLease(lease *coordinationv1.Lease) *coordinationv1.Lease {
+	now := metav1.NewMicroTime(s.now())
+	dur := leaseSeconds(s.leaseDur)
+	lease.Spec.RenewTime = &now
+	lease.Spec.LeaseDurationSeconds = &dur
+	return lease
+}
+
+// LeaseDuration is how long a held lock survives without renewal. A caller
+// that keeps working through an unconfirmed renewal needs it to bound itself
+// to the validity it already holds instead of guessing one.
+func (s *Store) LeaseDuration() time.Duration { return s.leaseDur }
 
 // Unlock releases the lock only if token still holds it, so a late Unlock never
 // frees a lock a different holder has since taken over. Idempotent.
