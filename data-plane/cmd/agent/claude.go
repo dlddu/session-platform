@@ -459,6 +459,28 @@ func (c *claudeWorkload) timestamp() string {
 	return c.now().UTC().Format(time.RFC3339)
 }
 
+// openTurnSeq reports the last turn of a restored scrollback when it has no end
+// marker: the pod that wrote the archive went away mid-turn without closing it
+// (docs/prd/claude-code-workload.md AC-E3).
+func openTurnSeq(scrollback []byte) (int, bool) {
+	lead := []byte(claudeTurnMarkerLead + "input seq=")
+	i := bytes.LastIndex(scrollback, lead)
+	if i < 0 {
+		return 0, false
+	}
+	digits := scrollback[i+len(lead):]
+	n := bytes.IndexAny(digits, " \n")
+	if n <= 0 {
+		return 0, false
+	}
+	seq, err := strconv.Atoi(string(digits[:n]))
+	if err != nil {
+		return 0, false
+	}
+	end := []byte(claudeTurnMarkerLead + "end seq=" + strconv.Itoa(seq) + " ")
+	return seq, !bytes.Contains(scrollback[i:], end)
+}
+
 func claudeTurnMarker(kind string, seq int, fields ...string) string {
 	return claudeTurnMarkerLead + kind + " seq=" + strconv.Itoa(seq) + strings.Join(append([]string{""}, fields...), " ") + "\n"
 }
@@ -1051,6 +1073,10 @@ func (c *claudeWorkload) restore(r io.Reader) error {
 	// put up must not land on this one (AC-E2, 「턴 중 도구 승인」).
 	c.toolApprovals.rotateEpoch()
 	c.out.restore(scrollbackBytes)
+	if seq, open := openTurnSeq(scrollbackBytes); open {
+		c.logger.Warn("the archive ends inside a turn; closing it as canceled", "seq", seq)
+		c.endTurn(seq, "canceled")
+	}
 	c.mu.Lock()
 	c.turns = bytes.Count(scrollbackBytes, []byte(claudeTurnMarkerLead+"input "))
 	c.hasRun = hasRun
