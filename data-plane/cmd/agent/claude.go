@@ -1511,6 +1511,13 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 		serveAgentLedger(w, r, c)
 	})
 
+	// AC-N6, write side: one user request stored on a ledger task. It appends
+	// a row beside the tasks and changes none of them, and it starts no turn —
+	// the parent picks the request up when it next reads its ledger.
+	mux.HandleFunc("POST "+agentLedgerRequestsPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentLedgerRequests(w, r, c)
+	})
+
 	mux.HandleFunc("GET /attach", func(w http.ResponseWriter, r *http.Request) {
 		if !c.isReady() {
 			http.Error(w, "claude workload is awaiting restore", http.StatusServiceUnavailable)

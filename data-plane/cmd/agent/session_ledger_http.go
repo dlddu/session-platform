@@ -97,3 +97,76 @@ func writeLedgerViewError(w http.ResponseWriter, status int, code, message strin
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"code": code, "error": message})
 }
+
+// sessionDBLedgerRequestsPath is where a request from outside the session is
+// stored. Keep in sync with data-plane/cmd/agent (agentLedgerRequestsPath
+// derivation) and control-plane/internal/adapter/agent.
+const sessionDBLedgerRequestsPath = "/session-db/ledger/requests"
+
+// ledgerRequestBody is what the control plane sends. The author is the caller's
+// own derivation from the boundary that authenticated the person — the app
+// never gets to name it — and it is bookkeeping here, exactly like a task's
+// owner: no tool, approval or merge is granted on the strength of it.
+type ledgerRequestBody struct {
+	ID     string `json:"id"`
+	TaskID string `json:"task_id"`
+	Text   string `json:"text"`
+	Author string `json:"author"`
+}
+
+// serveLedgerRequests stores one user request on a task of this slot's ledger.
+//
+// It is the only write this view has, and it is deliberately not a ledger
+// write: it appends a row of its own and leaves every task field — details,
+// approval, cursors — as the session wrote them. It starts no turn and wakes
+// nothing; the parent finds the request the next time it looks at its ledger.
+func (s *sessionDB) serveLedgerRequests(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "the task ledger request view accepts POST", http.StatusMethodNotAllowed)
+		return
+	}
+	if !fromLoopback(r) {
+		http.Error(w, "the task ledger request view is only for this pod", http.StatusForbidden)
+		return
+	}
+	var body ledgerRequestBody
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		writeLedgerViewError(w, http.StatusBadRequest, "invalid_argument", "body must be {id, task_id, text, author}")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), sessionDBCallTimeout)
+	defer cancel()
+	stored, replayed, err := s.appendLedgerRequest(ctx, body.ID, body.TaskID, body.Text, body.Author, ledgerNow())
+	if err != nil {
+		var ledgerErr ledgerError
+		if errors.As(err, &ledgerErr) {
+			status := http.StatusBadRequest
+			switch ledgerErr.Code {
+			case "not_found":
+				status = http.StatusNotFound
+			case "conflict", "schema_version":
+				status = http.StatusConflict
+			}
+			writeLedgerViewError(w, status, ledgerErr.Code, ledgerErr.ErrorText)
+			return
+		}
+		s.logger.Info("task ledger request could not be stored", "err", err)
+		writeLedgerViewError(w, http.StatusInternalServerError, "storage_error", "the request could not be stored")
+		return
+	}
+	// A replay of a request already stored answers 200 with the same row; a
+	// first store answers 201. Either way the caller learns the request is on
+	// the slot, which is what it has to tell the person.
+	status := http.StatusCreated
+	if replayed {
+		status = http.StatusOK
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(map[string]any{"request": stored, "replayed": replayed}); err != nil {
+		s.logger.Info("task ledger request reply could not be written", "err", err)
+	}
+}

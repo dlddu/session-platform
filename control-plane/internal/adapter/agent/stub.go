@@ -27,6 +27,9 @@ type StubClient struct {
 	// LedgerReads counts ledger pages served, so a test can show that reading
 	// a panel never turned into something else.
 	LedgerReads int
+	// LedgerRequests is what callers stored, in arrival order, with the same
+	// id-idempotency and task-link rules the sidecar applies.
+	LedgerRequests []session.LedgerRequest
 
 	mu      sync.Mutex
 	bufs    map[string][]byte
@@ -152,4 +155,38 @@ func (c *StubClient) Stream(_ context.Context, pod string, offset int64) (io.Rea
 	})
 	_, _ = fmt.Fprintf(&event, "id: %d\nevent: output\ndata: %s\n\n", n, body)
 	return io.NopCloser(bytes.NewReader(event.Bytes())), nil
+}
+
+// CreateLedgerRequest stores one request the way the sidecar does: the id is
+// the idempotency key, the task has to be one this ledger holds, and the stored
+// row never touches the task it names.
+func (c *StubClient) CreateLedgerRequest(_ context.Context, _ string, in session.LedgerRequestInput) (session.LedgerRequestStored, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, stored := range c.LedgerRequests {
+		if stored.ID != in.ID {
+			continue
+		}
+		if stored.TaskID != in.TaskID || stored.Text != in.Text {
+			return session.LedgerRequestStored{}, fmt.Errorf("%w: request id already used with different content", session.ErrConflict)
+		}
+		return session.LedgerRequestStored{Request: stored, Replayed: true}, nil
+	}
+	found := false
+	for _, row := range c.LedgerRows {
+		if row.ID == in.TaskID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return session.LedgerRequestStored{}, fmt.Errorf("%w: task not found", session.ErrNotFound)
+	}
+	stored := session.LedgerRequest{
+		ID: in.ID, TaskID: in.TaskID, Seq: int64(len(c.LedgerRequests) + 1), Version: 1,
+		Text: in.Text, Author: in.Author, Status: session.LedgerRequestPending,
+		CreatedAt: "2026-11-18T00:00:00Z",
+	}
+	c.LedgerRequests = append(c.LedgerRequests, stored)
+	return session.LedgerRequestStored{Request: stored, Replayed: false}, nil
 }

@@ -1,9 +1,11 @@
 package api_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
@@ -220,5 +222,118 @@ func TestLedgerTasks_IsGETOnly(t *testing.T) {
 		if resp.StatusCode == http.StatusOK {
 			t.Errorf("%s reached the ledger route; it must be GET only", method)
 		}
+	}
+}
+
+// postLedgerRequest stores one user request the way an app's backend does.
+func postLedgerRequest(t *testing.T, srv *httptest.Server, sessionID, taskID string, body map[string]any) (int, session.LedgerRequestStored) {
+	t.Helper()
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := srv.URL + "/api/v1/sessions/" + sessionID + "/ledger/tasks/" + taskID + "/requests"
+	resp, err := http.Post(target, "application/json", bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatalf("store request: %v", err)
+	}
+	defer resp.Body.Close()
+	var stored session.LedgerRequestStored
+	_ = json.NewDecoder(resp.Body).Decode(&stored)
+	return resp.StatusCode, stored
+}
+
+// AC-N6 write side: a request lands on the slot as pending, and the answer
+// says that and nothing more — stored and waiting, never dealt with. The task
+// comes from the path, so the body cannot aim it at another task.
+func TestLedgerRequests_StoresOnePendingRequest(t *testing.T) {
+	srv, stub := ledgerServer(t)
+	stub.LedgerRows = []session.LedgerTaskRecord{ledgerRow("t1", "blocked", "review", "CI 가 막혔다", "로그를 본다")}
+	_, s := createRaw(t, srv.URL, map[string]any{"name": "requests", "workloadType": "codex-chat"})
+
+	status, stored := postLedgerRequest(t, srv, s.ID, "t1", map[string]any{
+		"id": "req-1", "text": "이 작업 진행해 줘", "author": "user-7",
+	})
+	if status != http.StatusCreated || stored.Replayed {
+		t.Fatalf("store = %d %+v, want 201 and a first store", status, stored)
+	}
+	if stored.Request.TaskID != "t1" || stored.Request.Status != session.LedgerRequestPending ||
+		stored.Request.Text != "이 작업 진행해 줘" || stored.Request.Author != "user-7" {
+		t.Fatalf("stored = %+v, want a pending request on t1", stored.Request)
+	}
+	// Nothing was read or run to store it: the session was not woken.
+	if stub.LedgerReads != 0 {
+		t.Fatalf("ledger reads = %d, want storing a request to read nothing", stub.LedgerReads)
+	}
+
+	// The same id with the same words is the caller's retry, not a second
+	// request.
+	status, replay := postLedgerRequest(t, srv, s.ID, "t1", map[string]any{
+		"id": "req-1", "text": "이 작업 진행해 줘", "author": "user-7",
+	})
+	if status != http.StatusOK || !replay.Replayed || replay.Request.Seq != stored.Request.Seq {
+		t.Fatalf("replay = %d %+v, want 200 and the stored row", status, replay)
+	}
+	if len(stub.LedgerRequests) != 1 {
+		t.Fatalf("stored rows = %d, want the retry to have stored nothing twice", len(stub.LedgerRequests))
+	}
+
+	// The same id with different words is a mistake, not a second request.
+	if status, _ := postLedgerRequest(t, srv, s.ID, "t1", map[string]any{
+		"id": "req-1", "text": "다른 말", "author": "user-7",
+	}); status != http.StatusConflict {
+		t.Fatalf("reused id = %d, want 409", status)
+	}
+}
+
+// A request about a task this ledger does not have is not stored: nobody would
+// ever find it. A session that keeps no ledger, and one with no live pod to
+// write through, each say so in their own status.
+func TestLedgerRequests_RefusesWhatCannotBeStored(t *testing.T) {
+	srv, stub := ledgerServer(t)
+	stub.LedgerRows = []session.LedgerTaskRecord{ledgerRow("t1", "running", "implementation", "", "")}
+	_, chat := createRaw(t, srv.URL, map[string]any{"name": "requests", "workloadType": "codex-chat"})
+
+	if status, _ := postLedgerRequest(t, srv, chat.ID, "absent", map[string]any{
+		"id": "req-1", "text": "요청", "author": "user-7",
+	}); status != http.StatusNotFound {
+		t.Fatalf("unknown task = %d, want 404", status)
+	}
+
+	// Another tenant's session answers exactly like a missing one.
+	if status, _ := postLedgerRequest(t, srv, "sess-nope", "t1", map[string]any{
+		"id": "req-2", "text": "요청", "author": "user-7",
+	}); status != http.StatusNotFound {
+		t.Fatalf("unknown session = %d, want 404", status)
+	}
+
+	// A type that keeps no ledger has nowhere to put it.
+	_, shell := createRaw(t, srv.URL, map[string]any{"name": "shell", "workloadType": "shell"})
+	if status, _ := postLedgerRequest(t, srv, shell.ID, "t1", map[string]any{
+		"id": "req-3", "text": "요청", "author": "user-7",
+	}); status != http.StatusNotImplemented {
+		t.Fatalf("shell session = %d, want 501", status)
+	}
+}
+
+// The fields are bounded before the hop into the pod, and the message is about
+// the field rather than the hop.
+func TestLedgerRequests_RefusesMalformedFields(t *testing.T) {
+	srv, stub := ledgerServer(t)
+	stub.LedgerRows = []session.LedgerTaskRecord{ledgerRow("t1", "running", "implementation", "", "")}
+	_, s := createRaw(t, srv.URL, map[string]any{"name": "requests", "workloadType": "codex-chat"})
+	for _, body := range []map[string]any{
+		{"text": "요청", "author": "user-7"},
+		{"id": "한글 아이디", "text": "요청", "author": "user-7"},
+		{"id": "req-1", "text": "   ", "author": "user-7"},
+		{"id": "req-1", "text": "요청", "author": ""},
+		{"id": "req-1", "text": strings.Repeat("가", session.LedgerRequestTextMax+1), "author": "user-7"},
+	} {
+		if status, _ := postLedgerRequest(t, srv, s.ID, "t1", body); status != http.StatusBadRequest {
+			t.Errorf("%v = %d, want 400", body, status)
+		}
+	}
+	if len(stub.LedgerRequests) != 0 {
+		t.Fatalf("stored = %d, want nothing stored for a malformed request", len(stub.LedgerRequests))
 	}
 }

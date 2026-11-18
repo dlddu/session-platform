@@ -114,7 +114,9 @@ ledger to a person (the app's task panel) leaves them out. A row with no
 
 ## Read-only HTTP view
 
-Outside the session the ledger is readable, never writable. Three hops, each
+Outside the session the ledger's **tasks** are readable, never writable. The one
+thing a reader may add is a user request, which is a row of its own and never a
+task field — see [User requests](#user-requests). Three hops, each
 GET: the sidecar serves `/session-db/ledger/tasks`, the workload agent relays it
 at `/ledger/tasks` (the sidecar binds loopback, so the relay is what the pod
 network can reach), and the control plane exposes
@@ -147,6 +149,112 @@ successful call. It does not change PRAGMA user_version or existing user tables.
 A namespace collision or future version is refused without destructive repair.
 Any future version needs an explicit transactional migration; never DROP user
 tables or silently downgrade. Do not mutate the reserved tables using raw SQL.
+
+## User requests
+
+A person outside the session can leave a request about one task: the words they
+typed, stored on the slot until the parent picks it up. It is the chat app's
+alternative to speaking into the conversation — nothing is sent as a message and
+no turn starts, so a request survives a reply that is still being written, a
+restart and a snapshot.
+
+### Storage
+
+Requests live in `sp_ledger_user_requests`, keyed by the caller's own id and
+linked to a task by `task_id`. They are **not** part of the task document: a
+request arriving while the parent is writing that task with `ledger_put` is a
+single INSERT that touches no task row, so neither write loses the other and
+`details`, approval and cursors stay exactly as the parent left them. The table
+is additive — `sp_ledger_meta` stays at version 1, so an older sidecar image
+still opens the database after a rollback and simply ignores the table.
+
+Deleting a task does not delete what a person asked about it: the rows stay
+readable by `task_id`. A *new* request about a deleted (retired) task is refused
+instead, because nobody would look for it there.
+
+Each row carries id, `task_id`, arrival `seq`, the text, the author, the time,
+and then the whole answer to "has this been dealt with": `status`,
+`operation_key`/`operation_target`/`dispatch_state` and, once settled, `result`
+and `related_seq`. The author is the storing caller's own derivation from the
+boundary that authenticated the person; like a task's `owner` it is bookkeeping,
+and nothing in the ledger grants a tool, an approval or a merge on the strength
+of it. A request's text is a person's input to weigh, not a widening of what the
+session may do.
+
+### Write path
+
+Three hops, POST all the way: the sidecar serves
+`/session-db/ledger/requests` (loopback only), the workload agent relays it at
+`/ledger/requests`, and the control plane exposes
+`POST /api/v1/sessions/{id}/ledger/tasks/{taskID}/requests` with
+`{id, text, author}`. The task is in the path, so a body cannot aim a request at
+another task. Storing is as passive as reading: it is not an access, it restores
+no snapshot and it starts no turn.
+
+| Answer | Meaning |
+| --- | --- |
+| 201 | stored, `pending` |
+| 200 | the same id had already stored the same words — the caller's retry, not a second request |
+| 404 | no such session, or no such task in this slot's ledger |
+| 409 | that id is already used for different words, the task was deleted, or the session has no live pod to store through |
+| 501 | the session's type keeps no session database |
+| 400 | a malformed id, author or text (1..8192 characters) |
+
+### Lifecycle, and why listing is not taking
+
+`ledger_requests_list` shows requests oldest `seq` first and changes nothing.
+Taking one is `ledger_requests_claim` (CAS on `expected_version`, so exactly one
+parent wins and the rest get `conflict`); it returns a `claim_token` that
+`ledger_requests_dispatch` and `ledger_requests_ack` require. Only an ack
+reaches `processed`/`failed`, with the result a person reads and the turn that
+carries it — so a request that was looked at and dropped stays visibly open.
+
+`ledger_requests_dispatch` records the intent **before** the outside action:
+`operation_key` (the parent's own idempotency key for that action),
+`operation_target`, and `dispatch_state` `intended` then `dispatched`. This is
+the [external operation reconciliation](#external-operation-reconciliation)
+discipline applied to requests, and it is what makes a crash survivable.
+
+A claim that lapses is not a free retry:
+
+- no dispatch recorded → nothing can have happened outside, so the request is
+  claimable again as `claimed`;
+- a dispatch recorded → the request becomes `reconciling`, and the claim reply
+  says `reconcile: true` with the earlier `operation_key`/`operation_target`.
+  On a reconciling request a *different* operation key is refused unless
+  `observed=not_accepted` states the parent established the earlier dispatch
+  never landed; the recorded key is always accepted, because that is the key the
+  outside world deduplicates on.
+
+A lapsed holder's token is refused for both dispatch and ack, so a parent that
+comes back late cannot report over the one that took the request meanwhile.
+
+### Discovery, and the parent's order of work
+
+Every `ledger_get`/`ledger_list` task record carries `requests` —
+`{pending, claimed, reconciling, last_seq}` — when any request ever arrived. A
+parent that only reads its task list still sees that someone asked something;
+the counts and `last_seq` move when anything changes.
+
+The order a parent applies, each step its own tool call:
+
+1. On its ledger check, read `requests` on the tasks it owns; a non-zero
+   `pending` or `reconciling` is work.
+2. `ledger_requests_list` the task, oldest `seq` first.
+3. `ledger_requests_claim` the oldest open one. A `reconcile: true` reply is
+   handled before anything else: establish what the earlier dispatch did, then
+   either ack the outcome found or re-dispatch under the recorded key.
+4. Re-read the task (`ledger_get`): a request is new user input, so a `blocked`
+   or `review` task is re-evaluated rather than skipped. The request does not
+   change the task's status or approval by itself, and an unrelated block is not
+   cleared because a request arrived.
+5. `ledger_requests_dispatch` with `intended`, then act within the approval
+   scope already in force (a tool approval, a human merge gate and a session
+   command stay exactly where they were), then `dispatch` again with
+   `dispatched`.
+6. `ledger_requests_ack` with `processed` or `failed`, the result, and
+   `related_seq`.
+7. Record the task's own change with `ledger_put` as usual.
 
 ## External operation reconciliation
 
