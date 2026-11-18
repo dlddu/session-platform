@@ -524,15 +524,15 @@ func (c *claudeWorkload) runWorker() {
 		var steerIn io.Reader
 		closeSteer := func() {}
 		if steerer, ok := c.cli.(steerable); ok && steerer.takesSteering() {
-			pipeOut, pipeIn := io.Pipe()
-			steerIn = pipeOut
-			c.steer.open(pipeIn)
-			if projector, ok := stdout.(*codexStreamProjector); ok {
-				projector.withSteerDesk(&c.steer)
-			}
-			closeSteer = func() {
-				c.steer.close()
-				_ = pipeIn.Close()
+			stdin, closePipe, err := c.steer.openPipe()
+			if err != nil {
+				c.logger.Error("open the steering pipe; this turn takes no mid-turn messages", "err", c.redactString(err.Error()))
+			} else {
+				steerIn = stdin
+				if projector, ok := stdout.(*codexStreamProjector); ok {
+					projector.withSteerDesk(&c.steer)
+				}
+				closeSteer = closePipe
 			}
 		}
 		runCtx, cancelRun := context.WithTimeout(c.ctx, c.runTimeout)

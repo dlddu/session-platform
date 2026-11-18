@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -75,6 +76,9 @@ type steerDesk struct {
 	in      io.Writer
 	waiting map[string]chan steerOutcome
 	seq     uint64
+	// writeMu keeps each steer line whole: an OS pipe interleaves concurrent
+	// writes larger than PIPE_BUF, and one line can be up to 8000 runes.
+	writeMu sync.Mutex
 }
 
 // open hands the desk the running turn's runner stdin.
@@ -83,6 +87,24 @@ func (d *steerDesk) open(in io.Writer) {
 	d.in = in
 	d.waiting = map[string]chan steerOutcome{}
 	d.mu.Unlock()
+}
+
+// openPipe opens the desk on a fresh pipe and returns the runner's stdin and
+// the turn-end close. The stdin is an *os.File on purpose: os/exec copies any
+// other Stdin through a goroutine that Cmd.Wait awaits even past WaitDelay, and
+// that goroutine only stops when the write end closes — which the worker does
+// after Run returns, so Run would never return (2026-11-18, seq=377 hang).
+func (d *steerDesk) openPipe() (*os.File, func(), error) {
+	stdin, in, err := os.Pipe()
+	if err != nil {
+		return nil, nil, err
+	}
+	d.open(in)
+	return stdin, func() {
+		d.close()
+		_ = in.Close()
+		_ = stdin.Close()
+	}, nil
 }
 
 // close ends the turn's steering. Whoever still waits is answered rejected
@@ -139,7 +161,10 @@ func (d *steerDesk) steer(ctx context.Context, text string) (steerOutcome, error
 		d.forget(id)
 		return steerOutcome{}, err
 	}
-	if _, err := in.Write(append(line, '\n')); err != nil {
+	d.writeMu.Lock()
+	_, err = in.Write(append(line, '\n'))
+	d.writeMu.Unlock()
+	if err != nil {
 		d.forget(id)
 		return steerOutcome{}, fmt.Errorf("%w: %v", errSteerRunnerGone, err)
 	}
