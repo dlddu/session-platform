@@ -146,6 +146,8 @@
 | 2026-11-09 | `data-plane/cmd/agent/session_ledger.go` | 15 | `5cc0a263b906` | — | 등록 — 세션 작업 원장 구현/테스트. 필요성 판정 대기. 2026-11-18 사용자 요청 경로(AC-N7)에서 이 범위의 주석이 바뀌었다 — 재측정만, 판정하지 않았다. |
 | 2026-11-18 | `data-plane/cmd/agent/session_ledger_agent.go` | 38 | `aa0cee53e2b7` | — | 등재 — 2026-11-18 신규 파일(codex-chat 슬롯 원장 읽기 전용 경로 — AC-N6 읽기 측). 필요성 기준 판정 대기. 2026-11-18 사용자 요청 경로(AC-N7)에서 이 범위의 주석이 바뀌었다 — 재측정만, 판정하지 않았다. |
 | 2026-11-18 | `data-plane/cmd/agent/session_ledger_http.go` | 42 | `c29bfe7bcefa` | — | 등재 — 2026-11-18 신규 파일(codex-chat 슬롯 원장 읽기 전용 경로 — AC-N6 읽기 측). 필요성 기준 판정 대기. 2026-11-18 사용자 요청 경로(AC-N7)에서 이 범위의 주석이 바뀌었다 — 재측정만, 판정하지 않았다. |
+| 2026-11-18 | `data-plane/cmd/agent/session_ledger_user_requests.go` | 91 | `6ead93307790` | — | 등재 — 2026-11-18 신규 파일(작업에 남은 사용자 요청의 저장·접수 수명주기 — AC-N7). 필요성 기준 판정 대기. |
+| 2026-11-18 | `data-plane/cmd/agent/session_ledger_user_requests_test.go` | 52 | `9765c5b13d1a` | — | 등재 — 2026-11-18 신규 파일(사용자 요청 단위 테스트 — 멱등·claim 경합·dispatch 뒤 죽음의 재대조 — AC-N7). 필요성 기준 판정 대기. |
 | 2026-11-18 | `data-plane/cmd/agent/session_ledger_http_test.go` | 20 | `d3fa7044018b` | — | 등재 — 2026-11-18 신규 파일(codex-chat 슬롯 원장 읽기 전용 경로 — AC-N6 읽기 측). 필요성 기준 판정 대기. |
 | 2026-11-09 | `data-plane/cmd/agent/session_ledger_test.go` | 1 | `715185d9d560` | — | 등록 — 세션 작업 원장 구현/테스트. 필요성 판정 대기. |
 | 2026-11-02 | `data-plane/cmd/agent/session_mcp_argkeys_test.go` | 1 | `d6ac247e8ede` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. |
