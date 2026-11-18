@@ -664,3 +664,71 @@ func TestClaudeCheckpointErrorsRedactCredentialLiterals(t *testing.T) {
 		t.Fatalf("checkpoint error was not redacted: %q", body)
 	}
 }
+
+// A pod that went away mid-turn leaves an archive whose last turn has no end
+// marker; readers that wait for that end would wait forever.
+func TestClaudeRestoreClosesATurnTheArchiveLeftOpen(t *testing.T) {
+	runner := newFakeClaudeRunner()
+	runner.output = func(_ int, opts runnerOptions) {
+		_, _ = io.WriteString(opts.Stdout, "first answer\n")
+	}
+	c1, srv1 := newClaudeTestServer(t, runner, "claude-open-turn", false, nil)
+	writeViaHTTP(t, srv1, "first", http.StatusOK)
+	waitClaudeIdle(t, c1)
+	closed, _ := readViaHTTP(t, srv1, 0)
+
+	cut := closed + turnOpen(2, "second") + "partial answer"
+	var archive bytes.Buffer
+	if err := writeStateArchive(&archive, c1.stateDir, c1.tools.SharedDir, []byte(cut)); err != nil {
+		t.Fatal(err)
+	}
+
+	runner2 := newFakeClaudeRunner()
+	runner2.output = func(_ int, opts runnerOptions) {
+		_, _ = io.WriteString(opts.Stdout, "third answer\n")
+	}
+	c2, srv2 := newClaudeTestServerAt(t, runner2, "claude-open-turn", true, nil, filepath.Join(t.TempDir(), "restored-state"))
+	restoreResp, err := http.Post(srv2.URL+"/restore", "application/x-tar", &archive)
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	_, _ = io.Copy(io.Discard, restoreResp.Body)
+	restoreResp.Body.Close()
+	if restoreResp.StatusCode != http.StatusOK {
+		t.Fatalf("restore status=%d", restoreResp.StatusCode)
+	}
+	full, cursor := readViaHTTP(t, srv2, 0)
+	if want := cut + "\n" + turnClose(2, "canceled"); full != want {
+		t.Fatalf("restored output = %q, want the open turn closed as canceled %q", full, want)
+	}
+
+	writeViaHTTP(t, srv2, "third", http.StatusOK)
+	_, _ = eventuallyRead(t, srv2, cursor, func(payload string) bool {
+		return strings.Contains(payload, "third answer")
+	})
+	waitClaudeIdle(t, c2)
+	if delta, _ := readViaHTTP(t, srv2, cursor); delta != turnOpen(3, "third")+"third answer\n"+turnClose(3, "ok") {
+		t.Fatalf("post-restore turn = %q, want seq 3", delta)
+	}
+}
+
+func TestOpenTurnSeq(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		scrollback string
+		seq        int
+		open       bool
+	}{
+		{"empty", "", 0, false},
+		{"no turns", "plain shell text\n", 0, false},
+		{"closed", turnOpen(1, "a") + "x\n" + turnClose(1, "ok"), 1, false},
+		{"last open", turnOpen(1, "a") + "x\n" + turnClose(1, "ok") + turnOpen(2, "b") + "y", 2, true},
+		{"open with no output", turnOpen(12, "b"), 12, true},
+		{"end of an earlier seq does not close it", turnOpen(1, "a") + turnOpen(11, "b") + turnClose(1, "ok"), 11, true},
+	} {
+		seq, open := openTurnSeq([]byte(tc.scrollback))
+		if open != tc.open || (open && seq != tc.seq) {
+			t.Errorf("%s: openTurnSeq = (%d,%v), want (%d,%v)", tc.name, seq, open, tc.seq, tc.open)
+		}
+	}
+}
