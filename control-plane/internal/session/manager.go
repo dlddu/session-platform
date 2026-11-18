@@ -125,6 +125,9 @@ type Manager interface {
 	// put to its owner; DecideToolApproval relays one decision (AC-E2).
 	ToolApprovals(ctx context.Context, id string) (ToolApprovalPage, error)
 	DecideToolApproval(ctx context.Context, id, approvalID string, decision ToolApprovalDecision) error
+	// LedgerTasks reads one keyset page of the chat slot's task ledger, read
+	// only and without waking the session (AC-N6).
+	LedgerTasks(ctx context.Context, id string, limit int, afterID string) (LedgerTaskPage, error)
 	// Recover calls admit with the recovered record before anything is
 	// written, so the caller decides who may see it (AC-K2).
 	Recover(ctx context.Context, id string, opts RestoreOptions, admit func(*Session) error) (*Session, error)

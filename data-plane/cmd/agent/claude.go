@@ -1478,6 +1478,13 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 		serveAgentScheduler(w, r, c)
 	})
 
+	// AC-N6, read side: one page of the chat slot's task ledger, relayed from
+	// the sidecar that mounts the slot's database. Read-only, and it never
+	// queues a turn.
+	mux.HandleFunc("GET "+agentLedgerPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentLedger(w, r, c)
+	})
+
 	mux.HandleFunc("GET /attach", func(w http.ResponseWriter, r *http.Request) {
 		if !c.isReady() {
 			http.Error(w, "claude workload is awaiting restore", http.StatusServiceUnavailable)

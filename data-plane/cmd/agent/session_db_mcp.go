@@ -399,16 +399,21 @@ func (s *sessionDB) serveMCP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// withSessionDBMCP puts the database endpoint in front of the K3s MCP proxy.
-// The path is matched exactly and is not the K3s MCP's, so every other request
-// still reaches the proxy and its deny filter unchanged.
+// withSessionDBMCP puts the database endpoints in front of the K3s MCP proxy:
+// the session's own `db` MCP, and the read-only task ledger view the control
+// plane reads (session_ledger_http.go). Both paths are matched exactly and
+// neither is the K3s MCP's, so every other request still reaches the proxy and
+// its deny filter unchanged.
 func withSessionDBMCP(proxy http.Handler, db *sessionDB) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == sessionDBMCPPath {
+		switch r.URL.Path {
+		case sessionDBMCPPath:
 			db.serveMCP(w, r)
-			return
+		case sessionDBLedgerPath:
+			db.serveLedgerTasks(w, r)
+		default:
+			proxy.ServeHTTP(w, r)
 		}
-		proxy.ServeHTTP(w, r)
 	})
 }
 
