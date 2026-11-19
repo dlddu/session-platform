@@ -12,6 +12,12 @@ starts turns, or schedules work. codex-task and Claude workers do not receive
 this DB. The parent collects their final result and records it on return;
 never pass a parent's token or DB access to a worker.
 
+The same `db` MCP also offers the **work records** — `task_*` and `turn_*` —
+which are the shape the repository owner agreed on and the one new work is
+written in. The ledger stays: it is where a migrated slot's parent bookkeeping
+and task history keep living, and it is what an older image still reads. See
+[Work records](#work-records-tasks-and-turns).
+
 ## Storage
 
 The codex-chat slot PVC mounts `auth/` into the workload and `db/` into the
@@ -313,6 +319,156 @@ history, and none is invented for it**. A pod still running an earlier image has
 no such route; the control plane reports that as unsupported rather than as an
 empty history or a missing task.
 
+## Work records (tasks and turns)
+
+The work records are the shape the repository owner agreed on: **a task row and
+a turn row, nothing else**. New work is written in them. They live in the same
+session DB and are reached through the same `db` MCP, beside the ledger rather
+than instead of it.
+
+Why both: the ledger document carries the parent's own bookkeeping — approval
+scope, session cursors and seqs, preservation state, monitor rows — and that
+does not fit in a task and a turn. Reshaping `sp_ledger_tasks` to the agreed
+shape would drop records the parent still acts on, so the ledger tables stay
+exactly as they are and a migrated row's parts that have no column here are
+preserved verbatim beside it.
+
+### The agreed shape
+
+`sp_work_tasks` — `id`, `session_id` (null means unassigned), `title`,
+`description`, `completion_criteria`, `status`, `version`, `created_at`,
+`updated_at` (null means never recorded). Status is the ledger's own domain
+unchanged — `planned`, `running`, `blocked`, `review`, `completed`, `unknown`:
+a migration that renamed a status would move work a person had already seen as
+blocked or completed.
+
+`sp_work_turns` — `id`, `task_id`, `session_seq`, `request` (the person's words,
+verbatim), `instruction` (what the parent passed to the session doing the work),
+`response` (that session's final answer, verbatim), `explanation` (the parent's
+own account of the result for the person), `question`, `choices`, `artifacts`,
+`requested_at`, `started_at`, `ended_at`. The id is assigned by the database and
+increases across the whole database, so it is also the order turns happened in;
+a task's turns are indexed by `(task_id, id)`.
+
+**Nothing else is added to the two entities** — a reader of `sp_work_tasks` sees
+the agreed columns only. `response` is never a summary the parent wrote; that is
+`explanation`. Omitted fields are null, because a turn is written as it happens
+rather than all at once. Text bounds exist for the reason the ledger's do: a
+slot's storage budget is shared with the session's own archive, so one task
+cannot be an attachment.
+
+### API
+
+`task_get`, `task_list`, `task_put`, `task_delete`, `turn_append`, `turn_patch`,
+`turn_list`, `turn_dispatch`, and the two migration tools below. Reads change
+nothing; `task_get` carries `turns_total` and the latest turn, so a parent sees
+at a glance whether a request is waiting, and `turn_list({open: true})` selects
+the turns that still need it — a request arrived and the turn has no `ended_at`.
+A turn is consumed by writing its response and `ended_at`, not by reading it.
+
+Every mutation takes `request_id` and `expected_version`, with the ledger's
+contract: the same id with the same arguments returns what was committed then,
+and the same id with different arguments is a conflict rather than a second
+action. `expected_version` must be the task's **current** version, so two
+parents that both read a task cannot both write the turn that follows. A turn
+write does not bump the version — a turn is an event on the task, not a new
+state of it — but it moves the task's `updated_at`. `task_put` is a full
+replacement: unnamed fields are not preserved. A deleted task id is retired
+permanently, so a later create under it is a conflict rather than a revival.
+
+`turn_dispatch` records what the parent is about to do outside this database
+before it does it (`operation_key`, `operation_target`, `dispatch_state`
+`intended` → `dispatched`). It is bookkeeping beside the turn, not a turn field,
+and it follows [External operation reconciliation](#external-operation-reconciliation):
+a different operation key on a turn that already recorded a dispatch is refused
+unless `observed=not_accepted` states the earlier one was established never to
+have landed.
+
+### Migrating the ledger into them
+
+`work_migrate({request_id, dry_run?})` copies this slot's ledger tasks and the
+user requests on them into the work records, once.
+
+**Rehearse first.** `dry_run: true` reports exactly what a run would write — row
+counts, the requests it could not map and why, its checks — and changes nothing.
+
+**A real run backs the database up before it writes.** It runs
+`PRAGMA integrity_check` and refuses a damaged database rather than copying the
+damage, then takes a consistent snapshot with `VACUUM INTO` (one transaction's
+view, so the copy is never half a write) to `<db>.pre-work-<UTC timestamp>.bak`
+beside the database, and records that file's path, size and SHA-256 in
+`sp_work_migration`. The snapshot is **retained**: the migration never deletes
+it, and it is what a full restore starts from. Restoring is an offline
+operation — no sidecar may have the database open, copy the snapshot over it,
+then re-check integrity and row counts.
+
+**Concurrent writes are fenced, not raced.** `sp_work_meta.state` goes `ready` →
+`migrating` → `migrated`. While it is `migrating`, ledger and work writes are
+refused with `conflict` — a retry for the caller, not a loss, because the
+migration is one transaction and takes the ledger with it, so admitting a write
+in the middle would copy a row the source no longer has. Reads keep working.
+
+**Interruption is safe and restarting adds nothing.** The fence is committed
+before the copy, and the copy is one transaction: an interrupted run rolls back
+and leaves the fence up, so the next run resumes from the snapshot already
+recorded rather than taking a second one. Every insert is keyed, so a second run
+adds no duplicate — it reports what it found already there as `tasks_present`
+and `turns_present`. A fence that is up with no snapshot recorded is refused
+outright: a copy with no recorded starting point has nothing to roll back to.
+
+**Nothing is deleted or flattened.** The ledger tables stay exactly as they are,
+and every part of a row that has no column in the agreed shape — stage, owner,
+the session relations with their cursors and seqs, the details JSON with
+approval and preservation state, a request's claim and dispatch — is preserved
+verbatim in `sp_work_task_legacy` / `sp_work_turn_legacy`. Reading the work
+records never requires them; the parent still acts on them.
+
+**Only what the ledger really recorded is mapped.** A monitor row is the
+parent's own bookkeeping rather than a person's work, so it is preserved and
+does not become a task — presenting one as a task would invent work the person
+never asked for. The ledger never kept the instruction that went to a session or
+that session's final answer verbatim, so `instruction` and `response` stay null.
+A request's `result` is the sentence the parent wrote for the person, so it
+becomes the turn's `explanation` — never its `response`, which would dress a
+parent's summary up as the session's own words. A time or a seq the ledger does
+not have stays null rather than being guessed. Past management events are not
+turns: only a stored user request — a person's own words, with the time they
+arrived — becomes one. Status, approval and completion do not move because the
+data did.
+
+**What it did is readable afterwards.** The run verifies its own counts before
+committing, and `work_migration_report` gives the schema state, every recorded
+step with its row counts and the snapshot's checksum, and the current counts so
+a reader can re-check them. A second `work_migrate` on a migrated database
+returns that report with `already_migrated`.
+
+### After the cutover, and rolling back
+
+A migrated slot **keeps its ledger readable** — the monitor rows and the task
+history the parent works from live only there — but a ledger write is refused
+with `conflict` naming the work tool to use instead, because it would change a
+row nothing reads any more and the same work would then exist in two places with
+different answers.
+
+The app and its API are unchanged across the cutover. The read-only HTTP view
+serves work tasks projected into the same page shape, with the preserved
+bookkeeping put back where a reader of that shape expects it, so a caller cannot
+tell from the answer whether this slot has migrated — which is what lets the
+image and the app roll out separately. A stored user request becomes the next
+turn rather than a row beside a task that no longer exists here. A projected
+choice id names the turn it came from, so a pick from a turn that is no longer
+the latest is refused rather than silently applied. The one deploy order that
+does not work is an app expecting work views against an older image, which
+answers 404 — the app reads that as "no route", not as "no work".
+
+`sp_ledger_meta` stays at version 1 and these tables are additive, for the
+reason the request and choice tables kept it there: **an image rolled back to
+one that never heard of them still opens the database and still serves the
+ledger**, whose rows the migration left intact. Work written after the cutover
+is not in the ledger and is not invented there. `sp_work_meta` carries this
+namespace's own version, and a database written by a later version is refused
+rather than read with the columns of this one.
+
 ## External operation reconciliation
 
 Before create/write/delete, record operation key/kind/intent and approved scope.
@@ -344,6 +500,20 @@ tables/user_version, schema refusal,
 transaction rollback on receipt failure, single-winner CAS, replay and ID reuse,
 validation, filtering/keyset pages, raw transaction cleanup and close/reopen.
 Pod-spec tests cover the slot-level mount. These do not claim a deployed NFS restart/snapshot/restore test.
+
+For the work records they cover the agreed columns being exactly those columns,
+task and turn CRUD with version CAS and retirement, global turn ordering, the
+open-turn queue, single-winner concurrent writes, replay, validation and schema
+refusal; and for the migration: the dry run changing nothing, mapping only what
+the ledger recorded, task times coming from recorded history, fresh choices
+moving onto the latest turn, incomplete legacy rows, a damaged database refused,
+idempotence and resumption, the fence refusing writes, a fence with no snapshot
+refused, user tables left alone, and the ledger left intact for a rollback.
+The cutover is covered from the app's side: ledger writes refused while reads
+keep working, the projected page and stored-request-as-turn path, and a pick
+from an older turn refused. The snapshot path is exercised against a local
+SQLite file; **this does not claim a deployed restore drill on slot storage**,
+which belongs to the post-merge verification below.
 
 After authorized merge/deployment, verify tool discovery in the parent,
 restart and snapshot/restore with the same slot, and that a deleted and

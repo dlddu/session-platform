@@ -228,7 +228,7 @@ func sessionDBValue(v any) any {
 // talked into using.
 func sessionDBToolDefinitions(rawSQL bool) []map[string]any {
 	if !rawSQL {
-		return ledgerToolDefinitions()
+		return append(workToolDefinitions(), ledgerToolDefinitions()...)
 	}
 	statement := func(what string) map[string]any {
 		return map[string]any{
@@ -259,7 +259,7 @@ func sessionDBToolDefinitions(rawSQL bool) []map[string]any {
 				"return the rows affected and the last insert rowid. These are SQLite connection counters, NOT committed change totals (DDL/ROLLBACK can retain old values). Without params, several statements separated by ; run in order. Open transactions are rolled back at call end, so a transaction begins and commits within one call.",
 			"inputSchema": statement("The SQLite statement or statements to run."),
 		},
-	}, ledgerToolDefinitions()...)
+	}, append(workToolDefinitions(), ledgerToolDefinitions()...)...)
 }
 
 // callTool runs one tool. A statement that fails is a tool result with
@@ -275,6 +275,9 @@ func (s *sessionDB) callTool(ctx context.Context, params json.RawMessage) (any, 
 	}
 	if strings.HasPrefix(call.Name, "ledger_") {
 		return s.callLedger(ctx, call.Name, call.Arguments)
+	}
+	if isWorkTool(call.Name) {
+		return s.callWork(ctx, call.Name, call.Arguments)
 	}
 	// The name is checked before the arguments: a raw call on a sidecar that is
 	// not opted in has to say so, not fail on the SQL it was never going to run.

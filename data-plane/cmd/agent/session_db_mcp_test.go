@@ -68,9 +68,17 @@ func newTestSessionDBWithRawSQL(t *testing.T, rawSQL bool) (*sessionDB, http.Han
 	return db, http.HandlerFunc(db.serveMCP)
 }
 
-// ledgerToolNames is the ledger surface in offer order: the task tools, then
-// the user-request tools beside them.
-const ledgerToolNames = "ledger_get,ledger_list,ledger_put,ledger_delete," +
+// workToolNames is the agreed task/turn surface, offered first: it is what the
+// parent writes to, and the ledger behind it is what a migrated slot keeps for
+// reading (docs/session-ledger.md).
+const workToolNames = "task_get,task_list,task_put,task_delete," +
+	"turn_append,turn_patch,turn_list,turn_dispatch," +
+	"work_migrate,work_migration_report"
+
+// ledgerToolNames is the whole default surface in offer order: the work tools,
+// then the ledger's task, user-request and choice tools.
+const ledgerToolNames = workToolNames + "," +
+	"ledger_get,ledger_list,ledger_put,ledger_delete," +
 	"ledger_requests_list,ledger_requests_claim,ledger_requests_dispatch,ledger_requests_ack," +
 	"ledger_choices_put,ledger_choices_clear,ledger_events_list"
 
