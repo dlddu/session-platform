@@ -337,3 +337,151 @@ func TestLedgerRequests_RefusesMalformedFields(t *testing.T) {
 		t.Fatalf("stored = %d, want nothing stored for a malformed request", len(stub.LedgerRequests))
 	}
 }
+
+// AC-N8: the history route pages one task's story by seq, carries the cursor
+// forward, and is scoped like every other session-id route.
+func TestLedgerEvents_PagesOneTasksHistory(t *testing.T) {
+	srv, stub := ledgerServer(t)
+	stub.LedgerRows = []session.LedgerTaskRecord{ledgerRow("t1", "blocked", "review", "CI 가 막혔다", "로그를 본다")}
+	stub.LedgerEventRows = map[string][]session.LedgerTaskEvent{
+		"t1": {
+			{Seq: 1, TaskID: "t1", At: "2026-11-19T00:00:00Z", Kind: "task_created", Actor: "parent", Summary: "작업을 원장에 등록했다"},
+			{Seq: 2, TaskID: "t1", At: "2026-11-19T00:01:00Z", Kind: "request_stored", Actor: "user-1", Summary: "요청을 남겼다",
+				Detail: map[string]any{"text": "이 작업 진행해 줘"}, RequestID: "req-1"},
+			{Seq: 3, TaskID: "t1", At: "2026-11-19T00:02:00Z", Kind: "request_settled", Actor: "parent", Summary: "요청을 processed 로 닫았다"},
+		},
+		"t2": {{Seq: 9, TaskID: "t2", Kind: "task_created", Actor: "parent", Summary: "다른 작업"}},
+	}
+	_, s := createRaw(t, srv.URL, map[string]any{"name": "history", "workloadType": "codex-chat"})
+
+	get := func(query string) (int, session.LedgerTaskEventPage) {
+		target := srv.URL + "/api/v1/sessions/" + s.ID + "/ledger/tasks/t1/events"
+		if query != "" {
+			target += "?" + query
+		}
+		resp, err := http.Get(target)
+		if err != nil {
+			t.Fatalf("get history: %v", err)
+		}
+		defer resp.Body.Close()
+		var page session.LedgerTaskEventPage
+		_ = json.NewDecoder(resp.Body).Decode(&page)
+		return resp.StatusCode, page
+	}
+
+	status, first := get("limit=2")
+	if status != http.StatusOK || len(first.Events) != 2 || first.NextCursor != 2 {
+		t.Fatalf("first page = %d %+v", status, first)
+	}
+	if first.Events[1].Detail["text"] != "이 작업 진행해 줘" || first.Events[1].RequestID != "req-1" {
+		t.Fatalf("the person's own words must survive the path: %+v", first.Events[1])
+	}
+	status, second := get("limit=2&after_seq=2")
+	if status != http.StatusOK || len(second.Events) != 1 || second.Events[0].Seq != 3 || second.NextCursor != 0 {
+		t.Fatalf("second page = %d %+v", status, second)
+	}
+	// Another task's rows never appear under this one.
+	for _, e := range append(first.Events, second.Events...) {
+		if e.TaskID != "t1" {
+			t.Fatalf("leaked %+v", e)
+		}
+	}
+	for _, bad := range []string{"limit=0", "limit=101", "after_seq=-1", "after_seq=lots"} {
+		if status, _ := get(bad); status != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", bad, status)
+		}
+	}
+	// A task with no history is an empty page, not someone else's rows.
+	resp, err := http.Get(srv.URL + "/api/v1/sessions/" + s.ID + "/ledger/tasks/absent/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var empty session.LedgerTaskEventPage
+	_ = json.NewDecoder(resp.Body).Decode(&empty)
+	if resp.StatusCode != http.StatusOK || len(empty.Events) != 0 {
+		t.Fatalf("unknown task = %d %+v", resp.StatusCode, empty)
+	}
+	// Another tenant's session answers exactly like a missing one.
+	other, err := http.Get(srv.URL + "/api/v1/sessions/sess-nope/ledger/tasks/t1/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Body.Close()
+	if other.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown session = %d, want 404", other.StatusCode)
+	}
+}
+
+// The session's offered choices reach the app through the task page, with the
+// version they were written against.
+func TestLedgerTasks_CarryTheSessionsOfferedChoices(t *testing.T) {
+	srv, stub := ledgerServer(t)
+	row := ledgerRow("t1", "blocked", "review", "CI 가 막혔다", "로그를 본다")
+	row.Choices = []session.LedgerChoice{
+		{ID: "c-ci-log", Label: "CI 로그 확인 요청", RequestText: "방금 실패한 CI 로그에서 어디서 멈췄는지 알려 줘.", BasisVersion: 1, CreatedAt: "2026-11-19T00:00:00Z"},
+	}
+	stub.LedgerRows = []session.LedgerTaskRecord{row}
+	_, s := createRaw(t, srv.URL, map[string]any{"name": "choices", "workloadType": "codex-chat"})
+
+	status, page := getLedger(t, srv, s.ID, "")
+	if status != http.StatusOK || len(page.Tasks) != 1 {
+		t.Fatalf("page = %d %+v", status, page)
+	}
+	got := page.Tasks[0].Choices
+	if len(got) != 1 || got[0].ID != "c-ci-log" || got[0].RequestText == "" || got[0].BasisVersion != 1 {
+		t.Fatalf("choices = %+v, want the session's own sentence with its basis version", got)
+	}
+}
+
+// A pick is checked when it is stored, not only when it is shown: once the task
+// moves, the same choice from a screen that never saw the move is refused, and
+// the person's own words still store.
+func TestLedgerRequests_RefusesAPickTheSessionNoLongerOffers(t *testing.T) {
+	srv, stub := ledgerServer(t)
+	row := ledgerRow("t1", "blocked", "review", "CI 가 막혔다", "로그를 본다")
+	row.Choices = []session.LedgerChoice{
+		{ID: "c-ci-log", Label: "CI 로그 확인 요청", RequestText: "실패한 CI 로그를 확인해 줘", BasisVersion: 1, CreatedAt: "2026-11-19T00:00:00Z"},
+	}
+	stub.LedgerRows = []session.LedgerTaskRecord{row}
+	_, s := createRaw(t, srv.URL, map[string]any{"name": "requests", "workloadType": "codex-chat"})
+
+	if status, _ := postLedgerRequest(t, srv, s.ID, "t1", map[string]any{
+		"id": "req-1", "text": "실패한 CI 로그를 확인해 줘", "author": "user-7",
+		"choice_id": "c-ci-log", "choice_basis_version": 1,
+	}); status != http.StatusCreated {
+		t.Fatalf("fresh pick = %d, want 201", status)
+	}
+
+	// The task moves; its choices were written about the state before.
+	moved := stub.LedgerRows[0]
+	moved.Version = 2
+	stub.LedgerRows = []session.LedgerTaskRecord{moved}
+	if status, _ := postLedgerRequest(t, srv, s.ID, "t1", map[string]any{
+		"id": "req-2", "text": "실패한 CI 로그를 확인해 줘", "author": "user-7",
+		"choice_id": "c-ci-log", "choice_basis_version": 1,
+	}); status != http.StatusConflict {
+		t.Fatalf("stale pick = %d, want 409", status)
+	}
+	// A choice the task never offered is the same answer.
+	if status, _ := postLedgerRequest(t, srv, s.ID, "t1", map[string]any{
+		"id": "req-3", "text": "없는 선택", "author": "user-7", "choice_id": "c-made-up",
+	}); status != http.StatusConflict {
+		t.Fatalf("unknown pick = %d, want 409", status)
+	}
+	// A basis with no pick is a malformed body, and never reaches the slot.
+	if status, _ := postLedgerRequest(t, srv, s.ID, "t1", map[string]any{
+		"id": "req-4", "text": "선택 없이 기준", "author": "user-7", "choice_basis_version": 2,
+	}); status != http.StatusBadRequest {
+		t.Fatalf("basis without a pick = %d, want 400", status)
+	}
+	// Free text is unaffected by any of it.
+	if status, _ := postLedgerRequest(t, srv, s.ID, "t1", map[string]any{
+		"id": "req-5", "text": "내가 직접 쓴 요청", "author": "user-7",
+	}); status != http.StatusCreated {
+		t.Fatalf("free text = %d, want 201", status)
+	}
+	if len(stub.LedgerRequests) != 2 {
+		t.Fatalf("stored = %d, want only the fresh pick and the typed words", len(stub.LedgerRequests))
+	}
+}

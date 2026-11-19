@@ -1518,6 +1518,12 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 		serveAgentLedgerRequests(w, r, c)
 	})
 
+	// AC-N8: one page of a task's history, read-only and passive like the task
+	// view — it starts no turn and changes nothing.
+	mux.HandleFunc("GET "+agentLedgerEventsPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentLedgerEvents(w, r, c)
+	})
+
 	mux.HandleFunc("GET /attach", func(w http.ResponseWriter, r *http.Request) {
 		if !c.isReady() {
 			http.Error(w, "claude workload is awaiting restore", http.StatusServiceUnavailable)

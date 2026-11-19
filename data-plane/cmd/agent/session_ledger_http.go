@@ -112,6 +112,13 @@ type ledgerRequestBody struct {
 	TaskID string `json:"task_id"`
 	Text   string `json:"text"`
 	Author string `json:"author"`
+	// ChoiceID, when given, is the session's own offered choice the person
+	// picked. Empty means they typed their own words.
+	ChoiceID string `json:"choice_id"`
+	// ChoiceBasisVersion is the task version the caller saw that choice on. It
+	// is checked against the choice's own basis, so a screen left open while
+	// the task moved is refused rather than acted on.
+	ChoiceBasisVersion int64 `json:"choice_basis_version"`
 }
 
 // serveLedgerRequests stores one user request on a task of this slot's ledger.
@@ -139,7 +146,7 @@ func (s *sessionDB) serveLedgerRequests(w http.ResponseWriter, r *http.Request) 
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), sessionDBCallTimeout)
 	defer cancel()
-	stored, replayed, err := s.appendLedgerRequest(ctx, body.ID, body.TaskID, body.Text, body.Author, ledgerNow())
+	stored, replayed, err := s.appendLedgerRequest(ctx, body.ID, body.TaskID, body.Text, body.Author, body.ChoiceID, body.ChoiceBasisVersion, ledgerNow())
 	if err != nil {
 		var ledgerErr ledgerError
 		if errors.As(err, &ledgerErr) {
@@ -147,7 +154,7 @@ func (s *sessionDB) serveLedgerRequests(w http.ResponseWriter, r *http.Request) 
 			switch ledgerErr.Code {
 			case "not_found":
 				status = http.StatusNotFound
-			case "conflict", "schema_version":
+			case "conflict", "schema_version", "stale_choice":
 				status = http.StatusConflict
 			}
 			writeLedgerViewError(w, status, ledgerErr.Code, ledgerErr.ErrorText)
@@ -168,5 +175,62 @@ func (s *sessionDB) serveLedgerRequests(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(map[string]any{"request": stored, "replayed": replayed}); err != nil {
 		s.logger.Info("task ledger request reply could not be written", "err", err)
+	}
+}
+
+// sessionDBLedgerEventsPath is the task-history view's path on the sidecar.
+// Keep in sync with data-plane/cmd/agent (agentLedgerEventsPath derivation) and
+// control-plane/internal/adapter/agent.
+const sessionDBLedgerEventsPath = "/session-db/ledger/events"
+
+// serveLedgerEvents answers one page of one task's history. GET only, loopback
+// only, and keyset by the row's own seq — the same shape as the task view, so a
+// reader pages it the same way. There is no SQL on this path and nothing it
+// serves changes a row.
+func (s *sessionDB) serveLedgerEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "the task history view accepts GET", http.StatusMethodNotAllowed)
+		return
+	}
+	if !fromLoopback(r) {
+		http.Error(w, "the task history view is only for this pod", http.StatusForbidden)
+		return
+	}
+	query := r.URL.Query()
+	limit, err := ledgerViewLimit(query.Get("limit"))
+	if err != nil {
+		writeLedgerViewError(w, http.StatusBadRequest, "invalid_argument", err.Error())
+		return
+	}
+	args := ledgerArgs{ID: strings.TrimSpace(query.Get("task_id")), Limit: limit}
+	if raw := strings.TrimSpace(query.Get("after_seq")); raw != "" {
+		after, convErr := strconv.ParseInt(raw, 10, 64)
+		if convErr != nil || after < 0 {
+			writeLedgerViewError(w, http.StatusBadRequest, "invalid_argument", "after_seq must be a nonnegative number")
+			return
+		}
+		args.AfterSeq = &after
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), sessionDBCallTimeout)
+	defer cancel()
+	result, err := s.ledger(ctx, "ledger_events_list", args)
+	if err != nil {
+		var ledgerErr ledgerError
+		if errors.As(err, &ledgerErr) {
+			status := http.StatusBadRequest
+			if ledgerErr.Code == "schema_version" {
+				status = http.StatusConflict
+			}
+			writeLedgerViewError(w, status, ledgerErr.Code, ledgerErr.ErrorText)
+			return
+		}
+		s.logger.Info("task history view failed", "err", err)
+		writeLedgerViewError(w, http.StatusInternalServerError, "storage_error", "the task history could not be read")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		s.logger.Info("task history view could not be written", "err", err)
 	}
 }

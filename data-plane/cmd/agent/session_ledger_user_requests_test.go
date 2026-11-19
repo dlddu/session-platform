@@ -100,14 +100,14 @@ func TestLedgerUserRequestsAppendIsIdempotentAndTaskLinked(t *testing.T) {
 	ctx := context.Background()
 	freezeLedgerClock(t)
 
-	if _, _, err := s.appendLedgerRequest(ctx, "r1", "absent", "이 작업 진행해 줘", "user-7", ledgerNow()); err == nil {
+	if _, _, err := s.appendLedgerRequest(ctx, "r1", "absent", "이 작업 진행해 줘", "user-7", "", 0, ledgerNow()); err == nil {
 		t.Fatal("a request about a task the ledger does not have must be refused")
 	} else {
 		assertLedgerCode(t, err, "not_found")
 	}
 
 	putTask(t, s, "t1", "create-t1", 0)
-	stored, replayed, err := s.appendLedgerRequest(ctx, "r1", "t1", "이 작업 진행해 줘", "user-7", ledgerNow())
+	stored, replayed, err := s.appendLedgerRequest(ctx, "r1", "t1", "이 작업 진행해 줘", "user-7", "", 0, ledgerNow())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestLedgerUserRequestsAppendIsIdempotentAndTaskLinked(t *testing.T) {
 		t.Fatalf("stored = %+v, want a fresh pending request", stored)
 	}
 
-	again, replayed, err := s.appendLedgerRequest(ctx, "r1", "t1", "이 작업 진행해 줘", "user-7", ledgerNow())
+	again, replayed, err := s.appendLedgerRequest(ctx, "r1", "t1", "이 작업 진행해 줘", "user-7", "", 0, ledgerNow())
 	if err != nil || !replayed || again.Seq != stored.Seq {
 		t.Fatalf("replay = %+v, %v, %v — want the stored row", again, replayed, err)
 	}
@@ -123,7 +123,7 @@ func TestLedgerUserRequestsAppendIsIdempotentAndTaskLinked(t *testing.T) {
 		t.Fatalf("requests = %d, want the retry to have stored nothing twice", len(got.Requests))
 	}
 
-	if _, _, err := s.appendLedgerRequest(ctx, "r1", "t1", "다른 말", "user-7", ledgerNow()); err == nil {
+	if _, _, err := s.appendLedgerRequest(ctx, "r1", "t1", "다른 말", "user-7", "", 0, ledgerNow()); err == nil {
 		t.Fatal("the same id with different words must conflict")
 	} else {
 		assertLedgerCode(t, err, "conflict")
@@ -134,7 +134,7 @@ func TestLedgerUserRequestsAppendIsIdempotentAndTaskLinked(t *testing.T) {
 		{"r2", "t1", "말", "열린 문자열"},
 		{"공백 아이디", "t1", "말", "user-7"},
 	} {
-		if _, _, err := s.appendLedgerRequest(ctx, bad.id, bad.task, bad.text, bad.author, ledgerNow()); err == nil {
+		if _, _, err := s.appendLedgerRequest(ctx, bad.id, bad.task, bad.text, bad.author, "", 0, ledgerNow()); err == nil {
 			t.Fatalf("%+v must be refused", bad)
 		} else {
 			assertLedgerCode(t, err, "invalid_argument")
@@ -160,7 +160,7 @@ func TestLedgerUserRequestsDoNotDisturbTaskUpdates(t *testing.T) {
 		t.Fatalf("version = %d, want 1", got)
 	}
 
-	if _, _, err := s.appendLedgerRequest(ctx, "r1", "t1", "요청", "user-7", ledgerNow()); err != nil {
+	if _, _, err := s.appendLedgerRequest(ctx, "r1", "t1", "요청", "user-7", "", 0, ledgerNow()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -193,7 +193,7 @@ func TestLedgerUserRequestsOrderAndDiscovery(t *testing.T) {
 	for _, r := range []struct{ id, task, text string }{
 		{"r1", "t1", "첫 번째"}, {"r2", "t2", "다른 작업"}, {"r3", "t1", "두 번째"},
 	} {
-		if _, _, err := s.appendLedgerRequest(ctx, r.id, r.task, r.text, "user-7", ledgerNow()); err != nil {
+		if _, _, err := s.appendLedgerRequest(ctx, r.id, r.task, r.text, "user-7", "", 0, ledgerNow()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -237,7 +237,7 @@ func TestLedgerUserRequestsClaimIsExclusive(t *testing.T) {
 	ctx := context.Background()
 	freezeLedgerClock(t)
 	putTask(t, s, "t1", "create-t1", 0)
-	if _, _, err := s.appendLedgerRequest(ctx, "r1", "t1", "요청", "user-7", ledgerNow()); err != nil {
+	if _, _, err := s.appendLedgerRequest(ctx, "r1", "t1", "요청", "user-7", "", 0, ledgerNow()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -282,7 +282,7 @@ func TestLedgerUserRequestsAckNeedsTheHeldClaim(t *testing.T) {
 	ctx := context.Background()
 	freezeLedgerClock(t)
 	putTask(t, s, "t1", "create-t1", 0)
-	if _, _, err := s.appendLedgerRequest(ctx, "r1", "t1", "요청", "user-7", ledgerNow()); err != nil {
+	if _, _, err := s.appendLedgerRequest(ctx, "r1", "t1", "요청", "user-7", "", 0, ledgerNow()); err != nil {
 		t.Fatal(err)
 	}
 	claimed, err := s.ledger(ctx, "ledger_requests_claim", ledgerArgs{
@@ -338,7 +338,7 @@ func TestLedgerUserRequestsCrashAfterDispatchBecomesReconciliation(t *testing.T)
 	ctx := context.Background()
 	advance := freezeLedgerClock(t)
 	putTask(t, s, "t1", "create-t1", 0)
-	if _, _, err := s.appendLedgerRequest(ctx, "r1", "t1", "PR 올려 줘", "user-7", ledgerNow()); err != nil {
+	if _, _, err := s.appendLedgerRequest(ctx, "r1", "t1", "PR 올려 줘", "user-7", "", 0, ledgerNow()); err != nil {
 		t.Fatal(err)
 	}
 	first := decodeRequestReply(t, mustLedger(t, s, "ledger_requests_claim", ledgerArgs{
@@ -426,7 +426,7 @@ func TestLedgerUserRequestsLapsedClaimWithoutDispatchIsPlain(t *testing.T) {
 	ctx := context.Background()
 	advance := freezeLedgerClock(t)
 	putTask(t, s, "t1", "create-t1", 0)
-	if _, _, err := s.appendLedgerRequest(ctx, "r1", "t1", "요청", "user-7", ledgerNow()); err != nil {
+	if _, _, err := s.appendLedgerRequest(ctx, "r1", "t1", "요청", "user-7", "", 0, ledgerNow()); err != nil {
 		t.Fatal(err)
 	}
 	first := decodeRequestReply(t, mustLedger(t, s, "ledger_requests_claim", ledgerArgs{
@@ -457,7 +457,7 @@ func TestLedgerUserRequestsSurviveTaskDeletion(t *testing.T) {
 	ctx := context.Background()
 	freezeLedgerClock(t)
 	putTask(t, s, "t1", "create-t1", 0)
-	if _, _, err := s.appendLedgerRequest(ctx, "r1", "t1", "지워지기 전에 물어본 말", "user-7", ledgerNow()); err != nil {
+	if _, _, err := s.appendLedgerRequest(ctx, "r1", "t1", "지워지기 전에 물어본 말", "user-7", "", 0, ledgerNow()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.ledger(ctx, "ledger_delete", ledgerArgs{ID: "t1", RequestID: "delete-t1", ExpectedVersion: lv(1)}); err != nil {
@@ -467,7 +467,7 @@ func TestLedgerUserRequestsSurviveTaskDeletion(t *testing.T) {
 	if len(kept.Requests) != 1 || kept.Requests[0].Text != "지워지기 전에 물어본 말" {
 		t.Fatalf("requests after deletion = %+v, want the request kept", kept.Requests)
 	}
-	if _, _, err := s.appendLedgerRequest(ctx, "r2", "t1", "지워진 뒤에 보낸 말", "user-7", ledgerNow()); err == nil {
+	if _, _, err := s.appendLedgerRequest(ctx, "r2", "t1", "지워진 뒤에 보낸 말", "user-7", "", 0, ledgerNow()); err == nil {
 		t.Fatal("a request about a deleted task must be refused")
 	} else {
 		assertLedgerCode(t, err, "conflict")
@@ -481,7 +481,7 @@ func TestLedgerUserRequestsMutationsReplay(t *testing.T) {
 	ctx := context.Background()
 	freezeLedgerClock(t)
 	putTask(t, s, "t1", "create-t1", 0)
-	if _, _, err := s.appendLedgerRequest(ctx, "r1", "t1", "요청", "user-7", ledgerNow()); err != nil {
+	if _, _, err := s.appendLedgerRequest(ctx, "r1", "t1", "요청", "user-7", "", 0, ledgerNow()); err != nil {
 		t.Fatal(err)
 	}
 	args := ledgerArgs{ID: "r1", RequestID: "claim", ExpectedVersion: lv(1), ClaimOwner: "parent-a"}
@@ -566,8 +566,7 @@ func TestLedgerRequestsViewStoresFromLoopbackOnly(t *testing.T) {
 func TestLedgerRequestsToolsAreOffered(t *testing.T) {
 	_, h := newTestSessionDB(t)
 	names := strings.Join(sessionDBToolNames(t, h), ",")
-	want := "ledger_get,ledger_list,ledger_put,ledger_delete," +
-		"ledger_requests_list,ledger_requests_claim,ledger_requests_dispatch,ledger_requests_ack"
+	want := ledgerToolNames
 	if names != want {
 		t.Fatalf("tools = %s, want %s", names, want)
 	}

@@ -111,6 +111,10 @@ type ledgerRequest struct {
 	Author    string `json:"author"`
 	CreatedAt string `json:"created_at"`
 	Status    string `json:"status"`
+	// ChoiceID is the session's own choice the person picked, empty when they
+	// typed their own words. It lets the session tell which of its sentences
+	// came back — and the history line say so.
+	ChoiceID string `json:"choice_id,omitempty"`
 	// The claim's holder, never its token: a reader that did not claim the
 	// request must not be able to ack it.
 	ClaimOwner      string `json:"claim_owner,omitempty"`
@@ -282,7 +286,7 @@ func isRequestStatus(s string) bool {
 // and text returns the stored row (replayed), and the same id with different
 // content is a conflict rather than a second row. That makes the app's retry of
 // an answer it never saw safe.
-func (s *sessionDB) appendLedgerRequest(ctx context.Context, id, taskID, text, author string, now time.Time) (ledgerRequest, bool, error) {
+func (s *sessionDB) appendLedgerRequest(ctx context.Context, id, taskID, text, author, choiceID string, choiceBasis int64, now time.Time) (ledgerRequest, bool, error) {
 	if !ledgerID.MatchString(id) || !ledgerID.MatchString(taskID) {
 		return ledgerRequest{}, false, ledgerFail("invalid_argument", "id and task_id must be 1..128 letters, digits, _ or -")
 	}
@@ -291,6 +295,15 @@ func (s *sessionDB) appendLedgerRequest(ctx context.Context, id, taskID, text, a
 	}
 	if !ledgerID.MatchString(author) {
 		return ledgerRequest{}, false, ledgerFail("invalid_argument", "author must be 1..128 letters, digits, _ or -")
+	}
+	if choiceID != "" && !ledgerID.MatchString(choiceID) {
+		return ledgerRequest{}, false, ledgerFail("invalid_argument", "choice_id must be 1..128 letters, digits, _ or -")
+	}
+	if choiceID == "" && choiceBasis != 0 {
+		return ledgerRequest{}, false, ledgerFail("invalid_argument", "choice_basis_version belongs to a picked choice_id")
+	}
+	if choiceBasis < 0 || choiceBasis > requestSafeInt {
+		return ledgerRequest{}, false, ledgerFail("invalid_argument", "choice_basis_version out of range")
 	}
 	db, err := s.handle(ctx)
 	if err != nil {
@@ -317,11 +330,13 @@ func (s *sessionDB) appendLedgerRequest(ctx context.Context, id, taskID, text, a
 	// The task must exist on this slot: a request is about one task, and a
 	// request about a task this ledger does not have would never be found by
 	// the parent. A retired (deleted) id is refused for the same reason.
-	var taskCount, retired int
-	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM sp_ledger_tasks WHERE id=?", taskID).Scan(&taskCount); err != nil {
+	var taskVersion int64
+	retired := 0
+	err = tx.QueryRowContext(ctx, "SELECT version FROM sp_ledger_tasks WHERE id=?", taskID).Scan(&taskVersion)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return ledgerRequest{}, false, err
 	}
-	if taskCount == 0 {
+	if errors.Is(err, sql.ErrNoRows) {
 		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM sp_ledger_retired WHERE id=?", taskID).Scan(&retired); err != nil {
 			return ledgerRequest{}, false, err
 		}
@@ -330,21 +345,43 @@ func (s *sessionDB) appendLedgerRequest(ctx context.Context, id, taskID, text, a
 		}
 		return ledgerRequest{}, false, ledgerFail("not_found", "task not found")
 	}
+	// A picked choice is checked here, not only when the task is read: a screen
+	// opened before the task moved would otherwise still submit a sentence the
+	// session wrote about a state that no longer holds. The choice has to exist
+	// on this task and to have been written against the task's version as it
+	// stands now; a basis the caller carries from its own read has to agree too,
+	// so re-publishing the same choice_id against a newer version does not let
+	// an old screen through. The person's own words are untouched by this —
+	// free text has no choice_id.
+	if choiceID != "" {
+		if err = checkLedgerChoiceFresh(ctx, tx, taskID, choiceID, choiceBasis, taskVersion); err != nil {
+			return ledgerRequest{}, false, err
+		}
+	}
 	var seq int64
 	if err = tx.QueryRowContext(ctx, "SELECT coalesce(max(seq),0)+1 FROM sp_ledger_user_requests").Scan(&seq); err != nil {
 		return ledgerRequest{}, false, err
 	}
 	req := ledgerRequest{
 		ID: id, TaskID: taskID, Seq: seq, Version: 1, Text: text, Author: author,
-		CreatedAt: now.UTC().Format(time.RFC3339), Status: requestPending,
+		CreatedAt: now.UTC().Format(time.RFC3339), Status: requestPending, ChoiceID: choiceID,
 	}
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO sp_ledger_user_requests
 		 (id,task_id,seq,version,text,author,created_at,status,claim_owner,claim_token,claim_expires_at,
-		  operation_key,operation_target,dispatch_state,dispatched_at,related_seq,result,settled_at)
-		 VALUES (?,?,?,?,?,?,?,?,'','','','','','','',NULL,'','')`,
-		req.ID, req.TaskID, req.Seq, req.Version, req.Text, req.Author, req.CreatedAt, req.Status)
+		  operation_key,operation_target,dispatch_state,dispatched_at,related_seq,result,settled_at,choice_id)
+		 VALUES (?,?,?,?,?,?,?,?,'','','','','','','',NULL,'','',?)`,
+		req.ID, req.TaskID, req.Seq, req.Version, req.Text, req.Author, req.CreatedAt, req.Status, req.ChoiceID)
 	if err != nil {
+		return ledgerRequest{}, false, err
+	}
+	// One history line per stored request, in the same transaction: the person's
+	// own words, which are theirs to read back.
+	if err = recordTaskEvent(ctx, tx, ledgerTaskEvent{
+		TaskID: taskID, Kind: eventRequestStored, Actor: author,
+		Summary: "요청을 남겼다", RequestID: id,
+		Detail: map[string]any{"text": text, "seq": seq, "choice_id": choiceID},
+	}, now); err != nil {
 		return ledgerRequest{}, false, err
 	}
 	return req, false, tx.Commit()
@@ -363,10 +400,12 @@ func readLedgerRequest(ctx context.Context, tx *sql.Tx, id string) (ledgerReques
 	var claimToken string
 	err := tx.QueryRowContext(ctx,
 		`SELECT id,task_id,seq,version,text,author,created_at,status,claim_owner,claim_token,
-		        claim_expires_at,operation_key,operation_target,dispatch_state,dispatched_at,related_seq,result,settled_at
+		        claim_expires_at,operation_key,operation_target,dispatch_state,dispatched_at,related_seq,result,settled_at,
+		        coalesce(choice_id,'')
 		 FROM sp_ledger_user_requests WHERE id=?`, id).
 		Scan(&r.ID, &r.TaskID, &r.Seq, &r.Version, &r.Text, &r.Author, &r.CreatedAt, &r.Status, &r.ClaimOwner, &claimToken,
-			&r.ClaimExpiresAt, &r.OperationKey, &r.OperationTarget, &r.DispatchState, &r.DispatchedAt, &relatedSeq, &r.Result, &r.SettledAt)
+			&r.ClaimExpiresAt, &r.OperationKey, &r.OperationTarget, &r.DispatchState, &r.DispatchedAt, &relatedSeq, &r.Result,
+			&r.SettledAt, &r.ChoiceID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, errLedgerRequestMissing
 	}
@@ -571,6 +610,13 @@ func claimLedgerRequest(ctx context.Context, tx *sql.Tx, current ledgerRequest, 
 		next.Version, next.Status, next.ClaimOwner, token, next.ClaimExpiresAt, current.ID, current.Version); err != nil {
 		return nil, err
 	}
+	if err := recordTaskEvent(ctx, tx, ledgerTaskEvent{
+		TaskID: current.TaskID, Kind: eventRequestClaimed, Actor: a.ClaimOwner,
+		Summary: "요청을 접수했다", RequestID: current.ID,
+		Detail: map[string]any{"reconcile": reconcile, "status": status},
+	}, now); err != nil {
+		return nil, err
+	}
 	out := map[string]any{"request": next, "claim_token": token}
 	if reconcile {
 		// Say plainly that something may already be out there, and what it was.
@@ -609,6 +655,18 @@ func dispatchLedgerRequest(ctx context.Context, tx *sql.Tx, current ledgerReques
 		next.Version, next.OperationKey, next.OperationTarget, next.DispatchState, next.DispatchedAt, current.ID, current.Version); err != nil {
 		return nil, err
 	}
+	// The key and the target, never a token: the history says what was handed
+	// over, which is what a reader needs to reconcile it.
+	if err := recordTaskEvent(ctx, tx, ledgerTaskEvent{
+		TaskID: current.TaskID, Kind: eventRequestDispatched, Actor: current.ClaimOwner,
+		Summary: "요청을 처리하려고 " + a.DispatchState + " 로 적었다", RequestID: current.ID,
+		Detail: map[string]any{
+			"dispatch_state": a.DispatchState, "operation_key": a.OperationKey,
+			"operation_target": a.OperationTarget, "observed": a.Observed,
+		},
+	}, now); err != nil {
+		return nil, err
+	}
 	return map[string]any{"request": next}, nil
 }
 
@@ -641,6 +699,13 @@ func ackLedgerRequest(ctx context.Context, tx *sql.Tx, current ledgerRequest, a 
 		return nil, err
 	}
 	next.ClaimExpiresAt = ""
+	if err := recordTaskEvent(ctx, tx, ledgerTaskEvent{
+		TaskID: current.TaskID, Kind: eventRequestSettled, Actor: current.ClaimOwner,
+		Summary: "요청을 " + a.Outcome + " 로 닫았다", RequestID: current.ID,
+		Detail: map[string]any{"outcome": a.Outcome, "result": a.Result, "related_seq": related},
+	}, now); err != nil {
+		return nil, err
+	}
 	return map[string]any{"request": next}, nil
 }
 

@@ -68,6 +68,15 @@ type ledgerArgs struct {
 	Outcome         string `json:"outcome,omitempty"`
 	Result          string `json:"result,omitempty"`
 	RelatedSeq      *int64 `json:"related_seq,omitempty"`
+	// The offered-choice tools' own field (session_ledger_task_choices.go).
+	Choices []ledgerChoiceArg `json:"choices,omitempty"`
+}
+
+// ledgerChoiceArg is one choice as the session writes it.
+type ledgerChoiceArg struct {
+	ChoiceID    string `json:"choice_id"`
+	Label       string `json:"label"`
+	RequestText string `json:"request_text"`
 }
 type ledgerRecord struct {
 	ID      string     `json:"id"`
@@ -77,6 +86,10 @@ type ledgerRecord struct {
 	// plain get or list is enough to notice one. Absent when none ever
 	// arrived, which keeps the payload of an untouched ledger unchanged.
 	Requests *ledgerRequestSummary `json:"requests,omitempty"`
+	// Choices are what the session offers a person to say about this task,
+	// written against this very version. Absent when it offers none — the app
+	// then says so and keeps free text.
+	Choices []ledgerChoice `json:"choices,omitempty"`
 }
 type ledgerError struct {
 	Code      string `json:"code"`
@@ -115,12 +128,18 @@ func ledgerToolDefinitions() []map[string]any {
 	// The user requests waiting on these tasks are their own four tools: one
 	// list, and a claim/dispatch/ack that make picking one up a decision with
 	// a record rather than a side effect of reading.
-	return append(out, ledgerRequestToolDefinitions()...)
+	out = append(out, ledgerRequestToolDefinitions()...)
+	// What the session offers a person to say about one task, and the task's
+	// own history: written by the session, read by the app.
+	return append(out, ledgerChoiceToolDefinitions()...)
 }
 func validateLedger(name string, a ledgerArgs) error {
 	bad := func(s string) error { return ledgerFail("invalid_argument", s) }
 	if isLedgerRequestTool(name) {
 		return validateLedgerRequestTool(name, a)
+	}
+	if isLedgerChoiceTool(name) {
+		return validateLedgerChoiceTool(name, a)
 	}
 	if name != "ledger_get" && name != "ledger_list" && name != "ledger_put" && name != "ledger_delete" {
 		return bad("unknown ledger tool")
@@ -198,8 +217,13 @@ func migrateLedger(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, ledgerSchema); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, ledgerRequestsSchema)
-		return err
+		if _, err := tx.ExecContext(ctx, ledgerRequestsSchema); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, ledgerChoicesSchema); err != nil {
+			return err
+		}
+		return addRequestChoiceColumn(ctx, tx)
 	}
 	var v int
 	if err := tx.QueryRowContext(ctx, "SELECT version FROM sp_ledger_meta").Scan(&v); err != nil {
@@ -211,8 +235,13 @@ func migrateLedger(ctx context.Context, tx *sql.Tx) error {
 	// Additive, and version 1 stays version 1: the user-request table is new
 	// but no task row changes shape, so an older sidecar image still opens
 	// this database after a rollback.
-	_, err := tx.ExecContext(ctx, ledgerRequestsSchema)
-	return err
+	if _, err := tx.ExecContext(ctx, ledgerRequestsSchema); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, ledgerChoicesSchema); err != nil {
+		return err
+	}
+	return addRequestChoiceColumn(ctx, tx)
 }
 func readLedger(ctx context.Context, tx *sql.Tx, id string) (ledgerRecord, error) {
 	r := ledgerRecord{ID: id}
@@ -244,6 +273,16 @@ func (s *sessionDB) ledger(ctx context.Context, name string, a ledgerArgs) (any,
 		return nil, err
 	}
 	var result any
+	if isLedgerChoiceTool(name) {
+		result, err = s.ledgerChoiceCall(ctx, tx, name, a, ledgerNow())
+		if err != nil {
+			return nil, err
+		}
+		if err = tx.Commit(); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
 	if isLedgerRequestTool(name) {
 		result, err = s.ledgerRequests(ctx, tx, name, a, ledgerNow())
 		if err != nil {
@@ -259,6 +298,9 @@ func (s *sessionDB) ledger(ctx context.Context, name string, a ledgerArgs) (any,
 		record, err = readLedger(ctx, tx, a.ID)
 		if err == nil {
 			err = attachRequestSummaries(ctx, tx, []*ledgerRecord{&record})
+		}
+		if err == nil {
+			err = attachChoices(ctx, tx, []*ledgerRecord{&record})
 		}
 		result = record
 	} else if name == "ledger_list" {
@@ -297,6 +339,9 @@ func (s *sessionDB) ledger(ctx context.Context, name string, a ledgerArgs) (any,
 				pointers = append(pointers, &records[i])
 			}
 			err = attachRequestSummaries(ctx, tx, pointers)
+			if err == nil {
+				err = attachChoices(ctx, tx, pointers)
+			}
 		}
 		result = map[string]any{"tasks": records, "next_cursor": next}
 	} else {
@@ -314,6 +359,9 @@ func (s *sessionDB) ledger(ctx context.Context, name string, a ledgerArgs) (any,
 			return nil, e
 		}
 		var version int64
+		// The row as it stands now, so an update's history line can say what
+		// moved. A create has none; a missing row is handled just below.
+		previous, _ := readLedger(ctx, tx, a.ID)
 		e = tx.QueryRowContext(ctx, "SELECT version FROM sp_ledger_tasks WHERE id=?", a.ID).Scan(&version)
 		if errors.Is(e, sql.ErrNoRows) {
 			if *a.ExpectedVersion != 0 {
@@ -336,6 +384,14 @@ func (s *sessionDB) ledger(ctx context.Context, name string, a ledgerArgs) (any,
 			if err == nil {
 				_, err = tx.ExecContext(ctx, "INSERT INTO sp_ledger_retired VALUES (?)", a.ID)
 			}
+			// The task's history outlives the task: what a person asked about it
+			// stays readable, so the row saying it was removed belongs there too.
+			if err == nil {
+				err = recordTaskEvent(ctx, tx, ledgerTaskEvent{
+					TaskID: a.ID, Kind: eventTaskDeleted, Actor: "parent",
+					Summary: "작업 기록을 원장에서 지웠다", RequestID: a.RequestID,
+				}, ledgerNow())
+			}
 			result = map[string]any{"id": a.ID, "deleted": true, "version": version}
 		} else {
 			doc, _ := json.Marshal(a.Task)
@@ -344,6 +400,31 @@ func (s *sessionDB) ledger(ctx context.Context, name string, a ledgerArgs) (any,
 				_, err = tx.ExecContext(ctx, "INSERT INTO sp_ledger_tasks VALUES (?,?,?,?,?,?)", a.ID, version, a.Task.Status, a.Task.Stage, a.Task.Owner, string(doc))
 			} else {
 				_, err = tx.ExecContext(ctx, "UPDATE sp_ledger_tasks SET version=?,status=?,stage=?,owner=?,document=? WHERE id=? AND version=?", version, a.Task.Status, a.Task.Stage, a.Task.Owner, string(doc), a.ID, *a.ExpectedVersion)
+			}
+			if err == nil {
+				kind, summary := eventTaskUpdated, "작업을 고쳤다"
+				detail := map[string]any{"version": version, "status": a.Task.Status, "stage": a.Task.Stage}
+				if *a.ExpectedVersion == 0 {
+					kind, summary = eventTaskCreated, "작업을 원장에 등록했다"
+				} else {
+					// Say what moved, so a history line is a change rather than a
+					// timestamp. The earlier values come from the row this put
+					// replaces.
+					if previous.Task.Status != a.Task.Status {
+						detail["status_from"] = previous.Task.Status
+						summary = "상태를 " + previous.Task.Status + " 에서 " + a.Task.Status + " 로 옮겼다"
+					}
+					if previous.Task.Stage != a.Task.Stage {
+						detail["stage_from"] = previous.Task.Stage
+						if previous.Task.Status == a.Task.Status {
+							summary = "단계를 " + previous.Task.Stage + " 에서 " + a.Task.Stage + " 로 옮겼다"
+						}
+					}
+				}
+				err = recordTaskEvent(ctx, tx, ledgerTaskEvent{
+					TaskID: a.ID, Kind: kind, Actor: a.Task.Owner, Summary: summary,
+					Detail: detail, RequestID: a.RequestID,
+				}, ledgerNow())
 			}
 			result = ledgerRecord{ID: a.ID, Version: version, Task: *a.Task}
 		}

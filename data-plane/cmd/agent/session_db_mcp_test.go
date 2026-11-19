@@ -71,7 +71,8 @@ func newTestSessionDBWithRawSQL(t *testing.T, rawSQL bool) (*sessionDB, http.Han
 // ledgerToolNames is the ledger surface in offer order: the task tools, then
 // the user-request tools beside them.
 const ledgerToolNames = "ledger_get,ledger_list,ledger_put,ledger_delete," +
-	"ledger_requests_list,ledger_requests_claim,ledger_requests_dispatch,ledger_requests_ack"
+	"ledger_requests_list,ledger_requests_claim,ledger_requests_dispatch,ledger_requests_ack," +
+	"ledger_choices_put,ledger_choices_clear,ledger_events_list"
 
 // sessionDBToolNames is what the model is offered by one sidecar.
 func sessionDBToolNames(t *testing.T, h http.Handler) []string {

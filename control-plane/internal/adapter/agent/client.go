@@ -732,8 +732,20 @@ func (c *HTTPClient) CreateLedgerRequest(ctx context.Context, pod string, in ses
 	case http.StatusNotImplemented:
 		return stored, fmt.Errorf("%w: %s", session.ErrLedgerUnsupported, ledgerMessage(raw))
 	case http.StatusNotFound:
+		// A pod still running the earlier image has no such route at all, and
+		// its 404 is the mux's plain text rather than the ledger's own JSON.
+		// Saying "that task is gone" there would be wrong and misleading, so a
+		// route that is not there is reported as unsupported.
+		if !ledgerAnswered(raw) {
+			return stored, fmt.Errorf("%w: this session pod predates the ledger request route", session.ErrLedgerUnsupported)
+		}
 		return stored, fmt.Errorf("%w: %s", session.ErrNotFound, ledgerMessage(raw))
 	case http.StatusConflict:
+		// The slot refuses a pick it no longer offers with its own code, so a
+		// stale screen is not reported as a reused id.
+		if ledgerCode(raw) == "stale_choice" {
+			return stored, fmt.Errorf("%w: %s", session.ErrLedgerChoiceStale, ledgerMessage(raw))
+		}
 		return stored, fmt.Errorf("%w: %s", session.ErrConflict, ledgerMessage(raw))
 	case http.StatusBadRequest:
 		return stored, fmt.Errorf("%w: %s", session.ErrInvalidInput, ledgerMessage(raw))
@@ -741,6 +753,28 @@ func (c *HTTPClient) CreateLedgerRequest(ctx context.Context, pod string, in ses
 		return stored, fmt.Errorf("store task ledger request in session pod %s: agent returned %d: %s",
 			pod, resp.StatusCode, ledgerMessage(raw))
 	}
+}
+
+// ledgerAnswered says whether a body came from the ledger itself: its errors
+// are JSON carrying a code. A pod from before these routes answers with the
+// mux's plain "404 page not found", which is a different fact.
+func ledgerAnswered(raw []byte) bool {
+	var answer struct {
+		Code string `json:"code"`
+	}
+	return json.Unmarshal(raw, &answer) == nil && strings.TrimSpace(answer.Code) != ""
+}
+
+// ledgerCode is the ledger's own class for a refusal, empty when the body did
+// not come from the ledger.
+func ledgerCode(raw []byte) string {
+	var answer struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(raw, &answer) != nil {
+		return ""
+	}
+	return strings.TrimSpace(answer.Code)
 }
 
 // ledgerMessage is the sidecar's own sentence, which names the ledger's view of
@@ -753,4 +787,57 @@ func ledgerMessage(raw []byte) string {
 		return answer.Error
 	}
 	return strings.TrimSpace(string(raw))
+}
+
+// LedgerEvents reads one keyset page of a task's history (AC-N8). Read-only and
+// passive, like the task page: it starts no turn and changes nothing, and a pod
+// that predates the route is reported as unsupported rather than as an empty
+// history — an empty page would claim the task has no story.
+func (c *HTTPClient) LedgerEvents(ctx context.Context, pod, taskID string, afterSeq int64, limit int) (session.LedgerTaskEventPage, error) {
+	page := session.LedgerTaskEventPage{Events: []session.LedgerTaskEvent{}}
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return page, err
+	}
+	query := url.Values{}
+	query.Set("task_id", taskID)
+	if afterSeq > 0 {
+		query.Set("after_seq", strconv.FormatInt(afterSeq, 10))
+	}
+	if limit > 0 {
+		query.Set("limit", strconv.Itoa(limit))
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL(ip)+"/ledger/events?"+query.Encode(), nil)
+	if err != nil {
+		return page, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return page, fmt.Errorf("read task history in session pod %s: %w", pod, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	switch resp.StatusCode {
+	case http.StatusOK:
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return session.LedgerTaskEventPage{Events: []session.LedgerTaskEvent{}},
+				fmt.Errorf("read task history in session pod %s: decode: %w", pod, err)
+		}
+		if page.Events == nil {
+			page.Events = []session.LedgerTaskEvent{}
+		}
+		return page, nil
+	case http.StatusNotImplemented:
+		return page, fmt.Errorf("%w: %s", session.ErrLedgerUnsupported, ledgerMessage(raw))
+	case http.StatusNotFound, http.StatusMethodNotAllowed:
+		if !ledgerAnswered(raw) {
+			return page, fmt.Errorf("%w: this session pod predates the task history route", session.ErrLedgerUnsupported)
+		}
+		return page, fmt.Errorf("%w: %s", session.ErrNotFound, ledgerMessage(raw))
+	case http.StatusBadRequest:
+		return page, fmt.Errorf("%w: %s", session.ErrInvalidInput, ledgerMessage(raw))
+	default:
+		return page, fmt.Errorf("read task history in session pod %s: agent returned %d: %s",
+			pod, resp.StatusCode, ledgerMessage(raw))
+	}
 }

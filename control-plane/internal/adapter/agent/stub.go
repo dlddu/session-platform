@@ -30,6 +30,8 @@ type StubClient struct {
 	// LedgerRequests is what callers stored, in arrival order, with the same
 	// id-idempotency and task-link rules the sidecar applies.
 	LedgerRequests []session.LedgerRequest
+	// LedgerEventRows is one task's history as the stub holds it, keyed by task.
+	LedgerEventRows map[string][]session.LedgerTaskEvent
 
 	mu      sync.Mutex
 	bufs    map[string][]byte
@@ -157,6 +159,22 @@ func (c *StubClient) Stream(_ context.Context, pod string, offset int64) (io.Rea
 	return io.NopCloser(bytes.NewReader(event.Bytes())), nil
 }
 
+// offersChoice says whether the task still offers the picked choice: it has to
+// be one of the task's own, written against the version the task now stands at,
+// and to agree with the basis the caller saw.
+func offersChoice(task session.LedgerTaskRecord, in session.LedgerRequestInput) bool {
+	for _, c := range task.Choices {
+		if c.ID != in.ChoiceID {
+			continue
+		}
+		if c.BasisVersion != task.Version {
+			return false
+		}
+		return in.ChoiceBasisVersion == 0 || in.ChoiceBasisVersion == c.BasisVersion
+	}
+	return false
+}
+
 // CreateLedgerRequest stores one request the way the sidecar does: the id is
 // the idempotency key, the task has to be one this ledger holds, and the stored
 // row never touches the task it names.
@@ -173,14 +191,22 @@ func (c *StubClient) CreateLedgerRequest(_ context.Context, _ string, in session
 		return session.LedgerRequestStored{Request: stored, Replayed: true}, nil
 	}
 	found := false
+	var task session.LedgerTaskRecord
 	for _, row := range c.LedgerRows {
 		if row.ID == in.TaskID {
-			found = true
+			found, task = true, row
 			break
 		}
 	}
 	if !found {
 		return session.LedgerRequestStored{}, fmt.Errorf("%w: task not found", session.ErrNotFound)
+	}
+	// The sidecar checks a pick on the way in, not only on the way out: a
+	// choice it no longer offers is refused, so a screen left open while the
+	// task moved cannot act on an old sentence.
+	if in.ChoiceID != "" && !offersChoice(task, in) {
+		return session.LedgerRequestStored{}, fmt.Errorf("%w: that choice is no longer offered for this task",
+			session.ErrLedgerChoiceStale)
 	}
 	stored := session.LedgerRequest{
 		ID: in.ID, TaskID: in.TaskID, Seq: int64(len(c.LedgerRequests) + 1), Version: 1,
@@ -189,4 +215,26 @@ func (c *StubClient) CreateLedgerRequest(_ context.Context, _ string, in session
 	}
 	c.LedgerRequests = append(c.LedgerRequests, stored)
 	return session.LedgerRequestStored{Request: stored, Replayed: false}, nil
+}
+
+// LedgerEvents pages LedgerEventRows the way the sidecar pages the history: by
+// the row's own seq, and only the task that was asked for.
+func (c *StubClient) LedgerEvents(_ context.Context, _, taskID string, afterSeq int64, limit int) (session.LedgerTaskEventPage, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if limit <= 0 {
+		limit = session.LedgerEventPageLimitDefault
+	}
+	page := session.LedgerTaskEventPage{Events: []session.LedgerTaskEvent{}}
+	for _, row := range c.LedgerEventRows[taskID] {
+		if row.Seq <= afterSeq {
+			continue
+		}
+		if len(page.Events) == limit {
+			page.NextCursor = page.Events[len(page.Events)-1].Seq
+			break
+		}
+		page.Events = append(page.Events, row)
+	}
+	return page, nil
 }
