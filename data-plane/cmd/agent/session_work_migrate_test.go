@@ -529,15 +529,17 @@ func TestWorkCutoverRefusesAPickFromAnOlderTurn(t *testing.T) {
 	seedLedger(t, s)
 	runMigration(t, s, "m1", false)
 	task := mustWork(t, s, "task_get", map[string]any{"id": "task-a"})
-	latest := task["latest_turn"].(map[string]any)
 	version := task["task"].(map[string]any)["version"].(float64)
-	mustWork(t, s, "turn_patch", map[string]any{
-		"task_id": "task-a", "turn_id": latest["id"], "request_id": "q1", "expected_version": version,
+	// The parent asks on a turn of its own. The migrated turn it would
+	// otherwise have written on is finished work, and a finished turn is not
+	// rewritten.
+	asked := mustWork(t, s, "turn_append", map[string]any{
+		"task_id": "task-a", "request_id": "q1", "expected_version": version,
 		"turn": map[string]any{"question": "어느 쪽?", "choices": []any{
 			map[string]any{"label": "A", "request_text": "A 로 해 줘"},
 		}},
-	})
-	offered := compatChoiceID(int64(latest["id"].(float64)), 0)
+	})["turn"].(map[string]any)
+	offered := compatChoiceID(int64(asked["id"].(float64)), 0)
 	stored, _, err := s.appendLedgerRequest(ctx, "pick-1", "task-a", "A 로 해 줘", "user-1", offered, int64(version), time.Now())
 	if err != nil {
 		t.Fatalf("a current pick was refused: %v", err)
@@ -1142,15 +1144,16 @@ func TestWorkCutoverLeavesTheParentAbleToWork(t *testing.T) {
 	if len(relations) != 3 {
 		t.Fatalf("preserved relations are not readable: %v", relations)
 	}
-	version := int64(record["task_version"].(float64))
+	book := int64(record["book_version"].(float64))
 	// Advance the cursor the way a parent does after collecting a result, and
-	// record a new approval scope beside it.
+	// record a new approval scope beside it. The bookkeeping lane has its own
+	// counter, so this neither moves the task version nor invalidates a choice.
 	moved := make([]any, len(relations))
 	copy(moved, relations)
 	second := moved[1].(map[string]any)
 	second["nextOffset"] = float64(8192)
 	updated := mustWork(t, s, workLegacyPutTool, map[string]any{
-		"task_id": "task-a", "request_id": "bk-1", "expected_version": version,
+		"task_id": "task-a", "request_id": "bk-1", "expected_book_version": book,
 		"record": map[string]any{
 			"stage": "verification", "owner": "parent", "sessions": moved,
 			"details": map[string]any{
@@ -1174,18 +1177,18 @@ func TestWorkCutoverLeavesTheParentAbleToWork(t *testing.T) {
 	// beside the task, not a new state of it — so the choices a turn offers are
 	// not silently invalidated by a cursor update.
 	task := mustWork(t, s, "task_get", map[string]any{"id": "task-a"})["task"].(map[string]any)
-	if int64(task["version"].(float64)) != version {
+	if int64(task["version"].(float64)) != int64(record["task_version"].(float64)) {
 		t.Fatalf("bookkeeping moved the task version: %v", task["version"])
 	}
 
 	// A stale version loses, so two parents cannot write over each other.
 	wantWorkCode(t, s, workLegacyPutTool, map[string]any{
-		"task_id": "task-a", "request_id": "bk-2", "expected_version": version + 5,
+		"task_id": "task-a", "request_id": "bk-2", "expected_book_version": book + 5,
 		"record": map[string]any{"stage": "x", "owner": "y", "sessions": []any{}, "details": map[string]any{}},
 	}, "conflict")
 	// The same request_id replays rather than writing twice.
 	replay := mustWork(t, s, workLegacyPutTool, map[string]any{
-		"task_id": "task-a", "request_id": "bk-1", "expected_version": version,
+		"task_id": "task-a", "request_id": "bk-1", "expected_book_version": book,
 		"record": map[string]any{
 			"stage": "verification", "owner": "parent", "sessions": moved,
 			"details": map[string]any{
@@ -1200,7 +1203,7 @@ func TestWorkCutoverLeavesTheParentAbleToWork(t *testing.T) {
 	// A preserved row no work task owns is not written here: it keeps the
 	// ledger tools, and the refusal says so instead of a bare not_found.
 	wantWorkCode(t, s, workLegacyPutTool, map[string]any{
-		"task_id": "task-m", "request_id": "bk-3", "expected_version": 1,
+		"task_id": "task-m", "request_id": "bk-3", "expected_book_version": 1,
 		"record": map[string]any{"stage": "", "owner": "", "sessions": []any{}, "details": map[string]any{}},
 	}, "conflict")
 	wantWorkCode(t, s, workLegacyGetTool, map[string]any{"task_id": "no-such-task-at-all"}, "not_found")
@@ -1217,7 +1220,7 @@ func TestWorkCutoverLeavesTheParentAbleToWork(t *testing.T) {
 	}
 	// And a parent can start keeping bookkeeping on it.
 	mustWork(t, s, workLegacyPutTool, map[string]any{
-		"task_id": "task-fresh", "request_id": "bk-4", "expected_version": 1,
+		"task_id": "task-fresh", "request_id": "bk-4", "expected_book_version": 1,
 		"record": map[string]any{
 			"stage": "implementation", "owner": "parent",
 			"sessions": []any{map[string]any{"id": "worker-9", "ownership": "owned", "purpose": "구현", "cleanup": "pending"}},

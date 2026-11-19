@@ -109,19 +109,36 @@ func encodeWorkArtifacts(artifacts []string) string {
 // requireWorkTaskVersion is the fence on every turn write: the writer has to
 // hold the task's current version, so a parent that has not seen the task move
 // cannot write the turn that follows a state it never read.
-func requireWorkTaskVersion(ctx context.Context, tx *sql.Tx, taskID string, expected int64) (workTask, error) {
+// requireWorkTaskVersion checks that the writer is acting on the task state it
+// read, and then takes the turn lane's compare-and-swap. Both are needed and
+// they are different things: expected_version says "the task has not changed
+// under me" and does not move (so a turn does not invalidate the choices a
+// screen is showing), while expected_turn_version is the actual lock — a single
+// conditional UPDATE, so two parents holding the same value cannot both write
+// (session_work_guard.go).
+func requireWorkTaskVersion(
+	ctx context.Context, tx *sql.Tx, taskID string, expected int64, expectedTurn *int64,
+) (workTask, int64, error) {
 	task, err := loadWorkTask(ctx, tx, taskID)
 	if err != nil {
-		return task, err
+		return task, 0, err
 	}
 	if task.Version != expected {
-		return task, ledgerFail("conflict", "expected_version does not match the task's current version")
+		return task, 0, ledgerFail("conflict", "expected_version does not match the task's current version")
 	}
-	return task, nil
+	if expectedTurn == nil {
+		return task, 0, ledgerFail("invalid_argument", "expected_turn_version is required")
+	}
+	next, err := swapWorkGuard(ctx, tx, taskID, workGuardTurn, *expectedTurn)
+	if err != nil {
+		return task, 0, err
+	}
+	return task, next, nil
 }
 
 func appendWorkTurn(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (any, error) {
-	if _, err := requireWorkTaskVersion(ctx, tx, a.TaskID, *a.ExpectedVersion); err != nil {
+	_, turnVersion, err := requireWorkTaskVersion(ctx, tx, a.TaskID, *a.ExpectedVersion, a.ExpectedTurnVersion)
+	if err != nil {
 		return nil, err
 	}
 	turn, err := insertWorkTurn(ctx, tx, a.TaskID, a.Turn, now)
@@ -131,7 +148,7 @@ func appendWorkTurn(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) 
 	if err := touchWorkTask(ctx, tx, a.TaskID, now); err != nil {
 		return nil, err
 	}
-	return map[string]any{"turn": turn}, nil
+	return map[string]any{"turn": turn, "turn_version": turnVersion}, nil
 }
 
 func insertWorkTurn(ctx context.Context, tx *sql.Tx, taskID string, input *workTurnInput, now time.Time) (workTurn, error) {
@@ -168,11 +185,38 @@ func insertWorkTurn(ctx context.Context, tx *sql.Tx, taskID string, input *workT
 // clears one; an absent field is left alone, so filling in a response does not
 // erase the question that was asked on the same turn.
 func patchWorkTurn(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (any, error) {
-	if _, err := requireWorkTaskVersion(ctx, tx, a.TaskID, *a.ExpectedVersion); err != nil {
+	_, turnVersion, err := requireWorkTaskVersion(ctx, tx, a.TaskID, *a.ExpectedVersion, a.ExpectedTurnVersion)
+	if err != nil {
 		return nil, err
 	}
-	if _, err := loadWorkTurn(ctx, tx, a.TaskID, *a.TurnID); err != nil {
+	current, err := loadWorkTurn(ctx, tx, a.TaskID, *a.TurnID)
+	if err != nil {
 		return nil, err
+	}
+	// Taking a turn is writing its started_at, so writing one over a turn that
+	// already has one is a second parent claiming work somebody is already
+	// doing. The counter alone cannot catch it: a parent that re-reads *after*
+	// the first claim holds a current counter and would be admitted. Clearing
+	// it is how a parent hands a turn back, and that stays allowed.
+	if a.Turn.named("started_at") && !a.Turn.cleared("started_at") && current.StartedAt != nil {
+		return nil, ledgerFail("conflict",
+			"this turn was already taken at "+*current.StartedAt+
+				"; clear started_at to hand it back before taking it again")
+	}
+	// A turn that has ended is finished work, and what was said and answered on
+	// it is what a person has already been shown. Those four fields are the
+	// verbatim record, so they are not rewritten after the fact — reopen the
+	// turn by clearing ended_at, or append the next one. Tidying the question,
+	// its choices or the bookkeeping fields stays allowed: a stale question
+	// that a finished turn is still offering is worth clearing.
+	if current.EndedAt != nil && !a.Turn.cleared("ended_at") {
+		for _, field := range []string{"request", "instruction", "response", "explanation"} {
+			if a.Turn.named(field) {
+				return nil, ledgerFail("conflict",
+					"this turn ended at "+*current.EndedAt+" and its "+field+
+						" is the record a person was shown; clear ended_at to reopen it, or append the next turn")
+			}
+		}
 	}
 	assignments := []string{}
 	values := []any{}
@@ -237,7 +281,7 @@ func patchWorkTurn(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"turn": turn}, nil
+	return map[string]any{"turn": turn, "turn_version": turnVersion}, nil
 }
 
 // listWorkTurns pages a task's turns oldest first. open=true is the parent's
@@ -279,7 +323,14 @@ func listWorkTurns(ctx context.Context, tx *sql.Tx, a workArgs) (any, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	result := map[string]any{"turns": turns}
+	// The turn lane's counter travels with the page: a parent that has just
+	// read a task's turns needs it to write the next one, and reading it in a
+	// second call would be reading it after somebody else moved it.
+	turnVersion, _, err := workGuards(ctx, tx, a.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]any{"turns": turns, "turn_version": turnVersion}
 	if next != 0 {
 		result["next_cursor"] = next
 	}
@@ -296,14 +347,29 @@ func listWorkTurns(ctx context.Context, tx *sql.Tx, a workArgs) (any, error) {
 // new key would do it twice. observed=not_accepted is the parent stating it
 // established the first never landed.
 func dispatchWorkTurn(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (any, error) {
-	if _, err := requireWorkTaskVersion(ctx, tx, a.TaskID, *a.ExpectedVersion); err != nil {
+	_, turnVersion, err := requireWorkTaskVersion(ctx, tx, a.TaskID, *a.ExpectedVersion, a.ExpectedTurnVersion)
+	if err != nil {
 		return nil, err
 	}
-	if _, err := loadWorkTurn(ctx, tx, a.TaskID, *a.TurnID); err != nil {
+	turn, err := loadWorkTurn(ctx, tx, a.TaskID, *a.TurnID)
+	if err != nil {
 		return nil, err
+	}
+	// Recording an intent to act for a turn that has already ended would
+	// authorise an action for work that is finished.
+	if turn.EndedAt != nil {
+		return nil, ledgerFail("conflict",
+			"this turn ended at "+*turn.EndedAt+"; it cannot dispatch anything further")
+	}
+	// Only the parent holding the turn may act for it. A turn nobody has taken
+	// has nobody to act for it, and acting for one somebody else took is how
+	// the same outside action happens twice.
+	if turn.StartedAt == nil {
+		return nil, ledgerFail("conflict",
+			"this turn has not been taken: write started_at with turn_patch before dispatching for it")
 	}
 	var recordedKey, recordedState string
-	err := tx.QueryRowContext(ctx,
+	err = tx.QueryRowContext(ctx,
 		"SELECT operation_key,dispatch_state FROM sp_work_turn_admin WHERE turn_id=?", *a.TurnID).
 		Scan(&recordedKey, &recordedState)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -325,7 +391,7 @@ func dispatchWorkTurn(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time
 	}
 	return map[string]any{
 		"turn_id": *a.TurnID, "operation_key": a.OperationKey, "operation_target": a.OperationTarget,
-		"dispatch_state": a.DispatchState, "dispatched_at": stamp,
+		"dispatch_state": a.DispatchState, "dispatched_at": stamp, "turn_version": turnVersion,
 	}, nil
 }
 

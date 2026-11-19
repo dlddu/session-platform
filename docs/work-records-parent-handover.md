@@ -16,11 +16,11 @@
 | 작업 만들기·갱신 | `ledger_put` | `task_put` |
 | 작업 지우기 | `ledger_delete` | `task_delete` |
 | 사람 요청 발견 | `ledger_requests_list` | `turn_list({open:true})` |
-| 요청 접수 | `ledger_requests_claim` | **없음** — 턴 자체가 큐다(§3) |
+| 요청 접수 | `ledger_requests_claim` | `turn_patch` 로 `started_at` 쓰기 = 접수(§3) |
 | 외부 행동 기장 | `ledger_requests_dispatch` | `turn_dispatch` |
-| 결과 기록 | `ledger_requests_ack` | `turn_patch`(response·explanation·ended_at) |
+| 결과 기록 | `ledger_requests_ack` | `turn_patch`(response·explanation·ended_at) + `expected_turn_version` |
 | 보낼 선택지 | `ledger_choices_put` | `turn_patch`의 `choices` |
-| 승인·커서·보존 기장 | `ledger_put`의 `details`·`sessions` | **`work_legacy_put`** (§4) |
+| 승인·커서·보존 기장 | `ledger_put`의 `details`·`sessions` | **`work_legacy_put`** + `expected_book_version` (§4) |
 | 모니터 루프 기록 | `ledger_put` | **`ledger_put` 그대로** (§4) |
 | 작업 이력 읽기 | `ledger_events_list` | 옮겨온 작업은 그대로, **새 작업은 그 턴들이 이력**(§5) |
 | 롤백 | — | `work_rollback_export` (§6) |
@@ -63,20 +63,51 @@ task_list({session_id: "none"})          # 배정되지 않은 것만 ("none" �
 ```
 1) turn_list({task_id, open: true})
    → request 가 있고 ended_at 이 없는 턴 = 아직 부모가 할 일
-2) 그 턴을 집었으면  turn_patch({task_id, turn_id, request_id,
+   → 응답의 turn_version 을 기억한다 (이 레인의 CAS 값)
+2) 그 턴을 집는다  turn_patch({task_id, turn_id, request_id,
       expected_version: <task_get 의 현재 version>,
+      expected_turn_version: <1)에서 읽은 turn_version>,
       turn: {started_at: <지금>, instruction: <세션에 넘긴 원문>}})
-   → expected_version 이 현재 version 이어야 하므로, 같은 작업을 읽은 두
-     부모가 같은 턴을 둘 다 집을 수 없다(한쪽은 conflict).
-3) 외부 행동 전에  turn_dispatch({..., operation_key, operation_target,
-      dispatch_state: "intended"})  →  행동  →  "dispatched"
-   → 대조 규칙은 AC-N7 4번 그대로. 다른 operation_key 는
-     observed=not_accepted 없이는 거절된다.
-4) 끝났으면  turn_patch({..., turn: {
+3) 외부 행동 전에  turn_dispatch({..., expected_turn_version: <다시 읽은 값>,
+      operation_key, operation_target, dispatch_state: "intended"})
+      →  행동  →  "dispatched"
+4) 끝났으면  turn_patch({..., expected_turn_version: <다시 읽은 값>, turn: {
       response: <세션의 최종 답 원문>,
       explanation: <부모가 사람에게 쓰는 설명>,
       ended_at: <지금>}})
 ```
+
+**모든 쓰기는 직전에 읽은 `turn_version` 을 들고 가야 한다.** 쓰기가 성공하면
+그 값이 1 오르고 응답에 새 값이 담긴다. 그래서 같은 값을 든 두 부모 중
+**한 쪽만 성공**하고 다른 쪽은 `conflict` 로 「다시 읽으라」는 말을 듣는다.
+
+> **이전 문서의 서술은 틀렸다.** 「expected_version 이 현재 version 이어야
+> 하므로 둘 다 집을 수 없다」고 적혀 있었지만, 그 검사는 **비교만 하고 값을
+> 올리지 않았다** — 비교만 하는 것은 잠금이 아니다. 실측 결과 같은 version 을
+> 읽은 두 부모의 `turn_append` 가 **둘 다 성공**해 턴이 2개 생기고, 두
+> `work_legacy_put` 도 둘 다 성공해 **뒤에 쓴 쪽이 앞의 승인 범위를
+> 덮어썼다**. 그래서 레인별 CAS 카운터(`turn_version`·`book_version`)를 넣고
+> 조건부 UPDATE 한 문장으로 교체했다.
+
+### 접수·소유·외부 행동의 의미
+
+- **접수(claim)** = 그 턴의 `started_at` 을 쓰는 것. 이미 `started_at` 이 있는
+  턴에 다시 쓰는 것은 **거절**된다 — 카운터만으로는 막히지 않는다(다른 부모가
+  집은 **뒤에** 다시 읽은 부모는 최신 카운터를 들고 있다). 되돌리려면
+  `started_at: null` 로 **명시적으로 반납**하고, 그 뒤에 다시 집을 수 있다.
+- **소유** = 집은 부모만 그 턴을 위해 외부 행동을 기장할 수 있다. 아무도 집지
+  않은 턴의 `turn_dispatch` 는 거절된다(행동할 주체가 없다).
+- **종료된 턴**: `turn_dispatch` 는 거절된다(끝난 일에 행동을 허가할 수 없다).
+  `turn_patch` 로 `request`·`instruction`·`response`·`explanation` 을 **다시
+  쓰는 것도 거절**된다 — 그 네 개는 사람이 이미 본 원문이다. 고쳐야 하면
+  `ended_at: null` 로 다시 열거나 다음 턴을 추가한다. 질문·선택지·산출물·
+  session_seq 정리는 그대로 허용된다.
+- **멱등 replay**: 같은 `request_id` 는 그때 커밋된 답을 돌려주고 **카운터를
+  다시 올리지 않는다** — replay 가 두 번째 실행 허가가 되지 않는다. 같은
+  operation_key 라도 **낡은 카운터**로는 거절되므로, 자기가 처음이라고 믿는
+  재시도가 두 번 행동할 수 없다.
+- **다른 operation_key**: 이미 기장된 턴에 다른 key 는 `observed=not_accepted`
+  (앞 시도가 닿지 않았음을 확인했다는 진술) 없이는 거절된다.
 
 **`response` 와 `explanation` 을 바꿔 쓰지 않는다.** `response` 는 일을 한
 세션이 **스스로 쓴 원문**이고, `explanation` 은 부모가 사람에게 쓴 문장이다.
@@ -100,18 +131,22 @@ task_list({session_id: "none"})          # 배정되지 않은 것만 ("none" �
 work_legacy_get({task_id})
   → {task_id, kind, legacy_status, stage, owner,
      sessions: [...커서와 seq 포함...], details: {...승인·보존·취소...},
-     task_version}         # task_version 이 put 에 들 값
+     task_version,          # 이 기장이 가리키는 작업 상태(참고용)
+     book_version}          # 이 레인의 CAS 값 — put 에 들고 갈 값
 
 work_legacy_put({task_id, request_id,
-                 expected_version: <task_version>,
+                 expected_book_version: <book_version>,
                  record: {stage, owner, sessions, details}})   # 전체 교체
 ```
 
 - **전체 교체**다. 커서 하나만 바꾸려면 `work_legacy_get` → 수정 →
   `work_legacy_put`(read-modify-write). 일부만 담아 보내면 나머지가 사라진다.
-- `expected_version` 은 그 작업의 **현재 version**이어야 하고, 기장 쓰기는
-  **version 을 올리지 않는다**. 커서를 전진시켰다고 턴이 내놓은 선택지가
-  무효가 되지 않게 하기 위함이다.
+- `expected_book_version` 은 **이 레인의 카운터**이고, 교체가 성공하면 1 오른다.
+  두 부모가 같은 값을 들면 한 쪽만 성공한다(다른 쪽은 `conflict`).
+- 이 레인은 **작업 version 도, 턴 레인도 건드리지 않는다**. 그래서 커서를
+  전진시켜도 턴이 내놓은 선택지가 무효화되지 않는다 — 선택지는 작업의
+  **version** 을 기준으로 삼고, 그 값은 **진짜 작업 변경(`task_put`)** 에서만
+  움직인다. 실측으로 고정되어 있다.
 - 같은 `request_id` 는 그때 커밋된 답을 되돌려 준다(두 번 쓰지 않는다).
 - 작업이 커토버 뒤에 생겨 기장이 아직 없으면 **빈 레코드**가 온다(`not_found`
   가 아니다). 거기서부터 쓰기 시작하면 된다.
@@ -173,7 +208,7 @@ work_rollback_export({request_id})                  # 스냅샷 → 원장 모�
 | 스킬이 바꿀 것 | 무엇으로 | 플랫폼 근거 |
 | --- | --- | --- |
 | 작업 발견·읽기·쓰기 호출부 | `task_list`·`task_get`·`task_put`·`task_delete` | `data-plane/cmd/agent/session_work_tasks.go` |
-| 요청 큐 루프(`ledger_requests_*`) | `turn_list({open:true})` → `turn_patch` → `turn_dispatch` → `turn_patch` | `session_work_turns.go` |
+| 요청 큐 루프(`ledger_requests_*`) | `turn_list({open:true})` → `turn_patch`(접수) → `turn_dispatch` → `turn_patch`(종료). **매 쓰기에 직전 `turn_version`** | `session_work_turns.go`·`session_work_guard.go` |
 | 선택지 발행 | `turn_patch` 의 `choices` | `session_work_turns.go` |
 | 승인·커서·보존·취소 기장 | `work_legacy_get`/`work_legacy_put` (RMW) | `session_work_parent.go` |
 | 모니터 루프 기록 | `ledger_put` **유지** | `session_work_parent.go`(fence 규칙) |

@@ -59,7 +59,17 @@ func readWorkTask(ctx context.Context, tx *sql.Tx, id string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	result := map[string]any{"task": task, "turns_total": total}
+	turnVersion, bookVersion, err := workGuards(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+	// The counters travel with the task because a writer needs them before it
+	// can write: they are the compare-and-swap values for turns and for the
+	// parent's bookkeeping (session_work_guard.go).
+	result := map[string]any{
+		"task": task, "turns_total": total,
+		"turn_version": turnVersion, "book_version": bookVersion,
+	}
 	if latest != nil {
 		result["latest_turn"] = *latest
 	}
@@ -150,13 +160,23 @@ func putWorkTask(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (an
 		Status: *a.Task.Status, Version: current.Version + 1,
 		CreatedAt: current.CreatedAt, UpdatedAt: &stamp,
 	}
-	_, err = tx.ExecContext(ctx,
+	// The expected version is in the WHERE clause, so the test and the write
+	// are one statement — and the row count is checked rather than assumed: an
+	// UPDATE that matched nothing is a lost race, not a success.
+	result, err := tx.ExecContext(ctx,
 		`UPDATE sp_work_tasks SET session_id=?,title=?,description=?,completion_criteria=?,status=?,version=?,updated_at=?
 		 WHERE id=? AND version=?`,
 		task.SessionID, task.Title, task.Description, task.CompletionCriteria, task.Status,
 		task.Version, task.UpdatedAt, a.ID, *a.ExpectedVersion)
 	if err != nil {
 		return nil, err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if changed != 1 {
+		return nil, ledgerFail("conflict", "expected_version does not match")
 	}
 	return map[string]any{"task": task}, nil
 }
@@ -175,7 +195,20 @@ func deleteWorkTask(ctx context.Context, tx *sql.Tx, a workArgs) (any, error) {
 	if _, err := tx.ExecContext(ctx, "DELETE FROM sp_work_turns WHERE task_id=?", a.ID); err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM sp_work_tasks WHERE id=? AND version=?", a.ID, current.Version); err != nil {
+	deleted, err := tx.ExecContext(ctx, "DELETE FROM sp_work_tasks WHERE id=? AND version=?", a.ID, current.Version)
+	if err != nil {
+		return nil, err
+	}
+	// Checked, not assumed: a delete that matched nothing means the version
+	// moved under this caller, which is a lost race rather than a deletion.
+	gone, err := deleted.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if gone != 1 {
+		return nil, ledgerFail("conflict", "expected_version does not match")
+	}
+	if err := dropWorkGuard(ctx, tx, a.ID); err != nil {
 		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO sp_work_retired VALUES (?)", a.ID); err != nil {

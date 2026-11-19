@@ -366,15 +366,49 @@ at a glance whether a request is waiting, and `turn_list({open: true})` selects
 the turns that still need it — a request arrived and the turn has no `ended_at`.
 A turn is consumed by writing its response and `ended_at`, not by reading it.
 
-Every mutation takes `request_id` and `expected_version`, with the ledger's
-contract: the same id with the same arguments returns what was committed then,
-and the same id with different arguments is a conflict rather than a second
-action. `expected_version` must be the task's **current** version, so two
-parents that both read a task cannot both write the turn that follows. A turn
-write does not bump the version — a turn is an event on the task, not a new
-state of it — but it moves the task's `updated_at`. `task_put` is a full
-replacement: unnamed fields are not preserved. A deleted task id is retired
-permanently, so a later create under it is a conflict rather than a revival.
+Every mutation takes `request_id`, with the ledger's contract: the same id with
+the same arguments returns what was committed then, and the same id with
+different arguments is a conflict rather than a second action.
+
+**Exclusion is a compare-and-swap, in three separate lanes.** Comparing a
+version without moving it is not a lock, and an earlier revision of this
+document was wrong to claim otherwise — measured, two parents holding the same
+task version both appended a turn, and both replaced the bookkeeping, with the
+later write silently overwriting the earlier one's approval scope. The lanes:
+
+| Write | Holds | Moves |
+| --- | --- | --- |
+| `task_put`, `task_delete` (task state) | `expected_version` | the task's `version` |
+| `turn_append`, `turn_patch`, `turn_dispatch` | `expected_version` **and** `expected_turn_version` | `turn_version` only |
+| `work_legacy_put` (parent bookkeeping) | `expected_book_version` | `book_version` only |
+
+Each swap is a single conditional `UPDATE` whose row count is checked, so of two
+parents holding the same counter exactly one succeeds and the other is told
+which counter to read again. `turn_version` and `book_version` are internal
+management counters — not columns of the agreed records — and they are returned
+by `task_get`, `turn_list` and `work_legacy_get` so a writer has them before it
+writes.
+
+Keeping the lanes apart is the point: a turn write and a cursor advance leave
+the task's `version` alone, and the app's offered choices are basis-versioned
+against *that*, so routine parent bookkeeping never invalidates a screen nobody
+touched. Only a real task change does. `expected_version` on a turn write still
+has to match — it says "the task has not changed under me" — but it is the turn
+lane's counter that does the excluding.
+
+`task_put` is a full replacement: unnamed fields are not preserved. A deleted
+task id is retired permanently, so a later create under it is a conflict rather
+than a revival.
+
+A turn's lifecycle is owned: writing `started_at` is taking the turn, and taking
+one that is already taken is refused (clearing `started_at` hands it back).
+`turn_dispatch` requires the turn to be taken and not ended, so an action is
+never authorised for work nobody holds or work already finished, and a replayed
+`request_id` returns the committed answer **without** moving the counter — a
+replay is not a second permission. Once a turn has ended, its `request`,
+`instruction`, `response` and `explanation` are the record a person was shown
+and are not rewritten; reopen it by clearing `ended_at`, or append the next
+turn.
 
 ### Reading the work from outside the session
 

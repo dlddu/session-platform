@@ -88,6 +88,11 @@ CREATE TABLE IF NOT EXISTS sp_work_turn_admin (
 	dispatch_state TEXT NOT NULL,
 	dispatched_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sp_work_task_guard (
+	task_id TEXT PRIMARY KEY,
+	turn_version INTEGER NOT NULL,
+	book_version INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sp_work_migration (
 	seq INTEGER PRIMARY KEY AUTOINCREMENT,
 	at TEXT NOT NULL,
@@ -233,24 +238,30 @@ type workTurnInput struct {
 }
 
 type workArgs struct {
-	ID              string         `json:"id,omitempty"`
-	TaskID          string         `json:"task_id,omitempty"`
-	TurnID          *int64         `json:"turn_id,omitempty"`
-	RequestID       string         `json:"request_id,omitempty"`
-	ExpectedVersion *int64         `json:"expected_version,omitempty"`
-	Task            *workTaskInput `json:"task,omitempty"`
-	Turn            *workTurnInput `json:"turn,omitempty"`
-	SessionID       string         `json:"session_id,omitempty"`
-	Status          string         `json:"status,omitempty"`
-	AfterID         string         `json:"after_id,omitempty"`
-	AfterTurnID     *int64         `json:"after_turn_id,omitempty"`
-	Open            *bool          `json:"open,omitempty"`
-	Limit           int            `json:"limit,omitempty"`
-	OperationKey    string         `json:"operation_key,omitempty"`
-	OperationTarget string         `json:"operation_target,omitempty"`
-	DispatchState   string         `json:"dispatch_state,omitempty"`
-	Observed        string         `json:"observed,omitempty"`
-	DryRun          *bool          `json:"dry_run,omitempty"`
+	ID              string `json:"id,omitempty"`
+	TaskID          string `json:"task_id,omitempty"`
+	TurnID          *int64 `json:"turn_id,omitempty"`
+	RequestID       string `json:"request_id,omitempty"`
+	ExpectedVersion *int64 `json:"expected_version,omitempty"`
+	// ExpectedTurnVersion and ExpectedBookVersion are the compare-and-swap
+	// values for the two lanes that are not the task's own state: writes to its
+	// turns, and the parent's bookkeeping beside it (session_work_guard.go).
+	// They are internal management counters, not fields of the agreed records.
+	ExpectedTurnVersion *int64         `json:"expected_turn_version,omitempty"`
+	ExpectedBookVersion *int64         `json:"expected_book_version,omitempty"`
+	Task                *workTaskInput `json:"task,omitempty"`
+	Turn                *workTurnInput `json:"turn,omitempty"`
+	SessionID           string         `json:"session_id,omitempty"`
+	Status              string         `json:"status,omitempty"`
+	AfterID             string         `json:"after_id,omitempty"`
+	AfterTurnID         *int64         `json:"after_turn_id,omitempty"`
+	Open                *bool          `json:"open,omitempty"`
+	Limit               int            `json:"limit,omitempty"`
+	OperationKey        string         `json:"operation_key,omitempty"`
+	OperationTarget     string         `json:"operation_target,omitempty"`
+	DispatchState       string         `json:"dispatch_state,omitempty"`
+	Observed            string         `json:"observed,omitempty"`
+	DryRun              *bool          `json:"dry_run,omitempty"`
 	// Legacy is the parent's own bookkeeping beside a task, not part of the
 	// agreed task (session_work_parent.go).
 	Legacy *workLegacyInput `json:"record,omitempty"`

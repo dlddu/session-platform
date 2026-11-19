@@ -79,16 +79,18 @@ func workToolDefinitions() []map[string]any {
 			"description": "Appends one turn to a task. turn.id is assigned by the database and increases across the whole database, so it is also the order turns happened in. expected_version must be the task's current version; appending a turn moves the task's updated_at and leaves its version alone. Omitted fields are null: a turn is written as it happens rather than all at once.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 				"task_id": str(), "request_id": str(), "expected_version": integer(1),
-				"turn": map[string]any{"type": "object", "properties": turnProperties, "required": []string{}, "additionalProperties": false},
-			}, "required": []string{"task_id", "request_id", "expected_version", "turn"}, "additionalProperties": false},
+				"expected_turn_version": integer(1),
+				"turn":                  map[string]any{"type": "object", "properties": turnProperties, "required": []string{}, "additionalProperties": false},
+			}, "required": []string{"task_id", "request_id", "expected_version", "expected_turn_version", "turn"}, "additionalProperties": false},
 		},
 		{
 			"name":        "turn_patch",
 			"description": "Fills in fields of one existing turn — the instruction that went out, the session's final answer, the parent's explanation, a question and its choices, timestamps. Only the fields named are touched; an explicit null clears one. expected_version must be the task's current version.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 				"task_id": str(), "turn_id": integer(1), "request_id": str(), "expected_version": integer(1),
-				"turn": map[string]any{"type": "object", "properties": turnProperties, "required": []string{}, "additionalProperties": false},
-			}, "required": []string{"task_id", "turn_id", "request_id", "expected_version", "turn"}, "additionalProperties": false},
+				"expected_turn_version": integer(1),
+				"turn":                  map[string]any{"type": "object", "properties": turnProperties, "required": []string{}, "additionalProperties": false},
+			}, "required": []string{"task_id", "turn_id", "request_id", "expected_version", "expected_turn_version", "turn"}, "additionalProperties": false},
 		},
 		{
 			"name":        "turn_list",
@@ -103,8 +105,9 @@ func workToolDefinitions() []map[string]any {
 			"description": "Records what the parent is about to do outside this database for one turn, before it does it: operation_key is the parent's own idempotency key, operation_target names what it acts on, dispatch_state is intended (decided, not sent) or dispatched (handed over). This is bookkeeping beside the turn, not a turn field. A different operation_key on a turn that already recorded a dispatch is refused unless observed=not_accepted states the earlier one was established never to have landed.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 				"task_id": str(), "turn_id": integer(1), "request_id": str(), "expected_version": integer(1),
-				"operation_key": str(), "operation_target": str(), "dispatch_state": str(), "observed": str(),
-			}, "required": []string{"task_id", "turn_id", "request_id", "expected_version", "operation_key", "dispatch_state"}, "additionalProperties": false},
+				"expected_turn_version": integer(1),
+				"operation_key":         str(), "operation_target": str(), "dispatch_state": str(), "observed": str(),
+			}, "required": []string{"task_id", "turn_id", "request_id", "expected_version", "expected_turn_version", "operation_key", "dispatch_state"}, "additionalProperties": false},
 		},
 		{
 			"name":        "work_migrate",
@@ -169,11 +172,25 @@ func validateWork(name string, a workArgs) error {
 		name == workLegacyGetTool || name == workRollbackTool {
 		return nil
 	}
-	if a.ExpectedVersion == nil || *a.ExpectedVersion < 0 || *a.ExpectedVersion > requestSafeInt {
-		return bad("a safe nonnegative expected_version is required")
+	// The bookkeeping lane has its own counter and does not take the task
+	// version at all: its notes are about the task, not a new state of it.
+	if name != workLegacyPutTool {
+		if a.ExpectedVersion == nil || *a.ExpectedVersion < 0 || *a.ExpectedVersion > requestSafeInt {
+			return bad("a safe nonnegative expected_version is required")
+		}
+		if name != "task_put" && *a.ExpectedVersion == 0 {
+			return bad("expected_version must be the task's current version")
+		}
 	}
-	if name != "task_put" && *a.ExpectedVersion == 0 {
-		return bad("expected_version must be the task's current version")
+	switch name {
+	case "turn_append", "turn_patch", "turn_dispatch":
+		if a.ExpectedTurnVersion == nil || *a.ExpectedTurnVersion < 1 || *a.ExpectedTurnVersion > requestSafeInt {
+			return bad("expected_turn_version must be the turn_version the task's turns were read at")
+		}
+	case workLegacyPutTool:
+		if a.ExpectedBookVersion == nil || *a.ExpectedBookVersion < 1 || *a.ExpectedBookVersion > requestSafeInt {
+			return bad("expected_book_version must be the book_version work_legacy_get returned")
+		}
 	}
 	if name == "turn_patch" || name == "turn_dispatch" {
 		if a.TurnID == nil || *a.TurnID < 1 || *a.TurnID > requestSafeInt {

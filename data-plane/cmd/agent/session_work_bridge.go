@@ -271,6 +271,17 @@ func storeRequestAsTurn(ctx context.Context, tx *sql.Tx, id, taskID, text, autho
 	if err = touchWorkTask(ctx, tx, taskID, now); err != nil {
 		return ledgerRequest{}, false, err
 	}
+	// The turn set changed, so the turn lane's counter moves even though the
+	// writer here is a person's request rather than a parent. A parent holding
+	// the value it read before this arrived has to read again — otherwise it
+	// would write the next turn without having seen this one.
+	if _, _, err = workGuards(ctx, tx, taskID); err != nil {
+		return ledgerRequest{}, false, err
+	}
+	if _, err = tx.ExecContext(ctx,
+		"UPDATE sp_work_task_guard SET turn_version=turn_version+1 WHERE task_id=?", taskID); err != nil {
+		return ledgerRequest{}, false, err
+	}
 	return requestOfTurn(id, author, choiceID, turn), false, nil
 }
 

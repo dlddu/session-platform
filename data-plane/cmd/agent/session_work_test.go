@@ -11,8 +11,59 @@ import (
 // the Go structs: which fields a caller named is part of the contract (an
 // absent field is left alone, an explicit null clears it), and only the JSON
 // path carries that.
+// fillWorkCASArgs supplies the compare-and-swap counters a write needs when the
+// caller has not named them. It exists so a test about something else does not
+// have to read the counters first; the exclusion contract itself is pinned by
+// session_work_cas_test.go, which always names them explicitly, and by the
+// validation test that shows a missing counter is refused.
+func fillWorkCASArgs(t *testing.T, s *sessionDB, name string, args map[string]any) {
+	t.Helper()
+	taskID, _ := args["task_id"].(string)
+	if taskID == "" {
+		return
+	}
+	lane := ""
+	switch name {
+	case "turn_append", "turn_patch", "turn_dispatch":
+		lane = "expected_turn_version"
+	case workLegacyPutTool:
+		lane = "expected_book_version"
+	default:
+		return
+	}
+	if _, named := args[lane]; named {
+		return
+	}
+	ctx := context.Background()
+	db, err := s.handle(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if err := migrateWork(ctx, tx); err != nil {
+		t.Fatal(err)
+	}
+	turn, book, err := workGuards(ctx, tx, taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if lane == "expected_turn_version" {
+		args[lane] = turn
+	} else {
+		args[lane] = book
+	}
+}
+
 func workCall(t *testing.T, s *sessionDB, name string, args map[string]any) (map[string]any, string) {
 	t.Helper()
+	fillWorkCASArgs(t, s, name, args)
 	raw, err := json.Marshal(args)
 	if err != nil {
 		t.Fatal(err)
@@ -168,6 +219,11 @@ func TestWorkTurnLifecycleAndOpenQueue(t *testing.T) {
 	if len(open["turns"].([]any)) != 1 {
 		t.Fatalf("open queue = %v", open)
 	}
+	// The parent takes the turn first: only whoever holds it may act for it.
+	mustWork(t, s, "turn_patch", map[string]any{
+		"task_id": "task-a", "turn_id": turnID, "request_id": "take-1", "expected_version": 1,
+		"turn": map[string]any{"started_at": "2026-11-19T00:00:00Z"},
+	})
 	// Dispatch is recorded beside the turn, before the outside action.
 	mustWork(t, s, "turn_dispatch", map[string]any{
 		"task_id": "task-a", "turn_id": turnID, "request_id": "d1", "expected_version": 1,
@@ -186,8 +242,10 @@ func TestWorkTurnLifecycleAndOpenQueue(t *testing.T) {
 	patched := mustWork(t, s, "turn_patch", map[string]any{
 		"task_id": "task-a", "turn_id": turnID, "request_id": "p1", "expected_version": 1,
 		"turn": map[string]any{
-			"instruction": "담당 세션에게 전달한 지시", "started_at": "2026-11-19T12:00:00Z",
-			"question": "둘 중 어느 쪽?", "choices": []any{
+			// started_at is not written again: the turn was taken above, and
+			// taking a turn somebody already holds is refused.
+			"instruction": "담당 세션에게 전달한 지시",
+			"question":    "둘 중 어느 쪽?", "choices": []any{
 				map[string]any{"label": "A 로", "request_text": "A 로 해 줘"},
 				map[string]any{"label": "B 로", "request_text": "B 로 해 줘"},
 			},

@@ -57,10 +57,17 @@ type workLegacyRecord struct {
 	Owner        string          `json:"owner"`
 	Sessions     []ledgerSession `json:"sessions"`
 	Details      map[string]any  `json:"details"`
-	// TaskVersion is the work task's version this bookkeeping hangs off, and
-	// the value a writer has to hold. Zero means no work task owns this row —
-	// a preserved monitor row, which is written through the ledger instead.
+	// TaskVersion is the work task's version this bookkeeping hangs off. It is
+	// shown so a parent can see the state its notes are about; it is *not* the
+	// value a writer holds. Zero means no work task owns this row — a preserved
+	// monitor row, which is written through the ledger instead.
 	TaskVersion int64 `json:"task_version"`
+	// BookVersion is the compare-and-swap value for this lane: the writer names
+	// it and the swap is atomic, so two parents that both read this record
+	// cannot both replace it (session_work_guard.go). It moves only when the
+	// bookkeeping is written, so advancing a cursor never invalidates the
+	// choices a turn is offering.
+	BookVersion int64 `json:"book_version"`
 }
 
 const (
@@ -88,18 +95,14 @@ func workLegacyToolDefinitions() []map[string]any {
 		},
 		{
 			"name":        workLegacyPutTool,
-			"description": "Replaces that bookkeeping for one task the work records own — advance a session cursor after collecting a worker's result, record an approval scope, note preservation or a cancellation. Full replacement: every field is required. expected_version must be the task's current version, and writing bookkeeping does not move it (this is a record beside the task, not a new state of it), so two parents that both read the task cannot both write over each other. request_id replays the original committed answer. A monitor row the work records do not own is refused here; ledger_put remains its write path.",
+			"description": "Replaces that bookkeeping for one task the work records own — advance a session cursor after collecting a worker's result, record an approval scope, note preservation or a cancellation. Full replacement: every field is required. expected_book_version must be the book_version work_legacy_get returned, and the swap is atomic, so of two parents that both read this record exactly one can replace it and the other is told to read again. It is a counter of its own, so writing bookkeeping moves neither the task's version nor the turn lane's — advancing a cursor never invalidates the choices a turn is offering. request_id replays the original committed answer. A monitor row the work records do not own is refused here; ledger_put remains its write path.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 				"task_id": str(), "request_id": str(),
-				"expected_version": map[string]any{"type": "integer", "minimum": 1},
-				"record":           record,
-			}, "required": []string{"task_id", "request_id", "expected_version", "record"}, "additionalProperties": false},
+				"expected_book_version": map[string]any{"type": "integer", "minimum": 1},
+				"record":                record,
+			}, "required": []string{"task_id", "request_id", "expected_book_version", "record"}, "additionalProperties": false},
 		},
 	}
-}
-
-func isWorkLegacyTool(name string) bool {
-	return name == workLegacyGetTool || name == workLegacyPutTool
 }
 
 // readWorkLegacy answers one task's preserved bookkeeping. A task that exists
@@ -114,6 +117,13 @@ func readWorkLegacy(ctx context.Context, tx *sql.Tx, taskID string) (any, error)
 	}
 	record := workLegacyRecord{
 		TaskID: taskID, Sessions: []ledgerSession{}, Details: map[string]any{}, TaskVersion: version,
+	}
+	if owned {
+		_, book, guardErr := workGuards(ctx, tx, taskID)
+		if guardErr != nil {
+			return nil, guardErr
+		}
+		record.BookVersion = book
 	}
 	var stage, owner, sessions, details, kind, legacyStatus string
 	err = tx.QueryRowContext(ctx,
@@ -167,8 +177,11 @@ func putWorkLegacy(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (
 		}
 		return nil, ledgerFail("not_found", "task not found")
 	}
-	if a.ExpectedVersion == nil || *a.ExpectedVersion != version {
-		return nil, ledgerFail("conflict", "expected_version does not match the task's current version")
+	if a.ExpectedBookVersion == nil {
+		return nil, ledgerFail("invalid_argument", "expected_book_version is required")
+	}
+	if _, err = swapWorkGuard(ctx, tx, a.TaskID, workGuardBook, *a.ExpectedBookVersion); err != nil {
+		return nil, err
 	}
 	sessions, err := json.Marshal(a.Legacy.Sessions)
 	if err != nil {
