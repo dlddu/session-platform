@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -736,4 +738,296 @@ func TestWorkTurnLegacySourceIsUnique(t *testing.T) {
 		"SELECT max(turn_id) FROM sp_work_turn_legacy").Scan(&missing); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// A task with no turns at all is the ordinary case — a task created after the
+// cutover has none yet, and a migrated task has none unless a person had
+// already written a request on it. The projected page has to serve it rather
+// than fail on the aggregate over zero rows.
+func TestWorkCutoverPageServesTasksWithNoTurns(t *testing.T) {
+	s, _ := newTestSessionDB(t)
+	proxy := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+	h := withSessionDBMCP(proxy, s)
+	seedLedger(t, s)
+	// A legacy task nobody ever wrote a request on: it migrates to a task with
+	// zero turns.
+	mustLedger(t, s, "ledger_put", legacyTaskArgs("task-quiet", "lq1", 0, "아직 아무 말도 없는 작업", "planned",
+		[]ledgerSession{{ID: "worker-q", Ownership: "owned", Purpose: "대기", Cleanup: "pending"}},
+		map[string]any{"approval": "none"}))
+	runMigration(t, s, "m1", false)
+	// A task created after the cutover: also zero turns.
+	newWorkTask(t, s, "task-fresh", "f1", map[string]any{"title": "커토버 뒤에 생긴 작업"})
+
+	rec := ledgerViewGet(t, h, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("projected page = %d %s", rec.Code, rec.Body.String())
+	}
+	page := decodeLedgerView(t, rec)
+	seen := map[string]bool{}
+	for _, record := range page.Tasks {
+		seen[record.ID] = true
+	}
+	for _, id := range []string{"task-a", "task-quiet", "task-fresh"} {
+		if !seen[id] {
+			t.Fatalf("projected page lost %s: %s", id, rec.Body.String())
+		}
+	}
+
+	// The same through the session's own view, where the summary is typed: a
+	// task with no turns has nothing waiting, and that is not an error.
+	ctx := context.Background()
+	records := mustTasksView(t, s, ctx)
+	for _, record := range records {
+		switch record.ID {
+		case "task-quiet", "task-fresh":
+			if record.Requests != nil {
+				t.Fatalf("%s has no turns but reports %+v", record.ID, record.Requests)
+			}
+		case "task-a":
+			// One migrated turn is still open (the request nobody took); the
+			// settled one migrated closed and is not waiting on anybody.
+			if record.Requests == nil || record.Requests.Pending != 1 {
+				t.Fatalf("task-a requests = %+v", record.Requests)
+			}
+		}
+	}
+}
+
+func mustTasksView(t *testing.T, s *sessionDB, ctx context.Context) []ledgerRecord {
+	t.Helper()
+	page, err := s.tasksView(ctx, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return page.(map[string]any)["tasks"].([]ledgerRecord)
+}
+
+// workViewGet calls one of the work views the way the agent does — from
+// loopback, GET only.
+func workViewGet(t *testing.T, h http.Handler, path, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	target := path
+	if query != "" {
+		target += "?" + query
+	}
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	req.RemoteAddr = "127.0.0.1:54321"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+type workTurnsPage struct {
+	TaskID      string `json:"task_id"`
+	TaskVersion int64  `json:"task_version"`
+	Turns       []struct {
+		ID          int64   `json:"id"`
+		Request     *string `json:"request"`
+		Instruction *string `json:"instruction"`
+		Response    *string `json:"response"`
+		Explanation *string `json:"explanation"`
+		Question    *string `json:"question"`
+		Choices     []struct {
+			Label       string `json:"label"`
+			RequestText string `json:"request_text"`
+		} `json:"choices"`
+		Artifacts   []string `json:"artifacts"`
+		RequestedAt string   `json:"requested_at"`
+		StartedAt   *string  `json:"started_at"`
+		EndedAt     *string  `json:"ended_at"`
+		Origin      string   `json:"origin"`
+	} `json:"turns"`
+}
+
+type workTasksPage struct {
+	Tasks []struct {
+		Task struct {
+			ID                 string  `json:"id"`
+			Title              string  `json:"title"`
+			Description        *string `json:"description"`
+			CompletionCriteria *string `json:"completion_criteria"`
+			Status             string  `json:"status"`
+			Version            int64   `json:"version"`
+		} `json:"task"`
+		TurnsTotal int64 `json:"turns_total"`
+		LatestTurn *struct {
+			ID       int64   `json:"id"`
+			Question *string `json:"question"`
+		} `json:"latest_turn"`
+		Migrated bool `json:"migrated"`
+	} `json:"tasks"`
+	NextCursor string `json:"next_cursor"`
+}
+
+// AC-N9 read side, end to end through the sidecar views the control plane
+// reads: the agreed model has to actually arrive out here. The projected
+// ledger page cannot carry a description, a completion criterion or anything a
+// turn holds, so a reader that only had it could show that work exists but
+// never the work itself.
+func TestWorkViewsCarryTheAgreedModelOutOfTheSession(t *testing.T) {
+	s, _ := newTestSessionDB(t)
+	ctx := context.Background()
+	proxy := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
+	h := withSessionDBMCP(proxy, s)
+	seedLedger(t, s)
+	runMigration(t, s, "m1", false)
+
+	// A task created after the cutover, with no turns yet.
+	newWorkTask(t, s, "task-fresh", "f1", map[string]any{
+		"title": "새 작업", "description": "무엇을 why", "completion_criteria": "머지되면 끝",
+	})
+
+	// Two turns on it, written the way a parent writes them: the person's words
+	// first, then what went to the session, then what came back and what the
+	// parent made of it, then a question with choices.
+	first := mustWork(t, s, "turn_append", map[string]any{
+		"task_id": "task-fresh", "request_id": "t1", "expected_version": 1,
+		"turn": map[string]any{"request": "이거 해 줘"},
+	})["turn"].(map[string]any)
+	mustWork(t, s, "turn_patch", map[string]any{
+		"task_id": "task-fresh", "turn_id": int64(first["id"].(float64)), "request_id": "t1p", "expected_version": 1,
+		"turn": map[string]any{
+			"instruction": "저장소를 읽고 패치를 만들어라", "response": "패치를 만들었습니다",
+			"explanation": "요청한 변경을 PR 로 올렸어요", "artifacts": []any{"pull/42"},
+			"started_at": "2026-11-19T00:00:00Z", "ended_at": "2026-11-19T00:10:00Z",
+		},
+	})
+	second := mustWork(t, s, "turn_append", map[string]any{
+		"task_id": "task-fresh", "request_id": "t2", "expected_version": 1,
+		"turn": map[string]any{
+			"request": "리뷰 반영도 해 줘", "question": "리뷰 코멘트 중 어디까지 반영할까요?",
+			"choices": []any{
+				map[string]any{"label": "전부", "request_text": "코멘트 전부 반영해 줘"},
+				map[string]any{"label": "필수만", "request_text": "필수 코멘트만 반영해 줘"},
+			},
+		},
+	})["turn"].(map[string]any)
+
+	// The task page carries the agreed task columns, the turn count and the
+	// latest turn — and says which tasks came from the ledger.
+	rec := workViewGet(t, h, sessionDBWorkTasksPath, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("work tasks view = %d %s", rec.Code, rec.Body.String())
+	}
+	var tasks workTasksPage
+	if err := json.Unmarshal(rec.Body.Bytes(), &tasks); err != nil {
+		t.Fatalf("decode %s: %v", rec.Body.String(), err)
+	}
+	seen := map[string]bool{}
+	for _, record := range tasks.Tasks {
+		seen[record.Task.ID] = true
+		switch record.Task.ID {
+		case "task-fresh":
+			if record.Task.Description == nil || *record.Task.Description != "무엇을 why" {
+				t.Fatalf("description did not reach the view: %+v", record.Task)
+			}
+			if record.Task.CompletionCriteria == nil || *record.Task.CompletionCriteria != "머지되면 끝" {
+				t.Fatalf("completion_criteria did not reach the view: %+v", record.Task)
+			}
+			if record.TurnsTotal != 2 || record.LatestTurn == nil || record.LatestTurn.Question == nil {
+				t.Fatalf("turn tail did not reach the view: %+v", record)
+			}
+			if record.Migrated {
+				t.Fatal("a task created after the cutover is reported as migrated")
+			}
+		case "task-a":
+			if !record.Migrated {
+				t.Fatal("a migrated task is not reported as migrated")
+			}
+		}
+	}
+	if !seen["task-fresh"] || !seen["task-a"] {
+		t.Fatalf("work tasks view lost a task: %s", rec.Body.String())
+	}
+
+	// The turn page carries every agreed turn field, in the order they happened.
+	rec = workViewGet(t, h, sessionDBWorkTurnsPath, "task_id=task-fresh")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("work turns view = %d %s", rec.Code, rec.Body.String())
+	}
+	var turns workTurnsPage
+	if err := json.Unmarshal(rec.Body.Bytes(), &turns); err != nil {
+		t.Fatalf("decode %s: %v", rec.Body.String(), err)
+	}
+	if len(turns.Turns) != 2 || turns.Turns[0].ID >= turns.Turns[1].ID {
+		t.Fatalf("turns = %+v", turns.Turns)
+	}
+	one, two := turns.Turns[0], turns.Turns[1]
+	for field, got := range map[string]*string{
+		"request": one.Request, "instruction": one.Instruction,
+		"response": one.Response, "explanation": one.Explanation,
+	} {
+		if got == nil || *got == "" {
+			t.Fatalf("turn 1 lost %s: %+v", field, one)
+		}
+	}
+	if one.StartedAt == nil || one.EndedAt == nil || len(one.Artifacts) != 1 || one.Artifacts[0] != "pull/42" {
+		t.Fatalf("turn 1 lost its times or artifacts: %+v", one)
+	}
+	if two.Question == nil || len(two.Choices) != 2 || two.Choices[0].RequestText != "코멘트 전부 반영해 줘" {
+		t.Fatalf("turn 2 lost its question or choices: %+v", two)
+	}
+	if two.ID != int64(second["id"].(float64)) {
+		t.Fatalf("turn 2 id = %d", two.ID)
+	}
+	// A turn the session wrote carries no origin; a migrated one says so, so a
+	// reader can tell work that came from the ledger from work written here.
+	if one.Origin != "" || two.Origin != "" {
+		t.Fatalf("a session-written turn claims an origin: %+v %+v", one, two)
+	}
+	rec = workViewGet(t, h, sessionDBWorkTurnsPath, "task_id=task-a")
+	migrated := workTurnsPage{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &migrated); err != nil {
+		t.Fatal(err)
+	}
+	if len(migrated.Turns) == 0 || migrated.Turns[0].Origin != "user_request" {
+		t.Fatalf("migrated turns = %+v", migrated.Turns)
+	}
+	// The ledger never recorded an instruction or a session's own answer, so a
+	// migrated turn must not claim one.
+	if migrated.Turns[0].Instruction != nil || migrated.Turns[0].Response != nil {
+		t.Fatalf("a migrated turn invented an instruction or a response: %+v", migrated.Turns[0])
+	}
+
+	// A task this slot does not have is 404, not an empty page: an empty page
+	// reads as "no turns yet" and would hide a wrong id.
+	if rec = workViewGet(t, h, sessionDBWorkTurnsPath, "task_id=no-such"); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown task = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec = workViewGet(t, h, sessionDBWorkTurnsPath, ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing task_id = %d", rec.Code)
+	}
+	if rec = workViewGet(t, h, sessionDBWorkTasksPath, "limit=0"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("limit out of range = %d", rec.Code)
+	}
+
+	// Not GET, and not from loopback: the slot's work records are the pod's.
+	req := httptest.NewRequest(http.MethodPost, sessionDBWorkTasksPath, nil)
+	req.RemoteAddr = "127.0.0.1:1"
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST on the work task view = %d", rec.Code)
+	}
+	req = httptest.NewRequest(http.MethodGet, sessionDBWorkTurnsPath+"?task_id=task-a", nil)
+	req.RemoteAddr = "10.1.2.3:4567"
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("off-pod read of the work turn view = %d", rec.Code)
+	}
+
+	// The legacy history stays where it is and keeps its own route: a past
+	// management event is not a turn and is not dressed up as one.
+	events := mustLedger(t, s, "ledger_events_list", ledgerArgs{ID: "task-a"}).(map[string]any)["events"]
+	if len(events.([]ledgerTaskEvent)) == 0 {
+		t.Fatal("the migrated task lost its ledger history")
+	}
+	fresh := mustLedger(t, s, "ledger_events_list", ledgerArgs{ID: "task-fresh"}).(map[string]any)["events"]
+	if len(fresh.([]ledgerTaskEvent)) != 0 {
+		t.Fatalf("a task created after the cutover was given invented history: %v", fresh)
+	}
+	_ = ctx
 }

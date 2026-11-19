@@ -1758,3 +1758,63 @@ func (s *Service) releaseAuthSlotBestEffort(workload session.WorkloadType, id st
 		slog.Warn("auth slot release failed; the next acquire reclaims it", "session", id, "err", err)
 	}
 }
+
+// workAgent is the agent capability behind the agreed work records (AC-N9).
+type workAgent interface {
+	WorkTasks(ctx context.Context, pod string, limit int, afterID, status, sessionID string) (session.WorkTaskPage, error)
+	WorkTurns(ctx context.Context, pod, taskID string, afterTurnID int64, limit int, openOnly bool) (session.WorkTurnPage, error)
+}
+
+// workReadable is the check both work reads share: the slot keeps work records,
+// a live pod holds the slot now, and this deployment's agent can be asked. It
+// is the ledger read's check for the ledger read's reasons — the records belong
+// to the slot, so a session with no live pod is unavailable rather than empty.
+func (s *Service) workReadable(ctx context.Context, id string) (*session.Session, workAgent, error) {
+	sess, err := s.Get(ctx, id)
+	if err != nil {
+		return sess, nil, err
+	}
+	if sess.WorkloadType != session.WorkloadTypeCodexChat {
+		return sess, nil, fmt.Errorf("%w: only codex-chat sessions keep work records", session.ErrLedgerUnsupported)
+	}
+	if sess.State == session.StateSnapshot || sess.Pod == "" {
+		return sess, nil, session.ErrLedgerUnavailable
+	}
+	agentW, ok := s.agent.(workAgent)
+	if !ok {
+		return sess, nil, fmt.Errorf("%w: this deployment's agent offers no work records", session.ErrLedgerUnsupported)
+	}
+	return sess, agentW, nil
+}
+
+// WorkTasks reads one keyset page of the slot's work tasks (AC-N9). Passive
+// like the ledger read: no restore, no access, no turn.
+func (s *Service) WorkTasks(
+	ctx context.Context, id string, limit int, afterID, status, sessionID string,
+) (session.WorkTaskPage, error) {
+	empty := session.WorkTaskPage{Tasks: []session.WorkTaskRecord{}}
+	if status != "" && !session.IsWorkStatus(status) {
+		return empty, fmt.Errorf("%w: status must be one of %s",
+			session.ErrInvalidInput, strings.Join(session.WorkStatuses, ", "))
+	}
+	sess, agentW, err := s.workReadable(ctx, id)
+	if err != nil {
+		return empty, err
+	}
+	return agentW.WorkTasks(ctx, sess.Pod, limit, afterID, status, sessionID)
+}
+
+// WorkTurns reads one keyset page of one task's turns (AC-N9).
+func (s *Service) WorkTurns(
+	ctx context.Context, id, taskID string, afterTurnID int64, limit int, openOnly bool,
+) (session.WorkTurnPage, error) {
+	empty := session.WorkTurnPage{Turns: []session.WorkTurn{}}
+	if !ledgerRequestID.MatchString(taskID) {
+		return empty, fmt.Errorf("%w: task id must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
+	}
+	sess, agentW, err := s.workReadable(ctx, id)
+	if err != nil {
+		return empty, err
+	}
+	return agentW.WorkTurns(ctx, sess.Pod, taskID, afterTurnID, limit, openOnly)
+}

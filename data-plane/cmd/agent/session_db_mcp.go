@@ -418,6 +418,10 @@ func withSessionDBMCP(proxy http.Handler, db *sessionDB) http.Handler {
 			db.serveLedgerRequests(w, r)
 		case sessionDBLedgerEventsPath:
 			db.serveLedgerEvents(w, r)
+		case sessionDBWorkTasksPath:
+			db.serveWorkTasks(w, r)
+		case sessionDBWorkTurnsPath:
+			db.serveWorkTurns(w, r)
 		default:
 			proxy.ServeHTTP(w, r)
 		}

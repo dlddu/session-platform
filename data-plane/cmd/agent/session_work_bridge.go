@@ -165,12 +165,17 @@ func fillLegacyFacets(ctx context.Context, tx *sql.Tx, record *ledgerRecord) err
 // offers. A turn that has a request and has not started is waiting to be picked
 // up; one that started and has not ended is being worked on.
 func workTaskFacets(ctx context.Context, tx *sql.Tx, task workTask) (*ledgerRequestSummary, []ledgerChoice, error) {
+	// coalesce, because a task with no turns is the ordinary case — one created
+	// after the cutover has none yet, and a migrated one has none unless a
+	// person had already written a request on it. sum() over zero rows is NULL,
+	// and a NULL into an int fails the scan: without this the projected page
+	// 500s for exactly the tasks a reader is most likely to be looking at.
 	var waiting, running int
 	var lastSeq sql.NullInt64
 	err := tx.QueryRowContext(ctx,
 		`SELECT
-		   sum(CASE WHEN request IS NOT NULL AND ended_at IS NULL AND started_at IS NULL THEN 1 ELSE 0 END),
-		   sum(CASE WHEN request IS NOT NULL AND ended_at IS NULL AND started_at IS NOT NULL THEN 1 ELSE 0 END),
+		   coalesce(sum(CASE WHEN request IS NOT NULL AND ended_at IS NULL AND started_at IS NULL THEN 1 ELSE 0 END), 0),
+		   coalesce(sum(CASE WHEN request IS NOT NULL AND ended_at IS NULL AND started_at IS NOT NULL THEN 1 ELSE 0 END), 0),
 		   max(id)
 		 FROM sp_work_turns WHERE task_id=?`, task.ID).Scan(&waiting, &running, &lastSeq)
 	if err != nil {
@@ -312,4 +317,158 @@ func requestOfTurn(id, author, choiceID string, turn workTurn) ledgerRequest {
 		ID: id, TaskID: turn.TaskID, Seq: turn.ID, Version: 1, Text: text, Author: author,
 		CreatedAt: turn.RequestedAt, Status: status, ChoiceID: choiceID,
 	}
+}
+
+// workTaskView is one work task as a reader outside the session gets it: the
+// agreed columns, and the two facts a reader would otherwise need a call per
+// task for. Migrated says this task came from the ledger, which is how a reader
+// knows the ledger still holds history and parent bookkeeping about it — a task
+// created after the cutover has neither and is not shown as if it did.
+type workTaskView struct {
+	Task       workTask      `json:"task"`
+	TurnsTotal int64         `json:"turns_total"`
+	LatestTurn *workTurnView `json:"latest_turn,omitempty"`
+	Migrated   bool          `json:"migrated,omitempty"`
+}
+
+// workTurnView is one turn with where it came from. Origin is empty for a turn
+// the session wrote itself, "user_request" for one migrated from a ledger
+// request, and "app_request" for one a person wrote through the request route
+// after the cutover. It carries no claim token, operation key or dispatch
+// state: what the parent handed to another system is its own bookkeeping and
+// has never been part of what a person reads.
+type workTurnView struct {
+	workTurn
+	Origin string `json:"origin,omitempty"`
+}
+
+// workTasksView answers one page of this slot's work tasks. It refuses rather
+// than answers while the migration holds the database: a page read mid-copy
+// could show a task whose turns have not arrived yet.
+func (s *sessionDB) workTasksView(ctx context.Context, a workArgs) (any, error) {
+	db, err := s.handle(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var page map[string]any
+	err = s.workTx(ctx, db, func(tx *sql.Tx) error {
+		if fenceErr := requireWorkReadable(ctx, tx); fenceErr != nil {
+			return fenceErr
+		}
+		listed, listErr := listWorkTasks(ctx, tx, a)
+		if listErr != nil {
+			return listErr
+		}
+		decoded := listed.(map[string]any)
+		tasks := decoded["tasks"].([]workTask)
+		views := make([]workTaskView, 0, len(tasks))
+		for _, task := range tasks {
+			view, viewErr := workTaskViewOf(ctx, tx, task)
+			if viewErr != nil {
+				return viewErr
+			}
+			views = append(views, view)
+		}
+		page = map[string]any{"tasks": views, "next_cursor": decoded["next_cursor"]}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return page, nil
+}
+
+func workTaskViewOf(ctx context.Context, tx *sql.Tx, task workTask) (workTaskView, error) {
+	total, latest, err := workTurnTail(ctx, tx, task.ID)
+	if err != nil {
+		return workTaskView{}, err
+	}
+	view := workTaskView{Task: task, TurnsTotal: total}
+	if latest != nil {
+		turnView, turnErr := workTurnViewOf(ctx, tx, *latest)
+		if turnErr != nil {
+			return workTaskView{}, turnErr
+		}
+		view.LatestTurn = &turnView
+	}
+	var migrated int
+	if err = tx.QueryRowContext(ctx,
+		"SELECT count(*) FROM sp_work_task_legacy WHERE task_id=?", task.ID).Scan(&migrated); err != nil {
+		return workTaskView{}, err
+	}
+	view.Migrated = migrated != 0
+	return view, nil
+}
+
+// workTurnsView answers one page of one task's turns. The task has to exist:
+// an empty page for a task this slot does not have reads as "no turns yet",
+// which is a different thing and would hide a caller's wrong id.
+func (s *sessionDB) workTurnsView(ctx context.Context, a workArgs) (any, error) {
+	db, err := s.handle(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var page map[string]any
+	err = s.workTx(ctx, db, func(tx *sql.Tx) error {
+		if fenceErr := requireWorkReadable(ctx, tx); fenceErr != nil {
+			return fenceErr
+		}
+		task, taskErr := loadWorkTask(ctx, tx, a.TaskID)
+		if taskErr != nil {
+			return taskErr
+		}
+		listed, listErr := listWorkTurns(ctx, tx, a)
+		if listErr != nil {
+			return listErr
+		}
+		decoded := listed.(map[string]any)
+		turns := decoded["turns"].([]workTurn)
+		views := make([]workTurnView, 0, len(turns))
+		for _, turn := range turns {
+			view, viewErr := workTurnViewOf(ctx, tx, turn)
+			if viewErr != nil {
+				return viewErr
+			}
+			views = append(views, view)
+		}
+		page = map[string]any{"task_id": task.ID, "task_version": task.Version, "turns": views}
+		if next, ok := decoded["next_cursor"]; ok {
+			page["next_cursor"] = next
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return page, nil
+}
+
+func workTurnViewOf(ctx context.Context, tx *sql.Tx, turn workTurn) (workTurnView, error) {
+	view := workTurnView{workTurn: turn}
+	var source string
+	err := tx.QueryRowContext(ctx,
+		"SELECT source FROM sp_work_turn_legacy WHERE turn_id=?", turn.ID).Scan(&source)
+	if errors.Is(err, sql.ErrNoRows) {
+		return view, nil
+	}
+	if err != nil {
+		return workTurnView{}, err
+	}
+	view.Origin = source
+	return view, nil
+}
+
+// requireWorkReadable refuses a read while the migration holds the database.
+// The copy is one transaction, so a reader would either block on it or — on a
+// resumed run that has not reached this task yet — see a task without the turns
+// that belong to it.
+func requireWorkReadable(ctx context.Context, tx *sql.Tx) error {
+	state, err := workState(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if state == workStateMigrating {
+		return ledgerFail("conflict", "the work migration holds this database; retry when it has finished")
+	}
+	return nil
 }

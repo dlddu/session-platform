@@ -376,6 +376,37 @@ state of it — but it moves the task's `updated_at`. `task_put` is a full
 replacement: unnamed fields are not preserved. A deleted task id is retired
 permanently, so a later create under it is a conflict rather than a revival.
 
+### Reading the work from outside the session
+
+The ledger-shaped views have nowhere to put what the agreed model carries, so a
+reader that only had them could show that work exists but never the work. The
+work records therefore have their own read path, the ledger view's path with the
+work records behind it: sidecar `GET /session-db/work/tasks` and
+`GET /session-db/work/turns?task_id=` (loopback only, GET only) → the agent's
+`/work/tasks` and `/work/turns` → `GET /api/v1/sessions/{id}/work/tasks` and
+`GET /api/v1/sessions/{id}/work/tasks/{taskID}/turns`.
+
+A task record carries the agreed columns, `turns_total`, the `latest_turn`, and
+`migrated` — which says the task came from the ledger, so a reader knows the
+ledger also holds history and parent bookkeeping about it. A turn carries every
+agreed field and an `origin`: empty for a turn the session wrote, `user_request`
+for one migrated from a ledger request, `app_request` for one a person wrote
+through the request route after the cutover. **No claim token, operation key or
+dispatch state is on this path** — what the parent handed to another system is
+its own bookkeeping and has never been part of what a person reads.
+
+The pages are keyset like the ledger's, a page size out of range is refused
+rather than clamped, and a status outside the domain is refused rather than
+answered with an empty page. A task with no turns answers an empty page; a task
+the slot does not have is **not found**, because an empty page reads as "nothing
+has happened yet" and would hide a wrong id. A read while the migration holds
+the database is a conflict rather than a half-copied page.
+
+New work's history **is** its turns: a task created after the cutover has no
+ledger history and none is invented for it, and a past management event is not
+dressed up as a turn. A migrated task keeps its ledger history on the ledger's
+own `/ledger/events` route, which is where a reader goes for it.
+
 `turn_dispatch` records what the parent is about to do outside this database
 before it does it (`operation_key`, `operation_target`, `dispatch_state`
 `intended` → `dispatched`). It is bookkeeping beside the turn, not a turn field,
