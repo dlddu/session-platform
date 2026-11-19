@@ -60,10 +60,14 @@ const (
 // turns_present are what a second run found already there, which is how a
 // resumed run shows it added nothing twice.
 type workMigrationCounts struct {
-	LegacyTasks       int `json:"legacy_tasks"`
-	MonitorPreserved  int `json:"monitor_preserved"`
-	TasksCreated      int `json:"tasks_created"`
-	TasksPresent      int `json:"tasks_present"`
+	LegacyTasks      int `json:"legacy_tasks"`
+	MonitorPreserved int `json:"monitor_preserved"`
+	TasksCreated     int `json:"tasks_created"`
+	TasksPresent     int `json:"tasks_present"`
+	// TasksReconciled is what a return from a rollback refreshed from the
+	// ledger: rows that were already here and had moved while the older image
+	// owned the database.
+	TasksReconciled   int `json:"tasks_reconciled"`
 	LegacyRequests    int `json:"legacy_requests"`
 	TurnsCreated      int `json:"turns_created"`
 	TurnsPresent      int `json:"turns_present"`
@@ -106,15 +110,18 @@ func (s *sessionDB) runWorkMigration(ctx context.Context, a workArgs, now time.T
 	}
 	dryRun := a.DryRun != nil && *a.DryRun
 	if dryRun {
-		plan, planErr := s.workMigrationPlan(ctx, db)
+		plan, planErr := s.workMigrationPlan(ctx, db, state == workStateRolledBack)
 		if planErr != nil {
 			return nil, planErr
 		}
 		return map[string]any{"dry_run": true, "state": state, "plan": plan}, nil
 	}
 	snapshot := map[string]any{}
-	if state == workStateReady {
-		snapshot, err = s.snapshotSessionDB(ctx, db, now)
+	// rolled_back is the other direction's starting point: the ledger has been
+	// authoritative and may have moved, so this run needs its own snapshot
+	// rather than the one the first migration took.
+	if state == workStateReady || state == workStateRolledBack {
+		snapshot, err = s.snapshotSessionDB(ctx, db, "pre-work", now)
 		if err != nil {
 			return nil, err
 		}
@@ -138,6 +145,7 @@ func (s *sessionDB) runWorkMigration(ctx context.Context, a workArgs, now time.T
 			return nil, err
 		}
 	}
+	reconcile := state == workStateRolledBack
 	var result map[string]any
 	err = s.workTx(ctx, db, func(tx *sql.Tx) error {
 		replay, fingerprint, receiptErr := workReceipt(ctx, tx, "work_migrate", a)
@@ -152,7 +160,7 @@ func (s *sessionDB) runWorkMigration(ctx context.Context, a workArgs, now time.T
 			result = decoded
 			return nil
 		}
-		plan, copyErr := copyLedgerIntoWork(ctx, tx, now)
+		plan, copyErr := copyLedgerIntoWork(ctx, tx, reconcile, now)
 		if copyErr != nil {
 			return copyErr
 		}
@@ -200,11 +208,11 @@ func (s *sessionDB) workMigrationState(ctx context.Context, db *sql.DB) (string,
 	return state, err
 }
 
-func (s *sessionDB) workMigrationPlan(ctx context.Context, db *sql.DB) (workMigrationPlan, error) {
+func (s *sessionDB) workMigrationPlan(ctx context.Context, db *sql.DB, reconcile bool) (workMigrationPlan, error) {
 	var plan workMigrationPlan
 	err := s.workTx(ctx, db, func(tx *sql.Tx) error {
 		var planErr error
-		plan, planErr = planLedgerIntoWork(ctx, tx)
+		plan, planErr = planLedgerIntoWork(ctx, tx, reconcile)
 		return planErr
 	})
 	return plan, err
@@ -235,7 +243,9 @@ func (s *sessionDB) workRecordedSnapshot(ctx context.Context, db *sql.DB) (map[s
 // returns its checksum. VACUUM INTO is the consistent-snapshot path: it reads
 // one transaction's view, so the copy is never half a write, and it cannot run
 // inside a transaction.
-func (s *sessionDB) snapshotSessionDB(ctx context.Context, db *sql.DB, now time.Time) (map[string]any, error) {
+func (s *sessionDB) snapshotSessionDB(
+	ctx context.Context, db *sql.DB, label string, now time.Time,
+) (map[string]any, error) {
 	var integrity string
 	if err := db.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&integrity); err != nil {
 		return nil, err
@@ -243,9 +253,26 @@ func (s *sessionDB) snapshotSessionDB(ctx context.Context, db *sql.DB, now time.
 	if integrity != "ok" {
 		return nil, ledgerFail("storage_error", "the session database failed its integrity check; migrating it would copy the damage")
 	}
-	path := fmt.Sprintf("%s.pre-work-%s.bak", s.path, now.UTC().Format("20060102T150405Z"))
-	if _, err := os.Stat(path); err == nil {
-		return nil, ledgerFail("conflict", "a snapshot of this second already exists; retry")
+	// The label keeps the two directions' snapshots apart: a migration and a
+	// rollback export in the same second are different starting points, and one
+	// overwriting the other would leave a restore with nothing to go back to.
+	// Never overwrite an existing snapshot — it may be the only copy of the
+	// state something still has to go back to — so a name already taken takes
+	// the next free suffix instead of failing. Two runs in the same second are
+	// ordinary when a rollback is rehearsed and then taken.
+	stamp := now.UTC().Format("20060102T150405Z")
+	path := fmt.Sprintf("%s.%s-%s.bak", s.path, label, stamp)
+	for attempt := 1; ; attempt++ {
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			break
+		} else if err != nil {
+			return nil, err
+		}
+		if attempt > workSnapshotNameTries {
+			return nil, ledgerFail("conflict",
+				"too many snapshots of this second already exist; retry in a moment")
+		}
+		path = fmt.Sprintf("%s.%s-%s-%d.bak", s.path, label, stamp, attempt)
 	}
 	if _, err := db.ExecContext(ctx, "VACUUM INTO '"+strings.ReplaceAll(path, "'", "''")+"'"); err != nil {
 		return nil, err
@@ -424,18 +451,27 @@ func freshLegacyChoices(ctx context.Context, tx *sql.Tx, taskID string, version 
 	return out, rows.Err()
 }
 
-func planLedgerIntoWork(ctx context.Context, tx *sql.Tx) (workMigrationPlan, error) {
-	return migrateOrPlan(ctx, tx, nil, time.Time{})
+func planLedgerIntoWork(ctx context.Context, tx *sql.Tx, reconcile bool) (workMigrationPlan, error) {
+	return migrateOrPlan(ctx, tx, nil, reconcile, time.Time{})
 }
 
-func copyLedgerIntoWork(ctx context.Context, tx *sql.Tx, now time.Time) (workMigrationPlan, error) {
-	return migrateOrPlan(ctx, tx, tx, now)
+func copyLedgerIntoWork(ctx context.Context, tx *sql.Tx, reconcile bool, now time.Time) (workMigrationPlan, error) {
+	return migrateOrPlan(ctx, tx, tx, reconcile, now)
 }
 
 // migrateOrPlan walks the ledger once. With write == nil it only counts, which
 // is what dry_run reports; the two paths share one walk so the plan cannot
 // describe a different mapping than the run performs.
-func migrateOrPlan(ctx context.Context, tx *sql.Tx, write *sql.Tx, now time.Time) (workMigrationPlan, error) {
+// reconcile says the ledger has been authoritative since this slot last came
+// forward — a rollback was exported and an older image owned the database. A
+// task that is already here then has to be refreshed from the ledger rather
+// than skipped, because skipping it is exactly how an edit made during the
+// rollback would be lost. On a first or resumed migration reconcile is false
+// and an existing task is left alone, which is what makes a resumed run add
+// nothing.
+func migrateOrPlan(
+	ctx context.Context, tx *sql.Tx, write *sql.Tx, reconcile bool, now time.Time,
+) (workMigrationPlan, error) {
 	plan := workMigrationPlan{Unmapped: []workUnmapped{}, Checks: map[string]any{}}
 	tasks, err := readLegacyTasks(ctx, tx)
 	if err != nil {
@@ -466,6 +502,16 @@ func migrateOrPlan(ctx context.Context, tx *sql.Tx, write *sql.Tx, now time.Time
 		if present != 0 {
 			plan.Counts.TasksPresent++
 			migrated[row.id] = row.version
+			if !reconcile {
+				continue
+			}
+			plan.Counts.TasksReconciled++
+			if write == nil {
+				continue
+			}
+			if err = reconcileWorkTask(ctx, write, row, sessionID, string(relations), string(details)); err != nil {
+				return plan, err
+			}
 			continue
 		}
 		var retired int
@@ -562,7 +608,11 @@ func migrateLegacyRequests(ctx context.Context, tx *sql.Tx, write *sql.Tx, migra
 		}
 		var present int
 		if err = tx.QueryRowContext(ctx,
-			"SELECT count(*) FROM sp_work_turn_legacy WHERE source='user_request' AND source_id=?", request.id).
+			// Any source, not just user_request: a rollback export writes the
+			// turns it exported back into the ledger as user requests, and on
+			// the way forward those must be recognised as already mapped or the
+			// round trip duplicates every one of them.
+			"SELECT count(*) FROM sp_work_turn_legacy WHERE source_id=?", request.id).
 			Scan(&present); err != nil {
 			return err
 		}
@@ -793,4 +843,50 @@ func workMigrationReport(ctx context.Context, tx *sql.Tx) (any, error) {
 	return map[string]any{
 		"state": state, "schema_version": workSchemaVersion, "steps": steps, "counts": counts,
 	}, nil
+}
+
+// reconcileWorkTask refreshes a task the ledger has moved while it was
+// authoritative. The agreed columns the ledger has no place for travel in the
+// document's details under work_records (session_work_rollback.go wrote them
+// there), so a description survives the round trip instead of being dropped the
+// moment the ledger owns the row. The version is the ledger's, so a parent
+// holding what it read keeps holding it.
+func reconcileWorkTask(
+	ctx context.Context, write *sql.Tx, row legacyTaskRow, sessionID *string, relations, details string,
+) error {
+	var carried map[string]any
+	if decoded := map[string]any{}; json.Unmarshal([]byte(details), &decoded) == nil {
+		if nested, ok := decoded["work_records"].(map[string]any); ok {
+			carried = nested
+		}
+	}
+	text := func(key string) any {
+		if carried == nil {
+			return nil
+		}
+		if value, ok := carried[key].(string); ok {
+			return value
+		}
+		return nil
+	}
+	if carried != nil {
+		if named, ok := carried["session_id"].(string); ok && sessionID == nil {
+			sessionID = &named
+		}
+	}
+	if _, err := write.ExecContext(ctx,
+		`UPDATE sp_work_tasks
+		   SET session_id=?, title=?, status=?, version=?,
+		       description=coalesce(?, description),
+		       completion_criteria=coalesce(?, completion_criteria)
+		 WHERE id=?`,
+		sessionID, row.task.Title, row.status, row.version,
+		text("description"), text("completion_criteria"), row.id); err != nil {
+		return err
+	}
+	_, err := write.ExecContext(ctx,
+		`UPDATE sp_work_task_legacy SET stage=?, owner=?, sessions=?, details=?, legacy_version=?, legacy_status=?
+		 WHERE task_id=?`,
+		row.task.Stage, row.task.Owner, relations, details, row.version, row.status, row.id)
+	return err
 }

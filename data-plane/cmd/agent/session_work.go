@@ -127,6 +127,13 @@ const (
 	// workListLimitDefault/Max page tasks and turns the way the ledger pages.
 	workListLimitDefault = 20
 	workListLimitMax     = 100
+	// workLegacySessionMax/BytesMax bound the parent's own bookkeeping beside a
+	// task for the same reason the task's text is bounded.
+	workLegacySessionMax = 64
+	workLegacyBytesMax   = 64 << 10
+	// workSnapshotNameTries bounds the search for a free snapshot name within
+	// one second before the caller is asked to retry.
+	workSnapshotNameTries = 50
 )
 
 // workStatuses is the task status domain. It is the ledger's own domain
@@ -244,12 +251,19 @@ type workArgs struct {
 	DispatchState   string         `json:"dispatch_state,omitempty"`
 	Observed        string         `json:"observed,omitempty"`
 	DryRun          *bool          `json:"dry_run,omitempty"`
+	// Legacy is the parent's own bookkeeping beside a task, not part of the
+	// agreed task (session_work_parent.go).
+	Legacy *workLegacyInput `json:"record,omitempty"`
 }
 
 var workTools = []string{
 	"task_get", "task_list", "task_put", "task_delete",
 	"turn_append", "turn_patch", "turn_list", "turn_dispatch",
 	"work_migrate", "work_migration_report",
+	// The parent's own bookkeeping beside a task, last because it is not part
+	// of the agreed model (session_work_parent.go).
+	workLegacyGetTool, workLegacyPutTool,
+	workRollbackTool,
 }
 
 func isWorkTool(name string) bool {
@@ -265,7 +279,8 @@ func isWorkTool(name string) bool {
 // that is not here reads and is therefore safe to repeat.
 func isWorkMutation(name string) bool {
 	switch name {
-	case "task_put", "task_delete", "turn_append", "turn_patch", "turn_dispatch", "work_migrate":
+	case "task_put", "task_delete", "turn_append", "turn_patch", "turn_dispatch", "work_migrate",
+		workLegacyPutTool, workRollbackTool:
 		return true
 	}
 	return false
@@ -325,6 +340,14 @@ func requireWorkWritable(ctx context.Context, tx *sql.Tx) error {
 	if state == workStateMigrating {
 		return ledgerFail("conflict", "the work migration holds this database; retry when it has finished")
 	}
+	if state == workStateRolledBack {
+		// A rollback has been prepared, so the ledger is authoritative and the
+		// older image may already be writing it. A work write now would be the
+		// divergence the export exists to prevent.
+		return ledgerFail("conflict",
+			"a rollback export has been taken: the ledger is authoritative while this slot is rolled_back, "+
+				"so write it with the ledger tools — work_migrate brings this slot forward again")
+	}
 	return nil
 }
 
@@ -342,9 +365,19 @@ func isLegacyLedgerWrite(name string) bool {
 
 // guardLegacyLedgerWrite stops the two records from diverging. While the
 // migration runs, a ledger write would be copied twice or not at all; once it
-// has run, a ledger write would change a row that nothing reads any more, and
-// the same work would then exist in two places with different answers.
-func guardLegacyLedgerWrite(ctx context.Context, tx *sql.Tx, name string) error {
+// has run, a ledger write to a row the work records own would change something
+// nothing reads any more, and the same work would then exist in two places with
+// different answers.
+//
+// It refuses only where that divergence is possible. A preserved row the work
+// records do not own — a monitor row, which is the parent's own bookkeeping and
+// was never a person's work — stays writable through the tools it always had:
+// nothing in the work records reads it, so there is nothing to diverge from, and
+// refusing it would leave the parent unable to record that its own loops ran.
+// Creating a *new* ledger task stays refused either way, because the app reads
+// the work records and a task written to the ledger now would be work nobody can
+// see (session_work_parent.go).
+func guardLegacyLedgerWrite(ctx context.Context, tx *sql.Tx, name string, a ledgerArgs) error {
 	if !isLegacyLedgerWrite(name) {
 		return nil
 	}
@@ -356,11 +389,43 @@ func guardLegacyLedgerWrite(ctx context.Context, tx *sql.Tx, name string) error 
 	case workStateMigrating:
 		return ledgerFail("conflict", "the work migration holds this database; retry when it has finished")
 	case workStateMigrated:
-		return ledgerFail("conflict",
-			"this slot's tasks moved to the work records; use task_put, turn_append, turn_patch and turn_dispatch — "+
-				name+" would write a row nothing reads")
+		if legacyLedgerOwnedWrite(name) {
+			return ledgerFail("conflict",
+				"choices and user requests belong to the turn records now; use turn_append, turn_patch and turn_dispatch — "+
+					name+" would write a row nothing reads")
+		}
+		if !legacyLedgerTaskWrite(name) {
+			return ledgerFail("conflict",
+				"this slot's tasks moved to the work records; "+name+" would write a row nothing reads")
+		}
+		owned, err := legacyWriteTargetOwned(ctx, tx, a.ID)
+		if err != nil {
+			return err
+		}
+		if owned {
+			return ledgerFail("conflict",
+				"that task moved to the work records; use task_put and turn_* for it, and work_legacy_put for its "+
+					"approval, cursor and preservation bookkeeping — "+name+" would write a row nothing reads")
+		}
+		var preserved int
+		if err = tx.QueryRowContext(ctx,
+			"SELECT count(*) FROM sp_ledger_tasks WHERE id=?", a.ID).Scan(&preserved); err != nil {
+			return err
+		}
+		if preserved == 0 {
+			return ledgerFail("conflict",
+				"a new task goes in the work records now; use task_put — a task written to the ledger "+
+					"after the cutover would be work nothing reads")
+		}
 	}
 	return nil
+}
+
+// legacyWriteTargetOwned reports whether the work records own the task a legacy
+// write names.
+func legacyWriteTargetOwned(ctx context.Context, tx *sql.Tx, taskID string) (bool, error) {
+	_, owned, err := workTaskVersionOf(ctx, tx, taskID)
+	return owned, err
 }
 
 // workReceipt replays a mutation's first committed answer. The contract is the
@@ -408,6 +473,9 @@ func (s *sessionDB) work(ctx context.Context, name string, a workArgs) (any, err
 	// that an interrupted copy is still fenced when the next run arrives.
 	if name == "work_migrate" {
 		return s.runWorkMigration(ctx, a, ledgerNow())
+	}
+	if name == workRollbackTool {
+		return s.runWorkRollback(ctx, a, ledgerNow())
 	}
 	db, err := s.handle(ctx)
 	if err != nil {
@@ -458,6 +526,10 @@ func (s *sessionDB) work(ctx context.Context, name string, a workArgs) (any, err
 		result, err = dispatchWorkTurn(ctx, tx, a, now)
 	case "work_migration_report":
 		result, err = workMigrationReport(ctx, tx)
+	case workLegacyGetTool:
+		result, err = readWorkLegacy(ctx, tx, a.TaskID)
+	case workLegacyPutTool:
+		result, err = putWorkLegacy(ctx, tx, a, now)
 	default:
 		return nil, ledgerFail("invalid_argument", "unknown work tool")
 	}

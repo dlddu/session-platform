@@ -87,10 +87,14 @@ type WorkTaskPage struct {
 // TaskVersion is the version those turns were read against, so a caller that
 // then writes holds the value the slot will check.
 type WorkTurnPage struct {
-	TaskID      string     `json:"task_id"`
-	TaskVersion int64      `json:"task_version"`
-	Turns       []WorkTurn `json:"turns"`
-	NextCursor  int64      `json:"next_cursor,omitempty"`
+	TaskID      string `json:"task_id"`
+	TaskVersion int64  `json:"task_version"`
+	// Task travels with its turns, so a reader showing one task has its
+	// description and completion criteria beside the exchanges rather than
+	// needing a second call that could land on a different version.
+	Task       WorkTask   `json:"task"`
+	Turns      []WorkTurn `json:"turns"`
+	NextCursor int64      `json:"next_cursor,omitempty"`
 }
 
 // WorkPageLimit bounds one page of either kind, matching the work records' own

@@ -7,6 +7,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -38,7 +39,7 @@ func workToolDefinitions() []map[string]any {
 		"started_at":   str(),
 		"ended_at":     str(),
 	}
-	return []map[string]any{
+	return append([]map[string]any{
 		{
 			"name":        "task_get",
 			"description": "One task: session_id (null when unassigned), title, description, completion_criteria, status, version, created_at/updated_at (null means never recorded). The reply also carries turns_total and the task's latest turn, so a parent sees at a glance whether a request is waiting. Reading changes nothing.",
@@ -118,7 +119,7 @@ func workToolDefinitions() []map[string]any {
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{},
 				"required": []string{}, "additionalProperties": false},
 		},
-	}
+	}, append(workLegacyToolDefinitions(), workRollbackToolDefinition())...)
 }
 
 func validateWork(name string, a workArgs) error {
@@ -134,7 +135,8 @@ func validateWork(name string, a workArgs) error {
 		if !ledgerID.MatchString(a.ID) {
 			return bad("id must be 1..128 letters, digits, _ or -")
 		}
-	case "turn_append", "turn_patch", "turn_list", "turn_dispatch":
+	case "turn_append", "turn_patch", "turn_list", "turn_dispatch",
+		workLegacyGetTool, workLegacyPutTool:
 		if !ledgerID.MatchString(a.TaskID) {
 			return bad("task_id must be 1..128 letters, digits, _ or -")
 		}
@@ -163,7 +165,8 @@ func validateWork(name string, a workArgs) error {
 		}
 		return nil
 	}
-	if name == "task_get" || name == "work_migration_report" || name == "work_migrate" {
+	if name == "task_get" || name == "work_migration_report" || name == "work_migrate" ||
+		name == workLegacyGetTool || name == workRollbackTool {
 		return nil
 	}
 	if a.ExpectedVersion == nil || *a.ExpectedVersion < 0 || *a.ExpectedVersion > requestSafeInt {
@@ -184,6 +187,33 @@ func validateWork(name string, a workArgs) error {
 		return validateWorkTurnInput(name, a.Turn)
 	case "turn_dispatch":
 		return validateWorkDispatch(a)
+	case workLegacyPutTool:
+		return validateWorkLegacyInput(a.Legacy)
+	}
+	return nil
+}
+
+// validateWorkLegacyInput bounds the parent's bookkeeping. The details JSON is
+// the parent's own and its shape is not this code's business, but its size is:
+// the slot's storage budget is shared with the session's archive, so a record
+// cannot become an output archive.
+func validateWorkLegacyInput(record *workLegacyInput) error {
+	bad := func(s string) error { return ledgerFail("invalid_argument", s) }
+	if record == nil {
+		return bad("record required")
+	}
+	if len(record.Stage) > workTitleMax || len(record.Owner) > workTitleMax {
+		return bad("stage and owner must each be at most 512 characters")
+	}
+	if len(record.Sessions) > workLegacySessionMax {
+		return bad("a task cannot carry more than 64 session relations")
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return bad("record must be JSON")
+	}
+	if len(encoded) > workLegacyBytesMax {
+		return bad("the bookkeeping record must be at most 64KiB — it is a record, not an output archive")
 	}
 	return nil
 }

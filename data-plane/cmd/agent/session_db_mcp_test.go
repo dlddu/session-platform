@@ -71,9 +71,13 @@ func newTestSessionDBWithRawSQL(t *testing.T, rawSQL bool) (*sessionDB, http.Han
 // workToolNames is the agreed task/turn surface, offered first: it is what the
 // parent writes to, and the ledger behind it is what a migrated slot keeps for
 // reading (docs/session-ledger.md).
+// The bookkeeping pair comes last because it is not part of the agreed model:
+// it reads and writes what a migration preserved beside a task, which is the
+// parent's own and is not in anything a person reads.
 const workToolNames = "task_get,task_list,task_put,task_delete," +
 	"turn_append,turn_patch,turn_list,turn_dispatch," +
-	"work_migrate,work_migration_report"
+	"work_migrate,work_migration_report," +
+	"work_legacy_get,work_legacy_put,work_rollback_export"
 
 // ledgerToolNames is the whole default surface in offer order: the work tools,
 // then the ledger's task, user-request and choice tools.

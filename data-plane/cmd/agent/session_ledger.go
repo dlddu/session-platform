@@ -275,7 +275,7 @@ func (s *sessionDB) ledger(ctx context.Context, name string, a ledgerArgs) (any,
 	if err = migrateWork(ctx, tx); err != nil {
 		return nil, err
 	}
-	if err = guardLegacyLedgerWrite(ctx, tx, name); err != nil {
+	if err = guardLegacyLedgerWrite(ctx, tx, name, a); err != nil {
 		return nil, err
 	}
 	var result any

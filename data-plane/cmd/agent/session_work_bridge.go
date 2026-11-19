@@ -431,7 +431,13 @@ func (s *sessionDB) workTurnsView(ctx context.Context, a workArgs) (any, error) 
 			}
 			views = append(views, view)
 		}
-		page = map[string]any{"task_id": task.ID, "task_version": task.Version, "turns": views}
+		// The task travels with its turns: a reader showing one task needs its
+		// description and completion criteria beside the exchanges, and a second
+		// call for them could land on a different version than these turns were
+		// read against.
+		page = map[string]any{
+			"task_id": task.ID, "task_version": task.Version, "task": task, "turns": views,
+		}
 		if next, ok := decoded["next_cursor"]; ok {
 			page["next_cursor"] = next
 		}

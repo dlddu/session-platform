@@ -4,9 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -700,17 +703,33 @@ func TestWorkMigrationHandlesIncompleteLegacyRows(t *testing.T) {
 func TestWorkMigrationRefusesADamagedDatabase(t *testing.T) {
 	s, _ := newTestSessionDB(t)
 	seedLedger(t, s)
-	// A snapshot path that already exists is the only way this run refuses
-	// without corrupting anything, so it stands in for "the snapshot could not
-	// be taken".
+	// A snapshot that cannot be taken has to refuse the run: a copy with no
+	// recorded starting point has nothing to go back to. A name already in use
+	// is not that case any more — it takes the next free one rather than
+	// overwriting a snapshot something may still need — so the way to stand in
+	// for "the snapshot could not be taken" is to leave it no free name at all.
 	fixed := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
 	original := ledgerNow
 	ledgerNow = func() time.Time { return fixed }
 	defer func() { ledgerNow = original }()
-	runMigration(t, s, "m1", false)
-	workExec(t, s, "UPDATE sp_work_meta SET state=?", workStateReady)
-	workExec(t, s, "DELETE FROM sp_work_migration")
+	stamp := fixed.UTC().Format("20060102T150405Z")
+	taken := []string{fmt.Sprintf("%s.pre-work-%s.bak", s.path, stamp)}
+	for attempt := 1; attempt <= workSnapshotNameTries; attempt++ {
+		taken = append(taken, fmt.Sprintf("%s.pre-work-%s-%d.bak", s.path, stamp, attempt))
+	}
+	for _, path := range taken {
+		if err := os.WriteFile(path, []byte("not a snapshot"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	wantWorkCode(t, s, "work_migrate", map[string]any{"request_id": "m2"}, "conflict")
+	// Nothing moved: the fence is not up and no step was recorded.
+	if state := workRow(t, s, "SELECT state FROM sp_work_meta")["state"]; state != workStateReady {
+		t.Fatalf("a refused snapshot left the state at %v", state)
+	}
+	if n := countRows(t, s, "SELECT count(*) FROM sp_work_migration"); n != 0 {
+		t.Fatalf("a refused snapshot recorded %d steps", n)
+	}
 }
 
 func TestWorkTurnLegacySourceIsUnique(t *testing.T) {
@@ -1030,4 +1049,195 @@ func TestWorkViewsCarryTheAgreedModelOutOfTheSession(t *testing.T) {
 		t.Fatalf("a task created after the cutover was given invented history: %v", fresh)
 	}
 	_ = ctx
+}
+
+// AC-N9, the parent's side of the cutover: the legacy write fence must stop the
+// two records from diverging without stopping the parent from working. Before
+// this was checked, "every ledger write is refused once a slot has migrated"
+// left the parent unable to record that its own monitor loop ran or to advance
+// a session cursor after collecting a worker's result — the rows were preserved
+// and nothing could touch them, which is the same as losing them.
+func TestWorkCutoverLeavesTheParentAbleToWork(t *testing.T) {
+	s, _ := newTestSessionDB(t)
+	ctx := context.Background()
+	seedLedger(t, s)
+	runMigration(t, s, "m1", false)
+
+	// 1. Reading the ledger still works: the monitor rows and the task history
+	// the parent works from live only there.
+	page := mustLedger(t, s, "ledger_list", ledgerArgs{}).(map[string]any)
+	if len(page["tasks"].([]ledgerRecord)) == 0 {
+		t.Fatal("the parent can no longer read its own ledger")
+	}
+	if _, err := s.ledger(ctx, "ledger_get", ledgerArgs{ID: "task-m"}); err != nil {
+		t.Fatalf("the parent can no longer read its monitor row: %v", err)
+	}
+
+	// 2. A monitor row is the parent's own bookkeeping and no work task owns
+	// it, so it stays writable through the tool it always used. Nothing in the
+	// work records reads it, so there is nothing for it to diverge from.
+	monitor := mustLedger(t, s, "ledger_get", ledgerArgs{ID: "task-m"}).(ledgerRecord)
+	if _, err := s.ledger(ctx, "ledger_put", ledgerArgs{
+		ID: "task-m", RequestID: "mon-1", ExpectedVersion: lv(monitor.Version),
+		Task: &ledgerTask{
+			Title: monitor.Task.Title, Status: "running", Stage: monitor.Task.Stage,
+			Owner: monitor.Task.Owner, Sessions: monitor.Task.Sessions,
+			Details: map[string]any{"kind": "monitor", "last_run": "2026-11-19T02:00:00Z"},
+		},
+	}); err != nil {
+		t.Fatalf("the parent cannot record that its monitor loop ran: %v", err)
+	}
+	after := mustLedger(t, s, "ledger_get", ledgerArgs{ID: "task-m"}).(ledgerRecord)
+	if after.Task.Details["last_run"] != "2026-11-19T02:00:00Z" {
+		t.Fatalf("the monitor write did not land: %+v", after.Task.Details)
+	}
+
+	// 3. A task the work records own is refused, and the refusal names what to
+	// use instead — that is the divergence the fence exists for.
+	_, err := s.ledger(ctx, "ledger_put", ledgerArgs{
+		ID: "task-a", RequestID: "bad-1", ExpectedVersion: lv(1),
+		Task: &ledgerTask{
+			Title: "다른 제목", Status: "running", Stage: "implementation", Owner: "parent",
+			Sessions: []ledgerSession{}, Details: map[string]any{},
+		},
+	})
+	if err == nil {
+		t.Fatal("a ledger write to a migrated task was accepted")
+	}
+	var known ledgerError
+	if !errors.As(err, &known) || known.Code != "conflict" ||
+		!strings.Contains(known.ErrorText, "work_legacy_put") {
+		t.Fatalf("refusal does not point at the replacement: %+v", err)
+	}
+
+	// 4. Creating a *new* ledger task is refused: the app reads the work
+	// records, so it would be work nobody can see.
+	if _, err = s.ledger(ctx, "ledger_put", ledgerArgs{
+		ID: "task-new-in-ledger", RequestID: "bad-2", ExpectedVersion: lv(0),
+		Task: &ledgerTask{
+			Title: "새 작업", Status: "planned", Stage: "implementation", Owner: "parent",
+			Sessions: []ledgerSession{}, Details: map[string]any{},
+		},
+	}); err == nil {
+		t.Fatal("a new ledger task was created after the cutover")
+	}
+
+	// 5. Choices and requests belong to the turn records now, whatever they
+	// name.
+	for _, name := range []string{"ledger_choices_put", "ledger_choices_clear"} {
+		if _, err = s.ledger(ctx, name, ledgerArgs{
+			ID: "task-a", RequestID: name + "-1", ExpectedVersion: lv(1),
+		}); err == nil {
+			t.Fatalf("%s was accepted after the cutover", name)
+		}
+	}
+
+	// 6. The migrated task's approval scope, cursors and preservation notes are
+	// readable and writable through the path that owns them now.
+	record := mustWork(t, s, workLegacyGetTool, map[string]any{"task_id": "task-a"})
+	if record["details"].(map[string]any)["approval"] != "PR only" {
+		t.Fatalf("preserved approval scope is not readable: %v", record)
+	}
+	relations := record["sessions"].([]any)
+	if len(relations) != 3 {
+		t.Fatalf("preserved relations are not readable: %v", relations)
+	}
+	version := int64(record["task_version"].(float64))
+	// Advance the cursor the way a parent does after collecting a result, and
+	// record a new approval scope beside it.
+	moved := make([]any, len(relations))
+	copy(moved, relations)
+	second := moved[1].(map[string]any)
+	second["nextOffset"] = float64(8192)
+	updated := mustWork(t, s, workLegacyPutTool, map[string]any{
+		"task_id": "task-a", "request_id": "bk-1", "expected_version": version,
+		"record": map[string]any{
+			"stage": "verification", "owner": "parent", "sessions": moved,
+			"details": map[string]any{
+				"approval": "PR + manual", "preservation": "pushed", "cancel": "none",
+			},
+		},
+	})
+	if updated["details"].(map[string]any)["approval"] != "PR + manual" {
+		t.Fatalf("the bookkeeping write did not land: %v", updated)
+	}
+	if updated["stage"] != "verification" {
+		t.Fatalf("stage did not move: %v", updated)
+	}
+	back := mustWork(t, s, workLegacyGetTool, map[string]any{"task_id": "task-a"})
+	cursors := back["sessions"].([]any)
+	if cursors[1].(map[string]any)["nextOffset"].(float64) != 8192 {
+		t.Fatalf("the advanced cursor did not persist: %v", cursors[1])
+	}
+
+	// Writing bookkeeping does not move the task's version — it is a record
+	// beside the task, not a new state of it — so the choices a turn offers are
+	// not silently invalidated by a cursor update.
+	task := mustWork(t, s, "task_get", map[string]any{"id": "task-a"})["task"].(map[string]any)
+	if int64(task["version"].(float64)) != version {
+		t.Fatalf("bookkeeping moved the task version: %v", task["version"])
+	}
+
+	// A stale version loses, so two parents cannot write over each other.
+	wantWorkCode(t, s, workLegacyPutTool, map[string]any{
+		"task_id": "task-a", "request_id": "bk-2", "expected_version": version + 5,
+		"record": map[string]any{"stage": "x", "owner": "y", "sessions": []any{}, "details": map[string]any{}},
+	}, "conflict")
+	// The same request_id replays rather than writing twice.
+	replay := mustWork(t, s, workLegacyPutTool, map[string]any{
+		"task_id": "task-a", "request_id": "bk-1", "expected_version": version,
+		"record": map[string]any{
+			"stage": "verification", "owner": "parent", "sessions": moved,
+			"details": map[string]any{
+				"approval": "PR + manual", "preservation": "pushed", "cancel": "none",
+			},
+		},
+	})
+	if replay["stage"] != "verification" {
+		t.Fatalf("replay = %v", replay)
+	}
+
+	// A preserved row no work task owns is not written here: it keeps the
+	// ledger tools, and the refusal says so instead of a bare not_found.
+	wantWorkCode(t, s, workLegacyPutTool, map[string]any{
+		"task_id": "task-m", "request_id": "bk-3", "expected_version": 1,
+		"record": map[string]any{"stage": "", "owner": "", "sessions": []any{}, "details": map[string]any{}},
+	}, "conflict")
+	wantWorkCode(t, s, workLegacyGetTool, map[string]any{"task_id": "no-such-task-at-all"}, "not_found")
+
+	// A task created after the cutover has no bookkeeping yet, and that is an
+	// empty record rather than "no such task".
+	newWorkTask(t, s, "task-fresh", "f1", nil)
+	fresh := mustWork(t, s, workLegacyGetTool, map[string]any{"task_id": "task-fresh"})
+	if len(fresh["sessions"].([]any)) != 0 || len(fresh["details"].(map[string]any)) != 0 {
+		t.Fatalf("a fresh task has invented bookkeeping: %v", fresh)
+	}
+	if int64(fresh["task_version"].(float64)) != 1 {
+		t.Fatalf("fresh task_version = %v", fresh["task_version"])
+	}
+	// And a parent can start keeping bookkeeping on it.
+	mustWork(t, s, workLegacyPutTool, map[string]any{
+		"task_id": "task-fresh", "request_id": "bk-4", "expected_version": 1,
+		"record": map[string]any{
+			"stage": "implementation", "owner": "parent",
+			"sessions": []any{map[string]any{"id": "worker-9", "ownership": "owned", "purpose": "구현", "cleanup": "pending"}},
+			"details":  map[string]any{"approval": "none"},
+		},
+	})
+	kept := mustWork(t, s, workLegacyGetTool, map[string]any{"task_id": "task-fresh"})
+	if len(kept["sessions"].([]any)) != 1 || kept["stage"] != "implementation" {
+		t.Fatalf("bookkeeping on a fresh task did not persist: %v", kept)
+	}
+
+	// The bookkeeping path is the parent's, not the app's: it is an MCP tool on
+	// the session's own db, and no read-only view outside the session serves it.
+	proxy := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
+	h := withSessionDBMCP(proxy, s)
+	rec := workViewGet(t, h, sessionDBWorkTurnsPath, "task_id=task-a")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("turn view = %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "approval") || strings.Contains(rec.Body.String(), "nextOffset") {
+		t.Fatalf("parent bookkeeping leaked into what a person reads: %s", rec.Body.String())
+	}
 }

@@ -476,10 +476,30 @@ returns that report with `already_migrated`.
 ### After the cutover, and rolling back
 
 A migrated slot **keeps its ledger readable** — the monitor rows and the task
-history the parent works from live only there — but a ledger write is refused
-with `conflict` naming the work tool to use instead, because it would change a
-row nothing reads any more and the same work would then exist in two places with
-different answers.
+history the parent works from live only there — and a ledger write is refused
+only where the two records could actually diverge:
+
+- A task the work records own is refused, and the refusal names what to use
+  instead (`task_put`, `turn_*`, and `work_legacy_put` for its bookkeeping).
+- Choices and user requests are refused outright: a choice lives on a turn now
+  and a request becomes one.
+- Creating a **new** ledger task is refused, because the app reads the work
+  records and a task written to the ledger now would be work nobody can see.
+- A preserved row the work records do **not** own — a monitor row, which is the
+  parent's own bookkeeping and was never a person's work — stays writable
+  through the tools it always had. Nothing in the work records reads it, so
+  there is nothing to diverge from, and refusing it would leave the parent
+  unable to record that its own loops ran.
+
+The parent's bookkeeping beside a migrated task — approval scope, the session
+relations with their cursors and seqs, preservation and cancellation state — is
+read with `work_legacy_get` and replaced with `work_legacy_put`, under the work
+task's version. Writing it does **not** move that version: it is a record beside
+the task, not a new state of it, so advancing a cursor does not silently
+invalidate the choices a turn is offering. **Preserved and unreachable would be
+the same as lost**, which is why this path exists rather than only the
+preservation. None of it is on the read path a person sees: no claim token,
+operation key or dispatch state leaves through the work views.
 
 The app and its API are unchanged across the cutover. The read-only HTTP view
 serves work tasks projected into the same page shape, with the preserved
@@ -493,12 +513,55 @@ does not work is an app expecting work views against an older image, which
 answers 404 — the app reads that as "no route", not as "no work".
 
 `sp_ledger_meta` stays at version 1 and these tables are additive, for the
-reason the request and choice tables kept it there: **an image rolled back to
-one that never heard of them still opens the database and still serves the
-ledger**, whose rows the migration left intact. Work written after the cutover
-is not in the ledger and is not invented there. `sp_work_meta` carries this
-namespace's own version, and a database written by a later version is refused
-rather than read with the columns of this one.
+reason the request and choice tables kept it there: an image rolled back to one
+that never heard of them still opens the database and still serves the ledger,
+whose rows the migration left intact. `sp_work_meta` carries this namespace's
+own version, and a database written by a later version is refused rather than
+read with the columns of this one.
+
+**That is necessary and not sufficient.** The ledger such an image serves is the
+one the migration left behind, so everything written *after* the cutover — a
+task created in the work records, a turn, a person's request that became a turn
+— sits in tables it does not read. Rolling back on that basis alone would show
+a person work that silently stopped at the cutover, and leave the parent acting
+on a ledger that has forgotten days of exchanges. Invisible is the same as lost
+to whoever is reading the screen.
+
+So a rollback is a step, not an accident:
+
+1. `work_rollback_export({request_id, dry_run?})`. The rehearsal reports exactly
+   what it would write and changes nothing. A real run snapshots first
+   (`<db>.pre-rollback-<UTC>.bak`, checksummed and retained — a name already in
+   use takes the next free one rather than overwriting a snapshot something may
+   still need), then in one transaction writes every work task back to its
+   `sp_ledger_tasks` row and every turn holding a person's words back to
+   `sp_ledger_user_requests`. The agreed fields the ledger has no column for
+   travel in the document's `details.work_records`, so a description is not
+   dropped at the moment the ledger takes over. A turn with **no** request is
+   something the ledger shape never modelled; it is counted as
+   `turns_unexportable` and named, not dropped quietly, and it stays in the work
+   records.
+2. The state becomes `rolled_back`. From then on the direction is explicit
+   rather than guessed: **work writes are refused** with a message saying the
+   ledger is authoritative, and **ledger writes are allowed again**, so the older
+   image can keep working and there is never a second writer.
+3. Roll the image back. A person's new request lands as a ledger row, and the
+   parent uses the ledger tools, exactly as before the cutover.
+4. Coming forward is `work_migrate` again. Every insert is keyed, so nothing
+   already mapped is duplicated — including the rows the export itself wrote,
+   which are recorded as `exported_turn` so they come back as the turns they
+   are rather than as new ones. Because the ledger was authoritative in the
+   meantime, this run **reconciles** rather than resumes: a task that is already
+   there is refreshed from the ledger (`tasks_reconciled`), so an edit the older
+   image made is imported instead of skipped.
+
+The two records are therefore never both writable, and which one is
+authoritative is a value in `sp_work_meta.state` rather than an assumption.
+This round trip — migrate, work after the cutover, export, ledger writes by the
+older image, migrate forward — is exercised on an isolated fixture database and
+asserts that nothing is lost and nothing is duplicated. It is not a claim about
+a deployed restore drill on slot storage, which stays in the post-merge
+verification below.
 
 ## External operation reconciliation
 

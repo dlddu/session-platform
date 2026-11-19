@@ -301,11 +301,11 @@ func (c *StubClient) WorkTurns(
 	if limit <= 0 {
 		limit = session.WorkPageLimitDefault
 	}
-	version := int64(0)
+	var task session.WorkTask
 	found := false
 	for _, record := range c.WorkRows {
 		if record.Task.ID == taskID {
-			version, found = record.Task.Version, true
+			task, found = record.Task, true
 			break
 		}
 	}
@@ -313,7 +313,9 @@ func (c *StubClient) WorkTurns(
 		return session.WorkTurnPage{Turns: []session.WorkTurn{}},
 			fmt.Errorf("%w: task not found", session.ErrNotFound)
 	}
-	page := session.WorkTurnPage{TaskID: taskID, TaskVersion: version, Turns: []session.WorkTurn{}}
+	page := session.WorkTurnPage{
+		TaskID: taskID, TaskVersion: task.Version, Task: task, Turns: []session.WorkTurn{},
+	}
 	for _, turn := range c.WorkTurnRows[taskID] {
 		if turn.ID <= afterTurnID {
 			continue
