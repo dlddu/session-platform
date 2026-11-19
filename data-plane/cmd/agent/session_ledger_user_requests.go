@@ -286,7 +286,7 @@ func isRequestStatus(s string) bool {
 // and text returns the stored row (replayed), and the same id with different
 // content is a conflict rather than a second row. That makes the app's retry of
 // an answer it never saw safe.
-func (s *sessionDB) appendLedgerRequest(ctx context.Context, id, taskID, text, author, choiceID string, now time.Time) (ledgerRequest, bool, error) {
+func (s *sessionDB) appendLedgerRequest(ctx context.Context, id, taskID, text, author, choiceID string, choiceBasis int64, now time.Time) (ledgerRequest, bool, error) {
 	if !ledgerID.MatchString(id) || !ledgerID.MatchString(taskID) {
 		return ledgerRequest{}, false, ledgerFail("invalid_argument", "id and task_id must be 1..128 letters, digits, _ or -")
 	}
@@ -298,6 +298,12 @@ func (s *sessionDB) appendLedgerRequest(ctx context.Context, id, taskID, text, a
 	}
 	if choiceID != "" && !ledgerID.MatchString(choiceID) {
 		return ledgerRequest{}, false, ledgerFail("invalid_argument", "choice_id must be 1..128 letters, digits, _ or -")
+	}
+	if choiceID == "" && choiceBasis != 0 {
+		return ledgerRequest{}, false, ledgerFail("invalid_argument", "choice_basis_version belongs to a picked choice_id")
+	}
+	if choiceBasis < 0 || choiceBasis > requestSafeInt {
+		return ledgerRequest{}, false, ledgerFail("invalid_argument", "choice_basis_version out of range")
 	}
 	db, err := s.handle(ctx)
 	if err != nil {
@@ -324,11 +330,13 @@ func (s *sessionDB) appendLedgerRequest(ctx context.Context, id, taskID, text, a
 	// The task must exist on this slot: a request is about one task, and a
 	// request about a task this ledger does not have would never be found by
 	// the parent. A retired (deleted) id is refused for the same reason.
-	var taskCount, retired int
-	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM sp_ledger_tasks WHERE id=?", taskID).Scan(&taskCount); err != nil {
+	var taskVersion int64
+	retired := 0
+	err = tx.QueryRowContext(ctx, "SELECT version FROM sp_ledger_tasks WHERE id=?", taskID).Scan(&taskVersion)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return ledgerRequest{}, false, err
 	}
-	if taskCount == 0 {
+	if errors.Is(err, sql.ErrNoRows) {
 		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM sp_ledger_retired WHERE id=?", taskID).Scan(&retired); err != nil {
 			return ledgerRequest{}, false, err
 		}
@@ -336,6 +344,19 @@ func (s *sessionDB) appendLedgerRequest(ctx context.Context, id, taskID, text, a
 			return ledgerRequest{}, false, ledgerFail("conflict", "that task was deleted")
 		}
 		return ledgerRequest{}, false, ledgerFail("not_found", "task not found")
+	}
+	// A picked choice is checked here, not only when the task is read: a screen
+	// opened before the task moved would otherwise still submit a sentence the
+	// session wrote about a state that no longer holds. The choice has to exist
+	// on this task and to have been written against the task's version as it
+	// stands now; a basis the caller carries from its own read has to agree too,
+	// so re-publishing the same choice_id against a newer version does not let
+	// an old screen through. The person's own words are untouched by this —
+	// free text has no choice_id.
+	if choiceID != "" {
+		if err = checkLedgerChoiceFresh(ctx, tx, taskID, choiceID, choiceBasis, taskVersion); err != nil {
+			return ledgerRequest{}, false, err
+		}
 	}
 	var seq int64
 	if err = tx.QueryRowContext(ctx, "SELECT coalesce(max(seq),0)+1 FROM sp_ledger_user_requests").Scan(&seq); err != nil {

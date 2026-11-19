@@ -115,6 +115,10 @@ type ledgerRequestBody struct {
 	// ChoiceID, when given, is the session's own offered choice the person
 	// picked. Empty means they typed their own words.
 	ChoiceID string `json:"choice_id"`
+	// ChoiceBasisVersion is the task version the caller saw that choice on. It
+	// is checked against the choice's own basis, so a screen left open while
+	// the task moved is refused rather than acted on.
+	ChoiceBasisVersion int64 `json:"choice_basis_version"`
 }
 
 // serveLedgerRequests stores one user request on a task of this slot's ledger.
@@ -142,7 +146,7 @@ func (s *sessionDB) serveLedgerRequests(w http.ResponseWriter, r *http.Request) 
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), sessionDBCallTimeout)
 	defer cancel()
-	stored, replayed, err := s.appendLedgerRequest(ctx, body.ID, body.TaskID, body.Text, body.Author, body.ChoiceID, ledgerNow())
+	stored, replayed, err := s.appendLedgerRequest(ctx, body.ID, body.TaskID, body.Text, body.Author, body.ChoiceID, body.ChoiceBasisVersion, ledgerNow())
 	if err != nil {
 		var ledgerErr ledgerError
 		if errors.As(err, &ledgerErr) {
@@ -150,7 +154,7 @@ func (s *sessionDB) serveLedgerRequests(w http.ResponseWriter, r *http.Request) 
 			switch ledgerErr.Code {
 			case "not_found":
 				status = http.StatusNotFound
-			case "conflict", "schema_version":
+			case "conflict", "schema_version", "stale_choice":
 				status = http.StatusConflict
 			}
 			writeLedgerViewError(w, status, ledgerErr.Code, ledgerErr.ErrorText)

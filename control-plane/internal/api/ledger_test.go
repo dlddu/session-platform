@@ -433,3 +433,55 @@ func TestLedgerTasks_CarryTheSessionsOfferedChoices(t *testing.T) {
 		t.Fatalf("choices = %+v, want the session's own sentence with its basis version", got)
 	}
 }
+
+// A pick is checked when it is stored, not only when it is shown: once the task
+// moves, the same choice from a screen that never saw the move is refused, and
+// the person's own words still store.
+func TestLedgerRequests_RefusesAPickTheSessionNoLongerOffers(t *testing.T) {
+	srv, stub := ledgerServer(t)
+	row := ledgerRow("t1", "blocked", "review", "CI 가 막혔다", "로그를 본다")
+	row.Choices = []session.LedgerChoice{
+		{ID: "c-ci-log", Label: "CI 로그 확인 요청", RequestText: "실패한 CI 로그를 확인해 줘", BasisVersion: 1, CreatedAt: "2026-11-19T00:00:00Z"},
+	}
+	stub.LedgerRows = []session.LedgerTaskRecord{row}
+	_, s := createRaw(t, srv.URL, map[string]any{"name": "requests", "workloadType": "codex-chat"})
+
+	if status, _ := postLedgerRequest(t, srv, s.ID, "t1", map[string]any{
+		"id": "req-1", "text": "실패한 CI 로그를 확인해 줘", "author": "user-7",
+		"choice_id": "c-ci-log", "choice_basis_version": 1,
+	}); status != http.StatusCreated {
+		t.Fatalf("fresh pick = %d, want 201", status)
+	}
+
+	// The task moves; its choices were written about the state before.
+	moved := stub.LedgerRows[0]
+	moved.Version = 2
+	stub.LedgerRows = []session.LedgerTaskRecord{moved}
+	if status, _ := postLedgerRequest(t, srv, s.ID, "t1", map[string]any{
+		"id": "req-2", "text": "실패한 CI 로그를 확인해 줘", "author": "user-7",
+		"choice_id": "c-ci-log", "choice_basis_version": 1,
+	}); status != http.StatusConflict {
+		t.Fatalf("stale pick = %d, want 409", status)
+	}
+	// A choice the task never offered is the same answer.
+	if status, _ := postLedgerRequest(t, srv, s.ID, "t1", map[string]any{
+		"id": "req-3", "text": "없는 선택", "author": "user-7", "choice_id": "c-made-up",
+	}); status != http.StatusConflict {
+		t.Fatalf("unknown pick = %d, want 409", status)
+	}
+	// A basis with no pick is a malformed body, and never reaches the slot.
+	if status, _ := postLedgerRequest(t, srv, s.ID, "t1", map[string]any{
+		"id": "req-4", "text": "선택 없이 기준", "author": "user-7", "choice_basis_version": 2,
+	}); status != http.StatusBadRequest {
+		t.Fatalf("basis without a pick = %d, want 400", status)
+	}
+	// Free text is unaffected by any of it.
+	if status, _ := postLedgerRequest(t, srv, s.ID, "t1", map[string]any{
+		"id": "req-5", "text": "내가 직접 쓴 요청", "author": "user-7",
+	}); status != http.StatusCreated {
+		t.Fatalf("free text = %d, want 201", status)
+	}
+	if len(stub.LedgerRequests) != 2 {
+		t.Fatalf("stored = %d, want only the fresh pick and the typed words", len(stub.LedgerRequests))
+	}
+}

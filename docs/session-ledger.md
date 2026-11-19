@@ -275,6 +275,16 @@ read the task again and write the sentences against the version that now holds.
 `ledger_choices_clear` empties the set, which the app shows as "none offered"
 while keeping free text.
 
+Hiding a stale entry from the read is only half the rule: a screen opened before
+the task moved still holds the old sentences, so **the store itself refuses the
+pick**. A request carrying `choice_id` is accepted only when that choice is one
+the task still offers (its `basis_version` equals the task's current version),
+and when the `choice_basis_version` the caller saw agrees with it — which also
+refuses a screen whose task re-published the same `choice_id` at a newer
+version. The refusal is `stale_choice` (HTTP 409), distinct from a reused id, so
+the app can say the screen is out of date, keep the words already typed, and
+re-read the task. Free text carries no `choice_id` and is never refused this way.
+
 A choice is a sentence to send, not a permission: it grants no tool approval and
 no merge, and the request it fills in is stored like any other
 ([User requests](#user-requests)) with the `choice_id` beside it, so the session

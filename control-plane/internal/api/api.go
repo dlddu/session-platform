@@ -759,7 +759,7 @@ func (a *API) createLedgerRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	stored, err := a.mgr.CreateLedgerRequest(r.Context(), r.PathValue("id"), session.LedgerRequestInput{
 		ID: body.ID, TaskID: r.PathValue("taskID"), Text: body.Text, Author: body.Author,
-		ChoiceID: body.ChoiceID,
+		ChoiceID: body.ChoiceID, ChoiceBasisVersion: body.ChoiceBasisVersion,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -827,6 +827,10 @@ type createLedgerRequestReq struct {
 	// ChoiceID, when set, is the session's own offered choice the person
 	// picked.
 	ChoiceID string `json:"choice_id"`
+	// ChoiceBasisVersion is the task version the caller saw that choice on.
+	// The slot checks it, so a screen left open while the task moved has its
+	// pick refused instead of acted on.
+	ChoiceBasisVersion int64 `json:"choice_basis_version"`
 }
 
 // ledgerLimit reads the page size. An absent limit is the ledger's own default;
@@ -1050,6 +1054,11 @@ func writeErr(w http.ResponseWriter, err error) {
 		status = http.StatusBadGateway
 	case errors.Is(err, session.ErrLedgerUnsupported):
 		status = http.StatusNotImplemented
+	case errors.Is(err, session.ErrLedgerChoiceStale):
+		// The screen is out of date, not the request: 409 with the ledger's own
+		// sentence, so the caller can re-read the task and keep the words the
+		// person already typed.
+		status = http.StatusConflict
 	case errors.Is(err, session.ErrLedgerUnavailable):
 		// Not 404 and not an empty page: the ledger exists on the slot, it just
 		// cannot be read while no pod holds it. Reading never starts one.

@@ -203,7 +203,14 @@ func TestLedgerTaskHistoryRecordsWhatActuallyHappened(t *testing.T) {
 	if _, err := s.ledger(ctx, "ledger_put", moved); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.appendLedgerRequest(ctx, "req-1", "t1", "이 작업 진행해 줘", "user-7", "c-go", ledgerNow()); err != nil {
+	// The session offers a choice on the task as it now stands, and the person
+	// picks it — so the history shows which of its own sentences was taken.
+	if _, err := s.ledger(ctx, "ledger_choices_put", choiceArgs("t1", "choices-1", 2,
+		ledgerChoiceArg{ChoiceID: "c-go", Label: "그대로 진행", RequestText: "이 작업 진행해 줘"},
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.appendLedgerRequest(ctx, "req-1", "t1", "이 작업 진행해 줘", "user-7", "c-go", 2, ledgerNow()); err != nil {
 		t.Fatal(err)
 	}
 	claimed := decodeRequestReply(t, mustLedger(t, s, "ledger_requests_claim", ledgerArgs{
@@ -224,7 +231,7 @@ func TestLedgerTaskHistoryRecordsWhatActuallyHappened(t *testing.T) {
 	for _, e := range page.Events {
 		kinds = append(kinds, e.Kind)
 	}
-	want := []string{eventTaskCreated, eventTaskUpdated, eventRequestStored, eventRequestClaimed, eventRequestDispatched, eventRequestSettled}
+	want := []string{eventTaskCreated, eventTaskUpdated, eventChoicesPublished, eventRequestStored, eventRequestClaimed, eventRequestDispatched, eventRequestSettled}
 	if strings.Join(kinds, ",") != strings.Join(want, ",") {
 		t.Fatalf("history = %v, want %v", kinds, want)
 	}
@@ -239,11 +246,11 @@ func TestLedgerTaskHistoryRecordsWhatActuallyHappened(t *testing.T) {
 	if page.Events[1].Detail["status_from"] != "planned" || !strings.Contains(page.Events[1].Summary, "blocked") {
 		t.Fatalf("transition line = %+v", page.Events[1])
 	}
-	if page.Events[2].Detail["text"] != "이 작업 진행해 줘" || page.Events[2].Detail["choice_id"] != "c-go" {
-		t.Fatalf("request line = %+v", page.Events[2])
+	if page.Events[3].Detail["text"] != "이 작업 진행해 줘" || page.Events[3].Detail["choice_id"] != "c-go" {
+		t.Fatalf("request line = %+v", page.Events[3])
 	}
-	if page.Events[5].Detail["result"] != "원장에 적고 진행했다" {
-		t.Fatalf("settled line = %+v", page.Events[5])
+	if page.Events[6].Detail["result"] != "원장에 적고 진행했다" {
+		t.Fatalf("settled line = %+v", page.Events[6])
 	}
 	// No claim token, and nothing else that is not a named fact, reaches the
 	// history.
@@ -271,7 +278,7 @@ func TestLedgerTaskHistoryIsPerTaskAndPagesBySeq(t *testing.T) {
 		if i%2 == 1 {
 			task = "t2"
 		}
-		if _, _, err := s.appendLedgerRequest(ctx, id, task, "요청 "+id, "user-7", "", ledgerNow()); err != nil {
+		if _, _, err := s.appendLedgerRequest(ctx, id, task, "요청 "+id, "user-7", "", 0, ledgerNow()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -389,5 +396,81 @@ func TestLedgerEventsViewServesFromLoopbackOnly(t *testing.T) {
 	h.ServeHTTP(post, req)
 	if post.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST = %d, want 405", post.Code)
+	}
+}
+
+// Hiding a stale choice from the read is not the whole rule: a screen opened
+// before the task moved still holds the old sentences, so the store itself
+// refuses the pick. The person's typed words are never refused this way, and a
+// refusal stores nothing and leaves no history line.
+func TestLedgerRequestRefusesAChoiceTheSessionNoLongerOffers(t *testing.T) {
+	s, _ := newTestSessionDB(t)
+	ctx := context.Background()
+	freezeLedgerClock(t)
+	putTask(t, s, "t1", "create-t1", 0)
+	mustLedger(t, s, "ledger_choices_put", choiceArgs("t1", "choices-1", 1,
+		ledgerChoiceArg{ChoiceID: "c-ci", Label: "CI 로그 확인", RequestText: "실패한 CI 로그를 확인해 줘"},
+	))
+
+	// A choice this task never offered is refused even while the task stands
+	// still.
+	if _, _, err := s.appendLedgerRequest(ctx, "r-unknown", "t1", "다른 선택", "user-7", "c-made-up", 0, ledgerNow()); err == nil {
+		t.Fatal("an unknown choice_id must be refused")
+	} else {
+		assertLedgerCode(t, err, "stale_choice")
+	}
+	// A basis the caller carries that disagrees with the stored one is refused
+	// too — that is the long-open screen.
+	if _, _, err := s.appendLedgerRequest(ctx, "r-oldbasis", "t1", "낡은 화면", "user-7", "c-ci", 99, ledgerNow()); err == nil {
+		t.Fatal("a caller basis that disagrees must be refused")
+	} else {
+		assertLedgerCode(t, err, "stale_choice")
+	}
+	// Fresh, it stores.
+	if _, _, err := s.appendLedgerRequest(ctx, "r-ok", "t1", "실패한 CI 로그를 확인해 줘", "user-7", "c-ci", 1, ledgerNow()); err != nil {
+		t.Fatal(err)
+	}
+
+	// The task moves. The very same pick, from a screen that never saw the
+	// move, is now refused — including when the session re-published the same
+	// choice_id against the newer version.
+	if _, err := s.ledger(ctx, "ledger_put", taskArgs("t1", "update-t1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.appendLedgerRequest(ctx, "r-stale", "t1", "실패한 CI 로그를 확인해 줘", "user-7", "c-ci", 1, ledgerNow()); err == nil {
+		t.Fatal("a pick written against the older version must be refused")
+	} else {
+		assertLedgerCode(t, err, "stale_choice")
+	}
+	mustLedger(t, s, "ledger_choices_put", choiceArgs("t1", "choices-2", 2,
+		ledgerChoiceArg{ChoiceID: "c-ci", Label: "CI 로그 확인", RequestText: "실패한 CI 로그를 확인해 줘"},
+	))
+	if _, _, err := s.appendLedgerRequest(ctx, "r-stale2", "t1", "실패한 CI 로그를 확인해 줘", "user-7", "c-ci", 1, ledgerNow()); err == nil {
+		t.Fatal("a re-published choice must not let an older screen through")
+	} else {
+		assertLedgerCode(t, err, "stale_choice")
+	}
+	// The person's own words carry no choice_id and are stored as ever, even
+	// while every offered choice of that task is stale.
+	if _, _, err := s.appendLedgerRequest(ctx, "r-free", "t1", "내가 직접 쓴 요청", "user-7", "", 0, ledgerNow()); err != nil {
+		t.Fatal(err)
+	}
+	// A basis without a pick is a malformed call, not a stale one.
+	if _, _, err := s.appendLedgerRequest(ctx, "r-bad", "t1", "선택 없이 기준", "user-7", "", 3, ledgerNow()); err == nil {
+		t.Fatal("a basis with no choice_id must be refused")
+	} else {
+		assertLedgerCode(t, err, "invalid_argument")
+	}
+
+	// Only the two stores that were accepted exist, and the refusals left no
+	// history line of their own.
+	stored := 0
+	for _, e := range events(t, s, "t1", nil, 0).Events {
+		if e.Kind == eventRequestStored {
+			stored++
+		}
+	}
+	if stored != 2 {
+		t.Fatalf("stored requests = %d, want only the fresh pick and the typed words", stored)
 	}
 }

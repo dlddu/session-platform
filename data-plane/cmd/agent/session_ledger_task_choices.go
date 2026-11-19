@@ -421,3 +421,35 @@ func listTaskEvents(ctx context.Context, tx *sql.Tx, taskID string, afterSeq *in
 	}
 	return result, nil
 }
+
+// staleChoiceMessage is the sentence a refused pick carries all the way to the
+// person's screen. The control plane and the app's backend match on it, so it
+// changes only together with them.
+const staleChoiceMessage = "that choice is no longer offered for this task"
+
+// checkLedgerChoiceFresh refuses a pick that the session no longer offers.
+//
+// Hiding stale choices on the read side is not enough on its own: a screen
+// opened before the task moved still holds the old sentences and can submit
+// one. So the write side checks the same rule the read side applies — the
+// choice must exist on this task and must have been written against the task's
+// version as it stands now — and additionally that the basis the caller saw
+// agrees, which catches the case where the same choice_id was re-published
+// against a newer version. A refusal keeps the draft on the person's screen;
+// nothing is stored.
+func checkLedgerChoiceFresh(ctx context.Context, tx *sql.Tx, taskID, choiceID string, callerBasis, taskVersion int64) error {
+	var basis int64
+	err := tx.QueryRowContext(ctx,
+		"SELECT basis_version FROM sp_ledger_task_choices WHERE task_id=? AND choice_id=?",
+		taskID, choiceID).Scan(&basis)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ledgerFail("stale_choice", staleChoiceMessage)
+	}
+	if err != nil {
+		return err
+	}
+	if basis != taskVersion || (callerBasis != 0 && callerBasis != basis) {
+		return ledgerFail("stale_choice", staleChoiceMessage)
+	}
+	return nil
+}

@@ -827,6 +827,12 @@ func validateLedgerRequest(in session.LedgerRequestInput) error {
 	if in.ChoiceID != "" && !ledgerRequestID.MatchString(in.ChoiceID) {
 		return fmt.Errorf("%w: choice_id must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
 	}
+	if in.ChoiceID == "" && in.ChoiceBasisVersion != 0 {
+		return fmt.Errorf("%w: choice_basis_version belongs to a picked choice_id", session.ErrInvalidInput)
+	}
+	if in.ChoiceBasisVersion < 0 {
+		return fmt.Errorf("%w: choice_basis_version must not be negative", session.ErrInvalidInput)
+	}
 	if !ledgerRequestID.MatchString(in.Author) {
 		return fmt.Errorf("%w: author must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
 	}

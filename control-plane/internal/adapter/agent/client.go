@@ -741,6 +741,11 @@ func (c *HTTPClient) CreateLedgerRequest(ctx context.Context, pod string, in ses
 		}
 		return stored, fmt.Errorf("%w: %s", session.ErrNotFound, ledgerMessage(raw))
 	case http.StatusConflict:
+		// The slot refuses a pick it no longer offers with its own code, so a
+		// stale screen is not reported as a reused id.
+		if ledgerCode(raw) == "stale_choice" {
+			return stored, fmt.Errorf("%w: %s", session.ErrLedgerChoiceStale, ledgerMessage(raw))
+		}
 		return stored, fmt.Errorf("%w: %s", session.ErrConflict, ledgerMessage(raw))
 	case http.StatusBadRequest:
 		return stored, fmt.Errorf("%w: %s", session.ErrInvalidInput, ledgerMessage(raw))
@@ -758,6 +763,18 @@ func ledgerAnswered(raw []byte) bool {
 		Code string `json:"code"`
 	}
 	return json.Unmarshal(raw, &answer) == nil && strings.TrimSpace(answer.Code) != ""
+}
+
+// ledgerCode is the ledger's own class for a refusal, empty when the body did
+// not come from the ledger.
+func ledgerCode(raw []byte) string {
+	var answer struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(raw, &answer) != nil {
+		return ""
+	}
+	return strings.TrimSpace(answer.Code)
 }
 
 // ledgerMessage is the sidecar's own sentence, which names the ledger's view of
