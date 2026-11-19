@@ -132,6 +132,9 @@ type Manager interface {
 	// no task field and starts no turn: the session finds the request when it
 	// next reads its ledger (AC-N6).
 	CreateLedgerRequest(ctx context.Context, id string, in LedgerRequestInput) (LedgerRequestStored, error)
+	// LedgerEvents reads one keyset page of one task's history, read only and
+	// without waking the session (AC-N8).
+	LedgerEvents(ctx context.Context, id, taskID string, afterSeq int64, limit int) (LedgerTaskEventPage, error)
 	// Recover calls admit with the recovered record before anything is
 	// written, so the caller decides who may see it (AC-K2).
 	Recover(ctx context.Context, id string, opts RestoreOptions, admit func(*Session) error) (*Session, error)

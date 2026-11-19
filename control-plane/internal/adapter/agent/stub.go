@@ -30,6 +30,8 @@ type StubClient struct {
 	// LedgerRequests is what callers stored, in arrival order, with the same
 	// id-idempotency and task-link rules the sidecar applies.
 	LedgerRequests []session.LedgerRequest
+	// LedgerEventRows is one task's history as the stub holds it, keyed by task.
+	LedgerEventRows map[string][]session.LedgerTaskEvent
 
 	mu      sync.Mutex
 	bufs    map[string][]byte
@@ -189,4 +191,26 @@ func (c *StubClient) CreateLedgerRequest(_ context.Context, _ string, in session
 	}
 	c.LedgerRequests = append(c.LedgerRequests, stored)
 	return session.LedgerRequestStored{Request: stored, Replayed: false}, nil
+}
+
+// LedgerEvents pages LedgerEventRows the way the sidecar pages the history: by
+// the row's own seq, and only the task that was asked for.
+func (c *StubClient) LedgerEvents(_ context.Context, _, taskID string, afterSeq int64, limit int) (session.LedgerTaskEventPage, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if limit <= 0 {
+		limit = session.LedgerEventPageLimitDefault
+	}
+	page := session.LedgerTaskEventPage{Events: []session.LedgerTaskEvent{}}
+	for _, row := range c.LedgerEventRows[taskID] {
+		if row.Seq <= afterSeq {
+			continue
+		}
+		if len(page.Events) == limit {
+			page.NextCursor = page.Events[len(page.Events)-1].Seq
+			break
+		}
+		page.Events = append(page.Events, row)
+	}
+	return page, nil
 }

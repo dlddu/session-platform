@@ -27,6 +27,10 @@ const (
 	// control-plane/internal/adapter/agent (CreateLedgerRequest).
 	agentLedgerRequestsPath = "/ledger/requests"
 
+	// agentLedgerEventsPath is the control plane's read of one task's history.
+	// Keep in sync with control-plane/internal/adapter/agent (LedgerEvents).
+	agentLedgerEventsPath = "/ledger/events"
+
 	// ledgerViewCall bounds one sidecar read. The sidecar bounds the statement
 	// itself (sessionDBCallTimeout); this is the hop in front of it, kept short
 	// so a panel read can never hold the agent open.
@@ -70,6 +74,13 @@ func sessionLedgerRequestsURLFor(mcpURL string) string {
 		return ""
 	}
 	return strings.TrimSuffix(mcpURL, sessionDBMCPPath) + sessionDBLedgerRequestsPath
+}
+
+func sessionLedgerEventsURLFor(mcpURL string) string {
+	if mcpURL == "" {
+		return ""
+	}
+	return strings.TrimSuffix(mcpURL, sessionDBMCPPath) + sessionDBLedgerEventsPath
 }
 
 // serveAgentLedger relays one ledger page. A workload that keeps no ledger says
@@ -178,6 +189,59 @@ func serveAgentLedgerRequests(w http.ResponseWriter, r *http.Request, c *claudeW
 		w.WriteHeader(http.StatusBadGateway)
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"code": "ledger_unavailable", "error": "the request could not be stored",
+		})
+	}
+}
+
+// serveAgentLedgerEvents relays one page of a task's history. Read-only, like
+// the task view beside it: GET in, GET out, only a task id, a cursor and a page
+// size, and no path to the model or to the session's SQL.
+func serveAgentLedgerEvents(w http.ResponseWriter, r *http.Request, c *claudeWorkload) {
+	target := ""
+	if reporter, ok := c.cli.(ledgerReporter); ok {
+		target = sessionLedgerEventsURLFor(reporter.sessionDBMCPURL())
+	}
+	if target == "" {
+		http.Error(w, "this session keeps no task ledger", http.StatusNotImplemented)
+		return
+	}
+	query := url.Values{}
+	for _, name := range []string{"task_id", "after_seq", "limit"} {
+		if v := strings.TrimSpace(r.URL.Query().Get(name)); v != "" {
+			query.Set(name, v)
+		}
+	}
+	if len(query) > 0 {
+		target += "?" + query.Encode()
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), ledgerViewCall)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		http.Error(w, "the task history view could not be reached", http.StatusBadGateway)
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		http.Error(w, "the task history view could not be reached", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxLedgerViewBytes))
+	if err != nil {
+		http.Error(w, "the task history page could not be read", http.StatusBadGateway)
+		return
+	}
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusBadRequest:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write(body)
+	default:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"code": "ledger_unavailable", "error": "the task history could not be read",
 		})
 	}
 }

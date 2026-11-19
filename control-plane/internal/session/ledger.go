@@ -43,7 +43,49 @@ type LedgerTaskRecord struct {
 	// none ever arrived. A reader of the page therefore learns that someone
 	// asked something without a second call.
 	Requests *LedgerRequestSummary `json:"requests,omitempty"`
+	// Choices are what the session offers a person to say about this task,
+	// written against this very version — a task that has moved serves none.
+	Choices []LedgerChoice `json:"choices,omitempty"`
 }
+
+// LedgerChoice is one sentence the session offers for this task. The app shows
+// the label, fills the request box with RequestText and sends the id back, so
+// the session can tell which of its own sentences came back. It grants no tool,
+// approval or merge.
+type LedgerChoice struct {
+	ID           string `json:"id"`
+	Label        string `json:"label"`
+	RequestText  string `json:"request_text"`
+	BasisVersion int64  `json:"basis_version"`
+	CreatedAt    string `json:"created_at"`
+}
+
+// LedgerTaskEvent is one line of a task's history: a named fact, written with
+// the change it describes. It is not an agent log — no credential, token or
+// transcript reaches it.
+type LedgerTaskEvent struct {
+	Seq       int64          `json:"seq"`
+	TaskID    string         `json:"task_id"`
+	At        string         `json:"at"`
+	Kind      string         `json:"kind"`
+	Actor     string         `json:"actor"`
+	Summary   string         `json:"summary"`
+	Detail    map[string]any `json:"detail,omitempty"`
+	RequestID string         `json:"request_id,omitempty"`
+}
+
+// LedgerTaskEventPage is one keyset page of a task's history. NextCursor is the
+// seq to continue after and is zero on the last page.
+type LedgerTaskEventPage struct {
+	Events     []LedgerTaskEvent `json:"events"`
+	NextCursor int64             `json:"next_cursor,omitempty"`
+}
+
+// LedgerEventPageLimit bounds one history page, as the task page is bounded.
+const (
+	LedgerEventPageLimitDefault = 20
+	LedgerEventPageLimitMax     = 100
+)
 
 // LedgerTaskPage is one keyset page. NextCursor is the id to continue after and
 // is empty on the last page; a page is not a snapshot, so a row can repeat
@@ -134,6 +176,9 @@ type LedgerRequestInput struct {
 	TaskID string `json:"task_id"`
 	Text   string `json:"text"`
 	Author string `json:"author"`
+	// ChoiceID, when set, is the session's own offered choice the person
+	// picked; empty means they typed their own words.
+	ChoiceID string `json:"choice_id,omitempty"`
 }
 
 // LedgerRequestStored is the answer to storing one. Replayed is true when the

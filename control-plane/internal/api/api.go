@@ -102,6 +102,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/sessions/{id}/recover", a.recoverSession)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/ledger/tasks", a.listLedgerTasks)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/ledger/tasks/{taskID}/requests", a.createLedgerRequest)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/ledger/tasks/{taskID}/events", a.listLedgerEvents)
 }
 
 // ---- request/response DTOs ----
@@ -758,6 +759,7 @@ func (a *API) createLedgerRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	stored, err := a.mgr.CreateLedgerRequest(r.Context(), r.PathValue("id"), session.LedgerRequestInput{
 		ID: body.ID, TaskID: r.PathValue("taskID"), Text: body.Text, Author: body.Author,
+		ChoiceID: body.ChoiceID,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -773,12 +775,58 @@ func (a *API) createLedgerRequest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, stored)
 }
 
+// listLedgerEvents reads one page of a task's history (AC-N8): the requests a
+// person left on it and what the session did with them, oldest first. Read-only
+// and passive, scoped like every other session-id route.
+func (a *API) listLedgerEvents(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
+	limit, err := ledgerEventLimit(r.URL.Query().Get("limit"))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	after := int64(0)
+	if raw := strings.TrimSpace(r.URL.Query().Get("after_seq")); raw != "" {
+		after, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || after < 0 {
+			writeErr(w, fmt.Errorf("%w: after_seq must be a nonnegative number", session.ErrInvalidInput))
+			return
+		}
+	}
+	page, err := a.mgr.LedgerEvents(r.Context(), r.PathValue("id"), r.PathValue("taskID"), after, limit)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+// ledgerEventLimit reads the history page size; out of range is refused rather
+// than clamped, so a caller is never handed a different page than it asked for.
+func ledgerEventLimit(raw string) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 1 || limit > session.LedgerEventPageLimitMax {
+		return 0, fmt.Errorf("%w: limit must be a number from 1 to %d",
+			session.ErrInvalidInput, session.LedgerEventPageLimitMax)
+	}
+	return limit, nil
+}
+
 // createLedgerRequestReq is one request to store. The task is in the path, so
 // the body cannot name a different one than the URL it was sent to.
 type createLedgerRequestReq struct {
 	ID     string `json:"id"`
 	Text   string `json:"text"`
 	Author string `json:"author"`
+	// ChoiceID, when set, is the session's own offered choice the person
+	// picked.
+	ChoiceID string `json:"choice_id"`
 }
 
 // ledgerLimit reads the page size. An absent limit is the ledger's own default;

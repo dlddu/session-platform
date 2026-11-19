@@ -223,8 +223,12 @@ A claim that lapses is not a free retry:
   says `reconcile: true` with the earlier `operation_key`/`operation_target`.
   On a reconciling request a *different* operation key is refused unless
   `observed=not_accepted` states the parent established the earlier dispatch
-  never landed; the recorded key is always accepted, because that is the key the
-  outside world deduplicates on.
+  never landed. The recorded key is accepted as a retry, but **the key is this
+  ledger's own tracking handle, not platform idempotency**: it makes a resend
+  safe only where the receiving system itself deduplicates on it. The platform's
+  own `POST /sessions/{id}/write` takes no such key, so re-sending a prompt
+  there starts another turn — when acceptance is unknown, establish what landed
+  before writing again rather than relying on the key.
 
 A lapsed holder's token is refused for both dispatch and ack, so a parent that
 comes back late cannot report over the one that took the request meanwhile.
@@ -255,6 +259,49 @@ The order a parent applies, each step its own tool call:
 6. `ledger_requests_ack` with `processed` or `failed`, the result, and
    `related_seq`.
 7. Record the task's own change with `ledger_put` as usual.
+
+## Offered choices
+
+What the app offers a person to say about one task is written **by the session**,
+never by the app. `ledger_choices_put` replaces a task's set — up to 6 entries of
+{`choice_id`, `label`, `request_text`} — and `expected_version` must be the
+task's **current** version, which becomes each entry's `basis_version`.
+
+Reads serve only the entries whose `basis_version` equals the task's current
+version. So a task that moves leaves its choices behind automatically: nothing
+has to be deleted, a stale sentence is never shown, and a request can never be
+sent from one. Writing against a version that no longer holds is a conflict —
+read the task again and write the sentences against the version that now holds.
+`ledger_choices_clear` empties the set, which the app shows as "none offered"
+while keeping free text.
+
+A choice is a sentence to send, not a permission: it grants no tool approval and
+no merge, and the request it fills in is stored like any other
+([User requests](#user-requests)) with the `choice_id` beside it, so the session
+can tell which of its own sentences came back.
+
+## Task history
+
+`sp_ledger_task_events` is the task's own story, append-only, written **in the
+same transaction** as the change it describes: a history row cannot exist for a
+change that did not commit, and a replayed mutation adds none. Kinds:
+`task_created`, `task_updated` (with what moved), `task_deleted`,
+`request_stored` (the person's words), `request_claimed`, `request_dispatched`
+(operation key and target — never the claim token), `request_settled` (outcome,
+result, related seq), `choices_published`, `choices_cleared`.
+
+It is read by `ledger_events_list({id, after_seq?, limit?})`, and outside the
+session through the sidecar's `GET /session-db/ledger/events?task_id=&after_seq=&limit=`,
+the agent's `/ledger/events` and
+`GET /api/v1/sessions/{id}/ledger/tasks/{taskID}/events`. The cursor is the
+row's own seq, so a page boundary neither repeats nor skips a row. Rows are
+scoped to the task asked for; no credential, token or transcript reaches them,
+and this is a person's task history rather than an agent log.
+
+Rows start accruing when this schema is in place — **earlier work has no
+history, and none is invented for it**. A pod still running an earlier image has
+no such route; the control plane reports that as unsupported rather than as an
+empty history or a missing task.
 
 ## External operation reconciliation
 

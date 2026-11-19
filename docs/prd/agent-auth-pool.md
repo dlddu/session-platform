@@ -84,6 +84,18 @@
 - **구체화 대상**: AC-N6(슬롯 세션 DB와 읽기 전용 뷰) — 그 경로에 「사용자 요청」 한 종류의 쓰기를 더한 것, `codex-workload.md` AC-J5(도구 표면)
 - **검증 방법**: 데이터 플레인 단위 테스트로 작업에 연결되지 않은 요청 거절(404)·지워진 작업 거절(409)·같은 id 재전송 1건·id 재사용 충돌·형식 거절, 요청 저장이 작업 버전을 움직이지 않아 부모가 준비한 `ledger_put`이 그대로 착지하는 것, 도착 순 처리와 작업별 필터, 두 부모의 claim 경합에서 한 쪽만 이기는 것, 조회만으로는 상태가 바뀌지 않는 것, 보유하지 않은 토큰의 ack 거절, **dispatch 뒤 ack 전에 죽은 뒤** 만료 claim이 `reconciling`으로 열리고 다른 operation key가 근거 없이 거절되는 것, 작업 삭제 뒤에도 요청이 남는 것, 변이의 replay를 확인한다(`data-plane/cmd/agent/session_ledger_user_requests_test.go`). 사이드카 뷰는 루프백 아닌 POST 403·GET 405·201/200/404/409/400을 확인한다(같은 파일). control plane 경로는 201/200 재전송·없는 작업 404·남의 테넌트 404·세션 DB 없는 타입 501·형식 400과, 저장이 원장을 읽지도 세션을 깨우지도 않는 것을 확인한다(`control-plane/internal/api/ledger_test.go`).
 
+### AC-N8: 보낼 선택지는 세션이 쓰고, 작업에는 이력이 남는다
+- **설명**: 앱이 작업 상세에서 보여 주는 「보낼 수 있는 선택지」는 **세션이 쓴다** — 앱이 상태별로 들고 있던 고정 목록은 상태를 되풀이할 수밖에 없었고(「막혀 있으니 왜 막혔는지 물어보기」), 이 작업이 실제로 무엇을 기다리는지는 세션만 안다.
+  1. `ledger_choices_put({id, request_id, expected_version, choices})`가 한 작업의 선택지 집합을 **전체 교체**한다(최대 6개, `{choice_id, label(≤80자), request_text(≤1000자)}`). `expected_version`은 그 작업의 **현재 version**이어야 하고, 그 값이 각 항목의 `basis_version`이 된다. `ledger_choices_clear`는 집합을 비운다.
+  2. **읽기는 `basis_version`이 작업의 현재 version과 같은 항목만 내놓는다.** 작업이 바뀌면(version 상승) 그 선택지는 자동으로 더 이상 서빙되지 않는다 — 지우는 호출이 필요 없고, 낡은 문장이 화면에 남거나 그 문장으로 요청이 저장되는 일이 없다. 낡은 version 기준으로 쓰려 하면 **conflict**다(작업을 다시 읽고 지금 version 기준으로 쓴다).
+  3. 선택지는 **보낼 문장**이며 **권한이 아니다** — 호출별 도구 승인·사람 머지 게이트를 대신하지 않는다. 앱은 라벨을 보여 주고, 누르면 `request_text`로 요청 칸을 채우며(전송 아님), 저장할 때 `choice_id`를 함께 보내 세션이 자기 문장 중 무엇이 돌아왔는지 안다. 선택지가 없으면 앱은 **없다고 말하고** 자유 입력을 남긴다.
+  4. **작업 이력**(`sp_ledger_task_events`)은 append-only이고 **그 변화와 같은 트랜잭션**에 적힌다 — 커밋되지 않은 변화의 이력 줄은 존재할 수 없고, 멱등 재시도는 줄을 더하지 않는다. 종류: `task_created`·`task_updated`(무엇이 움직였는지)·`task_deleted`·`request_stored`(사람이 쓴 원문)·`request_claimed`·`request_dispatched`(operation key·대상 — **claim token 은 절대 넣지 않는다**)·`request_settled`(결과·related seq)·`choices_published`·`choices_cleared`.
+  5. 읽기는 `ledger_events_list({id, after_seq?, limit?})`와, 세션 밖에서 사이드카 `GET /session-db/ledger/events` → 에이전트 `/ledger/events` → control plane `GET /api/v1/sessions/{id}/ledger/tasks/{taskID}/events`다. 커서는 행의 `seq`라서 **페이지 경계가 행을 겹치거나 빠뜨리지 않는다**. 범위는 물어본 **그 작업 하나**이고, 자격증명·토큰·트랜스크립트는 들어가지 않는다 — 에이전트 로그가 아니라 사람이 읽는 작업 이력이다. 읽기는 수동적이다(AC-N6과 같음: 접근으로 세지 않고 스냅샷을 복원하지 않는다).
+  6. 이력은 이 스키마가 있는 시점부터 쌓인다 — **그 전 작업에는 이력이 없고, 없는 이력을 만들어 내지 않는다.** 옛 이미지를 쓰는 파드에는 이 라우트가 없으므로 control plane은 그것을 **「지원하지 않음」**으로 전하고(빈 이력·없는 작업으로 전하지 않는다), 요청 저장 라우트의 404도 같은 기준으로 구분한다.
+- **달성 가치**: V3(장기 세션), V1
+- **구체화 대상**: AC-N7(사용자 요청) — 그 요청에 「세션이 쓴 선택지」와 「작업 이력」을 더한 것
+- **검증 방법**: 데이터 플레인 단위 테스트로 선택지가 기준 version에서만 서빙되고 작업이 움직이면 사라지는 것·낡은 기준 put 의 conflict·경계값과 중복 id 거절·변이 replay 가 이력을 늘리지 않는 것, 이력이 실제 일어난 순서(생성→전환→요청 저장→접수→dispatch→종료)대로 적히고 전환 줄이 무엇이 움직였는지 담는 것·요청 줄이 사람의 원문을 담는 것·claim token 이 이력에 없는 것·작업별로 섞이지 않는 것·seq 커서 페이지 경계·동시 put 의 단일 집합, 그리고 이력 뷰의 루프백 아닌 요청 403·GET 아닌 요청 405·범위 밖 limit/after_seq 400 을 확인한다(`data-plane/cmd/agent/session_ledger_task_choices_test.go`). control plane 경로로 이력 페이지·커서·작업 범위·남의 테넌트 404·형식 400 과, 작업 페이지가 선택지와 `basis_version`을 싣는 것을 확인한다(`control-plane/internal/api/ledger_test.go`).
+
 ### AC-N5: 권한 — control plane은 PVC·Lease만, 세션은 자기 슬롯만
 - **설명**: control plane Role은 이미 가진 `persistentvolumeclaims` create/get/list/watch와 `leases` 전체 동사로 풀을 다룬다 — 새 권한이 없다. 세션 파드는 자기 슬롯 PVC 하나만 마운트하고, 다른 슬롯에 닿는 Kubernetes 자격 증명을 받지 않는다(타입별 SA 권한은 바뀌지 않는다). 슬롯 파일은 셸이 있는 주 컨테이너가 읽을 수 있다 — 프록시로 숨기지 않기로 했다(2026-11-07 사용자 결정): 세션 안 에이전트가 그 계정의 토큰을 읽을 수 있다는 것이 이 풀의 알려진 대가다.
 - **달성 가치**: V1

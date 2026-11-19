@@ -720,6 +720,11 @@ type ledgerRequestAgent interface {
 	CreateLedgerRequest(ctx context.Context, pod string, in session.LedgerRequestInput) (session.LedgerRequestStored, error)
 }
 
+// ledgerEventAgent is the agent capability behind one task's history (AC-N8).
+type ledgerEventAgent interface {
+	LedgerEvents(ctx context.Context, pod, taskID string, afterSeq int64, limit int) (session.LedgerTaskEventPage, error)
+}
+
 // LedgerTasks reads one keyset page of the chat slot's task ledger (AC-N6).
 // Like Questions and ToolApprovals it is passive: it neither restores a
 // snapshot nor counts as an access, so reading the ledger never wakes a session
@@ -783,6 +788,32 @@ func (s *Service) CreateLedgerRequest(ctx context.Context, id string, in session
 	return agentR.CreateLedgerRequest(ctx, sess.Pod, in)
 }
 
+// LedgerEvents reads one page of a task's history (AC-N8). It is passive like
+// the task read: no restore, no access, no turn — so opening a history never
+// wakes a session. A session with no live pod cannot be read, which is a
+// conflict rather than an empty history: the rows are on the slot.
+func (s *Service) LedgerEvents(ctx context.Context, id, taskID string, afterSeq int64, limit int) (session.LedgerTaskEventPage, error) {
+	empty := session.LedgerTaskEventPage{Events: []session.LedgerTaskEvent{}}
+	if !ledgerRequestID.MatchString(taskID) {
+		return empty, fmt.Errorf("%w: task id must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
+	}
+	sess, err := s.Get(ctx, id)
+	if err != nil {
+		return empty, err
+	}
+	if sess.WorkloadType != session.WorkloadTypeCodexChat {
+		return empty, fmt.Errorf("%w: only codex-chat sessions keep one", session.ErrLedgerUnsupported)
+	}
+	if sess.State == session.StateSnapshot || sess.Pod == "" {
+		return empty, session.ErrLedgerUnavailable
+	}
+	agentE, ok := s.agent.(ledgerEventAgent)
+	if !ok {
+		return empty, fmt.Errorf("%w: this deployment's agent offers no task history", session.ErrLedgerUnsupported)
+	}
+	return agentE.LedgerEvents(ctx, sess.Pod, taskID, afterSeq, limit)
+}
+
 // validateLedgerRequest bounds what reaches the slot. The ledger applies the
 // same rules itself; refusing here keeps a malformed request from costing a hop
 // into the pod, and keeps the message about the field rather than the hop.
@@ -792,6 +823,9 @@ func validateLedgerRequest(in session.LedgerRequestInput) error {
 	}
 	if !ledgerRequestID.MatchString(in.TaskID) {
 		return fmt.Errorf("%w: task_id must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
+	}
+	if in.ChoiceID != "" && !ledgerRequestID.MatchString(in.ChoiceID) {
+		return fmt.Errorf("%w: choice_id must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
 	}
 	if !ledgerRequestID.MatchString(in.Author) {
 		return fmt.Errorf("%w: author must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)

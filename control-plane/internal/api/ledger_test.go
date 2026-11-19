@@ -337,3 +337,99 @@ func TestLedgerRequests_RefusesMalformedFields(t *testing.T) {
 		t.Fatalf("stored = %d, want nothing stored for a malformed request", len(stub.LedgerRequests))
 	}
 }
+
+// AC-N8: the history route pages one task's story by seq, carries the cursor
+// forward, and is scoped like every other session-id route.
+func TestLedgerEvents_PagesOneTasksHistory(t *testing.T) {
+	srv, stub := ledgerServer(t)
+	stub.LedgerRows = []session.LedgerTaskRecord{ledgerRow("t1", "blocked", "review", "CI 가 막혔다", "로그를 본다")}
+	stub.LedgerEventRows = map[string][]session.LedgerTaskEvent{
+		"t1": {
+			{Seq: 1, TaskID: "t1", At: "2026-11-19T00:00:00Z", Kind: "task_created", Actor: "parent", Summary: "작업을 원장에 등록했다"},
+			{Seq: 2, TaskID: "t1", At: "2026-11-19T00:01:00Z", Kind: "request_stored", Actor: "user-1", Summary: "요청을 남겼다",
+				Detail: map[string]any{"text": "이 작업 진행해 줘"}, RequestID: "req-1"},
+			{Seq: 3, TaskID: "t1", At: "2026-11-19T00:02:00Z", Kind: "request_settled", Actor: "parent", Summary: "요청을 processed 로 닫았다"},
+		},
+		"t2": {{Seq: 9, TaskID: "t2", Kind: "task_created", Actor: "parent", Summary: "다른 작업"}},
+	}
+	_, s := createRaw(t, srv.URL, map[string]any{"name": "history", "workloadType": "codex-chat"})
+
+	get := func(query string) (int, session.LedgerTaskEventPage) {
+		target := srv.URL + "/api/v1/sessions/" + s.ID + "/ledger/tasks/t1/events"
+		if query != "" {
+			target += "?" + query
+		}
+		resp, err := http.Get(target)
+		if err != nil {
+			t.Fatalf("get history: %v", err)
+		}
+		defer resp.Body.Close()
+		var page session.LedgerTaskEventPage
+		_ = json.NewDecoder(resp.Body).Decode(&page)
+		return resp.StatusCode, page
+	}
+
+	status, first := get("limit=2")
+	if status != http.StatusOK || len(first.Events) != 2 || first.NextCursor != 2 {
+		t.Fatalf("first page = %d %+v", status, first)
+	}
+	if first.Events[1].Detail["text"] != "이 작업 진행해 줘" || first.Events[1].RequestID != "req-1" {
+		t.Fatalf("the person's own words must survive the path: %+v", first.Events[1])
+	}
+	status, second := get("limit=2&after_seq=2")
+	if status != http.StatusOK || len(second.Events) != 1 || second.Events[0].Seq != 3 || second.NextCursor != 0 {
+		t.Fatalf("second page = %d %+v", status, second)
+	}
+	// Another task's rows never appear under this one.
+	for _, e := range append(first.Events, second.Events...) {
+		if e.TaskID != "t1" {
+			t.Fatalf("leaked %+v", e)
+		}
+	}
+	for _, bad := range []string{"limit=0", "limit=101", "after_seq=-1", "after_seq=lots"} {
+		if status, _ := get(bad); status != http.StatusBadRequest {
+			t.Errorf("%s = %d, want 400", bad, status)
+		}
+	}
+	// A task with no history is an empty page, not someone else's rows.
+	resp, err := http.Get(srv.URL + "/api/v1/sessions/" + s.ID + "/ledger/tasks/absent/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var empty session.LedgerTaskEventPage
+	_ = json.NewDecoder(resp.Body).Decode(&empty)
+	if resp.StatusCode != http.StatusOK || len(empty.Events) != 0 {
+		t.Fatalf("unknown task = %d %+v", resp.StatusCode, empty)
+	}
+	// Another tenant's session answers exactly like a missing one.
+	other, err := http.Get(srv.URL + "/api/v1/sessions/sess-nope/ledger/tasks/t1/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Body.Close()
+	if other.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown session = %d, want 404", other.StatusCode)
+	}
+}
+
+// The session's offered choices reach the app through the task page, with the
+// version they were written against.
+func TestLedgerTasks_CarryTheSessionsOfferedChoices(t *testing.T) {
+	srv, stub := ledgerServer(t)
+	row := ledgerRow("t1", "blocked", "review", "CI 가 막혔다", "로그를 본다")
+	row.Choices = []session.LedgerChoice{
+		{ID: "c-ci-log", Label: "CI 로그 확인 요청", RequestText: "방금 실패한 CI 로그에서 어디서 멈췄는지 알려 줘.", BasisVersion: 1, CreatedAt: "2026-11-19T00:00:00Z"},
+	}
+	stub.LedgerRows = []session.LedgerTaskRecord{row}
+	_, s := createRaw(t, srv.URL, map[string]any{"name": "choices", "workloadType": "codex-chat"})
+
+	status, page := getLedger(t, srv, s.ID, "")
+	if status != http.StatusOK || len(page.Tasks) != 1 {
+		t.Fatalf("page = %d %+v", status, page)
+	}
+	got := page.Tasks[0].Choices
+	if len(got) != 1 || got[0].ID != "c-ci-log" || got[0].RequestText == "" || got[0].BasisVersion != 1 {
+		t.Fatalf("choices = %+v, want the session's own sentence with its basis version", got)
+	}
+}
