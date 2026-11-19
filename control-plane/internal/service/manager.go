@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -713,6 +714,12 @@ type ledgerAgent interface {
 	LedgerTasks(ctx context.Context, pod string, limit int, afterID string) (session.LedgerTaskPage, error)
 }
 
+// ledgerRequestAgent is the agent capability behind storing a user request on
+// a ledger task (AC-N6, write side).
+type ledgerRequestAgent interface {
+	CreateLedgerRequest(ctx context.Context, pod string, in session.LedgerRequestInput) (session.LedgerRequestStored, error)
+}
+
 // LedgerTasks reads one keyset page of the chat slot's task ledger (AC-N6).
 // Like Questions and ToolApprovals it is passive: it neither restores a
 // snapshot nor counts as an access, so reading the ledger never wakes a session
@@ -741,6 +748,63 @@ func (s *Service) LedgerTasks(ctx context.Context, id string, limit int, afterID
 	}
 	return agentL.LedgerTasks(ctx, sess.Pod, limit, afterID)
 }
+
+// CreateLedgerRequest stores one user request on a task of the chat slot's
+// ledger (AC-N6, write side).
+//
+// It is as passive as the read: it neither restores a snapshot nor counts as an
+// access, so a person leaving a request never wakes the session and never moves
+// its idle clock — the session picks the request up when it next reads its own
+// ledger. A session with no live pod cannot be written to, which is a conflict
+// rather than a loss: the caller is told, and can say so instead of implying
+// the request was stored.
+//
+// The slot's ledger is reached through the pod holding the slot now, exactly
+// as on the read side, so a request lands in the ledger the current chat sees.
+func (s *Service) CreateLedgerRequest(ctx context.Context, id string, in session.LedgerRequestInput) (session.LedgerRequestStored, error) {
+	var empty session.LedgerRequestStored
+	if err := validateLedgerRequest(in); err != nil {
+		return empty, err
+	}
+	sess, err := s.Get(ctx, id)
+	if err != nil {
+		return empty, err
+	}
+	if sess.WorkloadType != session.WorkloadTypeCodexChat {
+		return empty, fmt.Errorf("%w: only codex-chat sessions keep one", session.ErrLedgerUnsupported)
+	}
+	if sess.State == session.StateSnapshot || sess.Pod == "" {
+		return empty, session.ErrLedgerUnavailable
+	}
+	agentR, ok := s.agent.(ledgerRequestAgent)
+	if !ok {
+		return empty, fmt.Errorf("%w: this deployment's agent cannot store ledger requests", session.ErrLedgerUnsupported)
+	}
+	return agentR.CreateLedgerRequest(ctx, sess.Pod, in)
+}
+
+// validateLedgerRequest bounds what reaches the slot. The ledger applies the
+// same rules itself; refusing here keeps a malformed request from costing a hop
+// into the pod, and keeps the message about the field rather than the hop.
+func validateLedgerRequest(in session.LedgerRequestInput) error {
+	if !ledgerRequestID.MatchString(in.ID) {
+		return fmt.Errorf("%w: id must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
+	}
+	if !ledgerRequestID.MatchString(in.TaskID) {
+		return fmt.Errorf("%w: task_id must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
+	}
+	if !ledgerRequestID.MatchString(in.Author) {
+		return fmt.Errorf("%w: author must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
+	}
+	if text := strings.TrimSpace(in.Text); text == "" || len(in.Text) > session.LedgerRequestTextMax {
+		return fmt.Errorf("%w: text must be 1..%d characters", session.ErrInvalidInput, session.LedgerRequestTextMax)
+	}
+	return nil
+}
+
+// ledgerRequestID is the ledger's own id shape, so an id this service accepts
+// is one the slot will accept too.
+var ledgerRequestID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // Switch makes the target session active — promoting idle or restoring a
 // snapshot as needed — and is a no-op for an already-active session (AC-C4).

@@ -68,6 +68,11 @@ func newTestSessionDBWithRawSQL(t *testing.T, rawSQL bool) (*sessionDB, http.Han
 	return db, http.HandlerFunc(db.serveMCP)
 }
 
+// ledgerToolNames is the ledger surface in offer order: the task tools, then
+// the user-request tools beside them.
+const ledgerToolNames = "ledger_get,ledger_list,ledger_put,ledger_delete," +
+	"ledger_requests_list,ledger_requests_claim,ledger_requests_dispatch,ledger_requests_ack"
+
 // sessionDBToolNames is what the model is offered by one sidecar.
 func sessionDBToolNames(t *testing.T, h http.Handler) []string {
 	t.Helper()
@@ -83,7 +88,7 @@ func sessionDBToolNames(t *testing.T, h http.Handler) []string {
 // ledger is the whole surface a chat session gets.
 func TestSessionDBMCP_RawSQLIsDebugOnly(t *testing.T) {
 	_, h := newTestSessionDB(t)
-	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != "ledger_get,ledger_list,ledger_put,ledger_delete" {
+	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != ledgerToolNames {
 		t.Fatalf("tools = %v, want the ledger alone", names)
 	}
 	for _, name := range []string{"raw_query", "raw_exec"} {
@@ -133,7 +138,7 @@ func TestSessionDBMCP_RawExecThenRawQuery(t *testing.T) {
 	if init.Error != nil || init.Result.(map[string]any)["serverInfo"].(map[string]any)["name"] != sessionDBMCPServerName {
 		t.Fatalf("initialize = %+v", init)
 	}
-	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != "raw_query,raw_exec,ledger_get,ledger_list,ledger_put,ledger_delete" {
+	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != "raw_query,raw_exec,"+ledgerToolNames {
 		t.Fatalf("tools = %v, want raw and ledger tools", names)
 	}
 

@@ -55,11 +55,28 @@ type ledgerArgs struct {
 	SessionID       string      `json:"session_id,omitempty"`
 	AfterID         string      `json:"after_id,omitempty"`
 	Limit           int         `json:"limit,omitempty"`
+	// The user-request tools' fields (session_ledger_user_requests.go).
+	TaskID          string `json:"task_id,omitempty"`
+	AfterSeq        *int64 `json:"after_seq,omitempty"`
+	ClaimOwner      string `json:"claim_owner,omitempty"`
+	ClaimToken      string `json:"claim_token,omitempty"`
+	TTLSeconds      *int64 `json:"ttl_seconds,omitempty"`
+	OperationKey    string `json:"operation_key,omitempty"`
+	OperationTarget string `json:"operation_target,omitempty"`
+	DispatchState   string `json:"dispatch_state,omitempty"`
+	Observed        string `json:"observed,omitempty"`
+	Outcome         string `json:"outcome,omitempty"`
+	Result          string `json:"result,omitempty"`
+	RelatedSeq      *int64 `json:"related_seq,omitempty"`
 }
 type ledgerRecord struct {
 	ID      string     `json:"id"`
 	Version int64      `json:"version"`
 	Task    ledgerTask `json:"task"`
+	// Requests says how many user requests are waiting on this task, so a
+	// plain get or list is enough to notice one. Absent when none ever
+	// arrived, which keeps the payload of an untouched ledger unchanged.
+	Requests *ledgerRequestSummary `json:"requests,omitempty"`
 }
 type ledgerError struct {
 	Code      string `json:"code"`
@@ -95,10 +112,16 @@ func ledgerToolDefinitions() []map[string]any {
 		}
 		out = append(out, map[string]any{"name": name, "description": "Chat-slot task ledger (kept across chat sessions on the same slot); never calls platform session create/delete or sends notifications. put is full replacement with atomic expected_version (0=create); mutation request_id replays the original committed response, changed payload conflicts. list is ID-keyset pagination (next_cursor -> after_id), not a snapshot. Errors carry code invalid_argument/not_found/conflict/storage_error/schema_version.", "inputSchema": map[string]any{"type": "object", "properties": props, "required": required, "additionalProperties": false}})
 	}
-	return out
+	// The user requests waiting on these tasks are their own four tools: one
+	// list, and a claim/dispatch/ack that make picking one up a decision with
+	// a record rather than a side effect of reading.
+	return append(out, ledgerRequestToolDefinitions()...)
 }
 func validateLedger(name string, a ledgerArgs) error {
 	bad := func(s string) error { return ledgerFail("invalid_argument", s) }
+	if isLedgerRequestTool(name) {
+		return validateLedgerRequestTool(name, a)
+	}
 	if name != "ledger_get" && name != "ledger_list" && name != "ledger_put" && name != "ledger_delete" {
 		return bad("unknown ledger tool")
 	}
@@ -172,7 +195,10 @@ func migrateLedger(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 	if count == 0 {
-		_, err := tx.ExecContext(ctx, ledgerSchema)
+		if _, err := tx.ExecContext(ctx, ledgerSchema); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, ledgerRequestsSchema)
 		return err
 	}
 	var v int
@@ -182,7 +208,11 @@ func migrateLedger(ctx context.Context, tx *sql.Tx) error {
 	if v != 1 {
 		return ledgerFail("schema_version", "unsupported ledger schema; no downgrade performed")
 	}
-	return nil
+	// Additive, and version 1 stays version 1: the user-request table is new
+	// but no task row changes shape, so an older sidecar image still opens
+	// this database after a rollback.
+	_, err := tx.ExecContext(ctx, ledgerRequestsSchema)
+	return err
 }
 func readLedger(ctx context.Context, tx *sql.Tx, id string) (ledgerRecord, error) {
 	r := ledgerRecord{ID: id}
@@ -214,8 +244,23 @@ func (s *sessionDB) ledger(ctx context.Context, name string, a ledgerArgs) (any,
 		return nil, err
 	}
 	var result any
+	if isLedgerRequestTool(name) {
+		result, err = s.ledgerRequests(ctx, tx, name, a, ledgerNow())
+		if err != nil {
+			return nil, err
+		}
+		if err = tx.Commit(); err != nil {
+			return nil, err
+		}
+		return result, nil
+	}
 	if name == "ledger_get" {
-		result, err = readLedger(ctx, tx, a.ID)
+		var record ledgerRecord
+		record, err = readLedger(ctx, tx, a.ID)
+		if err == nil {
+			err = attachRequestSummaries(ctx, tx, []*ledgerRecord{&record})
+		}
+		result = record
 	} else if name == "ledger_list" {
 		limit := a.Limit
 		if limit == 0 {
@@ -246,6 +291,13 @@ func (s *sessionDB) ledger(ctx context.Context, name string, a ledgerArgs) (any,
 		}
 		err = errors.Join(e, rows.Err())
 		rows.Close()
+		if err == nil {
+			pointers := make([]*ledgerRecord, 0, len(records))
+			for i := range records {
+				pointers = append(pointers, &records[i])
+			}
+			err = attachRequestSummaries(ctx, tx, pointers)
+		}
 		result = map[string]any{"tasks": records, "next_cursor": next}
 	} else {
 		b, _ := json.Marshal(a)
@@ -293,7 +345,7 @@ func (s *sessionDB) ledger(ctx context.Context, name string, a ledgerArgs) (any,
 			} else {
 				_, err = tx.ExecContext(ctx, "UPDATE sp_ledger_tasks SET version=?,status=?,stage=?,owner=?,document=? WHERE id=? AND version=?", version, a.Task.Status, a.Task.Stage, a.Task.Owner, string(doc), a.ID, *a.ExpectedVersion)
 			}
-			result = ledgerRecord{a.ID, version, *a.Task}
+			result = ledgerRecord{ID: a.ID, Version: version, Task: *a.Task}
 		}
 		if err != nil {
 			return nil, err

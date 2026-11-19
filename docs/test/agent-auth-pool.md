@@ -7,6 +7,7 @@
 - AC-N4: 로그인은 슬롯 파일, 에이전트가 HOME과 동기화하고 아카이브에서 뺀다 (PRD: 에이전트 인증 풀)
 - AC-N5: 권한 — control plane은 PVC·Lease만, 세션은 자기 슬롯만 (PRD: 에이전트 인증 풀)
 - AC-N6: `codex-chat` 슬롯 = 로그인 + 세션 DB, 컨테이너마다 제 몫만 마운트 (PRD: 에이전트 인증 풀)
+- AC-N7: 사용자 요청 — 앱이 원장에 남기고, 부모가 접수해 처리한다 (PRD: 에이전트 인증 풀)
 
 > 📌 **SUT 설정**: kind e2e 오버레이가 `codex-task`를 켜고 풀 크기를 2로 둔다(`CODEX_TASK_AUTH_SLOTS`). 슬롯 PVC는 kind 기본
 > 스토리지 클래스(local-path)로 만들어진다. `claude-code`는 어느 모드에서도 풀을 쓰지 않는다(AC-E7) — 풀 시나리오는
@@ -44,3 +45,8 @@
 - **기대 결과**: (a) PVC 볼륨은 슬롯 `<네임스페이스>-codex-chat-auth-<i>` 하나다. 주 컨테이너는 subPath `auth`를 `/var/run/session-platform/auth-slot`에, `k3s-mcp-proxy`는 subPath `db`를 `/var/run/session-platform/session-db`에 마운트하고, 슬롯 전체를 마운트하는 것은 초기화 컨테이너 `slot-init`뿐이다. 주 컨테이너는 `SESSION_DB_MCP_URL=http://127.0.0.1:8093/session-db/mcp`를 받고 `SESSION_DB_DIR`·`SESSION_DB_RAW_SQL`은 받지 않는다 — 그 스위치는 사이드카에만 ConfigMap 키 참조로 붙는다. (b) 도구 목록은 `ledger_get`·`ledger_list`·`ledger_put`·`ledger_delete` 넷뿐이고, `raw_exec` 호출은 `SESSION_DB_RAW_SQL`을 가리키는 오류로 거절된다. (c) `rowsAffected`가 1이고 넣은 행이 돌아온다. (d) `isError` 도구 결과에 SQLite의 메시지가 있다. (e) 앞 세션이 넣은 행이 그대로 있다
 - **검증 AC**: AC-N6
 
+### 시나리오 6: 사용자 요청은 원장에 남고, 부모가 접수해 처리하며, 죽은 뒤에는 재실행이 아니라 대조로 이어진다
+- **사전 조건**: 파드가 살아 있는 `codex-chat` 세션 하나와 그 원장의 작업 하나(`t1`), control plane 접근
+- **실행 단계**: (a) `POST /api/v1/sessions/{id}/ledger/tasks/t1/requests`로 `{id: "req-1", text: "이 작업 진행해 줘", author: "user-7"}`을 저장하고, 같은 본문을 한 번 더 보낸다 → (b) 없는 작업 id로, 그리고 남의 테넌트 세션 id로 같은 호출을 한다 → (c) 세션 안에서 `ledger_get t1`과 `ledger_requests_list`를 부른다 → (d) `ledger_requests_claim`을 두 번(서로 다른 `request_id`, 같은 `expected_version`) 부른다 → (e) 이긴 쪽이 `ledger_requests_dispatch`로 `intended`·`dispatched`를 적은 뒤 **ack 없이 claim을 만료시킨다** → (f) 다른 부모가 다시 claim하고, 적힌 것과 **다른** `operation_key`로 dispatch를 시도한 뒤 `observed=not_accepted`를 붙여 다시 시도한다 → (g) `ledger_requests_ack`로 결과와 `related_seq`를 적는다 → (h) 작업 `t1`을 `ledger_delete`한 뒤 `ledger_requests_list`를 부른다
+- **기대 결과**: (a) 첫 호출 201·`status: pending`, 두 번째 200·`replayed: true`이고 행은 하나다. (b) 둘 다 404이며 아무것도 저장되지 않는다. (c) `ledger_get`의 작업 레코드에 `requests.pending`이 1이고, 목록은 도착 순으로 그 요청을 보여 주며 조회만으로는 `status`가 변하지 않는다. (d) 한 쪽만 성공해 `claimed`와 `claim_token`을 받고 다른 쪽은 `conflict`다. (e) 상태는 `claimed`·`dispatch_state: dispatched`로 남는다. (f) 다시 claim한 응답은 `reconcile: true`와 앞선 `operation_key`를 주고 상태는 `reconciling`이며, 다른 operation key의 dispatch는 `conflict`로 거절되고 `observed=not_accepted`를 붙이면 받아들여진다. 만료된 쪽의 토큰으로는 ack도 dispatch도 되지 않는다. (g) `processed`(또는 `failed`)·`result`·`related_seq`가 적히고 그 뒤 claim은 거절된다. (h) 요청 행은 그대로 조회되고, 지워진 작업에 대한 **새** 요청은 409다
+- **검증 AC**: AC-N7

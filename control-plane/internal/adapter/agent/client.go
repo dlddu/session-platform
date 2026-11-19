@@ -6,6 +6,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -689,4 +690,67 @@ func (c *HTTPClient) Stream(ctx context.Context, pod string, offset int64) (io.R
 		return nil, fmt.Errorf("stream from session pod %s: unexpected content type %q", pod, contentType)
 	}
 	return resp.Body, nil
+}
+
+// CreateLedgerRequest stores one user request on a task of the chat slot's
+// ledger (AC-N6, write side). It is the only write on this path and it is not
+// a ledger write: the sidecar appends a row of its own and leaves every task
+// row untouched, so a request arriving while the session is updating the same
+// task cannot take that update out from under it.
+//
+// Routing by pod is what makes it the slot's current ledger, as on the read
+// side. The sidecar's own answers are carried through as the classes a caller
+// can act on: a task this ledger does not have is not found, a reused id or a
+// deleted task is a conflict.
+func (c *HTTPClient) CreateLedgerRequest(ctx context.Context, pod string, in session.LedgerRequestInput) (session.LedgerRequestStored, error) {
+	var stored session.LedgerRequestStored
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return stored, err
+	}
+	body, err := json.Marshal(in)
+	if err != nil {
+		return stored, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL(ip)+"/ledger/requests", bytes.NewReader(body))
+	if err != nil {
+		return stored, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return stored, fmt.Errorf("store task ledger request in session pod %s: %w", pod, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusCreated:
+		if err := json.Unmarshal(raw, &stored); err != nil {
+			return session.LedgerRequestStored{}, fmt.Errorf("store task ledger request in session pod %s: decode: %w", pod, err)
+		}
+		return stored, nil
+	case http.StatusNotImplemented:
+		return stored, fmt.Errorf("%w: %s", session.ErrLedgerUnsupported, ledgerMessage(raw))
+	case http.StatusNotFound:
+		return stored, fmt.Errorf("%w: %s", session.ErrNotFound, ledgerMessage(raw))
+	case http.StatusConflict:
+		return stored, fmt.Errorf("%w: %s", session.ErrConflict, ledgerMessage(raw))
+	case http.StatusBadRequest:
+		return stored, fmt.Errorf("%w: %s", session.ErrInvalidInput, ledgerMessage(raw))
+	default:
+		return stored, fmt.Errorf("store task ledger request in session pod %s: agent returned %d: %s",
+			pod, resp.StatusCode, ledgerMessage(raw))
+	}
+}
+
+// ledgerMessage is the sidecar's own sentence, which names the ledger's view of
+// what went wrong without naming its database file.
+func ledgerMessage(raw []byte) string {
+	var answer struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &answer); err == nil && strings.TrimSpace(answer.Error) != "" {
+		return answer.Error
+	}
+	return strings.TrimSpace(string(raw))
 }

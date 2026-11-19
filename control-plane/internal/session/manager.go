@@ -128,6 +128,10 @@ type Manager interface {
 	// LedgerTasks reads one keyset page of the chat slot's task ledger, read
 	// only and without waking the session (AC-N6).
 	LedgerTasks(ctx context.Context, id string, limit int, afterID string) (LedgerTaskPage, error)
+	// CreateLedgerRequest stores one user request on a ledger task. It writes
+	// no task field and starts no turn: the session finds the request when it
+	// next reads its ledger (AC-N6).
+	CreateLedgerRequest(ctx context.Context, id string, in LedgerRequestInput) (LedgerRequestStored, error)
 	// Recover calls admit with the recovered record before anything is
 	// written, so the caller decides who may see it (AC-K2).
 	Recover(ctx context.Context, id string, opts RestoreOptions, admit func(*Session) error) (*Session, error)

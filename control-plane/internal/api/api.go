@@ -101,6 +101,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/sessions/{id}/tool-approvals/{approvalId}/decide", a.decideToolApproval)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/recover", a.recoverSession)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/ledger/tasks", a.listLedgerTasks)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/ledger/tasks/{taskID}/requests", a.createLedgerRequest)
 }
 
 // ---- request/response DTOs ----
@@ -730,6 +731,54 @@ func (a *API) listLedgerTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
+}
+
+// createLedgerRequest stores one user request on a ledger task (AC-N6, write
+// side). It is the one write on the ledger path, and it writes no task field:
+// the slot appends a row of its own, so a request arriving while the session is
+// updating that same task cannot take the update out from under it.
+//
+// It starts no turn and wakes nothing. The answer says the request is stored
+// and waiting — never that it has been dealt with, which only the session can
+// say by acking it.
+//
+// The author is the caller's own derivation from whatever boundary
+// authenticated the person; like a task's owner it is bookkeeping, and nothing
+// in the ledger grants a tool, an approval or a merge on the strength of it.
+// Scoped like every other session-id route, so another tenant's session answers
+// exactly like a missing one.
+func (a *API) createLedgerRequest(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
+	var body createLedgerRequestReq
+	if err := decodeRequestBody(r.Body, &body, true); err != nil {
+		writeErr(w, err)
+		return
+	}
+	stored, err := a.mgr.CreateLedgerRequest(r.Context(), r.PathValue("id"), session.LedgerRequestInput{
+		ID: body.ID, TaskID: r.PathValue("taskID"), Text: body.Text, Author: body.Author,
+	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	// 200 for a request this id already stored with the same words, 201 for a
+	// first store: a caller retrying an answer it never saw learns which of the
+	// two happened without having to compare the row itself.
+	status := http.StatusCreated
+	if stored.Replayed {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, stored)
+}
+
+// createLedgerRequestReq is one request to store. The task is in the path, so
+// the body cannot name a different one than the URL it was sent to.
+type createLedgerRequestReq struct {
+	ID     string `json:"id"`
+	Text   string `json:"text"`
+	Author string `json:"author"`
 }
 
 // ledgerLimit reads the page size. An absent limit is the ledger's own default;
