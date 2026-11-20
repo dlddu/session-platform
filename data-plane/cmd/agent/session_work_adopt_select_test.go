@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // The selection itself, at the unit it is decided in.
@@ -201,4 +202,122 @@ func contains(all []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// A carried-over loop has to be a row monitor_put would accept.
+//
+// The adoption writes sp_work_monitor directly, so it does not pass through the
+// tool's own validation — and the ledger bounded nothing against this table's
+// limits. A note past the bound, or a loop with no title, lands in a row that
+// monitor_get reads happily and monitor_put then refuses: monitor_put is a full
+// replacement that requires title, state and note, so the parent could never
+// record that its own loop had run again. The row would be readable for ever
+// and writable never.
+//
+// Real ledgers have such rows — a loop that keeps 5 KiB of state in its details
+// is past a 4096-byte note — so this is not a hypothetical.
+func TestAdoptedMonitorIsAlwaysWritableAfterwards(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		row    workMonitor
+		expect func(t *testing.T, got workMonitor, changed []string)
+	}{
+		{
+			name: "a note past the bound is cut to fit",
+			row:  workMonitor{ID: "loop-1", Title: "감시", State: monitorStateRunning, Note: strings.Repeat("가", 2000)},
+			expect: func(t *testing.T, got workMonitor, changed []string) {
+				// 2000 Korean runes is 6000 bytes, which is what a real ledger
+				// row looks like and what the bound is measured in.
+				if len(got.Note) > monitorNoteMax {
+					t.Fatalf("note = %d bytes, want at most %d", len(got.Note), monitorNoteMax)
+				}
+				if !utf8.ValidString(got.Note) {
+					t.Fatal("the cut split a rune, which stores invalid UTF-8")
+				}
+				if len(changed) == 0 || !strings.Contains(strings.Join(changed, " "), "never written again") {
+					t.Fatalf("changed = %v, want it to say why the cut matters", changed)
+				}
+			},
+		},
+		{
+			name: "a loop with no title is named by its id",
+			row:  workMonitor{ID: "loop-2", Title: "   ", State: monitorStateRunning},
+			expect: func(t *testing.T, got workMonitor, changed []string) {
+				if got.Title != "loop-2" {
+					t.Fatalf("title = %q, want the id", got.Title)
+				}
+				if len(changed) == 0 {
+					t.Fatal("renaming the loop was not reported")
+				}
+			},
+		},
+		{
+			name: "a state this record does not have becomes stopped",
+			row:  workMonitor{ID: "loop-3", Title: "감시", State: "completed"},
+			expect: func(t *testing.T, got workMonitor, changed []string) {
+				if got.State != monitorStateStopped {
+					t.Fatalf("state = %q, want %q", got.State, monitorStateStopped)
+				}
+				if len(changed) == 0 {
+					t.Fatal("the state change was not reported")
+				}
+			},
+		},
+		{
+			name: "a row already within the bounds is untouched and reports nothing",
+			row:  workMonitor{ID: "loop-4", Title: "감시", State: monitorStateRunning, Note: "마지막 확인 10:00"},
+			expect: func(t *testing.T, got workMonitor, changed []string) {
+				if got.Note != "마지막 확인 10:00" || got.Title != "감시" || got.State != monitorStateRunning {
+					t.Fatalf("an acceptable row was changed: %+v", got)
+				}
+				if len(changed) != 0 {
+					t.Fatalf("changed = %v, want nothing reported for a row that was already fine", changed)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, changed := adoptableMonitor(test.row)
+			test.expect(t, got, changed)
+			// Whatever it did, the result has to be a row the tool accepts —
+			// that is the whole point, so it is asserted for every case.
+			args := workArgs{ID: got.ID, ExpectedVersion: lvInt(0), Monitor: &workMonitorInput{
+				Title: got.Title, State: got.State, Note: got.Note,
+			}}
+			if err := validateMonitorTool(monitorPutTool, args); err != nil {
+				t.Fatalf("%s would refuse the adopted row: %v", monitorPutTool, err)
+			}
+		})
+	}
+}
+
+func lvInt(v int64) *int64 { return &v }
+
+// End to end: a ledger loop whose details are larger than the note bound is
+// carried, is writable afterwards, and the retirement record says it was cut.
+func TestRetireCarriesAnOverLongMonitorNoteAndSaysSo(t *testing.T) {
+	s, _ := newTestSessionDB(t)
+	seedLegacyLedger(t, s)
+	// The loop keeps more state than a note holds, which is what a real one
+	// that has been running for months looks like.
+	workExec(t, s, "UPDATE sp_ledger_tasks SET document=? WHERE id='task-m'",
+		ledgerTaskDocument(t, "모니터 루프 기록", "watch", "parent", nil, map[string]any{
+			"kind": "monitor", "seen": strings.Repeat("가", 2000),
+		}))
+	out := retireAt(t, s, "r1", false, time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC))
+
+	monitor := mustWork(t, s, monitorGetTool, map[string]any{"id": "task-m"})
+	if len(monitor["note"].(string)) > monitorNoteMax {
+		t.Fatalf("the adopted note is %d bytes, over the bound the tool enforces", len(monitor["note"].(string)))
+	}
+	// The parent can record its loop again, which is what the bound protects.
+	mustWork(t, s, monitorPutTool, map[string]any{
+		"id": "task-m", "request_id": "m1", "expected_version": monitor["version"],
+		"monitor": map[string]any{"title": "모니터 루프 기록", "state": monitorStateRunning, "note": "다시 확인"},
+	})
+	// And the record says it had to cut, so nobody reads the note as whole.
+	dropped := strings.Join(planNotes(t, retirementPlan(t, out), "dropped"), "\n")
+	if !strings.Contains(dropped, "sp_work_monitor:task-m") {
+		t.Fatalf("the retirement record does not name what it changed:\n%s", dropped)
+	}
 }

@@ -507,9 +507,6 @@ func rescuePreservedMonitor(
 		Table: "sp_work_task_legacy", Key: id,
 		Why: "the only copy left of a monitoring loop; carried into sp_work_monitor before this table goes",
 	})
-	if write == nil {
-		return nil
-	}
 	note, err := json.Marshal(monitorNoteOf(decodePreservedDetails(details)))
 	if err != nil {
 		return err
@@ -522,13 +519,22 @@ func rescuePreservedMonitor(
 	if status != "running" {
 		state = monitorStateStopped
 	}
-	name := title
-	if name == "" {
-		name = id
-	}
-	return adoptMonitorRow(ctx, write, workMonitor{
-		ID: id, Title: name, State: state, Note: text, UpdatedAt: workNow(now),
+	// The same coercion the ledger path uses: a rescued row that monitor_put
+	// would refuse could be read for ever and never written again. It runs
+	// before the rehearsal returns, so a dry run names what a real one would
+	// have to change rather than surprising a person with it afterwards.
+	carried, changed := adoptableMonitor(workMonitor{
+		ID: id, Title: title, State: state, Note: text, UpdatedAt: workNow(now),
 	})
+	for _, why := range changed {
+		plan.Dropped = append(plan.Dropped, workAdoptNote{
+			Record: "sp_work_monitor:" + id, Part: "the record as it stood", Why: why,
+		})
+	}
+	if write == nil {
+		return nil
+	}
+	return adoptMonitorRow(ctx, write, carried)
 }
 
 func decodePreservedRelations(raw string) []workBookSession {

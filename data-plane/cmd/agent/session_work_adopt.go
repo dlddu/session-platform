@@ -523,8 +523,18 @@ func adoptMonitor(ctx context.Context, write *sql.Tx, row adoptedTaskRow, plan *
 	}
 	plan.Counts.MonitorsCarried++
 	plan.carried("sp_work_monitor:"+row.id, "the monitoring row", "the parent's loop is still running")
-	if write == nil {
-		return nil
+	// The ledger row carried an owner and session relations. The monitoring
+	// record has neither on purpose — a loop is this parent's own, and the
+	// relations were a convention in a table that had no column for a loop at
+	// all. They are named here rather than vanishing, because "nothing is lost"
+	// is a claim a reader checks key by key.
+	if strings.TrimSpace(row.task.Owner) != "" {
+		plan.dropped("sp_work_monitor:"+row.id, "owner",
+			"a monitoring loop is the parent's own; there is no second owner to record")
+	}
+	if len(row.task.Sessions) != 0 {
+		plan.dropped("sp_work_monitor:"+row.id, fmt.Sprintf("%d session relation(s)", len(row.task.Sessions)),
+			"a loop is not assigned to a session the way work is; the sessions it watches are recomputed each run")
 	}
 	state := monitorStateRunning
 	if row.status != "running" {
@@ -538,9 +548,16 @@ func adoptMonitor(ctx context.Context, write *sql.Tx, row adoptedTaskRow, plan *
 	if text == "{}" {
 		text = ""
 	}
-	return adoptMonitorRow(ctx, write, workMonitor{
+	carried, changed := adoptableMonitor(workMonitor{
 		ID: row.id, Title: row.task.Title, State: state, Note: text, UpdatedAt: workNow(now),
 	})
+	for _, why := range changed {
+		plan.dropped("sp_work_monitor:"+row.id, "the record as it stood", why)
+	}
+	if write == nil {
+		return nil
+	}
+	return adoptMonitorRow(ctx, write, carried)
 }
 
 // monitorNoteOf is what a monitoring row's details still say, minus the

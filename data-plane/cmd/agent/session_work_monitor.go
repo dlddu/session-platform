@@ -23,8 +23,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -291,6 +293,61 @@ func deleteMonitor(ctx context.Context, tx *sql.Tx, a workArgs) (any, error) {
 // ledger. It never overwrites a row the parent has already written here: the
 // parent's own write is the current one, and the ledger copy it came from has
 // been standing still since.
+// adoptableMonitor makes one carried-over loop a row monitor_put would accept,
+// and says what it had to change.
+//
+// The adoption writes sp_work_monitor directly, so it does not pass through
+// validateMonitorTool — and a row that the tool would refuse is worse than one
+// that was never carried. monitor_put is a *full replacement* that requires
+// title, state and note, so a row over the note bound or with an empty title
+// can be read for ever and never written again: the parent would be unable to
+// record that its own loop had run. The ledger bounded neither against this
+// table's limits, and the table has no CHECK to fall back on.
+//
+// So the coercion is here, once, rather than in each caller: the note is cut to
+// the bound the tool enforces (bytes, as len() measures it), and a loop with no
+// title is named by its id, which is what it is called everywhere else. Each
+// change is returned so the retirement record can name it — a note that was cut
+// is a note the parent will replace on its next write anyway, but nothing may
+// claim it is whole when it is not.
+func adoptableMonitor(row workMonitor) (workMonitor, []string) {
+	changed := []string{}
+	if strings.TrimSpace(row.Title) == "" {
+		row.Title = row.ID
+		changed = append(changed, "the loop had no title, so it is named by its id")
+	}
+	if len(row.Title) > workTitleMax {
+		row.Title = truncateUTF8(row.Title, workTitleMax)
+		changed = append(changed, fmt.Sprintf("the title was over %d bytes and was cut", workTitleMax))
+	}
+	if len(row.Note) > monitorNoteMax {
+		was := len(row.Note)
+		row.Note = truncateUTF8(row.Note, monitorNoteMax)
+		changed = append(changed, fmt.Sprintf(
+			"the note was %d bytes, over the %d this record holds, and was cut to fit — "+
+				"a row over the bound could be read but never written again", was, monitorNoteMax))
+	}
+	if !isMonitorState(row.State) {
+		row.State = monitorStateStopped
+		changed = append(changed, "the state was not one this record has, so the loop is recorded as stopped")
+	}
+	return row, changed
+}
+
+// truncateUTF8 cuts s to at most limit bytes without splitting a rune. A split
+// rune would make the stored text invalid UTF-8, which is a different problem
+// from the one being fixed.
+func truncateUTF8(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
+}
+
 func adoptMonitorRow(ctx context.Context, tx *sql.Tx, row workMonitor) error {
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO sp_work_monitor (id,title,state,note,version,updated_at)
