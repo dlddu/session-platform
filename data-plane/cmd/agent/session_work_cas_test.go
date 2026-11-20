@@ -147,11 +147,14 @@ func TestWorkTurnDispatchIsOwnedBoundedAndIdempotent(t *testing.T) {
 		"turn":                  map[string]any{"request": "사람의 말"},
 	})["turn"].(map[string]any)["id"].(float64))
 
-	// Nobody holds it yet, so there is nobody to act for it.
+	// Nobody holds it yet, so there is nobody to act for it. A well-formed
+	// token that holds nothing is still refused — the check is on who holds the
+	// turn, not on whether a token was typed.
 	_, seq = turnCursor(t, s, "task-a")
 	wantWorkCode(t, s, "turn_dispatch", map[string]any{
 		"task_id": "task-a", "turn_id": turnID, "request_id": "d0",
 		"expected_version": version, "expected_turn_version": seq,
+		"claim_token":   "00000000000000000000000000000000",
 		"operation_key": "op-1", "operation_target": "pull/1", "dispatch_state": "intended",
 	}, "conflict")
 
@@ -357,5 +360,162 @@ func TestWorkWritesRequireTheirCASCounter(t *testing.T) {
 		if result["isError"] != true {
 			t.Fatalf("%s was admitted without naming its counter", tc.name)
 		}
+	}
+}
+
+// takeTurn claims a turn and returns its id and the claim token that holding it
+// means. Dispatch needs the token, not just the timestamp.
+func takeTurn(t *testing.T, s *sessionDB, taskID, requestID string, version int64) (int64, string) {
+	t.Helper()
+	_, seq := turnCursor(t, s, taskID)
+	appended := mustWork(t, s, "turn_append", map[string]any{
+		"task_id": taskID, "request_id": requestID + "-append", "expected_version": version,
+		"expected_turn_version": seq, "turn": map[string]any{"request": "사람의 말"},
+	})["turn"].(map[string]any)
+	id := int64(appended["id"].(float64))
+	_, seq = turnCursor(t, s, taskID)
+	claimed := mustWork(t, s, "turn_patch", map[string]any{
+		"task_id": taskID, "turn_id": id, "request_id": requestID + "-claim",
+		"expected_version": version, "expected_turn_version": seq,
+		"turn": map[string]any{"started_at": "2026-11-20T00:00:00Z"},
+	})
+	token, ok := claimed["claim_token"].(string)
+	if !ok || token == "" {
+		t.Fatalf("taking a turn returned no claim token: %v", claimed)
+	}
+	return id, token
+}
+
+// The ownership the handover claims has to be enforced, not asserted.
+//
+// Measured before this guard existed: a second caller that simply re-read the
+// counters could record an outside action for a turn another parent was
+// working — `started_at` is a timestamp, not an identity, so the counters alone
+// admitted it. The claim token is what makes "only the parent that took it may
+// act" true.
+func TestWorkTurnDispatchNeedsTheClaimThatHoldsTheTurn(t *testing.T) {
+	s, _ := newTestSessionDB(t)
+	newWorkTask(t, s, "task-a", "c1", nil)
+	version, _ := turnCursor(t, s, "task-a")
+	id, token := takeTurn(t, s, "task-a", "r1", version)
+
+	// A second caller with current counters but no token is refused.
+	_, seq := turnCursor(t, s, "task-a")
+	wantWorkCode(t, s, "turn_dispatch", map[string]any{
+		"task_id": "task-a", "turn_id": id, "request_id": "other-1",
+		"expected_version": version, "expected_turn_version": seq,
+		"claim_token":   "0000000000000000000000000000000f",
+		"operation_key": "op-other", "operation_target": "pull/9", "dispatch_state": "dispatched",
+	}, "conflict")
+	// Nothing was recorded for it.
+	if row := workRow(t, s, "SELECT operation_key FROM sp_work_turn_admin WHERE turn_id=?", id); row != nil {
+		t.Fatalf("a caller without the claim recorded an action: %v", row)
+	}
+
+	// The holder succeeds.
+	_, seq = turnCursor(t, s, "task-a")
+	mustWork(t, s, "turn_dispatch", map[string]any{
+		"task_id": "task-a", "turn_id": id, "request_id": "d1",
+		"expected_version": version, "expected_turn_version": seq,
+		"claim_token":   token,
+		"operation_key": "op-1", "operation_target": "pull/1", "dispatch_state": dispatchIntended,
+	})
+
+	// Handing the turn back destroys the token, so the old holder cannot keep
+	// acting for work it has released.
+	_, seq = turnCursor(t, s, "task-a")
+	mustWork(t, s, "turn_patch", map[string]any{
+		"task_id": "task-a", "turn_id": id, "request_id": "handback",
+		"expected_version": version, "expected_turn_version": seq,
+		"turn": map[string]any{"started_at": nil},
+	})
+	_, seq = turnCursor(t, s, "task-a")
+	wantWorkCode(t, s, "turn_dispatch", map[string]any{
+		"task_id": "task-a", "turn_id": id, "request_id": "d-after-handback",
+		"expected_version": version, "expected_turn_version": seq,
+		"claim_token":   token,
+		"operation_key": "op-1", "operation_target": "pull/1", "dispatch_state": dispatchDispatched,
+	}, "conflict")
+
+	// Re-taking it mints a different token, and the stale one stays refused.
+	_, seq = turnCursor(t, s, "task-a")
+	retaken := mustWork(t, s, "turn_patch", map[string]any{
+		"task_id": "task-a", "turn_id": id, "request_id": "retake",
+		"expected_version": version, "expected_turn_version": seq,
+		"turn": map[string]any{"started_at": "2026-11-20T01:00:00Z"},
+	})["claim_token"].(string)
+	if retaken == token {
+		t.Fatal("re-taking a turn reissued the same token")
+	}
+	_, seq = turnCursor(t, s, "task-a")
+	wantWorkCode(t, s, "turn_dispatch", map[string]any{
+		"task_id": "task-a", "turn_id": id, "request_id": "d-stale",
+		"expected_version": version, "expected_turn_version": seq,
+		"claim_token":   token,
+		"operation_key": "op-1", "operation_target": "pull/1", "dispatch_state": dispatchDispatched,
+	}, "conflict")
+}
+
+// What a recorded operation key is allowed to become. The key is the handle the
+// outside system deduplicates on, so it has to keep naming the same action, and
+// "handed over" cannot be unsaid.
+func TestWorkTurnDispatchKeyAndStateAreNotRewritten(t *testing.T) {
+	s, _ := newTestSessionDB(t)
+	newWorkTask(t, s, "task-a", "c1", nil)
+	version, _ := turnCursor(t, s, "task-a")
+	id, token := takeTurn(t, s, "task-a", "r1", version)
+
+	dispatch := func(requestID, key, target, state, observed string) string {
+		t.Helper()
+		_, seq := turnCursor(t, s, "task-a")
+		args := map[string]any{
+			"task_id": "task-a", "turn_id": id, "request_id": requestID,
+			"expected_version": version, "expected_turn_version": seq,
+			"claim_token":   token,
+			"operation_key": key, "operation_target": target, "dispatch_state": state,
+		}
+		if observed != "" {
+			args["observed"] = observed
+		}
+		_, code := workCall(t, s, "turn_dispatch", args)
+		return code
+	}
+
+	if code := dispatch("d1", "op-1", "pull/1", dispatchIntended, ""); code != "" {
+		t.Fatalf("first intent refused: %s", code)
+	}
+	// intended -> dispatched is the forward step and is allowed.
+	if code := dispatch("d2", "op-1", "pull/1", dispatchDispatched, ""); code != "" {
+		t.Fatalf("handing over refused: %s", code)
+	}
+	// Re-recording the same key and target under a new request_id is allowed:
+	// that is what an idempotency key is for, and the outside system dedupes on
+	// it. The platform records intent; it cannot make an outside call happen
+	// exactly once.
+	if code := dispatch("d3", "op-1", "pull/1", dispatchDispatched, ""); code != "" {
+		t.Fatalf("re-recording the same key and target refused: %s", code)
+	}
+	// dispatched -> intended is refused: it would erase that something left.
+	if code := dispatch("d4", "op-1", "pull/1", dispatchIntended, ""); code != "conflict" {
+		t.Fatalf("rewinding dispatched to intended = %q, want conflict", code)
+	}
+	// The same key cannot be pointed at a different target.
+	if code := dispatch("d5", "op-1", "pull/999", dispatchDispatched, ""); code != "conflict" {
+		t.Fatalf("moving a key to another target = %q, want conflict", code)
+	}
+	// And what was recorded is unchanged by the refusals.
+	row := workRow(t, s,
+		"SELECT operation_key,operation_target,dispatch_state FROM sp_work_turn_admin WHERE turn_id=?", id)
+	if row["operation_key"] != "op-1" || row["operation_target"] != "pull/1" ||
+		row["dispatch_state"] != dispatchDispatched {
+		t.Fatalf("a refused dispatch changed the record: %v", row)
+	}
+	// A different key still needs evidence the first never landed, and then it
+	// may name its own target.
+	if code := dispatch("d6", "op-2", "pull/2", dispatchIntended, ""); code != "conflict" {
+		t.Fatalf("a second key without evidence = %q, want conflict", code)
+	}
+	if code := dispatch("d7", "op-2", "pull/2", dispatchIntended, "not_accepted"); code != "" {
+		t.Fatalf("a second key with observed=not_accepted refused: %s", code)
 	}
 }

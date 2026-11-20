@@ -16,8 +16,8 @@
 | 작업 만들기·갱신 | `ledger_put` | `task_put` |
 | 작업 지우기 | `ledger_delete` | `task_delete` |
 | 사람 요청 발견 | `ledger_requests_list` | `turn_list({open:true})` |
-| 요청 접수 | `ledger_requests_claim` | `turn_patch` 로 `started_at` 쓰기 = 접수(§3) |
-| 외부 행동 기장 | `ledger_requests_dispatch` | `turn_dispatch` |
+| 요청 접수 | `ledger_requests_claim` | `turn_patch` 로 `started_at` 쓰기 = 접수, 응답의 `claim_token` 보관(§3) |
+| 외부 행동 기장 | `ledger_requests_dispatch` | `turn_dispatch` + `claim_token`(§3) |
 | 결과 기록 | `ledger_requests_ack` | `turn_patch`(response·explanation·ended_at) + `expected_turn_version` |
 | 보낼 선택지 | `ledger_choices_put` | `turn_patch`의 `choices` |
 | 승인·커서·보존 기장 | `ledger_put`의 `details`·`sessions` | **`work_legacy_put`** + `expected_book_version` (§4) |
@@ -57,8 +57,9 @@ task_list({session_id: "none"})          # 배정되지 않은 것만 ("none" �
 ## 3. 사람 요청 소비 — claim 이 없어진 이유와 대신 할 일
 
 원장에서는 요청이 작업 **옆의 행**이었으므로 누가 가져갔는지 표시할
-`claim` 이 필요했다. 턴은 작업 **안의 사건**이고, 그 작업의 version 이 이미
-경합을 막는다. 그래서 claim 토큰은 없고, 대신 이렇게 한다:
+`claim` 이 필요했다. 턴은 작업 **안의 사건**이지만, **소유는 여전히 토큰으로
+표시해야 한다** — 카운터는 동시 쓰기를 가릴 뿐 누가 쥐었는지 말하지 못한다.
+그래서 접수는 이렇게 한다:
 
 ```
 1) turn_list({task_id, open: true})
@@ -68,7 +69,10 @@ task_list({session_id: "none"})          # 배정되지 않은 것만 ("none" �
       expected_version: <task_get 의 현재 version>,
       expected_turn_version: <1)에서 읽은 turn_version>,
       turn: {started_at: <지금>, instruction: <세션에 넘긴 원문>}})
+   → 응답의 **claim_token** 을 보관한다. 이것이 「이 턴을 내가 쥐고 있다」는
+     증거이고 turn_dispatch 가 요구한다. 읽기 뷰에는 절대 담기지 않는다.
 3) 외부 행동 전에  turn_dispatch({..., expected_turn_version: <다시 읽은 값>,
+      claim_token: <2)에서 받은 토큰>,
       operation_key, operation_target, dispatch_state: "intended"})
       →  행동  →  "dispatched"
 4) 끝났으면  turn_patch({..., expected_turn_version: <다시 읽은 값>, turn: {
@@ -95,19 +99,41 @@ task_list({session_id: "none"})          # 배정되지 않은 것만 ("none" �
   턴에 다시 쓰는 것은 **거절**된다 — 카운터만으로는 막히지 않는다(다른 부모가
   집은 **뒤에** 다시 읽은 부모는 최신 카운터를 들고 있다). 되돌리려면
   `started_at: null` 로 **명시적으로 반납**하고, 그 뒤에 다시 집을 수 있다.
-- **소유** = 집은 부모만 그 턴을 위해 외부 행동을 기장할 수 있다. 아무도 집지
-  않은 턴의 `turn_dispatch` 는 거절된다(행동할 주체가 없다).
+- **소유** = 집은 부모만 그 턴을 위해 외부 행동을 기장할 수 있고, 그것을
+  증명하는 것은 **`claim_token`** 이다. 아무도 집지 않은 턴의 `turn_dispatch`
+  는 거절되고, 토큰이 없거나 맞지 않는 호출도 거절된다. 턴을 반납하면
+  (`started_at: null`) 토큰은 **파기**되므로 놓은 일에 계속 행동할 수 없고,
+  다시 집으면 **다른 토큰**이 발급돼 낡은 토큰은 계속 거절된다.
+
+  > **이전 문서는 이것을 보장하지 않은 채 주장했다.** `dispatchWorkTurn` 은
+  > `started_at != nil` 만 보았고 `started_at` 은 시각이지 신원이 아니다.
+  > 실측 결과 **카운터만 다시 읽은 다른 호출자의 dispatch 가 그대로 허용**
+  > 됐다. 그래서 claim 토큰을 내부관리 영역(`sp_work_turn_claim`)에 넣어
+  > 실제로 막는다 — 합의한 task/turn 에는 필드를 더하지 않았다.
 - **종료된 턴**: `turn_dispatch` 는 거절된다(끝난 일에 행동을 허가할 수 없다).
   `turn_patch` 로 `request`·`instruction`·`response`·`explanation` 을 **다시
   쓰는 것도 거절**된다 — 그 네 개는 사람이 이미 본 원문이다. 고쳐야 하면
   `ended_at: null` 로 다시 열거나 다음 턴을 추가한다. 질문·선택지·산출물·
   session_seq 정리는 그대로 허용된다.
 - **멱등 replay**: 같은 `request_id` 는 그때 커밋된 답을 돌려주고 **카운터를
-  다시 올리지 않는다** — replay 가 두 번째 실행 허가가 되지 않는다. 같은
-  operation_key 라도 **낡은 카운터**로는 거절되므로, 자기가 처음이라고 믿는
-  재시도가 두 번 행동할 수 없다.
+  다시 올리지 않는다**. 같은 operation_key 라도 **낡은 카운터**로는 거절된다.
+- **같은 key·같은 target 의 재기장은 허용된다**(새 `request_id` 로도). 그것이
+  idempotency key 의 용도이고, 중복을 걸러내는 쪽은 **외부 시스템**이다.
+- **되감기 금지**: 한 번 `dispatched` 로 적힌 턴은 `intended` 로 돌아갈 수
+  없다 — 넘어갔다는 사실을 지우면 뒤에 읽는 쪽이 아무것도 나가지 않은 것으로
+  믿는다.
+- **key 는 target 을 바꿀 수 없다**: 같은 operation_key 로 다른
+  `operation_target` 을 적으려 하면 거절된다. key 가 가리키는 행동이 달라지면
+  기록이 한 일과 다른 것을 말하게 된다.
 - **다른 operation_key**: 이미 기장된 턴에 다른 key 는 `observed=not_accepted`
   (앞 시도가 닿지 않았음을 확인했다는 진술) 없이는 거절된다.
+
+> **이 플랫폼은 외부 exactly-once 를 보장하지 않는다.** 보장하는 것은 이것뿐
+> 이다: 한 턴에 **한 번에 하나의 기록된 의도**, 그것을 쓸 수 있는 **한 명의
+> 소유자**, **되감기 불가**, **key→target 불변**. 바깥에서 그 행동이 한 번만
+> 일어나게 하는 것은 `operation_key` 로 중복을 걸러내는 **외부 시스템의
+> 몫**이고, 그 key 를 먼저 적고 나서 행동하는 것이 부모의 몫이다. CAS 카운터는
+> 동시 쓰기를 가려 주지만 바깥 호출을 되돌리지는 못한다.
 
 **`response` 와 `explanation` 을 바꿔 쓰지 않는다.** `response` 는 일을 한
 세션이 **스스로 쓴 원문**이고, `explanation` 은 부모가 사람에게 쓴 문장이다.

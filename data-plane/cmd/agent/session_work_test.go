@@ -31,6 +31,19 @@ func fillWorkCASArgs(t *testing.T, s *sessionDB, name string, args map[string]an
 	default:
 		return
 	}
+	// A dispatch also needs the token that holds the turn. Tests about
+	// something else get the live one; the ownership contract itself is pinned
+	// by session_work_cas_test.go, which passes tokens explicitly (including
+	// wrong and stale ones).
+	if name == "turn_dispatch" {
+		if _, named := args["claim_token"]; !named {
+			if turnID, ok := args["turn_id"]; ok {
+				if token := liveClaimToken(t, s, turnID); token != "" {
+					args["claim_token"] = token
+				}
+			}
+		}
+	}
 	if _, named := args[lane]; named {
 		return
 	}
@@ -443,4 +456,32 @@ func TestWorkSchemaHasOnlyTheAgreedColumns(t *testing.T) {
 	if indexed != 1 {
 		t.Fatal("sp_work_turns has no (task_id, id) index")
 	}
+}
+
+// liveClaimToken reads the token currently holding one turn, or "" when nothing
+// holds it.
+func liveClaimToken(t *testing.T, s *sessionDB, turnID any) string {
+	t.Helper()
+	ctx := context.Background()
+	db, err := s.handle(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id int64
+	switch v := turnID.(type) {
+	case int64:
+		id = v
+	case int:
+		id = int64(v)
+	case float64:
+		id = int64(v)
+	default:
+		return ""
+	}
+	var token string
+	err = db.QueryRowContext(ctx, "SELECT claim_token FROM sp_work_turn_claim WHERE turn_id=?", id).Scan(&token)
+	if err != nil {
+		return ""
+	}
+	return token
 }

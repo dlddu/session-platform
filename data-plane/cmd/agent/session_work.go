@@ -88,6 +88,11 @@ CREATE TABLE IF NOT EXISTS sp_work_turn_admin (
 	dispatch_state TEXT NOT NULL,
 	dispatched_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sp_work_turn_claim (
+	turn_id INTEGER PRIMARY KEY,
+	claim_token TEXT NOT NULL,
+	claimed_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sp_work_task_guard (
 	task_id TEXT PRIMARY KEY,
 	turn_version INTEGER NOT NULL,
@@ -265,6 +270,10 @@ type workArgs struct {
 	// Legacy is the parent's own bookkeeping beside a task, not part of the
 	// agreed task (session_work_parent.go).
 	Legacy *workLegacyInput `json:"record,omitempty"`
+	// ClaimToken proves the caller is the parent that took this turn. It is
+	// internal management state, not a field of the agreed turn
+	// (session_work_turns.go).
+	ClaimToken string `json:"claim_token,omitempty"`
 }
 
 var workTools = []string{

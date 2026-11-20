@@ -85,7 +85,7 @@ func workToolDefinitions() []map[string]any {
 		},
 		{
 			"name":        "turn_patch",
-			"description": "Fills in fields of one existing turn — the instruction that went out, the session's final answer, the parent's explanation, a question and its choices, timestamps. Only the fields named are touched; an explicit null clears one. expected_version must be the task's current version.",
+			"description": "Fills in fields of one existing turn — the instruction that went out, the session's final answer, the parent's explanation, a question and its choices, timestamps. Only the fields named are touched; an explicit null clears one. Writing started_at takes the turn and the reply carries a claim_token that turn_dispatch requires; clearing started_at hands the turn back and destroys that token. Taking a turn that is already taken is refused.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 				"task_id": str(), "turn_id": integer(1), "request_id": str(), "expected_version": integer(1),
 				"expected_turn_version": integer(1),
@@ -106,8 +106,9 @@ func workToolDefinitions() []map[string]any {
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 				"task_id": str(), "turn_id": integer(1), "request_id": str(), "expected_version": integer(1),
 				"expected_turn_version": integer(1),
+				"claim_token":           str(),
 				"operation_key":         str(), "operation_target": str(), "dispatch_state": str(), "observed": str(),
-			}, "required": []string{"task_id", "turn_id", "request_id", "expected_version", "expected_turn_version", "operation_key", "dispatch_state"}, "additionalProperties": false},
+			}, "required": []string{"task_id", "turn_id", "request_id", "expected_version", "expected_turn_version", "claim_token", "operation_key", "dispatch_state"}, "additionalProperties": false},
 		},
 		{
 			"name":        "work_migrate",
@@ -203,6 +204,9 @@ func validateWork(name string, a workArgs) error {
 	case "turn_append", "turn_patch":
 		return validateWorkTurnInput(name, a.Turn)
 	case "turn_dispatch":
+		if !ledgerID.MatchString(a.ClaimToken) {
+			return bad("claim_token must be the token turn_patch returned when this turn was taken")
+		}
 		return validateWorkDispatch(a)
 	case workLegacyPutTool:
 		return validateWorkLegacyInput(a.Legacy)

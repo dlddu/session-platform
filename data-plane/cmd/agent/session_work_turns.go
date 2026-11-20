@@ -203,6 +203,19 @@ func patchWorkTurn(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (
 			"this turn was already taken at "+*current.StartedAt+
 				"; clear started_at to hand it back before taking it again")
 	}
+	// Taking the turn mints the claim token that turn_dispatch requires, and
+	// handing it back destroys it. The counters cannot do this job: a second
+	// parent that re-reads them holds current values, so without a token it
+	// could record an outside action for work it does not hold.
+	taking := a.Turn.named("started_at") && !a.Turn.cleared("started_at")
+	handingBack := a.Turn.named("started_at") && a.Turn.cleared("started_at")
+	issued := ""
+	if taking {
+		issued, err = newClaimToken()
+		if err != nil {
+			return nil, err
+		}
+	}
 	// A turn that has ended is finished work, and what was said and answered on
 	// it is what a person has already been shown. Those four fields are the
 	// verbatim record, so they are not rewritten after the fact — reopen the
@@ -277,11 +290,31 @@ func patchWorkTurn(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (
 	if err := touchWorkTask(ctx, tx, a.TaskID, now); err != nil {
 		return nil, err
 	}
+	if taking {
+		if _, err = tx.ExecContext(ctx,
+			`INSERT INTO sp_work_turn_claim (turn_id,claim_token,claimed_at) VALUES (?,?,?)
+			 ON CONFLICT(turn_id) DO UPDATE SET claim_token=excluded.claim_token, claimed_at=excluded.claimed_at`,
+			*a.TurnID, issued, workNow(now)); err != nil {
+			return nil, err
+		}
+	}
+	if handingBack {
+		if _, err = tx.ExecContext(ctx,
+			"DELETE FROM sp_work_turn_claim WHERE turn_id=?", *a.TurnID); err != nil {
+			return nil, err
+		}
+	}
 	turn, err := loadWorkTurn(ctx, tx, a.TaskID, *a.TurnID)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"turn": turn, "turn_version": turnVersion}, nil
+	result := map[string]any{"turn": turn, "turn_version": turnVersion}
+	if issued != "" {
+		// Returned once, to the parent that took the turn. It is not in any
+		// read view: nothing a person reads carries it.
+		result["claim_token"] = issued
+	}
+	return result, nil
 }
 
 // listWorkTurns pages a task's turns oldest first. open=true is the parent's
@@ -362,22 +395,56 @@ func dispatchWorkTurn(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time
 			"this turn ended at "+*turn.EndedAt+"; it cannot dispatch anything further")
 	}
 	// Only the parent holding the turn may act for it. A turn nobody has taken
-	// has nobody to act for it, and acting for one somebody else took is how
-	// the same outside action happens twice.
+	// has nobody to act for it.
 	if turn.StartedAt == nil {
 		return nil, ledgerFail("conflict",
 			"this turn has not been taken: write started_at with turn_patch before dispatching for it")
 	}
-	var recordedKey, recordedState string
+	// Holding it means holding its claim token. started_at alone is a
+	// timestamp, not an identity — measured, a second caller that re-read the
+	// counters could record an outside action for a turn the first parent was
+	// working. The token is what the counters cannot provide.
+	var heldToken string
 	err = tx.QueryRowContext(ctx,
-		"SELECT operation_key,dispatch_state FROM sp_work_turn_admin WHERE turn_id=?", *a.TurnID).
-		Scan(&recordedKey, &recordedState)
+		"SELECT claim_token FROM sp_work_turn_claim WHERE turn_id=?", *a.TurnID).Scan(&heldToken)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ledgerFail("conflict",
+			"this turn has no live claim: take it again with turn_patch(started_at) and use the claim_token it returns")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if a.ClaimToken == "" || a.ClaimToken != heldToken {
+		return nil, ledgerFail("conflict",
+			"claim_token does not hold this turn; the parent that took it holds it. "+
+				"Do not act outside on its behalf — read the turn again")
+	}
+	var recordedKey, recordedTarget, recordedState string
+	err = tx.QueryRowContext(ctx,
+		"SELECT operation_key,operation_target,dispatch_state FROM sp_work_turn_admin WHERE turn_id=?", *a.TurnID).
+		Scan(&recordedKey, &recordedTarget, &recordedState)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 	if recordedKey != "" && recordedKey != a.OperationKey && a.Observed != "not_accepted" {
 		return nil, ledgerFail("conflict",
 			"this turn already recorded operation_key "+recordedKey+"; establish what it did before dispatching another")
+	}
+	if recordedKey != "" && recordedKey == a.OperationKey {
+		// The key is what the outside system deduplicates on, so it has to keep
+		// naming the same action. Letting the target move under it would make
+		// the record say one thing was done while another was.
+		if recordedTarget != a.OperationTarget {
+			return nil, ledgerFail("conflict",
+				"operation_key "+recordedKey+" already names target "+recordedTarget+
+					"; a key cannot be reused for a different target")
+		}
+		// dispatched means it was handed over. Rewinding to intended would
+		// erase that, and a later reader would believe nothing had left.
+		if recordedState == dispatchDispatched && a.DispatchState == dispatchIntended {
+			return nil, ledgerFail("conflict",
+				"this turn already recorded dispatched; it cannot go back to intended")
+		}
 	}
 	stamp := workNow(now)
 	if _, err := tx.ExecContext(ctx,

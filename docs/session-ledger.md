@@ -400,12 +400,29 @@ lane's counter that does the excluding.
 task id is retired permanently, so a later create under it is a conflict rather
 than a revival.
 
-A turn's lifecycle is owned: writing `started_at` is taking the turn, and taking
-one that is already taken is refused (clearing `started_at` hands it back).
-`turn_dispatch` requires the turn to be taken and not ended, so an action is
-never authorised for work nobody holds or work already finished, and a replayed
-`request_id` returns the committed answer **without** moving the counter — a
-replay is not a second permission. Once a turn has ended, its `request`,
+A turn's lifecycle is owned, and ownership is a token rather than a timestamp.
+Writing `started_at` takes the turn and returns a `claim_token`; taking one that
+is already taken is refused, and clearing `started_at` hands it back and
+destroys the token. `turn_dispatch` requires that token, the turn to be taken,
+and the turn not to have ended. An earlier revision checked only that
+`started_at` was set, which is a time and not an identity — measured, a second
+caller that merely re-read the counters was allowed to record an outside action
+for a turn another parent was working. The token lives in internal management
+(`sp_work_turn_claim`), not in the agreed turn, and never appears in a read
+view.
+
+Once a key is recorded it keeps naming the same action: the same
+`operation_key` may be re-recorded (that is what an idempotency key is for) but
+may **not** be pointed at a different `operation_target`, and `dispatched` may
+not be rewound to `intended` — unsaying "it left" would let a later reader
+believe nothing had. A replayed `request_id` returns the committed answer
+**without** moving the counter.
+
+**None of this is external exactly-once, and it is not claimed to be.** What the
+slot guarantees is one recorded intent per turn, a single holder who may write
+it, no rewind, and a key that cannot change its target. Making the outside
+action happen once is the outside system's job, keyed on `operation_key`, which
+is why the parent records the key *before* acting. Once a turn has ended, its `request`,
 `instruction`, `response` and `explanation` are the record a person was shown
 and are not rewritten; reopen it by clearing `ended_at`, or append the next
 turn.
