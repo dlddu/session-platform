@@ -91,6 +91,12 @@ const adoptMonitorKind = "monitor"
 
 // workLiveDetailKeys are the details keys that are current state the parent
 // acts on, each with why it is still needed. Everything here is carried.
+//
+// The list is not a guess about what a parent might want: every entry is a key
+// the managing skillset actually reads (plugin-marketplace skillset/
+// task-session-lifecycle and task-monitoring-lifecycle). That is what makes
+// "only what is needed" checkable — a key is live because a consumer reads it,
+// not because it looked important.
 var workLiveDetailKeys = map[string]string{
 	"kind":             "what this row is",
 	"approval":         "the approval scope in force",
@@ -105,6 +111,26 @@ var workLiveDetailKeys = map[string]string{
 	"notification":     "who was notified and whether it has been sent",
 	"direct_execution": "the responsibility the parent took for running this itself",
 	"responsibility":   "the responsibility the parent took for running this itself",
+
+	// The keys the lifecycle skillset reads every run. They were reaching the
+	// owned record through the unclassified catch-all, which carried them but
+	// reported each one as a key nothing here recognised — so every ordinary
+	// row asked a person about state the parent depends on.
+	"lifecycle":     "the stage, wait reason and next action the parent judges state from",
+	"stage":         "the display summary of lifecycle.stage, kept in the same record",
+	"resumption":    "an in-flight restore: its operation key, state and evidence",
+	"observation":   "the platform and execution state last observed, with its source",
+	"monitor_ref":   "which monitoring loop this task is connected to",
+	"monitoring":    "the parent's own scheduling record for this task",
+	"queue":         "the single-queue form of that scheduling record",
+	"blocker":       "what is blocking this task, which the handover reads",
+	"next_action":   "what comes next and whose it is, which the handover reads",
+	"report":        "the handover display, including the remaining steps",
+	"priority":      "the order the parent works tasks in",
+	"goal":          "what this task is for, as the parent recorded it",
+	"cleanup_check": "the cleanup the parent still owes",
+	"reuse_plans":   "the sessions this task plans to reuse",
+	"archive":       "the archive state the parent tracks",
 }
 
 // workPastDetailKeys are the details keys that record something that already
@@ -126,7 +152,6 @@ var workPastDetailKeys = map[string]string{
 	"operation":          "an outside action is recorded on the turn it belongs to (turn_dispatch)",
 	"external_operation": "an outside action is recorded on the turn it belongs to (turn_dispatch)",
 	"intent":             "an outside action is recorded on the turn it belongs to (turn_dispatch)",
-	"next_action":        "what comes next is the question and choices of the open turn",
 }
 
 // adoptedTask is the ledger's task document, read for the fields something
@@ -452,11 +477,20 @@ func liveRelations(all []workBookSession) ([]workBookSession, []string) {
 	return live, dropped
 }
 
-// liveDetails splits the details JSON by what still has a consumer. The third
-// return is the keys this image has no judgement about: they are carried,
-// because a key nothing here recognises might be live state, and dropping it on
-// a guess is the one mistake that cannot be noticed from the outside. They are
-// reported so that a person can decide, which is what the rehearsal is for.
+// liveDetails splits the details JSON by what still has a consumer.
+//
+// The third return is the keys this image has no judgement about. They are
+// carried, and that is deliberately not a loophole in "only what is needed":
+// dropping a key nothing here recognises is the one mistake that cannot be
+// noticed from the outside — the record would simply be missing state nobody
+// knew to look for. So an unrecognised key is carried *and named*, which is
+// what the rehearsal is for, and the answer to a key that keeps showing up
+// there is to classify it from its consumer rather than to widen the default.
+//
+// That is what happened to the lifecycle keys: they were reaching the record
+// through this path, so nothing was lost, but every ordinary row reported them
+// as unrecognised. Reading the managing skillset settled each one, and the
+// catch-all went back to being the narrow safety net it is meant to be.
 func liveDetails(details map[string]any) (map[string]any, []string, []string) {
 	live := map[string]any{}
 	dropped := []string{}

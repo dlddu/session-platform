@@ -42,13 +42,20 @@ func TestLiveDetailsSelectsRatherThanCopying(t *testing.T) {
 		"intent":      "PR 올리기",
 		"next_action": "리뷰 받기",
 
+		"lifecycle":   map[string]any{"stage": "implementation"},
+		"resumption":  map[string]any{"state": "intent"},
+		"blocker":     "리뷰 대기",
+		"monitor_ref": map[string]any{"id": "loop-1"},
+
 		"부모가 쓰는 무언가": "이 이미지가 모르는 키",
 	}
 	live, dropped, unclassified := liveDetails(details)
 
 	// Current state the parent acts on comes across.
 	for _, key := range []string{"approval", "restrictions", "preservation", "cancellation",
-		"notification", "direct_execution", "kind"} {
+		"notification", "direct_execution", "kind",
+		// The lifecycle keys, which the managing skillset reads every run.
+		"lifecycle", "resumption", "blocker", "monitor_ref", "next_action"} {
 		if _, ok := live[key]; !ok {
 			t.Errorf("liveDetails dropped %q, which is the state the parent acts on", key)
 		}
@@ -57,7 +64,7 @@ func TestLiveDetailsSelectsRatherThanCopying(t *testing.T) {
 	// the work holds its own result and artifacts, and the dispatch record holds
 	// the intent.
 	for _, key := range []string{"result", "summary", "pr", "head", "links", "validation", "provenance",
-		"observed_at", "history", "events", "log", "operation", "intent", "next_action"} {
+		"observed_at", "history", "events", "log", "operation", "intent"} {
 		if _, ok := live[key]; ok {
 			t.Errorf("liveDetails carried %q, which records something that already happened", key)
 		}
@@ -78,6 +85,26 @@ func TestLiveDetailsSelectsRatherThanCopying(t *testing.T) {
 	// rehearsal would ask a person about every ordinary row.
 	if contains(unclassified, "approval") {
 		t.Errorf("unclassified = %v, want only the keys this image has no judgement about", unclassified)
+	}
+	// The catch-all is a narrow safety net, not the path ordinary state travels
+	// on. A key the managing skillset reads every run must be classified, or
+	// every real row asks a person about state the parent depends on — which is
+	// how these keys were reaching the record before.
+	for _, key := range []string{"lifecycle", "resumption", "observation", "monitor_ref", "monitoring",
+		"blocker", "next_action", "report", "priority", "goal", "stage"} {
+		if workLiveDetailKeys[key] == "" {
+			t.Errorf("%q is read by the managing skillset but is not classified live", key)
+		}
+		if _, past := workPastDetailKeys[key]; past {
+			t.Errorf("%q is read by the managing skillset but is classified as past-tense", key)
+		}
+	}
+	// And the two lists cannot both claim a key: a key in both would be carried
+	// or dropped depending on which map was consulted first.
+	for key := range workLiveDetailKeys {
+		if _, past := workPastDetailKeys[key]; past {
+			t.Errorf("%q is in both the live and the past list", key)
+		}
 	}
 	// Every dropped key has a stated reason: "nothing is lost" is a claim a
 	// reader is entitled to check.
