@@ -186,6 +186,10 @@ type adoptedRequestRow struct {
 // workAdoptionCounts is what the walk did, in rows. Every row the ledger holds
 // is in exactly one of these, which is what the accounting check verifies
 // before anything is dropped.
+//
+// MonitorsRefused rather than MonitorsDropped: nothing drops a monitoring loop
+// any more. A loop this code cannot record faithfully stops the run and names
+// why, because deleting a parent's loop on a guess is not a cleanup.
 type workAdoptionCounts struct {
 	LedgerTasks         int `json:"ledger_tasks"`
 	TasksCreated        int `json:"tasks_created"`
@@ -194,11 +198,7 @@ type workAdoptionCounts struct {
 	BookCarried         int `json:"bookkeeping_carried"`
 	BookPresent         int `json:"bookkeeping_already_owned"`
 	MonitorsCarried     int `json:"monitors_carried"`
-	// MonitorsRefused is the loops this walk would not carry as they stood.
-	// Nothing drops a monitoring loop any more: a loop this code cannot record
-	// faithfully stops the run and names why, because deleting a parent's loop
-	// on a guess is not a cleanup.
-	MonitorsRefused int `json:"monitors_refused"`
+	MonitorsRefused     int `json:"monitors_refused"`
 	LedgerRequests      int `json:"ledger_requests"`
 	TurnsCreated        int `json:"turns_created"`
 	TurnsPresent        int `json:"turns_present"`
