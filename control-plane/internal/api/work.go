@@ -75,6 +75,60 @@ func (a *API) listWorkTurns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page)
 }
 
+// createWorkRequestReq is one request to store. The task is in the path, so the
+// body cannot name a different one than the URL it was sent to.
+type createWorkRequestReq struct {
+	ID     string `json:"id"`
+	Text   string `json:"text"`
+	Author string `json:"author"`
+	// ChoiceTurnID, when set, is the turn whose offered choices the person
+	// picked from. The slot refuses a pick from a turn the task has moved past,
+	// so a screen left open cannot act on a question that is no longer being
+	// asked. Free text omits it and is never refused for staleness.
+	ChoiceTurnID *int64 `json:"choice_turn_id"`
+}
+
+// createWorkRequest stores one person's request as the next turn of a task
+// (AC-N10, the one write on the work path).
+//
+// It writes no task field: the slot appends a turn, so a request arriving while
+// the session is updating that same task cannot take the update out from under
+// it. It starts no turn of the session's own and wakes nothing — the answer says
+// the request is on the slot and waiting, never that it has been dealt with,
+// which only the parent can say by working the turn.
+//
+// The author is the caller's own derivation from whatever boundary
+// authenticated the person; like a task's owner it is bookkeeping, and nothing
+// here grants a tool, an approval or a merge on the strength of it. Scoped like
+// every other session-id route, so another tenant's session answers exactly
+// like a missing one.
+func (a *API) createWorkRequest(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
+	var body createWorkRequestReq
+	if err := decodeRequestBody(r.Body, &body, true); err != nil {
+		writeErr(w, err)
+		return
+	}
+	stored, err := a.mgr.CreateWorkRequest(r.Context(), r.PathValue("id"), session.WorkRequestInput{
+		ID: body.ID, TaskID: r.PathValue("taskID"), Text: body.Text, Author: body.Author,
+		ChoiceTurnID: body.ChoiceTurnID,
+	})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	// 200 for a request this id already stored with the same words, 201 for a
+	// first store: a caller retrying an answer it never saw learns which of the
+	// two happened without having to compare the turn itself.
+	status := http.StatusCreated
+	if stored.Replayed {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, stored)
+}
+
 // workLimit reads a work page size; out of range is refused rather than
 // clamped, so a caller is never handed a different page than it asked for.
 func workLimit(raw string) (int, error) {

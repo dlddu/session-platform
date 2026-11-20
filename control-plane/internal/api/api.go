@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -100,14 +99,18 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/sessions/{id}/tool-approvals", a.listToolApprovals)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/tool-approvals/{approvalId}/decide", a.decideToolApproval)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/recover", a.recoverSession)
-	mux.HandleFunc("GET /api/v1/sessions/{id}/ledger/tasks", a.listLedgerTasks)
-	mux.HandleFunc("POST /api/v1/sessions/{id}/ledger/tasks/{taskID}/requests", a.createLedgerRequest)
-	mux.HandleFunc("GET /api/v1/sessions/{id}/ledger/tasks/{taskID}/events", a.listLedgerEvents)
-	// AC-N9: the agreed work records. The ledger routes above cannot carry a
-	// task's description and completion criteria or anything a turn holds, so a
-	// caller with only those can show that work exists but never the work.
+	// AC-N9/AC-N10: the agreed work records, which are the whole task surface.
+	// The ledger routes that used to sit beside these are gone with the ledger
+	// they read: a page with nowhere to put a task's description and completion
+	// criteria or anything a turn holds could show that work exists but never
+	// the work, and there is no second set of rows behind it any more.
+	//
+	// A task's turns are its history, so there is no separate history route — a
+	// past management event was never a turn, and dressing one up as a turn
+	// would put words in a person's mouth.
 	mux.HandleFunc("GET /api/v1/sessions/{id}/work/tasks", a.listWorkTasks)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/work/tasks/{taskID}/turns", a.listWorkTurns)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/work/tasks/{taskID}/requests", a.createWorkRequest)
 }
 
 // ---- request/response DTOs ----
@@ -718,142 +721,6 @@ type decideToolApprovalResp struct {
 	Status string `json:"status"`
 }
 
-// listLedgerTasks reads one page of the chat slot's task ledger (AC-N6). It is
-// read-only and passive: there is no SQL on the path, and a read neither wakes
-// the session nor counts as an access. Scoped like every other session-id
-// route, so another tenant's session answers exactly like a missing one.
-func (a *API) listLedgerTasks(w http.ResponseWriter, r *http.Request) {
-	if !a.authorizeSession(w, r) {
-		return
-	}
-	limit, err := ledgerLimit(r.URL.Query().Get("limit"))
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	page, err := a.mgr.LedgerTasks(r.Context(), r.PathValue("id"), limit, r.URL.Query().Get("after_id"))
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, page)
-}
-
-// createLedgerRequest stores one user request on a ledger task (AC-N6, write
-// side). It is the one write on the ledger path, and it writes no task field:
-// the slot appends a row of its own, so a request arriving while the session is
-// updating that same task cannot take the update out from under it.
-//
-// It starts no turn and wakes nothing. The answer says the request is stored
-// and waiting — never that it has been dealt with, which only the session can
-// say by acking it.
-//
-// The author is the caller's own derivation from whatever boundary
-// authenticated the person; like a task's owner it is bookkeeping, and nothing
-// in the ledger grants a tool, an approval or a merge on the strength of it.
-// Scoped like every other session-id route, so another tenant's session answers
-// exactly like a missing one.
-func (a *API) createLedgerRequest(w http.ResponseWriter, r *http.Request) {
-	if !a.authorizeSession(w, r) {
-		return
-	}
-	var body createLedgerRequestReq
-	if err := decodeRequestBody(r.Body, &body, true); err != nil {
-		writeErr(w, err)
-		return
-	}
-	stored, err := a.mgr.CreateLedgerRequest(r.Context(), r.PathValue("id"), session.LedgerRequestInput{
-		ID: body.ID, TaskID: r.PathValue("taskID"), Text: body.Text, Author: body.Author,
-		ChoiceID: body.ChoiceID, ChoiceBasisVersion: body.ChoiceBasisVersion,
-	})
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	// 200 for a request this id already stored with the same words, 201 for a
-	// first store: a caller retrying an answer it never saw learns which of the
-	// two happened without having to compare the row itself.
-	status := http.StatusCreated
-	if stored.Replayed {
-		status = http.StatusOK
-	}
-	writeJSON(w, status, stored)
-}
-
-// listLedgerEvents reads one page of a task's history (AC-N8): the requests a
-// person left on it and what the session did with them, oldest first. Read-only
-// and passive, scoped like every other session-id route.
-func (a *API) listLedgerEvents(w http.ResponseWriter, r *http.Request) {
-	if !a.authorizeSession(w, r) {
-		return
-	}
-	limit, err := ledgerEventLimit(r.URL.Query().Get("limit"))
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	after := int64(0)
-	if raw := strings.TrimSpace(r.URL.Query().Get("after_seq")); raw != "" {
-		after, err = strconv.ParseInt(raw, 10, 64)
-		if err != nil || after < 0 {
-			writeErr(w, fmt.Errorf("%w: after_seq must be a nonnegative number", session.ErrInvalidInput))
-			return
-		}
-	}
-	page, err := a.mgr.LedgerEvents(r.Context(), r.PathValue("id"), r.PathValue("taskID"), after, limit)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, page)
-}
-
-// ledgerEventLimit reads the history page size; out of range is refused rather
-// than clamped, so a caller is never handed a different page than it asked for.
-func ledgerEventLimit(raw string) (int, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return 0, nil
-	}
-	limit, err := strconv.Atoi(raw)
-	if err != nil || limit < 1 || limit > session.LedgerEventPageLimitMax {
-		return 0, fmt.Errorf("%w: limit must be a number from 1 to %d",
-			session.ErrInvalidInput, session.LedgerEventPageLimitMax)
-	}
-	return limit, nil
-}
-
-// createLedgerRequestReq is one request to store. The task is in the path, so
-// the body cannot name a different one than the URL it was sent to.
-type createLedgerRequestReq struct {
-	ID     string `json:"id"`
-	Text   string `json:"text"`
-	Author string `json:"author"`
-	// ChoiceID, when set, is the session's own offered choice the person
-	// picked.
-	ChoiceID string `json:"choice_id"`
-	// ChoiceBasisVersion is the task version the caller saw that choice on.
-	// The slot checks it, so a screen left open while the task moved has its
-	// pick refused instead of acted on.
-	ChoiceBasisVersion int64 `json:"choice_basis_version"`
-}
-
-// ledgerLimit reads the page size. An absent limit is the ledger's own default;
-// anything that is not a number in range is refused rather than clamped, so a
-// caller never gets a different page than it asked for without being told.
-func ledgerLimit(raw string) (int, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return 0, nil
-	}
-	limit, err := strconv.Atoi(raw)
-	if err != nil || limit < 1 || limit > session.LedgerTaskPageLimitMax {
-		return 0, fmt.Errorf("%w: limit must be a number from 1 to %d",
-			session.ErrInvalidInput, session.LedgerTaskPageLimitMax)
-	}
-	return limit, nil
-}
-
 type questionsResp struct {
 	Questions []session.PendingQuestion `json:"questions"`
 }
@@ -1057,16 +924,16 @@ func writeErr(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	case errors.Is(err, session.ErrPluginRefreshFailed):
 		status = http.StatusBadGateway
-	case errors.Is(err, session.ErrLedgerUnsupported):
+	case errors.Is(err, session.ErrWorkUnsupported):
 		status = http.StatusNotImplemented
-	case errors.Is(err, session.ErrLedgerChoiceStale):
-		// The screen is out of date, not the request: 409 with the ledger's own
+	case errors.Is(err, session.ErrWorkChoiceStale):
+		// The screen is out of date, not the request: 409 with the slot's own
 		// sentence, so the caller can re-read the task and keep the words the
 		// person already typed.
 		status = http.StatusConflict
-	case errors.Is(err, session.ErrLedgerUnavailable):
-		// Not 404 and not an empty page: the ledger exists on the slot, it just
-		// cannot be read while no pod holds it. Reading never starts one.
+	case errors.Is(err, session.ErrWorkUnavailable):
+		// Not 404 and not an empty page: the records exist on the slot, they just
+		// cannot be reached while no pod holds it. Reading never starts one.
 		status = http.StatusConflict
 	case errors.Is(err, session.ErrAuthPoolExhausted):
 		// The wrapped cause names slots and holders; clients only get the class.

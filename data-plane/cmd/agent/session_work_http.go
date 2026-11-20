@@ -1,28 +1,28 @@
-// The read-only work views outside the session: one page of this slot's work
-// tasks, and one page of a task's turns.
+// The work records outside the session: one page of this slot's tasks, one page
+// of a task's turns, and the one write a reader out there has — a person's
+// request, which becomes the next turn of a task.
 //
-// Why these exist beside the projected ledger view (session_work_bridge.go):
-// the projection answers a caller that speaks the ledger's shape, and that
-// shape has nowhere to put what the agreed model actually carries — a task's
-// description and completion criteria, and a turn's instruction, the session's
-// own final answer, the parent's explanation, its question and the artifacts.
-// A reader of the projection alone can therefore never show the work; it can
-// only show the fields the ledger already had. These views carry the agreed
-// records themselves.
+// These are the whole surface now. The ledger-shaped views that used to sit
+// beside them are gone with the ledger (AC-N10), and so is the projection that
+// answered them from the work records: a shape with nowhere to put a task's
+// description and completion criteria, or a turn's instruction, answer,
+// explanation, question and artifacts, could only ever show that work existed.
 //
-// A turn is the timeline of new work, so this is also where the app's history
-// of a task created after the cutover comes from. The ledger's own history
-// stays where it is and keeps its own route: a past management event is not a
-// turn, and dressing one up as a turn would put words in a person's mouth.
+// A task's history is its turns. There is no separate history route any more —
+// a past management event was never a turn, and dressing one up as a turn would
+// put words in a person's mouth, so the events the ledger kept were not carried
+// (session_work_adopt.go).
 package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -31,7 +31,122 @@ const (
 	// derivation) and control-plane/internal/adapter/k8s.
 	sessionDBWorkTasksPath = "/session-db/work/tasks"
 	sessionDBWorkTurnsPath = "/session-db/work/turns"
+	// sessionDBWorkRequestsPath is where a request from outside the session is
+	// stored. It is the one write on this path, and what it writes is a turn:
+	// a person's words are an exchange on the task, not a row beside it.
+	sessionDBWorkRequestsPath = "/session-db/work/requests"
 )
+
+// workRequestBody is what the control plane sends. The author is the caller's
+// own derivation from the boundary that authenticated the person — the app
+// never gets to name it — and it is bookkeeping, exactly like a task's owner:
+// no tool, approval or merge is granted on the strength of it.
+type workRequestBody struct {
+	ID     string `json:"id"`
+	TaskID string `json:"task_id"`
+	Text   string `json:"text"`
+	Author string `json:"author"`
+	// ChoiceTurnID, when given, is the turn whose offered choices the person
+	// picked from. The platform refuses a pick from a turn that is no longer
+	// the latest, so a screen left open while the task moved on cannot act on
+	// it. Free text omits it and is never refused for staleness.
+	ChoiceTurnID *int64 `json:"choice_turn_id,omitempty"`
+}
+
+// serveWorkRequests stores one person's request as the next turn of a task.
+//
+// It starts no turn of the session's own, wakes nothing and restores no
+// snapshot: the parent finds it the next time it lists the task's open turns.
+// Idempotency is the caller's own id — the same id with the same words answers
+// with the turn already appended.
+func (s *sessionDB) serveWorkRequests(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "the work request view accepts POST", http.StatusMethodNotAllowed)
+		return
+	}
+	if !fromLoopback(r) {
+		http.Error(w, "the work request view is only for this pod", http.StatusForbidden)
+		return
+	}
+	var body workRequestBody
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		writeWorkViewError(w, http.StatusBadRequest, "invalid_argument", "body must be {id, task_id, text, author}")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), sessionDBCallTimeout)
+	defer cancel()
+	stored, replayed, err := s.storeWorkRequest(ctx, body, workClock())
+	if err != nil {
+		var known workError
+		if errors.As(err, &known) {
+			writeWorkViewError(w, workViewStatus(known.Code), known.Code, known.ErrorText)
+			return
+		}
+		// A SQLite message can name the database file; the reader outside the
+		// session gets the class only, and the detail stays in the log.
+		s.logger.Info("work request could not be stored", "err", err)
+		writeWorkViewError(w, http.StatusInternalServerError, "storage_error", "the request could not be stored")
+		return
+	}
+	// A replay of a request already stored answers 200 with the same turn; a
+	// first store answers 201. Either way the caller learns the request is on
+	// the slot, which is what it has to tell the person.
+	status := http.StatusCreated
+	if replayed {
+		status = http.StatusOK
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(map[string]any{"turn": stored, "replayed": replayed}); err != nil {
+		s.logger.Info("work request reply could not be written", "err", err)
+	}
+}
+
+// storeWorkRequest validates the request and appends it in one transaction, so
+// the turn and the record of where it came from commit together.
+func (s *sessionDB) storeWorkRequest(
+	ctx context.Context, body workRequestBody, now time.Time,
+) (workTurnView, bool, error) {
+	if !workID.MatchString(body.ID) {
+		return workTurnView{}, false, workFail("invalid_argument", "id must be 1..128 letters, digits, _ or -")
+	}
+	if !workID.MatchString(body.TaskID) {
+		return workTurnView{}, false, workFail("invalid_argument", "task_id must be 1..128 letters, digits, _ or -")
+	}
+	text := strings.TrimSpace(body.Text)
+	if text == "" || len(body.Text) > workTurnTextMax {
+		return workTurnView{}, false, workFail("invalid_argument",
+			"text must be a person's words, at most 65536 characters")
+	}
+	if len(body.Author) > workTitleMax {
+		return workTurnView{}, false, workFail("invalid_argument", "author too long")
+	}
+	if body.ChoiceTurnID != nil && (*body.ChoiceTurnID < 1 || *body.ChoiceTurnID > requestSafeInt) {
+		return workTurnView{}, false, workFail("invalid_argument", "choice_turn_id must be a turn id")
+	}
+	db, err := s.handle(ctx)
+	if err != nil {
+		return workTurnView{}, false, err
+	}
+	var stored workTurnView
+	replayed := false
+	err = s.workTx(ctx, db, func(tx *sql.Tx) error {
+		if fenceErr := requireWorkWritable(ctx, tx); fenceErr != nil {
+			return fenceErr
+		}
+		var storeErr error
+		stored, replayed, storeErr = storeRequestAsTurn(
+			ctx, tx, body.ID, body.TaskID, body.Text, body.Author, body.ChoiceTurnID, now)
+		return storeErr
+	})
+	if err != nil {
+		return workTurnView{}, false, err
+	}
+	return stored, replayed, nil
+}
 
 // serveWorkTasks answers one keyset page of work tasks, reusing the same
 // listWorkTasks the session's own `db` MCP calls — one implementation, so a
@@ -44,9 +159,9 @@ func (s *sessionDB) serveWorkTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
-	limit, err := ledgerViewLimit(query.Get("limit"))
+	limit, err := workViewLimit(query.Get("limit"))
 	if err != nil {
-		writeLedgerViewError(w, http.StatusBadRequest, "invalid_argument", err.Error())
+		writeWorkViewError(w, http.StatusBadRequest, "invalid_argument", err.Error())
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), sessionDBCallTimeout)
@@ -68,20 +183,20 @@ func (s *sessionDB) serveWorkTurns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
-	limit, err := ledgerViewLimit(query.Get("limit"))
+	limit, err := workViewLimit(query.Get("limit"))
 	if err != nil {
-		writeLedgerViewError(w, http.StatusBadRequest, "invalid_argument", err.Error())
+		writeWorkViewError(w, http.StatusBadRequest, "invalid_argument", err.Error())
 		return
 	}
 	args := workArgs{TaskID: strings.TrimSpace(query.Get("task_id")), Limit: limit}
 	if args.TaskID == "" {
-		writeLedgerViewError(w, http.StatusBadRequest, "invalid_argument", "task_id is required")
+		writeWorkViewError(w, http.StatusBadRequest, "invalid_argument", "task_id is required")
 		return
 	}
 	if raw := strings.TrimSpace(query.Get("after_turn_id")); raw != "" {
 		after, convErr := strconv.ParseInt(raw, 10, 64)
 		if convErr != nil || after < 0 {
-			writeLedgerViewError(w, http.StatusBadRequest, "invalid_argument", "after_turn_id must be a nonnegative number")
+			writeWorkViewError(w, http.StatusBadRequest, "invalid_argument", "after_turn_id must be a nonnegative number")
 			return
 		}
 		args.AfterTurnID = &after
@@ -89,7 +204,7 @@ func (s *sessionDB) serveWorkTurns(w http.ResponseWriter, r *http.Request) {
 	if raw := strings.TrimSpace(query.Get("open")); raw != "" {
 		open, convErr := strconv.ParseBool(raw)
 		if convErr != nil {
-			writeLedgerViewError(w, http.StatusBadRequest, "invalid_argument", "open must be true or false")
+			writeWorkViewError(w, http.StatusBadRequest, "invalid_argument", "open must be true or false")
 			return
 		}
 		args.Open = &open
@@ -121,7 +236,7 @@ func workViewPreamble(w http.ResponseWriter, r *http.Request, what string) bool 
 // classified the same way the ledger view classifies its own.
 func writeWorkView(w http.ResponseWriter, s *sessionDB, what string, result any, err error) {
 	if err != nil {
-		var known ledgerError
+		var known workError
 		if errors.As(err, &known) {
 			status := http.StatusBadRequest
 			switch known.Code {
@@ -130,13 +245,13 @@ func writeWorkView(w http.ResponseWriter, s *sessionDB, what string, result any,
 			case "schema_version", "conflict":
 				status = http.StatusConflict
 			}
-			writeLedgerViewError(w, status, known.Code, known.ErrorText)
+			writeWorkViewError(w, status, known.Code, known.ErrorText)
 			return
 		}
 		// A SQLite message can name the database file; the reader outside the
 		// session gets the class only, and the detail stays in the log.
 		s.logger.Info(what+" failed", "err", err)
-		writeLedgerViewError(w, http.StatusInternalServerError, "storage_error", "the work records could not be read")
+		writeWorkViewError(w, http.StatusInternalServerError, "storage_error", "the work records could not be read")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

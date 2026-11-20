@@ -42,7 +42,7 @@ func loadWorkTask(ctx context.Context, tx *sql.Tx, id string) (workTask, error) 
 	row := tx.QueryRowContext(ctx, "SELECT "+workTaskColumns+" FROM sp_work_tasks WHERE id=?", id)
 	task, err := scanWorkTask(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		return task, ledgerFail("not_found", "task not found")
+		return task, workFail("not_found", "task not found")
 	}
 	return task, err
 }
@@ -128,14 +128,14 @@ func putWorkTask(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (an
 	stamp := workNow(now)
 	if !existing {
 		if *a.ExpectedVersion != 0 {
-			return nil, ledgerFail("not_found", "task not found")
+			return nil, workFail("not_found", "task not found")
 		}
 		var retired int
 		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM sp_work_retired WHERE id=?", a.ID).Scan(&retired); err != nil {
 			return nil, err
 		}
 		if retired != 0 {
-			return nil, ledgerFail("conflict", "deleted task ID cannot be reused")
+			return nil, workFail("conflict", "deleted task ID cannot be reused")
 		}
 		task := workTask{
 			ID: a.ID, SessionID: a.Task.SessionID, Title: *a.Task.Title,
@@ -152,7 +152,7 @@ func putWorkTask(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (an
 		return map[string]any{"task": task}, nil
 	}
 	if *a.ExpectedVersion == 0 || *a.ExpectedVersion != current.Version {
-		return nil, ledgerFail("conflict", "expected_version does not match")
+		return nil, workFail("conflict", "expected_version does not match")
 	}
 	task := workTask{
 		ID: a.ID, SessionID: a.Task.SessionID, Title: *a.Task.Title,
@@ -176,7 +176,7 @@ func putWorkTask(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (an
 		return nil, err
 	}
 	if changed != 1 {
-		return nil, ledgerFail("conflict", "expected_version does not match")
+		return nil, workFail("conflict", "expected_version does not match")
 	}
 	return map[string]any{"task": task}, nil
 }
@@ -190,7 +190,7 @@ func deleteWorkTask(ctx context.Context, tx *sql.Tx, a workArgs) (any, error) {
 		return nil, err
 	}
 	if current.Version != *a.ExpectedVersion {
-		return nil, ledgerFail("conflict", "expected_version does not match")
+		return nil, workFail("conflict", "expected_version does not match")
 	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM sp_work_turns WHERE task_id=?", a.ID); err != nil {
 		return nil, err
@@ -206,7 +206,7 @@ func deleteWorkTask(ctx context.Context, tx *sql.Tx, a workArgs) (any, error) {
 		return nil, err
 	}
 	if gone != 1 {
-		return nil, ledgerFail("conflict", "expected_version does not match")
+		return nil, workFail("conflict", "expected_version does not match")
 	}
 	if err := dropWorkGuard(ctx, tx, a.ID); err != nil {
 		return nil, err

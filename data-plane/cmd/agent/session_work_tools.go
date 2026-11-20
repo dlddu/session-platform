@@ -110,38 +110,38 @@ func workToolDefinitions() []map[string]any {
 				"operation_key":         str(), "operation_target": str(), "dispatch_state": str(), "observed": str(),
 			}, "required": []string{"task_id", "turn_id", "request_id", "expected_version", "expected_turn_version", "claim_token", "operation_key", "dispatch_state"}, "additionalProperties": false},
 		},
-		{
-			"name":        "work_migrate",
-			"description": "Copies this slot's ledger tasks and the user requests on them into the work records, once. dry_run=true reports exactly what a run would write and changes nothing. A real run takes a consistent snapshot of the database first, records its checksum, holds a fence that refuses ledger and work writes while it runs, and commits in one transaction — so an interrupted run leaves the database as it was and can simply be run again. Monitor bookkeeping rows are not a person's work and are preserved without becoming tasks; a field the ledger never recorded is left null rather than filled from a summary.",
-			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
-				"request_id": str(), "dry_run": map[string]any{"type": "boolean"},
-			}, "required": []string{"request_id"}, "additionalProperties": false},
-		},
-		{
-			"name":        "work_migration_report",
-			"description": "What the migration did and where this database stands: schema state (ready/migrating/migrated), every recorded step with its row counts and the snapshot's checksum, and the current counts so a reader can re-check them. Reading changes nothing.",
-			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{},
-				"required": []string{}, "additionalProperties": false},
-		},
-	}, append(workLegacyToolDefinitions(), workRollbackToolDefinition())...)
+	}, workSurfaceTail()...)
+}
+
+// workSurfaceTail is everything after the agreed records, in the order a reader
+// of tools/list should meet it: the parent's own bookkeeping beside a task, its
+// monitoring loops, where this slot's records stand, the snapshots the move
+// left behind, and the move itself. A retired slot never offers the last one
+// (session_db_mcp.go).
+func workSurfaceTail() []map[string]any {
+	tail := taskBookToolDefinitions()
+	tail = append(tail, monitorToolDefinitions()...)
+	tail = append(tail, workStateToolDefinition())
+	tail = append(tail, workBackupsToolDefinitions()...)
+	return append(tail, workRetireToolDefinition())
 }
 
 func validateWork(name string, a workArgs) error {
-	bad := func(s string) error { return ledgerFail("invalid_argument", s) }
+	bad := func(s string) error { return workFail("invalid_argument", s) }
 	if !isWorkTool(name) {
 		return bad("unknown work tool")
 	}
-	if isWorkMutation(name) && !ledgerID.MatchString(a.RequestID) {
+	if isWorkMutation(name) && !workID.MatchString(a.RequestID) {
 		return bad("request_id must be 1..128 letters, digits, _ or -")
 	}
 	switch name {
 	case "task_get", "task_put", "task_delete":
-		if !ledgerID.MatchString(a.ID) {
+		if !workID.MatchString(a.ID) {
 			return bad("id must be 1..128 letters, digits, _ or -")
 		}
 	case "turn_append", "turn_patch", "turn_list", "turn_dispatch",
-		workLegacyGetTool, workLegacyPutTool:
-		if !ledgerID.MatchString(a.TaskID) {
+		taskBookGetTool, taskBookPutTool:
+		if !workID.MatchString(a.TaskID) {
 			return bad("task_id must be 1..128 letters, digits, _ or -")
 		}
 	}
@@ -149,13 +149,13 @@ func validateWork(name string, a workArgs) error {
 		if a.Limit < 0 || a.Limit > workListLimitMax {
 			return bad("invalid pagination")
 		}
-		if a.AfterID != "" && !ledgerID.MatchString(a.AfterID) {
+		if a.AfterID != "" && !workID.MatchString(a.AfterID) {
 			return bad("invalid after_id")
 		}
 		if a.Status != "" && !isWorkStatus(a.Status) {
 			return bad("status must be " + strings.Join(workStatuses, ", "))
 		}
-		if a.SessionID != "" && a.SessionID != "none" && !ledgerID.MatchString(a.SessionID) {
+		if a.SessionID != "" && a.SessionID != "none" && !workID.MatchString(a.SessionID) {
 			return bad("session_id must be 1..128 letters, digits, _ or - (or \"none\")")
 		}
 		return nil
@@ -169,13 +169,23 @@ func validateWork(name string, a workArgs) error {
 		}
 		return nil
 	}
-	if name == "task_get" || name == "work_migration_report" || name == "work_migrate" ||
-		name == workLegacyGetTool || name == workRollbackTool {
+	if name == workBackupsPruneTool {
+		return validateWorkBackupPrune(a)
+	}
+	switch name {
+	case monitorGetTool, monitorListTool, monitorPutTool, monitorDeleteTool:
+		return validateMonitorTool(name, a)
+	}
+	// The reads and the runs that take no version: a state report, a transition
+	// run, a snapshot listing. Each one either names no record or holds its own
+	// fence rather than a caller's counter.
+	switch name {
+	case "task_get", workStateTool, workRetireTool, workBackupsTool, taskBookGetTool:
 		return nil
 	}
 	// The bookkeeping lane has its own counter and does not take the task
 	// version at all: its notes are about the task, not a new state of it.
-	if name != workLegacyPutTool {
+	if name != taskBookPutTool {
 		if a.ExpectedVersion == nil || *a.ExpectedVersion < 0 || *a.ExpectedVersion > requestSafeInt {
 			return bad("a safe nonnegative expected_version is required")
 		}
@@ -188,9 +198,9 @@ func validateWork(name string, a workArgs) error {
 		if a.ExpectedTurnVersion == nil || *a.ExpectedTurnVersion < 1 || *a.ExpectedTurnVersion > requestSafeInt {
 			return bad("expected_turn_version must be the turn_version the task's turns were read at")
 		}
-	case workLegacyPutTool:
+	case taskBookPutTool:
 		if a.ExpectedBookVersion == nil || *a.ExpectedBookVersion < 1 || *a.ExpectedBookVersion > requestSafeInt {
-			return bad("expected_book_version must be the book_version work_legacy_get returned")
+			return bad("expected_book_version must be the book_version " + taskBookGetTool + " returned")
 		}
 	}
 	if name == "turn_patch" || name == "turn_dispatch" {
@@ -204,11 +214,11 @@ func validateWork(name string, a workArgs) error {
 	case "turn_append", "turn_patch":
 		return validateWorkTurnInput(name, a.Turn)
 	case "turn_dispatch":
-		if !ledgerID.MatchString(a.ClaimToken) {
+		if !workID.MatchString(a.ClaimToken) {
 			return bad("claim_token must be the token turn_patch returned when this turn was taken")
 		}
 		return validateWorkDispatch(a)
-	case workLegacyPutTool:
+	case taskBookPutTool:
 		return validateWorkLegacyInput(a.Legacy)
 	}
 	return nil
@@ -219,7 +229,7 @@ func validateWork(name string, a workArgs) error {
 // the slot's storage budget is shared with the session's archive, so a record
 // cannot become an output archive.
 func validateWorkLegacyInput(record *workLegacyInput) error {
-	bad := func(s string) error { return ledgerFail("invalid_argument", s) }
+	bad := func(s string) error { return workFail("invalid_argument", s) }
 	if record == nil {
 		return bad("record required")
 	}
@@ -240,11 +250,11 @@ func validateWorkLegacyInput(record *workLegacyInput) error {
 }
 
 func validateWorkTaskInput(task *workTaskInput) error {
-	bad := func(s string) error { return ledgerFail("invalid_argument", s) }
+	bad := func(s string) error { return workFail("invalid_argument", s) }
 	if task == nil {
 		return bad("task required")
 	}
-	if task.SessionID != nil && !ledgerID.MatchString(*task.SessionID) {
+	if task.SessionID != nil && !workID.MatchString(*task.SessionID) {
 		return bad("session_id must be 1..128 letters, digits, _ or -, or null")
 	}
 	if task.Title == nil || strings.TrimSpace(*task.Title) == "" || len(*task.Title) > workTitleMax {
@@ -265,7 +275,7 @@ func validateWorkTaskInput(task *workTaskInput) error {
 }
 
 func validateWorkTurnInput(name string, turn *workTurnInput) error {
-	bad := func(s string) error { return ledgerFail("invalid_argument", s) }
+	bad := func(s string) error { return workFail("invalid_argument", s) }
 	if turn == nil {
 		return bad("turn required")
 	}
@@ -320,8 +330,8 @@ func validateWorkTurnInput(name string, turn *workTurnInput) error {
 }
 
 func validateWorkDispatch(a workArgs) error {
-	bad := func(s string) error { return ledgerFail("invalid_argument", s) }
-	if !ledgerID.MatchString(a.OperationKey) {
+	bad := func(s string) error { return workFail("invalid_argument", s) }
+	if !workID.MatchString(a.OperationKey) {
 		return bad("operation_key must be 1..128 letters, digits, _ or -")
 	}
 	if len(a.OperationTarget) > 512 {

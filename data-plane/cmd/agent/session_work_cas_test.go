@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"testing"
 )
@@ -50,17 +51,17 @@ func TestWorkTurnWritesExcludeASecondParentAtTheSameVersion(t *testing.T) {
 func TestWorkBookkeepingWritesExcludeASecondParentAtTheSameVersion(t *testing.T) {
 	s, _ := newTestSessionDB(t)
 	newWorkTask(t, s, "task-a", "c1", nil)
-	read := mustWork(t, s, workLegacyGetTool, map[string]any{"task_id": "task-a"})
+	read := mustWork(t, s, taskBookGetTool, map[string]any{"task_id": "task-a"})
 	book := int64(read["book_version"].(float64))
 
-	mustWork(t, s, workLegacyPutTool, map[string]any{
+	mustWork(t, s, taskBookPutTool, map[string]any{
 		"task_id": "task-a", "request_id": "b1", "expected_book_version": book,
 		"record": map[string]any{
 			"stage": "implementation", "owner": "parent", "sessions": []any{},
 			"details": map[string]any{"approval": "부모 1 이 적은 범위"},
 		},
 	})
-	wantWorkCode(t, s, workLegacyPutTool, map[string]any{
+	wantWorkCode(t, s, taskBookPutTool, map[string]any{
 		"task_id": "task-a", "request_id": "b2", "expected_book_version": book,
 		"record": map[string]any{
 			"stage": "verification", "owner": "parent", "sessions": []any{},
@@ -68,7 +69,7 @@ func TestWorkBookkeepingWritesExcludeASecondParentAtTheSameVersion(t *testing.T)
 		},
 	}, "conflict")
 
-	back := mustWork(t, s, workLegacyGetTool, map[string]any{"task_id": "task-a"})
+	back := mustWork(t, s, taskBookGetTool, map[string]any{"task_id": "task-a"})
 	if got := back["details"].(map[string]any)["approval"]; got != "부모 1 이 적은 범위" {
 		t.Fatalf("the loser overwrote the winner's approval scope: %v", got)
 	}
@@ -230,17 +231,15 @@ func TestWorkTurnDispatchIsOwnedBoundedAndIdempotent(t *testing.T) {
 }
 
 // The point of separate lanes: a cursor advance and a turn write must not
-// invalidate the choices a screen is showing. Those are basis-versioned against
-// the task's own version, which only a real task change moves.
+// invalidate the choices a screen is showing. What makes a pick current is the
+// turn it was offered on still being the task's latest, which neither the
+// parent's bookkeeping nor a patch to that same turn changes.
 func TestWorkBookkeepingAndTurnWritesKeepChoicesValid(t *testing.T) {
 	s, _ := newTestSessionDB(t)
 	ctx := context.Background()
-	// The projected page and the request route are the cutover's paths, so the
-	// slot has to have migrated for this to be the situation a screen is in.
-	runMigration(t, s, "m0", false)
 	newWorkTask(t, s, "task-a", "c1", nil)
 	version, seq := turnCursor(t, s, "task-a")
-	mustWork(t, s, "turn_append", map[string]any{
+	offered := mustWork(t, s, "turn_append", map[string]any{
 		"task_id": "task-a", "request_id": "r1", "expected_version": version,
 		"expected_turn_version": seq,
 		"turn": map[string]any{
@@ -250,66 +249,90 @@ func TestWorkBookkeepingAndTurnWritesKeepChoicesValid(t *testing.T) {
 				map[string]any{"label": "전부", "request_text": "전부 해 줘"},
 			},
 		},
-	})
-	page, err := s.tasksView(ctx, 0, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	before := page.(map[string]any)["tasks"].([]ledgerRecord)[0]
-	if len(before.Choices) != 1 {
-		t.Fatalf("no choice to keep: %+v", before)
-	}
-	basis := before.Choices[0].BasisVersion
-	choiceID := before.Choices[0].ID
+	})["turn"].(map[string]any)
+	choiceTurn := int64(offered["id"].(float64))
 
-	// A bookkeeping write (a cursor advance) and another turn write.
-	book := int64(mustWork(t, s, workLegacyGetTool, map[string]any{"task_id": "task-a"})["book_version"].(float64))
-	mustWork(t, s, workLegacyPutTool, map[string]any{
+	// The screen is showing that turn's choices, read the way a reader outside
+	// the session reads them.
+	latest := mustWorkView(t, s, workArgs{})["tasks"].([]workTaskView)[0].LatestTurn
+	if latest == nil || len(latest.Choices) != 1 {
+		t.Fatalf("no choice to keep: %+v", latest)
+	}
+
+	// A bookkeeping write (a cursor advance) and a patch to the same turn.
+	book := int64(mustWork(t, s, taskBookGetTool, map[string]any{"task_id": "task-a"})["book_version"].(float64))
+	mustWork(t, s, taskBookPutTool, map[string]any{
 		"task_id": "task-a", "request_id": "b1", "expected_book_version": book,
 		"record": map[string]any{
 			"stage": "implementation", "owner": "parent",
-			"sessions": []any{map[string]any{"id": "w1", "ownership": "owned", "purpose": "p", "cleanup": "pending", "nextOffset": float64(4096)}},
-			"details":  map[string]any{"approval": "PR only"},
+			"sessions": []any{map[string]any{
+				"id": "w1", "ownership": "owned", "purpose": "p", "cleanup": "pending", "nextOffset": float64(4096),
+			}},
+			"details": map[string]any{"approval": "PR only"},
 		},
 	})
 	_, seq = turnCursor(t, s, "task-a")
 	mustWork(t, s, "turn_patch", map[string]any{
-		"task_id": "task-a", "turn_id": 1, "request_id": "p1",
-		"expected_version": version, "expected_turn_version": seq,
-		"turn": map[string]any{"instruction": "지시"},
+		"task_id": "task-a", "turn_id": choiceTurn, "request_id": "p1",
+		"expected_turn_version": seq,
+		"turn":                  map[string]any{"instruction": "지시"},
 	})
 
-	// The task's version has not moved, so the choice is still the one being
-	// offered and the pick a screen is holding still lands.
-	nowVersion, _ := turnCursor(t, s, "task-a")
-	if nowVersion != version {
+	// The task's version has not moved, and the pick a screen is holding still
+	// lands on the turn it was offered on.
+	if nowVersion, _ := turnCursor(t, s, "task-a"); nowVersion != version {
 		t.Fatalf("a turn or bookkeeping write moved the task version: %d -> %d", version, nowVersion)
 	}
-	page, err = s.tasksView(ctx, 0, "")
+	if stored, replayed, err := storeWorkRequest(t, s, "pick-1", "task-a", "전부 해 줘", &choiceTurn); err != nil {
+		t.Fatalf("a pick a screen was holding was refused after unrelated writes: %v (%v %v)", err, stored, replayed)
+	}
+
+	// A later turn is what makes the old screen old: the choices on the turn
+	// the person picked from are not what the task is asking any more.
+	_, seq = turnCursor(t, s, "task-a")
+	mustWork(t, s, "turn_append", map[string]any{
+		"task_id": "task-a", "request_id": "r2", "expected_version": version,
+		"expected_turn_version": seq,
+		"turn":                  map[string]any{"request": "다음 말"},
+	})
+	_, _, err := storeWorkRequest(t, s, "pick-2", "task-a", "전부 해 줘", &choiceTurn)
+	if err == nil {
+		t.Fatal("a pick from a turn the task has moved past was accepted")
+	}
+	var known workError
+	if !asWorkError(err, &known) || known.Code != "stale_choice" {
+		t.Fatalf("refusal = %v, want stale_choice so the app can keep the words the person typed", err)
+	}
+	_ = ctx
+}
+
+// storeWorkRequest is the one write a reader outside the session has: a
+// person's words become the next turn of a task.
+func storeWorkRequest(
+	t *testing.T, s *sessionDB, id, taskID, text string, choiceTurn *int64,
+) (workTurnView, bool, error) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := s.handle(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	after := page.(map[string]any)["tasks"].([]ledgerRecord)[0]
-	if len(after.Choices) != 1 || after.Choices[0].BasisVersion != basis {
-		t.Fatalf("the offered choice was invalidated: %+v", after.Choices)
-	}
-	if _, _, err := s.appendLedgerRequest(
-		ctx, "pick-1", "task-a", "전부 해 줘", "user-1", choiceID, basis, ledgerNow()); err != nil {
-		t.Fatalf("a pick a screen was holding was refused after unrelated writes: %v", err)
-	}
-
-	// A real task change does move it, and then the old pick is refused.
-	mustWork(t, s, "task_put", map[string]any{
-		"id": "task-a", "request_id": "t2", "expected_version": version,
-		"task": map[string]any{
-			"session_id": nil, "title": "제목이 바뀐 작업", "description": "d",
-			"completion_criteria": "c", "status": "review",
-		},
+	var view workTurnView
+	var replayed bool
+	var inner error
+	err = s.workTx(ctx, db, func(tx *sql.Tx) error {
+		view, replayed, inner = storeRequestAsTurn(ctx, tx, id, taskID, text, "user-1", choiceTurn, workClock())
+		if inner != nil {
+			// Roll the transaction back but report the refusal itself, not a
+			// commit error standing in for it.
+			return inner
+		}
+		return nil
 	})
-	if _, _, err := s.appendLedgerRequest(
-		ctx, "pick-2", "task-a", "전부 해 줘", "user-1", choiceID, basis, ledgerNow()); err == nil {
-		t.Fatal("a pick from before a real task change was accepted")
+	if inner != nil {
+		return view, replayed, inner
 	}
+	return view, replayed, err
 }
 
 // The counters are required, not optional. A writer that does not name the lane
@@ -343,7 +366,7 @@ func TestWorkWritesRequireTheirCASCounter(t *testing.T) {
 			"task_id": "task-a", "turn_id": turnID, "request_id": "n3", "expected_version": version,
 			"operation_key": "op", "dispatch_state": "intended",
 		}},
-		{workLegacyPutTool, map[string]any{
+		{taskBookPutTool, map[string]any{
 			"task_id": "task-a", "request_id": "n4",
 			"record": map[string]any{"stage": "s", "owner": "o", "sessions": []any{}, "details": map[string]any{}},
 		}},
