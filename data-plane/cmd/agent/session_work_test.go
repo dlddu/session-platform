@@ -26,7 +26,7 @@ func fillWorkCASArgs(t *testing.T, s *sessionDB, name string, args map[string]an
 	switch name {
 	case "turn_append", "turn_patch", "turn_dispatch":
 		lane = "expected_turn_version"
-	case workLegacyPutTool:
+	case taskBookPutTool:
 		lane = "expected_book_version"
 	default:
 		return
@@ -44,7 +44,13 @@ func fillWorkCASArgs(t *testing.T, s *sessionDB, name string, args map[string]an
 			}
 		}
 	}
-	if _, named := args[lane]; named {
+	_, laneNamed := args[lane]
+	_, versionNamed := args["expected_version"]
+	// A turn write holds both counters. A test about something else should not
+	// have to read either; one about the counters themselves names them, and a
+	// named counter is never replaced here — that is how a deliberately stale
+	// one still reaches the code under test.
+	if laneNamed && (versionNamed || lane != "expected_turn_version") {
 		return
 	}
 	ctx := context.Background()
@@ -64,14 +70,23 @@ func fillWorkCASArgs(t *testing.T, s *sessionDB, name string, args map[string]an
 	if err != nil {
 		t.Fatal(err)
 	}
+	var version int64
+	if err := tx.QueryRowContext(ctx, "SELECT version FROM sp_work_tasks WHERE id=?", taskID).Scan(&version); err != nil {
+		version = 0
+	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	if lane == "expected_turn_version" {
-		args[lane] = turn
-	} else {
-		args[lane] = book
+		if !laneNamed {
+			args[lane] = turn
+		}
+		if !versionNamed {
+			args["expected_version"] = version
+		}
+		return
 	}
+	args[lane] = book
 }
 
 func workCall(t *testing.T, s *sessionDB, name string, args map[string]any) (map[string]any, string) {

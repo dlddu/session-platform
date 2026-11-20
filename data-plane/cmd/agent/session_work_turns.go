@@ -61,7 +61,7 @@ func loadWorkTurn(ctx context.Context, tx *sql.Tx, taskID string, turnID int64) 
 	if errors.Is(err, sql.ErrNoRows) {
 		// Scoped to the task on purpose: a turn id that belongs to another task
 		// is "not on this task", not someone else's row to edit.
-		return turn, ledgerFail("not_found", "turn not found on this task")
+		return turn, workFail("not_found", "turn not found on this task")
 	}
 	return turn, err
 }
@@ -124,10 +124,10 @@ func requireWorkTaskVersion(
 		return task, 0, err
 	}
 	if task.Version != expected {
-		return task, 0, ledgerFail("conflict", "expected_version does not match the task's current version")
+		return task, 0, workFail("conflict", "expected_version does not match the task's current version")
 	}
 	if expectedTurn == nil {
-		return task, 0, ledgerFail("invalid_argument", "expected_turn_version is required")
+		return task, 0, workFail("invalid_argument", "expected_turn_version is required")
 	}
 	next, err := swapWorkGuard(ctx, tx, taskID, workGuardTurn, *expectedTurn)
 	if err != nil {
@@ -199,7 +199,7 @@ func patchWorkTurn(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (
 	// the first claim holds a current counter and would be admitted. Clearing
 	// it is how a parent hands a turn back, and that stays allowed.
 	if a.Turn.named("started_at") && !a.Turn.cleared("started_at") && current.StartedAt != nil {
-		return nil, ledgerFail("conflict",
+		return nil, workFail("conflict",
 			"this turn was already taken at "+*current.StartedAt+
 				"; clear started_at to hand it back before taking it again")
 	}
@@ -225,7 +225,7 @@ func patchWorkTurn(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (
 	if current.EndedAt != nil && !a.Turn.cleared("ended_at") {
 		for _, field := range []string{"request", "instruction", "response", "explanation"} {
 			if a.Turn.named(field) {
-				return nil, ledgerFail("conflict",
+				return nil, workFail("conflict",
 					"this turn ended at "+*current.EndedAt+" and its "+field+
 						" is the record a person was shown; clear ended_at to reopen it, or append the next turn")
 			}
@@ -280,7 +280,7 @@ func patchWorkTurn(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (
 		}
 	}
 	if len(assignments) == 0 {
-		return nil, ledgerFail("invalid_argument", "turn must name at least one field to change")
+		return nil, workFail("invalid_argument", "turn must name at least one field to change")
 	}
 	values = append(values, *a.TurnID, a.TaskID)
 	if _, err := tx.ExecContext(ctx,
@@ -391,13 +391,13 @@ func dispatchWorkTurn(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time
 	// Recording an intent to act for a turn that has already ended would
 	// authorise an action for work that is finished.
 	if turn.EndedAt != nil {
-		return nil, ledgerFail("conflict",
+		return nil, workFail("conflict",
 			"this turn ended at "+*turn.EndedAt+"; it cannot dispatch anything further")
 	}
 	// Only the parent holding the turn may act for it. A turn nobody has taken
 	// has nobody to act for it.
 	if turn.StartedAt == nil {
-		return nil, ledgerFail("conflict",
+		return nil, workFail("conflict",
 			"this turn has not been taken: write started_at with turn_patch before dispatching for it")
 	}
 	// Holding it means holding its claim token. started_at alone is a
@@ -408,14 +408,14 @@ func dispatchWorkTurn(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time
 	err = tx.QueryRowContext(ctx,
 		"SELECT claim_token FROM sp_work_turn_claim WHERE turn_id=?", *a.TurnID).Scan(&heldToken)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ledgerFail("conflict",
+		return nil, workFail("conflict",
 			"this turn has no live claim: take it again with turn_patch(started_at) and use the claim_token it returns")
 	}
 	if err != nil {
 		return nil, err
 	}
 	if a.ClaimToken == "" || a.ClaimToken != heldToken {
-		return nil, ledgerFail("conflict",
+		return nil, workFail("conflict",
 			"claim_token does not hold this turn; the parent that took it holds it. "+
 				"Do not act outside on its behalf — read the turn again")
 	}
@@ -427,7 +427,7 @@ func dispatchWorkTurn(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time
 		return nil, err
 	}
 	if recordedKey != "" && recordedKey != a.OperationKey && a.Observed != "not_accepted" {
-		return nil, ledgerFail("conflict",
+		return nil, workFail("conflict",
 			"this turn already recorded operation_key "+recordedKey+"; establish what it did before dispatching another")
 	}
 	if recordedKey != "" && recordedKey == a.OperationKey {
@@ -435,14 +435,14 @@ func dispatchWorkTurn(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time
 		// naming the same action. Letting the target move under it would make
 		// the record say one thing was done while another was.
 		if recordedTarget != a.OperationTarget {
-			return nil, ledgerFail("conflict",
+			return nil, workFail("conflict",
 				"operation_key "+recordedKey+" already names target "+recordedTarget+
 					"; a key cannot be reused for a different target")
 		}
 		// dispatched means it was handed over. Rewinding to intended would
 		// erase that, and a later reader would believe nothing had left.
 		if recordedState == dispatchDispatched && a.DispatchState == dispatchIntended {
-			return nil, ledgerFail("conflict",
+			return nil, workFail("conflict",
 				"this turn already recorded dispatched; it cannot go back to intended")
 		}
 	}
@@ -474,7 +474,7 @@ func checkWorkAnsweredTurn(ctx context.Context, tx *sql.Tx, taskID string, answe
 		return err
 	}
 	if !latest.Valid || latest.Int64 != answered {
-		return ledgerFail("stale_choice", staleChoiceMessage)
+		return workFail("stale_choice", staleChoiceMessage)
 	}
 	return nil
 }

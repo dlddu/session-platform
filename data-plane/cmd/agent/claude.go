@@ -1504,36 +1504,21 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 		serveAgentScheduler(w, r, c)
 	})
 
-	// AC-N6, read side: one page of the chat slot's task ledger, relayed from
-	// the sidecar that mounts the slot's database. Read-only, and it never
-	// queues a turn.
-	mux.HandleFunc("GET "+agentLedgerPath, func(w http.ResponseWriter, r *http.Request) {
-		serveAgentLedger(w, r, c)
-	})
-
-	// AC-N6, write side: one user request stored on a ledger task. It appends
-	// a row beside the tasks and changes none of them, and it starts no turn —
-	// the parent picks the request up when it next reads its ledger.
-	mux.HandleFunc("POST "+agentLedgerRequestsPath, func(w http.ResponseWriter, r *http.Request) {
-		serveAgentLedgerRequests(w, r, c)
-	})
-
-	// AC-N8: one page of a task's history, read-only and passive like the task
-	// view — it starts no turn and changes nothing.
-	mux.HandleFunc("GET "+agentLedgerEventsPath, func(w http.ResponseWriter, r *http.Request) {
-		serveAgentLedgerEvents(w, r, c)
-	})
-
-	// AC-N9: the agreed work records themselves. The ledger-shaped views above
-	// have nowhere to put a task's description and completion criteria or a
-	// turn's instruction, answer, explanation, question and artifacts, so a
-	// reader that only has them can show the work existing but not the work.
-	// Read-only and passive, like the views beside them.
+	// AC-N9/AC-N10: the agreed work records, relayed from the sidecar that
+	// mounts the slot's database. Read-only and passive — a read starts no turn,
+	// counts as no access and restores no snapshot.
 	mux.HandleFunc("GET "+agentWorkTasksPath, func(w http.ResponseWriter, r *http.Request) {
 		serveAgentWorkTasks(w, r, c)
 	})
 	mux.HandleFunc("GET "+agentWorkTurnsPath, func(w http.ResponseWriter, r *http.Request) {
 		serveAgentWorkTurns(w, r, c)
+	})
+
+	// The one write: a person's request becomes the next turn of a task. It
+	// starts no turn of the session's own — the parent picks it up when it next
+	// reads the task's open turns.
+	mux.HandleFunc("POST "+agentWorkRequestsPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentWorkRequests(w, r, c)
 	})
 
 	mux.HandleFunc("GET /attach", func(w http.ResponseWriter, r *http.Request) {

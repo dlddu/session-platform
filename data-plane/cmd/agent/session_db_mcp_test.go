@@ -68,23 +68,25 @@ func newTestSessionDBWithRawSQL(t *testing.T, rawSQL bool) (*sessionDB, http.Han
 	return db, http.HandlerFunc(db.serveMCP)
 }
 
-// workToolNames is the agreed task/turn surface, offered first: it is what the
-// parent writes to, and the ledger behind it is what a migrated slot keeps for
-// reading (docs/session-ledger.md).
-// The bookkeeping pair comes last because it is not part of the agreed model:
-// it reads and writes what a migration preserved beside a task, which is the
-// parent's own and is not in anything a person reads.
-const workToolNames = "task_get,task_list,task_put,task_delete," +
+// workToolNamesRetired is the whole surface a slot offers once its transition
+// is retired — which is also what a brand new slot offers, because a slot with
+// no ledger has nothing to move (AC-N10). The ledger tools, the migration and
+// the rollback export are not in this image at all; a call to one by name is
+// answered with its successor rather than being listed.
+//
+// The order says what each group is: the agreed records first, then the
+// parent's own bookkeeping beside a task, then its monitoring loops, then the
+// two reads that outlive the move and the snapshot cleanup.
+const workToolNamesRetired = "task_get,task_list,task_put,task_delete," +
 	"turn_append,turn_patch,turn_list,turn_dispatch," +
-	"work_migrate,work_migration_report," +
-	"work_legacy_get,work_legacy_put,work_rollback_export"
+	"task_book_get,task_book_put," +
+	"monitor_get,monitor_list,monitor_put,monitor_delete," +
+	"work_state,work_backups,work_backups_prune"
 
-// ledgerToolNames is the whole default surface in offer order: the work tools,
-// then the ledger's task, user-request and choice tools.
-const ledgerToolNames = workToolNames + "," +
-	"ledger_get,ledger_list,ledger_put,ledger_delete," +
-	"ledger_requests_list,ledger_requests_claim,ledger_requests_dispatch,ledger_requests_ack," +
-	"ledger_choices_put,ledger_choices_clear,ledger_events_list"
+// workToolNames is what a slot that still has a ledger behind it offers: the
+// same surface plus the one-way move itself, offered last because it is the
+// only thing here a slot stops offering.
+const workToolNames = workToolNamesRetired + ",work_retire"
 
 // sessionDBToolNames is what the model is offered by one sidecar.
 func sessionDBToolNames(t *testing.T, h http.Handler) []string {
@@ -101,8 +103,8 @@ func sessionDBToolNames(t *testing.T, h http.Handler) []string {
 // ledger is the whole surface a chat session gets.
 func TestSessionDBMCP_RawSQLIsDebugOnly(t *testing.T) {
 	_, h := newTestSessionDB(t)
-	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != ledgerToolNames {
-		t.Fatalf("tools = %v, want the ledger alone", names)
+	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != workToolNamesRetired {
+		t.Fatalf("tools = %v, want the work records alone", names)
 	}
 	for _, name := range []string{"raw_query", "raw_exec"} {
 		resp := sessionDBCall(t, h, "tools/call", map[string]any{
@@ -119,9 +121,9 @@ func TestSessionDBMCP_RawSQLIsDebugOnly(t *testing.T) {
 		t.Fatalf("argument-less raw_exec = %+v", resp.Error)
 	}
 	if r := sessionDBCall(t, h, "tools/call", map[string]any{
-		"name": "ledger_get", "arguments": map[string]any{"id": "absent"},
+		"name": "task_get", "arguments": map[string]any{"id": "absent"},
 	}); r.Error != nil {
-		t.Fatalf("ledger_get = %+v, want a tool result: the ledger does not need the opt-in", r.Error)
+		t.Fatalf("task_get = %+v, want a tool result: the work records do not need the opt-in", r.Error)
 	}
 }
 
@@ -151,8 +153,8 @@ func TestSessionDBMCP_RawExecThenRawQuery(t *testing.T) {
 	if init.Error != nil || init.Result.(map[string]any)["serverInfo"].(map[string]any)["name"] != sessionDBMCPServerName {
 		t.Fatalf("initialize = %+v", init)
 	}
-	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != "raw_query,raw_exec,"+ledgerToolNames {
-		t.Fatalf("tools = %v, want raw and ledger tools", names)
+	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != "raw_query,raw_exec,"+workToolNamesRetired {
+		t.Fatalf("tools = %v, want raw and the work tools", names)
 	}
 
 	if out, isErr := sessionDBTool(t, h, "raw_exec",

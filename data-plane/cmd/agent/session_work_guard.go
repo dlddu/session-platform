@@ -97,11 +97,11 @@ func swapWorkGuard(ctx context.Context, tx *sql.Tx, taskID, lane string, expecte
 func workGuardConflict(lane string) error {
 	switch lane {
 	case workGuardTurn:
-		return ledgerFail("conflict",
+		return workFail("conflict",
 			"expected_turn_version does not match: another parent has written a turn on this task since you read it. "+
 				"Read the task's turns again and write against the turn_version they carry")
 	default:
-		return ledgerFail("conflict",
+		return workFail("conflict",
 			"expected_book_version does not match: another parent has written this task's bookkeeping since you read it. "+
 				"Read it again with work_legacy_get and write against the book_version it carries")
 	}
