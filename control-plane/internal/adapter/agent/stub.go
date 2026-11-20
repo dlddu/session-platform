@@ -33,6 +33,16 @@ type StubClient struct {
 	// LedgerEventRows is one task's history as the stub holds it, keyed by task.
 	LedgerEventRows map[string][]session.LedgerTaskEvent
 
+	// WorkRows is the slot's agreed work records as the stub holds them, in id
+	// order (AC-N9), and WorkTurnRows is each task's turns in turn-id order.
+	// WorkTasks/WorkTurns page over them with the sidecar's own keyset rules,
+	// so a test reads pages rather than one canned answer.
+	WorkRows     []session.WorkTaskRecord
+	WorkTurnRows map[string][]session.WorkTurn
+	// WorkReads counts work pages served, so a test can show that reading the
+	// records never turned into something else.
+	WorkReads int
+
 	mu      sync.Mutex
 	bufs    map[string][]byte
 	steered map[string][]string
@@ -235,6 +245,89 @@ func (c *StubClient) LedgerEvents(_ context.Context, _, taskID string, afterSeq 
 			break
 		}
 		page.Events = append(page.Events, row)
+	}
+	return page, nil
+}
+
+// WorkTasks pages over WorkRows the way the sidecar pages the work records
+// (AC-N9): ids in order, after_id as the cursor, and an empty next_cursor only
+// on the last page. status and session_id filter the same way, with the literal
+// "none" selecting the unassigned tasks.
+func (c *StubClient) WorkTasks(
+	_ context.Context, _ string, limit int, afterID, status, sessionID string,
+) (session.WorkTaskPage, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.WorkReads++
+	if limit <= 0 {
+		limit = session.WorkPageLimitDefault
+	}
+	page := session.WorkTaskPage{Tasks: []session.WorkTaskRecord{}}
+	for _, record := range c.WorkRows {
+		if record.Task.ID <= afterID {
+			continue
+		}
+		if status != "" && record.Task.Status != status {
+			continue
+		}
+		if sessionID != "" {
+			if sessionID == "none" {
+				if record.Task.SessionID != nil {
+					continue
+				}
+			} else if record.Task.SessionID == nil || *record.Task.SessionID != sessionID {
+				continue
+			}
+		}
+		if len(page.Tasks) == limit {
+			page.NextCursor = page.Tasks[len(page.Tasks)-1].Task.ID
+			break
+		}
+		page.Tasks = append(page.Tasks, record)
+	}
+	return page, nil
+}
+
+// WorkTurns pages WorkTurnRows the way the sidecar pages a task's turns: by
+// turn id, oldest first. A task the stub does not hold is not found rather than
+// an empty page — an empty page reads as "no turns yet" and would hide a wrong
+// id.
+func (c *StubClient) WorkTurns(
+	_ context.Context, _, taskID string, afterTurnID int64, limit int, openOnly bool,
+) (session.WorkTurnPage, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.WorkReads++
+	if limit <= 0 {
+		limit = session.WorkPageLimitDefault
+	}
+	var task session.WorkTask
+	found := false
+	for _, record := range c.WorkRows {
+		if record.Task.ID == taskID {
+			task, found = record.Task, true
+			break
+		}
+	}
+	if !found {
+		return session.WorkTurnPage{Turns: []session.WorkTurn{}},
+			fmt.Errorf("%w: task not found", session.ErrNotFound)
+	}
+	page := session.WorkTurnPage{
+		TaskID: taskID, TaskVersion: task.Version, Task: task, Turns: []session.WorkTurn{},
+	}
+	for _, turn := range c.WorkTurnRows[taskID] {
+		if turn.ID <= afterTurnID {
+			continue
+		}
+		if openOnly && (turn.Request == nil || turn.EndedAt != nil) {
+			continue
+		}
+		if len(page.Turns) == limit {
+			page.NextCursor = page.Turns[len(page.Turns)-1].ID
+			break
+		}
+		page.Turns = append(page.Turns, turn)
 	}
 	return page, nil
 }

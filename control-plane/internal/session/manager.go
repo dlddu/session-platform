@@ -135,6 +135,11 @@ type Manager interface {
 	// LedgerEvents reads one keyset page of one task's history, read only and
 	// without waking the session (AC-N8).
 	LedgerEvents(ctx context.Context, id, taskID string, afterSeq int64, limit int) (LedgerTaskEventPage, error)
+	// WorkTasks and WorkTurns read the agreed work records — the task row and
+	// the turn row — read only and without waking the session (AC-N9). The
+	// ledger reads above cannot carry what these hold.
+	WorkTasks(ctx context.Context, id string, limit int, afterID, status, sessionID string) (WorkTaskPage, error)
+	WorkTurns(ctx context.Context, id, taskID string, afterTurnID int64, limit int, openOnly bool) (WorkTurnPage, error)
 	// Recover calls admit with the recovered record before anything is
 	// written, so the caller decides who may see it (AC-K2).
 	Recover(ctx context.Context, id string, opts RestoreOptions, admit func(*Session) error) (*Session, error)

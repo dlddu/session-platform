@@ -103,6 +103,11 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/sessions/{id}/ledger/tasks", a.listLedgerTasks)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/ledger/tasks/{taskID}/requests", a.createLedgerRequest)
 	mux.HandleFunc("GET /api/v1/sessions/{id}/ledger/tasks/{taskID}/events", a.listLedgerEvents)
+	// AC-N9: the agreed work records. The ledger routes above cannot carry a
+	// task's description and completion criteria or anything a turn holds, so a
+	// caller with only those can show that work exists but never the work.
+	mux.HandleFunc("GET /api/v1/sessions/{id}/work/tasks", a.listWorkTasks)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/work/tasks/{taskID}/turns", a.listWorkTurns)
 }
 
 // ---- request/response DTOs ----

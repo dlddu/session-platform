@@ -50,10 +50,7 @@ func (s *sessionDB) serveLedgerTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), sessionDBCallTimeout)
 	defer cancel()
-	result, err := s.ledger(ctx, "ledger_list", ledgerArgs{
-		Limit:   limit,
-		AfterID: strings.TrimSpace(r.URL.Query().Get("after_id")),
-	})
+	result, err := s.tasksView(ctx, limit, strings.TrimSpace(r.URL.Query().Get("after_id")))
 	if err != nil {
 		var ledgerErr ledgerError
 		if errors.As(err, &ledgerErr) {

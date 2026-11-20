@@ -1524,6 +1524,18 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 		serveAgentLedgerEvents(w, r, c)
 	})
 
+	// AC-N9: the agreed work records themselves. The ledger-shaped views above
+	// have nowhere to put a task's description and completion criteria or a
+	// turn's instruction, answer, explanation, question and artifacts, so a
+	// reader that only has them can show the work existing but not the work.
+	// Read-only and passive, like the views beside them.
+	mux.HandleFunc("GET "+agentWorkTasksPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentWorkTasks(w, r, c)
+	})
+	mux.HandleFunc("GET "+agentWorkTurnsPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentWorkTurns(w, r, c)
+	})
+
 	mux.HandleFunc("GET /attach", func(w http.ResponseWriter, r *http.Request) {
 		if !c.isReady() {
 			http.Error(w, "claude workload is awaiting restore", http.StatusServiceUnavailable)

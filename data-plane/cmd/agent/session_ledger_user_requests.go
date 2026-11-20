@@ -317,6 +317,25 @@ func (s *sessionDB) appendLedgerRequest(ctx context.Context, id, taskID, text, a
 	if err = migrateLedger(ctx, tx); err != nil {
 		return ledgerRequest{}, false, err
 	}
+	if err = migrateWork(ctx, tx); err != nil {
+		return ledgerRequest{}, false, err
+	}
+	state, err := workState(ctx, tx)
+	if err != nil {
+		return ledgerRequest{}, false, err
+	}
+	if state == workStateMigrating {
+		return ledgerRequest{}, false, ledgerFail("conflict", "the work migration holds this database; retry when it has finished")
+	}
+	if state == workStateMigrated {
+		// The slot's tasks are turns now, so a person's words become the next
+		// turn rather than a row beside a task that no longer exists here.
+		stored, replayed, bridgeErr := storeRequestAsTurn(ctx, tx, id, taskID, text, author, choiceID, choiceBasis, now)
+		if bridgeErr != nil {
+			return ledgerRequest{}, false, bridgeErr
+		}
+		return stored, replayed, tx.Commit()
+	}
 	if existing, err := readLedgerRequest(ctx, tx, id); err == nil {
 		// Already stored. Same content is the caller's retry; different content
 		// under a used id is a mistake, not a second request.
