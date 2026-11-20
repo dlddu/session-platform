@@ -160,12 +160,24 @@ func (s *sessionDB) runWorkRetire(ctx context.Context, a workArgs, now time.Time
 		}); err != nil {
 			return nil, err
 		}
-		return map[string]any{
+		answer := map[string]any{
 			"dry_run": true, "state": state, "plan": plan,
 			"snapshot_label": workRetireSnapshotLabel,
 			"next": "a real run snapshots this database first, holds a fence that refuses writes while it adopts, " +
 				"and commits in one transaction; nothing above is written until then",
-		}, nil
+		}
+		if len(plan.Refusals) != 0 {
+			// The rehearsal does not write, so it cannot fail the way a real run
+			// does — but it must not read as "ready" either. A plan with
+			// refusals buried in a field is how somebody runs the real thing and
+			// is surprised, so the block is said at the top of the answer in the
+			// same words the real run will use.
+			answer["blocked"] = true
+			answer["refusals"] = plan.Refusals
+			answer["next"] = "a real run would refuse and change nothing: " + strings.Join(plan.Refusals, "; ") +
+				" Deal with each one and rehearse again."
+		}
+		return answer, nil
 	}
 	// A snapshot of the state before anything is dropped, checksummed and
 	// recorded, and the fence committed before the adoption so an interrupted
@@ -495,18 +507,6 @@ func rescuePreservedMonitor(
 		})
 		return nil
 	}
-	if status == "completed" {
-		plan.DropRows = append(plan.DropRows, workRetireDropRow{
-			Table: "sp_work_task_legacy", Key: id,
-			Why: "a monitoring loop that finished; nothing reads it again",
-		})
-		return nil
-	}
-	plan.Counts.MonitorRescued++
-	plan.DropRows = append(plan.DropRows, workRetireDropRow{
-		Table: "sp_work_task_legacy", Key: id,
-		Why: "the only copy left of a monitoring loop; carried into sp_work_monitor before this table goes",
-	})
 	note, err := json.Marshal(monitorNoteOf(decodePreservedDetails(details)))
 	if err != nil {
 		return err
@@ -515,26 +515,36 @@ func rescuePreservedMonitor(
 	if text == "{}" {
 		text = ""
 	}
-	state := monitorStateRunning
-	if status != "running" {
-		state = monitorStateStopped
+	// The preserved copy's status is not this record's state, and "completed"
+	// is not a licence to delete the only copy left of somebody's loop. running
+	// maps; anything else becomes a refusal below, where a person decides
+	// whether the loop is finished for good or merely between passes.
+	state := status
+	if status == "running" {
+		state = monitorStateRunning
 	}
-	// The same coercion the ledger path uses: a rescued row that monitor_put
-	// would refuse could be read for ever and never written again. It runs
-	// before the rehearsal returns, so a dry run names what a real one would
-	// have to change rather than surprising a person with it afterwards.
-	carried, changed := adoptableMonitor(workMonitor{
-		ID: id, Title: title, State: state, Note: text, UpdatedAt: workNow(now),
+	prospect := workMonitor{ID: id, Title: title, State: state, Note: text, UpdatedAt: workNow(now)}
+	// The same refusals the ledger path makes, for the same reason: a rescued
+	// row that monitor_put would refuse could be read for ever and never
+	// written again, and the copy is the *only* record of this loop — so the
+	// one thing that must not happen is losing it to a guess. It runs before
+	// the rehearsal returns, so a dry run names the refusal too.
+	if refusals := monitorAdoptionRefusals(prospect); len(refusals) != 0 {
+		for i, why := range refusals {
+			refusals[i] = "sp_work_task_legacy " + id + " is the only copy left of this loop. " + why
+		}
+		plan.Refusals = append(plan.Refusals, refusals...)
+		return nil
+	}
+	plan.Counts.MonitorRescued++
+	plan.DropRows = append(plan.DropRows, workRetireDropRow{
+		Table: "sp_work_task_legacy", Key: id,
+		Why: "the only copy left of a monitoring loop; carried into sp_work_monitor before this table goes",
 	})
-	for _, why := range changed {
-		plan.Dropped = append(plan.Dropped, workAdoptNote{
-			Record: "sp_work_monitor:" + id, Part: "the record as it stood", Why: why,
-		})
-	}
 	if write == nil {
 		return nil
 	}
-	return adoptMonitorRow(ctx, write, carried)
+	return adoptMonitorRow(ctx, write, prospect)
 }
 
 func decodePreservedRelations(raw string) []workBookSession {

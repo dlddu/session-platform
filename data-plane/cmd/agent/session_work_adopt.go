@@ -194,7 +194,11 @@ type workAdoptionCounts struct {
 	BookCarried         int `json:"bookkeeping_carried"`
 	BookPresent         int `json:"bookkeeping_already_owned"`
 	MonitorsCarried     int `json:"monitors_carried"`
-	MonitorsDropped     int `json:"monitors_dropped"`
+	// MonitorsRefused is the loops this walk would not carry as they stood.
+	// Nothing drops a monitoring loop any more: a loop this code cannot record
+	// faithfully stops the run and names why, because deleting a parent's loop
+	// on a guess is not a cleanup.
+	MonitorsRefused int `json:"monitors_refused"`
 	LedgerRequests      int `json:"ledger_requests"`
 	TurnsCreated        int `json:"turns_created"`
 	TurnsPresent        int `json:"turns_present"`
@@ -516,30 +520,6 @@ func liveDetails(details map[string]any) (map[string]any, []string, []string) {
 // run again; a record of it would be exactly the copy nothing reads that this
 // cleanup exists to remove.
 func adoptMonitor(ctx context.Context, write *sql.Tx, row adoptedTaskRow, plan *workAdoptionPlan, now time.Time) error {
-	if row.status == "completed" {
-		plan.Counts.MonitorsDropped++
-		plan.dropped("sp_ledger_tasks:"+row.id, "the monitoring row", "this loop finished; nothing reads it again")
-		return nil
-	}
-	plan.Counts.MonitorsCarried++
-	plan.carried("sp_work_monitor:"+row.id, "the monitoring row", "the parent's loop is still running")
-	// The ledger row carried an owner and session relations. The monitoring
-	// record has neither on purpose — a loop is this parent's own, and the
-	// relations were a convention in a table that had no column for a loop at
-	// all. They are named here rather than vanishing, because "nothing is lost"
-	// is a claim a reader checks key by key.
-	if strings.TrimSpace(row.task.Owner) != "" {
-		plan.dropped("sp_work_monitor:"+row.id, "owner",
-			"a monitoring loop is the parent's own; there is no second owner to record")
-	}
-	if len(row.task.Sessions) != 0 {
-		plan.dropped("sp_work_monitor:"+row.id, fmt.Sprintf("%d session relation(s)", len(row.task.Sessions)),
-			"a loop is not assigned to a session the way work is; the sessions it watches are recomputed each run")
-	}
-	state := monitorStateRunning
-	if row.status != "running" {
-		state = monitorStateStopped
-	}
 	note, err := json.Marshal(monitorNoteOf(row.task.Details))
 	if err != nil {
 		return err
@@ -548,16 +528,52 @@ func adoptMonitor(ctx context.Context, write *sql.Tx, row adoptedTaskRow, plan *
 	if text == "{}" {
 		text = ""
 	}
-	carried, changed := adoptableMonitor(workMonitor{
-		ID: row.id, Title: row.task.Title, State: state, Note: text, UpdatedAt: workNow(now),
-	})
-	for _, why := range changed {
-		plan.dropped("sp_work_monitor:"+row.id, "the record as it stood", why)
+	// The ledger's status is not this record's state. running maps; anything
+	// else — completed, cancelled, blocked, a status a newer image wrote — is
+	// not something this code may decide for a loop, so it becomes a refusal
+	// below rather than a guess here. Dropping a "completed" row on the
+	// strength of that one word is exactly the arbitrary deletion this cleanup
+	// is not allowed to make: only a person knows whether the loop is finished
+	// for good or merely between passes.
+	state := row.status
+	if row.status == "running" {
+		state = monitorStateRunning
 	}
+	prospect := workMonitor{
+		ID: row.id, Title: row.task.Title, State: state, Note: text, UpdatedAt: workNow(now),
+	}
+	refusals := monitorAdoptionRefusals(prospect)
+	// The owner and the session relations the ledger row carried. This record
+	// has no column for either, and nothing here establishes that they are
+	// disposable: an owner may be the only note of who set the loop up, and a
+	// relation may be the cursor it resumes from. Unclassified is a refusal,
+	// not a drop — the previous version named them as dropped, which recorded
+	// the loss honestly but still took the decision.
+	if owner := strings.TrimSpace(row.task.Owner); owner != "" {
+		refusals = append(refusals, fmt.Sprintf(
+			"sp_ledger_tasks monitoring row %s records owner %q, and the monitoring record has no column for it."+
+				" Whether that owner is still needed is not something this code can establish, so it is not"+
+				" dropped: fold it into what the loop keeps (or clear it) in the ledger and run again."+
+				" Nothing was changed.", row.id, owner))
+	}
+	if n := len(row.task.Sessions); n != 0 {
+		refusals = append(refusals, fmt.Sprintf(
+			"sp_ledger_tasks monitoring row %s carries %d session relation(s), and the monitoring record has no"+
+				" column for them. A relation may be the cursor this loop resumes from, so it is not dropped:"+
+				" clear the relations in the ledger once you have what you need from them, and run again."+
+				" Nothing was changed.", row.id, n))
+	}
+	if len(refusals) != 0 {
+		plan.Counts.MonitorsRefused++
+		plan.Refusals = append(plan.Refusals, refusals...)
+		return nil
+	}
+	plan.Counts.MonitorsCarried++
+	plan.carried("sp_work_monitor:"+row.id, "the monitoring row", "the parent's loop is still running")
 	if write == nil {
 		return nil
 	}
-	return adoptMonitorRow(ctx, write, carried)
+	return adoptMonitorRow(ctx, write, prospect)
 }
 
 // monitorNoteOf is what a monitoring row's details still say, minus the
@@ -827,7 +843,7 @@ func verifyAdoption(ctx context.Context, tx *sql.Tx, plan *workAdoptionPlan) err
 	counts := plan.Counts
 	plan.Checks["orphan_turns"] = orphans
 	plan.Checks["ledger_tasks_accounted"] = counts.TasksCreated+counts.TasksPresent+counts.TasksRetiredSkipped+
-		counts.MonitorsCarried+counts.MonitorsDropped == counts.LedgerTasks
+		counts.MonitorsCarried+counts.MonitorsRefused == counts.LedgerTasks
 	plan.Checks["ledger_requests_accounted"] = counts.TurnsCreated+counts.TurnsPresent+counts.RequestsDropped+
 		len(plan.Refusals) == counts.LedgerRequests || len(plan.Refusals) != 0
 	if orphans != 0 {

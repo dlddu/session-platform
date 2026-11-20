@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 const (
@@ -293,59 +292,59 @@ func deleteMonitor(ctx context.Context, tx *sql.Tx, a workArgs) (any, error) {
 // ledger. It never overwrites a row the parent has already written here: the
 // parent's own write is the current one, and the ledger copy it came from has
 // been standing still since.
-// adoptableMonitor makes one carried-over loop a row monitor_put would accept,
-// and says what it had to change.
+// monitorAdoptionRefusals is why a loop cannot be carried as it stands, or
+// nothing when it can.
 //
 // The adoption writes sp_work_monitor directly, so it does not pass through
-// validateMonitorTool — and a row that the tool would refuse is worse than one
-// that was never carried. monitor_put is a *full replacement* that requires
-// title, state and note, so a row over the note bound or with an empty title
-// can be read for ever and never written again: the parent would be unable to
-// record that its own loop had run. The ledger bounded neither against this
-// table's limits, and the table has no CHECK to fall back on.
+// validateMonitorTool, and the table has no CHECK to fall back on. A row the
+// tool would refuse is one monitor_get reads and monitor_put can never
+// replace — monitor_put is a *full* replacement — so the parent could never
+// record its own loop again: readable for ever, writable never.
 //
-// So the coercion is here, once, rather than in each caller: the note is cut to
-// the bound the tool enforces (bytes, as len() measures it), and a loop with no
-// title is named by its id, which is what it is called everywhere else. Each
-// change is returned so the retirement record can name it — a note that was cut
-// is a note the parent will replace on its next write anyway, but nothing may
-// claim it is whole when it is not.
-func adoptableMonitor(row workMonitor) (workMonitor, []string) {
-	changed := []string{}
+// The answer is to refuse, and it is worth saying why rather than making the
+// row fit. An earlier attempt cut the note to the bound. That was wrong. The
+// note is not scratch a parent rewrites on its next pass: it is where the
+// parent keeps the approval it is acting under, the claim it holds and the
+// cursor it resumes from, and it is JSON. Cutting it destroys state nothing
+// else holds and leaves the remainder unparseable — strictly worse than not
+// moving the row at all. Refusing keeps the ledger row byte for byte as it is
+// and leaves the decision with a person, which is the only honest option when
+// this code cannot tell what the bytes mean.
+//
+// Each refusal says what to do, because a refusal nobody can act on is a dead
+// end. The whole run stops on any of them (verifyRetirement) and the
+// transaction rolls back, so nothing is half-moved.
+func monitorAdoptionRefusals(row workMonitor) []string {
+	refusals := []string{}
+	where := "sp_ledger_tasks monitoring row " + row.ID
 	if strings.TrimSpace(row.Title) == "" {
-		row.Title = row.ID
-		changed = append(changed, "the loop had no title, so it is named by its id")
+		refusals = append(refusals, where+" has no title, and "+monitorPutTool+
+			" requires one, so the carried row could never be written again. Give the loop a title in the"+
+			" ledger, or remove the row deliberately, and run again — nothing was changed.")
 	}
 	if len(row.Title) > workTitleMax {
-		row.Title = truncateUTF8(row.Title, workTitleMax)
-		changed = append(changed, fmt.Sprintf("the title was over %d bytes and was cut", workTitleMax))
+		refusals = append(refusals, fmt.Sprintf(
+			"%s has a %d-byte title, over the %d this record holds. Shorten it in the ledger and run again —"+
+				" it is not cut here, because this code cannot tell which part matters.",
+			where, len(row.Title), workTitleMax))
 	}
 	if len(row.Note) > monitorNoteMax {
-		was := len(row.Note)
-		row.Note = truncateUTF8(row.Note, monitorNoteMax)
-		changed = append(changed, fmt.Sprintf(
-			"the note was %d bytes, over the %d this record holds, and was cut to fit — "+
-				"a row over the bound could be read but never written again", was, monitorNoteMax))
+		refusals = append(refusals, fmt.Sprintf(
+			"%s keeps %d bytes of state, over the %d a note holds. It is not cut: that state is where the"+
+				" approval in force, the claim held and the cursor to resume from live, and cutting it would"+
+				" destroy what nothing else has and leave the rest unparseable. Reduce what the loop keeps in"+
+				" the ledger — or record the loop with %s yourself and delete the ledger row — then run again."+
+				" Nothing was changed.",
+			where, len(row.Note), monitorNoteMax, monitorPutTool))
 	}
 	if !isMonitorState(row.State) {
-		row.State = monitorStateStopped
-		changed = append(changed, "the state was not one this record has, so the loop is recorded as stopped")
+		refusals = append(refusals, fmt.Sprintf(
+			"%s would be recorded as %q, which is not a state this record has (%s). A loop that is finished for"+
+				" good is removed with %s rather than recorded as finished, so which of the two this is needs a"+
+				" person. Nothing was changed.",
+			where, row.State, strings.Join(monitorStates, " or "), monitorDeleteTool))
 	}
-	return row, changed
-}
-
-// truncateUTF8 cuts s to at most limit bytes without splitting a rune. A split
-// rune would make the stored text invalid UTF-8, which is a different problem
-// from the one being fixed.
-func truncateUTF8(s string, limit int) string {
-	if len(s) <= limit {
-		return s
-	}
-	cut := limit
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
-	return s[:cut]
+	return refusals
 }
 
 func adoptMonitorRow(ctx context.Context, tx *sql.Tx, row workMonitor) error {
