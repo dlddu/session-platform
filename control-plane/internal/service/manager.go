@@ -708,67 +708,29 @@ func (s *Service) questionTarget(ctx context.Context, id string) (*session.Sessi
 	return sess, agentQ, nil
 }
 
-// ledgerAgent is the agent capability behind the read-only view of the chat
-// slot's task ledger (AC-N6).
-type ledgerAgent interface {
-	LedgerTasks(ctx context.Context, pod string, limit int, afterID string) (session.LedgerTaskPage, error)
+// workRequestAgent is the agent capability behind the one write on the work
+// path: a person's request becoming the next turn of a task (AC-N10).
+type workRequestAgent interface {
+	CreateWorkRequest(ctx context.Context, pod string, in session.WorkRequestInput) (session.WorkRequestStored, error)
 }
 
-// ledgerRequestAgent is the agent capability behind storing a user request on
-// a ledger task (AC-N6, write side).
-type ledgerRequestAgent interface {
-	CreateLedgerRequest(ctx context.Context, pod string, in session.LedgerRequestInput) (session.LedgerRequestStored, error)
-}
-
-// ledgerEventAgent is the agent capability behind one task's history (AC-N8).
-type ledgerEventAgent interface {
-	LedgerEvents(ctx context.Context, pod, taskID string, afterSeq int64, limit int) (session.LedgerTaskEventPage, error)
-}
-
-// LedgerTasks reads one keyset page of the chat slot's task ledger (AC-N6).
-// Like Questions and ToolApprovals it is passive: it neither restores a
-// snapshot nor counts as an access, so reading the ledger never wakes a session
-// and never moves its idle clock.
+// CreateWorkRequest stores one person's request as the next turn of a task of
+// the chat slot (AC-N10, the write side of the work records).
 //
-// The ledger belongs to the slot rather than to the session, so it is read
-// through the pod holding that slot now — which is what makes the page the
-// *current* chat's ledger and not a record left by an earlier one. A session
-// with no live pod is reported as unavailable, never as an empty ledger: the
-// rows are still on the volume, and claiming "no tasks" would be wrong.
-func (s *Service) LedgerTasks(ctx context.Context, id string, limit int, afterID string) (session.LedgerTaskPage, error) {
-	empty := session.LedgerTaskPage{Tasks: []session.LedgerTaskRecord{}}
-	sess, err := s.Get(ctx, id)
-	if err != nil {
-		return empty, err
-	}
-	if sess.WorkloadType != session.WorkloadTypeCodexChat {
-		return empty, fmt.Errorf("%w: only codex-chat sessions keep one", session.ErrLedgerUnsupported)
-	}
-	if sess.State == session.StateSnapshot || sess.Pod == "" {
-		return empty, session.ErrLedgerUnavailable
-	}
-	agentL, ok := s.agent.(ledgerAgent)
-	if !ok {
-		return empty, fmt.Errorf("%w: this deployment's agent offers no ledger view", session.ErrLedgerUnsupported)
-	}
-	return agentL.LedgerTasks(ctx, sess.Pod, limit, afterID)
-}
-
-// CreateLedgerRequest stores one user request on a task of the chat slot's
-// ledger (AC-N6, write side).
+// It is as passive as the reads beside it: it neither restores a snapshot nor
+// counts as an access, so a person leaving a request never wakes the session
+// and never moves its idle clock — the parent picks it up when it next reads
+// the task's open turns. A session with no live pod cannot be written to, which
+// is reported rather than swallowed: the caller can say the request was not
+// stored instead of implying it was.
 //
-// It is as passive as the read: it neither restores a snapshot nor counts as an
-// access, so a person leaving a request never wakes the session and never moves
-// its idle clock — the session picks the request up when it next reads its own
-// ledger. A session with no live pod cannot be written to, which is a conflict
-// rather than a loss: the caller is told, and can say so instead of implying
-// the request was stored.
-//
-// The slot's ledger is reached through the pod holding the slot now, exactly
-// as on the read side, so a request lands in the ledger the current chat sees.
-func (s *Service) CreateLedgerRequest(ctx context.Context, id string, in session.LedgerRequestInput) (session.LedgerRequestStored, error) {
-	var empty session.LedgerRequestStored
-	if err := validateLedgerRequest(in); err != nil {
+// The slot is reached through the pod holding it now, exactly as on the read
+// side, so a request lands in the records the current chat sees.
+func (s *Service) CreateWorkRequest(
+	ctx context.Context, id string, in session.WorkRequestInput,
+) (session.WorkRequestStored, error) {
+	var empty session.WorkRequestStored
+	if err := validateWorkRequest(in); err != nil {
 		return empty, err
 	}
 	sess, err := s.Get(ctx, id)
@@ -776,75 +738,46 @@ func (s *Service) CreateLedgerRequest(ctx context.Context, id string, in session
 		return empty, err
 	}
 	if sess.WorkloadType != session.WorkloadTypeCodexChat {
-		return empty, fmt.Errorf("%w: only codex-chat sessions keep one", session.ErrLedgerUnsupported)
+		return empty, fmt.Errorf("%w: only codex-chat sessions keep work records", session.ErrWorkUnsupported)
 	}
 	if sess.State == session.StateSnapshot || sess.Pod == "" {
-		return empty, session.ErrLedgerUnavailable
+		return empty, session.ErrWorkUnavailable
 	}
-	agentR, ok := s.agent.(ledgerRequestAgent)
+	agentR, ok := s.agent.(workRequestAgent)
 	if !ok {
-		return empty, fmt.Errorf("%w: this deployment's agent cannot store ledger requests", session.ErrLedgerUnsupported)
+		return empty, fmt.Errorf("%w: this deployment's agent cannot store work requests", session.ErrWorkUnsupported)
 	}
-	return agentR.CreateLedgerRequest(ctx, sess.Pod, in)
+	return agentR.CreateWorkRequest(ctx, sess.Pod, in)
 }
 
-// LedgerEvents reads one page of a task's history (AC-N8). It is passive like
-// the task read: no restore, no access, no turn — so opening a history never
-// wakes a session. A session with no live pod cannot be read, which is a
-// conflict rather than an empty history: the rows are on the slot.
-func (s *Service) LedgerEvents(ctx context.Context, id, taskID string, afterSeq int64, limit int) (session.LedgerTaskEventPage, error) {
-	empty := session.LedgerTaskEventPage{Events: []session.LedgerTaskEvent{}}
-	if !ledgerRequestID.MatchString(taskID) {
-		return empty, fmt.Errorf("%w: task id must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
-	}
-	sess, err := s.Get(ctx, id)
-	if err != nil {
-		return empty, err
-	}
-	if sess.WorkloadType != session.WorkloadTypeCodexChat {
-		return empty, fmt.Errorf("%w: only codex-chat sessions keep one", session.ErrLedgerUnsupported)
-	}
-	if sess.State == session.StateSnapshot || sess.Pod == "" {
-		return empty, session.ErrLedgerUnavailable
-	}
-	agentE, ok := s.agent.(ledgerEventAgent)
-	if !ok {
-		return empty, fmt.Errorf("%w: this deployment's agent offers no task history", session.ErrLedgerUnsupported)
-	}
-	return agentE.LedgerEvents(ctx, sess.Pod, taskID, afterSeq, limit)
-}
-
-// validateLedgerRequest bounds what reaches the slot. The ledger applies the
-// same rules itself; refusing here keeps a malformed request from costing a hop
-// into the pod, and keeps the message about the field rather than the hop.
-func validateLedgerRequest(in session.LedgerRequestInput) error {
-	if !ledgerRequestID.MatchString(in.ID) {
+// validateWorkRequest bounds what reaches the slot. The slot applies the same
+// rules itself; refusing here keeps a malformed request from costing a hop into
+// the pod, and keeps the message about the field rather than the hop.
+func validateWorkRequest(in session.WorkRequestInput) error {
+	if !workRecordID.MatchString(in.ID) {
 		return fmt.Errorf("%w: id must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
 	}
-	if !ledgerRequestID.MatchString(in.TaskID) {
+	if !workRecordID.MatchString(in.TaskID) {
 		return fmt.Errorf("%w: task_id must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
 	}
-	if in.ChoiceID != "" && !ledgerRequestID.MatchString(in.ChoiceID) {
-		return fmt.Errorf("%w: choice_id must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
-	}
-	if in.ChoiceID == "" && in.ChoiceBasisVersion != 0 {
-		return fmt.Errorf("%w: choice_basis_version belongs to a picked choice_id", session.ErrInvalidInput)
-	}
-	if in.ChoiceBasisVersion < 0 {
-		return fmt.Errorf("%w: choice_basis_version must not be negative", session.ErrInvalidInput)
-	}
-	if !ledgerRequestID.MatchString(in.Author) {
+	if !workRecordID.MatchString(in.Author) {
 		return fmt.Errorf("%w: author must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
 	}
-	if text := strings.TrimSpace(in.Text); text == "" || len(in.Text) > session.LedgerRequestTextMax {
-		return fmt.Errorf("%w: text must be 1..%d characters", session.ErrInvalidInput, session.LedgerRequestTextMax)
+	if text := strings.TrimSpace(in.Text); text == "" || len(in.Text) > session.WorkRequestTextMax {
+		return fmt.Errorf("%w: text must be 1..%d characters", session.ErrInvalidInput, session.WorkRequestTextMax)
+	}
+	// A pick names the turn it was offered on. Zero or negative is not a turn
+	// id, and refusing it here keeps a caller from learning "stale" for a
+	// number that was never a turn in the first place.
+	if in.ChoiceTurnID != nil && *in.ChoiceTurnID < 1 {
+		return fmt.Errorf("%w: choice_turn_id must be a positive turn id", session.ErrInvalidInput)
 	}
 	return nil
 }
 
-// ledgerRequestID is the ledger's own id shape, so an id this service accepts
+// workRecordID is the work records' own id shape, so an id this service accepts
 // is one the slot will accept too.
-var ledgerRequestID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+var workRecordID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // Switch makes the target session active — promoting idle or restoring a
 // snapshot as needed — and is a no-op for an already-active session (AC-C4).
@@ -1765,30 +1698,31 @@ type workAgent interface {
 	WorkTurns(ctx context.Context, pod, taskID string, afterTurnID int64, limit int, openOnly bool) (session.WorkTurnPage, error)
 }
 
-// workReadable is the check both work reads share: the slot keeps work records,
-// a live pod holds the slot now, and this deployment's agent can be asked. It
-// is the ledger read's check for the ledger read's reasons — the records belong
-// to the slot, so a session with no live pod is unavailable rather than empty.
+// workReadable is the check every call on this path shares: the slot keeps work
+// records, a live pod holds the slot now, and this deployment's agent can be
+// asked. The records belong to the slot rather than to the session, so a
+// session with no live pod is unavailable rather than empty — the rows are
+// still on the volume, and claiming "no tasks" would be wrong.
 func (s *Service) workReadable(ctx context.Context, id string) (*session.Session, workAgent, error) {
 	sess, err := s.Get(ctx, id)
 	if err != nil {
 		return sess, nil, err
 	}
 	if sess.WorkloadType != session.WorkloadTypeCodexChat {
-		return sess, nil, fmt.Errorf("%w: only codex-chat sessions keep work records", session.ErrLedgerUnsupported)
+		return sess, nil, fmt.Errorf("%w: only codex-chat sessions keep work records", session.ErrWorkUnsupported)
 	}
 	if sess.State == session.StateSnapshot || sess.Pod == "" {
-		return sess, nil, session.ErrLedgerUnavailable
+		return sess, nil, session.ErrWorkUnavailable
 	}
 	agentW, ok := s.agent.(workAgent)
 	if !ok {
-		return sess, nil, fmt.Errorf("%w: this deployment's agent offers no work records", session.ErrLedgerUnsupported)
+		return sess, nil, fmt.Errorf("%w: this deployment's agent offers no work records", session.ErrWorkUnsupported)
 	}
 	return sess, agentW, nil
 }
 
-// WorkTasks reads one keyset page of the slot's work tasks (AC-N9). Passive
-// like the ledger read: no restore, no access, no turn.
+// WorkTasks reads one keyset page of the slot's work tasks (AC-N9). Passive:
+// no restore, no access, no turn — opening a panel never wakes a session.
 func (s *Service) WorkTasks(
 	ctx context.Context, id string, limit int, afterID, status, sessionID string,
 ) (session.WorkTaskPage, error) {
@@ -1809,7 +1743,7 @@ func (s *Service) WorkTurns(
 	ctx context.Context, id, taskID string, afterTurnID int64, limit int, openOnly bool,
 ) (session.WorkTurnPage, error) {
 	empty := session.WorkTurnPage{Turns: []session.WorkTurn{}}
-	if !ledgerRequestID.MatchString(taskID) {
+	if !workRecordID.MatchString(taskID) {
 		return empty, fmt.Errorf("%w: task id must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
 	}
 	sess, agentW, err := s.workReadable(ctx, id)

@@ -100,7 +100,7 @@ func getWorkTurns(t *testing.T, srv *httptest.Server, id, taskID, query string) 
 // a turn holds, so this is the test that the app can show the work rather than
 // only that work exists.
 func TestWorkTasks_CarryTheAgreedModel(t *testing.T) {
-	srv, stub := ledgerServer(t)
+	srv, stub := workServer(t)
 	workFixture(stub)
 	_, s := createRaw(t, srv.URL, map[string]any{"name": "work", "workloadType": "codex-chat"})
 
@@ -135,7 +135,7 @@ func TestWorkTasks_CarryTheAgreedModel(t *testing.T) {
 
 // Every field of a turn reaches the app, in the order the turns happened.
 func TestWorkTurns_CarryEveryAgreedField(t *testing.T) {
-	srv, stub := ledgerServer(t)
+	srv, stub := workServer(t)
 	workFixture(stub)
 	_, s := createRaw(t, srv.URL, map[string]any{"name": "turns", "workloadType": "codex-chat"})
 
@@ -190,7 +190,7 @@ func TestWorkTurns_CarryEveryAgreedField(t *testing.T) {
 // is not found. An empty page for an unknown id would read as "nothing has
 // happened yet" and hide a wrong id.
 func TestWorkTurns_EmptyIsNotTheSameAsUnknown(t *testing.T) {
-	srv, stub := ledgerServer(t)
+	srv, stub := workServer(t)
 	workFixture(stub)
 	_, s := createRaw(t, srv.URL, map[string]any{"name": "empty", "workloadType": "codex-chat"})
 
@@ -203,12 +203,12 @@ func TestWorkTurns_EmptyIsNotTheSameAsUnknown(t *testing.T) {
 	}
 }
 
-// Scope and shape refusals, the same ones the ledger routes make: a page size
-// out of range is refused rather than clamped, a status outside the domain is
-// refused rather than answered with an empty page, a workload type that keeps
-// no work records says so, and another tenant's session does not exist.
+// Scope and shape refusals: a page size out of range is refused rather than
+// clamped, a status outside the domain is refused rather than answered with an
+// empty page, a workload type that keeps no work records says so, and another
+// tenant's session does not exist.
 func TestWorkRoutes_RefusalsAndScope(t *testing.T) {
-	srv, stub := ledgerServer(t)
+	srv, stub := workServer(t)
 	workFixture(stub)
 	_, s := createRaw(t, srv.URL, map[string]any{"name": "refusals", "workloadType": "codex-chat"})
 
@@ -250,7 +250,7 @@ func TestWorkRoutes_RefusalsAndScope(t *testing.T) {
 	if stub.WorkReads == 0 {
 		t.Fatal("the stub served no work page")
 	}
-	if len(stub.LedgerRequests) != 0 {
-		t.Fatalf("reading work stored something: %+v", stub.LedgerRequests)
+	if len(stub.WorkRequests) != 0 {
+		t.Fatalf("reading work stored something: %+v", stub.WorkRequests)
 	}
 }

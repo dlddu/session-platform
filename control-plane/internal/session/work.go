@@ -1,13 +1,35 @@
-// The agreed work records as they leave the control plane (AC-N9): a task row
-// and a turn row, and nothing else.
+// The agreed work records as they leave the control plane (AC-N9, AC-N10): a
+// task row, a turn row, and the one write — a person's words, which become the
+// next turn of a task.
 //
-// These exist beside the ledger types rather than replacing them because the
-// ledger shapes cannot carry what the agreed model holds — a task's description
+// These replaced the ledger shapes rather than sitting beside them. The ledger
+// page had nowhere to put what the agreed model holds — a task's description
 // and completion criteria, and a turn's instruction, the session's own final
-// answer, the parent's explanation, its question and the artifacts. A caller
-// that only had the ledger page could show that work exists but never the work
-// itself.
+// answer, the parent's explanation, its question and the artifacts — so a
+// caller that only had it could show that work exists but never the work
+// itself. Keeping both would have meant two shapes for one truth, and the
+// slot's ledger is gone (AC-N10): there is nothing behind the second shape to
+// read.
 package session
+
+import "errors"
+
+var (
+	// ErrWorkUnsupported is a session whose type keeps no work records. Only
+	// codex-chat gets a session database.
+	ErrWorkUnsupported = errors.New("this workload keeps no work records")
+	// ErrWorkUnavailable is a session that keeps work records but has no live
+	// pod to read its slot through. It is distinct from empty work on purpose:
+	// the rows are still on the slot's volume, so answering "no tasks" would
+	// claim there is no work. Reading never starts a pod — that would make
+	// opening a panel restore a snapshot.
+	ErrWorkUnavailable = errors.New("the session has no live pod to read its work records through")
+	// ErrWorkChoiceStale is a pick from a turn the task has moved past. It is
+	// its own class because the caller's answer is different: the screen is out
+	// of date, so re-reading the task is what helps, and the words the person
+	// already typed are still good.
+	ErrWorkChoiceStale = errors.New("that offered choice is no longer current")
+)
 
 // WorkTask is one task: who has it, what it is, how it will be known to be
 // done, where it stands, and the version a writer has to hold to change it.
@@ -103,6 +125,46 @@ const (
 	WorkPageLimitDefault = 20
 	WorkPageLimitMax     = 100
 )
+
+// WorkRequestTextMax bounds one request's words. It is a person's sentence
+// about one task; the caller's own limit is expected to be smaller.
+const WorkRequestTextMax = 8192
+
+// WorkRequestInput is one person's request to store. It becomes the next turn
+// of the task — a person's words are an exchange on the work, not a row beside
+// it, which is why there is no separate request record to read back.
+//
+// ID is the caller's own stable id and the whole idempotency contract: the same
+// id with the same task and text stores nothing twice, and the same id with
+// different content is a conflict rather than a second turn.
+//
+// Author is the caller's own derivation from whatever boundary authenticated
+// the person. It is bookkeeping, exactly like a task's owner: nothing here
+// grants a tool, an approval or a merge on the strength of it.
+type WorkRequestInput struct {
+	ID     string `json:"id"`
+	TaskID string `json:"task_id"`
+	Text   string `json:"text"`
+	Author string `json:"author"`
+	// ChoiceTurnID, when set, is the turn whose offered choices the person
+	// picked from. The slot refuses a pick from a turn that is no longer the
+	// task's latest, so a screen left open while the task moved on cannot act
+	// on it. Free text leaves it nil and is never refused for staleness.
+	//
+	// It replaced the ledger's (choice_id, basis_version) pair: what makes a
+	// pick current is the turn it was offered on still being the latest, and
+	// a version carried beside a choice id was a second way of saying that
+	// which could disagree with the first.
+	ChoiceTurnID *int64 `json:"choice_turn_id,omitempty"`
+}
+
+// WorkRequestStored is the answer to storing one: the turn the request became.
+// Replayed is true when the id was already stored with the same content, which
+// is what makes a caller's retry of an answer it never saw safe.
+type WorkRequestStored struct {
+	Turn     WorkTurn `json:"turn"`
+	Replayed bool     `json:"replayed"`
+}
 
 // WorkStatuses is the task status domain, the ledger's own unchanged: a
 // migration that renamed a status would move work a person had already seen as

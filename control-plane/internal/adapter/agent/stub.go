@@ -20,19 +20,6 @@ type StubClient struct {
 	// SteerOutcome overrides what Steer answers (AC-J9); nil means applied.
 	SteerOutcome *session.Steered
 
-	// LedgerRows is the chat slot's task ledger as the stub holds it, in id
-	// order (AC-N6). LedgerTasks pages over it with the same keyset rules the
-	// sidecar uses, so a test reads pages rather than one canned answer.
-	LedgerRows []session.LedgerTaskRecord
-	// LedgerReads counts ledger pages served, so a test can show that reading
-	// a panel never turned into something else.
-	LedgerReads int
-	// LedgerRequests is what callers stored, in arrival order, with the same
-	// id-idempotency and task-link rules the sidecar applies.
-	LedgerRequests []session.LedgerRequest
-	// LedgerEventRows is one task's history as the stub holds it, keyed by task.
-	LedgerEventRows map[string][]session.LedgerTaskEvent
-
 	// WorkRows is the slot's agreed work records as the stub holds them, in id
 	// order (AC-N9), and WorkTurnRows is each task's turns in turn-id order.
 	// WorkTasks/WorkTurns page over them with the sidecar's own keyset rules,
@@ -42,6 +29,10 @@ type StubClient struct {
 	// WorkReads counts work pages served, so a test can show that reading the
 	// records never turned into something else.
 	WorkReads int
+	// WorkRequests is what callers stored, in arrival order, with the same
+	// id-idempotency and task-link rules the sidecar applies. Each one became a
+	// turn on its task, which is where a test looks for it.
+	WorkRequests []session.WorkRequestInput
 
 	mu      sync.Mutex
 	bufs    map[string][]byte
@@ -66,30 +57,6 @@ func (c *StubClient) Write(_ context.Context, pod, payload string) error {
 // sidecar to clone one.
 func (c *StubClient) RefreshPlugins(context.Context, string) (session.PluginChanges, error) {
 	return session.PluginChanges{State: "unconfigured", Added: []string{}, Updated: []string{}, Removed: []string{}}, nil
-}
-
-// LedgerTasks pages over LedgerRows the way the sidecar pages over the ledger
-// (AC-N6): ids in order, after_id as the cursor, and an empty next_cursor only
-// on the last page.
-func (c *StubClient) LedgerTasks(_ context.Context, _ string, limit int, afterID string) (session.LedgerTaskPage, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.LedgerReads++
-	if limit <= 0 {
-		limit = session.LedgerTaskPageLimitDefault
-	}
-	page := session.LedgerTaskPage{Tasks: []session.LedgerTaskRecord{}}
-	for _, row := range c.LedgerRows {
-		if afterID != "" && row.ID <= afterID {
-			continue
-		}
-		if len(page.Tasks) == limit {
-			page.NextCursor = page.Tasks[len(page.Tasks)-1].ID
-			break
-		}
-		page.Tasks = append(page.Tasks, row)
-	}
-	return page, nil
 }
 
 // PendingQuestions reports none: the stub runs no turn that could ask.
@@ -169,90 +136,97 @@ func (c *StubClient) Stream(_ context.Context, pod string, offset int64) (io.Rea
 	return io.NopCloser(bytes.NewReader(event.Bytes())), nil
 }
 
-// offersChoice says whether the task still offers the picked choice: it has to
-// be one of the task's own, written against the version the task now stands at,
-// and to agree with the basis the caller saw.
-func offersChoice(task session.LedgerTaskRecord, in session.LedgerRequestInput) bool {
-	for _, c := range task.Choices {
-		if c.ID != in.ChoiceID {
-			continue
-		}
-		if c.BasisVersion != task.Version {
-			return false
-		}
-		return in.ChoiceBasisVersion == 0 || in.ChoiceBasisVersion == c.BasisVersion
+// latestTurnID is the task's newest turn, which is the only turn whose offered
+// choices are current. It is how the stub reproduces the slot's own staleness
+// rule: a pick from an earlier turn is a screen the task has moved past.
+func (c *StubClient) latestTurnID(taskID string) (int64, bool) {
+	turns := c.WorkTurnRows[taskID]
+	if len(turns) == 0 {
+		return 0, false
 	}
-	return false
+	return turns[len(turns)-1].ID, true
 }
 
-// CreateLedgerRequest stores one request the way the sidecar does: the id is
-// the idempotency key, the task has to be one this ledger holds, and the stored
-// row never touches the task it names.
-func (c *StubClient) CreateLedgerRequest(_ context.Context, _ string, in session.LedgerRequestInput) (session.LedgerRequestStored, error) {
+// CreateWorkRequest stores one request the way the sidecar does: the id is the
+// idempotency key, the task has to be one this slot holds, a pick has to name
+// the task's latest turn, and what is stored is a *turn* on that task rather
+// than a row beside it.
+func (c *StubClient) CreateWorkRequest(
+	_ context.Context, _ string, in session.WorkRequestInput,
+) (session.WorkRequestStored, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, stored := range c.LedgerRequests {
+	for _, stored := range c.WorkRequests {
 		if stored.ID != in.ID {
 			continue
 		}
 		if stored.TaskID != in.TaskID || stored.Text != in.Text {
-			return session.LedgerRequestStored{}, fmt.Errorf("%w: request id already used with different content", session.ErrConflict)
+			return session.WorkRequestStored{}, fmt.Errorf("%w: request id already used with different content",
+				session.ErrConflict)
 		}
-		return session.LedgerRequestStored{Request: stored, Replayed: true}, nil
+		// A replay answers with the turn it already became, found by the origin
+		// the slot recorded against it.
+		for _, turn := range c.WorkTurnRows[stored.TaskID] {
+			if turn.Request != nil && *turn.Request == stored.Text {
+				return session.WorkRequestStored{Turn: turn, Replayed: true}, nil
+			}
+		}
+		return session.WorkRequestStored{Replayed: true}, nil
 	}
 	found := false
-	var task session.LedgerTaskRecord
-	for _, row := range c.LedgerRows {
-		if row.ID == in.TaskID {
-			found, task = true, row
+	for _, row := range c.WorkRows {
+		if row.Task.ID == in.TaskID {
+			found = true
 			break
 		}
 	}
 	if !found {
-		return session.LedgerRequestStored{}, fmt.Errorf("%w: task not found", session.ErrNotFound)
+		return session.WorkRequestStored{}, fmt.Errorf("%w: task not found", session.ErrNotFound)
 	}
-	// The sidecar checks a pick on the way in, not only on the way out: a
-	// choice it no longer offers is refused, so a screen left open while the
-	// task moved cannot act on an old sentence.
-	if in.ChoiceID != "" && !offersChoice(task, in) {
-		return session.LedgerRequestStored{}, fmt.Errorf("%w: that choice is no longer offered for this task",
-			session.ErrLedgerChoiceStale)
+	// The slot checks a pick on the way in, not only on the way out: a turn the
+	// task has moved past is refused, so a screen left open cannot act on a
+	// question that is no longer being asked.
+	if in.ChoiceTurnID != nil {
+		latest, ok := c.latestTurnID(in.TaskID)
+		if !ok || latest != *in.ChoiceTurnID {
+			return session.WorkRequestStored{}, fmt.Errorf("%w: that choice is no longer offered for this task",
+				session.ErrWorkChoiceStale)
+		}
 	}
-	stored := session.LedgerRequest{
-		ID: in.ID, TaskID: in.TaskID, Seq: int64(len(c.LedgerRequests) + 1), Version: 1,
-		Text: in.Text, Author: in.Author, Status: session.LedgerRequestPending,
-		CreatedAt: "2026-11-18T00:00:00Z",
+	if c.WorkTurnRows == nil {
+		c.WorkTurnRows = map[string][]session.WorkTurn{}
 	}
-	c.LedgerRequests = append(c.LedgerRequests, stored)
-	return session.LedgerRequestStored{Request: stored, Replayed: false}, nil
-}
-
-// LedgerEvents pages LedgerEventRows the way the sidecar pages the history: by
-// the row's own seq, and only the task that was asked for.
-func (c *StubClient) LedgerEvents(_ context.Context, _, taskID string, afterSeq int64, limit int) (session.LedgerTaskEventPage, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if limit <= 0 {
-		limit = session.LedgerEventPageLimitDefault
+	next := int64(1)
+	for _, turns := range c.WorkTurnRows {
+		for _, turn := range turns {
+			if turn.ID >= next {
+				next = turn.ID + 1
+			}
+		}
 	}
-	page := session.LedgerTaskEventPage{Events: []session.LedgerTaskEvent{}}
-	for _, row := range c.LedgerEventRows[taskID] {
-		if row.Seq <= afterSeq {
+	text := in.Text
+	turn := session.WorkTurn{
+		ID: next, TaskID: in.TaskID, Request: &text,
+		Choices: []session.WorkChoice{}, Artifacts: []string{},
+		RequestedAt: "2026-11-20T00:00:00Z",
+		// app_request is what the slot records for a turn a person wrote
+		// through this route, which is how a reader tells it from one the
+		// session wrote itself.
+		Origin: "app_request",
+	}
+	c.WorkTurnRows[in.TaskID] = append(c.WorkTurnRows[in.TaskID], turn)
+	c.WorkRequests = append(c.WorkRequests, in)
+	for i := range c.WorkRows {
+		if c.WorkRows[i].Task.ID != in.TaskID {
 			continue
 		}
-		if len(page.Events) == limit {
-			page.NextCursor = page.Events[len(page.Events)-1].Seq
-			break
-		}
-		page.Events = append(page.Events, row)
+		c.WorkRows[i].TurnsTotal++
+		stored := turn
+		c.WorkRows[i].LatestTurn = &stored
 	}
-	return page, nil
+	return session.WorkRequestStored{Turn: turn, Replayed: false}, nil
 }
 
-// WorkTasks pages over WorkRows the way the sidecar pages the work records
-// (AC-N9): ids in order, after_id as the cursor, and an empty next_cursor only
-// on the last page. status and session_id filter the same way, with the literal
-// "none" selecting the unassigned tasks.
 func (c *StubClient) WorkTasks(
 	_ context.Context, _ string, limit int, afterID, status, sessionID string,
 ) (session.WorkTaskPage, error) {

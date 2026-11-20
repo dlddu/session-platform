@@ -125,21 +125,16 @@ type Manager interface {
 	// put to its owner; DecideToolApproval relays one decision (AC-E2).
 	ToolApprovals(ctx context.Context, id string) (ToolApprovalPage, error)
 	DecideToolApproval(ctx context.Context, id, approvalID string, decision ToolApprovalDecision) error
-	// LedgerTasks reads one keyset page of the chat slot's task ledger, read
-	// only and without waking the session (AC-N6).
-	LedgerTasks(ctx context.Context, id string, limit int, afterID string) (LedgerTaskPage, error)
-	// CreateLedgerRequest stores one user request on a ledger task. It writes
-	// no task field and starts no turn: the session finds the request when it
-	// next reads its ledger (AC-N6).
-	CreateLedgerRequest(ctx context.Context, id string, in LedgerRequestInput) (LedgerRequestStored, error)
-	// LedgerEvents reads one keyset page of one task's history, read only and
-	// without waking the session (AC-N8).
-	LedgerEvents(ctx context.Context, id, taskID string, afterSeq int64, limit int) (LedgerTaskEventPage, error)
 	// WorkTasks and WorkTurns read the agreed work records — the task row and
-	// the turn row — read only and without waking the session (AC-N9). The
-	// ledger reads above cannot carry what these hold.
+	// the turn row — read only and without waking the session (AC-N9). A
+	// task's turns are its history: there is no separate history read, because
+	// a past management event was never a turn (AC-N10).
 	WorkTasks(ctx context.Context, id string, limit int, afterID, status, sessionID string) (WorkTaskPage, error)
 	WorkTurns(ctx context.Context, id, taskID string, afterTurnID int64, limit int, openOnly bool) (WorkTurnPage, error)
+	// CreateWorkRequest stores one person's request as the next turn of a
+	// task. It writes no task field and starts no turn of the session's own:
+	// the parent finds it when it next reads the task's open turns (AC-N10).
+	CreateWorkRequest(ctx context.Context, id string, in WorkRequestInput) (WorkRequestStored, error)
 	// Recover calls admit with the recovered record before anything is
 	// written, so the caller decides who may see it (AC-K2).
 	Recover(ctx context.Context, id string, opts RestoreOptions, admit func(*Session) error) (*Session, error)
