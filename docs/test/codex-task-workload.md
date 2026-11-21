@@ -32,7 +32,7 @@
 ### 시나리오 4: 추론 수준은 생성 시 정해지고 파드까지 간다
 - **사전 조건**: SUT와 그 클러스터의 kube 접근
 - **실행 단계**: (a) `GET /config`를 읽는다 → (b) `reasoningEffort=high`로 `codex-task` 세션을 만든다 → (c) `reasoningEffort=max`로, 그리고 `""`로 만든다
-- **기대 결과**: (a) `codex-task` 항목의 `reasoningEfforts`가 `minimal`·`low`·`medium`·`high`·`xhigh`다. (b) 조회 응답의 `reasoningEffort`가 `high`이고 주 컨테이너가 `CODEX_REASONING_EFFORT=high`를 받는다. (c) 둘 다 400이고 파드가 없다
+- **기대 결과**: (a) `codex-task` 항목의 `reasoningEfforts`가 `minimal`·`low`·`medium`·`high`·`xhigh`다. (b) 조회 응답의 `reasoningEffort`가 `high`이고 주 컨테이너가 `CODEX_REASONING_EFFORT=high`를 받는다. 고르지 않은 세션의 주 컨테이너는 그 변수를 `codex-task-config`의 선택 키 `reasoning-effort`에서 받는다(*2026-11-21*, 통합 테스트 `TestCodexTask_DefaultEffortFromConfigMap`). (c) 둘 다 400이고 파드가 없다
 - **검증 AC**: AC-M4
 
 ### 시나리오 5: 동결·복원 뒤에도 대화와 출력이 이어지고 로그인 파일은 아카이브에 없다

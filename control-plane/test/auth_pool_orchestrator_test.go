@@ -115,6 +115,22 @@ func TestCodexTask_PodShape(t *testing.T) {
 	}
 }
 
+// AC-M4: a codex-task session that names no effort reads codex-task-config's
+// default.
+func TestCodexTask_DefaultEffortFromConfigMap(t *testing.T) {
+	orch, cs := newReadyOrchestrator(t,
+		k8s.WithWorkloadImage(session.WorkloadTypeCodexTask, codexImage),
+		k8s.WithCodexTaskConfigConfigMap("codex-task-cfg"),
+	)
+	pod := onlyPod(t, orch, func() []corev1.Pod { return listPods(t, cs) }, "ct04", k8s.WorkloadSpec{
+		Type: session.WorkloadTypeCodexTask, Model: session.PlatformDefaultModel, AuthSlot: slot(0),
+	})
+	agent := container(t, pod, k8s.ContainerName)
+	if ref := optionalConfigMapRef(agent, k8s.CodexReasoningEffortEnvVar); ref == nil || ref.Name != "codex-task-cfg" || ref.Key != k8s.CodexReasoningEffortConfigKey {
+		t.Errorf("%s must come from codex-task-cfg's optional reasoning-effort key, got %+v", k8s.CodexReasoningEffortEnvVar, ref)
+	}
+}
+
 func TestCodexTask_NeedsSlotAndValidEffort(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t, k8s.WithWorkloadImage(session.WorkloadTypeCodexTask, codexImage))
 	if _, err := orch.Start(context.Background(), "ct02", k8s.WorkloadSpec{Type: session.WorkloadTypeCodexTask}); err == nil {

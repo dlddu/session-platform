@@ -42,7 +42,7 @@
 - **검증 방법**: 게이트 on에서 동결→복원 후 대화·출력·커서가 보존되고 아카이브에 `auth.json`이 없음을 확인한다. 게이트 off에서 동결이 거부되고 파드·슬롯이 남음을 확인한다.
 
 ### AC-M4: 모델과 추론 수준을 세션마다 정한다
-- **설명**: 생성 요청의 `model`은 AC-E6의 계약을 따른다(생략은 `platform-default` → ConfigMap `codex-task-config`의 선택 `model` → 플랜 기본). 생성 요청의 선택 필드 `reasoningEffort`는 이 타입에서 `minimal`·`low`·`medium`·`high`·`xhigh` 중 하나다. 생략하면 세션에 저장되지 않고 Codex 설정·모델의 기본값을 쓴다. 값은 모델처럼 **생성 시 고정**이고 동결·복원을 건너 유지된다. 파드는 `CODEX_REASONING_EFFORT`로 받고 러너는 `--effort <값>`으로 스레드 옵션 `modelReasoningEffort`를 준다(재개 턴도 같은 값). 허용값 밖·빈 문자열·비문자열은 pod 생성 전 400이다. `GET /config`의 타입 항목은 `reasoningEfforts`(허용값 배열, 이 타입은 위 다섯)를 내놓는다. 계약의 공통 부분(필드 이름·저장·불변·`/config` 모양·다른 타입의 거부)은 AC-E8이다.
+- **설명**: 생성 요청의 `model`은 AC-E6의 계약을 따른다(생략은 `platform-default` → ConfigMap `codex-task-config`의 선택 `model` → 플랜 기본). 생성 요청의 선택 필드 `reasoningEffort`는 이 타입에서 `minimal`·`low`·`medium`·`high`·`xhigh` 중 하나다. 생략하면 세션에 저장되지 않고, 파드는 ConfigMap `codex-task-config`의 선택 키 `reasoning-effort`를 받으며(*2026-11-21*, 값의 목록은 같다) 그 키도 없으면 모델의 기본값을 쓴다. 값은 모델처럼 **생성 시 고정**이고 동결·복원을 건너 유지된다. 파드는 `CODEX_REASONING_EFFORT`로 받고 러너는 `--effort <값>`으로 스레드 옵션 `modelReasoningEffort`를 준다(재개 턴도 같은 값). 허용값 밖·빈 문자열·비문자열은 pod 생성 전 400이다. `GET /config`의 타입 항목은 `reasoningEfforts`(허용값 배열, 이 타입은 위 다섯)를 내놓는다. 계약의 공통 부분(필드 이름·저장·불변·`/config` 모양·다른 타입의 거부)은 AC-E8이다.
 - **달성 가치**: V8
 - **구체화 대상**: AC-E8(세션 추론 수준)의 `codex-task` 값
 - **검증 방법**: `reasoningEffort=high`로 생성한 세션의 조회 응답과 파드 env에 그 값이 있고 러너 argv에 `--effort high`가 있음을 확인한다. `max`·`""`는 400이고 파드가 없음을 확인한다. `GET /config`의 `codex-task` 항목이 다섯 값을 내놓음을 확인한다.
@@ -51,6 +51,9 @@
 - **이름**: 채팅용은 `codex-chat`, 작업용은 `codex-task`. 옛 이름 `codex`는 `codex-chat`의 별칭으로 계속 받는다(`codex-workload.md` AC-J1).
 - **권한 수준**: claude-code와 비슷하게 — 셸·파일·네트워크. 웹 검색은 claude-code의 허용 도구에 없으므로 끈다.
 - **로그인**: 세션이 아니라 풀 슬롯(PVC)에. 슬롯 파일은 세션 컨테이너가 읽을 수 있다(AC-N5의 대가).
+
+## 결정 사항 (2026-11-21, 사용자)
+- **추론 수준의 배포 기본값** (AC-M4): GPT-6.2 모델의 기본 추론 수준이 `low`라, 세션이 고르지 않으면 `codex-task-config`의 `reasoning-effort`(운영 `medium`)를 쓴다. 세션이 고른 값이 이긴다.
 
 ## 남은 일
 - 세션 MCP(파일·git push·drop)는 주지 않는다. 셸로 git을 쓰지만 push 자격 증명은 없다 — 필요하면 claude-code의 repo-access 배선을 옮기는 후속.

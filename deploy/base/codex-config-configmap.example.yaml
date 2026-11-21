@@ -8,6 +8,10 @@
 #   models                  JSON string array, the UI picker catalog (advisory,
 #                           not an allowlist) — projected into the control plane
 #                           as CODEX_MODELS, with `model` as CODEX_DEFAULT_MODEL.
+#   reasoning-effort        Every session's reasoning effort (minimal, low,
+#                           medium, high or xhigh), projected as
+#                           CODEX_REASONING_EFFORT; sessions cannot choose one.
+#                           Omit it for the model's own default (AC-J1).
 #   k3s-mcp-url             K3s MCP endpoint the sidecar forwards to (default
 #                           https://homelab-k3s-mcp.llkm.nl/mcp).
 #   plugin-marketplace-url  Git remote of the plugin marketplace whose skills
@@ -31,3 +35,4 @@ metadata:
 data:
   model: "gpt-6-sol"
   models: '["gpt-6-sol", "gpt-6-luna"]'
+  reasoning-effort: "xhigh"
