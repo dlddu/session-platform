@@ -265,8 +265,9 @@ interactive shell and Claude Code workloads.
   runner with claude-code's tool level (AC-M1). Each job executes
   `codex-runner --mode task --model MODEL [--effort EFFORT] [--resume] --
   PROMPT`; `CODEX_REASONING_EFFORT` (`minimal`, `low`, `medium`, `high` or
-  `xhigh`, AC-M4) sets codex's `model_reasoning_effort`, and `codex-chat`
-  refuses to start with it set. Task mode runs with sandbox
+  `xhigh`, AC-M4) sets codex's `model_reasoning_effort`. Both types take it:
+  `codex-task` from the session or `codex-task-config`'s `reasoning-effort`,
+  `codex-chat` only from `codex-config`'s (AC-J1); any other value refuses start. Task mode runs with sandbox
   `danger-full-access`, approval policy `never`, sandbox network on and web
   search off, and has no kill switch; it waits for its sub-agents the same
   way (AC-J8). Its managed `config.toml` leaves the

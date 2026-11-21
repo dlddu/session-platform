@@ -79,8 +79,8 @@ var codexReasoningEfforts = []string{"minimal", "low", "medium", "high", "xhigh"
 type codexCLI struct {
 	// task selects codex-task's surface (AC-M1) over codex-chat's (AC-J5).
 	task bool
-	// effort is codex-task's session reasoning effort (AC-M4), empty for the
-	// model's default.
+	// effort is the session's reasoning effort (AC-M4) or the type's
+	// ConfigMap default (AC-J1), empty for the model's default.
 	effort string
 	// k3sProxyURL is the loopback k3s-mcp-proxy sidecar (AC-J6).
 	k3sProxyURL string
@@ -312,18 +312,14 @@ func newCodexWorkloadFromEnv(workload string, logger *slog.Logger, restoreMode b
 	if cli.schedulerURL, err = schedulerMCPURLFromEnv(os.Getenv); err != nil {
 		return nil, err
 	}
+	// codex-chat's effort is only ever the ConfigMap default (AC-J1).
+	if effort != "" && !slices.Contains(codexReasoningEfforts, effort) {
+		return nil, fmt.Errorf("%s must be one of %s, got %q", codexReasoningEffortEnv, strings.Join(codexReasoningEfforts, ", "), effort)
+	}
+	cli.effort = effort
 	if workload == workloadCodexTask {
-		if effort != "" && !slices.Contains(codexReasoningEfforts, effort) {
-			return nil, fmt.Errorf("%s must be one of %s, got %q", codexReasoningEffortEnv, strings.Join(codexReasoningEfforts, ", "), effort)
-		}
 		cli.task = true
-		cli.effort = effort
 	} else {
-		if effort != "" {
-			// AC-E8: codex-chat takes no effort, so one here is a spec this
-			// agent was not built for.
-			return nil, fmt.Errorf("codex-chat does not take %s", codexReasoningEffortEnv)
-		}
 		if cli.sessionDBURL, err = sessionDBMCPURLFromEnv(); err != nil {
 			return nil, err
 		}

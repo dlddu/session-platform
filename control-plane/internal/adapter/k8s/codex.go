@@ -27,9 +27,11 @@ const (
 	// Keep in sync with data-plane/cmd/agent (codexModelEnv).
 	CodexModelEnvVar = "CODEX_MODEL"
 	// CodexReasoningEffortEnvVar carries a codex-task session's reasoning
-	// effort; it is absent when the session names none (AC-M4).
+	// effort (AC-M4), or the ConfigMap's optional `reasoning-effort` key when
+	// the session names none — the type's default, codex-chat's only source.
 	// Keep in sync with data-plane/cmd/agent.
-	CodexReasoningEffortEnvVar = "CODEX_REASONING_EFFORT"
+	CodexReasoningEffortEnvVar    = "CODEX_REASONING_EFFORT"
+	CodexReasoningEffortConfigKey = "reasoning-effort"
 	// K3SMCPProxyContainerName is the loopback sidecar that holds the K3s MCP
 	// token in a claude-code, codex-chat or codex-task pod.
 	K3SMCPProxyContainerName = "k3s-mcp-proxy"
@@ -135,9 +137,11 @@ func (o *ClientOrchestrator) codexPod(container *corev1.Container, sessionID str
 		{Name: claudeCodeStateVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		pluginSeedMarketplaceEmptyDir(),
 	}
+	effortEnv := optionalConfigMapEnv(CodexReasoningEffortEnvVar, profile.configConfigMap, CodexReasoningEffortConfigKey)
 	if workload.ReasoningEffort != "" {
-		container.Env = append(container.Env, corev1.EnvVar{Name: CodexReasoningEffortEnvVar, Value: workload.ReasoningEffort})
+		effortEnv = corev1.EnvVar{Name: CodexReasoningEffortEnvVar, Value: workload.ReasoningEffort}
 	}
+	container.Env = append(container.Env, effortEnv)
 	return []corev1.Container{o.codexK3SMCPProxy(sessionID, image, profile, workload.Plugins)}, volumes
 }
 

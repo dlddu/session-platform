@@ -439,9 +439,21 @@ func TestNewCodexWorkloadFromEnv(t *testing.T) {
 		t.Fatal("a session DB MCP off loopback must be refused")
 	}
 	t.Setenv(sessionDBMCPURLEnv, "")
-	t.Setenv(codexReasoningEffortEnv, "high")
+	t.Setenv(codexReasoningEffortEnv, "max")
 	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
-		t.Fatal("codex-chat takes no reasoning effort (AC-E8)")
+		t.Fatal("max is not a codex effort")
+	}
+	// AC-J1: codex-chat's effort is the codex-config default.
+	t.Setenv(codexReasoningEffortEnv, "xhigh")
+	if w, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err != nil {
+		t.Fatalf("codex-chat with a default effort: %v", err)
+	} else {
+		got := w.argv("p", false, false)
+		want := []string{"/opt/runner", "--model", "gpt-6", "--effort", "xhigh", "--", "p"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("argv = %q, want %q", got, want)
+		}
+		w.Close()
 	}
 	t.Setenv(codexReasoningEffortEnv, "")
 	t.Setenv(codexModelEnv, "bad model")

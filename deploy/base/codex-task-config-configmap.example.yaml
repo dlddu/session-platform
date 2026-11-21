@@ -15,7 +15,10 @@
 #                           sessions get (default the dlddu plugin-marketplace).
 #                           Which plugins is the session's own selection; none by default.
 #
-# The reasoning effort is chosen per session, not here (AC-M4).
+#   reasoning-effort        Default reasoning effort (minimal, low, medium,
+#                           high or xhigh) for sessions that name none,
+#                           projected as CODEX_REASONING_EFFORT. Omit it for
+#                           the model's own default; a session's effort wins (AC-M4).
 #
 # Named by CODEX_TASK_CONFIG_CONFIGMAP (default `codex-task-config`), which must
 # differ from codex-chat's `codex-config`. EXAMPLE-ONLY, not in kustomization.yaml.
@@ -28,3 +31,4 @@ metadata:
 data:
   model: "gpt-6-sol"
   models: '["gpt-6-sol", "gpt-6-luna"]'
+  reasoning-effort: "medium"
