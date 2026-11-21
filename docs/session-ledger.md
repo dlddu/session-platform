@@ -468,38 +468,50 @@ have landed.
 
 ### The ledger, and the move that is over
 
-The ledger these records came from is gone, and so is every tool that moved
-them: `work_migrate`, `work_migration_report` and `work_rollback_export` were
-removed with the ledger itself (AC-N10), and `work_retire` with the snapshot
-pair `work_backups`/`work_backups_prune` are removed now that no slot can be
-mid-move. A call to any of those names is answered with what to call instead
-rather than with "unknown tool", so a parent holding an older `tools/list`
-learns the change on its first call.
+The ledger these records came from is gone, and so is every tool around the
+move: `work_migrate`, `work_migration_report` and `work_rollback_export` went
+with the ledger itself (AC-N10), and `work_retire`, the snapshot pair
+`work_backups`/`work_backups_prune` and the state report `work_state` are
+removed now that no slot can be mid-move. **Nothing replaces them, under this
+name or any other.** The surface is the agreed records, the parent's own
+bookkeeping beside a task, and its monitoring loops — and that is all it is.
 
-What is left of that area is one read: `work_state` reports the state the
-database carries, its schema version and the current counts of tasks, turns,
-open turns, bookkeeping records and monitoring loops, re-measured on every call
-rather than replayed from a run's own account. It also names the removed tools
-and their successors, so a parent reads them once instead of discovering one
-refusal at a time.
+A call to one of the removed names is still answered rather than met with
+"unknown tool", so a parent holding an older `tools/list` learns the change on
+its first call. What the answer says is what is true, not the name of the next
+management call: there is no move to make, no snapshot of one to keep, and no
+transition state to be in.
 
-The records that existed only to manage the move go with the tools. The
-migration and retirement step logs and the verbatim copies the migration kept
-beside each moved row are dropped on a one-time step to schema version 3, taken
-when the database is opened. The step is only reachable from a database whose
-rows already *are* the work records, so it never drops the last copy of
-anything. "Where a task came from" is **not** one of those records: it is owned
-(`sp_work_task_origin`, `sp_work_turn_origin`) and it stays, which is what keeps
-`migrated` honest in the pages a reader outside the session gets.
+**Where a caller stands is answered by its own call.** Every work call passes
+the schema gate first, so a call that is answered *is* the statement that this
+database is servable, and a refusal carries the reason by name. That cannot
+drift from the truth the way a separate report can, and it needs no tool of its
+own.
+
+The records that existed only to manage the move go with the tools: the
+migration and retirement step logs, the verbatim copies the migration kept
+beside each moved row, **and the transition state itself**. `sp_work_meta` keeps
+one column — the version — because a version is a fact about the file's shape
+while a state described where a move had got to, and no move can run here. All
+of it is dropped on a one-time step to schema version 3, taken when the database
+is opened, reachable only from a database whose rows already *are* the work
+records, so it never drops the last copy of anything. "Where a task came from"
+is **not** one of those records: it is owned (`sp_work_task_origin`,
+`sp_work_turn_origin`) and it stays, which is what keeps `migrated` honest in
+the pages a reader outside the session gets.
 
 **A slot whose ledger was never adopted is refused, not served.** This image
 has no door to move it, so answering its reads would mean reporting "no work"
 about rows that are sitting right there. Instead every work call on such a
-database is refused with `schema_version`, naming the image that still offers
-`work_retire`, and the ledger is left byte for byte as it is for that image to
-read. A database left at version 1 with no ledger beside it — a move an older
-image did not finish — is refused the same way rather than being given an
-invented state.
+database is refused with `schema_version`, and the refusal carries the upgrade
+path: serve that slot with the image that still offers `work_retire`, which
+moves the records, then deploy this image to it. **Any** of the ledger's tables
+is enough to refuse on — checking only the task table would let a slot whose
+tasks were adopted but whose unanswered requests were not through, and those
+requests are rows a person is waiting on. The ledger is left byte for byte as it
+is. A database left at version 1 with no ledger beside it — a move an older
+image did not finish — is refused the same way, with the same path, rather than
+being given an invented state.
 
 The version is what keeps the removal honest in both directions: an image that
 still has the retirement tools refuses a database at version 3 rather than
@@ -541,12 +553,15 @@ For the work records they cover the agreed columns being exactly those columns,
 task and turn CRUD with version CAS and retirement, global turn ordering, the
 open-turn queue, single-winner concurrent writes, replay, validation and schema
 refusal. For the move being over they cover the one-time step to version 3
-dropping the transition's own records while leaving the carried work and the
-owned origins untouched, that step being idempotent across opens, a slot still
-holding a ledger refused with its rows left intact, a slot left mid-move
-refused, and the removed names being neither listed nor callable while still
-answering with their successors — through `tools/call`, not only as Go
-functions.
+dropping the transition's own records *and its state column* while leaving the
+carried work and the owned origins untouched, writes still working against the
+rebuilt meta row, that step being idempotent across opens, a new slot being born
+past the move, a slot still holding any ledger table refused with its rows left
+intact and the upgrade path named, a slot left mid-move refused the same way, an
+unknown version refused rather than read, and the removed names being neither
+listed nor callable **nor re-offered under another name** — the listed surface is
+asserted exactly, no listed tool's description reaches a removed call, and every
+removed name answered through `tools/call` points at no other dead name.
 
 The relay the control plane reads through is covered on the one input that
 decides its answer: a slot that keeps a session database serves the sidecar's

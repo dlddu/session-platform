@@ -10,11 +10,18 @@
 // (session_work_parent.go), sp_work_monitor (session_work_monitor.go),
 // sp_work_turn_claim and sp_work_turn_admin.
 //
-// The ledger these records came from is gone, and so are the tables that held
-// what a migration preserved verbatim beside each moved row (AC-N10,
-// session_work_retire.go). sp_work_meta carries this namespace's version and
-// the state of that one-way move, which is also the fence it holds while it
-// runs.
+// The ledger these records came from is gone, and so is everything that moved
+// it: the migration, the rollback export, the retirement, the snapshot tools
+// and the state report they were read through (AC-N10). sp_work_meta carries
+// one thing now — this namespace's version — because a slot has no transition
+// to be in the middle of, and a "state" nothing can change is not a fact a
+// caller should be able to branch on.
+//
+// What replaces that report is not another tool but the gate every work call
+// already passes through: migrateWork decides whether this image can serve this
+// database at all, and refuses it by name if it cannot. A caller learns where it
+// stands from whether its own call is answered, which cannot drift from the
+// truth the way a separate report can.
 package main
 
 import (
@@ -24,19 +31,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
 
-// workSchema is split in two because retirement drops one half and keeps the
-// other. workSchemaLive is what a slot keeps for good: the agreed records, the
-// receipts and retired ids, the internal management counters and claim tokens,
-// the parent's own bookkeeping, and where a record came from. workSchemaTransition
-// is the machinery that moves a ledger into them, and a retired slot must not
-// get it back — a CREATE TABLE IF NOT EXISTS over a retired database would
-// resurrect the dropped tables as empty ones, which reads as "the transition is
-// still here" to every tool that checks for them.
-const workSchemaLive = `CREATE TABLE IF NOT EXISTS sp_work_meta (version INTEGER NOT NULL, state TEXT NOT NULL);
+// workSchemaLive is what a slot keeps: the agreed records, the receipts and
+// retired ids, the internal management counters and claim tokens, the parent's
+// own bookkeeping, and where a record came from. The tables a transition used to
+// need are not here and must never be re-added — a CREATE TABLE IF NOT EXISTS
+// over a database that is past the move would resurrect them as empty ones,
+// which reads as "the transition is still here" to anything that checks.
+const workSchemaLive = `CREATE TABLE IF NOT EXISTS sp_work_meta (version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS sp_work_tasks (
 	id TEXT PRIMARY KEY,
 	session_id TEXT,
@@ -154,20 +160,13 @@ const (
 	// that still has the retirement tools refuses a database at this version
 	// rather than reporting a step log that is gone, and this image refuses
 	// anything above it.
+	//
+	// It is also what the `state` column used to be read for. A version says
+	// which shape this database is in, which is a fact about the file; a state
+	// said where a move had got to, and no move can run here. So the column goes
+	// with the rest of the transition's bookkeeping and the version is the whole
+	// answer.
 	workSchemaVersionFinal = 3
-
-	// The states a slot can be in. ready means the ledger is still behind this
-	// slot and its records have not been adopted yet; migrated is a slot an
-	// older image moved and left the ledger standing beside; retiring is the
-	// fence the one-way move holds; retired is a slot whose records are only in
-	// the work records — which is also where a brand new slot starts, because
-	// there is no ledger to adopt. rolled_back is the state an older image's
-	// rollback export left behind: the ledger was authoritative again, so the
-	// move starts from it (session_work_retire.go).
-	workStateReady      = "ready"
-	workStateMigrating  = "migrating"
-	workStateMigrated   = "migrated"
-	workStateRolledBack = "rolled_back"
 )
 
 const (
@@ -347,9 +346,6 @@ var workTools = []string{
 	// became tasks. They used to be rows in the ledger; they are a record of
 	// their own now (session_work_monitor.go).
 	monitorGetTool, monitorListTool, monitorPutTool, monitorDeleteTool,
-	// Where this slot's records stand, which is the one call from the transition
-	// that outlives it — a parent branches on it (session_work_state.go).
-	workStateTool,
 }
 
 // workRemovedTools names what to call instead of a tool that is gone. The
@@ -360,6 +356,9 @@ var workTools = []string{
 //
 // A removed name is never reused for something else, so these entries stay for
 // as long as a parent could still be holding an older tools/list.
+const workNoMoveAnswer = "this image performs no migration; the work records are the records — " +
+	"read them with task_list and turn_list"
+
 var workRemovedTools = map[string]string{
 	"ledger_get":               "task_get, task_list and turn_list",
 	"ledger_list":              "task_get, task_list and turn_list",
@@ -374,25 +373,29 @@ var workRemovedTools = map[string]string{
 	"ledger_events_list":       "turn_list — a task's turns are its history",
 	workLegacyGetTool:          taskBookGetTool,
 	workLegacyPutTool:          taskBookPutTool,
-	"work_migration_report":    workStateTool,
-	// The move itself and everything that managed it. There is no successor
-	// call, because there is no move left to make: every slot this image serves
-	// keeps its records in the work records only, and a slot whose ledger was
-	// never adopted is refused by the schema gate rather than offered a door
-	// (migrateWork). The snapshots the move left beside the database are no
-	// longer this image's to report or delete.
-	"work_migrate":         workStateTool + " reports what this slot keeps; this image performs no move",
-	"work_rollback_export": workStateTool + " reports what this slot keeps; this image performs no move",
-	workRetireTool:         workStateTool + " reports what this slot keeps; the move is already finished",
-	workBackupsTool:        "nothing — the snapshots the move left are no longer this image's to report",
-	workBackupsPruneTool:   "nothing — the snapshots the move left are no longer this image's to delete",
+	// The move, everything that managed it, and the report they were read
+	// through. None of these has a successor call, and none is replaced under
+	// another name: there is no move to make, no snapshot of one to keep, and no
+	// transition state to be in. So the message says what is true instead of
+	// naming a tool — pointing at a management call that no longer exists is how
+	// a parent ends up looking for the next one.
+	"work_migration_report": workNoMoveAnswer,
+	"work_migrate":          workNoMoveAnswer,
+	"work_rollback_export":  workNoMoveAnswer,
+	workRetireTool:          workNoMoveAnswer,
+	workStateTool: "nothing — this image keeps no transition state to report. " +
+		"Whether this slot can be served is answered by your own call: " +
+		"a refusal with code schema_version means it cannot, and says why",
+	workBackupsTool:      "nothing — the snapshots the move left are no longer this image's to report",
+	workBackupsPruneTool: "nothing — the snapshots the move left are no longer this image's to delete",
 }
 
 const (
-	// The names the retirement offered, kept only so a call to one is answered
+	// The names the transition offered, kept only so a call to one is answered
 	// with workRemovedTools rather than "unknown tool". None is in workTools, so
-	// none is listed or callable.
+	// none is listed or callable, and none is re-added under another name.
 	workRetireTool       = "work_retire"
+	workStateTool        = "work_state"
 	workBackupsTool      = "work_backups"
 	workBackupsPruneTool = "work_backups_prune"
 )
@@ -426,22 +429,34 @@ func isWorkMutation(name string) bool {
 // PRAGMA user_version, and never repairs a collision destructively — a table
 // named sp_work_* that this schema did not write is a refusal, not something to
 // drop.
-// A new slot is born with no ledger and nothing to adopt, so it starts in the
-// terminal state. A database that still has ledger tables is refused instead:
-// this image removed the door that adopted them (session_work_state.go), so
-// serving it would mean answering "no work" about rows that are sitting right
-// there. That refusal is the whole protection for a slot the move never
-// reached — it is louder than an empty page and it loses nothing, because the
-// ledger is left exactly as it is for an image that can still move it.
+// A new slot is born with no ledger and nothing to adopt, so it is born at the
+// final version. A database that still has ledger tables is refused instead:
+// this image removed the door that adopted them, so serving it would mean
+// answering "no work" about rows that are sitting right there. That refusal is
+// the whole protection for a slot the move never reached — it is louder than an
+// empty page and it loses nothing, because the ledger is left exactly as it is
+// for an image that can still move it.
+//
+// This is also the only place a caller learns where it stands. There is no state
+// report any more: every work call passes through here first, so a call that is
+// answered is the statement that this database is servable, and a refusal
+// carries the reason by name.
 func migrateWork(ctx context.Context, tx *sql.Tx) error {
-	ledger, err := workTableExists(ctx, tx, "sp_ledger_tasks")
-	if err != nil {
-		return err
-	}
-	if ledger {
-		return workFail("schema_version",
-			"this slot's records are still in the ledger and this image has no migration; "+
-				"nothing was read or changed — run the image that still offers work_retire to move them")
+	// Any one of the ledger's tables is enough to refuse on. Checking only the
+	// task table would let a slot whose tasks were adopted but whose requests
+	// were not through, and the unanswered requests are the rows a person is
+	// waiting on.
+	for _, table := range workLedgerTables {
+		present, err := workTableExists(ctx, tx, table)
+		if err != nil {
+			return err
+		}
+		if present {
+			return workFail("schema_version",
+				"this slot's records are still in the ledger ("+table+") and this image has no "+
+					"migration; nothing was read or changed — serve this slot with the image that "+
+					"still offers work_retire, which moves them, and deploy this image to it afterwards")
+		}
 	}
 	var count int
 	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name LIKE 'sp_work_%'").Scan(&count); err != nil {
@@ -451,13 +466,11 @@ func migrateWork(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, workSchemaLive); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, "INSERT INTO sp_work_meta VALUES (?,?)",
-			workSchemaVersionFinal, workStateRetired)
+		_, err := tx.ExecContext(ctx, "INSERT INTO sp_work_meta (version) VALUES (?)", workSchemaVersionFinal)
 		return err
 	}
 	var version int
-	var state string
-	if err := tx.QueryRowContext(ctx, "SELECT version,state FROM sp_work_meta").Scan(&version, &state); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT version FROM sp_work_meta").Scan(&version); err != nil {
 		return workFail("schema_version", "work namespace collision or invalid schema; no tables changed")
 	}
 	// Additive on purpose: a database created by an earlier version still gets
@@ -478,58 +491,61 @@ func migrateWork(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, workSchemaLive); err != nil {
 			return err
 		}
-		if err := dropWorkTransitionTables(ctx, tx); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(ctx, "UPDATE sp_work_meta SET version=?", workSchemaVersionFinal)
-		return err
+		return endWorkTransitionRecords(ctx, tx)
 	case workSchemaVersion:
 		// Version 1 with no ledger beside it: an older image was mid-move when
 		// the ledger went, which this code cannot reconstruct. Refusing is the
 		// only answer that does not invent a state.
 		return workFail("schema_version",
-			"this slot was left mid-migration and this image has no migration; nothing was read or changed")
+			"this slot was left mid-migration and this image has no migration; "+
+				"nothing was read or changed — restore it with the image that still offers work_retire")
 	default:
 		return workFail("schema_version", "unsupported work schema; no downgrade performed")
 	}
 }
 
-// dropWorkTransitionTables removes the records only the move's own tools read.
-// It is reached only from a database whose rows are already the work records,
-// so each drop is of a copy or of a log, never of the last copy of anyone's
-// work.
-func dropWorkTransitionTables(ctx context.Context, tx *sql.Tx) error {
+// workTx runs one read or write against the work records in its own
+// transaction, with the schema gate ahead of it — so a caller can never reach
+// the records of a database this image refuses to serve.
+func (s *sessionDB) workTx(ctx context.Context, db *sql.DB, body func(*sql.Tx) error) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := migrateWork(ctx, tx); err != nil {
+		return err
+	}
+	if err := body(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// endWorkTransitionRecords is the one step that finishes the move for good: it
+// drops the records only the move's own tools read, and replaces sp_work_meta
+// with the single column that is still a fact.
+//
+// It is reached only from a database whose rows are already the work records, so
+// each drop is of a copy or of a log, never of the last copy of anyone's work.
+// Rebuilding the meta table rather than altering it keeps this independent of
+// which SQLite build is underneath, and the whole step rides the caller's
+// transaction — a crash leaves the old shape or the new one, never half.
+func endWorkTransitionRecords(ctx context.Context, tx *sql.Tx) error {
 	for _, table := range workTransitionTables {
 		if _, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
 			return err
 		}
 	}
-	return nil
-}
-
-func workState(ctx context.Context, tx *sql.Tx) (string, error) {
-	var state string
-	err := tx.QueryRowContext(ctx, "SELECT state FROM sp_work_meta").Scan(&state)
-	return state, err
-}
-
-func setWorkState(ctx context.Context, tx *sql.Tx, state string) error {
-	_, err := tx.ExecContext(ctx, "UPDATE sp_work_meta SET state=?", state)
-	return err
-}
-
-// requireWorkWritable refuses a write while the one-way move holds the fence.
-// The move adopts what the ledger still holds and drops it in one transaction,
-// so a write admitted in the middle would be adopted twice or not at all. It is
-// a retry for the caller, not a loss.
-func requireWorkWritable(ctx context.Context, tx *sql.Tx) error {
-	state, err := workState(ctx, tx)
-	if err != nil {
-		return err
-	}
-	switch state {
-	case workStateMigrating, workStateRetiring:
-		return workFail("conflict", "the work records are being moved; retry when it has finished")
+	for _, statement := range []string{
+		"CREATE TABLE sp_work_meta_final (version INTEGER NOT NULL)",
+		"INSERT INTO sp_work_meta_final (version) VALUES (" + strconv.Itoa(workSchemaVersionFinal) + ")",
+		"DROP TABLE sp_work_meta",
+		"ALTER TABLE sp_work_meta_final RENAME TO sp_work_meta",
+	} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -586,11 +602,10 @@ func (s *sessionDB) work(ctx context.Context, name string, a workArgs) (any, err
 	if err = migrateWork(ctx, tx); err != nil {
 		return nil, err
 	}
-	if isWorkMutation(name) {
-		if err = requireWorkWritable(ctx, tx); err != nil {
-			return nil, err
-		}
-	}
+	// There is no fence to check before a write any more. The fence existed for
+	// the window in which a move held the database, and migrateWork above
+	// refuses every version a half-finished move could have left — so a write
+	// that gets this far is on a database no move can touch.
 	fingerprint := ""
 	if isWorkMutation(name) {
 		replay, print, receiptErr := workReceipt(ctx, tx, name, a)
@@ -621,8 +636,6 @@ func (s *sessionDB) work(ctx context.Context, name string, a workArgs) (any, err
 		result, err = listWorkTurns(ctx, tx, a)
 	case "turn_dispatch":
 		result, err = dispatchWorkTurn(ctx, tx, a, now)
-	case workStateTool:
-		result, err = workStateReport(ctx, tx)
 	case taskBookGetTool:
 		result, err = readWorkLegacy(ctx, tx, a.TaskID)
 	case taskBookPutTool:

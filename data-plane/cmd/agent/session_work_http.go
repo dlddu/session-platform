@@ -134,9 +134,6 @@ func (s *sessionDB) storeWorkRequest(
 	var stored workTurnView
 	replayed := false
 	err = s.workTx(ctx, db, func(tx *sql.Tx) error {
-		if fenceErr := requireWorkWritable(ctx, tx); fenceErr != nil {
-			return fenceErr
-		}
 		var storeErr error
 		stored, replayed, storeErr = storeRequestAsTurn(
 			ctx, tx, body.ID, body.TaskID, body.Text, body.Author, body.ChoiceTurnID, now)

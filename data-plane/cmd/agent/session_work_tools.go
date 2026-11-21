@@ -114,12 +114,12 @@ func workToolDefinitions() []map[string]any {
 }
 
 // workSurfaceTail is everything after the agreed records, in the order a reader
-// of tools/list should meet it: the parent's own bookkeeping beside a task, its
-// monitoring loops, and where this slot's records stand.
+// of tools/list should meet it: the parent's own bookkeeping beside a task, and
+// its monitoring loops. Nothing from the transition is here — not the move, not
+// its snapshots, and not the state report, which is not re-offered under another
+// name either (session_work.go, workRemovedTools).
 func workSurfaceTail() []map[string]any {
-	tail := taskBookToolDefinitions()
-	tail = append(tail, monitorToolDefinitions()...)
-	return append(tail, workStateToolDefinition())
+	return append(taskBookToolDefinitions(), monitorToolDefinitions()...)
 }
 
 func validateWork(name string, a workArgs) error {
@@ -172,7 +172,7 @@ func validateWork(name string, a workArgs) error {
 	// The reads that take no version: they name no record whose state a caller
 	// could be holding, so there is no counter for them to hold.
 	switch name {
-	case "task_get", workStateTool, taskBookGetTool:
+	case "task_get", taskBookGetTool:
 		return nil
 	}
 	// The bookkeeping lane has its own counter and does not take the task

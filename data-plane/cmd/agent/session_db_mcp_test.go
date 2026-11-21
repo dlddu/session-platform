@@ -69,18 +69,18 @@ func newTestSessionDBWithRawSQL(t *testing.T, rawSQL bool) (*sessionDB, http.Han
 }
 
 // workToolNames is the whole surface, and now the same one for every slot this
-// image serves (AC-N10). The ledger tools, the migration, the rollback export,
-// the retirement and its snapshot tools are not in this image at all; a call to
-// one by name is answered with its successor rather than being listed.
+// image serves (AC-N10). Nothing the transition needed is in this image: the
+// ledger tools, the migration, the rollback export, the retirement, its
+// snapshot pair and the state report they were read through are all gone, and
+// none is re-offered under another name. A call to one of those names is
+// answered with what is true instead rather than being listed.
 //
 // The order says what each group is: the agreed records first, then the
-// parent's own bookkeeping beside a task, then its monitoring loops, then the
-// one read that outlives the move.
+// parent's own bookkeeping beside a task, then its monitoring loops.
 const workToolNames = "task_get,task_list,task_put,task_delete," +
 	"turn_append,turn_patch,turn_list,turn_dispatch," +
 	"task_book_get,task_book_put," +
-	"monitor_get,monitor_list,monitor_put,monitor_delete," +
-	"work_state"
+	"monitor_get,monitor_list,monitor_put,monitor_delete"
 
 // sessionDBToolNames is what the model is offered by one sidecar.
 func sessionDBToolNames(t *testing.T, h http.Handler) []string {
