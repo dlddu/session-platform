@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 )
 
 // workViewGet calls one of the work views the way the control plane does —
@@ -233,14 +232,21 @@ func TestWorkViewsServeTasksWithNoTurns(t *testing.T) {
 	}
 }
 
-// A turn that came out of a ledger says so after the cleanup, through the same
-// view — which is the whole reason the origin is an owned record rather than
-// part of the preserved copy that gets dropped.
+// A turn that came out of a ledger says so through the same view — which is the
+// whole reason the origin is an owned record rather than part of the preserved
+// copy the move dropped. The move itself is gone now (session_work_state.go),
+// so the state under test is the one it left: the origin record stands on its
+// own, and the view still reads it after the move's bookkeeping is dropped.
 func TestWorkViewsNameTheOriginOfACarriedTurn(t *testing.T) {
 	s, _ := newTestSessionDB(t)
 	h := workViewHandler(t, s)
-	seedMigratedSlot(t, s)
-	retireAt(t, s, "r1", false, time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC))
+	seedRetiredSlot(t, s)
+	turn := mustWork(t, s, "turn_append", map[string]any{
+		"task_id": "task-a", "request_id": "t1", "expected_version": 1,
+		"turn": map[string]any{"request": "이거 해 줘"},
+	})["turn"].(map[string]any)
+	workExec(t, s, "INSERT INTO sp_work_turn_origin (turn_id,origin,source_id,author) VALUES (?,?,?,?)",
+		int64(turn["id"].(float64)), workTurnOriginUserRequest, "ledger-request-1", "person")
 
 	rec := workViewGet(t, h, sessionDBWorkTurnsPath, "task_id=task-a")
 	if rec.Code != http.StatusOK {

@@ -68,25 +68,19 @@ func newTestSessionDBWithRawSQL(t *testing.T, rawSQL bool) (*sessionDB, http.Han
 	return db, http.HandlerFunc(db.serveMCP)
 }
 
-// workToolNamesRetired is the whole surface a slot offers once its transition
-// is retired — which is also what a brand new slot offers, because a slot with
-// no ledger has nothing to move (AC-N10). The ledger tools, the migration and
-// the rollback export are not in this image at all; a call to one by name is
-// answered with its successor rather than being listed.
+// workToolNames is the whole surface, and now the same one for every slot this
+// image serves (AC-N10). The ledger tools, the migration, the rollback export,
+// the retirement and its snapshot tools are not in this image at all; a call to
+// one by name is answered with its successor rather than being listed.
 //
 // The order says what each group is: the agreed records first, then the
 // parent's own bookkeeping beside a task, then its monitoring loops, then the
-// two reads that outlive the move and the snapshot cleanup.
-const workToolNamesRetired = "task_get,task_list,task_put,task_delete," +
+// one read that outlives the move.
+const workToolNames = "task_get,task_list,task_put,task_delete," +
 	"turn_append,turn_patch,turn_list,turn_dispatch," +
 	"task_book_get,task_book_put," +
 	"monitor_get,monitor_list,monitor_put,monitor_delete," +
-	"work_state,work_backups,work_backups_prune"
-
-// workToolNames is what a slot that still has a ledger behind it offers: the
-// same surface plus the one-way move itself, offered last because it is the
-// only thing here a slot stops offering.
-const workToolNames = workToolNamesRetired + ",work_retire"
+	"work_state"
 
 // sessionDBToolNames is what the model is offered by one sidecar.
 func sessionDBToolNames(t *testing.T, h http.Handler) []string {
@@ -103,7 +97,7 @@ func sessionDBToolNames(t *testing.T, h http.Handler) []string {
 // ledger is the whole surface a chat session gets.
 func TestSessionDBMCP_RawSQLIsDebugOnly(t *testing.T) {
 	_, h := newTestSessionDB(t)
-	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != workToolNamesRetired {
+	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != workToolNames {
 		t.Fatalf("tools = %v, want the work records alone", names)
 	}
 	for _, name := range []string{"raw_query", "raw_exec"} {
@@ -153,7 +147,7 @@ func TestSessionDBMCP_RawExecThenRawQuery(t *testing.T) {
 	if init.Error != nil || init.Result.(map[string]any)["serverInfo"].(map[string]any)["name"] != sessionDBMCPServerName {
 		t.Fatalf("initialize = %+v", init)
 	}
-	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != "raw_query,raw_exec,"+workToolNamesRetired {
+	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != "raw_query,raw_exec,"+workToolNames {
 		t.Fatalf("tools = %v, want raw and the work tools", names)
 	}
 

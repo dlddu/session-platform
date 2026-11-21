@@ -147,6 +147,15 @@ func (c codexCLI) schedulerStateURL() string {
 	return schedulerStateURLFor(c.schedulerURL)
 }
 
+// sessionDBMCPURL makes this workload the relay's workReporter
+// (session_work_records.go). Without it no type in this package implements that
+// interface, so the relay's capability check fails on every slot and every work
+// read answers 501 — "this session keeps no work records" about a slot that
+// keeps them. codex-task leaves sessionDBURL empty, which is the real 501.
+func (c codexCLI) sessionDBMCPURL() string {
+	return c.sessionDBURL
+}
+
 func (codexCLI) newProjector(dst io.Writer) io.WriteCloser {
 	return newCodexStreamProjector(dst)
 }

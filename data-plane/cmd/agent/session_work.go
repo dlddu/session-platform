@@ -105,22 +105,28 @@ CREATE TABLE IF NOT EXISTS sp_work_monitor (
 	note TEXT NOT NULL,
 	version INTEGER NOT NULL,
 	updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS sp_work_retirement (
-	seq INTEGER PRIMARY KEY AUTOINCREMENT,
-	at TEXT NOT NULL,
-	step TEXT NOT NULL,
-	detail TEXT NOT NULL
 );`
 
-// The tables this image no longer creates and retirement removes: the ledger
-// this slot's records came from, the verbatim copies a migration kept beside
-// each moved row, and the migration's own step log. They are named here because
-// dropping them is the only thing left that touches them — every reader asks
-// whether the table is there first (workTableExists), so a slot that was never
-// migrated by an older image behaves the same as one that was.
-var workRetiredTables = []string{
-	"sp_work_task_legacy", "sp_work_turn_legacy", "sp_work_migration",
+// The records that existed only to manage the move onto the work records, and
+// that this image removes once a slot is past it: the step logs of the
+// migration and the retirement, and the verbatim copies the migration kept
+// beside each moved row. None of them is anyone's work — they are a history of
+// a transition, read by tools this image no longer has.
+//
+// They are dropped on the one-time step to workSchemaVersionFinal, which is
+// only taken on a database whose records already *are* the work records. A
+// database still holding the ledger never reaches that step, so this list never
+// drops a row that is the only copy of something.
+var workTransitionTables = []string{
+	"sp_work_migration", "sp_work_retirement",
+	"sp_work_task_legacy", "sp_work_turn_legacy",
+}
+
+// The ledger itself, which an image with the retirement door dropped once its
+// rows had been adopted. This image has no door, so it never drops these: their
+// presence is what tells the schema gate that this slot's records were never
+// moved, and dropping them would destroy the only copy.
+var workLedgerTables = []string{
 	"sp_ledger_task_choices", "sp_ledger_task_events", "sp_ledger_user_requests",
 	"sp_ledger_requests", "sp_ledger_retired", "sp_ledger_tasks", "sp_ledger_meta",
 }
@@ -139,6 +145,16 @@ const (
 	// (schema_version) instead. That is the one-way door retirement is: checked,
 	// not assumed.
 	workSchemaVersionRetired = 2
+	// workSchemaVersionFinal is the version this image writes and reads: the
+	// work records with no transition bookkeeping left beside them. The step up
+	// from workSchemaVersionRetired drops the records only the move's own tools
+	// read (workTransitionTables), and is taken once, on open.
+	//
+	// The bump is what keeps the removal honest in both directions. An image
+	// that still has the retirement tools refuses a database at this version
+	// rather than reporting a step log that is gone, and this image refuses
+	// anything above it.
+	workSchemaVersionFinal = 3
 
 	// The states a slot can be in. ready means the ledger is still behind this
 	// slot and its records have not been adopted yet; migrated is a slot an
@@ -331,68 +347,59 @@ var workTools = []string{
 	// became tasks. They used to be rows in the ledger; they are a record of
 	// their own now (session_work_monitor.go).
 	monitorGetTool, monitorListTool, monitorPutTool, monitorDeleteTool,
-	// Where this slot's records stand, and the snapshots the move left behind.
-	// Both outlive the move: the first is what a parent branches on, the second
-	// is what makes a retained backup deletable on purpose rather than kept for
-	// ever (session_work_retire.go, session_work_backups.go).
-	workStateTool, workBackupsTool, workBackupsPruneTool,
-	// The one-way door itself: it adopts what this slot still needs and removes
-	// everything the move leaves behind. A retired slot no longer lists it.
-	workRetireTool,
+	// Where this slot's records stand, which is the one call from the transition
+	// that outlives it — a parent branches on it (session_work_state.go).
+	workStateTool,
 }
 
-// isWorkTransitionTool reports the tools a retired slot stops listing. Only the
-// retirement itself is left: a slot that has nothing to retire offering to
-// retire is the same confusion as a migrated slot offering to migrate. The
-// refusal stays in place for a client holding an older list — a list is a hint
-// and a guard is a guarantee.
-func isWorkTransitionTool(name string) bool {
-	return name == workRetireTool
+// workRemovedTools names what to call instead of a tool that is gone. The
+// ledger tools, the migration, the rollback export and now the retirement and
+// its snapshot tools are not in this image any more (AC-N10), and a parent that
+// still calls one is told the name of the call that does the job rather than
+// "unknown tool" — the same discipline the cutover's own refusals followed.
+//
+// A removed name is never reused for something else, so these entries stay for
+// as long as a parent could still be holding an older tools/list.
+var workRemovedTools = map[string]string{
+	"ledger_get":               "task_get, task_list and turn_list",
+	"ledger_list":              "task_get, task_list and turn_list",
+	"ledger_put":               "task_put and task_delete, or " + monitorPutTool + "/" + monitorDeleteTool + " for a monitoring loop",
+	"ledger_delete":            "task_put and task_delete, or " + monitorPutTool + "/" + monitorDeleteTool + " for a monitoring loop",
+	"ledger_choices_put":       "turn_patch with choices",
+	"ledger_choices_clear":     "turn_patch with choices",
+	"ledger_requests_list":     "turn_list with open=true",
+	"ledger_requests_claim":    "turn_patch",
+	"ledger_requests_ack":      "turn_patch",
+	"ledger_requests_dispatch": "turn_dispatch",
+	"ledger_events_list":       "turn_list — a task's turns are its history",
+	workLegacyGetTool:          taskBookGetTool,
+	workLegacyPutTool:          taskBookPutTool,
+	"work_migration_report":    workStateTool,
+	// The move itself and everything that managed it. There is no successor
+	// call, because there is no move left to make: every slot this image serves
+	// keeps its records in the work records only, and a slot whose ledger was
+	// never adopted is refused by the schema gate rather than offered a door
+	// (migrateWork). The snapshots the move left beside the database are no
+	// longer this image's to report or delete.
+	"work_migrate":         workStateTool + " reports what this slot keeps; this image performs no move",
+	"work_rollback_export": workStateTool + " reports what this slot keeps; this image performs no move",
+	workRetireTool:         workStateTool + " reports what this slot keeps; the move is already finished",
+	workBackupsTool:        "nothing — the snapshots the move left are no longer this image's to report",
+	workBackupsPruneTool:   "nothing — the snapshots the move left are no longer this image's to delete",
 }
 
-// workRemovedToolSuccessor names what to call instead of a tool that is gone.
-// The ledger tools, the migration and the rollback export are not in this image
-// any more (AC-N10), and a parent that still calls one is told the name of the
-// call that does the job rather than "unknown tool" — the same discipline the
-// cutover's own refusals followed.
-func workRemovedToolSuccessor(name string) string {
-	switch name {
-	case "ledger_get", "ledger_list":
-		return "task_get, task_list and turn_list"
-	case "ledger_put", "ledger_delete":
-		return "task_put and task_delete, or " + monitorPutTool + "/" + monitorDeleteTool + " for a monitoring loop"
-	case "ledger_choices_put", "ledger_choices_clear":
-		return "turn_patch with choices"
-	case "ledger_requests_list":
-		return "turn_list with open=true"
-	case "ledger_requests_claim", "ledger_requests_ack":
-		return "turn_patch"
-	case "ledger_requests_dispatch":
-		return "turn_dispatch"
-	case "ledger_events_list":
-		return "turn_list — a task's turns are its history"
-	case workLegacyGetTool:
-		return taskBookGetTool
-	case workLegacyPutTool:
-		return taskBookPutTool
-	case "work_migration_report":
-		return workStateTool
-	case "work_migrate", workRollbackTool:
-		return workRetireTool + ", which is the one way this slot's records move now"
-	default:
-		return ""
-	}
-}
+const (
+	// The names the retirement offered, kept only so a call to one is answered
+	// with workRemovedTools rather than "unknown tool". None is in workTools, so
+	// none is listed or callable.
+	workRetireTool       = "work_retire"
+	workBackupsTool      = "work_backups"
+	workBackupsPruneTool = "work_backups_prune"
+)
 
-// workRollbackTool is a name this image no longer implements, kept only so a
-// call to it is answered with its successor (workRemovedToolSuccessor). It is
-// not in workTools, so it is neither listed nor callable. Rolling the image
-// back is not a step any more: retirement is a one-way door and the version
-// gate makes an older image fail closed rather than serve a ledger that no
-// longer exists.
-const workRollbackTool = "work_rollback_export"
+func isRemovedWorkTool(name string) bool { _, ok := workRemovedTools[name]; return ok }
 
-func isRemovedWorkTool(name string) bool { return workRemovedToolSuccessor(name) != "" }
+func workRemovedToolSuccessor(name string) string { return workRemovedTools[name] }
 
 func isWorkTool(name string) bool {
 	for _, candidate := range workTools {
@@ -408,7 +415,7 @@ func isWorkTool(name string) bool {
 func isWorkMutation(name string) bool {
 	switch name {
 	case "task_put", "task_delete", "turn_append", "turn_patch", "turn_dispatch",
-		taskBookPutTool, monitorPutTool, monitorDeleteTool, workRetireTool, workBackupsPruneTool:
+		taskBookPutTool, monitorPutTool, monitorDeleteTool:
 		return true
 	}
 	return false
@@ -420,12 +427,22 @@ func isWorkMutation(name string) bool {
 // named sp_work_* that this schema did not write is a refusal, not something to
 // drop.
 // A new slot is born with no ledger and nothing to adopt, so it starts in the
-// terminal state rather than in `ready`: `ready` means "there are records in a
-// ledger that have not moved yet", and saying that about a database that never
-// had one would send a parent looking for a move to make. A database that does
-// have ledger tables starts at `ready`, whatever this image thinks of them —
-// that is the one case where there is something to adopt.
+// terminal state. A database that still has ledger tables is refused instead:
+// this image removed the door that adopted them (session_work_state.go), so
+// serving it would mean answering "no work" about rows that are sitting right
+// there. That refusal is the whole protection for a slot the move never
+// reached — it is louder than an empty page and it loses nothing, because the
+// ledger is left exactly as it is for an image that can still move it.
 func migrateWork(ctx context.Context, tx *sql.Tx) error {
+	ledger, err := workTableExists(ctx, tx, "sp_ledger_tasks")
+	if err != nil {
+		return err
+	}
+	if ledger {
+		return workFail("schema_version",
+			"this slot's records are still in the ledger and this image has no migration; "+
+				"nothing was read or changed — run the image that still offers work_retire to move them")
+	}
 	var count int
 	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE name LIKE 'sp_work_%'").Scan(&count); err != nil {
 		return err
@@ -434,15 +451,8 @@ func migrateWork(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, workSchemaLive); err != nil {
 			return err
 		}
-		ledger, err := workTableExists(ctx, tx, "sp_ledger_tasks")
-		if err != nil {
-			return err
-		}
-		version, state := workSchemaVersionRetired, workStateRetired
-		if ledger {
-			version, state = workSchemaVersion, workStateReady
-		}
-		_, err = tx.ExecContext(ctx, "INSERT INTO sp_work_meta VALUES (?,?)", version, state)
+		_, err = tx.ExecContext(ctx, "INSERT INTO sp_work_meta VALUES (?,?)",
+			workSchemaVersionFinal, workStateRetired)
 		return err
 	}
 	var version int
@@ -452,17 +462,49 @@ func migrateWork(ctx context.Context, tx *sql.Tx) error {
 	}
 	// Additive on purpose: a database created by an earlier version still gets
 	// the tables a later additive change introduces, and CREATE TABLE IF NOT
-	// EXISTS leaves the ones already there alone. The tables retirement drops
-	// are never in this statement, so a retired slot cannot get them back as
-	// empty ones — which would read as "the ledger is still here" to every
-	// reader that checks.
+	// EXISTS leaves the ones already there alone. The transition's own tables
+	// are never in this statement, so the step below cannot be undone by the
+	// next open recreating them as empty ones.
 	switch version {
-	case workSchemaVersion, workSchemaVersionRetired:
+	case workSchemaVersionFinal:
 		_, err := tx.ExecContext(ctx, workSchemaLive)
 		return err
+	case workSchemaVersionRetired:
+		// A slot an older image retired: its records are already the work
+		// records, so the only thing left is the bookkeeping the move kept about
+		// itself. Dropping it and writing the version is one transaction with
+		// the caller's own work, so a crash leaves either the old shape or the
+		// new one.
+		if _, err := tx.ExecContext(ctx, workSchemaLive); err != nil {
+			return err
+		}
+		if err := dropWorkTransitionTables(ctx, tx); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, "UPDATE sp_work_meta SET version=?", workSchemaVersionFinal)
+		return err
+	case workSchemaVersion:
+		// Version 1 with no ledger beside it: an older image was mid-move when
+		// the ledger went, which this code cannot reconstruct. Refusing is the
+		// only answer that does not invent a state.
+		return workFail("schema_version",
+			"this slot was left mid-migration and this image has no migration; nothing was read or changed")
 	default:
 		return workFail("schema_version", "unsupported work schema; no downgrade performed")
 	}
+}
+
+// dropWorkTransitionTables removes the records only the move's own tools read.
+// It is reached only from a database whose rows are already the work records,
+// so each drop is of a copy or of a log, never of the last copy of anyone's
+// work.
+func dropWorkTransitionTables(ctx context.Context, tx *sql.Tx) error {
+	for _, table := range workTransitionTables {
+		if _, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func workState(ctx context.Context, tx *sql.Tx) (string, error) {
@@ -531,18 +573,6 @@ func storeWorkReceipt(ctx context.Context, tx *sql.Tx, requestID, fingerprint st
 func (s *sessionDB) work(ctx context.Context, name string, a workArgs) (any, error) {
 	if err := validateWork(name, a); err != nil {
 		return nil, err
-	}
-	// Retirement takes a consistent snapshot, which cannot be taken inside a
-	// transaction, and commits its fence before it adopts anything so that an
-	// interrupted run is still fenced when the next one arrives. So it owns its
-	// transactions rather than running in the one below.
-	if name == workRetireTool {
-		return s.runWorkRetire(ctx, a, workClock())
-	}
-	// The snapshot tools work on files beside the database rather than on rows
-	// in it, so they are not inside the record transaction either.
-	if name == workBackupsTool || name == workBackupsPruneTool {
-		return s.runWorkBackups(ctx, name, a, workClock())
 	}
 	db, err := s.handle(ctx)
 	if err != nil {

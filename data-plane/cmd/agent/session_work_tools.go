@@ -115,15 +115,11 @@ func workToolDefinitions() []map[string]any {
 
 // workSurfaceTail is everything after the agreed records, in the order a reader
 // of tools/list should meet it: the parent's own bookkeeping beside a task, its
-// monitoring loops, where this slot's records stand, the snapshots the move
-// left behind, and the move itself. A retired slot never offers the last one
-// (session_db_mcp.go).
+// monitoring loops, and where this slot's records stand.
 func workSurfaceTail() []map[string]any {
 	tail := taskBookToolDefinitions()
 	tail = append(tail, monitorToolDefinitions()...)
-	tail = append(tail, workStateToolDefinition())
-	tail = append(tail, workBackupsToolDefinitions()...)
-	return append(tail, workRetireToolDefinition())
+	return append(tail, workStateToolDefinition())
 }
 
 func validateWork(name string, a workArgs) error {
@@ -169,18 +165,14 @@ func validateWork(name string, a workArgs) error {
 		}
 		return nil
 	}
-	if name == workBackupsPruneTool {
-		return validateWorkBackupPrune(a)
-	}
 	switch name {
 	case monitorGetTool, monitorListTool, monitorPutTool, monitorDeleteTool:
 		return validateMonitorTool(name, a)
 	}
-	// The reads and the runs that take no version: a state report, a transition
-	// run, a snapshot listing. Each one either names no record or holds its own
-	// fence rather than a caller's counter.
+	// The reads that take no version: they name no record whose state a caller
+	// could be holding, so there is no counter for them to hold.
 	switch name {
-	case "task_get", workStateTool, workRetireTool, workBackupsTool, taskBookGetTool:
+	case "task_get", workStateTool, taskBookGetTool:
 		return nil
 	}
 	// The bookkeeping lane has its own counter and does not take the task
