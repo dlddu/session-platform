@@ -330,7 +330,7 @@ func adoptLedgerRecords(ctx context.Context, tx *sql.Tx, write *sql.Tx, plan *wo
 	for _, row := range tasks {
 		plan.Counts.LedgerTasks++
 		if detailsKindOf(row.task.Details) == adoptMonitorKind {
-			if err = adoptMonitor(ctx, write, row, plan, now); err != nil {
+			if err = adoptMonitor(ctx, tx, write, row, plan, now); err != nil {
 				return err
 			}
 			continue
