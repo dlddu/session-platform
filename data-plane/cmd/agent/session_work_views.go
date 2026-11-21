@@ -168,9 +168,6 @@ func (s *sessionDB) workTasksView(ctx context.Context, a workArgs) (any, error) 
 	}
 	var page map[string]any
 	err = s.workTx(ctx, db, func(tx *sql.Tx) error {
-		if fenceErr := requireWorkReadable(ctx, tx); fenceErr != nil {
-			return fenceErr
-		}
 		listed, listErr := listWorkTasks(ctx, tx, a)
 		if listErr != nil {
 			return listErr
@@ -230,9 +227,6 @@ func (s *sessionDB) workTurnsView(ctx context.Context, a workArgs) (any, error) 
 	}
 	var page map[string]any
 	err = s.workTx(ctx, db, func(tx *sql.Tx) error {
-		if fenceErr := requireWorkReadable(ctx, tx); fenceErr != nil {
-			return fenceErr
-		}
 		task, taskErr := loadWorkTask(ctx, tx, a.TaskID)
 		if taskErr != nil {
 			return taskErr
@@ -286,19 +280,4 @@ func workTurnViewOf(ctx context.Context, tx *sql.Tx, turn workTurn) (workTurnVie
 	}
 	view.Origin = origin.origin
 	return view, nil
-}
-
-// requireWorkReadable refuses a read while the migration holds the database.
-// The copy is one transaction, so a reader would either block on it or — on a
-// resumed run that has not reached this task yet — see a task without the turns
-// that belong to it.
-func requireWorkReadable(ctx context.Context, tx *sql.Tx) error {
-	state, err := workState(ctx, tx)
-	if err != nil {
-		return err
-	}
-	if state == workStateMigrating {
-		return workFail("conflict", "the work migration holds this database; retry when it has finished")
-	}
-	return nil
 }

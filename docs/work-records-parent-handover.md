@@ -23,21 +23,31 @@
 | 승인·커서·보존 기장 | `ledger_put`의 `details`·`sessions` | **`work_legacy_put`** + `expected_book_version` (§4) |
 | 모니터 루프 기록 | `ledger_put` | **`ledger_put` 그대로** (§4) |
 | 작업 이력 읽기 | `ledger_events_list` | 옮겨온 작업은 그대로, **새 작업은 그 턴들이 이력**(§5) |
-| 롤백 | — | `work_rollback_export` (§6) |
+| 롤백 | — | **없다 — 이관은 끝났고 되돌리는 단계는 제거됐다**(§6) |
 
-지금 어느 상태인지는 **추측하지 않는다**: `work_migration_report` 의
-`state` 가 `ready`·`migrating`·`migrated`·`rolled_back` 중 하나를 말한다.
-`ready` 면 아래 전환을 **하지 않는다**(아직 원장이 정본이다).
+**상태를 묻는 도구는 없다.** 이관이 끝났으므로 슬롯이 「어느 단계에 있는지」는
+더 이상 사실이 아니고, 그것을 보고하던 `work_state` 도 제거됐다 — 다른 이름으로
+되살리지도 않았다. 대신 **부모 자신의 호출이 답이다**: 모든 work 호출은 스키마
+게이트를 먼저 지나므로, 호출이 답을 받았다는 것이 곧 「이 슬롯은 서비스된다」는
+진술이고, 거절은 이유를 이름으로 말해 준다.
 
 ## 1. 전환 순서 (부모가 직접 하는 일)
 
-1. `work_migration_report` 로 상태를 읽는다.
-2. `ready` 면 `work_migrate({request_id, dry_run: true})` 로 **리허설**하고
-   보고된 `unmapped` 를 사람에게 보여 준 뒤, 사람의 지시가 있을 때
-   `work_migrate({request_id})` 를 부른다. 리허설 없이 부르지 않는다.
-3. `migrated` 면 이 문서의 도구로만 쓴다. 옛 도구를 부르면 `conflict` 가
-   **무엇을 쓰라고 이름까지 말해 준다** — 그 메시지를 사람에게 그대로 전한다.
-4. `migrating` 은 재시도다(손실이 아니다). `rolled_back` 은 §6.
+이관은 끝났다. 전환 도구(`work_migration_report`·`work_migrate`·
+`work_rollback_export`)와 퇴역 도구(`work_retire`·`work_backups`·
+`work_backups_prune`), 그리고 상태 보고(`work_state`)는 이 이미지에 **없다**.
+전환을 위해 부모가 **먼저 불러야 하는 호출은 하나도 없다**:
+
+1. 평소 하던 일을 그대로 한다 — `task_list`·`turn_list` 로 읽고, 이 문서의
+   도구로 쓴다. 상태 분기를 위한 선행 호출은 필요하지 않다.
+2. 제거된 이름을 부르면 refusal 이 **무엇이 사실인지** 말해 준다. 그 메시지를
+   사람에게 그대로 전한다. 그 답은 다른 관리 도구를 가리키지 않는다 — 가리킬
+   것이 없다.
+3. 거절 코드 `schema_version` 은 **이 슬롯은 아직 원장을 들고 있다**(또는 옛
+   이미지가 이관을 끝내지 못했다)는 뜻이다. 아무것도 읽거나 바꾸지 않았고 원장은
+   그대로 있다. refusal 원문에 **업그레이드 경로**가 담겨 있다 — 그 슬롯은
+   `work_retire` 가 아직 있는 이미지로 먼저 옮긴 뒤 이 이미지를 올린다. 사람에게
+   그 사실과 원문을 전하고, 임의로 재시도하거나 우회하지 않는다(§6).
 
 ## 2. 발견 — 전수로 읽는 법
 
@@ -207,24 +217,22 @@ work_legacy_put({task_id, request_id,
 - 앱이 읽는 경로도 같게 갈린다(§세션 원장 계약 「Reading the work from
   outside the session」).
 
-## 6. 롤백이 필요해지면
+## 6. 되돌릴 수 없다 — 그래서 무엇을 하는가
 
-옛 이미지로 되돌리는 것은 **단계**다. 그냥 되돌리면 커토버 뒤에 쓴 작업·턴·
-요청이 옛 이미지가 읽지 않는 테이블에 남아 **사람 화면에서 사라진다**.
+롤백 경로는 제거됐다. 그것은 손실이 아니라 **이미 사실인 것을 코드가 인정한
+것**이다: 커토버 뒤에 쓴 작업·턴·요청은 옛 이미지가 읽지 않는 테이블에 있고,
+되돌리기는 그것을 사람 화면에서 사라지게 만든다. 그래서 되돌리는 단계 대신
+**닫히는 쪽으로 실패하는 게이트**가 있다.
 
-```
-work_rollback_export({request_id, dry_run: true})   # 리허설, 아무것도 안 바꾼다
-work_rollback_export({request_id})                  # 스냅샷 → 원장 모양으로 되쓰기
-                                                    # → state=rolled_back
-```
-
-- `rolled_back` 이면 **원장이 정본**이다: 작업 도구 쓰기는 거절되고 원장
-  쓰기가 다시 허용된다. 부모는 커토버 전 절차로 돌아간다.
-- 다시 앞으로 올 때는 `work_migrate` 를 부른다. 키가 있어 중복되지 않고,
-  옛 이미지가 그동안 고친 것은 **reconcile 되어 들어온다**(`tasks_reconciled`).
-- `turns_unexportable` 로 보고되는 턴(요청이 없는 턴 — 질문만 있는 턴 등)은
-  원장 모양에 담을 자리가 없어 작업 레코드에만 남는다. 사람에게 그 사실을
-  말한다. **조용히 버리지 않는다.**
+- 이미지를 되돌리는 것 자체가 막힌다: 퇴역한 데이터베이스는 스키마 버전 3을
+  들고 있고, 그 버전을 모르는 옛 이미지는 **첫 호출에서 거절한다** — 없어진
+  원장을 빈 원장으로 되살려 서비스하는 대신이다.
+- 아직 원장을 들고 있는 슬롯은 이 이미지가 **거절한다**(`schema_version`).
+  원장 행은 한 바이트도 건드리지 않으므로, `work_retire` 가 아직 있는 이미지로
+  그 슬롯을 옮기는 길은 남아 있다. 그 결정과 배포는 사람의 것이다.
+- 어느 쪽이든 부모가 할 일은 같다: refusal 원문과 코드를 사람에게 그대로
+  전하고, 우회하지 않는다. **조용히 빈 목록을 보여 주는 것이 가장 나쁜
+  결과다.**
 
 ## 7. 스킬이 바뀌어야 하는 지점 (파일 단위)
 
@@ -238,8 +246,8 @@ work_rollback_export({request_id})                  # 스냅샷 → 원장 모�
 | 선택지 발행 | `turn_patch` 의 `choices` | `session_work_turns.go` |
 | 승인·커서·보존·취소 기장 | `work_legacy_get`/`work_legacy_put` (RMW) | `session_work_parent.go` |
 | 모니터 루프 기록 | `ledger_put` **유지** | `session_work_parent.go`(fence 규칙) |
-| 상태 분기 | 먼저 `work_migration_report` 의 `state` 확인 | `session_work_migrate.go` |
-| 롤백 절차 | `work_rollback_export` → 이미지 되돌리기 → `work_migrate` | `session_work_rollback.go` |
+| 상태 분기 | **제거.** 선행 상태 조회 호출이 없다 — 자기 호출의 응답·거절이 답이다 | `session_work.go`(`migrateWork`) |
+| 롤백 절차 | **없다.** 되돌리기는 제거됐고 스키마 버전 게이트가 닫히는 쪽으로 막는다(§6) | `session_work.go`(`migrateWork`) |
 | 「최종 원문 저장」 규칙 | `response`=세션 원문, `explanation`=부모 설명 | `session_work.go`(workTurn 주석) |
 
 **생략하면 안 되는 것**: 요청 큐 루프와 기장 경로. 전자를 빼면 사람이 남긴

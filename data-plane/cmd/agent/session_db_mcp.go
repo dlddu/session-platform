@@ -262,41 +262,22 @@ func sessionDBToolDefinitions(rawSQL bool) []map[string]any {
 	}, workToolDefinitions()...)
 }
 
-// toolDefinitions is what this sidecar's tools/list answers: the whole surface,
-// minus the tools this slot's records have moved past.
+// toolDefinitions is what this sidecar's tools/list answers.
 //
-// A tool that is listed is one the model can be talked into calling, and every
-// refusal it then gets is a turn spent learning something the list could have
-// said. So a slot that has nothing left to move does not offer to move it. The
-// refusal stays in place either way — a client holding an older list is still
-// told what to call instead (session_work.go) — because a list is a hint and a
-// guard is a guarantee.
+// It used to depend on the database: while a slot could still be mid-move, the
+// transition's own tools were listed only where there was something left to
+// move, so the model was not shown a call whose only possible answer was a
+// refusal. Those tools are gone (session_work_state.go), and with them the one
+// reason this list differed between slots — so it is now the same surface
+// everywhere, read from no state at all. A sidecar whose volume is not ready
+// yet therefore answers the same list as a healthy one instead of a shorter one
+// that looks like a deployment without these tools.
 //
-// The state is read from the database, so a database that cannot be read yet
-// answers with the whole surface rather than with an empty one: a sidecar that
-// started before its volume was ready must not look like a deployment without
-// these tools.
-func (s *sessionDB) toolDefinitions(ctx context.Context) []map[string]any {
-	all := sessionDBToolDefinitions(s.rawSQL)
-	ctx, cancel := context.WithTimeout(ctx, sessionDBCallTimeout)
-	defer cancel()
-	db, err := s.handle(ctx)
-	if err != nil {
-		return all
-	}
-	state, err := s.workRecordsState(ctx, db)
-	if err != nil || state != workStateRetired {
-		return all
-	}
-	out := make([]map[string]any, 0, len(all))
-	for _, definition := range all {
-		name, _ := definition["name"].(string)
-		if isWorkTransitionTool(name) {
-			continue
-		}
-		out = append(out, definition)
-	}
-	return out
+// The refusals stay in place for a client holding an older list: it is told what
+// to call instead (session_work.go), because a list is a hint and a guard is a
+// guarantee.
+func (s *sessionDB) toolDefinitions(context.Context) []map[string]any {
+	return sessionDBToolDefinitions(s.rawSQL)
 }
 
 // callTool runs one tool. A statement that fails is a tool result with
@@ -314,9 +295,10 @@ func (s *sessionDB) callTool(ctx context.Context, params json.RawMessage) (any, 
 		return s.callWork(ctx, call.Name, call.Arguments)
 	}
 	// A name this image removed is answered with the call that does the job
-	// instead. The ledger tools, the migration and the rollback export are gone
-	// (AC-N10), and a parent that still holds an older tools/list learns the
-	// successor rather than "unknown tool" (session_work.go).
+	// instead. The ledger tools, the migration, the rollback export and now the
+	// retirement with its snapshot tools are gone (AC-N10), and a parent that
+	// still holds an older tools/list learns the successor rather than "unknown
+	// tool" (session_work.go).
 	if successor := workRemovedToolSuccessor(call.Name); successor != "" {
 		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: call.Name +
 			" is not a tool on this slot any more; use " + successor}
