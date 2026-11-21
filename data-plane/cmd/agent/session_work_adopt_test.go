@@ -70,15 +70,15 @@ func seedLegacyLedger(t *testing.T, s *sessionDB) {
 				"observed_at":  "2026-10-01T00:00:00Z",
 				"wildcard":     "부모가 쓰는 무언가",
 			}))
+	// A running loop with nothing the monitoring record has no column for, so
+	// it is one this walk can carry faithfully. The rows it cannot carry — an
+	// owner, a session relation, a status that is not running, more state than
+	// a note holds — each stop the run and are covered on their own, because a
+	// cleanup that guesses at those is the thing being prevented.
 	workExec(t, s, "INSERT INTO sp_ledger_tasks VALUES (?,?,?,?,?,?)",
-		"task-m", int64(1), "running", "watch", "parent",
-		ledgerTaskDocument(t, "모니터 루프 기록", "watch", "parent",
-			[]workBookSession{{ID: "monitor-1", Ownership: "owned", Purpose: "모니터", Cleanup: "pending"}},
+		"task-m", int64(1), "running", "watch", "",
+		ledgerTaskDocument(t, "모니터 루프 기록", "watch", "", nil,
 			map[string]any{"kind": "monitor", "last_seen": "2026-11-01T00:00:00Z"}))
-	workExec(t, s, "INSERT INTO sp_ledger_tasks VALUES (?,?,?,?,?,?)",
-		"task-m-done", int64(4), "completed", "watch", "parent",
-		ledgerTaskDocument(t, "끝난 모니터 루프", "watch", "parent", nil,
-			map[string]any{"kind": "monitor"}))
 	workExec(t, s, "INSERT INTO sp_ledger_retired VALUES ('task-gone')")
 	workExec(t, s, "INSERT INTO sp_ledger_requests VALUES ('rq-1','fp','{}')")
 	// A request nobody has answered, and one that was settled.
@@ -212,7 +212,6 @@ func TestRetireAdoptsWhatIsNeededAndRemovesTheLedger(t *testing.T) {
 	if !strings.Contains(monitor["note"].(string), "last_seen") {
 		t.Fatalf("monitor note = %v, want what the loop last saw", monitor["note"])
 	}
-	wantWorkCode(t, s, monitorGetTool, map[string]any{"id": "task-m-done"}, "not_found")
 	listed := mustWork(t, s, "task_list", map[string]any{})["tasks"].([]any)
 	if len(listed) != 1 {
 		t.Fatalf("task_list = %v, want the person's one task and no monitoring row", listed)

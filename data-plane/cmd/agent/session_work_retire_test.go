@@ -240,15 +240,20 @@ func TestWorkRetireCarriesTheBookkeepingAndDropsTheCopies(t *testing.T) {
 	}
 	plan := retirementPlan(t, out)
 	counts := plan["counts"].(map[string]any)
-	// The live ledger row is where task-a's bookkeeping comes from — it is the
-	// one something could still have written — so the adoption carries it and
-	// the preserved copy beside it correctly finds it already owned.
+	// The **preserved copy** is where task-a's bookkeeping comes from, not the
+	// ledger row. While the slot was migrated the parent kept writing the copy
+	// through work_legacy_put and the ledger document stopped at the cutover,
+	// so the copy is the newer of the two. The adoption therefore writes
+	// nothing for this task and the preserved carry does.
 	adoption := counts["adoption"].(map[string]any)
-	if adoption["bookkeeping_carried"].(float64) != 1 {
-		t.Fatalf("adoption bookkeeping_carried = %v, want the live row's bookkeeping carried", adoption)
+	if adoption["bookkeeping_carried"].(float64) != 0 {
+		t.Fatalf("adoption bookkeeping_carried = %v, want 0 — the stale ledger row must not win", adoption)
 	}
-	if counts["preserved_bookkeeping_already_owned"].(float64) != 1 {
-		t.Fatalf("preserved_bookkeeping_already_owned = %v, want the copy recognised as the older of the two", counts)
+	if counts["preserved_bookkeeping_carried"].(float64) != 1 {
+		t.Fatalf("preserved_bookkeeping_carried = %v, want the current copy carried", counts)
+	}
+	if counts["preserved_bookkeeping_already_owned"].(float64) != 0 {
+		t.Fatalf("preserved_bookkeeping_already_owned = %v, want none — nothing owned it first", counts)
 	}
 	if counts["turn_dispatch_verified"].(float64) != 1 {
 		t.Fatalf("turn_dispatch_verified = %v, want the recorded dispatch checked before its copy went", counts)
@@ -270,10 +275,10 @@ func TestWorkRetireCarriesTheBookkeepingAndDropsTheCopies(t *testing.T) {
 		}
 	}
 	// A relation whose session is gone is a cursor into nothing, so it does not
-	// come across either. The live ledger row carries three; one is deleted.
+	// come across either. The preserved copy carries two; one is deleted.
 	relations := book["sessions"].([]any)
-	if len(relations) != 2 {
-		t.Fatalf("relations = %v, want the two that are not deleted", relations)
+	if len(relations) != 1 {
+		t.Fatalf("relations = %v, want the one that is not deleted", relations)
 	}
 	for _, raw := range relations {
 		if raw.(map[string]any)["id"] == "worker-old" {

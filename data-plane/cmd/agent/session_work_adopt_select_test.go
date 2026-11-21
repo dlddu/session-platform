@@ -1,11 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 )
 
 // The selection itself, at the unit it is decided in.
@@ -204,120 +205,390 @@ func contains(all []string, want string) bool {
 	return false
 }
 
-// A carried-over loop has to be a row monitor_put would accept.
+// A loop this code cannot record faithfully stops the whole run and keeps the
+// ledger row exactly as it is.
 //
-// The adoption writes sp_work_monitor directly, so it does not pass through the
-// tool's own validation — and the ledger bounded nothing against this table's
-// limits. A note past the bound, or a loop with no title, lands in a row that
-// monitor_get reads happily and monitor_put then refuses: monitor_put is a full
-// replacement that requires title, state and note, so the parent could never
-// record that its own loop had run again. The row would be readable for ever
-// and writable never.
-//
-// Real ledgers have such rows — a loop that keeps 5 KiB of state in its details
-// is past a 4096-byte note — so this is not a hypothetical.
-func TestAdoptedMonitorIsAlwaysWritableAfterwards(t *testing.T) {
+// The adoption writes sp_work_monitor directly, so a row monitor_put would
+// refuse could be read for ever and never written again. An earlier attempt at
+// this made the row fit by cutting the note, which was wrong: the note is where
+// the parent keeps the approval it is acting under, the claim it holds and the
+// cursor it resumes from, and it is JSON. Cutting it destroys state nothing
+// else holds and leaves the rest unparseable. So each case refuses, names what
+// to do, and changes nothing — and that last part is what these tests check,
+// because a refusal that half-moved the data would be the worst of both.
+func TestRetireRefusesAMonitorItCannotRecordFaithfully(t *testing.T) {
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
 	for _, test := range []struct {
-		name   string
-		row    workMonitor
-		expect func(t *testing.T, got workMonitor, changed []string)
+		name     string
+		document func(t *testing.T) string
+		status   string
+		expect   string
 	}{
 		{
-			name: "a note past the bound is cut to fit",
-			row:  workMonitor{ID: "loop-1", Title: "감시", State: monitorStateRunning, Note: strings.Repeat("가", 2000)},
-			expect: func(t *testing.T, got workMonitor, changed []string) {
-				// 2000 Korean runes is 6000 bytes, which is what a real ledger
-				// row looks like and what the bound is measured in.
-				if len(got.Note) > monitorNoteMax {
-					t.Fatalf("note = %d bytes, want at most %d", len(got.Note), monitorNoteMax)
-				}
-				if !utf8.ValidString(got.Note) {
-					t.Fatal("the cut split a rune, which stores invalid UTF-8")
-				}
-				if len(changed) == 0 || !strings.Contains(strings.Join(changed, " "), "never written again") {
-					t.Fatalf("changed = %v, want it to say why the cut matters", changed)
-				}
+			name:   "more state than a note holds",
+			status: "running",
+			document: func(t *testing.T) string {
+				return ledgerTaskDocument(t, "모니터", "watch", "", nil, map[string]any{
+					"kind": "monitor", "approval": "PR only", "cursor": strings.Repeat("가", 2000),
+				})
 			},
+			expect: "is not cut",
 		},
 		{
-			name: "a loop with no title is named by its id",
-			row:  workMonitor{ID: "loop-2", Title: "   ", State: monitorStateRunning},
-			expect: func(t *testing.T, got workMonitor, changed []string) {
-				if got.Title != "loop-2" {
-					t.Fatalf("title = %q, want the id", got.Title)
-				}
-				if len(changed) == 0 {
-					t.Fatal("renaming the loop was not reported")
-				}
+			name:   "a status that is not running",
+			status: "completed",
+			document: func(t *testing.T) string {
+				return ledgerTaskDocument(t, "끝난 듯한 루프", "watch", "", nil, map[string]any{"kind": "monitor"})
 			},
+			expect: "finished for good",
 		},
 		{
-			name: "a state this record does not have becomes stopped",
-			row:  workMonitor{ID: "loop-3", Title: "감시", State: "completed"},
-			expect: func(t *testing.T, got workMonitor, changed []string) {
-				if got.State != monitorStateStopped {
-					t.Fatalf("state = %q, want %q", got.State, monitorStateStopped)
-				}
-				if len(changed) == 0 {
-					t.Fatal("the state change was not reported")
-				}
+			name:   "an owner the record has no column for",
+			status: "running",
+			document: func(t *testing.T) string {
+				return ledgerTaskDocument(t, "모니터", "watch", "parent", nil, map[string]any{"kind": "monitor"})
 			},
+			expect: "records owner",
 		},
 		{
-			name: "a row already within the bounds is untouched and reports nothing",
-			row:  workMonitor{ID: "loop-4", Title: "감시", State: monitorStateRunning, Note: "마지막 확인 10:00"},
-			expect: func(t *testing.T, got workMonitor, changed []string) {
-				if got.Note != "마지막 확인 10:00" || got.Title != "감시" || got.State != monitorStateRunning {
-					t.Fatalf("an acceptable row was changed: %+v", got)
-				}
-				if len(changed) != 0 {
-					t.Fatalf("changed = %v, want nothing reported for a row that was already fine", changed)
-				}
+			name:   "a session relation the record has no column for",
+			status: "running",
+			document: func(t *testing.T) string {
+				return ledgerTaskDocument(t, "모니터", "watch", "",
+					[]workBookSession{{ID: "monitor-1", Ownership: "owned", Cleanup: "pending", NextOffset: 4096}},
+					map[string]any{"kind": "monitor"})
 			},
+			expect: "session relation",
+		},
+		{
+			name:   "no title, which monitor_put requires",
+			status: "running",
+			document: func(t *testing.T) string {
+				return ledgerTaskDocument(t, "   ", "watch", "", nil, map[string]any{"kind": "monitor"})
+			},
+			expect: "has no title",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, changed := adoptableMonitor(test.row)
-			test.expect(t, got, changed)
-			// Whatever it did, the result has to be a row the tool accepts —
-			// that is the whole point, so it is asserted for every case.
-			args := workArgs{ID: got.ID, ExpectedVersion: lvInt(0), Monitor: &workMonitorInput{
-				Title: got.Title, State: got.State, Note: got.Note,
-			}}
-			if err := validateMonitorTool(monitorPutTool, args); err != nil {
-				t.Fatalf("%s would refuse the adopted row: %v", monitorPutTool, err)
+			s, _ := newTestSessionDB(t)
+			seedLegacyLedger(t, s)
+			workExec(t, s, "INSERT INTO sp_ledger_tasks VALUES (?,?,?,?,?,?)",
+				"loop-x", int64(1), test.status, "watch", "", test.document(t))
+			before := ledgerSnapshotOf(t, s)
+
+			// The rehearsal says it is blocked, in the words the real run uses.
+			out := retireAt(t, s, "rehearse", true, now)
+			if out["blocked"] != true {
+				t.Fatalf("the rehearsal did not say it is blocked: %v", out)
+			}
+			rehearsed := refusalText(t, out["refusals"])
+			if !strings.Contains(rehearsed, test.expect) {
+				t.Fatalf("rehearsal refusals do not name %q:\n%s", test.expect, rehearsed)
+			}
+			if !strings.Contains(rehearsed, "loop-x") {
+				t.Fatalf("rehearsal refusals do not name the row:\n%s", rehearsed)
+			}
+
+			// The real run refuses, as a conflict a caller branches on.
+			err := retireFails(t, s, "real", now)
+			assertWorkCode(t, err, "conflict")
+			if !strings.Contains(err.Error(), test.expect) {
+				t.Fatalf("the refusal does not say why: %v", err)
+			}
+
+			// Nothing moved: the ledger is byte for byte what it was, no work
+			// record was half-written, and the tables are all still there.
+			if after := ledgerSnapshotOf(t, s); after != before {
+				t.Fatalf("a refused run changed the ledger:\n%s\n--- became ---\n%s", before, after)
+			}
+			if n := workCount(t, s, "sp_work_monitor"); n != 0 {
+				t.Fatalf("a refused run wrote %d monitoring record(s)", n)
+			}
+			if n := workCount(t, s, "sp_work_tasks"); n != 0 {
+				t.Fatalf("a refused run adopted %d task(s) — no partial adoption is allowed", n)
+			}
+			if n := workCount(t, s, "sp_work_turns"); n != 0 {
+				t.Fatalf("a refused run wrote %d turn(s)", n)
+			}
+			for _, table := range []string{"sp_ledger_tasks", "sp_ledger_user_requests", "sp_ledger_task_events"} {
+				if !workTableIsThere(t, s, table) {
+					t.Fatalf("a refused run dropped %s", table)
+				}
 			}
 		})
 	}
 }
 
-func lvInt(v int64) *int64 { return &v }
+// ledgerSnapshotOf is every ledger task row as text, so a test can assert the
+// original is unchanged rather than only that the row count matches.
+func ledgerSnapshotOf(t *testing.T, s *sessionDB) string {
+	t.Helper()
+	ctx := context.Background()
+	db, err := s.handle(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.QueryContext(ctx, "SELECT id,version,status,stage,owner,document FROM sp_ledger_tasks ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var id, status, stage, owner, document string
+		var version int64
+		if err := rows.Scan(&id, &version, &status, &stage, &owner, &document); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, fmt.Sprintf("%s|%d|%s|%s|%s|%s", id, version, status, stage, owner, document))
+	}
+	return strings.Join(out, "\n")
+}
 
-// End to end: a ledger loop whose details are larger than the note bound is
-// carried, is writable afterwards, and the retirement record says it was cut.
-func TestRetireCarriesAnOverLongMonitorNoteAndSaysSo(t *testing.T) {
+func refusalText(t *testing.T, raw any) string {
+	t.Helper()
+	switch v := raw.(type) {
+	case []string:
+		return strings.Join(v, "\n")
+	case []any:
+		out := []string{}
+		for _, item := range v {
+			out = append(out, fmt.Sprint(item))
+		}
+		return strings.Join(out, "\n")
+	default:
+		t.Fatalf("refusals = %T %v", raw, raw)
+		return ""
+	}
+}
+
+// The other side of the gate: a loop small enough and plain enough to record
+// faithfully goes across whole and comes back out of monitor_get byte for byte,
+// and the parent can then write it. A refusal gate that also blocked the
+// ordinary row would have stopped every cleanup.
+func TestRetireCarriesAPlainMonitorWholeAndItStaysWritable(t *testing.T) {
 	s, _ := newTestSessionDB(t)
 	seedLegacyLedger(t, s)
-	// The loop keeps more state than a note holds, which is what a real one
-	// that has been running for months looks like.
-	workExec(t, s, "UPDATE sp_ledger_tasks SET document=? WHERE id='task-m'",
-		ledgerTaskDocument(t, "모니터 루프 기록", "watch", "parent", nil, map[string]any{
-			"kind": "monitor", "seen": strings.Repeat("가", 2000),
-		}))
-	out := retireAt(t, s, "r1", false, time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC))
+	retireAt(t, s, "r1", false, time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC))
 
 	monitor := mustWork(t, s, monitorGetTool, map[string]any{"id": "task-m"})
-	if len(monitor["note"].(string)) > monitorNoteMax {
-		t.Fatalf("the adopted note is %d bytes, over the bound the tool enforces", len(monitor["note"].(string)))
+	// The note is the loop's own state, carried whole — not cut, and still the
+	// JSON the parent wrote.
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(monitor["note"].(string)), &decoded); err != nil {
+		t.Fatalf("the carried note is not the JSON the parent wrote: %v (%q)", err, monitor["note"])
 	}
-	// The parent can record its loop again, which is what the bound protects.
+	if decoded["last_seen"] != "2026-11-01T00:00:00Z" {
+		t.Fatalf("the loop's state did not come across whole: %v", decoded)
+	}
+	if _, marker := decoded["kind"]; marker {
+		t.Fatalf("the kind convention came across with it: %v", decoded)
+	}
+	// And it is writable, which is the invariant the refusals protect.
 	mustWork(t, s, monitorPutTool, map[string]any{
 		"id": "task-m", "request_id": "m1", "expected_version": monitor["version"],
 		"monitor": map[string]any{"title": "모니터 루프 기록", "state": monitorStateRunning, "note": "다시 확인"},
 	})
-	// And the record says it had to cut, so nobody reads the note as whole.
-	dropped := strings.Join(planNotes(t, retirementPlan(t, out), "dropped"), "\n")
-	if !strings.Contains(dropped, "sp_work_monitor:task-m") {
-		t.Fatalf("the retirement record does not name what it changed:\n%s", dropped)
+	if back := mustWork(t, s, monitorGetTool, map[string]any{"id": "task-m"}); back["note"] != "다시 확인" {
+		t.Fatalf("the round trip did not hold: %v", back)
+	}
+}
+
+// The newest management record wins, not whichever one the walk reaches first.
+//
+// While a slot is `migrated` the parent keeps writing its bookkeeping through
+// the preserved copy (work_legacy_put wrote sp_work_task_legacy), and the
+// ledger document stops at the cutover. So there can be three versions of one
+// task's bookkeeping: the ledger row (oldest), the preserved copy (current),
+// and a record the parent wrote after the cutover (newest).
+//
+// The walk used to decide by order: the adoption inserted the ledger values
+// first, and the preserved carry then saw a row already present and threw the
+// current copy away. That rolled the approval scope and the session cursor back
+// to the cutover — a parent acting on the restored record would act under an
+// approval that had been narrowed and resume from a cursor it had already
+// passed. Order is never how to choose between two records.
+func TestRetirePrefersTheNewestBookkeepingNotTheFirstSeen(t *testing.T) {
+	now := time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC)
+
+	t.Run("the preserved copy beats the ledger row it outlived", func(t *testing.T) {
+		s, _ := newTestSessionDB(t)
+		seedThreeVersionBookkeeping(t, s, false)
+
+		retireAt(t, s, "r1", false, now)
+
+		book := mustWork(t, s, taskBookGetTool, map[string]any{"task_id": "task-a"})
+		details := book["details"].(map[string]any)
+		if details["approval"] != "merge allowed" {
+			t.Fatalf("approval = %v, want the preserved copy's — the ledger's was narrower and older", details["approval"])
+		}
+		if book["stage"] != "verification" {
+			t.Fatalf("stage = %v, want the preserved copy's", book["stage"])
+		}
+		relations := book["sessions"].([]any)
+		if len(relations) != 1 {
+			t.Fatalf("sessions = %v", relations)
+		}
+		// The cursor is the one the parent had actually reached, not the one the
+		// ledger froze at the cutover.
+		if got := relations[0].(map[string]any)["nextOffset"]; got != float64(100) {
+			t.Fatalf("nextOffset = %v, want 100 — 10 would be the cursor rolled back", got)
+		}
+	})
+
+	t.Run("a record the parent wrote after the cutover beats both", func(t *testing.T) {
+		s, _ := newTestSessionDB(t)
+		seedThreeVersionBookkeeping(t, s, true)
+
+		retireAt(t, s, "r1", false, now)
+
+		book := mustWork(t, s, taskBookGetTool, map[string]any{"task_id": "task-a"})
+		details := book["details"].(map[string]any)
+		if details["approval"] != "parent wrote this after the cutover" {
+			t.Fatalf("approval = %v, want the parent's own newest write", details["approval"])
+		}
+		if got := book["sessions"].([]any)[0].(map[string]any)["nextOffset"]; got != float64(1000) {
+			t.Fatalf("nextOffset = %v, want 1000", got)
+		}
+	})
+
+	t.Run("the rehearsal counts per id, not by a global flag", func(t *testing.T) {
+		s, _ := newTestSessionDB(t)
+		// Two tasks: one whose bookkeeping only the ledger has, one with a
+		// preserved copy. The rehearsal has to say one of each — a global
+		// counter made every copy read as already owned once any task was
+		// carried, so the rehearsal's numbers were not the run's.
+		seedThreeVersionBookkeeping(t, s, false)
+		workExec(t, s, "INSERT INTO sp_ledger_tasks VALUES (?,?,?,?,?,?)",
+			"task-ledger-only", int64(1), "running", "implementation", "parent",
+			ledgerTaskDocument(t, "원장에만 있는 작업", "implementation", "parent",
+				[]workBookSession{{ID: "w2", Ownership: "owned", Cleanup: "pending", NextOffset: 7}},
+				map[string]any{"approval": "PR only"}))
+		newWorkTask(t, s, "task-ledger-only", "seed-lo", map[string]any{"title": "원장에만 있는 작업"})
+
+		rehearsal := retirementPlan(t, retireAt(t, s, "rehearse", true, now))
+		counts := rehearsal["counts"].(map[string]any)
+		adoption := counts["adoption"].(map[string]any)
+		if adoption["bookkeeping_carried"].(float64) != 1 {
+			t.Fatalf("adoption bookkeeping_carried = %v, want the one task only the ledger has", adoption)
+		}
+		if counts["preserved_bookkeeping_carried"].(float64) != 1 {
+			t.Fatalf("preserved_bookkeeping_carried = %v, want the one task with a copy", counts)
+		}
+		if counts["preserved_bookkeeping_already_owned"].(float64) != 0 {
+			t.Fatalf("preserved_bookkeeping_already_owned = %v, want none — nothing owned either yet", counts)
+		}
+
+		// And the committed run does exactly what the rehearsal said.
+		ran := retirementPlan(t, retireAt(t, s, "r1", false, now))
+		ranCounts := ran["counts"].(map[string]any)
+		if ranCounts["preserved_bookkeeping_carried"] != counts["preserved_bookkeeping_carried"] ||
+			ranCounts["adoption"].(map[string]any)["bookkeeping_carried"] != adoption["bookkeeping_carried"] {
+			t.Fatalf("the run did not match the rehearsal:\n%v\n%v", counts, ranCounts)
+		}
+	})
+}
+
+// seedThreeVersionBookkeeping builds the state the review described: a migrated
+// slot where the ledger row holds the *old* approval and cursor, the preserved
+// copy holds the current ones, and — when parentWrote — the parent has since
+// written a newer record of its own.
+func seedThreeVersionBookkeeping(t *testing.T, s *sessionDB, parentWrote bool) {
+	t.Helper()
+	workExec(t, s, legacyLedgerSchema)
+	// The ledger row as it stopped at the cutover: a narrower approval and a
+	// cursor at 10.
+	workExec(t, s, "INSERT INTO sp_ledger_tasks VALUES (?,?,?,?,?,?)",
+		"task-a", int64(3), "blocked", "implementation", "parent",
+		ledgerTaskDocument(t, "작업 하나", "implementation", "parent",
+			[]workBookSession{{ID: "w1", Ownership: "owned", Purpose: "구현", Cleanup: "pending", NextOffset: 10}},
+			map[string]any{"approval": "PR only", "lifecycle": map[string]any{"stage": "implementation"}}))
+	mustWork(t, s, workStateTool, map[string]any{})
+	workExec(t, s, `CREATE TABLE sp_work_task_legacy (
+		task_id TEXT PRIMARY KEY, legacy_version INTEGER NOT NULL, legacy_status TEXT NOT NULL, kind TEXT NOT NULL,
+		stage TEXT NOT NULL, owner TEXT NOT NULL, sessions TEXT NOT NULL, details TEXT NOT NULL,
+		provenance TEXT NOT NULL)`)
+	workExec(t, s, `CREATE TABLE sp_work_turn_legacy (
+		turn_id INTEGER PRIMARY KEY, source TEXT NOT NULL, source_id TEXT NOT NULL,
+		claim_state TEXT NOT NULL, admin TEXT NOT NULL, provenance TEXT NOT NULL)`)
+	newWorkTask(t, s, "task-a", "seed-a", map[string]any{"title": "작업 하나", "status": "blocked"})
+	// The preserved copy, kept current by work_legacy_put while the slot was
+	// migrated: the approval has been widened and the cursor has reached 100.
+	workExec(t, s, `INSERT INTO sp_work_task_legacy VALUES
+		('task-a',3,'blocked','','verification','parent',
+		 '[{"id":"w1","ownership":"owned","purpose":"구현","cleanup":"pending","nextOffset":100}]',
+		 '{"approval":"merge allowed","lifecycle":{"stage":"verification"}}','{}')`)
+	if parentWrote {
+		read := mustWork(t, s, taskBookGetTool, map[string]any{"task_id": "task-a"})
+		mustWork(t, s, taskBookPutTool, map[string]any{
+			"task_id": "task-a", "request_id": "parent-1",
+			"expected_book_version": read["book_version"],
+			"record": map[string]any{
+				"stage": "review", "owner": "parent",
+				"sessions": []any{map[string]any{
+					"id": "w1", "ownership": "owned", "purpose": "구현",
+					"cleanup": "pending", "nextOffset": float64(1000),
+				}},
+				"details": map[string]any{"approval": "parent wrote this after the cutover"},
+			},
+		})
+	}
+	workExec(t, s, "UPDATE sp_work_meta SET state=?", workStateMigrated)
+}
+
+// A loop the parent has already recorded properly is superseded, not refused.
+//
+// The operational case: a monitor's old ledger row keeps far more state than a
+// note holds, so the parent read it, decided what the loop is, and wrote
+// sp_work_monitor itself with monitor_put — approval, owner, generation, the
+// policy it keeps, and `stopped` on the evidence that its schedule list is
+// empty. The ledger row behind that is now the stale copy this cleanup removes.
+//
+// Refusing on it would block the cleanup for ever over a row nobody reads, and
+// overwriting it would throw away the decision the parent just made. Neither.
+func TestRetireSupersedesAMonitorTheParentAlreadyRecorded(t *testing.T) {
+	s, _ := newTestSessionDB(t)
+	seedLegacyLedger(t, s)
+	// The old ledger row: more state than a note holds, and an owner — either
+	// of which refuses on its own when nothing has superseded it.
+	workExec(t, s, "UPDATE sp_ledger_tasks SET owner='parent', document=? WHERE id='task-m'",
+		ledgerTaskDocument(t, "모니터 루프 기록", "watch", "parent",
+			[]workBookSession{{ID: "monitor-1", Ownership: "owned", Cleanup: "pending"}},
+			map[string]any{"kind": "monitor", "cache": strings.Repeat("가", 6000)}))
+	// What the parent established instead, through the tool, before retiring.
+	mustWork(t, s, monitorPutTool, map[string]any{
+		"id": "task-m", "request_id": "m-establish", "expected_version": 0,
+		"monitor": map[string]any{
+			"title": "모니터 루프 기록", "state": monitorStateStopped,
+			"note": `{"approval":"PR only","owner":"parent","membership_generation":14,` +
+				`"stopped_because":"schedule_list empty: desired active, schedule_lost"}`,
+		},
+	})
+	established := mustWork(t, s, monitorGetTool, map[string]any{"id": "task-m"})
+
+	// It retires rather than refusing, even though the ledger row on its own
+	// would refuse twice over.
+	out := retireAt(t, s, "r1", false, time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC))
+	plan := retirementPlan(t, out)
+	if refusals, _ := plan["refusals"].([]any); len(refusals) != 0 {
+		t.Fatalf("a superseded ledger row blocked the cleanup: %v", refusals)
+	}
+	if plan["counts"].(map[string]any)["adoption"].(map[string]any)["monitors_superseded"].(float64) != 1 {
+		t.Fatalf("the supersede was not counted: %v", plan["counts"])
+	}
+
+	// And the parent's record is untouched — byte for byte what it wrote.
+	after := mustWork(t, s, monitorGetTool, map[string]any{"id": "task-m"})
+	for _, field := range []string{"title", "state", "note", "version"} {
+		if after[field] != established[field] {
+			t.Fatalf("the parent's own record was changed: %s %v -> %v", field, established[field], after[field])
+		}
+	}
+	if !strings.Contains(after["note"].(string), "membership_generation") {
+		t.Fatalf("the parent's note did not survive: %v", after["note"])
+	}
+	// The stale ledger copy is gone with the rest of the ledger.
+	if workTableIsThere(t, s, "sp_ledger_tasks") {
+		t.Fatal("the ledger survived a successful retirement")
 	}
 }
