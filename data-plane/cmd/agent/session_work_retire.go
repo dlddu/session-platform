@@ -429,11 +429,17 @@ func carryPreservedBookkeeping(
 			"SELECT count(*) FROM sp_work_task_book WHERE task_id=?", row.taskID).Scan(&already); err != nil {
 			return err
 		}
-		if already != 0 || plan.Counts.Adoption.BookCarried != 0 && write == nil {
-			// Something owns this task's bookkeeping already — the adoption just
-			// wrote it from the ledger row, or a parent wrote it after the
-			// cutover. Either way the owned record is the live one and this copy
-			// is the older of the two.
+		if already != 0 {
+			// The parent wrote this task's bookkeeping in the owned record after
+			// the cutover, so that is the newest of the three and it wins.
+			//
+			// This used to read `already != 0 || Adoption.BookCarried != 0 && write == nil`.
+			// The second half was a global counter: in a rehearsal, as soon as
+			// the adoption carried *any* task's bookkeeping, *every* preserved
+			// copy here read as already owned — so the rehearsal's counts were
+			// not the run's, per id. The adoption no longer writes for a task
+			// that has a preserved copy (adoptTaskBook), so this is a plain
+			// per-id question again and the hack is gone.
 			plan.Counts.BookPresent++
 		} else {
 			plan.Counts.BookCarried++

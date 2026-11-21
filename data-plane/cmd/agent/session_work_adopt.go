@@ -199,6 +199,7 @@ type workAdoptionCounts struct {
 	BookPresent         int `json:"bookkeeping_already_owned"`
 	MonitorsCarried     int `json:"monitors_carried"`
 	MonitorsRefused     int `json:"monitors_refused"`
+	MonitorsSuperseded  int `json:"monitors_superseded"`
 	LedgerRequests      int `json:"ledger_requests"`
 	TurnsCreated        int `json:"turns_created"`
 	TurnsPresent        int `json:"turns_present"`
@@ -429,6 +430,35 @@ func adoptTaskBook(ctx context.Context, tx *sql.Tx, write *sql.Tx, row adoptedTa
 			"the parent has written this task's bookkeeping in the owned record since")
 		return nil
 	}
+	// A slot an older image migrated has a preserved copy beside the task, and
+	// that copy is **newer than the ledger row**: while the slot was migrated
+	// the parent kept writing its bookkeeping through work_legacy_put, which
+	// wrote the copy, and the ledger document stopped at the cutover. So the
+	// ledger must not write here first — carryPreservedBookkeeping does, from
+	// the copy.
+	//
+	// Getting this backwards rolled the approval scope and the session cursors
+	// back to whatever they were at the cutover: this function inserted the old
+	// ledger values, and the preserved carry then saw a row already present and
+	// threw the current copy away. Order decided which of two records won, which
+	// is never how to pick.
+	preserved, err := workTableExists(ctx, tx, "sp_work_task_legacy")
+	if err != nil {
+		return err
+	}
+	if preserved {
+		var copies int
+		if err := tx.QueryRowContext(ctx,
+			"SELECT count(*) FROM sp_work_task_legacy WHERE task_id=?", row.id).Scan(&copies); err != nil {
+			return err
+		}
+		if copies != 0 {
+			plan.dropped("sp_ledger_tasks:"+row.id, "stage, owner, sessions, details",
+				"the ledger row stopped at the cutover; the parent has kept this task's bookkeeping current in "+
+					"the preserved copy since, and that is what is carried")
+			return nil
+		}
+	}
 	relations, droppedRelations := liveRelations(row.task.Sessions)
 	details, droppedKeys, unclassified := liveDetails(row.task.Details)
 	for _, name := range droppedRelations {
@@ -519,7 +549,28 @@ func liveDetails(details map[string]any) (map[string]any, []string, []string) {
 // that it is finished and goes. A loop the ledger recorded as completed will not
 // run again; a record of it would be exactly the copy nothing reads that this
 // cleanup exists to remove.
-func adoptMonitor(ctx context.Context, write *sql.Tx, row adoptedTaskRow, plan *workAdoptionPlan, now time.Time) error {
+func adoptMonitor(
+	ctx context.Context, tx *sql.Tx, write *sql.Tx, row adoptedTaskRow, plan *workAdoptionPlan, now time.Time,
+) error {
+	// The parent may already have recorded this loop properly — read the ledger
+	// row, decide what the loop is, and write sp_work_monitor with monitor_put.
+	// When it has, that record is the newest and the ledger row is the stale
+	// copy this cleanup exists to remove. It must neither be overwritten nor
+	// hold the whole run up: refusing on a superseded row would block the
+	// cleanup for ever over a copy nobody reads, and that is the opposite of
+	// what the refusals are for.
+	var owned int
+	if err := tx.QueryRowContext(ctx,
+		"SELECT count(*) FROM sp_work_monitor WHERE id=?", row.id).Scan(&owned); err != nil {
+		return err
+	}
+	if owned != 0 {
+		plan.Counts.MonitorsSuperseded++
+		plan.dropped("sp_ledger_tasks:"+row.id, "the monitoring row",
+			"the parent has recorded this loop in sp_work_monitor since, with what it decided the loop is; the "+
+				"ledger row has been standing still behind it and is the older of the two")
+		return nil
+	}
 	note, err := json.Marshal(monitorNoteOf(row.task.Details))
 	if err != nil {
 		return err
@@ -843,7 +894,7 @@ func verifyAdoption(ctx context.Context, tx *sql.Tx, plan *workAdoptionPlan) err
 	counts := plan.Counts
 	plan.Checks["orphan_turns"] = orphans
 	plan.Checks["ledger_tasks_accounted"] = counts.TasksCreated+counts.TasksPresent+counts.TasksRetiredSkipped+
-		counts.MonitorsCarried+counts.MonitorsRefused == counts.LedgerTasks
+		counts.MonitorsCarried+counts.MonitorsRefused+counts.MonitorsSuperseded == counts.LedgerTasks
 	plan.Checks["ledger_requests_accounted"] = counts.TurnsCreated+counts.TurnsPresent+counts.RequestsDropped+
 		len(plan.Refusals) == counts.LedgerRequests || len(plan.Refusals) != 0
 	if orphans != 0 {
