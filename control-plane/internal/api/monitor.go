@@ -21,7 +21,20 @@ type MonitorPairs interface {
 	For(ctx context.Context, sessionID string) (monitorpair.Binding, monitorpair.Role, error)
 	RecordMirror(ctx context.Context, monitorSessionID, payload string) error
 	LastMirror(ctx context.Context, monitorSessionID string) (monitorpair.Mirror, error)
+	Accept(ctx context.Context, monitorSessionID, requestID, taskID, text, author string) (monitorpair.InboxItem, bool, error)
+	Pending(ctx context.Context, monitorSessionID string) ([]monitorpair.InboxItem, error)
+	Item(ctx context.Context, monitorSessionID, requestID string) (monitorpair.InboxItem, error)
+	MarkForwarded(ctx context.Context, monitorSessionID, requestID string, turnID int64, sessionSeq *int64) (monitorpair.InboxItem, error)
+	MarkRefused(ctx context.Context, monitorSessionID, requestID, detail string) (monitorpair.InboxItem, error)
+	PublishSnapshot(ctx context.Context, monitorSessionID, kind, key, payload string) error
+	Snapshot(ctx context.Context, monitorSessionID, kind, key string) (monitorpair.Mirror, error)
 }
+
+// Snapshot kinds the monitor publishes.
+const (
+	snapshotTasks = "tasks"
+	snapshotTurns = "turns"
+)
 
 // SessionIdentity proves which session a request comes from. It is the same
 // shape repo access already uses for its helper pods (AC-H3): a projected
@@ -61,6 +74,11 @@ func (m *Monitor) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/internal/monitor/work/tasks", m.session(m.tasks))
 	mux.HandleFunc("GET /api/v1/internal/monitor/work/tasks/{taskID}/turns", m.session(m.turns))
 	mux.HandleFunc("POST /api/v1/internal/monitor/work/tasks/{taskID}/requests", m.session(m.request))
+	mux.HandleFunc("GET /api/v1/internal/monitor/requests/{requestID}", m.session(m.requestStatus))
+	mux.HandleFunc("GET /api/v1/internal/monitor/inbox", m.session(m.inbox))
+	mux.HandleFunc("POST /api/v1/internal/monitor/inbox/{requestID}/forwarded", m.session(m.markForwarded))
+	mux.HandleFunc("POST /api/v1/internal/monitor/inbox/{requestID}/refused", m.session(m.markRefused))
+	mux.HandleFunc("POST /api/v1/internal/monitor/work/snapshot", m.session(m.publishSnapshot))
 }
 
 var errMonitorDisabled = errors.New("the managed monitor pair is not enabled on this deployment")
@@ -239,6 +257,19 @@ func (m *Monitor) tasks(w http.ResponseWriter, r *http.Request) {
 		// The parent still needs its list, so the last read the control plane
 		// took is served — labelled, timestamped, and only to this binding.
 		if errors.Is(err, session.ErrWorkUnavailable) {
+			// The monitor's own published state comes first: it is current as
+			// of its last commit, and it exists even for work this parent has
+			// never read. The read-through mirror is only the fallback for a
+			// deployment whose monitor has not published yet.
+			if pub, pErr := m.pairs.Snapshot(r.Context(), b.MonitorSessionID, snapshotTasks, ""); pErr == nil {
+				var published session.WorkTaskPage
+				if json.Unmarshal([]byte(pub.Payload), &published) == nil {
+					at := pub.MirroredAt
+					writeJSON(w, http.StatusOK, tasksView{WorkTaskPage: published,
+						Monitor: m.monitorState(r.Context(), b), Source: "published", AsOf: &at})
+					return
+				}
+			}
 			if stored, mErr := m.pairs.LastMirror(r.Context(), b.MonitorSessionID); mErr == nil {
 				var mirrored session.WorkTaskPage
 				if json.Unmarshal([]byte(stored.Payload), &mirrored) == nil {
@@ -282,13 +313,33 @@ func (m *Monitor) turns(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	page, err := m.mgr.WorkTurns(r.Context(), b.MonitorSessionID, r.PathValue("taskID"),
+	taskID := r.PathValue("taskID")
+	page, err := m.mgr.WorkTurns(r.Context(), b.MonitorSessionID, taskID,
 		afterTurnID, limit, q.Get("open") == "true")
 	if err != nil {
+		if errors.Is(err, session.ErrWorkUnavailable) {
+			if pub, pErr := m.pairs.Snapshot(r.Context(), b.MonitorSessionID, snapshotTurns, taskID); pErr == nil {
+				var published session.WorkTurnPage
+				if json.Unmarshal([]byte(pub.Payload), &published) == nil {
+					at := pub.MirroredAt
+					writeJSON(w, http.StatusOK, turnsView{WorkTurnPage: published,
+						Monitor: m.monitorState(r.Context(), b), Source: "published", AsOf: &at})
+					return
+				}
+			}
+		}
 		m.workErr(w, r, b, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, page)
+	writeJSON(w, http.StatusOK, turnsView{WorkTurnPage: page,
+		Monitor: m.monitorState(r.Context(), b), Source: "slot"})
+}
+
+type turnsView struct {
+	session.WorkTurnPage
+	Monitor *monitorStateView `json:"monitor,omitempty"`
+	Source  string            `json:"source"`
+	AsOf    *time.Time        `json:"asOf,omitempty"`
 }
 
 type monitorRequestReq struct {
@@ -305,14 +356,19 @@ type monitorRequestView struct {
 	Monitor *monitorStateView `json:"monitor,omitempty"`
 }
 
-// request puts one instruction in the monitor's inbox. Only the parent may
-// call it: the monitor writes its own records directly, and letting the parent
-// in here is the whole point of the separation — the parent asks, the monitor
-// decides and records.
+// request is durable intake, then delivery — in that order, always.
 //
-// There is deliberately no route that lets the parent create or change a task
-// or a turn. Intake is the only write it has, and the reply says plainly
-// whether this was a fresh intake or a replay of one already accepted.
+// The instruction is stored here first, under the parent's stable request id.
+// Only then is the monitor's slot asked to take it as a turn, and the turn id
+// that comes back is written beside the stored item. That order is what makes
+// a lost response safe: the retry finds the stored item (receipt), and the
+// monitor finds "accepted but not forwarded" rather than guessing.
+//
+// A monitor that is asleep or frozen cannot take a turn, so the item stays
+// accepted and the monitor drains it when it comes back. Nothing is dropped
+// and nothing is reported as run that did not run.
+//
+// Only the parent may call it: the monitor writes its own records directly.
 func (m *Monitor) request(w http.ResponseWriter, r *http.Request) {
 	b, role, ok := m.resolve(w, r)
 	if !ok {
@@ -327,18 +383,228 @@ func (m *Monitor) request(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "body must be JSON with id and text", http.StatusBadRequest)
 		return
 	}
+	requestID := strings.TrimSpace(body.ID)
+	taskID := r.PathValue("taskID")
+	item, created, err := m.pairs.Accept(r.Context(), b.MonitorSessionID, requestID, taskID, body.Text, b.ParentSessionID)
+	if err != nil {
+		switch {
+		case errors.Is(err, monitorpair.ErrRequestReused):
+			http.Error(w, err.Error(), http.StatusConflict)
+		case errors.Is(err, monitorpair.ErrInvalidID), errors.Is(err, monitorpair.ErrInvalidBody):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		default:
+			m.logger.Error("monitor intake failed", "err", err)
+			http.Error(w, "intake failed", http.StatusBadGateway)
+		}
+		return
+	}
+	// Already forwarded: the receipt is the answer, and the slot is not asked
+	// again. This is the path a reconnecting client takes.
+	if item.State == monitorpair.InboxForwarded {
+		writeJSON(w, http.StatusOK, intakeView{Item: item, Replayed: true,
+			Monitor: m.monitorState(r.Context(), b)})
+		return
+	}
 	stored, err := m.mgr.CreateWorkRequest(r.Context(), b.MonitorSessionID, session.WorkRequestInput{
-		ID:           strings.TrimSpace(body.ID),
-		TaskID:       r.PathValue("taskID"),
+		ID:           requestID,
+		TaskID:       taskID,
 		Text:         body.Text,
 		Author:       b.ParentSessionID,
 		ChoiceTurnID: body.ChoiceTurnID,
 	})
 	if err != nil {
+		if errors.Is(err, session.ErrWorkUnavailable) {
+			// Durably accepted, not delivered. The monitor drains it on resume.
+			writeJSON(w, http.StatusAccepted, intakeView{Item: item, Replayed: !created,
+				Monitor: m.monitorState(r.Context(), b),
+				Note:    "accepted and held: the monitor is not running, and it will take this from its inbox when it resumes"})
+			return
+		}
+		if errors.Is(err, session.ErrWorkChoiceStale) || errors.Is(err, session.ErrInvalidInput) {
+			if refused, rErr := m.pairs.MarkRefused(r.Context(), b.MonitorSessionID, requestID, err.Error()); rErr == nil {
+				writeJSON(w, http.StatusConflict, intakeView{Item: refused, Monitor: m.monitorState(r.Context(), b)})
+				return
+			}
+		}
 		m.workErr(w, r, b, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, monitorRequestView{WorkRequestStored: stored, Monitor: m.monitorState(r.Context(), b)})
+	marked, err := m.pairs.MarkForwarded(r.Context(), b.MonitorSessionID, requestID, stored.Turn.ID, stored.Turn.SessionSeq)
+	if err != nil {
+		// The slot has it; the bookkeeping did not land. Say so rather than
+		// claim either outcome: the next drain reconciles from the slot.
+		m.logger.Warn("forwarded but not recorded", "request", requestID, "err", err)
+		writeJSON(w, http.StatusOK, intakeView{Item: item, Replayed: stored.Replayed, Turn: &stored.Turn,
+			Monitor: m.monitorState(r.Context(), b),
+			Note:    "the monitor's slot took this turn but the inbox record did not update; the next drain reconciles it"})
+		return
+	}
+	writeJSON(w, http.StatusOK, intakeView{Item: marked, Replayed: stored.Replayed, Turn: &stored.Turn,
+		Monitor: m.monitorState(r.Context(), b)})
+}
+
+type intakeView struct {
+	Item monitorpair.InboxItem `json:"item"`
+	// Replayed is the existing receipt: true when this instruction was already
+	// stored or already a turn, so a retry is never a second delegation.
+	Replayed bool              `json:"replayed"`
+	Turn     *session.WorkTurn `json:"turn,omitempty"`
+	Monitor  *monitorStateView `json:"monitor,omitempty"`
+	Note     string            `json:"note,omitempty"`
+}
+
+// requestStatus is the parent asking what happened to one instruction. It is a
+// read: it exposes state and history only and never runs or re-runs anything.
+func (m *Monitor) requestStatus(w http.ResponseWriter, r *http.Request) {
+	b, _, ok := m.resolve(w, r)
+	if !ok {
+		return
+	}
+	item, err := m.pairs.Item(r.Context(), b.MonitorSessionID, r.PathValue("requestID"))
+	if err != nil {
+		if errors.Is(err, monitorpair.ErrNotFound) {
+			http.Error(w, "no such request for this pair", http.StatusNotFound)
+			return
+		}
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, intakeView{Item: item, Monitor: m.monitorState(r.Context(), b)})
+}
+
+// inbox is the monitor draining what the parent sent while it was away.
+// Reading it claims nothing; the monitor claims an item by forwarding it.
+func (m *Monitor) inbox(w http.ResponseWriter, r *http.Request) {
+	b, role, ok := m.resolve(w, r)
+	if !ok {
+		return
+	}
+	if role != monitorpair.RoleMonitor {
+		http.Error(w, "only the monitor drains its own inbox", http.StatusForbidden)
+		return
+	}
+	items, err := m.pairs.Pending(r.Context(), b.MonitorSessionID)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if items == nil {
+		items = []monitorpair.InboxItem{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pending": items})
+}
+
+type forwardedReq struct {
+	// TurnID is the turn the slot made for this instruction — the existing
+	// handle, not a new identifier.
+	TurnID     int64  `json:"turnId"`
+	SessionSeq *int64 `json:"sessionSeq,omitempty"`
+}
+
+// markForwarded is the monitor saying "this is now turn N in my slot". It is
+// idempotent on the same turn, so a monitor that died between the slot write
+// and this call repeats it safely; a different turn for the same request is
+// refused, because that would be a second run.
+func (m *Monitor) markForwarded(w http.ResponseWriter, r *http.Request) {
+	b, role, ok := m.resolve(w, r)
+	if !ok {
+		return
+	}
+	if role != monitorpair.RoleMonitor {
+		http.Error(w, "only the monitor records its own delegation", http.StatusForbidden)
+		return
+	}
+	var body forwardedReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil || body.TurnID <= 0 {
+		http.Error(w, "body must be JSON with a positive turnId", http.StatusBadRequest)
+		return
+	}
+	item, err := m.pairs.MarkForwarded(r.Context(), b.MonitorSessionID, r.PathValue("requestID"), body.TurnID, body.SessionSeq)
+	if err != nil {
+		switch {
+		case errors.Is(err, monitorpair.ErrNotFound):
+			http.Error(w, "no such request for this pair", http.StatusNotFound)
+		case errors.Is(err, monitorpair.ErrRequestReused):
+			http.Error(w, err.Error(), http.StatusConflict)
+		default:
+			writeErr(w, err)
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, intakeView{Item: item})
+}
+
+type refusedReq struct {
+	Detail string `json:"detail"`
+}
+
+func (m *Monitor) markRefused(w http.ResponseWriter, r *http.Request) {
+	b, role, ok := m.resolve(w, r)
+	if !ok {
+		return
+	}
+	if role != monitorpair.RoleMonitor {
+		http.Error(w, "only the monitor refuses its own inbox items", http.StatusForbidden)
+		return
+	}
+	var body refusedReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil || strings.TrimSpace(body.Detail) == "" {
+		http.Error(w, "body must be JSON with a detail saying why", http.StatusBadRequest)
+		return
+	}
+	item, err := m.pairs.MarkRefused(r.Context(), b.MonitorSessionID, r.PathValue("requestID"), body.Detail)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, intakeView{Item: item})
+}
+
+type snapshotReq struct {
+	// Kind is "tasks" for the page or "turns" for one task's history, and Key
+	// is the task id for turns. Payload is the committed view as the slot
+	// serves it, so the parent reads exactly the same shape either way.
+	Kind    string          `json:"kind"`
+	Key     string          `json:"key"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+// publishSnapshot is the monitor pushing its own committed state after it
+// registers, changes or finishes work. That is what lets the parent read the
+// latest stored list, detail and history for work it never looked at, and
+// while the monitor is asleep.
+func (m *Monitor) publishSnapshot(w http.ResponseWriter, r *http.Request) {
+	b, role, ok := m.resolve(w, r)
+	if !ok {
+		return
+	}
+	if role != monitorpair.RoleMonitor {
+		http.Error(w, "only the monitor publishes its own state", http.StatusForbidden)
+		return
+	}
+	var body snapshotReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+		http.Error(w, "body must be JSON with kind, key and payload", http.StatusBadRequest)
+		return
+	}
+	kind := strings.TrimSpace(body.Kind)
+	if kind != snapshotTasks && kind != snapshotTurns {
+		http.Error(w, `kind must be "tasks" or "turns"`, http.StatusBadRequest)
+		return
+	}
+	if kind == snapshotTurns && strings.TrimSpace(body.Key) == "" {
+		http.Error(w, `"turns" needs the task id as key`, http.StatusBadRequest)
+		return
+	}
+	if len(body.Payload) == 0 {
+		http.Error(w, "payload is required", http.StatusBadRequest)
+		return
+	}
+	if err := m.pairs.PublishSnapshot(r.Context(), b.MonitorSessionID, kind, strings.TrimSpace(body.Key), string(body.Payload)); err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"published": kind, "key": body.Key})
 }
 
 // workErr keeps the "the monitor is not running" case distinguishable from a

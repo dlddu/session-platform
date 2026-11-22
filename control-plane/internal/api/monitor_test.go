@@ -365,14 +365,21 @@ func TestParentReadsStoredRecordsWhileTheMonitorIsFrozen(t *testing.T) {
 
 	// Intake is a different matter: it cannot be mirrored, so it is refused
 	// rather than silently dropped, and the reply says how to recover.
-	status, refused := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/tasks/task-moved/requests",
+	status, heldNow := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/tasks/task-moved/requests",
 		map[string]any{"id": "req-frozen", "text": "x"})
-	if status != http.StatusServiceUnavailable {
-		t.Fatalf("frozen intake = %d %+v, want 503", status, refused)
+	if status != http.StatusAccepted {
+		t.Fatalf("frozen intake = %d %+v, want 202 durable intake", status, heldNow)
 	}
-	mon, _ := refused["monitor"].(map[string]any)
+	heldItem, _ := heldNow["item"].(map[string]any)
+	if heldItem["state"] != "accepted" || heldItem["turnId"] != nil {
+		t.Fatalf("a held instruction must not claim a turn: %+v", heldNow)
+	}
+	mon, _ := heldNow["monitor"].(map[string]any)
 	if mon["intake"] != "refused" || mon["recovery"] == nil {
-		t.Fatalf("the refusal must name intake and recovery: %+v", refused)
+		t.Fatalf("the reply must still say the monitor is down and how to recover: %+v", heldNow)
+	}
+	if heldNow["note"] == nil {
+		t.Fatalf("a held instruction must say it is held, not run: %+v", heldNow)
 	}
 
 	// A binding the control plane never managed to read has no mirror to
@@ -418,5 +425,234 @@ func TestParentReadsStoredRecordsWhileTheMonitorIsFrozen(t *testing.T) {
 	ident.id = thirdParent.ID
 	if status, _ := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks", nil); status != http.StatusServiceUnavailable {
 		t.Fatalf("never-read binding = %d, want 503 rather than an empty list", status)
+	}
+}
+
+// snapshotOf is what the monitor publishes after a commit: the same shape the
+// slot serves, so the parent reads one format either way.
+func publishTasks(t *testing.T, srv *httptest.Server, tasks []map[string]any) {
+	t.Helper()
+	status, _ := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/snapshot", map[string]any{
+		"kind": "tasks", "payload": map[string]any{"tasks": tasks, "next_cursor": ""},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("publish tasks = %d", status)
+	}
+}
+
+// One real instruction end to end: the parent sends it, the control plane
+// stores it durably first, the monitor's slot takes it as a turn, the turn id
+// lands beside the stored item, and the parent can read the outcome.
+func TestOneInstructionGoesIntakeThenDelegationThenResult(t *testing.T) {
+	srv, stub, ident, pairs := monitorServer(t)
+	_, parent := createRaw(t, srv.URL, map[string]any{"name": "chat", "workloadType": "codex-chat"})
+	_, monitor := createRaw(t, srv.URL, map[string]any{
+		"name": "monitor", "workloadType": "codex-chat", "monitorFor": parent.ID})
+	if _, err := pairs.Bind(t.Context(), parent.ID, monitor.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	workFixture(stub)
+
+	ident.id = parent.ID
+	status, sent := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/tasks/task-moved/requests",
+		map[string]any{"id": "req-e2e", "text": "코멘트 전부 반영해 줘"})
+	if status != http.StatusOK {
+		t.Fatalf("intake = %d %+v", status, sent)
+	}
+	item, _ := sent["item"].(map[string]any)
+	if item["state"] != "forwarded" || item["turnId"] == nil {
+		t.Fatalf("a live monitor must have taken the turn: %+v", sent)
+	}
+	if sent["turn"] == nil {
+		t.Fatalf("the slot's turn is the handle and must come back: %+v", sent)
+	}
+	// Exactly one delegation reached the slot, under the parent's own key.
+	if len(stub.WorkRequests) != 1 || stub.WorkRequests[0].ID != "req-e2e" {
+		t.Fatalf("slot got %+v, want one request keyed req-e2e", stub.WorkRequests)
+	}
+	if stub.WorkRequests[0].Author != parent.ID {
+		t.Fatalf("author = %q, want the proved parent", stub.WorkRequests[0].Author)
+	}
+
+	// A reconnect replays the receipt and does not delegate again.
+	status, again := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/tasks/task-moved/requests",
+		map[string]any{"id": "req-e2e", "text": "코멘트 전부 반영해 줘"})
+	if status != http.StatusOK || again["replayed"] != true {
+		t.Fatalf("retry = %d %+v, want a replayed receipt", status, again)
+	}
+	if len(stub.WorkRequests) != 1 {
+		t.Fatalf("retry delegated again: %+v", stub.WorkRequests)
+	}
+
+	// The same id with different text is refused rather than overwriting what
+	// may already be running.
+	if status, _ := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/tasks/task-moved/requests",
+		map[string]any{"id": "req-e2e", "text": "something else"}); status != http.StatusConflict {
+		t.Fatalf("reused id with new text = %d, want 409", status)
+	}
+
+	// The parent can ask what happened to it, as a pure read.
+	status, view := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/requests/req-e2e", nil)
+	if status != http.StatusOK {
+		t.Fatalf("request status = %d %+v", status, view)
+	}
+	got, _ := view["item"].(map[string]any)
+	if got["state"] != "forwarded" || got["author"] != parent.ID {
+		t.Fatalf("request view = %+v", got)
+	}
+}
+
+// While the monitor is away the instruction is held, not dropped and not
+// faked: the parent sees "accepted", the monitor drains it on resume, and the
+// delegation happens exactly once even across a restart.
+func TestHeldInstructionIsDrainedOnceAfterRestart(t *testing.T) {
+	srv, stub, ident, pairs := monitorServer(t)
+	_, parent := createRaw(t, srv.URL, map[string]any{"name": "chat", "workloadType": "codex-chat"})
+	_, monitor := createRaw(t, srv.URL, map[string]any{
+		"name": "monitor", "workloadType": "codex-chat", "monitorFor": parent.ID})
+	if _, err := pairs.Bind(t.Context(), parent.ID, monitor.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	workFixture(stub)
+
+	// The monitor goes away.
+	freeze, err := http.Post(srv.URL+"/api/v1/sessions/"+monitor.ID+"/snapshot", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freeze.Body.Close()
+
+	ident.id = parent.ID
+	status, held := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/tasks/task-moved/requests",
+		map[string]any{"id": "req-held", "text": "재개하면 처리해 줘"})
+	if status != http.StatusAccepted {
+		t.Fatalf("held intake = %d %+v, want 202", status, held)
+	}
+	item, _ := held["item"].(map[string]any)
+	if item["state"] != "accepted" || item["turnId"] != nil {
+		t.Fatalf("a held item must not claim a turn: %+v", held)
+	}
+	if len(stub.WorkRequests) != 0 {
+		t.Fatalf("nothing should have reached the slot: %+v", stub.WorkRequests)
+	}
+	// Retrying while still away is still one item, still accepted.
+	if status, _ := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/tasks/task-moved/requests",
+		map[string]any{"id": "req-held", "text": "재개하면 처리해 줘"}); status != http.StatusAccepted {
+		t.Fatalf("second held intake = %d, want 202", status)
+	}
+
+	// The monitor comes back and drains its inbox.
+	ident.id = monitor.ID
+	status, inbox := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/inbox", nil)
+	pending, _ := inbox["pending"].([]any)
+	if status != http.StatusOK || len(pending) != 1 {
+		t.Fatalf("inbox = %d %+v, want exactly one pending", status, inbox)
+	}
+	// It delegates through the slot's own path and records the turn it got.
+	if status, _ := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/inbox/req-held/forwarded",
+		map[string]any{"turnId": 7, "sessionSeq": 3}); status != http.StatusOK {
+		t.Fatalf("mark forwarded = %d", status)
+	}
+	// A monitor that crashed after the slot write repeats the same call safely.
+	if status, _ := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/inbox/req-held/forwarded",
+		map[string]any{"turnId": 7}); status != http.StatusOK {
+		t.Fatalf("repeating the same turn = %d, want 200", status)
+	}
+	// Claiming a *different* turn for the same request would mean it ran
+	// twice, so it is refused.
+	if status, _ := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/inbox/req-held/forwarded",
+		map[string]any{"turnId": 8}); status != http.StatusConflict {
+		t.Fatalf("second turn for one request = %d, want 409", status)
+	}
+	// Drained: nothing is pending any more.
+	_, drained := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/inbox", nil)
+	if left, _ := drained["pending"].([]any); len(left) != 0 {
+		t.Fatalf("still pending after forwarding: %+v", drained)
+	}
+	// And the parent sees the delegation, with the slot's turn id.
+	ident.id = parent.ID
+	_, view := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/requests/req-held", nil)
+	got, _ := view["item"].(map[string]any)
+	if got["state"] != "forwarded" || got["turnId"] == nil {
+		t.Fatalf("parent view of a drained item = %+v", got)
+	}
+}
+
+// The parent's offline window does not depend on having read before: the
+// monitor publishes its committed state, so work the parent never looked at is
+// still there, with its history and the time it was published.
+func TestParentReadsPublishedStateItNeverFetchedBefore(t *testing.T) {
+	srv, stub, ident, pairs := monitorServer(t)
+	_, parent := createRaw(t, srv.URL, map[string]any{"name": "chat", "workloadType": "codex-chat"})
+	_, monitor := createRaw(t, srv.URL, map[string]any{
+		"name": "monitor", "workloadType": "codex-chat", "monitorFor": parent.ID})
+	if _, err := pairs.Bind(t.Context(), parent.ID, monitor.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	workFixture(stub)
+
+	// The monitor registers work and publishes it. The parent has never read.
+	ident.id = monitor.ID
+	publishTasks(t, srv, []map[string]any{
+		{"task": map[string]any{"id": "task-new", "title": "모니터가 등록한 작업", "status": "planned", "version": 1}, "turns_total": 1},
+	})
+	if status, _ := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/snapshot", map[string]any{
+		"kind": "turns", "key": "task-new",
+		"payload": map[string]any{
+			"task_id": "task-new", "task_version": 1,
+			"task":  map[string]any{"id": "task-new", "title": "모니터가 등록한 작업", "status": "planned", "version": 1},
+			"turns": []map[string]any{{"id": 1, "task_id": "task-new", "requested_at": "2026-11-22T00:00:00Z"}},
+		},
+	}); status != http.StatusOK {
+		t.Fatalf("publish turns failed")
+	}
+
+	// Now the monitor goes away, and the parent looks for the first time.
+	freeze, err := http.Post(srv.URL+"/api/v1/sessions/"+monitor.ID+"/snapshot", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freeze.Body.Close()
+
+	ident.id = parent.ID
+	status, page := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks", nil)
+	if status != http.StatusOK || page["source"] != "published" || page["asOf"] == nil {
+		t.Fatalf("first-ever read while frozen = %d %+v", status, page)
+	}
+	tasks, _ := page["tasks"].([]any)
+	if len(tasks) != 1 {
+		t.Fatalf("published tasks not served: %+v", page)
+	}
+	status, turns := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks/task-new/turns", nil)
+	if status != http.StatusOK || turns["source"] != "published" {
+		t.Fatalf("published history = %d %+v", status, turns)
+	}
+
+	// Reading again changes nothing — not the payload, not the published time.
+	_, againPage := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks", nil)
+	if againPage["asOf"] != page["asOf"] {
+		t.Fatalf("a read moved the published time: %v -> %v", page["asOf"], againPage["asOf"])
+	}
+	a, _ := json.Marshal(page["tasks"])
+	b2, _ := json.Marshal(againPage["tasks"])
+	if string(a) != string(b2) {
+		t.Fatalf("a read changed the records")
+	}
+
+	// Another pair's parent cannot see it.
+	_, otherParent := createRaw(t, srv.URL, map[string]any{"name": "other", "workloadType": "codex-chat"})
+	_, otherMonitor := createRaw(t, srv.URL, map[string]any{
+		"name": "other-monitor", "workloadType": "codex-chat", "monitorFor": otherParent.ID})
+	if _, err := pairs.Bind(t.Context(), otherParent.ID, otherMonitor.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	frozen, err := http.Post(srv.URL+"/api/v1/sessions/"+otherMonitor.ID+"/snapshot", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen.Body.Close()
+	ident.id = otherParent.ID
+	if status, _ := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks", nil); status != http.StatusServiceUnavailable {
+		t.Fatalf("another pair's parent saw something: %d", status)
 	}
 }

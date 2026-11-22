@@ -84,3 +84,37 @@ func TestSeparateBindingsStayApart(t *testing.T) {
 		t.Fatalf("parentB resolved to %+v, %v", b, err)
 	}
 }
+
+// The monitor publishes its committed state; reading it back is exact, keyed
+// per view, and scoped to that monitor.
+func TestPublishedSnapshotRoundTripsPerKindAndKey(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	if err := s.PublishSnapshot(ctx, "monitor1", "tasks", "", `{"tasks":[1]}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PublishSnapshot(ctx, "monitor1", "turns", "task-new", `{"turns":[2]}`); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := s.Snapshot(ctx, "monitor1", "tasks", "")
+	if err != nil || tasks.Payload != `{"tasks":[1]}` {
+		t.Fatalf("tasks snapshot = %+v, %v", tasks, err)
+	}
+	turns, err := s.Snapshot(ctx, "monitor1", "turns", "task-new")
+	if err != nil || turns.Payload != `{"turns":[2]}` {
+		t.Fatalf("turns snapshot = %+v, %v", turns, err)
+	}
+	if _, err := s.Snapshot(ctx, "monitor1", "turns", "other-task"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an unpublished key = %v, want ErrNotFound", err)
+	}
+	if _, err := s.Snapshot(ctx, "monitor2", "tasks", ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another monitor saw the snapshot: %v", err)
+	}
+	// Republishing replaces the view rather than appending a second one.
+	if err := s.PublishSnapshot(ctx, "monitor1", "tasks", "", `{"tasks":[1,2]}`); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Snapshot(ctx, "monitor1", "tasks", ""); got.Payload != `{"tasks":[1,2]}` {
+		t.Fatalf("republish = %+v", got)
+	}
+}
