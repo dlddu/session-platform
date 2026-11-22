@@ -22,6 +22,8 @@
 
 | 판정일 | 범위 | 주석 줄 | 지문 | 판정 | 결과 |
 | --- | --- | ---: | --- | --- | --- |
+| 2026-11-22 | `control-plane/internal/worktasks/store.go` | 59 | `51ee9f609631` | — | 등록 — 2026-11-22 신규 파일(모니터 소유 작업 원장 저장소 계층). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
+| 2026-11-22 | `control-plane/internal/worktasks/store_test.go` | 15 | `c239fb383aa5` | — | 등록 — 2026-11-22 신규 파일(모니터 소유 작업 원장 저장소 계층). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
 | 2026-11-02 | `.github/workflows/e2e.yml` | 48 | `8eece10779d1` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. *2026-11-10 재측정(k3s 부트스트랩 구조 이전 — `k8s/`→`deploy/base/`·`deploy/`→`deploy/overlays/e2e/` 이동, ci.yml → pr·test·image.yml 재편): 경로 문자열·워크플로 이름만 바뀐 주석 갱신 — 51→48줄. 판정하지 않았다 — 판정 칸 `—`.* |
 | 2026-11-10 | `.github/workflows/image.yml` | 54 | `995c1534a60d` | — | 등록 — 2026-11-10 신규 파일(k3s 부트스트랩 구조 이전 — `k8s/`→`deploy/base/`·`deploy/`→`deploy/overlays/e2e/` 이동, ci.yml → pr·test·image.yml 재편). 필요성 기준 판정 대기. |
 | 2026-11-10 | `.github/workflows/pr.yml` | 32 | `f106a9306066` | — | 등록 — 2026-11-10 신규 파일(k3s 부트스트랩 구조 이전 — `k8s/`→`deploy/base/`·`deploy/`→`deploy/overlays/e2e/` 이동, ci.yml → pr·test·image.yml 재편). 필요성 기준 판정 대기. |
@@ -308,6 +310,7 @@ as-is 지문과 달랐다 — 포함 목록(`control-plane`·`data-plane`·`web/
 <!-- 판정-원장-E -->
 | 판정일 | 범위 | 주석 줄 | 지문 | 판정 | 결과 |
 | --- | --- | ---: | --- | --- | --- |
+| 2026-11-22 | `control-plane/internal/worktasks/store_test.go` | 3 | `d75fbb71ca91` | — | 등록 — 2026-11-22 신규 파일(모니터 소유 작업 원장 저장소 계층). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
 | 2026-11-10 | `.github/workflows/e2e.yml` | 2 | `f34f02b3a822` | — | 등록 — 2026-11-10 이 표면에 처음 든 주석(셸 지시 주석 2줄; k3s 부트스트랩 구조 이전 — `k8s/`→`deploy/base/`·`deploy/`→`deploy/overlays/e2e/` 이동, ci.yml → pr·test·image.yml 재편). 필요성 기준 판정 대기. |
 | 2026-11-10 | `.github/workflows/pr.yml` | 1 | `7aed60995452` | — | 등록 — 2026-11-10 신규 파일(k3s 부트스트랩 구조 이전 — `k8s/`→`deploy/base/`·`deploy/`→`deploy/overlays/e2e/` 이동, ci.yml → pr·test·image.yml 재편). 필요성 기준 판정 대기. |
 | 2026-11-04 | `control-plane/cmd/control-plane/main.go` | 1 | `ecf3c7b43b24` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 지문 표면 개정(L + D·E)으로 판정 범위에 들어온 표면. |
