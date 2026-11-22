@@ -413,6 +413,24 @@ func isWorkTool(name string) bool {
 	return false
 }
 
+// pairRoleParent is the value the control plane puts on a session whose work
+// its bound monitor owns.
+const pairRoleParent = "parent"
+
+// refuseWorkWriteForPairedParent is the server-side boundary for the separated
+// monitor: every tool isWorkMutation names — task_put, task_delete,
+// turn_append, turn_patch, turn_dispatch, the task book put and the monitor
+// record writes — is refused for a paired parent. Dispatching a worker is in
+// that set, so the parent cannot instruct a work session directly either.
+func refuseWorkWriteForPairedParent(role, name string) error {
+	if role != pairRoleParent || !isWorkMutation(name) {
+		return nil
+	}
+	return workFail("permission_denied", "this session's work is owned by its monitor; "+name+
+		" is the monitor's to call. Send an instruction with the monitor_pair request_send tool instead, "+
+		"and read with task_get, task_list or turn_list")
+}
+
 // workMutations are the tools whose answer is replayed from a receipt. A tool
 // that is not here reads and is therefore safe to repeat.
 func isWorkMutation(name string) bool {
@@ -587,6 +605,14 @@ func storeWorkReceipt(ctx context.Context, tx *sql.Tx, requestID, fingerprint st
 // work runs one tool in its own transaction, so a record and the receipt that
 // makes it replayable commit together or not at all.
 func (s *sessionDB) work(ctx context.Context, name string, a workArgs) (any, error) {
+	// A paired parent owns no work: its monitor does. The refusal is here, in
+	// front of the transaction, so a call that names a write tool directly has
+	// no effect at all — the list it was left out of is a convenience, this is
+	// the boundary. Reads fall through untouched, and an unpaired or legacy
+	// session has no role and is not affected.
+	if err := refuseWorkWriteForPairedParent(s.pairRole, name); err != nil {
+		return nil, err
+	}
 	if err := validateWork(name, a); err != nil {
 		return nil, err
 	}

@@ -34,7 +34,12 @@ const (
 	// k8s.MonitorPairTokenFileEnvVar). Keep the names in sync.
 	monitorPairURLEnv       = "MONITOR_PAIR_URL"
 	monitorPairTokenFileEnv = "MONITOR_PAIR_TOKEN_FILE"
-	monitorMCPTimeout       = 30 * time.Second
+	// monitorPairRoleEnv is the control plane's own statement of this
+	// session's side of the pair. The sidecar that serves the work records has
+	// no pair token and cannot ask, so the role has to arrive as configuration
+	// — and configuration the model cannot set.
+	monitorPairRoleEnv = "MONITOR_PAIR_ROLE"
+	monitorMCPTimeout  = 30 * time.Second
 )
 
 type monitorMCPServer struct {

@@ -104,6 +104,12 @@ func main() {
 
 	// The store is built below; pods are only built once it is set.
 	var autoArchiveStore *checkpointstore.S3
+	pairs, err := openMonitorPairs(context.Background(), cfg.monitorPair)
+	if err != nil {
+		logger.Error("monitor pair store unavailable", "err", err)
+		os.Exit(1)
+	}
+	defer pairs.close()
 	orch := k8s.NewClientOrchestrator(client, namespace,
 		k8s.WithAutoArchive(func(sessionID, pod string) (string, error) {
 			if autoArchiveStore == nil {
@@ -131,6 +137,7 @@ func main() {
 		k8s.WithHighMemoryPlacement(cfg.highMemoryNodeSelector, cfg.highMemoryTolerations),
 		k8s.WithRepoAccess(cfg.repoAccess.helperURL(namespace)),
 		k8s.WithMonitorPair(cfg.monitorPair.workloadURL(namespace)),
+		k8s.WithMonitorPairRoles(pairs.roleOf),
 		k8s.WithDropURL(cfg.dropURL))
 	store := configmap.NewStore(client, namespace)
 	// Shell I/O (write→stdin, read→scrollback delta) AND checkpoint/restore ride
@@ -234,12 +241,6 @@ func main() {
 	}
 	defer repoAccess.close()
 	repoAccess.routes(mux, client, namespace, mgr, logger)
-	pairs, err := openMonitorPairs(context.Background(), cfg.monitorPair)
-	if err != nil {
-		logger.Error("monitor pair store unavailable", "err", err)
-		os.Exit(1)
-	}
-	defer pairs.close()
 	pairs.routes(mux, client, namespace, mgr, logger)
 	mux.Handle("/", static.Handler())
 

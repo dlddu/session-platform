@@ -224,12 +224,13 @@ type ClientOrchestrator struct {
 	client                   kubernetes.Interface
 	namespace                string
 	image                    string
-	claudeCredentialsSecret  string // platform Secret referenced by claude-code pods
-	claudeConfigConfigMap    string // its non-credential counterpart
-	approvalGatewayURL       string // PocketAide base URL handed to gated helper pods
-	repoAccessURL            string // control plane URL for the helper's repo access calls (repo_access.go)
-	monitorPairURL           string // control plane URL for the session's monitor-pair calls (monitor_pair.go)
-	dropURL                  string // drop's in-cluster URL for the helper's drop_* tools (drop.go)
+	claudeCredentialsSecret  string                        // platform Secret referenced by claude-code pods
+	claudeConfigConfigMap    string                        // its non-credential counterpart
+	approvalGatewayURL       string                        // PocketAide base URL handed to gated helper pods
+	repoAccessURL            string                        // control plane URL for the helper's repo access calls (repo_access.go)
+	monitorPairURL           string                        // control plane URL for the session's monitor-pair calls (monitor_pair.go)
+	monitorPairRoleOf        func(sessionID string) string // the pair store's view of a session's role
+	dropURL                  string                        // drop's in-cluster URL for the helper's drop_* tools (drop.go)
 	miniMaxCredentialsSecret string
 	miniMaxConfigConfigMap   string
 	codexCredentialsSecret   string
@@ -700,6 +701,16 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 	}
 	volumes = append(volumes, slotVolumes...)
 	initContainers, err := attachSessionDB(&container, sidecars, workloadType, image, o.codexProfileFor(workloadType).configConfigMap)
+	// The work surface runs in the loopback sidecar, which holds no pair
+	// token and so cannot ask what role this session has. The control plane
+	// tells it here, from the session record and its own pair store.
+	if roleEnv := o.monitorPairRoleEnv(sessionID); len(roleEnv) > 0 {
+		for i := range sidecars {
+			if sidecars[i].Name == K3SMCPProxyContainerName {
+				sidecars[i].Env = append(sidecars[i].Env, roleEnv...)
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

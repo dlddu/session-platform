@@ -92,3 +92,16 @@ func (mp monitorPairs) close() {
 		_ = mp.store.Close()
 	}
 }
+
+// roleOf is the lookup the orchestrator uses to tell a pod its side of the
+// pair. It reads the control plane's own store and nothing else.
+func (mp monitorPairs) roleOf(sessionID string) string {
+	if mp.store == nil {
+		return ""
+	}
+	_, role, err := mp.store.For(context.Background(), sessionID)
+	if err != nil {
+		return ""
+	}
+	return string(role)
+}
