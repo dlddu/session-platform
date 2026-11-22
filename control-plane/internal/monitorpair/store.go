@@ -88,6 +88,11 @@ CREATE TABLE IF NOT EXISTS bindings (
   monitor_session_id TEXT NOT NULL UNIQUE,
   tenant             TEXT NOT NULL,
   created_at         INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mirror (
+  monitor_session_id TEXT PRIMARY KEY,
+  payload            TEXT NOT NULL,
+  mirrored_at        INTEGER NOT NULL
 );`
 	_, err := s.db.ExecContext(ctx, schema)
 	return err
@@ -186,4 +191,57 @@ func (s *Store) lookup(ctx context.Context, column, value string) (Binding, erro
 	}
 	b.CreatedAt = time.Unix(created, 0).UTC()
 	return b, nil
+}
+
+// Mirror is the last page of work records the control plane managed to read
+// from a monitor's slot, with the time it read them.
+//
+// It is **not** a second write origin: only a successful read of the slot
+// writes it, nothing here ever flows back to the slot, and it is served only
+// with its own `asOf` so a reader can never mistake it for live state. It
+// exists because the parent must still see its list, detail, history and last
+// update time while the monitor is frozen or stopped — the slot's SQLite is
+// reachable only through that session's own sidecar, so when the pod is gone
+// there is nothing to proxy to.
+type Mirror struct {
+	Payload    string    `json:"payload"`
+	MirroredAt time.Time `json:"mirroredAt"`
+}
+
+// RecordMirror stores the payload of a successful live read. The monitor ID is
+// the one the API proved and resolved, so a caller cannot seed another pair's
+// mirror.
+func (s *Store) RecordMirror(ctx context.Context, monitorSessionID, payload string) error {
+	if !validID(monitorSessionID) {
+		return ErrInvalidID
+	}
+	if payload == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO mirror (monitor_session_id, payload, mirrored_at) VALUES (?, ?, ?)
+ON CONFLICT (monitor_session_id) DO UPDATE SET payload = ?, mirrored_at = ?`,
+		monitorSessionID, payload, s.now().Truncate(time.Second).Unix(), payload, s.now().Truncate(time.Second).Unix())
+	return err
+}
+
+// LastMirror returns the stored read, or ErrNotFound when the control plane
+// has never managed to read this monitor's slot — which the parent must be
+// told rather than shown an empty list.
+func (s *Store) LastMirror(ctx context.Context, monitorSessionID string) (Mirror, error) {
+	if !validID(monitorSessionID) {
+		return Mirror{}, ErrInvalidID
+	}
+	var m Mirror
+	var at int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT payload, mirrored_at FROM mirror WHERE monitor_session_id = ?`, monitorSessionID).Scan(&m.Payload, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Mirror{}, ErrNotFound
+	}
+	if err != nil {
+		return Mirror{}, err
+	}
+	m.MirroredAt = time.Unix(at, 0).UTC()
+	return m, nil
 }

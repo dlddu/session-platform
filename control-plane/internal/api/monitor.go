@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dlddu/session-platform/control-plane/internal/helperauth"
 	"github.com/dlddu/session-platform/control-plane/internal/monitorpair"
@@ -18,6 +19,8 @@ import (
 type MonitorPairs interface {
 	Bind(ctx context.Context, parentSessionID, monitorSessionID, tenant string) (monitorpair.Binding, error)
 	For(ctx context.Context, sessionID string) (monitorpair.Binding, monitorpair.Role, error)
+	RecordMirror(ctx context.Context, monitorSessionID, payload string) error
+	LastMirror(ctx context.Context, monitorSessionID string) (monitorpair.Mirror, error)
 }
 
 // SessionIdentity proves which session a request comes from. It is the same
@@ -206,6 +209,12 @@ func (m *Monitor) bindPair(w http.ResponseWriter, r *http.Request) {
 type tasksView struct {
 	session.WorkTaskPage
 	Monitor *monitorStateView `json:"monitor,omitempty"`
+	// Source is "slot" for a live read of the monitor's own records and
+	// "mirror" for the last read the control plane managed to take. AsOf is
+	// set only for a mirror, so a reader always knows how old the answer is
+	// and can never mistake stored records for live ones.
+	Source string     `json:"source"`
+	AsOf   *time.Time `json:"asOf,omitempty"`
 }
 
 // tasks is the parent's window on the work: one keyset page of the monitor's
@@ -226,10 +235,32 @@ func (m *Monitor) tasks(w http.ResponseWriter, r *http.Request) {
 	page, err := m.mgr.WorkTasks(r.Context(), b.MonitorSessionID, limit,
 		strings.TrimSpace(q.Get("after_id")), strings.TrimSpace(q.Get("status")), "")
 	if err != nil {
+		// A monitor that is frozen, stopped or gone has no pod to proxy to.
+		// The parent still needs its list, so the last read the control plane
+		// took is served — labelled, timestamped, and only to this binding.
+		if errors.Is(err, session.ErrWorkUnavailable) {
+			if stored, mErr := m.pairs.LastMirror(r.Context(), b.MonitorSessionID); mErr == nil {
+				var mirrored session.WorkTaskPage
+				if json.Unmarshal([]byte(stored.Payload), &mirrored) == nil {
+					at := stored.MirroredAt
+					writeJSON(w, http.StatusOK, tasksView{WorkTaskPage: mirrored,
+						Monitor: m.monitorState(r.Context(), b), Source: "mirror", AsOf: &at})
+					return
+				}
+			}
+		}
 		m.workErr(w, r, b, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, tasksView{WorkTaskPage: page, Monitor: m.monitorState(r.Context(), b)})
+	// Keep the mirror current from the live read. This is the only writer of
+	// the mirror, and it never writes back to the slot.
+	if raw, mErr := json.Marshal(page); mErr == nil {
+		if err := m.pairs.RecordMirror(r.Context(), b.MonitorSessionID, string(raw)); err != nil {
+			m.logger.Warn("could not mirror the monitor's work records", "monitor", b.MonitorSessionID, "err", err)
+		}
+	}
+	writeJSON(w, http.StatusOK, tasksView{WorkTaskPage: page,
+		Monitor: m.monitorState(r.Context(), b), Source: "slot"})
 }
 
 func (m *Monitor) turns(w http.ResponseWriter, r *http.Request) {

@@ -25,9 +25,9 @@
 | 2026-11-22 | `control-plane/internal/adapter/k8s/monitor_pair.go` | 22 | `3d02ad5266cc` | — | 등록 — 2026-11-22 신규 파일(모니터 페어 프로덕션 배선·토큰 투영). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
 | 2026-11-22 | `control-plane/internal/adapter/k8s/monitor_pair_test.go` | 6 | `c274ddd1cf33` | — | 등록 — 2026-11-22 신규 파일(모니터 페어 프로덕션 배선·토큰 투영). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
 | 2026-11-22 | `control-plane/cmd/control-plane/monitor_pair.go` | 16 | `27397b22a463` | — | 등록 — 2026-11-22 신규 파일(모니터 페어 프로덕션 배선·토큰 투영). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
-| 2026-11-22 | `control-plane/internal/api/monitor.go` | 55 | `5eb6db0d8477` | — | 등록 — 2026-11-22 신규 파일(부모↔모니터 페어 역할 인식 라우팅). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
-| 2026-11-22 | `control-plane/internal/api/monitor_test.go` | 42 | `ed2716d033ad` | — | 등록 — 2026-11-22 신규 파일(부모↔모니터 페어 역할 인식 라우팅). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
-| 2026-11-22 | `control-plane/internal/monitorpair/store.go` | 34 | `3606f9d79c65` | — | 등록 — 2026-11-22 신규 파일(모니터 소유 작업 원장 저장소 계층). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
+| 2026-11-22 | `control-plane/internal/api/monitor.go` | 64 | `0d8c451e39d6` | — | 등록 — 2026-11-22 신규 파일(부모↔모니터 페어 역할 인식 라우팅). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
+| 2026-11-22 | `control-plane/internal/api/monitor_test.go` | 58 | `abf03806c506` | — | 등록 — 2026-11-22 신규 파일(부모↔모니터 페어 역할 인식 라우팅). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
+| 2026-11-22 | `control-plane/internal/monitorpair/store.go` | 50 | `fb7db0fadbd0` | — | 등록 — 2026-11-22 신규 파일(모니터 소유 작업 원장 저장소 계층). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
 | 2026-11-22 | `control-plane/internal/monitorpair/store_test.go` | 4 | `0378c4c81514` | — | 등록 — 2026-11-22 신규 파일(모니터 소유 작업 원장 저장소 계층). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
 | 2026-11-02 | `.github/workflows/e2e.yml` | 48 | `8eece10779d1` | — | 등록 — 필요성 기준(한 문장 필요 사유) 판정 대기. 2026-09-26 범위 개정(포함 목록 → 레포 전체 − 제외)으로 판정 범위에 들어온 파일. *2026-11-10 재측정(k3s 부트스트랩 구조 이전 — `k8s/`→`deploy/base/`·`deploy/`→`deploy/overlays/e2e/` 이동, ci.yml → pr·test·image.yml 재편): 경로 문자열·워크플로 이름만 바뀐 주석 갱신 — 51→48줄. 판정하지 않았다 — 판정 칸 `—`.* |
 | 2026-11-10 | `.github/workflows/image.yml` | 54 | `995c1534a60d` | — | 등록 — 2026-11-10 신규 파일(k3s 부트스트랩 구조 이전 — `k8s/`→`deploy/base/`·`deploy/`→`deploy/overlays/e2e/` 이동, ci.yml → pr·test·image.yml 재편). 필요성 기준 판정 대기. |

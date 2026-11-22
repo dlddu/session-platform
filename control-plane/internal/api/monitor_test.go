@@ -317,3 +317,106 @@ func createStatus(t *testing.T, base string, body map[string]any) (int, map[stri
 	_ = json.NewDecoder(resp.Body).Decode(&out)
 	return resp.StatusCode, out
 }
+
+// The parent keeps its window while the monitor is frozen: the control plane
+// serves the last read it took, labelled as a mirror with its own timestamp,
+// and says plainly that intake is refused and how to recover.
+func TestParentReadsStoredRecordsWhileTheMonitorIsFrozen(t *testing.T) {
+	srv, stub, ident, pairs := monitorServer(t)
+	_, parent := createRaw(t, srv.URL, map[string]any{"name": "chat", "workloadType": "codex-chat"})
+	_, monitor := createRaw(t, srv.URL, map[string]any{
+		"name": "monitor", "workloadType": "codex-chat", "monitorFor": parent.ID})
+	if _, err := pairs.Bind(t.Context(), parent.ID, monitor.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	workFixture(stub)
+	ident.id = parent.ID
+
+	// A live read fills the mirror.
+	status, live := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks", nil)
+	if status != http.StatusOK || live["source"] != "slot" {
+		t.Fatalf("live read = %d %+v", status, live)
+	}
+	liveTasks, _ := json.Marshal(live["tasks"])
+
+	// Freeze the monitor for real: snapshot it through the product API, so its
+	// pod is gone and there is nothing to proxy to.
+	freeze, err := http.Post(srv.URL+"/api/v1/sessions/"+monitor.ID+"/snapshot", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freeze.Body.Close()
+	if freeze.StatusCode != http.StatusOK && freeze.StatusCode != http.StatusAccepted {
+		t.Fatalf("snapshot = %d", freeze.StatusCode)
+	}
+	status, stored := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks", nil)
+	if status != http.StatusOK {
+		t.Fatalf("frozen read = %d %+v; the parent must still see its list", status, stored)
+	}
+	if stored["source"] != "mirror" {
+		t.Fatalf("source = %v, want mirror", stored["source"])
+	}
+	if stored["asOf"] == nil {
+		t.Fatalf("a mirror must carry its own timestamp: %+v", stored)
+	}
+	if got, _ := json.Marshal(stored["tasks"]); string(got) != string(liveTasks) {
+		t.Fatalf("mirror lost records:\n%s\n%s", got, liveTasks)
+	}
+
+	// Intake is a different matter: it cannot be mirrored, so it is refused
+	// rather than silently dropped, and the reply says how to recover.
+	status, refused := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/tasks/task-moved/requests",
+		map[string]any{"id": "req-frozen", "text": "x"})
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("frozen intake = %d %+v, want 503", status, refused)
+	}
+	mon, _ := refused["monitor"].(map[string]any)
+	if mon["intake"] != "refused" || mon["recovery"] == nil {
+		t.Fatalf("the refusal must name intake and recovery: %+v", refused)
+	}
+
+	// A binding the control plane never managed to read has no mirror to
+	// serve, which the parent is told instead of being shown an empty list.
+	_, otherParent := createRaw(t, srv.URL, map[string]any{"name": "chat2", "workloadType": "codex-chat"})
+	_, otherMonitor := createRaw(t, srv.URL, map[string]any{
+		"name": "monitor2", "workloadType": "codex-chat", "monitorFor": otherParent.ID})
+	if _, err := pairs.Bind(t.Context(), otherParent.ID, otherMonitor.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	// While that monitor is up the read is live and simply empty — that is a
+	// real answer, not a mirror.
+	ident.id = otherParent.ID
+	status, empty := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks", nil)
+	if status != http.StatusOK || empty["source"] != "slot" {
+		t.Fatalf("live empty read = %d %+v", status, empty)
+	}
+	// That read, empty as it was, is now the stored answer: freezing the
+	// monitor afterwards serves it as a mirror, not as live state.
+	frozen2, err := http.Post(srv.URL+"/api/v1/sessions/"+otherMonitor.ID+"/snapshot", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen2.Body.Close()
+	status, mirroredEmpty := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks", nil)
+	if status != http.StatusOK || mirroredEmpty["source"] != "mirror" || mirroredEmpty["asOf"] == nil {
+		t.Fatalf("frozen read after an empty live read = %d %+v", status, mirroredEmpty)
+	}
+
+	// A pair the control plane never managed to read has nothing stored, so
+	// the parent is told rather than shown an empty list it might trust.
+	_, thirdParent := createRaw(t, srv.URL, map[string]any{"name": "chat3", "workloadType": "codex-chat"})
+	_, thirdMonitor := createRaw(t, srv.URL, map[string]any{
+		"name": "monitor3", "workloadType": "codex-chat", "monitorFor": thirdParent.ID})
+	if _, err := pairs.Bind(t.Context(), thirdParent.ID, thirdMonitor.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	frozen3, err := http.Post(srv.URL+"/api/v1/sessions/"+thirdMonitor.ID+"/snapshot", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen3.Body.Close()
+	ident.id = thirdParent.ID
+	if status, _ := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks", nil); status != http.StatusServiceUnavailable {
+		t.Fatalf("never-read binding = %d, want 503 rather than an empty list", status)
+	}
+}
