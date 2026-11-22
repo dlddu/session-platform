@@ -90,6 +90,7 @@ func main() {
 		"claude_code_default_model", cfg.claudeCodeDefaultModel,
 		"claude_code_models", len(cfg.claudeCodeModels),
 		"repo_access_enabled", cfg.repoAccess.enabled,
+		"monitor_pair_enabled", cfg.monitorPair.enabled,
 		"drop_url", cfg.dropURL,
 		"high_memory_node_selector", cfg.highMemoryNodeSelector,
 		"high_memory_tolerations", len(cfg.highMemoryTolerations),
@@ -129,6 +130,7 @@ func main() {
 		k8s.WithSharedVolume(cfg.sharedVolumeStorageClass, cfg.sharedVolumeSize),
 		k8s.WithHighMemoryPlacement(cfg.highMemoryNodeSelector, cfg.highMemoryTolerations),
 		k8s.WithRepoAccess(cfg.repoAccess.helperURL(namespace)),
+		k8s.WithMonitorPair(cfg.monitorPair.workloadURL(namespace)),
 		k8s.WithDropURL(cfg.dropURL))
 	store := configmap.NewStore(client, namespace)
 	// Shell I/O (write→stdin, read→scrollback delta) AND checkpoint/restore ride
@@ -232,6 +234,13 @@ func main() {
 	}
 	defer repoAccess.close()
 	repoAccess.routes(mux, client, namespace, mgr, logger)
+	pairs, err := openMonitorPairs(context.Background(), cfg.monitorPair)
+	if err != nil {
+		logger.Error("monitor pair store unavailable", "err", err)
+		os.Exit(1)
+	}
+	defer pairs.close()
+	pairs.routes(mux, client, namespace, mgr, logger)
 	mux.Handle("/", static.Handler())
 
 	srv := &http.Server{
@@ -326,6 +335,7 @@ type config struct {
 	claudeAuth              claudeAuthConfig
 	tenancy                 tenancyConfig
 	repoAccess              repoAccessConfig
+	monitorPair             monitorPairConfig
 	dropURL                 string // drop's in-cluster URL for helper pods (docs/prd/drop-file-share.md AC-I2)
 }
 
@@ -475,6 +485,7 @@ func loadConfig() (config, error) {
 		claudeAuth:               claudeAuth,
 		tenancy:                  tenants,
 		repoAccess:               loadRepoAccessConfig(),
+		monitorPair:              loadMonitorPairConfig(),
 		dropURL:                  env("DROP_URL", ""),
 	}, nil
 }

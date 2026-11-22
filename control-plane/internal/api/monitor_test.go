@@ -90,11 +90,11 @@ func monitorCall(t *testing.T, srv *httptest.Server, method, path string, body a
 func TestMonitorPairIsClaimedByTheMonitorAndSurvivesRestart(t *testing.T) {
 	srv, _, ident, _ := monitorServer(t)
 	_, parent := createRaw(t, srv.URL, map[string]any{"name": "chat", "workloadType": "codex-chat"})
-	_, monitor := createRaw(t, srv.URL, map[string]any{"name": "monitor", "workloadType": "codex-chat"})
+	_, monitor := createRaw(t, srv.URL, map[string]any{
+		"name": "monitor", "workloadType": "codex-chat", "monitorFor": parent.ID})
 
 	ident.id = monitor.ID
-	status, first := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/pair",
-		map[string]any{"parentSessionId": parent.ID})
+	status, first := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/pair", nil)
 	if status != http.StatusOK {
 		t.Fatalf("bind = %d %+v", status, first)
 	}
@@ -102,8 +102,7 @@ func TestMonitorPairIsClaimedByTheMonitorAndSurvivesRestart(t *testing.T) {
 		t.Fatalf("role = %v, want monitor", first["role"])
 	}
 	// A restarted monitor repeats the call; the binding must be the same one.
-	_, again := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/pair",
-		map[string]any{"parentSessionId": parent.ID})
+	_, again := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/pair", nil)
 	b1, _ := first["binding"].(map[string]any)
 	b2, _ := again["binding"].(map[string]any)
 	if b1["createdAt"] != b2["createdAt"] || b1["monitorSessionId"] != b2["monitorSessionId"] {
@@ -243,4 +242,78 @@ func TestMonitorRoutesAreOffWithoutTheStore(t *testing.T) {
 	if status, _ := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/pair", nil); status != http.StatusServiceUnavailable {
 		t.Fatalf("disabled deployment = %d, want 503", status)
 	}
+}
+
+// A workload cannot bind a parent slot by asking: the parent comes from the
+// record the control plane wrote at create time, so a session created without
+// one binds nothing, and a body naming someone else is not read at all.
+func TestMonitorCannotBindAnArbitraryParentSlot(t *testing.T) {
+	srv, _, ident, _ := monitorServer(t)
+	_, victim := createRaw(t, srv.URL, map[string]any{"name": "victim-chat", "workloadType": "codex-chat"})
+	_, mine := createRaw(t, srv.URL, map[string]any{"name": "my-chat", "workloadType": "codex-chat"})
+	_, loose := createRaw(t, srv.URL, map[string]any{"name": "loose", "workloadType": "codex-chat"})
+	_, bound := createRaw(t, srv.URL, map[string]any{
+		"name": "monitor", "workloadType": "codex-chat", "monitorFor": mine.ID})
+
+	// No recorded pair: nothing to bind, whatever the body says.
+	ident.id = loose.ID
+	if status, _ := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/pair",
+		map[string]any{"parentSessionId": victim.ID}); status != http.StatusForbidden {
+		t.Fatalf("unassigned workload bind = %d, want 403", status)
+	}
+
+	// A recorded pair binds to *that* parent even when the body names another.
+	ident.id = bound.ID
+	status, view := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/pair",
+		map[string]any{"parentSessionId": victim.ID})
+	if status != http.StatusOK {
+		t.Fatalf("bind = %d %+v", status, view)
+	}
+	b, _ := view["binding"].(map[string]any)
+	if b["parentSessionId"] != mine.ID {
+		t.Fatalf("bound to %v, want the recorded parent %s", b["parentSessionId"], mine.ID)
+	}
+
+	// The parent side cannot claim a pair: it is not a monitor of anyone.
+	ident.id = mine.ID
+	if status, _ := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/pair", nil); status != http.StatusForbidden {
+		t.Fatalf("parent bind = %d, want 403", status)
+	}
+}
+
+// A monitor may not itself be monitored: the create path refuses a second
+// level, so the chain cannot become a loop or a ladder.
+func TestMonitorChainIsOneDeep(t *testing.T) {
+	srv, _, _, _ := monitorServer(t)
+	_, parent := createRaw(t, srv.URL, map[string]any{"name": "chat", "workloadType": "codex-chat"})
+	_, monitor := createRaw(t, srv.URL, map[string]any{
+		"name": "monitor", "workloadType": "codex-chat", "monitorFor": parent.ID})
+	status, _ := createStatus(t, srv.URL, map[string]any{
+		"name": "second", "workloadType": "codex-chat", "monitorFor": monitor.ID})
+	if status != http.StatusBadRequest {
+		t.Fatalf("monitoring a monitor = %d, want 400", status)
+	}
+	// An unknown parent is refused too.
+	if status, _ := createStatus(t, srv.URL, map[string]any{
+		"name": "orphan", "workloadType": "codex-chat", "monitorFor": "nope"}); status != http.StatusNotFound {
+		t.Fatalf("monitoring an unknown session = %d, want 404", status)
+	}
+}
+
+// createStatus posts a create request and returns only its status, for the
+// cases where the request is meant to be refused.
+func createStatus(t *testing.T, base string, body map[string]any) (int, map[string]any) {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(base+"/api/v1/sessions", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	out := map[string]any{}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	return resp.StatusCode, out
 }

@@ -29,6 +29,11 @@ type CreateRequest struct {
 	// Tenant names the owning tenant (AC-K2). The API fills it from the
 	// caller; the manager stores it verbatim.
 	Tenant string
+	// MonitorFor names the parent session this one monitors. The API fills it
+	// after checking the parent exists in the same tenant, and it is immutable
+	// afterwards: the managed pair is what the control plane later trusts, so
+	// a workload cannot claim a parent slot by asking.
+	MonitorFor string
 }
 
 // RestoreOptions changes what a restore from snapshot brings back. A nil

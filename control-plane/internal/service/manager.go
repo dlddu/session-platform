@@ -289,6 +289,7 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 		Plugins:         plugins,
 		ReasoningEffort: effort,
 		Tenant:          req.Tenant,
+		MonitorFor:      req.MonitorFor,
 		Name:            name,
 		State:           session.StateActive,
 		Pod:             pods.Workload.Name,

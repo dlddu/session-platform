@@ -228,6 +228,7 @@ type ClientOrchestrator struct {
 	claudeConfigConfigMap    string // its non-credential counterpart
 	approvalGatewayURL       string // PocketAide base URL handed to gated helper pods
 	repoAccessURL            string // control plane URL for the helper's repo access calls (repo_access.go)
+	monitorPairURL           string // control plane URL for the session's monitor-pair calls (monitor_pair.go)
 	dropURL                  string // drop's in-cluster URL for the helper's drop_* tools (drop.go)
 	miniMaxCredentialsSecret string
 	miniMaxConfigConfigMap   string
@@ -711,6 +712,11 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		name = restorePodName(sessionID, suffix)
 		annotations = map[string]string{AnnotationRestoreArchive: checkpointRef}
 		container.Env = append(container.Env, corev1.EnvVar{Name: restoreModeEnvVar, Value: "1"})
+	}
+	// The monitor-pair token goes to agent workloads only: a shell session has
+	// no work records to read or own, so it gets no path to that API.
+	if workloadType != session.WorkloadTypeShell {
+		o.attachMonitorPair(&volumes, &container)
 	}
 	containers := append([]corev1.Container{container}, sidecars...)
 	// Session workloads intentionally receive a Kubernetes identity so they can

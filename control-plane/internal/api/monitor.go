@@ -155,57 +155,48 @@ func (m *Monitor) showPair(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, pairView{Role: role, Binding: b, Monitor: m.monitorState(r.Context(), b)})
 }
 
-type bindPairReq struct {
-	// ParentSessionID is the session this monitor serves. The monitor proves
-	// its own identity, so only the other side is named here, and both must be
-	// sessions of the same tenant.
-	ParentSessionID string `json:"parentSessionId"`
-}
-
 // bindPair is called by the monitor, never by the parent: the side that does
-// the work claims the pair. Re-calling it after a restart returns the same
-// binding.
+// the work claims the pair. It takes **no parent from the request** — the
+// parent is the one the control plane recorded on this session when it was
+// created (`monitorFor`). That is what stops a workload from binding an
+// arbitrary other parent's slot: asking cannot change the record, and the
+// record was checked against the tenant at create time.
+//
+// Re-calling it after a restart returns the same binding, so a monitor that
+// comes back does not need to remember anything.
 func (m *Monitor) bindPair(w http.ResponseWriter, r *http.Request) {
 	monitorID := caller(r)
-	var body bindPairReq
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&body); err != nil {
-		http.Error(w, "body must be JSON with parentSessionId", http.StatusBadRequest)
-		return
-	}
-	parentID := strings.TrimSpace(body.ParentSessionID)
-	if parentID == "" {
-		http.Error(w, "parentSessionId is required", http.StatusBadRequest)
-		return
-	}
-	// The tenant comes from the session records, not from the caller: a
-	// binding may not bridge two tenants, and a monitor may not claim a parent
-	// outside its own.
-	parent, err := m.mgr.Get(r.Context(), parentID)
-	if err != nil {
-		writeErr(w, err)
-		return
-	}
 	mon, err := m.mgr.Get(r.Context(), monitorID)
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
+	if strings.TrimSpace(mon.MonitorFor) == "" {
+		http.Error(w, "this session was not created as a monitor for a parent session", http.StatusForbidden)
+		return
+	}
+	parent, err := m.mgr.Get(r.Context(), mon.MonitorFor)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	// Belt and braces: the tenant was checked when the pair was recorded, and
+	// it is checked again here in case either record moved tenants since.
 	if parent.Tenant != mon.Tenant {
 		http.Error(w, "parent and monitor belong to different tenants", http.StatusForbidden)
 		return
 	}
-	b, err := m.pairs.Bind(r.Context(), parentID, monitorID, mon.Tenant)
+	b, err := m.pairs.Bind(r.Context(), parent.ID, monitorID, mon.Tenant)
 	if err != nil {
-		if errors.Is(err, monitorpair.ErrBound) {
+		switch {
+		case errors.Is(err, monitorpair.ErrBound):
 			http.Error(w, err.Error(), http.StatusConflict)
-			return
-		}
-		if errors.Is(err, monitorpair.ErrInvalidID) {
+		case errors.Is(err, monitorpair.ErrInvalidID):
 			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
+		default:
+			m.logger.Error("monitor pair bind failed", "err", err)
+			http.Error(w, "bind failed", http.StatusBadGateway)
 		}
-		m.logger.Error("monitor pair bind failed", "err", err)
-		http.Error(w, "bind failed", http.StatusBadGateway)
 		return
 	}
 	writeJSON(w, http.StatusOK, pairView{Role: monitorpair.RoleMonitor, Binding: b,

@@ -142,6 +142,11 @@ type createReq struct {
 	// ReasoningEffort is raw for the same reason; its contract is AC-E8.
 	ReasoningEffort json.RawMessage `json:"reasoningEffort"`
 
+	// MonitorFor asks for this session to be the monitor of that parent
+	// session. The server checks the parent and records the pair; the value is
+	// not trusted from any later request.
+	MonitorFor string `json:"monitorFor"`
+
 	// MemoryMultiplier is a pointer only so an explicit 0 is refused rather
 	// than read as omitted.
 	MemoryMultiplier *int `json:"memoryMultiplier"`
@@ -358,9 +363,29 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	monitorFor := strings.TrimSpace(req.MonitorFor)
+	if monitorFor != "" {
+		// The pair is assigned here, once, against the stored parent record:
+		// the parent must exist and sit in the same tenant as the session being
+		// created. Nothing later may change it.
+		parent, err := a.mgr.Get(r.Context(), monitorFor)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		if parent.Tenant != tenant {
+			writeErr(w, session.ErrInvalidInput)
+			return
+		}
+		if parent.MonitorFor != "" {
+			// A monitor may not itself be monitored: the chain is one deep.
+			writeErr(w, session.ErrInvalidInput)
+			return
+		}
+	}
 	sess, err := a.mgr.Create(r.Context(), session.CreateRequest{
 		Name: req.Name, WorkloadType: workload, Model: model, Plugins: plugins, ReasoningEffort: effort,
-		MemoryMultiplier: valueOr(req.MemoryMultiplier, 0), Tenant: tenant,
+		MemoryMultiplier: valueOr(req.MemoryMultiplier, 0), Tenant: tenant, MonitorFor: monitorFor,
 	})
 	if err != nil {
 		writeErr(w, err)
