@@ -85,6 +85,16 @@ var errMonitorDisabled = errors.New("the managed monitor pair is not enabled on 
 
 type callerKey struct{}
 
+// boundKey carries the binding the request was resolved to, so the handlers
+// are the same whether the caller proved itself as a session (the workload
+// routes) or as the tenant that owns the parent session (the backend routes).
+type boundKey struct{}
+
+type boundPair struct {
+	binding monitorpair.Binding
+	role    monitorpair.Role
+}
+
 // session proves the caller and puts its session ID in the context. A
 // deployment without the store or the verifier answers 503 rather than
 // falling back to an unauthenticated route.
@@ -105,7 +115,21 @@ func (m *Monitor) session(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "identity check failed", http.StatusBadGateway)
 			return
 		}
-		next(w, r.WithContext(context.WithValue(r.Context(), callerKey{}, id)))
+		r = r.WithContext(context.WithValue(r.Context(), callerKey{}, id))
+		// A session with no binding still reaches the handlers: claiming the
+		// pair is how one comes to exist. Everything that needs a binding
+		// calls resolve, which refuses when the middleware found none.
+		b, role, err := m.pairs.For(r.Context(), id)
+		switch {
+		case err == nil:
+			r = r.WithContext(context.WithValue(r.Context(), boundKey{}, boundPair{binding: b, role: role}))
+		case errors.Is(err, monitorpair.ErrNotFound), errors.Is(err, monitorpair.ErrInvalidID):
+		default:
+			m.logger.Error("monitor pair lookup failed", "err", err)
+			http.Error(w, "pair lookup failed", http.StatusBadGateway)
+			return
+		}
+		next(w, r)
 	}
 }
 
@@ -114,20 +138,68 @@ func caller(r *http.Request) string {
 	return id
 }
 
-// resolve turns the proved caller into its binding and role. Anything else is
-// 403: a session outside a binding has no work records to reach here.
+// resolve returns the binding the middleware put on the request. Both route
+// sets resolve it before the handler runs, each from an identity it proved,
+// so no handler ever takes a session id from a body, a query or a header.
 func (m *Monitor) resolve(w http.ResponseWriter, r *http.Request) (monitorpair.Binding, monitorpair.Role, bool) {
-	b, role, err := m.pairs.For(r.Context(), caller(r))
-	if err != nil {
-		if errors.Is(err, monitorpair.ErrNotFound) || errors.Is(err, monitorpair.ErrInvalidID) {
-			http.Error(w, "this session is not part of a managed monitor pair", http.StatusForbidden)
-			return monitorpair.Binding{}, "", false
-		}
-		m.logger.Error("monitor pair lookup failed", "err", err)
-		http.Error(w, "pair lookup failed", http.StatusBadGateway)
+	bound, ok := r.Context().Value(boundKey{}).(boundPair)
+	if !ok {
+		http.Error(w, "this session is not part of a managed monitor pair", http.StatusForbidden)
 		return monitorpair.Binding{}, "", false
 	}
-	return b, role, true
+	return bound.binding, bound.role, true
+}
+
+// TenantGuard is the check the backend routes run first: it is the control
+// plane's existing session authorization, which loads `{id}` and refuses a
+// caller whose tenant does not own it. The guard is injected rather than
+// re-implemented so there is one ownership rule, not two.
+type TenantGuard func(w http.ResponseWriter, r *http.Request) bool
+
+// BackendRoutes serves the same pair surface to a backend that calls on a
+// person's behalf — PocketAide's server, not a session. Identity is the
+// caller's own tenant token, `{id}` is the **parent** session it owns, and the
+// monitor comes from the binding: the caller never names a monitor, and no
+// header is trusted for either side.
+//
+// It exists because the published read model and the durable inbox live behind
+// the workload-token routes, which a backend cannot use — and must not, since
+// that would mean handing a workload's token to something outside the pod.
+func (m *Monitor) BackendRoutes(mux *http.ServeMux, guard TenantGuard) {
+	backend := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if m.pairs == nil {
+				http.Error(w, errMonitorDisabled.Error(), http.StatusServiceUnavailable)
+				return
+			}
+			if guard != nil && !guard(w, r) {
+				return
+			}
+			parentID := r.PathValue("id")
+			b, role, err := m.pairs.For(r.Context(), parentID)
+			if err != nil {
+				if errors.Is(err, monitorpair.ErrNotFound) || errors.Is(err, monitorpair.ErrInvalidID) {
+					http.Error(w, "this session has no monitor", http.StatusNotFound)
+					return
+				}
+				m.logger.Error("monitor pair lookup failed", "err", err)
+				http.Error(w, "pair lookup failed", http.StatusBadGateway)
+				return
+			}
+			if role != monitorpair.RoleParent || b.ParentSessionID != parentID {
+				// The path must name the parent. Naming the monitor here would
+				// let a caller read a pair from the wrong side.
+				http.Error(w, "this session has no monitor", http.StatusNotFound)
+				return
+			}
+			next(w, r.WithContext(context.WithValue(r.Context(), boundKey{}, boundPair{binding: b, role: role})))
+		}
+	}
+	mux.HandleFunc("GET /api/v1/sessions/{id}/monitor/pair", backend(m.showPair))
+	mux.HandleFunc("GET /api/v1/sessions/{id}/monitor/work/tasks", backend(m.tasks))
+	mux.HandleFunc("GET /api/v1/sessions/{id}/monitor/work/tasks/{taskID}/turns", backend(m.turns))
+	mux.HandleFunc("POST /api/v1/sessions/{id}/monitor/work/tasks/{taskID}/requests", backend(m.request))
+	mux.HandleFunc("GET /api/v1/sessions/{id}/monitor/requests/{requestID}", backend(m.requestStatus))
 }
 
 type pairView struct {

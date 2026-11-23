@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
@@ -52,8 +53,13 @@ func monitorServer(t *testing.T) (*httptest.Server, *agent.StubClient, *fakeIden
 	t.Cleanup(func() { pairs.Close() })
 	ident := &fakeIdentity{}
 	mux := http.NewServeMux()
-	api.New(mgr).Routes(mux)
-	api.NewMonitor(pairs, ident, mgr, nil).Routes(mux)
+	productAPI := api.New(mgr)
+	productAPI.Routes(mux)
+	monitor := api.NewMonitor(pairs, ident, mgr, nil)
+	monitor.Routes(mux)
+	// The backend routes run the product API's own ownership check, the same
+	// way the binary wires them.
+	monitor.BackendRoutes(mux, productAPI.AuthorizeSession)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, stub, ident, pairs
@@ -654,5 +660,110 @@ func TestParentReadsPublishedStateItNeverFetchedBefore(t *testing.T) {
 	ident.id = otherParent.ID
 	if status, _ := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks", nil); status != http.StatusServiceUnavailable {
 		t.Fatalf("another pair's parent saw something: %d", status)
+	}
+}
+
+// The backend routes are the path a server calls on a person's behalf: its own
+// tenant token, the parent session it owns in the path, and the monitor from
+// the binding. A frozen monitor still answers 200 with the published state and
+// its time, which is what lets the app's panel open after a freeze.
+func TestBackendRoutesServeTheParentsPanelEvenWhenFrozen(t *testing.T) {
+	srv, stub, ident, pairs := monitorServer(t)
+	_, parent := createRaw(t, srv.URL, map[string]any{"name": "chat", "workloadType": "codex-chat"})
+	_, monitor := createRaw(t, srv.URL, map[string]any{
+		"name": "monitor", "workloadType": "codex-chat", "monitorFor": parent.ID})
+	if _, err := pairs.Bind(t.Context(), parent.ID, monitor.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	workFixture(stub)
+
+	// The monitor publishes what it committed, then goes away. The backend has
+	// never read anything yet — this is the first visit, after the freeze.
+	ident.id = monitor.ID
+	publishTasks(t, srv, []map[string]any{
+		{"task": map[string]any{"id": "task-pub", "title": "모니터가 등록", "status": "running", "version": 3}, "turns_total": 2},
+	})
+	if status, _ := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/snapshot", map[string]any{
+		"kind": "turns", "key": "task-pub",
+		"payload": map[string]any{
+			"task_id": "task-pub", "task_version": 3,
+			"task":  map[string]any{"id": "task-pub", "title": "모니터가 등록", "status": "running", "version": 3},
+			"turns": []map[string]any{{"id": 4, "task_id": "task-pub", "response": "최종 응답 본문", "requested_at": "2026-11-22T00:00:00Z"}},
+		},
+	}); status != http.StatusOK {
+		t.Fatal("publish turns failed")
+	}
+	freeze, err := http.Post(srv.URL+"/api/v1/sessions/"+monitor.ID+"/snapshot", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freeze.Body.Close()
+
+	// No session identity at all now: this is the backend calling.
+	ident.id = ""
+	base := "/api/v1/sessions/" + parent.ID + "/monitor"
+	status, page := monitorCall(t, srv, "GET", base+"/work/tasks", nil)
+	if status != http.StatusOK {
+		t.Fatalf("backend read while frozen = %d %+v, want 200", status, page)
+	}
+	if page["source"] != "published" || page["asOf"] == nil {
+		t.Fatalf("a frozen read must be the published state with its time: %+v", page)
+	}
+	tasks, _ := page["tasks"].([]any)
+	if len(tasks) != 1 {
+		t.Fatalf("published tasks missing: %+v", page)
+	}
+	status, turns := monitorCall(t, srv, "GET", base+"/work/tasks/task-pub/turns", nil)
+	if status != http.StatusOK || turns["source"] != "published" {
+		t.Fatalf("backend history while frozen = %d %+v", status, turns)
+	}
+	raw, _ := json.Marshal(turns["turns"])
+	if !strings.Contains(string(raw), "최종 응답 본문") {
+		t.Fatalf("the final response text did not reach the backend: %s", raw)
+	}
+
+	// Submitting is durable: 202 accepted under the app's stable id, with no
+	// claim that it ran, and the status route reads it back.
+	status, sent := monitorCall(t, srv, "POST", base+"/work/tasks/task-pub/requests",
+		map[string]any{"id": "req-app-1", "text": "동결 중에 보낸 지시"})
+	if status != http.StatusAccepted {
+		t.Fatalf("durable intake = %d %+v, want 202", status, sent)
+	}
+	item, _ := sent["item"].(map[string]any)
+	if item["state"] != "accepted" || item["turnId"] != nil {
+		t.Fatalf("a held instruction must not claim a turn: %+v", sent)
+	}
+	// A retry with the same id is the same item, not a second one.
+	status, again := monitorCall(t, srv, "POST", base+"/work/tasks/task-pub/requests",
+		map[string]any{"id": "req-app-1", "text": "동결 중에 보낸 지시"})
+	if status != http.StatusAccepted || again["replayed"] != true {
+		t.Fatalf("retry = %d %+v, want a replayed receipt", status, again)
+	}
+	status, view := monitorCall(t, srv, "GET", base+"/requests/req-app-1", nil)
+	got, _ := view["item"].(map[string]any)
+	if status != http.StatusOK || got["state"] != "accepted" {
+		t.Fatalf("status read = %d %+v", status, view)
+	}
+	if got["author"] != parent.ID {
+		t.Fatalf("author = %v, want the parent session the caller owns", got["author"])
+	}
+}
+
+// The backend path only works from the parent side, and only for a session
+// that has a monitor. Naming the monitor, or an unpaired session, is a 404 —
+// the caller cannot read a pair from the wrong end.
+func TestBackendRoutesRefuseTheWrongSide(t *testing.T) {
+	srv, _, _, pairs := monitorServer(t)
+	_, parent := createRaw(t, srv.URL, map[string]any{"name": "chat", "workloadType": "codex-chat"})
+	_, monitor := createRaw(t, srv.URL, map[string]any{
+		"name": "monitor", "workloadType": "codex-chat", "monitorFor": parent.ID})
+	_, lonely := createRaw(t, srv.URL, map[string]any{"name": "lonely", "workloadType": "codex-chat"})
+	if _, err := pairs.Bind(t.Context(), parent.ID, monitor.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{monitor.ID, lonely.ID} {
+		if status, _ := monitorCall(t, srv, "GET", "/api/v1/sessions/"+id+"/monitor/work/tasks", nil); status != http.StatusNotFound {
+			t.Fatalf("backend read for %s = %d, want 404", id, status)
+		}
 	}
 }

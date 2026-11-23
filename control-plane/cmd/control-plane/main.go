@@ -227,13 +227,14 @@ func main() {
 
 	mux := http.NewServeMux()
 	claudeDefaultModel, claudeModels := cfg.claudeAuth.claudeCodeModelConfig(cfg.claudeCodeDefaultModel, cfg.claudeCodeModels)
-	api.New(mgr,
+	productAPI := api.New(mgr,
 		api.WithClaudeCodeModelConfig(claudeDefaultModel, claudeModels),
 		api.WithWorkloadModelConfig(session.WorkloadTypeCodexChat, cfg.codex.defaultModel, cfg.codex.models),
 		api.WithWorkloadModelConfig(session.WorkloadTypeCodexTask, cfg.codexTask.defaultModel, cfg.codexTask.models),
 		api.WithOfferedWorkloadTypes(cfg.offeredWorkloadTypes()...),
 		cfg.tenancy.apiOption(client),
-	).Routes(mux)
+	)
+	productAPI.Routes(mux)
 	repoAccess, err := openRepoAccess(context.Background(), cfg.repoAccess)
 	if err != nil {
 		logger.Error("repo access misconfigured", "err", err)
@@ -241,7 +242,7 @@ func main() {
 	}
 	defer repoAccess.close()
 	repoAccess.routes(mux, client, namespace, mgr, logger)
-	pairs.routes(mux, client, namespace, mgr, logger)
+	pairs.routes(mux, client, namespace, mgr, productAPI.AuthorizeSession, logger)
 	mux.Handle("/", static.Handler())
 
 	srv := &http.Server{

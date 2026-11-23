@@ -75,7 +75,7 @@ func openMonitorPairs(ctx context.Context, cfg monitorPairConfig) (monitorPairs,
 // a pod labelled with the session's ID and the workload role — so the caller
 // is a session's workload container and nothing else.
 func (mp monitorPairs) routes(mux *http.ServeMux, client kubernetes.Interface, namespace string,
-	mgr session.Manager, logger *slog.Logger) {
+	mgr session.Manager, guard api.TenantGuard, logger *slog.Logger) {
 	// Typed nils would defeat the handler's nil checks.
 	var pairs api.MonitorPairs
 	var identity api.SessionIdentity
@@ -84,7 +84,14 @@ func (mp monitorPairs) routes(mux *http.ServeMux, client kubernetes.Interface, n
 		identity = helperauth.New(client, namespace, k8s.DataPlaneServiceAccountName,
 			k8s.MonitorPairTokenAudience, k8s.LabelSessionID, k8s.LabelPodRole, k8s.PodRoleWorkload)
 	}
-	api.NewMonitor(pairs, identity, mgr, logger).Routes(mux)
+	monitor := api.NewMonitor(pairs, identity, mgr, logger)
+	monitor.Routes(mux)
+	// The same pair surface for a backend that calls on a person's behalf.
+	// The guard is the API's own session authorization, so ownership is
+	// decided in one place.
+	if mp.store != nil {
+		monitor.BackendRoutes(mux, guard)
+	}
 }
 
 func (mp monitorPairs) close() {

@@ -782,6 +782,13 @@ func (a *API) caller(w http.ResponseWriter, r *http.Request) (tenancy.Caller, bo
 // authorizeSession admits a session-id route only for a caller that sees the
 // session. Another tenant's session answers exactly like a missing one, so a
 // tenant cannot learn which ids exist (AC-K2).
+// AuthorizeSession is authorizeSession for another route set in this package's
+// deployment — the monitor pair's backend routes reuse it so the ownership
+// rule is written once.
+func (a *API) AuthorizeSession(w http.ResponseWriter, r *http.Request) bool {
+	return a.authorizeSession(w, r)
+}
+
 func (a *API) authorizeSession(w http.ResponseWriter, r *http.Request) bool {
 	_, ok := a.authorizedCaller(w, r)
 	return ok
