@@ -1,4 +1,4 @@
-// Session DB MCP (docs/prd/agent-auth-pool.md AC-N6): a codex-chat session's
+// Session DB MCP (docs/prd/agent-auth-pool.md AC-N6): a codex-manager session's
 // SQLite database, served by the loopback k3s-mcp-proxy sidecar from the
 // database directory of the session's slot PVC. The workload container never
 // mounts that directory; it reaches the database only through this endpoint,

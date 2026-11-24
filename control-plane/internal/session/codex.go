@@ -1,26 +1,32 @@
 package session
 
 const (
-	// WorkloadTypeCodexChat selects the Codex SDK chat workload
-	// (docs/prd/codex-workload.md, AC-J1~J7): a long-lived single session that
+	// WorkloadTypeCodexManager selects the Codex SDK manager workload
+	// (docs/prd/codex-workload.md, AC-J1~J8): a long-lived single session that
 	// signs in to ChatGPT itself and whose tool surface is narrowed to
 	// conversation, platform plugin skills and the K3s MCP.
-	WorkloadTypeCodexChat WorkloadType = "codex-chat"
+	WorkloadTypeCodexManager WorkloadType = "codex-manager"
 	// WorkloadTypeCodexTask selects the Codex SDK task workload
 	// (docs/prd/codex-task-workload.md, AC-M1~M4): claude-code's tool surface,
 	// with the ChatGPT login held by an auth pool slot rather than the session.
 	WorkloadTypeCodexTask WorkloadType = "codex-task"
 
-	// legacyWorkloadTypeCodex is codex-chat's name before the 2026-11-07 split.
-	// Only session records written before it still carry the name; they are
-	// read as codex-chat and the next write stores the new name (AC-J1).
+	// legacyWorkloadTypeCodexChat is codex-manager's name between the
+	// 2026-11-07 codex split and the 2026-11-17 rename. Unlike the older
+	// "codex", it stays accepted on every input path — create requests, tenant
+	// grants and stored records — because the callers and the deployed tenant
+	// set still name it (AC-J1).
+	legacyWorkloadTypeCodexChat WorkloadType = "codex-chat"
+	// legacyWorkloadTypeCodex is the name before the 2026-11-07 split. Only
+	// session records written before it still carry the name; they are read as
+	// codex-manager and the next write stores the new name (AC-J1).
 	legacyWorkloadTypeCodex WorkloadType = "codex"
 )
 
 // IsCodex reports whether a session of this type runs the Codex SDK runner and
 // its loopback K3s MCP sidecar, which is what the plugin refresh needs (AC-J7).
 func (w WorkloadType) IsCodex() bool {
-	return w == WorkloadTypeCodexChat || w == WorkloadTypeCodexTask
+	return w == WorkloadTypeCodexManager || w == WorkloadTypeCodexTask
 }
 
 // Steered is what one mid-turn message did (AC-J9). Applied means codex put
@@ -45,7 +51,7 @@ func (s Steered) Applied() bool { return s.Status == SteerStatusApplied }
 // tool approvals), not free text.
 func SteerableWorkload(t WorkloadType) bool {
 	switch t {
-	case WorkloadTypeCodexChat, WorkloadTypeCodexTask, legacyWorkloadTypeCodex:
+	case WorkloadTypeCodexManager, WorkloadTypeCodexTask, legacyWorkloadTypeCodex:
 		return true
 	default:
 		return false

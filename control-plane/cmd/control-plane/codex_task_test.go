@@ -81,7 +81,7 @@ func TestValidateCodexTaskConfigRefusesSharedObjects(t *testing.T) {
 	}
 	cfg.configConfigMap = "codex-config"
 	if err := validateCodexTaskConfig(cfg, map[string]string{"CODEX_CONFIG_CONFIGMAP": "codex-config"}); err == nil {
-		t.Fatal("codex-task sharing codex-chat's ConfigMap was accepted")
+		t.Fatal("codex-task sharing codex-manager's ConfigMap was accepted")
 	}
 }
 

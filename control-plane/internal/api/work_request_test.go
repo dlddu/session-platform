@@ -25,7 +25,7 @@ func workServer(t *testing.T) (*httptest.Server, *agent.StubClient) {
 	ckpt := archive.NewStubCheckpointer(true)
 	stub := agent.NewStubClient()
 	mgr := service.New(orch, configmap.NewStore(fake.NewSimpleClientset(), "sessions"), ckpt, stub,
-		service.WithWorkloadCheckpointer(session.WorkloadTypeCodexChat, ckpt))
+		service.WithWorkloadCheckpointer(session.WorkloadTypeCodexManager, ckpt))
 	mux := http.NewServeMux()
 	api.New(mgr).Routes(mux)
 	srv := httptest.NewServer(mux)

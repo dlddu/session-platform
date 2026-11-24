@@ -62,9 +62,9 @@ func newScheduleIdleService(clock *testClock, ag agent.Client) *service.Service 
 		stub,
 		ag,
 		service.WithWorkloadCheckpointer(session.WorkloadTypeClaudeCode, stub),
-		service.WithWorkloadCheckpointer(session.WorkloadTypeCodexChat, stub),
+		service.WithWorkloadCheckpointer(session.WorkloadTypeCodexManager, stub),
 		service.WithWorkloadCheckpointer(session.WorkloadTypeCodexTask, stub),
-		service.WithAuthPool(session.WorkloadTypeCodexChat, k8s.NewMemoryAuthPool(2)),
+		service.WithAuthPool(session.WorkloadTypeCodexManager, k8s.NewMemoryAuthPool(2)),
 		service.WithAuthPool(session.WorkloadTypeCodexTask, k8s.NewMemoryAuthPool(2)),
 		service.WithClock(clock.Now),
 	)
@@ -72,7 +72,7 @@ func newScheduleIdleService(clock *testClock, ag agent.Client) *service.Service 
 
 // AC-P3 itself: the hold while schedules remain, and its release.
 func TestSchedulesHoldTheIdleCountAndReleaseIt(t *testing.T) {
-	for _, workload := range []session.WorkloadType{session.WorkloadTypeCodexChat, session.WorkloadTypeCodexTask} {
+	for _, workload := range []session.WorkloadType{session.WorkloadTypeCodexManager, session.WorkloadTypeCodexTask} {
 		t.Run(string(workload), func(t *testing.T) {
 			clock := &testClock{now: time.Date(2026, 11, 9, 9, 0, 0, 0, time.UTC)}
 			ag := newScheduleReportingAgent()
@@ -125,7 +125,7 @@ func TestScheduleHoldIsReaperOnlyAndFailsOpen(t *testing.T) {
 	ag := newScheduleReportingAgent()
 	svc := newScheduleIdleService(clock, ag)
 
-	manual := mustCreate(t, svc, session.WorkloadTypeCodexChat)
+	manual := mustCreate(t, svc, session.WorkloadTypeCodexManager)
 	ag.set(manual.Pod, 1)
 	frozen, err := svc.Snapshot(context.Background(), manual.ID)
 	if err != nil || frozen.State != session.StateSnapshot {

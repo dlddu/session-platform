@@ -149,7 +149,7 @@ func main() {
 		logger.Info("agent workload started", "workload", workload, "addr", addr,
 			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode,
 			"auth_mode", auth.mode, "effort", auth.effort)
-	case workloadCodexChat, workloadCodexTask:
+	case workloadCodexManager, legacyWorkloadCodexChat, workloadCodexTask:
 		claude, err := newCodexWorkloadFromEnv(workload, logger, restoreMode)
 		if err != nil {
 			logger.Error("failed to initialise agent workload", "workload", workload, "err", err)
@@ -239,7 +239,7 @@ func main() {
 		if proxy.seeder != nil {
 			go proxy.seeder.run(context.Background())
 		}
-		// A codex-chat sidecar also serves the session DB from its slot (AC-N6).
+		// A codex-manager sidecar also serves the session DB from its slot (AC-N6).
 		if dir := os.Getenv(sessionDBDirEnv); dir != "" {
 			rawSQL, err := sessionDBRawSQLFromEnv()
 			if err != nil {

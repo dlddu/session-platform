@@ -15,10 +15,11 @@ import type {
   WriteResult,
 } from "./types";
 
-// AC-J1: `codex` 는 `codex-chat` 의 옛 이름이다. 서버는 늘 새 이름을 내지만, 이름 변경
-// 전의 제어면과 섞여 돌 때도 화면이 한 갈래로 읽게 여기서 한 번 접는다.
-function normalizeType(t: WorkloadType | "codex"): WorkloadType {
-  return t === "codex" ? "codex-chat" : t;
+// AC-J1: `codex`(2026-11-07 전)와 `codex-chat`(2026-11-17 전)은 `codex-manager` 의
+// 옛 이름이다. 서버는 늘 새 이름을 내지만, 이름 변경 전의 제어면과 섞여 돌 때도 화면이
+// 한 갈래로 읽게 여기서 한 번 접는다.
+function normalizeType(t: WorkloadType | "codex" | "codex-chat"): WorkloadType {
+  return t === "codex" || t === "codex-chat" ? "codex-manager" : t;
 }
 
 function normalizeSession<T extends Session | undefined>(s: T): T {
@@ -131,7 +132,7 @@ export const api = {
   archiveSession: (id: string) =>
     req<Session>(`/sessions/${id}/snapshot`, { method: "POST" }).then(normalizeSession),
 
-  /** AC-J7 — codex-chat and codex-task only, between turns; the conversation is kept. */
+  /** AC-J7 — codex-manager and codex-task only, between turns; the conversation is kept. */
   refreshPlugins: (id: string) =>
     req<PluginRefreshResult>(`/sessions/${id}/plugins/refresh`, { method: "POST" }).then(
       withSession,

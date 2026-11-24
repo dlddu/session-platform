@@ -45,7 +45,7 @@ func monitorServer(t *testing.T) (*httptest.Server, *agent.StubClient, *fakeIden
 	ckpt := archive.NewStubCheckpointer(true)
 	stub := agent.NewStubClient()
 	mgr := service.New(orch, configmap.NewStore(fake.NewSimpleClientset(), "sessions"), ckpt, stub,
-		service.WithWorkloadCheckpointer(session.WorkloadTypeCodexChat, ckpt),
+		service.WithWorkloadCheckpointer(session.WorkloadTypeCodexManager, ckpt),
 		// A prepared deployment: the control plane holds the key its sidecars'
 		// seal credentials are derived from. Without it every handover is
 		// refused, which TestAnUnpreparedDeploymentRefusesToBindAPair pins.
@@ -943,7 +943,7 @@ func TestAnUnpreparedDeploymentRefusesToBindAPair(t *testing.T) {
 	// No WithMonitorPairWriterKey: this is a deployment that has not been
 	// prepared for the handover.
 	mgr := service.New(orch, configmap.NewStore(fake.NewSimpleClientset(), "sessions"), ckpt, stub,
-		service.WithWorkloadCheckpointer(session.WorkloadTypeCodexChat, ckpt))
+		service.WithWorkloadCheckpointer(session.WorkloadTypeCodexManager, ckpt))
 	pairs, err := monitorpair.Open(t.Context(), filepath.Join(t.TempDir(), "pairs.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -985,7 +985,7 @@ func TestASealWithTheWrongCredentialBindsNothing(t *testing.T) {
 	ckpt := archive.NewStubCheckpointer(true)
 	stub := agent.NewStubClient()
 	mgr := service.New(orch, configmap.NewStore(fake.NewSimpleClientset(), "sessions"), ckpt, stub,
-		service.WithWorkloadCheckpointer(session.WorkloadTypeCodexChat, ckpt),
+		service.WithWorkloadCheckpointer(session.WorkloadTypeCodexManager, ckpt),
 		service.WithMonitorPairWriterKey([]byte("a-different-key-than-the-pods")))
 	pairs, err := monitorpair.Open(t.Context(), filepath.Join(t.TempDir(), "pairs.db"))
 	if err != nil {

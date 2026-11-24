@@ -9,8 +9,8 @@ info:
     uniform "ensure active then serve": read, write and switch promote
     idle->active (AC-C1) or restore snapshot->active (AC-B2) before serving.
     A session picks a workload type at creation (AC-E1): `shell` (the default),
-    `claude-code`, `minimax-code`, `codex-chat` or `codex-task`
-    (`codex-chat` was `codex` before 2026-11-07). The type is immutable for the session's lifetime — no
+    `claude-code`, `minimax-code`, `codex-manager` or `codex-task`
+    (`codex-manager` was `codex-chat` before 2026-11-17 and `codex` before 2026-11-07). The type is immutable for the session's lifetime — no
 
     endpoint changes it, and a restore keeps it — so switching workloads means
     creating a new session. For `shell`, write injects the payload into the PTY
@@ -103,7 +103,7 @@ paths:
                 tenant: null
                 tenants:
                   - name: pocket-aide
-                    workloadTypes: [claude-code, codex-chat]
+                    workloadTypes: [claude-code, codex-manager]
                 claudeCode:
                   defaultModel: "~anthropic/claude-opus-latest"
                   models: [sonnet, opus]
@@ -563,7 +563,7 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
   /sessions/{id}/plugins/refresh:
     post:
-      summary: Fetch a codex-chat or codex-task session's plugin skills again, keeping its conversation (AC-J7)
+      summary: Fetch a codex-manager or codex-task session's plugin skills again, keeping its conversation (AC-J7)
       operationId: refreshSessionPlugins
       description: >
         Codex sessions only. The session's K3s MCP sidecar clones the plugin
@@ -612,7 +612,7 @@ paths:
         "413":
           $ref: "#/components/responses/RequestEntityTooLarge"
         "422":
-          description: The session is neither codex-chat nor codex-task
+          description: The session is neither codex-manager nor codex-task
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -1217,7 +1217,7 @@ components:
       enum: [active, idle, snapshot]
     WorkloadType:
       type: string
-      enum: [shell, claude-code, minimax-code, codex-chat, codex-task]
+      enum: [shell, claude-code, minimax-code, codex-manager, codex-task]
 
       default: shell
       description: >
@@ -1227,11 +1227,15 @@ components:
         `minimax-code` is the MiniMax Code CLI (`mcode`) on that same
         execution model, with its own provider Secret and ConfigMap, behind
         the approval gate — a workload pod plus a session-scoped helper pod
-        (AC-G1~G6, docs/prd/approval-gate.md AC-F2~F6); `codex-chat` runs the Codex SDK on
+        (AC-G1~G6, docs/prd/approval-gate.md AC-F2~F6); `codex-manager` runs the Codex SDK on
         the same execution model, signs each session in to ChatGPT with a
         device code on its first prompt, and is limited to conversation,
-        platform plugin skills and the K3s MCP (AC-J1~J7). Its old name `codex`
-        is refused in requests; sessions stored under it are answered as `codex-chat`.
+        platform plugin skills and the K3s MCP (AC-J1~J7). Its previous name
+        `codex-chat` is still accepted in create requests and tenant grants but
+        never returned — responses, `GET /config`, pod labels and
+        `DATA_PLANE_WORKLOAD` always say `codex-manager`. The older `codex` is
+        refused in requests; sessions stored under either old name are answered
+        as `codex-manager`.
         `codex-task` runs the same SDK with a shell, files and network like
         `claude-code`, signed in through a login slot of the `codex-task` auth
         pool (AC-M1~M4, AC-N1~N5). Each non-default type requires the control plane
@@ -1285,7 +1289,7 @@ components:
           type: string
           description: >
             Immutable model identifier for the agent workload types. Present
-            for `claude-code`, `minimax-code`, `codex-chat` and `codex-task`, which share
+            for `claude-code`, `minimax-code`, `codex-manager` and `codex-task`, which share
             this contract (AC-E6, reused by AC-G1); omitted at creation resolves to
 
             `platform-default`.
@@ -1326,7 +1330,7 @@ components:
             Session-scoped pods that serve the workload pod without running the
             workload themselves (AC-A2's auxiliary-pod clause). They share the
             workload pod's lifetime and are reclaimed with it, so this is absent
-            exactly when `pod` is. `shell`, `claude-code`, `codex-chat` and `codex-task`
+            exactly when `pod` is. `shell`, `claude-code`, `codex-manager` and `codex-task`
             sessions provision none; a session of a type behind the approval gate
             (`minimax-code`) lists its one helper pod here (AC-F4).
 
@@ -1348,14 +1352,16 @@ components:
             - $ref: "#/components/schemas/WorkloadType"
           description: >
             Optional. Omitted means `shell`, so a request that predates the
-            workload type axis behaves unchanged. Any value outside the enum,
-            including `codex-chat`'s old name `codex` (AC-J1), is rejected with 400 before any pod is provisioned.
+            workload type axis behaves unchanged. `codex-manager`'s previous
+            name `codex-chat` is accepted and folded to it (AC-J1). Any other
+            value outside the enum, including the older `codex`, is rejected
+            with 400 before any pod is provisioned.
         model:
           type: string
           pattern: '^(~[A-Za-z0-9][A-Za-z0-9._:/-]{0,126}|[A-Za-z0-9][A-Za-z0-9._:/-]{0,127})$'
           description: >
             Model for this session. Valid when workloadType is `claude-code`,
-            `minimax-code`, `codex-chat` or `codex-task`; omitted resolves to `platform-default`. A concrete
+            `minimax-code`, `codex-manager` or `codex-task`; omitted resolves to `platform-default`. A concrete
 
             value is passed literally and takes precedence over the platform
             ConfigMap default. The catalog returned by GET /config is advisory,
@@ -1371,14 +1377,14 @@ components:
           description: >
             Optional marketplace plugins for this session (AC-L1), by plugin name
             in the platform marketplace (no `@marketplace` suffix). Valid when
-            workloadType is `claude-code`, `minimax-code`, `codex-chat` or
+            workloadType is `claude-code`, `minimax-code`, `codex-manager` or
             `codex-task`. Omitted, the session runs without plugins — no type
             has a platform default (AC-A5). Given, the list is every plugin the
             session gets.
             Names are not checked against the marketplace here: a name it does
             not list fails the pod's plugin bootstrap, which for `claude-code`
             fails the create (its agent never becomes reachable) and for
-            `codex-chat`/`codex-task`/`minimax-code` leaves the session running without plugins,
+            `codex-manager`/`codex-task`/`minimax-code` leaves the session running without plugins,
             as any marketplace failure already does. `minimax-code` registers
             its K3s MCP server only from a selected plugin that declares it, so
             a failed bundle, an omitted list, or a list without such a plugin
@@ -1446,7 +1452,7 @@ components:
           type: string
           description: >
             Raw workload input. Agent workload writes (claude-code,
-            minimax-code, codex-chat, codex-task) are limited to 1 MiB of UTF-8 bytes
+            minimax-code, codex-manager, codex-task) are limited to 1 MiB of UTF-8 bytes
 
             per prompt; larger writes return 413.
         toolApprovals:

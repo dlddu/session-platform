@@ -8,7 +8,7 @@ needs (AC-A2). The control plane provisions and reclaims these pods via the
 The runtime image includes `git`, `gh`, `curl`, `jq`, and `kubectl` for use by
 interactive shell and Claude Code workloads.
 
-## Status: shell, claude-code, minimax-code, codex-chat, codex-task, mcp, credential-proxy, and k3s-mcp-proxy agents built
+## Status: shell, claude-code, minimax-code, codex-manager, codex-task, mcp, credential-proxy, and k3s-mcp-proxy agents built
 
 
 `DATA_PLANE_WORKLOAD` selects one of these modes across a session's pods:
@@ -144,7 +144,8 @@ interactive shell and Claude Code workloads.
   removed, and any other server is dropped with a warning, since the pod cannot
   reach it. The K3s MCP tools are not behind the session gate because the K3s
   MCP gates its own writes.
-- `codex-chat` (formerly `codex`, still accepted as `DATA_PLANE_WORKLOAD`)
+- `codex-manager` (named `codex-chat` before 2026-11-17 and `codex` before
+  2026-11-07; both older names are still accepted as `DATA_PLANE_WORKLOAD`)
   runs Codex on the same one-shot runner as `claude-code`
   (AC-J1/J2): queue, bounds, cursor, resume flag and archive are shared. Each
   job executes `codex-runner --model MODEL [--resume] -- PROMPT`
@@ -261,18 +262,18 @@ interactive shell and Claude Code workloads.
   mean codex did not load the managed config). That rendering does not include MCP
   tools, because codex does not wait for MCP servers there, so the check
   covers what the config removes.
-- `codex-task` (`docs/prd/codex-task-workload.md`) is `codex-chat`'s pod and
+- `codex-task` (`docs/prd/codex-task-workload.md`) is `codex-manager`'s pod and
   runner with claude-code's tool level (AC-M1). Each job executes
   `codex-runner --mode task --model MODEL [--effort EFFORT] [--resume] --
   PROMPT`; `CODEX_REASONING_EFFORT` (`minimal`, `low`, `medium`, `high` or
   `xhigh`, AC-M4) sets codex's `model_reasoning_effort`. Both types take it:
   `codex-task` from the session or `codex-task-config`'s `reasoning-effort`,
-  `codex-chat` only from `codex-config`'s (AC-J1); any other value refuses start. Task mode runs with sandbox
+  `codex-manager` only from `codex-config`'s (AC-J1); any other value refuses start. Task mode runs with sandbox
   `danger-full-access`, approval policy `never`, sandbox network on and web
   search off, and has no kill switch; it waits for its sub-agents the same
   way (AC-J8). Its managed `config.toml` leaves the
   shell and `unified_exec` on, opens the sandbox, keeps every other
-  `codex-chat` switch; like it, it sets no developer instructions. The ChatGPT login is the auth
+  `codex-manager` switch; like it, it sets no developer instructions. The ChatGPT login is the auth
   slot's `auth.json` (`AGENT_AUTH_SLOT_DIR`), kept in sync with
   `$HOME/.codex/auth.json` — copied into HOME before every turn (HOME's copy
   removed when the slot has none), back every second while the runner works
@@ -281,12 +282,12 @@ interactive shell and Claude Code workloads.
   archive (AC-M2, AC-M3, `docs/prd/agent-auth-pool.md` AC-N4;
   `GET /auth-slot` answers `{"signedIn": bool}` for a workload with a slot and
   404 otherwise); an empty slot gets the same in-turn device-code sign-in as
-  `codex-chat`, and the end-of-turn copy keeps it for the next session. The
+  `codex-manager`, and the end-of-turn copy keeps it for the next session. The
   image build renders both modes (`/agent codex-render-config <home>
   chat|task`) and runs `surface-check.mjs --mode chat|task`: task mode must
   show a shell tool, and no image or web tool or bundled skill.
 - `k3s-mcp-proxy` is the `minimax-code` helper pod's K3s MCP proxy, and the
-  `claude-code`, `codex-chat` and `codex-task` pods' loopback sidecar (`DATA_PLANE_PROXY_PLACEMENT=sidecar`,
+  `claude-code`, `codex-manager` and `codex-task` pods' loopback sidecar (`DATA_PLANE_PROXY_PLACEMENT=sidecar`,
   `127.0.0.1:8093`): the
   credential-proxy implementation with the MCP Streamable HTTP header allowlist
   (`Accept`, `Content-Type`, `Mcp-Session-Id`, `Mcp-Protocol-Version`,

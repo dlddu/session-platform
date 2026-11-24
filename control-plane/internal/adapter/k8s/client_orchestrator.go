@@ -693,7 +693,7 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		volumes = append(volumes, pluginSeedMarketplaceEmptyDir())
 	case session.WorkloadTypeMiniMaxCode:
 		sidecars, volumes = o.miniMaxCodePod(&container, model, helper, helperPodNameFor(sessionID, suffix))
-	case session.WorkloadTypeCodexChat, session.WorkloadTypeCodexTask:
+	case session.WorkloadTypeCodexManager, session.WorkloadTypeCodexTask:
 		sidecars, volumes = o.codexPod(&container, sessionID, workload, workloadType, model, image)
 	}
 	slotVolumes, err := o.attachAuthSlot(&container, workloadType, workload.AuthSlot)
@@ -739,9 +739,9 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 	// inspect cluster resources. Its ClusterRoleBinding uses the built-in `view`
 	// role rather than a wildcard rule because RBAC cannot subtract Secrets from
 	// an otherwise-wildcard grant.
-	// codex-chat alone has no shell to use one with (AC-J6); codex-task runs at
+	// codex-manager alone has no shell to use one with (AC-J6); codex-task runs at
 	// claude-code's level and gets it (AC-M1).
-	automountServiceAccountToken := workloadType != session.WorkloadTypeCodexChat
+	automountServiceAccountToken := workloadType != session.WorkloadTypeCodexManager
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{

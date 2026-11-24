@@ -30,6 +30,8 @@ func (h headerResolver) Resolve(r *http.Request) (tenancy.Caller, error) {
 
 func newTenantServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	// alpha's grant names codex-manager by its previous name, as the deployed
+	// tenant set does; the config endpoint must answer the current one (AC-J1).
 	cfg, err := tenancy.Parse(`{"tenants":[
 		{"name":"alpha","serviceAccounts":["alpha/sa"],"workloadTypes":["shell","codex-chat"]},
 		{"name":"beta","serviceAccounts":["beta/sa"],"workloadTypes":["claude-code"]},
@@ -40,7 +42,7 @@ func newTenantServer(t *testing.T) *httptest.Server {
 	}
 	srv := newServer(
 		api.WithTenancy(headerResolver{cfg}, cfg),
-		api.WithOfferedWorkloadTypes(session.WorkloadTypeShell, session.WorkloadTypeClaudeCode, session.WorkloadTypeCodexChat),
+		api.WithOfferedWorkloadTypes(session.WorkloadTypeShell, session.WorkloadTypeClaudeCode, session.WorkloadTypeCodexManager),
 	)
 	t.Cleanup(srv.Close)
 	return srv
@@ -184,6 +186,7 @@ func TestTenancyCreateRules(t *testing.T) {
 		{"wildcard tenant default shell", "omni", map[string]any{"name": "x"}, http.StatusCreated},
 		{"wildcard tenant any type", "omni", map[string]any{"name": "x", "workloadType": "claude-code"}, http.StatusCreated},
 		{"wildcard tenant unknown type", "omni", map[string]any{"name": "x", "workloadType": "vim"}, http.StatusBadRequest},
+		// A caller that has not moved off the previous name still creates (AC-J1).
 		{"operator into wildcard tenant", "", map[string]any{"name": "x", "tenant": "omni", "workloadType": "codex-chat"}, http.StatusCreated},
 	}
 	for _, tc := range cases {
@@ -226,8 +229,8 @@ func TestTenancyRuntimeConfig(t *testing.T) {
 	if alpha.Tenant == nil || alpha.Tenant.Name != "alpha" || len(alpha.Tenants) != 0 {
 		t.Fatalf("alpha config tenant=%+v tenants=%+v", alpha.Tenant, alpha.Tenants)
 	}
-	if len(alpha.WorkloadTypes) != 2 || alpha.WorkloadTypes[0].Type != "shell" || alpha.WorkloadTypes[1].Type != "codex-chat" {
-		t.Errorf("alpha workloadTypes = %+v, want shell, codex-chat", alpha.WorkloadTypes)
+	if len(alpha.WorkloadTypes) != 2 || alpha.WorkloadTypes[0].Type != "shell" || alpha.WorkloadTypes[1].Type != "codex-manager" {
+		t.Errorf("alpha workloadTypes = %+v, want shell, codex-manager", alpha.WorkloadTypes)
 	}
 	op := decode("")
 	if op.Tenant != nil || len(op.Tenants) != 3 || len(op.WorkloadTypes) != 3 {
@@ -237,8 +240,8 @@ func TestTenancyRuntimeConfig(t *testing.T) {
 		t.Errorf("operator tenants = %+v", op.Tenants)
 	}
 	// "*" is never echoed: both sides see the offered types it expands to.
-	if got := op.Tenants[2].WorkloadTypes; op.Tenants[2].Name != "omni" || len(got) != 3 || got[0] != "shell" || got[1] != "claude-code" || got[2] != "codex-chat" {
-		t.Errorf("operator view of omni = %+v, want shell, claude-code, codex-chat", op.Tenants[2])
+	if got := op.Tenants[2].WorkloadTypes; op.Tenants[2].Name != "omni" || len(got) != 3 || got[0] != "shell" || got[1] != "claude-code" || got[2] != "codex-manager" {
+		t.Errorf("operator view of omni = %+v, want shell, claude-code, codex-manager", op.Tenants[2])
 	}
 	omni := decode("omni")
 	if omni.Tenant == nil || len(omni.Tenant.WorkloadTypes) != 3 || len(omni.WorkloadTypes) != 3 {

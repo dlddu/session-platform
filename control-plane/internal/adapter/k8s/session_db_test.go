@@ -10,7 +10,7 @@ import (
 func TestSessionDBMountIsSlotScoped(t *testing.T) {
 	c := corev1.Container{}
 	s := []corev1.Container{{Name: K3SMCPProxyContainerName}}
-	init, err := attachSessionDB(&c, s, session.WorkloadTypeCodexChat, "image", "codex-config")
+	init, err := attachSessionDB(&c, s, session.WorkloadTypeCodexManager, "image", "codex-config")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestSessionDBMountIsSlotScoped(t *testing.T) {
 func TestSessionDBRawSQLComesFromTheDeployment(t *testing.T) {
 	c := corev1.Container{}
 	s := []corev1.Container{{Name: K3SMCPProxyContainerName}}
-	if _, err := attachSessionDB(&c, s, session.WorkloadTypeCodexChat, "image", "codex-config"); err != nil {
+	if _, err := attachSessionDB(&c, s, session.WorkloadTypeCodexManager, "image", "codex-config"); err != nil {
 		t.Fatal(err)
 	}
 	var env *corev1.EnvVar

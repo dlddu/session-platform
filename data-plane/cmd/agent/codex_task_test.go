@@ -9,7 +9,7 @@ import (
 )
 
 // AC-M1: codex-task's config opens the sandbox and keeps the shell, and turns
-// off everything else codex-chat turns off.
+// off everything else codex-manager turns off.
 func TestRenderCodexTaskConfig(t *testing.T) {
 	doc := tomlCheck(t, string(renderCodexConfig(codexConfig{
 		task:        true,
@@ -70,7 +70,7 @@ func TestCodexChatArgvHasNoMode(t *testing.T) {
 	if !reflect.DeepEqual(got, []string{"r", "--model", "gpt-6", "--resume", "--", "p"}) {
 		t.Fatalf("chat argv = %q", got)
 	}
-	if (codexCLI{}).workloadName() != workloadCodexChat || (codexCLI{task: true}).workloadName() != workloadCodexTask {
+	if (codexCLI{}).workloadName() != workloadCodexManager || (codexCLI{task: true}).workloadName() != workloadCodexTask {
 		t.Fatal("workload names")
 	}
 }

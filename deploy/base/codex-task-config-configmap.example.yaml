@@ -21,7 +21,7 @@
 #                           the model's own default; a session's effort wins (AC-M4).
 #
 # Named by CODEX_TASK_CONFIG_CONFIGMAP (default `codex-task-config`), which must
-# differ from codex-chat's `codex-config`. EXAMPLE-ONLY, not in kustomization.yaml.
+# differ from codex-manager's `codex-config`. EXAMPLE-ONLY, not in kustomization.yaml.
 apiVersion: v1
 kind: ConfigMap
 metadata:

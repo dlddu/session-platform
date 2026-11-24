@@ -327,7 +327,7 @@ func TestRenderCodexConfig(t *testing.T) {
 	}
 }
 
-// AC-N6: a codex-chat pod with a session DB registers the sidecar's endpoint
+// AC-N6: a codex-manager pod with a session DB registers the sidecar's endpoint
 // as the `db` server, run without asking like the others.
 func TestRenderCodexConfigRegistersSessionDB(t *testing.T) {
 	doc := tomlCheck(t, string(renderCodexConfig(codexConfig{
@@ -420,33 +420,33 @@ func TestNewCodexWorkloadFromEnv(t *testing.T) {
 	t.Setenv(authSlotDirEnv, "")
 	t.Setenv(codexReasoningEffortEnv, "")
 	t.Setenv(sessionDBMCPURLEnv, "")
-	// AC-N6: codex-chat keeps its login in a slot too.
-	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
-		t.Fatal("codex-chat without an auth slot must be refused")
+	// AC-N6: codex-manager keeps its login in a slot too.
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err == nil {
+		t.Fatal("codex-manager without an auth slot must be refused")
 	}
 	t.Setenv(authSlotDirEnv, t.TempDir())
-	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err != nil {
-		t.Fatalf("restore-mode codex-chat workload: %v", err)
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err != nil {
+		t.Fatalf("restore-mode codex-manager workload: %v", err)
 	}
 	t.Setenv(sessionDBMCPURLEnv, "http://127.0.0.1:8093/session-db/mcp")
-	if w, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err != nil {
-		t.Fatalf("codex-chat with a session DB: %v", err)
+	if w, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err != nil {
+		t.Fatalf("codex-manager with a session DB: %v", err)
 	} else if cli, ok := w.cli.(codexCLI); !ok || cli.sessionDBURL != "http://127.0.0.1:8093/session-db/mcp" {
 		t.Fatalf("session DB URL not carried to the CLI: %+v", w.cli)
 	}
 	t.Setenv(sessionDBMCPURLEnv, "http://db.example:8093/session-db/mcp")
-	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err == nil {
 		t.Fatal("a session DB MCP off loopback must be refused")
 	}
 	t.Setenv(sessionDBMCPURLEnv, "")
 	t.Setenv(codexReasoningEffortEnv, "max")
-	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err == nil {
 		t.Fatal("max is not a codex effort")
 	}
-	// AC-J1: codex-chat's effort is the codex-config default.
+	// AC-J1: codex-manager's effort is the codex-config default.
 	t.Setenv(codexReasoningEffortEnv, "xhigh")
-	if w, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err != nil {
-		t.Fatalf("codex-chat with a default effort: %v", err)
+	if w, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err != nil {
+		t.Fatalf("codex-manager with a default effort: %v", err)
 	} else {
 		got := w.argv("p", false, false)
 		want := []string{"/opt/runner", "--model", "gpt-6", "--effort", "xhigh", "--", "p"}
@@ -457,13 +457,51 @@ func TestNewCodexWorkloadFromEnv(t *testing.T) {
 	}
 	t.Setenv(codexReasoningEffortEnv, "")
 	t.Setenv(codexModelEnv, "bad model")
-	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err == nil {
 		t.Fatal("an invalid model must be refused at start")
 	}
 	t.Setenv(codexModelEnv, "")
 	t.Setenv("OPENAI_API_KEY", "sk")
-	if _, err := newCodexWorkloadFromEnv(workloadCodexChat, testLogger(), true); err == nil {
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err == nil {
 		t.Fatal("a credential must be refused at start")
+	}
+}
+
+// AC-J1: a pod written by a control plane older than the 2026-11-17 rename
+// carries codex-manager's previous name in DATA_PLANE_WORKLOAD. It must start
+// the same manager workload — not codex-task — and report the current name.
+func TestNewCodexWorkloadFromEnvAcceptsPreviousName(t *testing.T) {
+	for _, name := range codexCredentialEnv {
+		t.Setenv(name, "")
+	}
+	t.Setenv(k3sMCPProxyURLEnv, "http://127.0.0.1:8093")
+	t.Setenv("CLAUDE_CODE_STATE_DIR", filepath.Join(t.TempDir(), "state"))
+	t.Setenv(codexModelEnv, "gpt-6")
+	t.Setenv(codexRunnerBinaryEnv, "/opt/runner")
+	t.Setenv(authSlotDirEnv, t.TempDir())
+	t.Setenv(codexReasoningEffortEnv, "")
+	t.Setenv(sessionDBMCPURLEnv, "")
+	w, err := newCodexWorkloadFromEnv(legacyWorkloadCodexChat, testLogger(), true)
+	if err != nil {
+		t.Fatalf("previous name refused: %v", err)
+	}
+	cli, ok := w.cli.(codexCLI)
+	if !ok || cli.task {
+		t.Fatalf("previous name did not select the manager workload: %+v", w.cli)
+	}
+	if got := cli.workloadName(); got != workloadCodexManager {
+		t.Errorf("workloadName() = %q, want %q", got, workloadCodexManager)
+	}
+	// The rules do not loosen under the old name either: the effort is the
+	// deployment's (AC-J1, from the codex-config ConfigMap), and a value
+	// outside AC-M4's list still refuses to start.
+	t.Setenv(codexReasoningEffortEnv, "xhigh")
+	if _, err := newCodexWorkloadFromEnv(legacyWorkloadCodexChat, testLogger(), true); err != nil {
+		t.Fatalf("the previous name refused the deployment's effort: %v", err)
+	}
+	t.Setenv(codexReasoningEffortEnv, "max")
+	if _, err := newCodexWorkloadFromEnv(legacyWorkloadCodexChat, testLogger(), true); err == nil {
+		t.Fatal("the previous name must not accept an effort outside the list")
 	}
 }
 
@@ -952,7 +990,7 @@ func TestCodexHealthzNamesWorkload(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if body["workload"] != workloadCodexChat {
-		t.Fatalf("healthz = %v, want workload %s", body, workloadCodexChat)
+	if body["workload"] != workloadCodexManager {
+		t.Fatalf("healthz = %v, want workload %s", body, workloadCodexManager)
 	}
 }

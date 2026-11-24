@@ -101,7 +101,7 @@ type PluginRefreshResult struct {
 //   - Restore   → AC-B2 (restore the workload into a new pod).
 //   - Terminate → AC-A3 (reclaim resources).
 //   - Recover   → AC-B4 (put a deleted session back from its last archive).
-//   - RefreshPlugins → AC-J7 (fetch a codex-chat or codex-task session's plugin skills again,
+//   - RefreshPlugins → AC-J7 (fetch a codex-manager or codex-task session's plugin skills again,
 //     between turns, keeping its conversation).
 //   - Questions/AnswerQuestion → AC-E2 (a claude-code turn's AskUserQuestion,
 //     answered by a person while the turn waits).

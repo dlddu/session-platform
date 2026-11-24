@@ -2,14 +2,16 @@
 //
 // docs/prd/multitenancy.md AC-K4. 브라우저는 bearer 없이 오므로 운영자다. 테넌트 셋은
 // deploy/overlays/e2e/ 오버레이의 ConfigMap `session-platform-tenants` 가 심는다 — e2e-alpha(shell·codex-chat),
-// e2e-beta(shell), e2e-gamma("*"). codex-chat 세션에 프롬프트는 보내지 않는다(첫 프롬프트가 ChatGPT 로그인을 연다).
+// e2e-beta(shell), e2e-gamma("*"). alpha 의 grant 는 옛 이름 `codex-chat` 그대로 두었다 — 이름을 바꾸기 전에
+// 쓰던 테넌트 설정이 그대로 뜨고 `codex-manager` 로 읽힌다는 AC-J1 의 호환을 이 시나리오가 실물로 지난다.
+// codex-manager 세션에 프롬프트는 보내지 않는다(첫 프롬프트가 ChatGPT 로그인을 연다).
 import { expect, test } from "@playwright/test";
 
 const POD_BOUND = 240_000;
 
 type Session = { id: string; state: string; tenant?: string; workloadType: string };
 
-test("operator picks a tenant, creates codex-chat into it, and filters the list by tenant", async ({
+test("operator picks a tenant, creates codex-manager into it, and filters the list by tenant", async ({
   page,
   request,
 }) => {
@@ -33,9 +35,9 @@ test("operator picks a tenant, creates codex-chat into it, and filters the list 
       page.getByRole("radiogroup", { name: "Workload type" }).getByRole("radio"),
     ).toHaveCount(2);
     await expect(page.getByTestId("new-session-workload-shell")).toBeVisible();
-    await expect(page.getByTestId("new-session-workload-codex-chat")).toBeVisible();
+    await expect(page.getByTestId("new-session-workload-codex-manager")).toBeVisible();
 
-    await page.getByTestId("new-session-workload-codex-chat").click();
+    await page.getByTestId("new-session-workload-codex-manager").click();
     await page.getByTestId("new-session-name").fill(name);
     await page.getByTestId("new-session-submit").click();
     await expect(page).toHaveURL(/\/agent\/[0-9a-f]+$/, { timeout: POD_BOUND });
@@ -45,7 +47,7 @@ test("operator picks a tenant, creates codex-chat into it, and filters the list 
     expect(fetched.status()).toBe(200);
     const body = (await fetched.json()) as Session;
     expect(body.tenant).toBe("e2e-alpha");
-    expect(body.workloadType).toBe("codex-chat");
+    expect(body.workloadType).toBe("codex-manager");
 
     await page.goto("/");
     const card = page.locator(`[data-session-id="${createdId}"]`);
