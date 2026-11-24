@@ -29,6 +29,13 @@ const (
 	agentWorkTasksPath    = "/work/tasks"
 	agentWorkTurnsPath    = "/work/turns"
 	agentWorkRequestsPath = "/work/requests"
+	// agentWorkWriterPath reads and moves the seal that says who may write this
+	// slot's work records, and agentWorkCallPath is one work tool call made by
+	// the bound monitor. Both are the control plane's: the handover is its
+	// decision, and the monitor reaches these records only through it
+	// (session_work_seal.go).
+	agentWorkWriterPath = "/work/writer"
+	agentWorkCallPath   = "/work/call"
 )
 
 func sessionWorkTasksURLFor(mcpURL string) string {
@@ -52,15 +59,60 @@ func sessionWorkRequestsURLFor(mcpURL string) string {
 	return strings.TrimSuffix(mcpURL, sessionDBMCPPath) + sessionDBWorkRequestsPath
 }
 
+func sessionWorkWriterURLFor(mcpURL string) string {
+	if mcpURL == "" {
+		return ""
+	}
+	return strings.TrimSuffix(mcpURL, sessionDBMCPPath) + sessionDBWorkWriterPath
+}
+
+func sessionWorkCallURLFor(mcpURL string) string {
+	if mcpURL == "" {
+		return ""
+	}
+	return strings.TrimSuffix(mcpURL, sessionDBMCPPath) + sessionDBWorkCallPath
+}
+
+// serveAgentWorkWriter relays the seal. The GET is the fact — who writes these
+// records, at which epoch — and the POST is the handover or its rollback. The
+// sidecar answers the POST only after the previous writer is actually refused,
+// so a control plane that has this answer may open the next writer and must not
+// before (session_work_seal.go).
+func serveAgentWorkWriter(w http.ResponseWriter, r *http.Request, c *claudeWorkload) {
+	if r.Method == http.MethodGet {
+		relayWorkView(w, r, c, sessionWorkWriterURLFor, nil, "the work writer view")
+		return
+	}
+	relayWorkPost(w, r, c, sessionWorkWriterURLFor, "the work writer view")
+}
+
+// serveAgentWorkCall relays one work tool call made by the bound monitor.
+func serveAgentWorkCall(w http.ResponseWriter, r *http.Request, c *claudeWorkload) {
+	relayWorkPost(w, r, c, sessionWorkCallURLFor, "the work call view")
+}
+
 // serveAgentWorkRequests relays one stored request to the sidecar. It is a
 // POST, and still passive: it starts no turn of the session's own and wakes
 // nothing — the parent picks the request up when it next reads the task's open
 // turns. The body is passed through unchanged and bounded, so the agent never
 // becomes a place where a request can be rewritten.
 func serveAgentWorkRequests(w http.ResponseWriter, r *http.Request, c *claudeWorkload) {
+	relayWorkPost(w, r, c, sessionWorkRequestsURLFor, "the work request view")
+}
+
+// relayWorkPost is the one relay every write on this path uses: a stored
+// request, the seal that hands the records over, and a work tool call made by
+// the bound monitor. The body is passed through unchanged and bounded, so the
+// agent never becomes a place where a caller's words can be rewritten, and the
+// sidecar's own 200/201/400/404/409 pass through — a refusal has to stay a
+// refusal, because the caller's next decision depends on which one it was.
+func relayWorkPost(
+	w http.ResponseWriter, r *http.Request, c *claudeWorkload,
+	targetOf func(string) string, what string,
+) {
 	target := ""
 	if reporter, ok := c.cli.(workReporter); ok {
-		target = sessionWorkRequestsURLFor(reporter.sessionDBMCPURL())
+		target = targetOf(reporter.sessionDBMCPURL())
 	}
 	if target == "" {
 		http.Error(w, "this session keeps no work records", http.StatusNotImplemented)
@@ -79,6 +131,13 @@ func serveAgentWorkRequests(w http.ResponseWriter, r *http.Request, c *claudeWor
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// The seal routes are authorised by a credential only the sidecar holds, so
+	// the relay carries the caller's own header through and never holds or mints
+	// one of its own. An agent in the workload container has nothing to add here
+	// — which is the point (session_work_seal_http.go).
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		http.Error(w, "the work records could not be reached", http.StatusBadGateway)
@@ -91,7 +150,11 @@ func serveAgentWorkRequests(w http.ResponseWriter, r *http.Request, c *claudeWor
 		return
 	}
 	switch resp.StatusCode {
-	case http.StatusCreated, http.StatusOK, http.StatusBadRequest, http.StatusNotFound, http.StatusConflict:
+	case http.StatusCreated, http.StatusOK, http.StatusBadRequest, http.StatusNotFound,
+		http.StatusConflict, http.StatusForbidden, http.StatusNotImplemented:
+		// A refusal of the credential and "this slot cannot be handed over" both
+		// pass through: the control plane acts differently on each, and turning
+		// either into a gateway error would hide which it was.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(answer)
@@ -99,8 +162,7 @@ func serveAgentWorkRequests(w http.ResponseWriter, r *http.Request, c *claudeWor
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"code": "work_unavailable", "error": "the request could not be stored",
-		})
+			"code": "work_unavailable", "error": what + " did not answer"})
 	}
 }
 

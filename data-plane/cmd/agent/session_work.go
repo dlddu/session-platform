@@ -111,6 +111,13 @@ CREATE TABLE IF NOT EXISTS sp_work_monitor (
 	note TEXT NOT NULL,
 	version INTEGER NOT NULL,
 	updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sp_work_writer (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	writer TEXT NOT NULL,
+	epoch INTEGER NOT NULL,
+	holder TEXT NOT NULL,
+	changed_at TEXT NOT NULL
 );`
 
 // The records that existed only to manage the move onto the work records, and
@@ -413,6 +420,24 @@ func isWorkTool(name string) bool {
 	return false
 }
 
+// pairRoleParent is the value the control plane puts on a session whose work
+// its bound monitor owns.
+const pairRoleParent = "parent"
+
+// refuseWorkWriteForPairedParent is the server-side boundary for the separated
+// monitor: every tool isWorkMutation names — task_put, task_delete,
+// turn_append, turn_patch, turn_dispatch, the task book put and the monitor
+// record writes — is refused for a paired parent. Dispatching a worker is in
+// that set, so the parent cannot instruct a work session directly either.
+func refuseWorkWriteForPairedParent(role, name string) error {
+	if role != pairRoleParent || !isWorkMutation(name) {
+		return nil
+	}
+	return workFail("permission_denied", "this session's work is owned by its monitor; "+name+
+		" is the monitor's to call. Send an instruction with the monitor_pair request_send tool instead, "+
+		"and read with task_get, task_list or turn_list")
+}
+
 // workMutations are the tools whose answer is replayed from a receipt. A tool
 // that is not here reads and is therefore safe to repeat.
 func isWorkMutation(name string) bool {
@@ -586,7 +611,21 @@ func storeWorkReceipt(ctx context.Context, tx *sql.Tx, requestID, fingerprint st
 
 // work runs one tool in its own transaction, so a record and the receipt that
 // makes it replayable commit together or not at all.
-func (s *sessionDB) work(ctx context.Context, name string, a workArgs) (any, error) {
+// work runs one work tool. caller is who is calling — workCallerSelf for the
+// session's own model through the slot MCP, workCallerMonitor for a bound
+// monitor through the control plane — and it is decided by the route the call
+// arrived on, never by anything inside the call.
+func (s *sessionDB) work(ctx context.Context, caller, name string, a workArgs) (any, error) {
+	// A paired parent owns no work: its monitor does. The refusal is here, in
+	// front of the transaction, so a call that names a write tool directly has
+	// no effect at all — the list it was left out of is a convenience, this is
+	// the boundary. Reads fall through untouched, and an unpaired or legacy
+	// session has no role and is not affected.
+	if caller != workCallerMonitor {
+		if err := refuseWorkWriteForPairedParent(s.pairRole, name); err != nil {
+			return nil, err
+		}
+	}
 	if err := validateWork(name, a); err != nil {
 		return nil, err
 	}
@@ -600,6 +639,13 @@ func (s *sessionDB) work(ctx context.Context, name string, a workArgs) (any, err
 	}
 	defer tx.Rollback()
 	if err = migrateWork(ctx, tx); err != nil {
+		return nil, err
+	}
+	// The env role above cannot speak for a session that was already running
+	// when its monitor was bound. This can: the records themselves say who
+	// their writer is, and the check is inside the transaction that would do
+	// the writing (session_work_seal.go).
+	if err = refuseSealedWorkWrite(ctx, tx, name, caller); err != nil {
 		return nil, err
 	}
 	// There is no fence to check before a write any more. The fence existed for
@@ -662,7 +708,7 @@ func (s *sessionDB) work(ctx context.Context, name string, a workArgs) (any, err
 // callWork is the tools/call entry. Unknown and null-valued fields are refused
 // before anything runs, so a caller that misspells a field learns that rather
 // than having it silently ignored.
-func (s *sessionDB) callWork(ctx context.Context, name string, raw json.RawMessage) (any, *jsonRPCError) {
+func (s *sessionDB) callWork(ctx context.Context, caller, name string, raw json.RawMessage) (any, *jsonRPCError) {
 	var fields map[string]json.RawMessage
 	err := json.Unmarshal(raw, &fields)
 	var a workArgs
@@ -683,7 +729,7 @@ func (s *sessionDB) callWork(ctx context.Context, name string, raw json.RawMessa
 	}
 	ctx, cancel := context.WithTimeout(ctx, sessionDBCallTimeout)
 	defer cancel()
-	result, err := s.work(ctx, name, a)
+	result, err := s.work(ctx, caller, name, a)
 	if err != nil {
 		var known workError
 		if !errors.As(err, &known) {

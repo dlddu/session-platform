@@ -375,7 +375,7 @@ func TestWorkWritesRequireTheirCASCounter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out, rpcErr := s.callWork(context.Background(), tc.name, raw)
+		out, rpcErr := s.callWork(context.Background(), workCallerSelf, tc.name, raw)
 		if rpcErr != nil {
 			t.Fatalf("%s: %+v", tc.name, rpcErr)
 		}

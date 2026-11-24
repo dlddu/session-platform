@@ -37,6 +37,12 @@ type StubClient struct {
 	mu      sync.Mutex
 	bufs    map[string][]byte
 	steered map[string][]string
+	// workWriters is each pod's seal: who may write that slot's work records
+	// (work_writer.go). A pod that is not here has never been handed over.
+	workWriters map[string]session.WorkWriter
+	// writerToken is the credential the stub's seal routes require, mirroring
+	// the sidecar's MONITOR_PAIR_WRITER_TOKEN.
+	writerToken string
 }
 
 var _ Client = (*StubClient)(nil)
@@ -304,4 +310,145 @@ func (c *StubClient) WorkTurns(
 		page.Turns = append(page.Turns, turn)
 	}
 	return page, nil
+}
+
+// The seal that says who writes a slot's work records, as the stub holds it.
+//
+// It is per pod, because that is what it is in a real slot: the row sits in the
+// database the pod mounts. The rule the stub enforces is the one the sidecar
+// enforces — a monitor writes only a sealed slot, a session writes only an
+// unsealed one — so a test that binds a pair and then writes exercises the
+// ordering rather than a canned answer.
+
+// WorkWriter answers this pod's seal; a pod that was never sealed is the
+// session's own, which is every session with no monitor.
+func (c *StubClient) WorkWriter(_ context.Context, pod, token string) (session.WorkWriter, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.checkWriterToken(token); err != nil {
+		return session.WorkWriter{}, err
+	}
+	return c.writerOf(pod), nil
+}
+
+// WriterToken is what the stub's sidecar requires, so a test can show that a
+// caller without it is refused the way a real sidecar refuses it.
+func (c *StubClient) RequireWriterToken(token string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.writerToken = token
+}
+
+func (c *StubClient) checkWriterToken(token string) error {
+	if c.writerToken == "" || c.writerToken == token {
+		return nil
+	}
+	return fmt.Errorf("%w: only the control plane may move this slot's writer", session.ErrForbidden)
+}
+
+func (c *StubClient) writerOf(pod string) session.WorkWriter {
+	if c.workWriters == nil {
+		c.workWriters = map[string]session.WorkWriter{}
+	}
+	got, ok := c.workWriters[pod]
+	if !ok {
+		return session.WorkWriter{Writer: session.WorkWriterSession}
+	}
+	return got
+}
+
+// SealWorkWriter moves the seal, with the same epoch rules the slot applies:
+// the same seal again changes nothing, and a stale epoch is refused.
+func (c *StubClient) SealWorkWriter(
+	_ context.Context, pod, token string, in session.WorkSeal,
+) (session.WorkSealResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.checkWriterToken(token); err != nil {
+		return session.WorkSealResult{}, err
+	}
+	current := c.writerOf(pod)
+	if in.ExpectedEpoch != nil && *in.ExpectedEpoch != current.Epoch {
+		return session.WorkSealResult{}, fmt.Errorf("%w: expected_epoch does not match", session.ErrConflict)
+	}
+	holder := in.Holder
+	if in.Writer == session.WorkWriterSession {
+		holder = ""
+	}
+	if current.Writer == in.Writer && current.Holder == holder {
+		return session.WorkSealResult{Writer: current, Changed: false}, nil
+	}
+	if in.Writer == session.WorkWriterSession && current.Sealed() &&
+		in.Holder != "" && in.Holder != current.Holder {
+		return session.WorkSealResult{}, fmt.Errorf("%w: held by %s", session.ErrConflict, current.Holder)
+	}
+	sealed := session.WorkWriter{Writer: in.Writer, Holder: holder, Epoch: current.Epoch + 1,
+		ChangedAt: "2026-11-24T00:00:00Z"}
+	c.workWriters[pod] = sealed
+	return session.WorkSealResult{Writer: sealed, Changed: true}, nil
+}
+
+// CallWork carries one work tool call for the bound monitor. The stub answers
+// the seal check for every tool and appends a turn for turn_append, which is
+// what a test needs to show that the monitor's writes land in the same records
+// the session read before the handover.
+func (c *StubClient) CallWork(
+	_ context.Context, pod, token, name string, args json.RawMessage,
+) (session.WorkCallResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.checkWriterToken(token); err != nil {
+		return session.WorkCallResult{}, err
+	}
+	refuse := func(message string) session.WorkCallResult {
+		raw, _ := json.Marshal(map[string]string{"code": "permission_denied", "error": message})
+		return workCallResultOf(string(raw), true)
+	}
+	if !c.writerOf(pod).Sealed() {
+		return refuse("these work records are the session's own"), nil
+	}
+	var call struct {
+		TaskID string `json:"task_id"`
+		Turn   struct {
+			Request *string `json:"request"`
+		} `json:"turn"`
+	}
+	_ = json.Unmarshal(args, &call)
+	if name != "turn_append" {
+		raw, _ := json.Marshal(map[string]any{"called": name})
+		return workCallResultOf(string(raw), false), nil
+	}
+	if c.WorkTurnRows == nil {
+		c.WorkTurnRows = map[string][]session.WorkTurn{}
+	}
+	next := int64(1)
+	for _, turns := range c.WorkTurnRows {
+		for _, turn := range turns {
+			if turn.ID >= next {
+				next = turn.ID + 1
+			}
+		}
+	}
+	turn := session.WorkTurn{ID: next, TaskID: call.TaskID, Request: call.Turn.Request,
+		RequestedAt: "2026-11-24T00:00:00Z"}
+	c.WorkTurnRows[call.TaskID] = append(c.WorkTurnRows[call.TaskID], turn)
+	raw, _ := json.Marshal(map[string]any{"turn": turn})
+	return workCallResultOf(string(raw), false), nil
+}
+
+func workCallResultOf(text string, isError bool) session.WorkCallResult {
+	result := session.WorkCallResult{IsError: isError}
+	result.Content = append(result.Content, struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}{Type: "text", Text: text})
+	return result
+}
+
+// Written is what a session's pod has been told, so a test can show that
+// something which claimed to wake a monitor actually queued it a turn.
+func (c *StubClient) Written(pod string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return string(c.bufs[pod])
 }

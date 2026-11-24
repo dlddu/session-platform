@@ -1521,6 +1521,20 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 		serveAgentWorkRequests(w, r, c)
 	})
 
+	// The handover: who may write these records, and the bound monitor's own
+	// calls on them. Both are the control plane's — a session cannot hand its
+	// own work over, and a monitor reaches it only this way
+	// (session_work_seal.go).
+	mux.HandleFunc("GET "+agentWorkWriterPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentWorkWriter(w, r, c)
+	})
+	mux.HandleFunc("POST "+agentWorkWriterPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentWorkWriter(w, r, c)
+	})
+	mux.HandleFunc("POST "+agentWorkCallPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentWorkCall(w, r, c)
+	})
+
 	mux.HandleFunc("GET /attach", func(w http.ResponseWriter, r *http.Request) {
 		if !c.isReady() {
 			http.Error(w, "claude workload is awaiting restore", http.StatusServiceUnavailable)

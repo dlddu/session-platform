@@ -62,13 +62,19 @@ type sessionDB struct {
 	// tools/list and refuses them in tools/call. The record tools do not read
 	// it — their statements are this type's methods, not model-supplied SQL.
 	rawSQL bool
-	logger *slog.Logger
+	// pairRole is what the control plane put on this container
+	// (MONITOR_PAIR_ROLE). "parent" means this session's work is owned by its
+	// bound monitor: the record tools still read, and every write is refused
+	// here, in tools/call, not merely left out of tools/list. Empty is an
+	// unpaired or legacy session and changes nothing.
+	pairRole string
+	logger   *slog.Logger
 
 	mu sync.Mutex
 	db *sql.DB
 }
 
-func newSessionDB(dir string, rawSQL bool, logger *slog.Logger) (*sessionDB, error) {
+func newSessionDB(dir string, rawSQL bool, pairRole string, logger *slog.Logger) (*sessionDB, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" || !filepath.IsAbs(dir) {
 		return nil, fmt.Errorf("%s must be an absolute path", sessionDBDirEnv)
@@ -77,9 +83,10 @@ func newSessionDB(dir string, rawSQL bool, logger *slog.Logger) (*sessionDB, err
 		logger = slog.Default()
 	}
 	return &sessionDB{
-		path:   filepath.Join(filepath.Clean(dir), sessionDBFileName),
-		rawSQL: rawSQL,
-		logger: logger,
+		pairRole: strings.TrimSpace(pairRole),
+		path:     filepath.Join(filepath.Clean(dir), sessionDBFileName),
+		rawSQL:   rawSQL,
+		logger:   logger,
 	}, nil
 }
 
@@ -292,7 +299,10 @@ func (s *sessionDB) callTool(ctx context.Context, params json.RawMessage) (any, 
 		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: "tools/call needs a name and arguments"}
 	}
 	if isWorkTool(call.Name) {
-		return s.callWork(ctx, call.Name, call.Arguments)
+		// The slot MCP is the session's own model. A monitor never reaches the
+		// records this way: it goes through the control plane, which is the only
+		// caller that can be told apart from the session itself.
+		return s.callWork(ctx, workCallerSelf, call.Name, call.Arguments)
 	}
 	// A name this image removed is answered with the call that does the job
 	// instead. The ledger tools, the migration, the rollback export and now the
@@ -442,6 +452,10 @@ func withSessionDBMCP(proxy http.Handler, db *sessionDB) http.Handler {
 			db.serveWorkTasks(w, r)
 		case sessionDBWorkTurnsPath:
 			db.serveWorkTurns(w, r)
+		case sessionDBWorkWriterPath:
+			db.serveWorkWriter(w, r)
+		case sessionDBWorkCallPath:
+			db.serveWorkCall(w, r)
 		default:
 			proxy.ServeHTTP(w, r)
 		}

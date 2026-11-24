@@ -291,8 +291,13 @@ type Session struct {
 	// AC-K2), fixed at creation. Empty means operator-owned: sessions created
 	// before tenancy existed, or by the operator without naming a tenant.
 	Tenant string `json:"tenant,omitempty"`
-	Name   string `json:"name"`
-	State  State  `json:"state"`
+	// MonitorFor is the parent session this one was created to monitor. It is
+	// server-assigned at create time and never taken from a later caller, so
+	// the monitor/parent pair the control plane enforces cannot be re-pointed
+	// by the workload.
+	MonitorFor string `json:"monitorFor,omitempty"`
+	Name       string `json:"name"`
+	State      State  `json:"state"`
 	// Pod is the session's dedicated *workload* pod — the one running the
 	// workload its type selects. It is the 1:1 subject of AC-A2 and is empty
 	// when the session is snapshotted/reclaimed.

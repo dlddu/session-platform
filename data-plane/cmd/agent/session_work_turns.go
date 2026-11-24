@@ -363,11 +363,59 @@ func listWorkTurns(ctx context.Context, tx *sql.Tx, a workArgs) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	dispatches, err := readWorkDispatches(ctx, tx, turns)
+	if err != nil {
+		return nil, err
+	}
 	result := map[string]any{"turns": turns, "turn_version": turnVersion}
+	if len(dispatches) > 0 {
+		result["dispatches"] = dispatches
+	}
 	if next != 0 {
 		result["next_cursor"] = next
 	}
 	return result, nil
+}
+
+// readWorkDispatches answers what was already recorded as going outside this
+// database for the turns on this page. It is a read of the bookkeeping, not of
+// the turns, so it stays beside them in the reply.
+//
+// Without it the record is write-only: a parent that recorded `dispatched` and
+// then lost its reply — or restarted — has no way to find out it already acted,
+// except by attempting another dispatch and reading the refusal. That is the
+// one thing the key exists to prevent, so the fact a key was recorded has to be
+// readable before the next decision rather than after it.
+func readWorkDispatches(ctx context.Context, tx *sql.Tx, turns []workTurn) ([]map[string]any, error) {
+	if len(turns) == 0 {
+		return nil, nil
+	}
+	ids := make([]any, 0, len(turns))
+	holes := make([]string, 0, len(turns))
+	for _, turn := range turns {
+		ids = append(ids, turn.ID)
+		holes = append(holes, "?")
+	}
+	rows, err := tx.QueryContext(ctx,
+		`SELECT turn_id,operation_key,operation_target,dispatch_state,dispatched_at
+		 FROM sp_work_turn_admin WHERE turn_id IN (`+strings.Join(holes, ",")+") ORDER BY turn_id", ids...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var turnID int64
+		var key, target, state, at string
+		if err := rows.Scan(&turnID, &key, &target, &state, &at); err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]any{
+			"turn_id": turnID, "operation_key": key, "operation_target": target,
+			"dispatch_state": state, "dispatched_at": at,
+		})
+	}
+	return out, rows.Err()
 }
 
 // dispatchWorkTurn records an outside action's key and intent beside the turn,
