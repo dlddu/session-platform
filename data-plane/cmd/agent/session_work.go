@@ -111,6 +111,30 @@ CREATE TABLE IF NOT EXISTS sp_work_monitor (
 	note TEXT NOT NULL,
 	version INTEGER NOT NULL,
 	updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sp_work_relay (
+	id TEXT PRIMARY KEY,
+	seq INTEGER NOT NULL UNIQUE,
+	sender TEXT NOT NULL,
+	recipient TEXT NOT NULL,
+	kind TEXT NOT NULL,
+	subject TEXT NOT NULL,
+	body TEXT NOT NULL,
+	task_id TEXT,
+	state TEXT NOT NULL,
+	result TEXT,
+	version INTEGER NOT NULL,
+	attempts INTEGER NOT NULL,
+	sent_at TEXT NOT NULL,
+	claimed_at TEXT,
+	settled_at TEXT
+);
+CREATE INDEX IF NOT EXISTS sp_work_relay_inbox ON sp_work_relay (recipient, state, seq);
+CREATE TABLE IF NOT EXISTS sp_work_relay_claim (
+	message_id TEXT PRIMARY KEY,
+	claim_token TEXT NOT NULL,
+	incarnation TEXT NOT NULL,
+	claimed_at TEXT NOT NULL
 );`
 
 // The records that existed only to manage the move onto the work records, and
@@ -330,10 +354,25 @@ type workArgs struct {
 	// Monitor is one of the parent's own monitoring loops, which is not a task
 	// and never was (session_work_monitor.go).
 	Monitor *workMonitorInput `json:"monitor,omitempty"`
-	// ClaimToken proves the caller is the parent that took this turn. It is
-	// internal management state, not a field of the agreed turn
-	// (session_work_turns.go).
+	// ClaimToken proves the caller is the parent that took this turn, or the
+	// lane that took a relay message. It is internal management state, not a
+	// field of the agreed turn (session_work_turns.go, session_work_relay.go).
 	ClaimToken string `json:"claim_token,omitempty"`
+	// Message is one handover between the two lanes of a manager. Its sender
+	// and recipient are not in it: a lane's own role comes from its MCP
+	// registration, so neither lane can send as the other
+	// (session_work_relay.go).
+	Message *relayInput `json:"message,omitempty"`
+	// Box selects which side of the relay a list reads — what was sent to this
+	// lane, or what it sent.
+	Box string `json:"box,omitempty"`
+	// AfterSeq is the relay's page cursor. It is the message's own arrival
+	// number, so a page boundary neither repeats nor skips one.
+	AfterSeq *int64 `json:"after_seq,omitempty"`
+	// Outcome and Result settle a relay message: processed or failed, and what
+	// the sender reads about it.
+	Outcome string `json:"outcome,omitempty"`
+	Result  string `json:"result,omitempty"`
 }
 
 var workTools = []string{
@@ -346,6 +385,24 @@ var workTools = []string{
 	// became tasks. They used to be rows in the ledger; they are a record of
 	// their own now (session_work_monitor.go).
 	monitorGetTool, monitorListTool, monitorPutTool, monitorDeleteTool,
+	// The handover between a manager's two lanes, which is neither a task nor a
+	// turn: it is what the parent and the monitor pass each other and how they
+	// learn it was dealt with (session_work_relay.go). These are listed only to
+	// a caller that is one of the two lanes.
+	relaySendTool, relayListTool, relayClaimTool, relayAckTool, relayStatusTool,
+}
+
+// workLedgerWrites are the calls that change the work records a person reads —
+// the records the monitor lane owns (AC-N11). They are not refused here but in
+// front of the arguments (session_db_mcp.go), so a parent lane learns that the
+// records are not its to write rather than that its arguments were wrong.
+func isWorkLedgerWrite(name string) bool {
+	switch name {
+	case "task_put", "task_delete", "turn_append", "turn_patch", "turn_dispatch",
+		taskBookPutTool, monitorPutTool, monitorDeleteTool:
+		return true
+	}
+	return false
 }
 
 // workRemovedTools names what to call instead of a tool that is gone. The
@@ -421,7 +478,7 @@ func isWorkMutation(name string) bool {
 		taskBookPutTool, monitorPutTool, monitorDeleteTool:
 		return true
 	}
-	return false
+	return isRelayMutation(name)
 }
 
 // migrateWork creates this namespace transactionally on first use and refuses a
@@ -586,7 +643,13 @@ func storeWorkReceipt(ctx context.Context, tx *sql.Tx, requestID, fingerprint st
 
 // work runs one tool in its own transaction, so a record and the receipt that
 // makes it replayable commit together or not at all.
-func (s *sessionDB) work(ctx context.Context, name string, a workArgs) (any, error) {
+//
+// caller is which lane of this manager is calling and which incarnation of it.
+// Both come from the lane's own MCP registration, which the platform renders and
+// the model cannot change, so they are configuration rather than arguments — a
+// lane cannot claim to be the other one, and an incarnation cannot claim to be
+// an earlier one whose work it is recovering (session_db_mcp.go).
+func (s *sessionDB) work(ctx context.Context, caller workCaller, name string, a workArgs) (any, error) {
 	if err := validateWork(name, a); err != nil {
 		return nil, err
 	}
@@ -642,6 +705,8 @@ func (s *sessionDB) work(ctx context.Context, name string, a workArgs) (any, err
 		result, err = putWorkLegacy(ctx, tx, a, now)
 	case monitorGetTool, monitorListTool, monitorPutTool, monitorDeleteTool:
 		result, err = runMonitorTool(ctx, tx, name, a, now)
+	case relaySendTool, relayListTool, relayClaimTool, relayAckTool, relayStatusTool:
+		result, err = runRelayTool(ctx, tx, name, caller.lane, caller.incarnation, a, now)
 	default:
 		return nil, workFail("invalid_argument", "unknown work tool")
 	}
@@ -662,7 +727,7 @@ func (s *sessionDB) work(ctx context.Context, name string, a workArgs) (any, err
 // callWork is the tools/call entry. Unknown and null-valued fields are refused
 // before anything runs, so a caller that misspells a field learns that rather
 // than having it silently ignored.
-func (s *sessionDB) callWork(ctx context.Context, name string, raw json.RawMessage) (any, *jsonRPCError) {
+func (s *sessionDB) callWork(ctx context.Context, caller workCaller, name string, raw json.RawMessage) (any, *jsonRPCError) {
 	var fields map[string]json.RawMessage
 	err := json.Unmarshal(raw, &fields)
 	var a workArgs
@@ -673,7 +738,7 @@ func (s *sessionDB) callWork(ctx context.Context, name string, raw json.RawMessa
 		err = decoder.Decode(&a)
 	}
 	if err == nil {
-		err = checkWorkFields(name, fields)
+		err = checkWorkFields(caller.lane, name, fields)
 	}
 	if err == nil && fields["turn"] != nil {
 		err = readWorkTurnFields(&a, fields["turn"])
@@ -683,7 +748,7 @@ func (s *sessionDB) callWork(ctx context.Context, name string, raw json.RawMessa
 	}
 	ctx, cancel := context.WithTimeout(ctx, sessionDBCallTimeout)
 	defer cancel()
-	result, err := s.work(ctx, name, a)
+	result, err := s.work(ctx, caller, name, a)
 	if err != nil {
 		var known workError
 		if !errors.As(err, &known) {
@@ -694,8 +759,8 @@ func (s *sessionDB) callWork(ctx context.Context, name string, raw json.RawMessa
 	return sessionDBToolResult(result, false), nil
 }
 
-func checkWorkFields(name string, fields map[string]json.RawMessage) error {
-	for _, definition := range workToolDefinitions() {
+func checkWorkFields(lane, name string, fields map[string]json.RawMessage) error {
+	for _, definition := range workToolDefinitions(lane) {
 		if definition["name"] != name {
 			continue
 		}

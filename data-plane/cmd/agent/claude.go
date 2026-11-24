@@ -1473,8 +1473,19 @@ func loadClaudeManagedSettings(homeDir string) (claudeManagedSettings, error) {
 	return settings, nil
 }
 
-func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
+// claudeRoutes serves one agent workload. monitor is the second lane of a
+// manager pod, which this pod reports beside the first one so that a reader
+// outside the session can see both and the pod they are in (AC-N11,
+// manager_lane.go); it is nil for every workload that is the only one in its
+// pod, and for the monitor lane's own routes.
+func claudeRoutes(logger *slog.Logger, c *claudeWorkload, monitor *claudeWorkload) http.Handler {
 	mux := http.NewServeMux()
+
+	// Which conversations this pod runs. It is the pod's answer rather than a
+	// lane's, and it is passive: asking changes nothing and wakes nothing.
+	mux.HandleFunc("GET "+agentLanesPath, func(w http.ResponseWriter, _ *http.Request) {
+		serveManagerLanes(w, c, monitor)
+	})
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

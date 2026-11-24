@@ -150,14 +150,62 @@ func main() {
 			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode,
 			"auth_mode", auth.mode, "effort", auth.effort)
 	case workloadCodexManager, legacyWorkloadCodexChat, workloadCodexTask:
-		claude, err := newCodexWorkloadFromEnv(workload, logger, restoreMode)
+		parentLane := managerLane{}
+		paired, err := managerPairEnabled(workload)
+		if err != nil {
+			logger.Error("invalid manager lane configuration", "workload", workload, "err", err)
+			os.Exit(1)
+		}
+		if paired {
+			// Both lanes are built before either starts serving: a pod that can
+			// only start one of them is a pod whose person-facing chat would
+			// hand work to a lane that is not there, so it fails to start
+			// instead (AC-N11).
+			incarnation, err := newLaneIncarnation()
+			if err != nil {
+				logger.Error("failed to mint this run's lane identity", "workload", workload, "err", err)
+				os.Exit(1)
+			}
+			slot, err := newAuthSlotFromEnv(codexAuthFile, codexAuthHomeRel, logger)
+			if err != nil {
+				logger.Error("unsafe agent credential configuration", "workload", workload, "err", err)
+				os.Exit(1)
+			}
+			parentLane = managerLane{role: relayLaneParent, incarnation: incarnation, slot: slot}
+		}
+		claude, err := newCodexWorkloadFromEnv(workload, logger, restoreMode, parentLane)
 		if err != nil {
 			logger.Error("failed to initialise agent workload", "workload", workload, "err", err)
 			os.Exit(1)
 		}
 		a.claude = claude
 		logger.Info("agent workload started", "workload", workload, "addr", addr,
-			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode)
+			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode,
+			"lane", parentLane.role)
+		if paired {
+			monitorIncarnation, err := newLaneIncarnation()
+			if err != nil {
+				logger.Error("failed to mint this run's lane identity", "workload", workload, "err", err)
+				os.Exit(1)
+			}
+			// The monitor lane is never in restore mode: its conversation is
+			// not in the archive, so there is nothing for it to wait for, and
+			// waiting would leave the work unattended for the whole restore.
+			// What it recovers is in the slot's database (session_work_relay.go).
+			monitor, err := newCodexWorkloadFromEnv(workload, logger, false, managerLane{
+				role:        relayLaneMonitor,
+				incarnation: monitorIncarnation,
+				stateDir:    managerMonitorStateDir(claude.stateDir),
+				slot:        parentLane.slot,
+			})
+			if err != nil {
+				logger.Error("failed to initialise the monitor lane", "workload", workload, "err", err)
+				os.Exit(1)
+			}
+			a.monitor = monitor
+			logger.Info("monitor lane started", "workload", workload,
+				"state_dir", monitor.stateDir, "path_prefix", managerLanePathPrefix)
+		}
 	case workloadMiniMaxCode:
 		claude, err := newMiniMaxWorkloadFromEnv(logger, restoreMode)
 		if err != nil {
@@ -312,6 +360,9 @@ func main() {
 		if a.claude != nil {
 			a.claude.Close()
 		}
+		if a.monitor != nil {
+			a.monitor.Close()
+		}
 		if sh := a.current(); sh != nil {
 			// A paused tree would hold SIGHUP pending until the kill timeout.
 			a.resumePaused()
@@ -331,6 +382,10 @@ type agent struct {
 	shellPath string
 	stateDir  string
 	claude    *claudeWorkload
+	// monitor is the second lane of a manager pod: its own conversation,
+	// queue and cursor, served under managerLanePathPrefix (AC-N11,
+	// manager_lane.go). Nil for every workload that is the only one in its pod.
+	monitor *claudeWorkload
 
 	mu     sync.Mutex
 	sh     *shellProc
@@ -606,7 +661,13 @@ var upgrader = websocket.Upgrader{
 
 func routes(logger *slog.Logger, a *agent) http.Handler {
 	if a.claude != nil {
-		return claudeRoutes(logger, a.claude)
+		parent := claudeRoutes(logger, a.claude, a.monitor)
+		if a.monitor == nil {
+			return parent
+		}
+		// The monitor lane's conversation goes beside the parent's on the same
+		// port, and only its conversation (manager_lane.go).
+		return withManagerMonitorLane(parent, claudeRoutes(logger, a.monitor, nil), logger)
 	}
 	mux := http.NewServeMux()
 

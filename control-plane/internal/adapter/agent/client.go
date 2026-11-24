@@ -188,17 +188,17 @@ func (c *HTTPClient) baseURL(ip string) string {
 
 // Write forwards shell stdin or a Claude prompt to the agent (AC-D2/AC-E2).
 func (c *HTTPClient) Write(ctx context.Context, pod, payload string) error {
-	return c.write(ctx, pod, payload, nil)
+	return c.write(ctx, pod, "", payload, nil)
 }
 
 // write is one /write call. The body is the raw payload either way; query
 // carries what the caller chose for the turn it queues.
-func (c *HTTPClient) write(ctx context.Context, pod, payload string, query url.Values) error {
+func (c *HTTPClient) write(ctx context.Context, pod, prefix, payload string, query url.Values) error {
 	ip, err := c.resolve(ctx, pod)
 	if err != nil {
 		return err
 	}
-	target := c.baseURL(ip) + "/write"
+	target := c.baseURL(ip) + prefix + "/write"
 	if len(query) > 0 {
 		target += "?" + query.Encode()
 	}
@@ -276,7 +276,7 @@ const ToolApprovalsParam = "toolApprovals"
 // platform policy allows to the session owner (AC-E2). Like PendingQuestions
 // it is an optional capability, not part of the Client interface.
 func (c *HTTPClient) WriteWithToolApprovals(ctx context.Context, pod, payload string) error {
-	return c.write(ctx, pod, payload, url.Values{ToolApprovalsParam: {"true"}})
+	return c.write(ctx, pod, "", payload, url.Values{ToolApprovalsParam: {"true"}})
 }
 
 // PendingToolApprovals lists the tool calls a claude-code turn put to the
@@ -470,11 +470,18 @@ func (c *HTTPClient) AnswerQuestion(ctx context.Context, pod, questionID string,
 
 // Read fetches workload output after offset from the agent (AC-D3/AC-E3).
 func (c *HTTPClient) Read(ctx context.Context, pod string, offset int64) (string, int64, error) {
+	return c.readLane(ctx, pod, "", offset)
+}
+
+// readLane is Read on one lane of the pod. prefix is empty for the workload's
+// own conversation — the person's chat on a manager — and the lane's path
+// prefix for a second one (AC-N11, lane.go).
+func (c *HTTPClient) readLane(ctx context.Context, pod, prefix string, offset int64) (string, int64, error) {
 	ip, err := c.resolve(ctx, pod)
 	if err != nil {
 		return "", 0, err
 	}
-	url := fmt.Sprintf("%s/read?offset=%d", c.baseURL(ip), offset)
+	url := fmt.Sprintf("%s%s/read?offset=%d", c.baseURL(ip), prefix, offset)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", 0, err
@@ -608,11 +615,16 @@ func (c *HTTPClient) AuthSlotSignedIn(ctx context.Context, pod string) (bool, er
 // Stream opens the data plane's long-lived SSE output feed at offset, over the
 // context-bounded streaming client rather than the short Read one.
 func (c *HTTPClient) Stream(ctx context.Context, pod string, offset int64) (io.ReadCloser, error) {
+	return c.streamLane(ctx, pod, "", offset)
+}
+
+// streamLane is Stream on one lane of the pod (AC-N11, lane.go).
+func (c *HTTPClient) streamLane(ctx context.Context, pod, prefix string, offset int64) (io.ReadCloser, error) {
 	ip, err := c.resolve(ctx, pod)
 	if err != nil {
 		return nil, err
 	}
-	url := fmt.Sprintf("%s/stream?offset=%d", c.baseURL(ip), offset)
+	url := fmt.Sprintf("%s%s/stream?offset=%d", c.baseURL(ip), prefix, offset)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err

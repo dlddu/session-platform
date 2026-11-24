@@ -90,6 +90,10 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/sessions/{id}/read", a.readSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/write", a.writeSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/steer", a.steerSession)
+	// AC-N11: which conversations this session's pod runs. The lane itself is a
+	// parameter of read, write and stream above rather than a route of its own —
+	// a lane is a conversation inside one session, not a session beside it.
+	mux.HandleFunc("GET /api/v1/sessions/{id}/lanes", a.listSessionLanes)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/switch", a.switchSession)
 
 	mux.HandleFunc("POST /api/v1/sessions/{id}/snapshot", a.snapshotSession)
@@ -155,11 +159,20 @@ type writeReq struct {
 	// call the platform policy allows to the session owner (AC-E2). Omitted or
 	// false runs the turn the platform's own way.
 	ToolApprovals bool `json:"toolApprovals"`
+	// Lane is which conversation of a manager pod this prompt is for (AC-N11).
+	// Omitted is the person's chat, so a caller that knows nothing about lanes
+	// writes where it always did.
+	Lane string `json:"lane"`
 }
 
 type readReq struct {
 	// Offset is the read cursor defined by AC-D3.
 	Offset int64 `json:"offset"`
+	// Lane is which conversation of a manager pod to read (AC-N11). Each lane
+	// has its own output buffer and therefore its own cursor: an offset means
+	// nothing across lanes, which is why it travels beside the lane that
+	// produced it.
+	Lane string `json:"lane"`
 }
 
 type readResp struct {
@@ -429,12 +442,17 @@ func (a *API) streamSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, session.ErrInvalidInput)
 		return
 	}
+	lane, err := requestLane(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeJSON(w, http.StatusInternalServerError, errResp{Error: "streaming is unsupported by this server"})
 		return
 	}
-	stream, err := a.mgr.Stream(r.Context(), r.PathValue("id"), offset)
+	stream, err := a.mgr.StreamLane(r.Context(), r.PathValue("id"), lane, offset)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -490,7 +508,12 @@ func (a *API) readSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, session.ErrInvalidInput)
 		return
 	}
-	res, err := a.mgr.Read(r.Context(), r.PathValue("id"), req.Offset)
+	lane, err := session.NormalizeLane(strings.TrimSpace(req.Lane))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	res, err := a.mgr.ReadLane(r.Context(), r.PathValue("id"), lane, req.Offset)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -507,8 +530,13 @@ func (a *API) writeSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	lane, err := session.NormalizeLane(strings.TrimSpace(req.Lane))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
 	res, err := a.mgr.WriteTurn(r.Context(), r.PathValue("id"), req.Payload,
-		session.WriteOptions{ToolApprovals: req.ToolApprovals})
+		session.WriteOptions{ToolApprovals: req.ToolApprovals, Lane: lane})
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -925,6 +953,11 @@ func writeErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, session.ErrPluginRefreshFailed):
 		status = http.StatusBadGateway
 	case errors.Is(err, session.ErrWorkUnsupported):
+		status = http.StatusNotImplemented
+	case errors.Is(err, session.ErrLanesUnsupported):
+		// The session is fine and its chat is there; this workload just runs
+		// one conversation (AC-N11). 501 says that, where 404 would say the
+		// session does not exist and an empty list would say it has no chat.
 		status = http.StatusNotImplemented
 	case errors.Is(err, session.ErrWorkChoiceStale):
 		// The screen is out of date, not the request: 409 with the slot's own

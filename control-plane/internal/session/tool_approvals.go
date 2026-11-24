@@ -76,6 +76,10 @@ type WriteOptions struct {
 	// policy allows to wait for the session owner's decision. The policy's
 	// denials stay denials: they are never put to a person.
 	ToolApprovals bool
+	// Lane is which conversation of a manager pod this write is for (AC-N11).
+	// The zero value is the person's chat, so a caller that knows nothing about
+	// lanes writes where it always did.
+	Lane Lane
 }
 
 var (

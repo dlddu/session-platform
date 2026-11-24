@@ -35,6 +35,14 @@ const (
 	sessionDBMCPURLEnv = "SESSION_DB_MCP_URL"
 	sessionDBRawSQLEnv = "SESSION_DB_RAW_SQL"
 	sessionDBMCPPath   = "/session-db/mcp"
+	// sessionDBLanePathPrefix is where a manager's two lanes reach the same
+	// database as themselves: <prefix>/<role>/<incarnation> (AC-N11). The role
+	// is in the address rather than in an argument because the address is in the
+	// lane's own managed config.toml, which the platform rewrites on every boot
+	// and the model can neither read nor change — and because the only way the
+	// model reaches this sidecar at all is a server that config registered.
+	// So a parent lane cannot call as the monitor: it has no address to call.
+	sessionDBLanePathPrefix = sessionDBMCPPath + "/lane"
 
 	// sessionDBRawSQLDebug is the only value that turns raw SQL on. A spelling
 	// the operator meant as "on" (true, 1, yes) is refused rather than read as
@@ -226,9 +234,15 @@ func sessionDBValue(v any) any {
 // sessionDBToolDefinitions lists the work records, and the raw SQL pair only
 // for a sidecar opted into debug: a tool the model cannot see is one it cannot
 // be talked into using.
-func sessionDBToolDefinitions(rawSQL bool) []map[string]any {
+//
+// The same principle decides what a manager lane is shown. A parent lane reads
+// the work records and does not write them (AC-N11), so the writes are not in
+// its list at all — being told "that is not yours" on every attempt would be a
+// worse way to learn a rule than never being offered it. The guard behind the
+// list stays, for a client holding an older one.
+func sessionDBToolDefinitions(rawSQL bool, caller workCaller) []map[string]any {
 	if !rawSQL {
-		return workToolDefinitions()
+		return laneToolDefinitions(caller.lane)
 	}
 	statement := func(what string) map[string]any {
 		return map[string]any{
@@ -259,7 +273,25 @@ func sessionDBToolDefinitions(rawSQL bool) []map[string]any {
 				"return the rows affected and the last insert rowid. These are SQLite connection counters, NOT committed change totals (DDL/ROLLBACK can retain old values). Without params, several statements separated by ; run in order. Open transactions are rolled back at call end, so a transaction begins and commits within one call.",
 			"inputSchema": statement("The SQLite statement or statements to run."),
 		},
-	}, workToolDefinitions()...)
+	}, laneToolDefinitions(caller.lane)...)
+}
+
+// laneToolDefinitions is the work surface one lane is offered: everything for a
+// manager that runs a single lane or for the monitor that owns the records, and
+// the reads plus the relay for the parent that does not.
+func laneToolDefinitions(lane string) []map[string]any {
+	all := workToolDefinitions(lane)
+	if lane != relayLaneParent {
+		return all
+	}
+	offered := make([]map[string]any, 0, len(all))
+	for _, definition := range all {
+		if name, _ := definition["name"].(string); isWorkLedgerWrite(name) {
+			continue
+		}
+		offered = append(offered, definition)
+	}
+	return offered
 }
 
 // toolDefinitions is what this sidecar's tools/list answers.
@@ -276,14 +308,14 @@ func sessionDBToolDefinitions(rawSQL bool) []map[string]any {
 // The refusals stay in place for a client holding an older list: it is told what
 // to call instead (session_work.go), because a list is a hint and a guard is a
 // guarantee.
-func (s *sessionDB) toolDefinitions(context.Context) []map[string]any {
-	return sessionDBToolDefinitions(s.rawSQL)
+func (s *sessionDB) toolDefinitions(_ context.Context, caller workCaller) []map[string]any {
+	return sessionDBToolDefinitions(s.rawSQL, caller)
 }
 
 // callTool runs one tool. A statement that fails is a tool result with
 // isError, so the model sees SQLite's message; only a malformed call is a
 // JSON-RPC error.
-func (s *sessionDB) callTool(ctx context.Context, params json.RawMessage) (any, *jsonRPCError) {
+func (s *sessionDB) callTool(ctx context.Context, caller workCaller, params json.RawMessage) (any, *jsonRPCError) {
 	var call struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -291,8 +323,27 @@ func (s *sessionDB) callTool(ctx context.Context, params json.RawMessage) (any, 
 	if err := json.Unmarshal(params, &call); err != nil || call.Name == "" {
 		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: "tools/call needs a name and arguments"}
 	}
+	// The lane is checked before the arguments, like the raw SQL opt-in below: a
+	// parent lane writing the records has to learn which lane owns them, not
+	// that the record it sent was malformed. This is the guard behind the list —
+	// it answers a client holding a list from before the pair, and it is what
+	// makes the role an enforced boundary rather than a filtered menu.
+	if caller.lane == relayLaneParent && isWorkLedgerWrite(call.Name) {
+		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: call.Name +
+			" is the monitor lane's to call: this manager's parent lane reads the work records and does not write them. " +
+			"Hand the change to the monitor with " + relaySendTool + " and read the result with " + relayStatusTool}
+	}
+	// The other side of the same check. The relay is a handover between two
+	// lanes, so a database serving one has no second lane to address — and the
+	// generic argument refusal behind this would say only that the call was
+	// malformed, which is not what is wrong with it.
+	if isRelayTool(call.Name) && !isRelayLane(caller.lane) {
+		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: call.Name +
+			" is the handover between a manager's two lanes; this session database is serving a single lane, " +
+			"so there is no other lane to hand a message to"}
+	}
 	if isWorkTool(call.Name) {
-		return s.callWork(ctx, call.Name, call.Arguments)
+		return s.callWork(ctx, caller, call.Name, call.Arguments)
 	}
 	// A name this image removed is answered with the call that does the job
 	// instead. The ledger tools, the migration, the rollback export and now the
@@ -383,8 +434,9 @@ func sessionDBToolResult(payload any, isError bool) map[string]any {
 }
 
 // serveMCP is the MCP endpoint: the same JSON-RPC-over-POST shape as
-// the session MCP (session_mcp.go).
-func (s *sessionDB) serveMCP(w http.ResponseWriter, r *http.Request) {
+// the session MCP (session_mcp.go). caller is which lane of the manager this
+// address belongs to, decided by the path and not by anything in the request.
+func (s *sessionDB) serveMCP(w http.ResponseWriter, r *http.Request, caller workCaller) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "session DB MCP accepts POST", http.StatusMethodNotAllowed)
@@ -411,9 +463,9 @@ func (s *sessionDB) serveMCP(w http.ResponseWriter, r *http.Request) {
 			"serverInfo":      map[string]any{"name": sessionDBMCPServerName, "version": sessionMCPServerVersion},
 		})
 	case "tools/list":
-		writeJSONRPCResult(w, req.ID, map[string]any{"tools": s.toolDefinitions(r.Context())})
+		writeJSONRPCResult(w, req.ID, map[string]any{"tools": s.toolDefinitions(r.Context(), caller)})
 	case "tools/call":
-		result, rpcErr := s.callTool(r.Context(), req.Params)
+		result, rpcErr := s.callTool(r.Context(), caller, req.Params)
 		if rpcErr != nil {
 			writeJSONRPCError(w, req.ID, rpcErr.Code, rpcErr.Message)
 			return
@@ -433,9 +485,20 @@ func (s *sessionDB) serveMCP(w http.ResponseWriter, r *http.Request) {
 // unchanged.
 func withSessionDBMCP(proxy http.Handler, db *sessionDB) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if caller, ok, bad := sessionDBLaneCaller(r.URL.Path); ok {
+			if bad != "" {
+				http.Error(w, bad, http.StatusNotFound)
+				return
+			}
+			db.serveMCP(w, r, caller)
+			return
+		}
 		switch r.URL.Path {
 		case sessionDBMCPPath:
-			db.serveMCP(w, r)
+			// The address a manager with one lane registers. It keeps the whole
+			// surface: there is no other lane for the records to belong to, so
+			// narrowing it would take writes away from the only caller there is.
+			db.serveMCP(w, r, workCaller{})
 		case sessionDBWorkRequestsPath:
 			db.serveWorkRequests(w, r)
 		case sessionDBWorkTasksPath:
@@ -446,6 +509,39 @@ func withSessionDBMCP(proxy http.Handler, db *sessionDB) http.Handler {
 			proxy.ServeHTTP(w, r)
 		}
 	})
+}
+
+// sessionDBLaneCaller reads a lane address: <prefix>/<role>/<incarnation>.
+// It reports whether the path is one of this prefix's at all, so a path that is
+// not is left to the routes beside it, and a malformed one under the prefix is
+// refused by name rather than falling through to the K3s MCP proxy.
+//
+// The incarnation has the id shape every record here uses, and it is not a
+// secret: what it proves is only that a caller presenting a different one is a
+// different run of that lane, which is what makes a claim left behind by a lane
+// that is gone recoverable exactly once (session_work_relay.go).
+func sessionDBLaneCaller(path string) (caller workCaller, underPrefix bool, refusal string) {
+	if path != sessionDBLanePathPrefix && !strings.HasPrefix(path, sessionDBLanePathPrefix+"/") {
+		return workCaller{}, false, ""
+	}
+	parts := strings.Split(strings.TrimPrefix(path, sessionDBLanePathPrefix+"/"), "/")
+	if path == sessionDBLanePathPrefix || len(parts) != 2 {
+		return workCaller{}, true, "a lane address is " + sessionDBLanePathPrefix + "/<role>/<incarnation>"
+	}
+	if !isRelayLane(parts[0]) {
+		return workCaller{}, true, "a manager lane is " + strings.Join(relayLanes, " or ")
+	}
+	if !workID.MatchString(parts[1]) {
+		return workCaller{}, true, "an incarnation is 1..128 letters, digits, _ or -"
+	}
+	return workCaller{lane: parts[0], incarnation: parts[1]}, true, ""
+}
+
+// sessionDBLaneMCPPath is the address one lane registers. The incarnation is
+// this run of the lane, so a restart changes the address the lane calls from
+// and the database can tell the two runs apart.
+func sessionDBLaneMCPPath(lane, incarnation string) string {
+	return sessionDBLanePathPrefix + "/" + lane + "/" + incarnation
 }
 
 // errSessionDBMCPURL is a SESSION_DB_MCP_URL the workload agent will not

@@ -351,7 +351,7 @@ func TestAuthSlotCopiesOnlyJSON(t *testing.T) {
 	if got, _ := readOptional(t, slot.slotPath()); got != `{"t":"good"}` {
 		t.Fatalf("slot = %q, want the good login kept", got)
 	}
-	if slot.unpushed {
+	if slot.homeLocked(home).unpushed {
 		t.Fatal("a non-JSON file is not a login to retry")
 	}
 }

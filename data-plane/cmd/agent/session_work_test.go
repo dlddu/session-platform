@@ -96,7 +96,7 @@ func workCall(t *testing.T, s *sessionDB, name string, args map[string]any) (map
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, rpcErr := s.callWork(context.Background(), name, raw)
+	out, rpcErr := s.callWork(context.Background(), workCaller{}, name, raw)
 	if rpcErr != nil {
 		t.Fatalf("%s: JSON-RPC error %+v", name, rpcErr)
 	}

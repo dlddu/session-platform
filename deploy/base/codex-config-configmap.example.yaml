@@ -23,6 +23,21 @@
 #                           the only accepted value is `debug`, which adds
 #                           raw_query/raw_exec (any other value fails the
 #                           sidecar's start rather than reading as off).
+#   manager-monitor-lane    Opt-in for the codex-manager pod's second execution
+#                           context (AC-N11), projected into the workload
+#                           container as MANAGER_MONITOR_LANE. `1` runs the
+#                           monitor that moves the work beside the parent that
+#                           talks to the person — one pod, one slot, one
+#                           archive, two conversations; the parent then reads
+#                           the work records and the monitor owns writing them.
+#                           Omit it or set `0` and a manager runs the single
+#                           lane it always did. It is a deployment key rather
+#                           than a session choice for the reason
+#                           session-db-raw-sql is: it changes what a manager pod
+#                           is, and a chat cannot ask for a second lane of
+#                           itself. Any other value fails the pod's start
+#                           rather than reading as off, so a misspelling cannot
+#                           look like a manager that was never paired.
 #
 # Named by CODEX_CONFIG_CONFIGMAP (default `codex-config`). EXAMPLE-ONLY, not in
 # kustomization.yaml.

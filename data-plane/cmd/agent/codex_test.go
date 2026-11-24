@@ -421,31 +421,31 @@ func TestNewCodexWorkloadFromEnv(t *testing.T) {
 	t.Setenv(codexReasoningEffortEnv, "")
 	t.Setenv(sessionDBMCPURLEnv, "")
 	// AC-N6: codex-manager keeps its login in a slot too.
-	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err == nil {
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true, managerLane{}); err == nil {
 		t.Fatal("codex-manager without an auth slot must be refused")
 	}
 	t.Setenv(authSlotDirEnv, t.TempDir())
-	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err != nil {
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true, managerLane{}); err != nil {
 		t.Fatalf("restore-mode codex-manager workload: %v", err)
 	}
 	t.Setenv(sessionDBMCPURLEnv, "http://127.0.0.1:8093/session-db/mcp")
-	if w, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err != nil {
+	if w, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true, managerLane{}); err != nil {
 		t.Fatalf("codex-manager with a session DB: %v", err)
 	} else if cli, ok := w.cli.(codexCLI); !ok || cli.sessionDBURL != "http://127.0.0.1:8093/session-db/mcp" {
 		t.Fatalf("session DB URL not carried to the CLI: %+v", w.cli)
 	}
 	t.Setenv(sessionDBMCPURLEnv, "http://db.example:8093/session-db/mcp")
-	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err == nil {
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true, managerLane{}); err == nil {
 		t.Fatal("a session DB MCP off loopback must be refused")
 	}
 	t.Setenv(sessionDBMCPURLEnv, "")
 	t.Setenv(codexReasoningEffortEnv, "max")
-	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err == nil {
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true, managerLane{}); err == nil {
 		t.Fatal("max is not a codex effort")
 	}
 	// AC-J1: codex-manager's effort is the codex-config default.
 	t.Setenv(codexReasoningEffortEnv, "xhigh")
-	if w, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err != nil {
+	if w, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true, managerLane{}); err != nil {
 		t.Fatalf("codex-manager with a default effort: %v", err)
 	} else {
 		got := w.argv("p", false, false)
@@ -457,12 +457,12 @@ func TestNewCodexWorkloadFromEnv(t *testing.T) {
 	}
 	t.Setenv(codexReasoningEffortEnv, "")
 	t.Setenv(codexModelEnv, "bad model")
-	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err == nil {
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true, managerLane{}); err == nil {
 		t.Fatal("an invalid model must be refused at start")
 	}
 	t.Setenv(codexModelEnv, "")
 	t.Setenv("OPENAI_API_KEY", "sk")
-	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err == nil {
+	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true, managerLane{}); err == nil {
 		t.Fatal("a credential must be refused at start")
 	}
 }
@@ -481,7 +481,7 @@ func TestNewCodexWorkloadFromEnvAcceptsPreviousName(t *testing.T) {
 	t.Setenv(authSlotDirEnv, t.TempDir())
 	t.Setenv(codexReasoningEffortEnv, "")
 	t.Setenv(sessionDBMCPURLEnv, "")
-	w, err := newCodexWorkloadFromEnv(legacyWorkloadCodexChat, testLogger(), true)
+	w, err := newCodexWorkloadFromEnv(legacyWorkloadCodexChat, testLogger(), true, managerLane{})
 	if err != nil {
 		t.Fatalf("previous name refused: %v", err)
 	}
@@ -496,11 +496,11 @@ func TestNewCodexWorkloadFromEnvAcceptsPreviousName(t *testing.T) {
 	// deployment's (AC-J1, from the codex-config ConfigMap), and a value
 	// outside AC-M4's list still refuses to start.
 	t.Setenv(codexReasoningEffortEnv, "xhigh")
-	if _, err := newCodexWorkloadFromEnv(legacyWorkloadCodexChat, testLogger(), true); err != nil {
+	if _, err := newCodexWorkloadFromEnv(legacyWorkloadCodexChat, testLogger(), true, managerLane{}); err != nil {
 		t.Fatalf("the previous name refused the deployment's effort: %v", err)
 	}
 	t.Setenv(codexReasoningEffortEnv, "max")
-	if _, err := newCodexWorkloadFromEnv(legacyWorkloadCodexChat, testLogger(), true); err == nil {
+	if _, err := newCodexWorkloadFromEnv(legacyWorkloadCodexChat, testLogger(), true, managerLane{}); err == nil {
 		t.Fatal("the previous name must not accept an effort outside the list")
 	}
 }
@@ -517,16 +517,16 @@ func TestNewCodexTaskWorkloadFromEnv(t *testing.T) {
 	t.Setenv(codexRunnerBinaryEnv, "/opt/runner")
 	t.Setenv(codexReasoningEffortEnv, "")
 	t.Setenv(authSlotDirEnv, "")
-	if _, err := newCodexWorkloadFromEnv(workloadCodexTask, testLogger(), true); err == nil {
+	if _, err := newCodexWorkloadFromEnv(workloadCodexTask, testLogger(), true, managerLane{}); err == nil {
 		t.Fatal("codex-task without an auth slot must be refused")
 	}
 	t.Setenv(authSlotDirEnv, t.TempDir())
 	t.Setenv(codexReasoningEffortEnv, "max")
-	if _, err := newCodexWorkloadFromEnv(workloadCodexTask, testLogger(), true); err == nil {
+	if _, err := newCodexWorkloadFromEnv(workloadCodexTask, testLogger(), true, managerLane{}); err == nil {
 		t.Fatal("max is not a codex-task effort")
 	}
 	t.Setenv(codexReasoningEffortEnv, "xhigh")
-	w, err := newCodexWorkloadFromEnv(workloadCodexTask, testLogger(), true)
+	w, err := newCodexWorkloadFromEnv(workloadCodexTask, testLogger(), true, managerLane{})
 	if err != nil {
 		t.Fatal(err)
 	}

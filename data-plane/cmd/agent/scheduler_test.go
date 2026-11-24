@@ -386,7 +386,7 @@ func TestSchedulerMCPEndpoint(t *testing.T) {
 
 func TestAgentQueueAndSchedulerRoutes(t *testing.T) {
 	c := newTestClaudeWorkload(t)
-	routes := claudeRoutes(testLogger(), c)
+	routes := claudeRoutes(testLogger(), c, nil)
 
 	req := httptest.NewRequest(http.MethodGet, agentQueuePath, nil)
 	req.RemoteAddr = "10.0.0.5:4000"

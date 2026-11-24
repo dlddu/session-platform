@@ -252,6 +252,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/SessionId"
         - $ref: "#/components/parameters/StreamOffset"
+        - $ref: "#/components/parameters/StreamLane"
         - $ref: "#/components/parameters/LastEventID"
       responses:
         "200":
@@ -363,6 +364,45 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "503": { $ref: "#/components/responses/AuthPoolExhausted" }
+  /sessions/{id}/lanes:
+    get:
+      summary: Which conversations this session's pod runs (AC-N11)
+      operationId: listSessionLanes
+      description: >
+        A codex-manager session whose deployment turns the pair on runs the
+        person's chat and the monitor that moves the work as two execution
+        contexts in one pod. This answers which of them the pod is actually
+        running, with the pod each one runs in, so a reader can check that the
+        pair is in one pod rather than taking the control plane's word for it —
+        the lanes come from the pod's own answer.
+
+        Like the work reads it is passive: it neither restores a snapshot nor
+        counts as an access, so asking never starts a pod. A snapshotted
+        session returns 422 instead, and a workload that runs a single
+        conversation returns 501 — which is not the same as having no chat.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      responses:
+        "200":
+          description: The conversations this pod runs
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Lanes" }
+        "404":
+          description: Session not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: The session is snapshotted and has no live pod to ask; restore explicitly first
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "501":
+          description: This session's workload runs a single conversation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /sessions/{id}/steer:
     post:
       summary: Put a message into a codex session's running turn (AC-J9)
@@ -1073,6 +1113,15 @@ components:
         history. Clients must not calculate it from decoded text. A value ahead
         of the retained byte length produces a reset event whose id and
         data.nextOffset equal the current length.
+    StreamLane:
+      name: lane
+      in: query
+      required: false
+      schema: { $ref: "#/components/schemas/Lane" }
+      description: >
+        Which conversation of a manager pod to stream (AC-N11). Omitted is the
+        person's chat. The offset and `Last-Event-ID` cursors belong to the
+        lane they were issued by.
     LastEventID:
       name: Last-Event-ID
       in: header
@@ -1085,6 +1134,52 @@ components:
         SSE reconnect cursor. When present it takes precedence over the offset
         query parameter.
   schemas:
+    Lane:
+      type: string
+      enum: [parent, monitor]
+      default: parent
+      description: >
+        Which conversation of a manager pod this call is for (AC-N11). A
+        codex-manager session whose deployment turns the pair on runs two
+        execution contexts in one pod: `parent` is the person's chat, which
+        reads the work records, and `monitor` moves the work and owns writing
+        them. Omitted is `parent`, so a client that knows nothing about lanes
+        reaches exactly the conversation it always did. Each lane has its own
+        output buffer and therefore its own cursor — an offset from one lane
+        means nothing on the other. A lane that is not one of these is 400, not
+        a silent fallback to the chat. Naming `monitor` on a session whose
+        workload runs a single conversation is 501.
+    Lanes:
+      type: object
+      description: >
+        Which conversations this session's pod runs and the pod each runs in.
+        The pod is repeated on every lane rather than stated once beside them
+        because the fact worth being able to check is that it is the same one.
+      properties:
+        session: { $ref: "#/components/schemas/Session" }
+        pod: { type: string }
+        paired:
+          type: boolean
+          description: >
+            True when this pod reported a second conversation. It comes from
+            the pod's own answer, not from the control plane's configuration,
+            so it cannot claim a lane that failed to start.
+        lanes:
+          type: array
+          items:
+            type: object
+            properties:
+              role: { $ref: "#/components/schemas/Lane" }
+              pod: { type: string }
+              path:
+                type: string
+                description: Where this lane's conversation is served on its pod's agent.
+                example: /monitor/read
+              ready:
+                type: boolean
+                description: >
+                  This lane's own readiness. A restored pod's chat can still be
+                  waiting for its archive while the monitor is already working.
     RuntimeConfig:
       type: object
       additionalProperties: false
@@ -1470,10 +1565,14 @@ components:
             is
 
             refused with 400 and nothing is written.
+        lane:
+          $ref: "#/components/schemas/Lane"
     ReadRequest:
       type: object
       additionalProperties: false
       properties:
+        lane:
+          $ref: "#/components/schemas/Lane"
         offset:
           type: integer
           format: int64

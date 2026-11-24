@@ -507,6 +507,27 @@ const (
 	SessionDBMCPURLEnvVar = "SESSION_DB_MCP_URL"
 	sessionDBMCPPath      = "/session-db/mcp"
 
+	// ManagerMonitorLaneEnvVar turns the manager's second lane on (AC-N11): the
+	// monitor that moves the work beside the parent that talks to the person,
+	// in the same pod. Keep in sync with data-plane/cmd/agent.
+	//
+	// It comes from the deployment's codex ConfigMap rather than from the
+	// session, for the reason the raw SQL opt-in does: it changes what a
+	// manager pod is, and a chat session cannot ask for a second lane of
+	// itself. Unset is a manager with one lane — every session created before
+	// the pair keeps behaving exactly as it did.
+	ManagerMonitorLaneEnvVar = "MANAGER_MONITOR_LANE"
+	// CodexManagerMonitorLaneConfigKey is that ConfigMap key.
+	CodexManagerMonitorLaneConfigKey = "manager-monitor-lane"
+	// ManagerMonitorStateDirEnvVar is where the monitor lane keeps its own
+	// conversation, HOME and managed config. It is on the pod's state volume
+	// and deliberately *outside* the archived tree (workloadStateDir): the
+	// session's archive is the person's chat, and a second conversation written
+	// while a checkpoint is being taken would make that archive inconsistent.
+	// The monitor's own record of where it stands is the slot's database.
+	ManagerMonitorStateDirEnvVar = "MANAGER_MONITOR_STATE_DIR"
+	managerMonitorStateDir       = workloadStateVolumePath + "/state-monitor"
+
 	// SessionDBRawSQLEnvVar carries the raw SQL debug opt-in to the sidecar,
 	// which refuses any value but `debug`. Keep in sync with
 	// data-plane/cmd/agent. It comes from the deployment's codex ConfigMap, not
@@ -581,7 +602,14 @@ func attachSessionDB(container *corev1.Container, sidecars []corev1.Container, w
 	sidecars[proxy].Env = append(sidecars[proxy].Env,
 		corev1.EnvVar{Name: SessionDBDirEnvVar, Value: SessionDBMountPath},
 		optionalConfigMapEnv(SessionDBRawSQLEnvVar, configMap, CodexSessionDBRawSQLConfigKey))
-	container.Env = append(container.Env, corev1.EnvVar{Name: SessionDBMCPURLEnvVar, Value: CodexChatSessionDBMCPURL})
+	container.Env = append(container.Env,
+		corev1.EnvVar{Name: SessionDBMCPURLEnvVar, Value: CodexChatSessionDBMCPURL},
+		// The pair's opt-in and where its second lane lives (AC-N11). Both go
+		// on the workload container, because the lanes are two workloads in it;
+		// the sidecar needs neither — it learns which lane is calling from the
+		// address the call arrives on.
+		optionalConfigMapEnv(ManagerMonitorLaneEnvVar, configMap, CodexManagerMonitorLaneConfigKey),
+		corev1.EnvVar{Name: ManagerMonitorStateDirEnvVar, Value: managerMonitorStateDir})
 	return []corev1.Container{slotInitContainer(image)}, nil
 }
 
