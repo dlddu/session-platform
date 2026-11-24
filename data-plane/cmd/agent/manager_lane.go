@@ -133,19 +133,31 @@ type managerLane struct {
 // pair on and misspelled it would otherwise run a single-lane manager that looks
 // exactly like one that was never paired.
 func managerPairEnabled(workload string) (bool, error) {
-	raw := strings.TrimSpace(os.Getenv(managerMonitorLaneEnv))
-	switch raw {
-	case "", managerMonitorLaneOff:
-		return false, nil
-	case managerMonitorLaneOn:
-	default:
-		return false, fmt.Errorf("%s must be unset, %q or %q, not %q",
-			managerMonitorLaneEnv, managerMonitorLaneOff, managerMonitorLaneOn, raw)
+	on, err := managerPairOptIn()
+	if err != nil || !on {
+		return false, err
 	}
 	if workload != workloadCodexManager && workload != legacyWorkloadCodexChat {
 		return false, fmt.Errorf("%s is codex-manager's; workload %q runs one lane", managerMonitorLaneEnv, workload)
 	}
 	return true, nil
+}
+
+// managerPairOptIn is the opt-in's value alone, without the workload it belongs
+// to. The manager's own container reads it through managerPairEnabled; the
+// sidecar beside it reads it here, because whether to sweep for a lane to wake
+// is the same question as whether that lane exists (session_work_relay_wake.go)
+// and two opt-ins that could disagree would be one too many.
+func managerPairOptIn() (bool, error) {
+	switch raw := strings.TrimSpace(os.Getenv(managerMonitorLaneEnv)); raw {
+	case "", managerMonitorLaneOff:
+		return false, nil
+	case managerMonitorLaneOn:
+		return true, nil
+	default:
+		return false, fmt.Errorf("%s must be unset, %q or %q, not %q",
+			managerMonitorLaneEnv, managerMonitorLaneOff, managerMonitorLaneOn, raw)
+	}
 }
 
 // managerMonitorStateDir is the monitor lane's state tree. It defaults beside

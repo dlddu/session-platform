@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -528,6 +529,22 @@ const (
 	ManagerMonitorStateDirEnvVar = "MANAGER_MONITOR_STATE_DIR"
 	managerMonitorStateDir       = workloadStateVolumePath + "/state-monitor"
 
+	// ManagerMonitorWakeURLEnvVar is the monitor lane's own write address, given
+	// to the sidecar that holds the slot's database (AC-N11). The sidecar is
+	// what starts the monitor's turn when the parent hands it a message: it owns
+	// the rows, and a record nobody runs is a pair in shape only. The hop is the
+	// one the scheduler already makes (SchedulerAgentURLEnvVar) — loopback,
+	// inside this pod, onto the lane's own queue.
+	//
+	// The address is unconditional — it is a fact about this pod's shape, not a
+	// decision — and the pair's opt-in travels beside it to decide whether the
+	// sweep runs at all. That way an unpaired manager's sidecar simply never
+	// sweeps, while a paired one that somehow has no address to wake fails to
+	// start instead of storing handovers nothing will ever run. Keep in sync
+	// with data-plane/cmd/agent.
+	ManagerMonitorWakeURLEnvVar = "MANAGER_MONITOR_WAKE_URL"
+	managerMonitorWakePath      = "/monitor/write"
+
 	// SessionDBRawSQLEnvVar carries the raw SQL debug opt-in to the sidecar,
 	// which refuses any value but `debug`. Keep in sync with
 	// data-plane/cmd/agent. It comes from the deployment's codex ConfigMap, not
@@ -583,7 +600,7 @@ func (o *ClientOrchestrator) attachAuthSlot(container *corev1.Container, workloa
 // session, so the database carries over to whichever chat session holds the
 // slot next. The workload container only learns the MCP's address. Other
 // types get nothing.
-func attachSessionDB(container *corev1.Container, sidecars []corev1.Container, workloadType session.WorkloadType, image, configMap string) ([]corev1.Container, error) {
+func attachSessionDB(container *corev1.Container, sidecars []corev1.Container, workloadType session.WorkloadType, image, configMap string, agentPort int) ([]corev1.Container, error) {
 	if workloadType != session.WorkloadTypeCodexManager {
 		return nil, nil
 	}
@@ -601,16 +618,30 @@ func attachSessionDB(container *corev1.Container, sidecars []corev1.Container, w
 	})
 	sidecars[proxy].Env = append(sidecars[proxy].Env,
 		corev1.EnvVar{Name: SessionDBDirEnvVar, Value: SessionDBMountPath},
-		optionalConfigMapEnv(SessionDBRawSQLEnvVar, configMap, CodexSessionDBRawSQLConfigKey))
+		optionalConfigMapEnv(SessionDBRawSQLEnvVar, configMap, CodexSessionDBRawSQLConfigKey),
+		// The sidecar does not need to be told which lane is calling it — the
+		// address a call arrives on says that. What it does need is the lane to
+		// wake when a handover commits, and the same opt-in the workload reads,
+		// so the pair cannot be half on (AC-N11).
+		optionalConfigMapEnv(ManagerMonitorLaneEnvVar, configMap, CodexManagerMonitorLaneConfigKey),
+		managerMonitorWakeEnv(agentPort))
 	container.Env = append(container.Env,
 		corev1.EnvVar{Name: SessionDBMCPURLEnvVar, Value: CodexChatSessionDBMCPURL},
 		// The pair's opt-in and where its second lane lives (AC-N11). Both go
-		// on the workload container, because the lanes are two workloads in it;
-		// the sidecar needs neither — it learns which lane is calling from the
-		// address the call arrives on.
+		// on the workload container, because the lanes are two workloads in it.
 		optionalConfigMapEnv(ManagerMonitorLaneEnvVar, configMap, CodexManagerMonitorLaneConfigKey),
 		corev1.EnvVar{Name: ManagerMonitorStateDirEnvVar, Value: managerMonitorStateDir})
 	return []corev1.Container{slotInitContainer(image)}, nil
+}
+
+// managerMonitorWakeEnv is the monitor lane's write address on this pod's
+// loopback. It is the agent's own port — the lanes share one listener, and the
+// lane is a path prefix (AC-N11) — so there is no second port to get wrong.
+func managerMonitorWakeEnv(agentPort int) corev1.EnvVar {
+	return corev1.EnvVar{
+		Name:  ManagerMonitorWakeURLEnvVar,
+		Value: "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(agentPort)) + managerMonitorWakePath,
+	}
 }
 
 // slotInitContainer creates the slot's two directories and hands the

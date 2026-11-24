@@ -71,6 +71,12 @@ type sessionDB struct {
 	// it — their statements are this type's methods, not model-supplied SQL.
 	rawSQL bool
 	logger *slog.Logger
+	// waker is what turns a committed relay_send into a monitor turn
+	// (session_work_relay_wake.go). Nil for a pod that does not run the pair,
+	// and nil is not a degraded mode — it is a sidecar with no second lane to
+	// wake. The nudge it gets is only a nudge: the waker's own sweep reads the
+	// same rows, so a nil or a missed one costs latency and never a message.
+	waker *relayWaker
 
 	mu sync.Mutex
 	db *sql.DB

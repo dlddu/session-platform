@@ -37,7 +37,12 @@
 #                           is, and a chat cannot ask for a second lane of
 #                           itself. Any other value fails the pod's start
 #                           rather than reading as off, so a misspelling cannot
-#                           look like a manager that was never paired.
+#                           look like a manager that was never paired. The same
+#                           key also reaches the sidecar that holds the slot's
+#                           database, which is what starts the monitor's turn
+#                           when the parent hands it a message — otherwise the
+#                           handovers would be stored and nothing would run
+#                           them. One key, read the same way on both.
 #
 # Named by CODEX_CONFIG_CONFIGMAP (default `codex-config`). EXAMPLE-ONLY, not in
 # kustomization.yaml.

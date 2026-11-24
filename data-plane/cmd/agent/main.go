@@ -300,6 +300,34 @@ func main() {
 				os.Exit(1)
 			}
 			defer db.Close()
+			// What makes the monitor lane run what the parent hands it: the
+			// sidecar owns the rows, so the sidecar is what wakes the lane
+			// (AC-N11, session_work_relay_wake.go).
+			wakeURL, err := monitorWakeURLFromEnv(os.Getenv)
+			if err != nil {
+				logger.Error("invalid monitor lane wake URL", "err", err)
+				os.Exit(1)
+			}
+			paired, err := managerPairOptIn()
+			if err != nil {
+				logger.Error("invalid manager lane configuration", "err", err)
+				os.Exit(1)
+			}
+			// The opt-in decides whether the sweep runs; the address is only
+			// where it would knock. An unpaired pod has an address and no lane,
+			// which is simply no sweep — but a paired pod with no address would
+			// be a pod that stores handovers and runs none of them, so it fails
+			// to start rather than look like a working pair.
+			if paired && wakeURL == "" {
+				logger.Error("the manager pair is on but this sidecar has no monitor lane address to wake",
+					"env", managerMonitorWakeURLEnv)
+				os.Exit(1)
+			}
+			if paired {
+				db.waker = newRelayWaker(db.monitorRelayWakeSet, newHTTPRelayWakeTarget(wakeURL), logger)
+				go db.waker.run(context.Background())
+				logger.Info("monitor lane relay wake enabled", "write_url", wakeURL, "sweep", relayWakeSweep)
+			}
 			handler = withSessionDBMCP(proxy, db)
 			logger.Info("session db mcp enabled", "path", sessionDBMCPPath, "raw_sql", rawSQL)
 		}

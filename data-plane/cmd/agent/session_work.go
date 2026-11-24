@@ -756,6 +756,13 @@ func (s *sessionDB) callWork(ctx context.Context, caller workCaller, name string
 		}
 		return sessionDBToolResult(known, true), nil
 	}
+	if name == relaySendTool && caller.lane == relayLaneParent {
+		// The row is committed, so the monitor has work. This only shortens the
+		// wait: the waker's sweep would find the same row on its own, which is
+		// what makes a nudge that never arrives harmless
+		// (session_work_relay_wake.go).
+		s.waker.notify()
+	}
 	return sessionDBToolResult(result, false), nil
 }
 
