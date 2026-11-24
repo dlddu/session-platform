@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1697,6 +1698,74 @@ func (s *Service) releaseAuthSlotBestEffort(workload session.WorkloadType, id st
 type workAgent interface {
 	WorkTasks(ctx context.Context, pod string, limit int, afterID, status, sessionID string) (session.WorkTaskPage, error)
 	WorkTurns(ctx context.Context, pod, taskID string, afterTurnID int64, limit int, openOnly bool) (session.WorkTurnPage, error)
+}
+
+// workWriterAgent is the agent capability behind the seal that says who writes
+// a slot's work records, and behind a bound monitor's calls on them.
+type workWriterAgent interface {
+	WorkWriter(ctx context.Context, pod string) (session.WorkWriter, error)
+	SealWorkWriter(ctx context.Context, pod string, in session.WorkSeal) (session.WorkSealResult, error)
+	CallWork(ctx context.Context, pod, name string, args json.RawMessage) (session.WorkCallResult, error)
+}
+
+// workWritable is workReadable for the seal: the same checks, and the agent has
+// to offer the writer path as well. A session with no live pod is unavailable
+// rather than unsealed — the records are on the volume and so is the seal, and
+// answering "nobody has them" would let a caller open a second writer.
+func (s *Service) workWritable(ctx context.Context, id string) (*session.Session, workWriterAgent, error) {
+	sess, _, err := s.workReadable(ctx, id)
+	if err != nil {
+		return sess, nil, err
+	}
+	agentW, ok := s.agent.(workWriterAgent)
+	if !ok {
+		return sess, nil, fmt.Errorf("%w: this deployment's agent cannot hand work records over",
+			session.ErrWorkUnsupported)
+	}
+	return sess, agentW, nil
+}
+
+// WorkWriter reads who may write one session's work records.
+func (s *Service) WorkWriter(ctx context.Context, id string) (session.WorkWriter, error) {
+	sess, agentW, err := s.workWritable(ctx, id)
+	if err != nil {
+		return session.WorkWriter{}, err
+	}
+	return agentW.WorkWriter(ctx, sess.Pod)
+}
+
+// SealWorkWriter hands one session's work records to its monitor, or gives them
+// back. When it returns without error the previous writer is already refused —
+// the slot moved the seal in the transaction that every write to those records
+// contends with — so the caller may open the next writer at that point and must
+// not before (AC-N9, monitor pair).
+func (s *Service) SealWorkWriter(
+	ctx context.Context, id string, in session.WorkSeal,
+) (session.WorkSealResult, error) {
+	var empty session.WorkSealResult
+	if in.Writer != session.WorkWriterSession && in.Writer != session.WorkWriterMonitor {
+		return empty, fmt.Errorf("%w: writer must be %q or %q",
+			session.ErrInvalidInput, session.WorkWriterSession, session.WorkWriterMonitor)
+	}
+	sess, agentW, err := s.workWritable(ctx, id)
+	if err != nil {
+		return empty, err
+	}
+	return agentW.SealWorkWriter(ctx, sess.Pod, in)
+}
+
+// CallWork makes one work tool call against a session's records on behalf of
+// its bound monitor. The slot decides whether the monitor may write, from the
+// seal; this only carries the call.
+func (s *Service) CallWork(
+	ctx context.Context, id, name string, args json.RawMessage,
+) (session.WorkCallResult, error) {
+	var empty session.WorkCallResult
+	sess, agentW, err := s.workWritable(ctx, id)
+	if err != nil {
+		return empty, err
+	}
+	return agentW.CallWork(ctx, sess.Pod, name, args)
 }
 
 // workReadable is the check every call on this path shares: the slot keeps work

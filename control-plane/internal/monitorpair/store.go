@@ -522,3 +522,46 @@ func (s *Store) Snapshot(ctx context.Context, monitorSessionID, kind, key string
 	m.MirroredAt = time.Unix(at, 0).UTC()
 	return m, nil
 }
+
+// Unbind removes one pair, and is the first half of a rollback.
+//
+// Order matters and is the caller's to keep: removing the binding is what stops
+// the monitor — every monitor-side route resolves the binding first, and the
+// control plane will not carry its calls without one — so this comes *before*
+// the slot's seal is handed back. Doing it the other way round would leave a
+// moment with two writers, which is the one state the pair must never be in.
+//
+// It answers whether a binding was there. Unbinding a pair that is already gone
+// is not an error: a rollback that lost its reply has to be safe to repeat.
+func (s *Store) Unbind(ctx context.Context, parentSessionID string) (Binding, bool, error) {
+	if !validID(parentSessionID) {
+		return Binding{}, false, ErrInvalidID
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Binding{}, false, err
+	}
+	defer tx.Rollback()
+	var monitor, tenant string
+	var createdAt int64
+	err = tx.QueryRowContext(ctx,
+		`SELECT monitor_session_id, tenant, created_at FROM bindings WHERE parent_session_id = ?`,
+		parentSessionID).Scan(&monitor, &tenant, &createdAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Binding{}, false, tx.Commit()
+	}
+	if err != nil {
+		return Binding{}, false, err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM bindings WHERE parent_session_id = ?`, parentSessionID); err != nil {
+		return Binding{}, false, err
+	}
+	// The inbox, the mirror and the published snapshots are left where they
+	// are. They are this pair's receipts and its last answers to the parent:
+	// deleting them would lose the record of instructions that were accepted,
+	// and a rollback is not meant to erase what happened.
+	binding := Binding{ParentSessionID: parentSessionID, MonitorSessionID: monitor,
+		Tenant: tenant, CreatedAt: time.Unix(createdAt, 0).UTC()}
+	return binding, true, tx.Commit()
+}

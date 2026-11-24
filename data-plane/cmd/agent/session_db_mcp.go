@@ -299,7 +299,10 @@ func (s *sessionDB) callTool(ctx context.Context, params json.RawMessage) (any, 
 		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: "tools/call needs a name and arguments"}
 	}
 	if isWorkTool(call.Name) {
-		return s.callWork(ctx, call.Name, call.Arguments)
+		// The slot MCP is the session's own model. A monitor never reaches the
+		// records this way: it goes through the control plane, which is the only
+		// caller that can be told apart from the session itself.
+		return s.callWork(ctx, workCallerSelf, call.Name, call.Arguments)
 	}
 	// A name this image removed is answered with the call that does the job
 	// instead. The ledger tools, the migration, the rollback export and now the
@@ -449,6 +452,10 @@ func withSessionDBMCP(proxy http.Handler, db *sessionDB) http.Handler {
 			db.serveWorkTasks(w, r)
 		case sessionDBWorkTurnsPath:
 			db.serveWorkTurns(w, r)
+		case sessionDBWorkWriterPath:
+			db.serveWorkWriter(w, r)
+		case sessionDBWorkCallPath:
+			db.serveWorkCall(w, r)
 		default:
 			proxy.ServeHTTP(w, r)
 		}

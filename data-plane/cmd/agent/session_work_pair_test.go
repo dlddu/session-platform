@@ -36,7 +36,7 @@ func TestPairedParentCannotWriteWorkOrDispatchThroughTheSlotSurface(t *testing.T
 		"task_put", "task_delete", "turn_append", "turn_patch", "turn_dispatch",
 		taskBookPutTool, monitorPutTool, monitorDeleteTool,
 	} {
-		_, err := db.work(ctx, name, workArgs{RequestID: "r-" + name, TaskID: "t1", ID: "t1"})
+		_, err := db.work(ctx, workCallerSelf, name, workArgs{RequestID: "r-" + name, TaskID: "t1", ID: "t1"})
 		if err == nil {
 			t.Fatalf("%s was allowed for a paired parent", name)
 		}
@@ -50,7 +50,7 @@ func TestPairedParentCannotWriteWorkOrDispatchThroughTheSlotSurface(t *testing.T
 	}
 
 	// Nothing was written: the database has no task to find.
-	if _, err := db.work(ctx, "task_get", workArgs{ID: "t1"}); err == nil {
+	if _, err := db.work(ctx, workCallerSelf, "task_get", workArgs{ID: "t1"}); err == nil {
 		t.Fatal("a refused write still created the task")
 	}
 }
@@ -61,7 +61,7 @@ func TestPairedParentKeepsWorkReads(t *testing.T) {
 	ctx := context.Background()
 	db := pairedWorkSurface(t, pairRoleParent)
 	for _, name := range []string{"task_list", "turn_list", monitorListTool} {
-		if _, err := db.work(ctx, name, workArgs{TaskID: "t1"}); err != nil {
+		if _, err := db.work(ctx, workCallerSelf, name, workArgs{TaskID: "t1"}); err != nil {
 			var fail workError
 			if asWorkError(err, &fail) && fail.Code == "permission_denied" {
 				t.Fatalf("%s must stay readable for the parent: %s", name, fail.ErrorText)
@@ -75,11 +75,11 @@ func TestPairedParentKeepsWorkReads(t *testing.T) {
 func TestUnpairedSessionKeepsTheWholeWorkSurface(t *testing.T) {
 	ctx := context.Background()
 	db := pairedWorkSurface(t, "")
-	if _, err := db.work(ctx, "task_put", workArgs{
+	if _, err := db.work(ctx, workCallerSelf, "task_put", workArgs{
 		RequestID: "r1", ID: "t1", ExpectedVersion: pairInt(0), Task: &workTaskInput{Title: pairStr("legacy"), Description: pairStr("왜"), CompletionCriteria: pairStr("끝나면"), Status: pairStr("planned")}}); err != nil {
 		t.Fatalf("an unpaired session lost task_put: %v", err)
 	}
-	got, err := db.work(ctx, "task_get", workArgs{ID: "t1"})
+	got, err := db.work(ctx, workCallerSelf, "task_get", workArgs{ID: "t1"})
 	if err != nil {
 		t.Fatalf("task_get after an unpaired write: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestUnpairedSessionKeepsTheWholeWorkSurface(t *testing.T) {
 func TestBoundMonitorKeepsTheWriteSurface(t *testing.T) {
 	ctx := context.Background()
 	db := pairedWorkSurface(t, "monitor")
-	if _, err := db.work(ctx, "task_put", workArgs{
+	if _, err := db.work(ctx, workCallerSelf, "task_put", workArgs{
 		RequestID: "r1", ID: "t1", ExpectedVersion: pairInt(0), Task: &workTaskInput{Title: pairStr("monitor owns this"), Description: pairStr("왜"), CompletionCriteria: pairStr("끝나면"), Status: pairStr("planned")}}); err != nil {
 		t.Fatalf("the monitor lost task_put: %v", err)
 	}

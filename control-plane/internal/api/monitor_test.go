@@ -324,9 +324,13 @@ func createStatus(t *testing.T, base string, body map[string]any) (int, map[stri
 	return resp.StatusCode, out
 }
 
-// The parent keeps its window while the monitor is frozen: the control plane
-// serves the last read it took, labelled as a mirror with its own timestamp,
-// and says plainly that intake is refused and how to recover.
+// The parent keeps its window whatever has stopped.
+//
+// A frozen monitor does not take the records away any more: they are the
+// parent's own slot, which the person is talking to, so the read is live. What
+// a frozen monitor stops is carrying instructions out, and the reply says so.
+// The stored answer — the mirror, with its own timestamp — is for the slot
+// itself being unreachable, which is the parent having no live pod.
 func TestParentReadsStoredRecordsWhileTheMonitorIsFrozen(t *testing.T) {
 	srv, stub, ident, pairs := monitorServer(t)
 	_, parent := createRaw(t, srv.URL, map[string]any{"name": "chat", "workloadType": "codex-chat"})
@@ -346,7 +350,7 @@ func TestParentReadsStoredRecordsWhileTheMonitorIsFrozen(t *testing.T) {
 	liveTasks, _ := json.Marshal(live["tasks"])
 
 	// Freeze the monitor for real: snapshot it through the product API, so its
-	// pod is gone and there is nothing to proxy to.
+	// pod is gone.
 	freeze, err := http.Post(srv.URL+"/api/v1/sessions/"+monitor.ID+"/snapshot", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -355,6 +359,35 @@ func TestParentReadsStoredRecordsWhileTheMonitorIsFrozen(t *testing.T) {
 	if freeze.StatusCode != http.StatusOK && freeze.StatusCode != http.StatusAccepted {
 		t.Fatalf("snapshot = %d", freeze.StatusCode)
 	}
+	// The read is still live, because the records never left the parent.
+	status, withMonitorDown := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks", nil)
+	if status != http.StatusOK || withMonitorDown["source"] != "slot" {
+		t.Fatalf("read with the monitor down = %d %+v, want the parent's own live records",
+			status, withMonitorDown)
+	}
+
+	// And an instruction sent now is recorded in those records straight away.
+	// What waits for the monitor is carrying it out, which the reply says.
+	status, recorded := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/tasks/task-moved/requests",
+		map[string]any{"id": "req-frozen", "text": "x"})
+	if status != http.StatusOK {
+		t.Fatalf("intake with the monitor down = %d %+v, want it recorded", status, recorded)
+	}
+	if recorded["turn"] == nil {
+		t.Fatalf("the instruction was not recorded as a turn: %+v", recorded)
+	}
+	mon, _ := recorded["monitor"].(map[string]any)
+	if mon["intake"] != "refused" || mon["recovery"] == nil {
+		t.Fatalf("the reply must still say the monitor is down and how to recover: %+v", recorded)
+	}
+
+	// Now take the slot away too: the parent itself has no live pod. This is
+	// what the stored answer is for, and it carries its own timestamp.
+	freezeParent, err := http.Post(srv.URL+"/api/v1/sessions/"+parent.ID+"/snapshot", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freezeParent.Body.Close()
 	status, stored := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks", nil)
 	if status != http.StatusOK {
 		t.Fatalf("frozen read = %d %+v; the parent must still see its list", status, stored)
@@ -369,20 +402,16 @@ func TestParentReadsStoredRecordsWhileTheMonitorIsFrozen(t *testing.T) {
 		t.Fatalf("mirror lost records:\n%s\n%s", got, liveTasks)
 	}
 
-	// Intake is a different matter: it cannot be mirrored, so it is refused
-	// rather than silently dropped, and the reply says how to recover.
+	// With the slot unreachable, intake cannot be recorded, so it is held
+	// durably instead of being dropped — and says that it was.
 	status, heldNow := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/tasks/task-moved/requests",
-		map[string]any{"id": "req-frozen", "text": "x"})
+		map[string]any{"id": "req-held-while-slot-down", "text": "x"})
 	if status != http.StatusAccepted {
-		t.Fatalf("frozen intake = %d %+v, want 202 durable intake", status, heldNow)
+		t.Fatalf("intake with no slot = %d %+v, want 202 durable intake", status, heldNow)
 	}
 	heldItem, _ := heldNow["item"].(map[string]any)
 	if heldItem["state"] != "accepted" || heldItem["turnId"] != nil {
 		t.Fatalf("a held instruction must not claim a turn: %+v", heldNow)
-	}
-	mon, _ := heldNow["monitor"].(map[string]any)
-	if mon["intake"] != "refused" || mon["recovery"] == nil {
-		t.Fatalf("the reply must still say the monitor is down and how to recover: %+v", heldNow)
 	}
 	if heldNow["note"] == nil {
 		t.Fatalf("a held instruction must say it is held, not run: %+v", heldNow)
@@ -403,9 +432,9 @@ func TestParentReadsStoredRecordsWhileTheMonitorIsFrozen(t *testing.T) {
 	if status != http.StatusOK || empty["source"] != "slot" {
 		t.Fatalf("live empty read = %d %+v", status, empty)
 	}
-	// That read, empty as it was, is now the stored answer: freezing the
-	// monitor afterwards serves it as a mirror, not as live state.
-	frozen2, err := http.Post(srv.URL+"/api/v1/sessions/"+otherMonitor.ID+"/snapshot", "application/json", nil)
+	// That read, empty as it was, is now the stored answer: taking the slot
+	// away afterwards serves it as a mirror, not as live state.
+	frozen2, err := http.Post(srv.URL+"/api/v1/sessions/"+otherParent.ID+"/snapshot", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +452,7 @@ func TestParentReadsStoredRecordsWhileTheMonitorIsFrozen(t *testing.T) {
 	if _, err := pairs.Bind(t.Context(), thirdParent.ID, thirdMonitor.ID, ""); err != nil {
 		t.Fatal(err)
 	}
-	frozen3, err := http.Post(srv.URL+"/api/v1/sessions/"+thirdMonitor.ID+"/snapshot", "application/json", nil)
+	frozen3, err := http.Post(srv.URL+"/api/v1/sessions/"+thirdParent.ID+"/snapshot", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,9 +537,14 @@ func TestOneInstructionGoesIntakeThenDelegationThenResult(t *testing.T) {
 	}
 }
 
-// While the monitor is away the instruction is held, not dropped and not
-// faked: the parent sees "accepted", the monitor drains it on resume, and the
-// delegation happens exactly once even across a restart.
+// When the records themselves cannot be reached — the slot has no live pod —
+// an instruction is held rather than dropped or faked: the parent sees
+// "accepted", the monitor drains it on resume, and the delegation happens
+// exactly once even across a restart.
+//
+// A frozen monitor alone no longer reaches this path: the records are the
+// parent's, so the instruction becomes a turn immediately and only its
+// execution waits (TestParentReadsStoredRecordsWhileTheMonitorIsFrozen).
 func TestHeldInstructionIsDrainedOnceAfterRestart(t *testing.T) {
 	srv, stub, ident, pairs := monitorServer(t)
 	_, parent := createRaw(t, srv.URL, map[string]any{"name": "chat", "workloadType": "codex-chat"})
@@ -521,12 +555,15 @@ func TestHeldInstructionIsDrainedOnceAfterRestart(t *testing.T) {
 	}
 	workFixture(stub)
 
-	// The monitor goes away.
-	freeze, err := http.Post(srv.URL+"/api/v1/sessions/"+monitor.ID+"/snapshot", "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
+	// The slot goes away: the monitor is frozen and so is the session whose
+	// records the pair writes, so there is nothing to record the turn in.
+	for _, id := range []string{monitor.ID, parent.ID} {
+		freeze, err := http.Post(srv.URL+"/api/v1/sessions/"+id+"/snapshot", "application/json", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		freeze.Body.Close()
 	}
-	freeze.Body.Close()
 
 	ident.id = parent.ID
 	status, held := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/tasks/task-moved/requests",
@@ -613,12 +650,14 @@ func TestParentReadsPublishedStateItNeverFetchedBefore(t *testing.T) {
 		t.Fatalf("publish turns failed")
 	}
 
-	// Now the monitor goes away, and the parent looks for the first time.
-	freeze, err := http.Post(srv.URL+"/api/v1/sessions/"+monitor.ID+"/snapshot", "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
+	// Now the pair's slot goes away, and the parent looks for the first time.
+	for _, id := range []string{monitor.ID, parent.ID} {
+		freeze, err := http.Post(srv.URL+"/api/v1/sessions/"+id+"/snapshot", "application/json", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		freeze.Body.Close()
 	}
-	freeze.Body.Close()
 
 	ident.id = parent.ID
 	status, page := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks", nil)
@@ -652,11 +691,13 @@ func TestParentReadsPublishedStateItNeverFetchedBefore(t *testing.T) {
 	if _, err := pairs.Bind(t.Context(), otherParent.ID, otherMonitor.ID, ""); err != nil {
 		t.Fatal(err)
 	}
-	frozen, err := http.Post(srv.URL+"/api/v1/sessions/"+otherMonitor.ID+"/snapshot", "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
+	for _, id := range []string{otherMonitor.ID, otherParent.ID} {
+		freeze, err := http.Post(srv.URL+"/api/v1/sessions/"+id+"/snapshot", "application/json", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		freeze.Body.Close()
 	}
-	frozen.Body.Close()
 	ident.id = otherParent.ID
 	if status, _ := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks", nil); status != http.StatusServiceUnavailable {
 		t.Fatalf("another pair's parent saw something: %d", status)
@@ -693,11 +734,13 @@ func TestBackendRoutesServeTheParentsPanelEvenWhenFrozen(t *testing.T) {
 	}); status != http.StatusOK {
 		t.Fatal("publish turns failed")
 	}
-	freeze, err := http.Post(srv.URL+"/api/v1/sessions/"+monitor.ID+"/snapshot", "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
+	for _, id := range []string{monitor.ID, parent.ID} {
+		freeze, err := http.Post(srv.URL+"/api/v1/sessions/"+id+"/snapshot", "application/json", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		freeze.Body.Close()
 	}
-	freeze.Body.Close()
 
 	// No session identity at all now: this is the backend calling.
 	ident.id = ""
@@ -765,5 +808,108 @@ func TestBackendRoutesRefuseTheWrongSide(t *testing.T) {
 		if status, _ := monitorCall(t, srv, "GET", "/api/v1/sessions/"+id+"/monitor/work/tasks", nil); status != http.StatusNotFound {
 			t.Fatalf("backend read for %s = %d, want 404", id, status)
 		}
+	}
+}
+
+// The handover is ordered, and its order is the whole point: the parent's work
+// records are sealed to the monitor *before* the binding exists, and on a
+// rollback the binding goes *before* the seal comes back. Neither step trusts
+// a delay — the slot answers the seal only once it holds, and the binding is
+// what the control plane checks on every monitor call.
+func TestHandoverPrecedesTheBindingAndRollbackReversesIt(t *testing.T) {
+	srv, stub, ident, pairs := monitorServer(t)
+	_, parent := createRaw(t, srv.URL, map[string]any{"name": "chat", "workloadType": "codex-chat"})
+	_, monitor := createRaw(t, srv.URL, map[string]any{
+		"name": "monitor", "workloadType": "codex-chat", "monitorFor": parent.ID})
+	workFixture(stub)
+
+	// The monitor claims the pair. The reply carries the slot's own answer
+	// about who writes now, which is the handover's receipt.
+	ident.id = monitor.ID
+	status, bound := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/pair", nil)
+	if status != http.StatusOK {
+		t.Fatalf("bind = %d %+v", status, bound)
+	}
+	writer, _ := bound["writer"].(map[string]any)
+	if writer["writer"] != session.WorkWriterMonitor || writer["holder"] != monitor.ID {
+		t.Fatalf("binding did not report the handover: %+v", bound)
+	}
+	// The pod is where the seal lives, so the check is against the parent's
+	// own pod rather than against anything the bind reply said.
+	if sealed, _ := stub.WorkWriter(t.Context(), parent.Pod); !sealed.Sealed() {
+		t.Fatalf("the parent's slot was not sealed by the bind: %+v", sealed)
+	}
+
+	// The monitor now writes the parent's records through the control plane,
+	// and the parent reads that turn out of its own task.
+	status, called := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/call",
+		map[string]any{"name": "turn_append", "args": map[string]any{
+			"task_id": "task-moved", "request_id": "mon-1",
+			"turn": map[string]any{"request": "모니터가 이어서 쓴 지시"},
+		}})
+	if status != http.StatusOK || called["isError"] == true {
+		t.Fatalf("monitor write = %d %+v", status, called)
+	}
+	ident.id = parent.ID
+	_, history := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks/task-moved/turns", nil)
+	raw, _ := json.Marshal(history["turns"])
+	if !strings.Contains(string(raw), "모니터가 이어서 쓴 지시") {
+		t.Fatalf("the monitor's turn is not in the parent's history: %s", raw)
+	}
+
+	// Rollback through the backend route: the binding goes first, so the
+	// monitor's next call has nothing to resolve, and only then are the
+	// records the parent's own again.
+	ident.id = ""
+	status, released := monitorCall(t, srv, "DELETE",
+		"/api/v1/sessions/"+parent.ID+"/monitor/pair", nil)
+	if status != http.StatusOK || released["unbound"] != true {
+		t.Fatalf("unbind = %d %+v", status, released)
+	}
+	back, _ := released["writer"].(map[string]any)
+	if back["writer"] != session.WorkWriterSession {
+		t.Fatalf("the rollback did not hand the records back: %+v", released)
+	}
+	if after, _ := stub.WorkWriter(t.Context(), parent.Pod); after.Sealed() {
+		t.Fatalf("the slot is still sealed after the rollback: %+v", after)
+	}
+	ident.id = monitor.ID
+	if status, _ := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/call",
+		map[string]any{"name": "turn_append", "args": map[string]any{"task_id": "task-moved"}}); status != http.StatusForbidden {
+		t.Fatalf("an unbound monitor still had a write route: %d", status)
+	}
+	// Repeating the rollback is safe: a lost reply must be retryable.
+	ident.id = ""
+	if status, _ := monitorCall(t, srv, "DELETE",
+		"/api/v1/sessions/"+parent.ID+"/monitor/pair", nil); status != http.StatusNotFound {
+		t.Fatalf("a repeated rollback = %d", status)
+	}
+	if _, _, err := pairs.For(t.Context(), parent.ID); err == nil {
+		t.Fatalf("the binding is still there after the rollback")
+	}
+}
+
+// A parent whose slot cannot be reached is not bound at all: a monitor opened
+// over an unsealed slot would be the second writer the moment that parent came
+// back, and no amount of waiting would make that safe.
+func TestAPairIsNotBoundWhenTheParentsSlotCannotBeSealed(t *testing.T) {
+	srv, stub, ident, pairs := monitorServer(t)
+	_, parent := createRaw(t, srv.URL, map[string]any{"name": "chat", "workloadType": "codex-chat"})
+	_, monitor := createRaw(t, srv.URL, map[string]any{
+		"name": "monitor", "workloadType": "codex-chat", "monitorFor": parent.ID})
+	workFixture(stub)
+	freeze, err := http.Post(srv.URL+"/api/v1/sessions/"+parent.ID+"/snapshot", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freeze.Body.Close()
+
+	ident.id = monitor.ID
+	status, refused := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/pair", nil)
+	if status != http.StatusConflict {
+		t.Fatalf("bind over an unreachable slot = %d %+v, want 409", status, refused)
+	}
+	if _, _, err := pairs.For(t.Context(), parent.ID); err == nil {
+		t.Fatalf("a pair was bound without a handover")
 	}
 }

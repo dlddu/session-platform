@@ -111,6 +111,13 @@ CREATE TABLE IF NOT EXISTS sp_work_monitor (
 	note TEXT NOT NULL,
 	version INTEGER NOT NULL,
 	updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sp_work_writer (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	writer TEXT NOT NULL,
+	epoch INTEGER NOT NULL,
+	holder TEXT NOT NULL,
+	changed_at TEXT NOT NULL
 );`
 
 // The records that existed only to manage the move onto the work records, and
@@ -604,14 +611,20 @@ func storeWorkReceipt(ctx context.Context, tx *sql.Tx, requestID, fingerprint st
 
 // work runs one tool in its own transaction, so a record and the receipt that
 // makes it replayable commit together or not at all.
-func (s *sessionDB) work(ctx context.Context, name string, a workArgs) (any, error) {
+// work runs one work tool. caller is who is calling — workCallerSelf for the
+// session's own model through the slot MCP, workCallerMonitor for a bound
+// monitor through the control plane — and it is decided by the route the call
+// arrived on, never by anything inside the call.
+func (s *sessionDB) work(ctx context.Context, caller, name string, a workArgs) (any, error) {
 	// A paired parent owns no work: its monitor does. The refusal is here, in
 	// front of the transaction, so a call that names a write tool directly has
 	// no effect at all — the list it was left out of is a convenience, this is
 	// the boundary. Reads fall through untouched, and an unpaired or legacy
 	// session has no role and is not affected.
-	if err := refuseWorkWriteForPairedParent(s.pairRole, name); err != nil {
-		return nil, err
+	if caller != workCallerMonitor {
+		if err := refuseWorkWriteForPairedParent(s.pairRole, name); err != nil {
+			return nil, err
+		}
 	}
 	if err := validateWork(name, a); err != nil {
 		return nil, err
@@ -626,6 +639,13 @@ func (s *sessionDB) work(ctx context.Context, name string, a workArgs) (any, err
 	}
 	defer tx.Rollback()
 	if err = migrateWork(ctx, tx); err != nil {
+		return nil, err
+	}
+	// The env role above cannot speak for a session that was already running
+	// when its monitor was bound. This can: the records themselves say who
+	// their writer is, and the check is inside the transaction that would do
+	// the writing (session_work_seal.go).
+	if err = refuseSealedWorkWrite(ctx, tx, name, caller); err != nil {
 		return nil, err
 	}
 	// There is no fence to check before a write any more. The fence existed for
@@ -688,7 +708,7 @@ func (s *sessionDB) work(ctx context.Context, name string, a workArgs) (any, err
 // callWork is the tools/call entry. Unknown and null-valued fields are refused
 // before anything runs, so a caller that misspells a field learns that rather
 // than having it silently ignored.
-func (s *sessionDB) callWork(ctx context.Context, name string, raw json.RawMessage) (any, *jsonRPCError) {
+func (s *sessionDB) callWork(ctx context.Context, caller, name string, raw json.RawMessage) (any, *jsonRPCError) {
 	var fields map[string]json.RawMessage
 	err := json.Unmarshal(raw, &fields)
 	var a workArgs
@@ -709,7 +729,7 @@ func (s *sessionDB) callWork(ctx context.Context, name string, raw json.RawMessa
 	}
 	ctx, cancel := context.WithTimeout(ctx, sessionDBCallTimeout)
 	defer cancel()
-	result, err := s.work(ctx, name, a)
+	result, err := s.work(ctx, caller, name, a)
 	if err != nil {
 		var known workError
 		if !errors.As(err, &known) {

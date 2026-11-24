@@ -118,3 +118,36 @@ func TestPublishedSnapshotRoundTripsPerKindAndKey(t *testing.T) {
 		t.Fatalf("republish = %+v", got)
 	}
 }
+
+// Unbind is the first half of a rollback: it closes the monitor by removing
+// what every monitor-side call resolves. It keeps the pair's receipts, and
+// repeating it is safe — a rollback whose reply was lost has to be retryable.
+func TestUnbindClosesTheMonitorAndKeepsTheReceipts(t *testing.T) {
+	store := open(t)
+	if _, err := store.Bind(t.Context(), "parent-1", "monitor-1", "tenant-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Accept(t.Context(), "monitor-1", "req-1", "task-1", "해 줘", "parent-1"); err != nil {
+		t.Fatal(err)
+	}
+	released, had, err := store.Unbind(t.Context(), "parent-1")
+	if err != nil || !had || released.MonitorSessionID != "monitor-1" {
+		t.Fatalf("unbind = %+v %v %v", released, had, err)
+	}
+	if _, _, err := store.For(t.Context(), "parent-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the binding survived the unbind: %v", err)
+	}
+	// The accepted instruction is still on record: a rollback is not meant to
+	// erase what a person asked for.
+	if item, err := store.Item(t.Context(), "monitor-1", "req-1"); err != nil || item.RequestID != "req-1" {
+		t.Fatalf("the receipt went with the binding: %+v %v", item, err)
+	}
+	// Again, with nothing to remove.
+	if _, had, err := store.Unbind(t.Context(), "parent-1"); err != nil || had {
+		t.Fatalf("a repeated unbind = %v %v", had, err)
+	}
+	// And the pair can be made again afterwards, which is what re-enabling is.
+	if _, err := store.Bind(t.Context(), "parent-1", "monitor-1", "tenant-a"); err != nil {
+		t.Fatalf("rebinding after a rollback: %v", err)
+	}
+}

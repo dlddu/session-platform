@@ -18,6 +18,7 @@ import (
 // MonitorPairs is the subset of *monitorpair.Store these handlers use.
 type MonitorPairs interface {
 	Bind(ctx context.Context, parentSessionID, monitorSessionID, tenant string) (monitorpair.Binding, error)
+	Unbind(ctx context.Context, parentSessionID string) (monitorpair.Binding, bool, error)
 	For(ctx context.Context, sessionID string) (monitorpair.Binding, monitorpair.Role, error)
 	RecordMirror(ctx context.Context, monitorSessionID, payload string) error
 	LastMirror(ctx context.Context, monitorSessionID string) (monitorpair.Mirror, error)
@@ -79,6 +80,7 @@ func (m *Monitor) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/internal/monitor/inbox/{requestID}/forwarded", m.session(m.markForwarded))
 	mux.HandleFunc("POST /api/v1/internal/monitor/inbox/{requestID}/refused", m.session(m.markRefused))
 	mux.HandleFunc("POST /api/v1/internal/monitor/work/snapshot", m.session(m.publishSnapshot))
+	mux.HandleFunc("POST /api/v1/internal/monitor/work/call", m.session(m.callWork))
 }
 
 var errMonitorDisabled = errors.New("the managed monitor pair is not enabled on this deployment")
@@ -196,6 +198,7 @@ func (m *Monitor) BackendRoutes(mux *http.ServeMux, guard TenantGuard) {
 		}
 	}
 	mux.HandleFunc("GET /api/v1/sessions/{id}/monitor/pair", backend(m.showPair))
+	mux.HandleFunc("DELETE /api/v1/sessions/{id}/monitor/pair", backend(m.unbindPair))
 	mux.HandleFunc("GET /api/v1/sessions/{id}/monitor/work/tasks", backend(m.tasks))
 	mux.HandleFunc("GET /api/v1/sessions/{id}/monitor/work/tasks/{taskID}/turns", backend(m.turns))
 	mux.HandleFunc("POST /api/v1/sessions/{id}/monitor/work/tasks/{taskID}/requests", backend(m.request))
@@ -209,6 +212,11 @@ type pairView struct {
 	// tell "nothing to report" from "the monitor is not running". It is read
 	// from the session record, which needs no live pod.
 	Monitor *monitorStateView `json:"monitor,omitempty"`
+	// Writer is who may write the parent's work records, as the slot itself
+	// answered when the pair was bound. It is the handover's receipt: a caller
+	// that sees the monitor here knows the parent is already refused, rather
+	// than trusting that a configuration change has reached it.
+	Writer *session.WorkWriter `json:"writer,omitempty"`
 }
 
 type monitorStateView struct {
@@ -279,6 +287,33 @@ func (m *Monitor) bindPair(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "parent and monitor belong to different tenants", http.StatusForbidden)
 		return
 	}
+	// The handover before the binding, and in that order. Sealing the parent's
+	// slot is what stops the parent writing, and the slot answers only once it
+	// has — the seal and every write to those records are the same database. So
+	// by the time the binding exists there is no moment when both sides could
+	// write, and nothing here waits out a propagation delay to believe it.
+	//
+	// A parent with no live pod cannot be sealed, so it is not bound either: a
+	// monitor opened over an unsealed slot would be the second writer the
+	// moment that parent came back.
+	sealed, err := m.mgr.SealWorkWriter(r.Context(), parent.ID, session.WorkSeal{
+		Writer: session.WorkWriterMonitor, Holder: monitorID,
+	})
+	if err != nil {
+		if errors.Is(err, session.ErrWorkUnavailable) {
+			http.Error(w, "the parent session has no live pod, so its work records cannot be "+
+				"handed over yet; restore it and bind again", http.StatusConflict)
+			return
+		}
+		if errors.Is(err, session.ErrWorkUnsupported) {
+			http.Error(w, "this deployment cannot hand work records over", http.StatusNotImplemented)
+			return
+		}
+		m.logger.Error("monitor pair handover failed", "parent", parent.ID, "monitor", monitorID, "err", err)
+		http.Error(w, "the parent's work records could not be handed over; nothing was bound",
+			http.StatusBadGateway)
+		return
+	}
 	b, err := m.pairs.Bind(r.Context(), parent.ID, monitorID, mon.Tenant)
 	if err != nil {
 		switch {
@@ -293,7 +328,82 @@ func (m *Monitor) bindPair(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, pairView{Role: monitorpair.RoleMonitor, Binding: b,
-		Monitor: m.monitorState(r.Context(), b)})
+		Monitor: m.monitorState(r.Context(), b), Writer: &sealed.Writer})
+}
+
+// unbindPair is the rollback, and it runs the handover backwards: the binding
+// goes first, so the monitor is closed before the parent is opened.
+//
+// Removing the binding is what closes the monitor — every monitor-side route
+// resolves it before anything else, and this process will not carry a call
+// without one — and only then is the slot handed back. If the second step does
+// not land, the records stay sealed: a slot with no writer is recoverable by
+// repeating this call, and a slot with two writers is not.
+func (m *Monitor) unbindPair(w http.ResponseWriter, r *http.Request) {
+	b, _, ok := m.resolve(w, r)
+	if !ok {
+		return
+	}
+	released, had, err := m.pairs.Unbind(r.Context(), b.ParentSessionID)
+	if err != nil {
+		m.logger.Error("monitor pair unbind failed", "parent", b.ParentSessionID, "err", err)
+		http.Error(w, "the pair could not be released", http.StatusBadGateway)
+		return
+	}
+	monitor := b.MonitorSessionID
+	if had {
+		monitor = released.MonitorSessionID
+	}
+	// Now, and not before, the parent may write its own records again.
+	handed, err := m.mgr.SealWorkWriter(r.Context(), b.ParentSessionID, session.WorkSeal{
+		Writer: session.WorkWriterSession, Holder: monitor,
+	})
+	if err != nil {
+		m.logger.Error("monitor pair rollback left the slot sealed",
+			"parent", b.ParentSessionID, "monitor", monitor, "err", err)
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"unbound": true,
+			"note": "the monitor is closed and no longer writes, but the records are still " +
+				"sealed to it; repeat this call to hand them back",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"unbound": true, "writer": handed.Writer})
+}
+
+// callWork carries one work tool call from the bound monitor to the records it
+// was handed. The monitor names no session: the parent comes from the binding,
+// and the slot decides whether the call is allowed from the seal, so this route
+// cannot be used to write a slot that was not handed over.
+func (m *Monitor) callWork(w http.ResponseWriter, r *http.Request) {
+	b, role, ok := m.resolve(w, r)
+	if !ok {
+		return
+	}
+	if role != monitorpair.RoleMonitor {
+		http.Error(w, "only the bound monitor writes these records", http.StatusForbidden)
+		return
+	}
+	var body struct {
+		Name string          `json:"name"`
+		Args json.RawMessage `json:"args"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&body); err != nil {
+		http.Error(w, "body must be JSON with name and args", http.StatusBadRequest)
+		return
+	}
+	result, err := m.mgr.CallWork(r.Context(), b.ParentSessionID, strings.TrimSpace(body.Name), body.Args)
+	if err != nil {
+		m.workErr(w, r, b, err)
+		return
+	}
+	status := http.StatusOK
+	if result.IsError {
+		// The slot refused it. The monitor reads the same code the session's own
+		// model would, so a refusal is never reported as a result.
+		status = http.StatusConflict
+	}
+	writeJSON(w, status, result)
 }
 
 type tasksView struct {
@@ -322,7 +432,11 @@ func (m *Monitor) tasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	page, err := m.mgr.WorkTasks(r.Context(), b.MonitorSessionID, limit,
+	// The records are the parent's own: the pair hands the *writing* over, it
+	// does not move the rows. So a parent's panel shows one history — what it
+	// recorded before the handover and what its monitor has recorded since —
+	// and nothing had to be migrated for that to be true.
+	page, err := m.mgr.WorkTasks(r.Context(), b.ParentSessionID, limit,
 		strings.TrimSpace(q.Get("after_id")), strings.TrimSpace(q.Get("status")), "")
 	if err != nil {
 		// A monitor that is frozen, stopped or gone has no pod to proxy to.
@@ -386,7 +500,7 @@ func (m *Monitor) turns(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	taskID := r.PathValue("taskID")
-	page, err := m.mgr.WorkTurns(r.Context(), b.MonitorSessionID, taskID,
+	page, err := m.mgr.WorkTurns(r.Context(), b.ParentSessionID, taskID,
 		afterTurnID, limit, q.Get("open") == "true")
 	if err != nil {
 		if errors.Is(err, session.ErrWorkUnavailable) {
@@ -477,7 +591,11 @@ func (m *Monitor) request(w http.ResponseWriter, r *http.Request) {
 			Monitor: m.monitorState(r.Context(), b)})
 		return
 	}
-	stored, err := m.mgr.CreateWorkRequest(r.Context(), b.MonitorSessionID, session.WorkRequestInput{
+	// Into the ledger, which is the parent's slot and is live whenever the
+	// person is talking to it. A frozen monitor therefore cannot stop an
+	// instruction from being recorded; what waits for the monitor is carrying
+	// it out, which its next drain picks up from the task's open turns.
+	stored, err := m.mgr.CreateWorkRequest(r.Context(), b.ParentSessionID, session.WorkRequestInput{
 		ID:           requestID,
 		TaskID:       taskID,
 		Text:         body.Text,
