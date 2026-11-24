@@ -57,9 +57,8 @@ const (
 	codexRenderConfigCommand = "codex-render-config"
 	defaultCodexAgentBinary  = "/agent"
 
-	codexK3SServerName     = "k3s"
-	codexSkillsServerName  = "skills"
-	codexMonitorServerName = "monitor_pair"
+	codexK3SServerName    = "k3s"
+	codexSkillsServerName = "skills"
 	// codexSessionDBServerName is the sidecar's session DB MCP (AC-N6).
 	codexSessionDBServerName = "db"
 	// codexSchedulerServerName is the sidecar's scheduler MCP (AC-P1).
@@ -184,10 +183,6 @@ func (c codexCLI) ensureHome(homeDir string, _ toolSurface) error {
 		skillsDir:    skillsDir,
 		sessionDBURL: c.sessionDBURL,
 		schedulerURL: c.schedulerURL,
-		// The bridge is configured by the control plane's own env on this
-		// container; nothing here asks the model or the sidecar for it.
-		monitorPairURL:       strings.TrimSpace(os.Getenv(monitorPairURLEnv)),
-		monitorPairTokenFile: strings.TrimSpace(os.Getenv(monitorPairTokenFileEnv)),
 	}
 	if sidecar.configured {
 		mcpURL, err := k3sProxyMCPURL(c.k3sProxyURL)
@@ -365,13 +360,6 @@ func runAgentSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer
 	switch args[0] {
 	case autoArchivePreStopCmd:
 		return runAutoArchivePreStop(args[1:], stdout, stderr), true
-	case monitorMCPCommand:
-		logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-		if err := serveMonitorMCP(stdin, stdout, os.Getenv(monitorPairURLEnv), os.Getenv(monitorPairTokenFileEnv), logger); err != nil {
-			fmt.Fprintln(stderr, "monitor-mcp:", err)
-			return 1, true
-		}
-		return 0, true
 	case codexSkillsMCPCommand:
 		logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 		if err := serveCodexSkillsMCP(stdin, stdout, os.Getenv(codexSkillsDirEnv), os.Getenv(codexAgentURLEnv), logger); err != nil {

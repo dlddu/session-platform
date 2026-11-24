@@ -246,7 +246,7 @@ func main() {
 				logger.Error("invalid session database raw SQL setting", "err", err)
 				os.Exit(1)
 			}
-			db, err := newSessionDB(dir, rawSQL, os.Getenv(monitorPairRoleEnv), logger)
+			db, err := newSessionDB(dir, rawSQL, logger)
 			if err != nil {
 				logger.Error("invalid session database directory", "err", err)
 				os.Exit(1)

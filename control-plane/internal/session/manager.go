@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 )
 
@@ -30,11 +29,6 @@ type CreateRequest struct {
 	// Tenant names the owning tenant (AC-K2). The API fills it from the
 	// caller; the manager stores it verbatim.
 	Tenant string
-	// MonitorFor names the parent session this one monitors. The API fills it
-	// after checking the parent exists in the same tenant, and it is immutable
-	// afterwards: the managed pair is what the control plane later trusts, so
-	// a workload cannot claim a parent slot by asking.
-	MonitorFor string
 }
 
 // RestoreOptions changes what a restore from snapshot brings back. A nil
@@ -141,14 +135,6 @@ type Manager interface {
 	// task. It writes no task field and starts no turn of the session's own:
 	// the parent finds it when it next reads the task's open turns (AC-N10).
 	CreateWorkRequest(ctx context.Context, id string, in WorkRequestInput) (WorkRequestStored, error)
-	// WorkWriter, SealWorkWriter and CallWork are the monitor pair's hold on the
-	// same records: who writes them, the handover that moves that, and a bound
-	// monitor's own calls. SealWorkWriter returning is the evidence the previous
-	// writer stopped — it and every write take the same slot database — so the
-	// caller opens the next writer only after it (work_writer.go).
-	WorkWriter(ctx context.Context, id string) (WorkWriter, error)
-	SealWorkWriter(ctx context.Context, id string, in WorkSeal) (WorkSealResult, error)
-	CallWork(ctx context.Context, id, name string, args json.RawMessage) (WorkCallResult, error)
 	// Recover calls admit with the recovered record before anything is
 	// written, so the caller decides who may see it (AC-K2).
 	Recover(ctx context.Context, id string, opts RestoreOptions, admit func(*Session) error) (*Session, error)
