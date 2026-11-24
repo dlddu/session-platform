@@ -69,3 +69,44 @@ func TestMonitorPairTokenIsAbsentWhenDisabled(t *testing.T) {
 		t.Fatalf("disabled feature projected something: %+v %+v %+v", volumes, workload.VolumeMounts, workload.Env)
 	}
 }
+
+// The seal credential is the mirror image of the pair token: it goes to the
+// sidecar that mounts the slot's database and to nothing else. The workload
+// container must not have it — it shares the sidecar's loopback, so holding the
+// credential would let a session move its own writer and write as its own
+// monitor.
+func TestTheSealCredentialGoesToTheSidecarOnlyAndIsPerSession(t *testing.T) {
+	o := &ClientOrchestrator{}
+	WithMonitorPairWriterKey([]byte("deployment-key"))(o)
+
+	sidecarEnv := o.monitorPairWriterEnv("session-a")
+	if len(sidecarEnv) != 1 || sidecarEnv[0].Name != MonitorPairWriterTokenEnvVar {
+		t.Fatalf("sidecar env = %+v, want one %s", sidecarEnv, MonitorPairWriterTokenEnvVar)
+	}
+	if sidecarEnv[0].Value == "" {
+		t.Fatalf("the sidecar got an empty credential")
+	}
+	// Per session: a credential lifted out of one pod cannot seal another.
+	if other := o.monitorPairWriterEnv("session-b"); other[0].Value == sidecarEnv[0].Value {
+		t.Fatalf("two sessions share one credential")
+	}
+
+	// The workload container's own attachment carries the pair token and the
+	// URL — and no seal credential.
+	var volumes []corev1.Volume
+	workload := corev1.Container{Name: ContainerName}
+	WithMonitorPair("http://control-plane.sessions.svc.cluster.local")(o)
+	o.attachMonitorPair(&volumes, &workload)
+	for _, e := range workload.Env {
+		if e.Name == MonitorPairWriterTokenEnvVar {
+			t.Fatalf("the workload container was given the seal credential")
+		}
+	}
+
+	// A deployment with no key gives nobody one, which is what makes the
+	// feature decline rather than run without the boundary.
+	bare := &ClientOrchestrator{}
+	if got := bare.monitorPairWriterEnv("session-a"); len(got) != 0 {
+		t.Fatalf("a deployment with no key still issued %+v", got)
+	}
+}

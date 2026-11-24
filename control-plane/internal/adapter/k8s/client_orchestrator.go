@@ -230,6 +230,7 @@ type ClientOrchestrator struct {
 	repoAccessURL            string                        // control plane URL for the helper's repo access calls (repo_access.go)
 	monitorPairURL           string                        // control plane URL for the session's monitor-pair calls (monitor_pair.go)
 	monitorPairRoleOf        func(sessionID string) string // the pair store's view of a session's role
+	monitorPairWriterKey     []byte                        // derives each sidecar's seal credential (monitor_pair.go)
 	dropURL                  string                        // drop's in-cluster URL for the helper's drop_* tools (drop.go)
 	miniMaxCredentialsSecret string
 	miniMaxConfigConfigMap   string
@@ -708,6 +709,10 @@ func (o *ClientOrchestrator) buildPod(sessionID, checkpointRef, suffix string, w
 		for i := range sidecars {
 			if sidecars[i].Name == K3SMCPProxyContainerName {
 				sidecars[i].Env = append(sidecars[i].Env, roleEnv...)
+				// The seal credential goes here and nowhere else: the work
+				// surface is in this container, and the workload container
+				// must not be able to move its own writer.
+				sidecars[i].Env = append(sidecars[i].Env, o.monitorPairWriterEnv(sessionID)...)
 			}
 		}
 	}

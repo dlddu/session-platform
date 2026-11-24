@@ -45,7 +45,11 @@ func monitorServer(t *testing.T) (*httptest.Server, *agent.StubClient, *fakeIden
 	ckpt := archive.NewStubCheckpointer(true)
 	stub := agent.NewStubClient()
 	mgr := service.New(orch, configmap.NewStore(fake.NewSimpleClientset(), "sessions"), ckpt, stub,
-		service.WithWorkloadCheckpointer(session.WorkloadTypeCodexChat, ckpt))
+		service.WithWorkloadCheckpointer(session.WorkloadTypeCodexChat, ckpt),
+		// A prepared deployment: the control plane holds the key its sidecars'
+		// seal credentials are derived from. Without it every handover is
+		// refused, which TestAnUnpreparedDeploymentRefusesToBindAPair pins.
+		service.WithMonitorPairWriterKey(testWriterKey))
 	pairs, err := monitorpair.Open(t.Context(), filepath.Join(t.TempDir(), "pairs.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -366,8 +370,9 @@ func TestParentReadsStoredRecordsWhileTheMonitorIsFrozen(t *testing.T) {
 			status, withMonitorDown)
 	}
 
-	// And an instruction sent now is recorded in those records straight away.
-	// What waits for the monitor is carrying it out, which the reply says.
+	// And an instruction sent now is recorded in those records straight away,
+	// and the frozen monitor is resumed so it drains it — through the
+	// platform's own write path, which activates a session before writing.
 	status, recorded := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/tasks/task-moved/requests",
 		map[string]any{"id": "req-frozen", "text": "x"})
 	if status != http.StatusOK {
@@ -376,9 +381,12 @@ func TestParentReadsStoredRecordsWhileTheMonitorIsFrozen(t *testing.T) {
 	if recorded["turn"] == nil {
 		t.Fatalf("the instruction was not recorded as a turn: %+v", recorded)
 	}
+	if recorded["woken"] != true {
+		t.Fatalf("a frozen monitor was not resumed for the instruction: %+v", recorded)
+	}
 	mon, _ := recorded["monitor"].(map[string]any)
-	if mon["intake"] != "refused" || mon["recovery"] == nil {
-		t.Fatalf("the reply must still say the monitor is down and how to recover: %+v", recorded)
+	if mon["intake"] != "available" {
+		t.Fatalf("the resumed monitor should be able to take turns: %+v", recorded)
 	}
 
 	// Now take the slot away too: the parent itself has no live pod. This is
@@ -816,6 +824,15 @@ func TestBackendRoutesRefuseTheWrongSide(t *testing.T) {
 // rollback the binding goes *before* the seal comes back. Neither step trusts
 // a delay — the slot answers the seal only once it holds, and the binding is
 // what the control plane checks on every monitor call.
+// testWriterKey is what this deployment's control plane would hold, and
+// testWriterKeyToken derives one session's sidecar credential from it the way
+// the orchestrator and the service both do.
+var testWriterKey = []byte("api-test-monitor-pair-writer-key")
+
+func testWriterKeyToken(sessionID string) string {
+	return session.MonitorPairWriterToken(testWriterKey, sessionID)
+}
+
 func TestHandoverPrecedesTheBindingAndRollbackReversesIt(t *testing.T) {
 	srv, stub, ident, pairs := monitorServer(t)
 	_, parent := createRaw(t, srv.URL, map[string]any{"name": "chat", "workloadType": "codex-chat"})
@@ -836,7 +853,7 @@ func TestHandoverPrecedesTheBindingAndRollbackReversesIt(t *testing.T) {
 	}
 	// The pod is where the seal lives, so the check is against the parent's
 	// own pod rather than against anything the bind reply said.
-	if sealed, _ := stub.WorkWriter(t.Context(), parent.Pod); !sealed.Sealed() {
+	if sealed, _ := stub.WorkWriter(t.Context(), parent.Pod, testWriterKeyToken(parent.ID)); !sealed.Sealed() {
 		t.Fatalf("the parent's slot was not sealed by the bind: %+v", sealed)
 	}
 
@@ -870,7 +887,7 @@ func TestHandoverPrecedesTheBindingAndRollbackReversesIt(t *testing.T) {
 	if back["writer"] != session.WorkWriterSession {
 		t.Fatalf("the rollback did not hand the records back: %+v", released)
 	}
-	if after, _ := stub.WorkWriter(t.Context(), parent.Pod); after.Sealed() {
+	if after, _ := stub.WorkWriter(t.Context(), parent.Pod, testWriterKeyToken(parent.ID)); after.Sealed() {
 		t.Fatalf("the slot is still sealed after the rollback: %+v", after)
 	}
 	ident.id = monitor.ID
@@ -912,4 +929,190 @@ func TestAPairIsNotBoundWhenTheParentsSlotCannotBeSealed(t *testing.T) {
 	if _, _, err := pairs.For(t.Context(), parent.ID); err == nil {
 		t.Fatalf("a pair was bound without a handover")
 	}
+}
+
+// A deployment that cannot enforce the writer boundary does not get the
+// feature. There is no key, so no sidecar was given a seal credential and the
+// seal routes refuse every caller — including the control plane. The pair is
+// then not bound at all: running the monitor over a slot whose writer cannot be
+// moved would mean two writers, and declining is the safe answer.
+func TestAnUnpreparedDeploymentRefusesToBindAPair(t *testing.T) {
+	orch := k8s.NewStubOrchestrator("sessions")
+	ckpt := archive.NewStubCheckpointer(true)
+	stub := agent.NewStubClient()
+	// No WithMonitorPairWriterKey: this is a deployment that has not been
+	// prepared for the handover.
+	mgr := service.New(orch, configmap.NewStore(fake.NewSimpleClientset(), "sessions"), ckpt, stub,
+		service.WithWorkloadCheckpointer(session.WorkloadTypeCodexChat, ckpt))
+	pairs, err := monitorpair.Open(t.Context(), filepath.Join(t.TempDir(), "pairs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pairs.Close() })
+	ident := &fakeIdentity{}
+	mux := http.NewServeMux()
+	productAPI := api.New(mgr)
+	productAPI.Routes(mux)
+	monitor := api.NewMonitor(pairs, ident, mgr, nil)
+	monitor.Routes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	_, parent := createRaw(t, srv.URL, map[string]any{"name": "chat", "workloadType": "codex-chat"})
+	_, monitorSession := createRaw(t, srv.URL, map[string]any{
+		"name": "monitor", "workloadType": "codex-chat", "monitorFor": parent.ID})
+	workFixture(stub)
+	ident.id = monitorSession.ID
+	status, refused := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/pair", nil)
+	if status != http.StatusNotImplemented {
+		t.Fatalf("bind on an unprepared deployment = %d %+v, want 501", status, refused)
+	}
+	if _, _, err := pairs.For(t.Context(), parent.ID); err == nil {
+		t.Fatalf("a pair was bound on a deployment that cannot seal the slot")
+	}
+	// The parent keeps its own work path, exactly as before the feature.
+	ident.id = parent.ID
+	if status, _ := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks", nil); status != http.StatusForbidden {
+		t.Fatalf("an unpaired parent = %d, want the pair routes to refuse it", status)
+	}
+}
+
+// The credential is what the sidecar checks, and the control plane is the only
+// caller that has it. If the service sends the wrong one — a key that does not
+// match the pod's — the seal is refused and no pair is bound.
+func TestASealWithTheWrongCredentialBindsNothing(t *testing.T) {
+	orch := k8s.NewStubOrchestrator("sessions")
+	ckpt := archive.NewStubCheckpointer(true)
+	stub := agent.NewStubClient()
+	mgr := service.New(orch, configmap.NewStore(fake.NewSimpleClientset(), "sessions"), ckpt, stub,
+		service.WithWorkloadCheckpointer(session.WorkloadTypeCodexChat, ckpt),
+		service.WithMonitorPairWriterKey([]byte("a-different-key-than-the-pods")))
+	pairs, err := monitorpair.Open(t.Context(), filepath.Join(t.TempDir(), "pairs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pairs.Close() })
+	ident := &fakeIdentity{}
+	mux := http.NewServeMux()
+	productAPI := api.New(mgr)
+	productAPI.Routes(mux)
+	monitor := api.NewMonitor(pairs, ident, mgr, nil)
+	monitor.Routes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	_, parent := createRaw(t, srv.URL, map[string]any{"name": "chat", "workloadType": "codex-chat"})
+	_, monitorSession := createRaw(t, srv.URL, map[string]any{
+		"name": "monitor", "workloadType": "codex-chat", "monitorFor": parent.ID})
+	workFixture(stub)
+	// The pod requires the credential derived from the real key.
+	stub.RequireWriterToken(testWriterKeyToken(parent.ID))
+	ident.id = monitorSession.ID
+	if status, refused := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/pair", nil); status == http.StatusOK {
+		t.Fatalf("a mismatched credential sealed the slot: %+v", refused)
+	}
+	if _, _, err := pairs.For(t.Context(), parent.ID); err == nil {
+		t.Fatalf("a pair was bound without a valid seal")
+	}
+}
+
+// One instruction arriving at a frozen monitor gets it running again, and
+// nothing in this test restores anything by hand: the intake path writes to the
+// monitor, and the platform's uniform resume-on-access rule brings the session
+// back before that write lands. A read, by contrast, must leave it frozen.
+func TestOneInstructionWakesAFrozenMonitorAndRunsOnce(t *testing.T) {
+	srv, stub, ident, pairs := monitorServer(t)
+	_, parent := createRaw(t, srv.URL, map[string]any{"name": "chat", "workloadType": "codex-chat"})
+	_, monitor := createRaw(t, srv.URL, map[string]any{
+		"name": "monitor", "workloadType": "codex-chat", "monitorFor": parent.ID})
+	if _, err := pairs.Bind(t.Context(), parent.ID, monitor.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	workFixture(stub)
+
+	freeze, err := http.Post(srv.URL+"/api/v1/sessions/"+monitor.ID+"/snapshot", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	freeze.Body.Close()
+	if frozen := sessionOf(t, srv, monitor.ID); frozen.State != session.StateSnapshot {
+		t.Fatalf("the monitor is %s, want it frozen before the test starts", frozen.State)
+	}
+
+	// A read first: the parent opens its panel, repeatedly. Nothing wakes.
+	ident.id = parent.ID
+	for range 3 {
+		if status, _ := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks", nil); status != http.StatusOK {
+			t.Fatalf("read while frozen = %d", status)
+		}
+		monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks/task-moved/turns", nil)
+		monitorCall(t, srv, "GET", "/api/v1/internal/monitor/pair", nil)
+	}
+	if after := sessionOf(t, srv, monitor.ID); after.State != session.StateSnapshot {
+		t.Fatalf("reading woke the monitor: it is now %s", after.State)
+	}
+
+	// Now one instruction. This is the product path the app uses.
+	status, sent := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/tasks/task-moved/requests",
+		map[string]any{"id": "req-wake-1", "text": "동결 중에 들어온 지시"})
+	if status != http.StatusOK && status != http.StatusAccepted {
+		t.Fatalf("intake = %d %+v", status, sent)
+	}
+	if sent["woken"] != true {
+		t.Fatalf("the instruction did not resume the monitor: %+v", sent)
+	}
+	woken := sessionOf(t, srv, monitor.ID)
+	if woken.State == session.StateSnapshot {
+		t.Fatalf("the monitor is still frozen after an instruction: %s", woken.State)
+	}
+	// And it was told to drain, in its own turn queue.
+	if queued := stub.Written(woken.Pod); !strings.Contains(queued, "인박스") {
+		t.Fatalf("the monitor was resumed but not told to drain: %q", queued)
+	}
+
+	// The same instruction again — a retry, a reconnect — is one instruction:
+	// one inbox item, one turn on the task, however many times it is sent.
+	for range 3 {
+		if status, _ := monitorCall(t, srv, "POST", "/api/v1/internal/monitor/work/tasks/task-moved/requests",
+			map[string]any{"id": "req-wake-1", "text": "동결 중에 들어온 지시"}); status != http.StatusOK {
+			t.Fatalf("resend = %d", status)
+		}
+	}
+	matching := 0
+	_, turns := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/work/tasks/task-moved/turns", nil)
+	for _, row := range turns["turns"].([]any) {
+		if fields, _ := row.(map[string]any); fields["request"] == "동결 중에 들어온 지시" {
+			matching++
+		}
+	}
+	if matching != 1 {
+		t.Fatalf("one instruction became %d turns", matching)
+	}
+	ident.id = monitor.ID
+	_, inbox := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/inbox", nil)
+	if pending, _ := inbox["pending"].([]any); len(pending) != 0 {
+		t.Fatalf("a forwarded instruction is still pending: %+v", inbox)
+	}
+	ident.id = parent.ID
+	_, view := monitorCall(t, srv, "GET", "/api/v1/internal/monitor/requests/req-wake-1", nil)
+	got, _ := view["item"].(map[string]any)
+	if got["state"] != "forwarded" || got["turnId"] == nil {
+		t.Fatalf("the instruction's receipt = %+v", got)
+	}
+}
+
+// sessionOf reads one session through the product API, which is how a test
+// checks whether something woke it without waking it itself.
+func sessionOf(t *testing.T, srv *httptest.Server, id string) session.Session {
+	t.Helper()
+	resp, err := http.Get(srv.URL + "/api/v1/sessions/" + id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got session.Session
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("read session %s: %v", id, err)
+	}
+	return got
 }

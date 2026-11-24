@@ -131,6 +131,13 @@ func relayWorkPost(
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// The seal routes are authorised by a credential only the sidecar holds, so
+	// the relay carries the caller's own header through and never holds or mints
+	// one of its own. An agent in the workload container has nothing to add here
+	// — which is the point (session_work_seal_http.go).
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		http.Error(w, "the work records could not be reached", http.StatusBadGateway)
@@ -143,7 +150,11 @@ func relayWorkPost(
 		return
 	}
 	switch resp.StatusCode {
-	case http.StatusCreated, http.StatusOK, http.StatusBadRequest, http.StatusNotFound, http.StatusConflict:
+	case http.StatusCreated, http.StatusOK, http.StatusBadRequest, http.StatusNotFound,
+		http.StatusConflict, http.StatusForbidden, http.StatusNotImplemented:
+		// A refusal of the credential and "this slot cannot be handed over" both
+		// pass through: the control plane acts differently on each, and turning
+		// either into a gateway error would hide which it was.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(answer)

@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
 const (
@@ -23,6 +25,14 @@ const (
 	// configuration the model cannot set. Empty is an unpaired or legacy
 	// session, which keeps the whole work surface.
 	MonitorPairRoleEnvVar = "MONITOR_PAIR_ROLE"
+	// MonitorPairWriterTokenEnvVar is what the sidecar requires on the routes
+	// that move the slot's writer seal and carry the bound monitor's writes. It
+	// goes on the sidecar **only**: the workload container shares the pod's
+	// loopback with it, so being in the pod cannot be the authorisation, and the
+	// pod shares no process namespace, so the workload cannot read it either.
+	// Empty leaves those routes refusing every caller, which is what makes the
+	// pair's opt-in fail closed on a deployment that has no key.
+	MonitorPairWriterTokenEnvVar = "MONITOR_PAIR_WRITER_TOKEN"
 	// MonitorPairRoleParent and MonitorPairRoleMonitor are its values.
 	MonitorPairRoleParent     = "parent"
 	MonitorPairRoleMonitor    = "monitor"
@@ -95,6 +105,24 @@ func (o *ClientOrchestrator) monitorPairRoleEnv(sessionID string) []corev1.EnvVa
 		return []corev1.EnvVar{{Name: MonitorPairRoleEnvVar, Value: role}}
 	}
 	return nil
+}
+
+// monitorPairWriterEnv is the seal credential for this session's sidecar. It is
+// derived from the deployment's key, so nothing is stored and a token taken
+// from one pod cannot seal another. Every session gets it, not only paired
+// ones: the handover has to be possible before a pair exists.
+func (o *ClientOrchestrator) monitorPairWriterEnv(sessionID string) []corev1.EnvVar {
+	token := session.MonitorPairWriterToken(o.monitorPairWriterKey, sessionID)
+	if token == "" {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: MonitorPairWriterTokenEnvVar, Value: token}}
+}
+
+// WithMonitorPairWriterKey gives the orchestrator the key the seal credential is
+// derived from. Without it no sidecar gets one and no slot can be handed over.
+func WithMonitorPairWriterKey(key []byte) Option {
+	return func(o *ClientOrchestrator) { o.monitorPairWriterKey = key }
 }
 
 // WithMonitorPairRoles gives the orchestrator the pair lookup so a parent's

@@ -30,14 +30,16 @@
 // sealing with a stale epoch is refused, so two controllers racing cannot swap
 // the writer back and forth unnoticed.
 //
-// Scope, stated plainly: this is a boundary against a stale writer, not against
-// a hostile one. The workload container shares the pod's loopback with the
-// sidecar, so a session that set out to forge a handover could call the same
-// route the control plane calls. Closing that needs an identity the workload
-// cannot mint, which this pod layout does not have (the pair token is projected
-// into the workload container only, deliberately — see
-// control-plane/internal/adapter/k8s/monitor_pair.go). What this does close is
-// the real failure: an honest parent that has not yet heard it was paired.
+// Who may move the seal is a separate question, and loopback is not the answer
+// to it: the workload container shares the pod's loopback with this sidecar, so
+// the session's own model reaches the same address the control plane reaches.
+// The seal routes therefore require a credential this container was given and
+// the workload container was not (session_work_seal_http.go,
+// MONITOR_PAIR_WRITER_TOKEN) — put there by the orchestrator, in a pod that
+// shares no process namespace, so one container cannot read the other's
+// environment. A sidecar with no credential refuses those routes outright
+// rather than serving them open, which is what makes the pair's opt-in fail
+// closed on a deployment or an image that cannot enforce this.
 package main
 
 import (

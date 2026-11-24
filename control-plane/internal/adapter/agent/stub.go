@@ -40,6 +40,9 @@ type StubClient struct {
 	// workWriters is each pod's seal: who may write that slot's work records
 	// (work_writer.go). A pod that is not here has never been handed over.
 	workWriters map[string]session.WorkWriter
+	// writerToken is the credential the stub's seal routes require, mirroring
+	// the sidecar's MONITOR_PAIR_WRITER_TOKEN.
+	writerToken string
 }
 
 var _ Client = (*StubClient)(nil)
@@ -319,10 +322,28 @@ func (c *StubClient) WorkTurns(
 
 // WorkWriter answers this pod's seal; a pod that was never sealed is the
 // session's own, which is every session with no monitor.
-func (c *StubClient) WorkWriter(_ context.Context, pod string) (session.WorkWriter, error) {
+func (c *StubClient) WorkWriter(_ context.Context, pod, token string) (session.WorkWriter, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.checkWriterToken(token); err != nil {
+		return session.WorkWriter{}, err
+	}
 	return c.writerOf(pod), nil
+}
+
+// WriterToken is what the stub's sidecar requires, so a test can show that a
+// caller without it is refused the way a real sidecar refuses it.
+func (c *StubClient) RequireWriterToken(token string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.writerToken = token
+}
+
+func (c *StubClient) checkWriterToken(token string) error {
+	if c.writerToken == "" || c.writerToken == token {
+		return nil
+	}
+	return fmt.Errorf("%w: only the control plane may move this slot's writer", session.ErrForbidden)
 }
 
 func (c *StubClient) writerOf(pod string) session.WorkWriter {
@@ -339,10 +360,13 @@ func (c *StubClient) writerOf(pod string) session.WorkWriter {
 // SealWorkWriter moves the seal, with the same epoch rules the slot applies:
 // the same seal again changes nothing, and a stale epoch is refused.
 func (c *StubClient) SealWorkWriter(
-	_ context.Context, pod string, in session.WorkSeal,
+	_ context.Context, pod, token string, in session.WorkSeal,
 ) (session.WorkSealResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.checkWriterToken(token); err != nil {
+		return session.WorkSealResult{}, err
+	}
 	current := c.writerOf(pod)
 	if in.ExpectedEpoch != nil && *in.ExpectedEpoch != current.Epoch {
 		return session.WorkSealResult{}, fmt.Errorf("%w: expected_epoch does not match", session.ErrConflict)
@@ -369,10 +393,13 @@ func (c *StubClient) SealWorkWriter(
 // what a test needs to show that the monitor's writes land in the same records
 // the session read before the handover.
 func (c *StubClient) CallWork(
-	_ context.Context, pod, name string, args json.RawMessage,
+	_ context.Context, pod, token, name string, args json.RawMessage,
 ) (session.WorkCallResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := c.checkWriterToken(token); err != nil {
+		return session.WorkCallResult{}, err
+	}
 	refuse := func(message string) session.WorkCallResult {
 		raw, _ := json.Marshal(map[string]string{"code": "permission_denied", "error": message})
 		return workCallResultOf(string(raw), true)
@@ -416,4 +443,12 @@ func workCallResultOf(text string, isError bool) session.WorkCallResult {
 		Text string `json:"text"`
 	}{Type: "text", Text: text})
 	return result
+}
+
+// Written is what a session's pod has been told, so a test can show that
+// something which claimed to wake a monitor actually queued it a turn.
+func (c *StubClient) Written(pod string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return string(c.bufs[pod])
 }

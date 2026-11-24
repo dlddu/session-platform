@@ -30,6 +30,12 @@ type monitorPairConfig struct {
 	dbPath string
 	// internalURL is how a session's workload reaches this control plane.
 	internalURL string
+	// writerKey derives each session sidecar's seal credential, from
+	// MONITOR_PAIR_WRITER_KEY. Without it no sidecar is given one and every
+	// handover is refused, so the feature declines rather than running without
+	// the boundary that keeps a session from moving its own writer
+	// (internal/session/writer_token.go).
+	writerKey []byte
 }
 
 func loadMonitorPairConfig() monitorPairConfig {
@@ -37,7 +43,17 @@ func loadMonitorPairConfig() monitorPairConfig {
 		enabled:     envBool("MONITOR_PAIR_ENABLED", false),
 		dbPath:      monitorPairDBPath,
 		internalURL: env("MONITOR_PAIR_INTERNAL_URL", ""),
+		writerKey:   []byte(env("MONITOR_PAIR_WRITER_KEY", "")),
 	}
+}
+
+// writerKeyFor is the key the orchestrator and the service both derive from,
+// and it is handed out only when the feature is on.
+func (c monitorPairConfig) writerKeyFor() []byte {
+	if !c.enabled {
+		return nil
+	}
+	return c.writerKey
 }
 
 // workloadURL defaults to this namespace's control-plane Service, the same

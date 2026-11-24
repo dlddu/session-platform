@@ -25,22 +25,29 @@ import (
 )
 
 // WorkWriter reads who may write this slot's work records.
-func (c *HTTPClient) WorkWriter(ctx context.Context, pod string) (session.WorkWriter, error) {
+func (c *HTTPClient) WorkWriter(ctx context.Context, pod, token string) (session.WorkWriter, error) {
+	raw, status, err := c.getWork(ctx, pod, "/work/writer", token)
+	if err != nil {
+		return session.WorkWriter{}, err
+	}
+	if status != http.StatusOK {
+		return session.WorkWriter{}, workWriteError(pod, status, raw)
+	}
 	var view struct {
 		Writer session.WorkWriter `json:"writer"`
 	}
-	if err := c.readWork(ctx, pod, "/work/writer", nil, "work writer", &view); err != nil {
-		return session.WorkWriter{}, err
+	if err := json.Unmarshal(raw, &view); err != nil {
+		return session.WorkWriter{}, fmt.Errorf("read the work writer of session pod %s: decode: %w", pod, err)
 	}
 	return view.Writer, nil
 }
 
 // SealWorkWriter hands the records to a monitor, or gives them back.
 func (c *HTTPClient) SealWorkWriter(
-	ctx context.Context, pod string, in session.WorkSeal,
+	ctx context.Context, pod, token string, in session.WorkSeal,
 ) (session.WorkSealResult, error) {
 	var empty session.WorkSealResult
-	raw, status, err := c.postWork(ctx, pod, "/work/writer", in)
+	raw, status, err := c.postWork(ctx, pod, "/work/writer", token, in)
 	if err != nil {
 		return empty, err
 	}
@@ -58,10 +65,10 @@ func (c *HTTPClient) SealWorkWriter(
 // the arguments and enforces the seal exactly as it does for the session's own
 // model: this adds no tool and relaxes no rule, it only says who is calling.
 func (c *HTTPClient) CallWork(
-	ctx context.Context, pod, name string, args json.RawMessage,
+	ctx context.Context, pod, token, name string, args json.RawMessage,
 ) (session.WorkCallResult, error) {
 	var empty session.WorkCallResult
-	raw, status, err := c.postWork(ctx, pod, "/work/call",
+	raw, status, err := c.postWork(ctx, pod, "/work/call", token,
 		map[string]any{"name": name, "args": args})
 	if err != nil {
 		return empty, err
@@ -80,9 +87,33 @@ func (c *HTTPClient) CallWork(
 	}
 }
 
-// postWork is the shared POST onto the agent's work path.
+// getWork and postWork are the shared hops onto the agent's seal paths. The
+// credential is the sidecar's, derived per session by the caller: the agent in
+// between holds none and only passes the header along.
+func (c *HTTPClient) getWork(ctx context.Context, pod, path, token string) ([]byte, int, error) {
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return nil, 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL(ip)+path, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("get %s from session pod %s: %w", path, pod, err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("get %s from session pod %s: %w", path, pod, err)
+	}
+	return raw, resp.StatusCode, nil
+}
+
 func (c *HTTPClient) postWork(
-	ctx context.Context, pod, path string, body any,
+	ctx context.Context, pod, path, token string, body any,
 ) ([]byte, int, error) {
 	ip, err := c.resolve(ctx, pod)
 	if err != nil {
@@ -97,6 +128,7 @@ func (c *HTTPClient) postWork(
 		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("post %s to session pod %s: %w", path, pod, err)

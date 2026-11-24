@@ -18,10 +18,13 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"strings"
 )
 
 const (
@@ -30,7 +33,47 @@ const (
 	sessionDBWorkWriterPath = "/session-db/work/writer"
 	// sessionDBWorkCallPath is one work tool call made by the bound monitor.
 	sessionDBWorkCallPath = "/session-db/work/call"
+	// monitorPairWriterTokenEnv is the credential these two routes require. The
+	// orchestrator puts it on this container and not on the workload container
+	// (control-plane/internal/adapter/k8s: MonitorPairWriterTokenEnvVar), so a
+	// caller that merely shares the pod cannot move the writer or write as the
+	// monitor. Unset means this slot cannot be handed over at all.
+	monitorPairWriterTokenEnv = "MONITOR_PAIR_WRITER_TOKEN"
 )
+
+// authorizeWriterCall is the gate in front of both seal routes.
+//
+// Loopback stays required — the database is this pod's — but it is not what
+// authorises the call: the workload container is on the same loopback. The
+// credential is, and it is compared whole and in constant time.
+//
+// A sidecar with no credential configured refuses rather than serving these
+// routes open. That is deliberate: the control plane reads the refusal as "this
+// slot cannot be handed over", and a pair is not bound over a slot it could not
+// seal — so an unprepared deployment declines the feature instead of running it
+// without the boundary.
+func authorizeWriterCall(w http.ResponseWriter, r *http.Request) bool {
+	if !fromLoopback(r) {
+		http.Error(w, "the work writer view is only for this pod", http.StatusForbidden)
+		return false
+	}
+	want := strings.TrimSpace(os.Getenv(monitorPairWriterTokenEnv))
+	if want == "" {
+		writeWorkViewError(w, http.StatusNotImplemented, "unsupported",
+			"this slot has no writer credential, so its work records cannot be handed over")
+		return false
+	}
+	got := strings.TrimSpace(strings.TrimPrefix(
+		strings.TrimSpace(r.Header.Get("Authorization")), "Bearer "))
+	if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+		// Being in the pod is not enough, and saying which part failed would
+		// help a caller in the pod guess its way in.
+		writeWorkViewError(w, http.StatusForbidden, "permission_denied",
+			"only the control plane may move this slot's writer or write as its monitor")
+		return false
+	}
+	return true
+}
 
 // serveWorkWriter answers or moves the seal.
 //
@@ -40,8 +83,7 @@ const (
 // as soon as it has this answer, and has no reason to wait a fixed time for
 // anything to propagate.
 func (s *sessionDB) serveWorkWriter(w http.ResponseWriter, r *http.Request) {
-	if !fromLoopback(r) {
-		http.Error(w, "the work writer view is only for this pod", http.StatusForbidden)
+	if !authorizeWriterCall(w, r) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), sessionDBCallTimeout)
@@ -119,8 +161,7 @@ func (s *sessionDB) serveWorkCall(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the work call view accepts POST", http.StatusMethodNotAllowed)
 		return
 	}
-	if !fromLoopback(r) {
-		http.Error(w, "the work call view is only for this pod", http.StatusForbidden)
+	if !authorizeWriterCall(w, r) {
 		return
 	}
 	var body workCallBody

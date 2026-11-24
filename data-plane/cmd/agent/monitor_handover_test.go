@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -31,7 +32,15 @@ type handoverSlot struct {
 	t    *testing.T
 	db   *sessionDB
 	base string
+	// auth is the credential the sidecar requires on the seal routes. The
+	// control plane has it; the session's own model does not
+	// (session_work_seal_http.go, session_work_seal_auth_test.go).
+	auth string
 }
+
+// testWriterCredential stands for what the orchestrator puts on a real
+// sidecar. These tests act as the control plane, so they hold it.
+const testWriterCredential = "fixture-slot-writer-credential"
 
 // openHandoverSlot opens a slot directory. Calling it again on the same
 // directory is a restart: a new process, the same records, and no memory of
@@ -48,7 +57,7 @@ func openHandoverSlot(t *testing.T, dir, role string) *handoverSlot {
 			http.Error(w, "not the work surface", http.StatusNotFound)
 		}), db))
 	t.Cleanup(srv.Close)
-	return &handoverSlot{t: t, db: db, base: srv.URL}
+	return &handoverSlot{t: t, db: db, base: srv.URL, auth: "Bearer " + testWriterCredential}
 }
 
 // own is a call by the session's own model, through the slot MCP.
@@ -69,7 +78,15 @@ func (s *handoverSlot) post(path string, body any) (int, map[string]any) {
 	if err != nil {
 		s.t.Fatal(err)
 	}
-	resp, err := http.Post(s.base+path, "application/json", bytes.NewReader(raw))
+	req, err := http.NewRequest(http.MethodPost, s.base+path, bytes.NewReader(raw))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if s.auth != "" {
+		req.Header.Set("Authorization", s.auth)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		s.t.Fatalf("POST %s: %v", path, err)
 	}
@@ -78,7 +95,14 @@ func (s *handoverSlot) post(path string, body any) (int, map[string]any) {
 
 func (s *handoverSlot) get(path string) (int, map[string]any) {
 	s.t.Helper()
-	resp, err := http.Get(s.base + path)
+	req, err := http.NewRequest(http.MethodGet, s.base+path, nil)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	if s.auth != "" {
+		req.Header.Set("Authorization", s.auth)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		s.t.Fatalf("GET %s: %v", path, err)
 	}
@@ -172,6 +196,9 @@ func (s *handoverSlot) turnTexts(taskID string) []string {
 // written by its own model before any monitor existed.
 func handoverFixture(t *testing.T, dir string) *handoverSlot {
 	t.Helper()
+	if _, named := os.LookupEnv(monitorPairWriterTokenEnv); !named {
+		t.Setenv(monitorPairWriterTokenEnv, testWriterCredential)
+	}
 	// The empty role is the already-running session: the control plane put no
 	// role on this pod, because when it started there was no pair.
 	slot := openHandoverSlot(t, dir, "")

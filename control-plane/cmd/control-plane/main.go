@@ -138,6 +138,10 @@ func main() {
 		k8s.WithRepoAccess(cfg.repoAccess.helperURL(namespace)),
 		k8s.WithMonitorPair(cfg.monitorPair.workloadURL(namespace)),
 		k8s.WithMonitorPairRoles(pairs.roleOf),
+		// The seal credential goes on each session's sidecar, derived from this
+		// key. The same key is given to the service below, so the two agree
+		// without anything being stored (internal/session/writer_token.go).
+		k8s.WithMonitorPairWriterKey(cfg.monitorPair.writerKeyFor()),
 		k8s.WithDropURL(cfg.dropURL))
 	store := configmap.NewStore(client, namespace)
 	// Shell I/O (write→stdin, read→scrollback delta) AND checkpoint/restore ride
@@ -165,7 +169,9 @@ func main() {
 		logger.Info("shell filesystem archive enabled", "store", cfg.checkpointStoreDesc())
 	}
 
-	var serviceOpts []service.Option
+	serviceOpts := []service.Option{
+		service.WithMonitorPairWriterKey(cfg.monitorPair.writerKeyFor()),
+	}
 	if cfg.claudeArchiveEnabled {
 		if cfg.dataPlaneClaudeCodeImage == "" {
 			logger.Error("CLAUDE_CODE_ARCHIVE_ENABLED needs DATA_PLANE_CLAUDE_CODE_IMAGE")

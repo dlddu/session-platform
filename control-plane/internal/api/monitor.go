@@ -31,6 +31,17 @@ type MonitorPairs interface {
 	Snapshot(ctx context.Context, monitorSessionID, kind, key string) (monitorpair.Mirror, error)
 }
 
+// monitorDrainPrompt is the turn the control plane queues on a monitor that
+// could not take an instruction when it arrived. It says only "there is
+// something in your inbox, run your own procedure": what to do is the monitor
+// role skill's, not this prompt's.
+// monitorIntakeAvailable is the intake state a monitor that can take a turn
+// now reports. Anything else means an instruction has to wait for it to come
+// back, which is what the intake path resumes it for.
+const monitorIntakeAvailable = "available"
+
+const monitorDrainPrompt = "새 지시가 접수됐습니다. 모니터 역할 스킬의 순서대로 인박스와 열린 턴을 확인해 처리하세요."
+
 // Snapshot kinds the monitor publishes.
 const (
 	snapshotTasks = "tasks"
@@ -240,7 +251,7 @@ func (m *Monitor) monitorState(ctx context.Context, b monitorpair.Binding) *moni
 	v := &monitorStateView{SessionID: b.MonitorSessionID, State: string(s.State)}
 	switch s.State {
 	case session.StateActive, session.StateIdle:
-		v.Reads, v.Intake = "available", "available"
+		v.Reads, v.Intake = "available", monitorIntakeAvailable
 	default:
 		v.Reads, v.Intake = "unavailable", "refused"
 		v.Recovery = "restore the monitor session (POST /api/v1/sessions/" + b.MonitorSessionID + "/switch) before reading or sending"
@@ -604,10 +615,16 @@ func (m *Monitor) request(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if errors.Is(err, session.ErrWorkUnavailable) {
-			// Durably accepted, not delivered. The monitor drains it on resume.
+			// Durably accepted, not delivered. Resuming the monitor is what
+			// makes it drain, and that is the platform's own write path, so
+			// there is nothing extra to arrange for the instruction to run.
+			woken := m.wakeMonitor(r.Context(), b)
+			note := "accepted and held: the monitor is not running, and it will take this from its inbox when it resumes"
+			if woken {
+				note = "accepted and held: the monitor was not running, so it has been resumed and will drain this now"
+			}
 			writeJSON(w, http.StatusAccepted, intakeView{Item: item, Replayed: !created,
-				Monitor: m.monitorState(r.Context(), b),
-				Note:    "accepted and held: the monitor is not running, and it will take this from its inbox when it resumes"})
+				Monitor: m.monitorState(r.Context(), b), Woken: woken, Note: note})
 			return
 		}
 		if errors.Is(err, session.ErrWorkChoiceStale) || errors.Is(err, session.ErrInvalidInput) {
@@ -619,18 +636,47 @@ func (m *Monitor) request(w http.ResponseWriter, r *http.Request) {
 		m.workErr(w, r, b, err)
 		return
 	}
+	// The instruction is in the records. Carrying it out is the monitor's, and
+	// a monitor that is frozen would not notice until something woke it — so
+	// this does, through the platform's own resume-on-access write. A monitor
+	// that is already taking turns is left to the nudge its own caller sends.
+	woken := false
+	if state := m.monitorState(r.Context(), b); state == nil || state.Intake != monitorIntakeAvailable {
+		woken = m.wakeMonitor(r.Context(), b)
+	}
 	marked, err := m.pairs.MarkForwarded(r.Context(), b.MonitorSessionID, requestID, stored.Turn.ID, stored.Turn.SessionSeq)
 	if err != nil {
 		// The slot has it; the bookkeeping did not land. Say so rather than
 		// claim either outcome: the next drain reconciles from the slot.
 		m.logger.Warn("forwarded but not recorded", "request", requestID, "err", err)
 		writeJSON(w, http.StatusOK, intakeView{Item: item, Replayed: stored.Replayed, Turn: &stored.Turn,
-			Monitor: m.monitorState(r.Context(), b),
-			Note:    "the monitor's slot took this turn but the inbox record did not update; the next drain reconciles it"})
+			Monitor: m.monitorState(r.Context(), b), Woken: woken,
+			Note: "the monitor's slot took this turn but the inbox record did not update; the next drain reconciles it"})
 		return
 	}
 	writeJSON(w, http.StatusOK, intakeView{Item: marked, Replayed: stored.Replayed, Turn: &stored.Turn,
-		Monitor: m.monitorState(r.Context(), b)})
+		Monitor: m.monitorState(r.Context(), b), Woken: woken})
+}
+
+// wakeMonitor queues one turn on the monitor, which is also what brings it back
+// if it was frozen: the platform's write path activates a session before it
+// writes (the uniform resume-on-access rule), so this needs no new recovery
+// mechanism and no schedule of its own.
+//
+// It is called only from intake — never from a read. A read of the records must
+// not start a pod, which is why the read handlers use the manager's read path
+// and answer from the published state when there is nothing to read from.
+//
+// Failing to wake does not fail the intake: the instruction is already durable,
+// so the honest answer is "accepted, not yet running", and the next intake or
+// the monitor's own schedule picks it up.
+func (m *Monitor) wakeMonitor(ctx context.Context, b monitorpair.Binding) bool {
+	if _, err := m.mgr.Write(ctx, b.MonitorSessionID, monitorDrainPrompt); err != nil {
+		m.logger.Warn("could not wake the monitor for a drain",
+			"monitor", b.MonitorSessionID, "err", err)
+		return false
+	}
+	return true
 }
 
 type intakeView struct {
@@ -640,7 +686,10 @@ type intakeView struct {
 	Replayed bool              `json:"replayed"`
 	Turn     *session.WorkTurn `json:"turn,omitempty"`
 	Monitor  *monitorStateView `json:"monitor,omitempty"`
-	Note     string            `json:"note,omitempty"`
+	// Woken is true when this intake resumed the monitor so it would drain now.
+	// It is only ever set by an intake: a read never wakes anything.
+	Woken bool   `json:"woken,omitempty"`
+	Note  string `json:"note,omitempty"`
 }
 
 // requestStatus is the parent asking what happened to one instruction. It is a
