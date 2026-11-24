@@ -552,6 +552,9 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 | `agent-auth-pool.md#시나리오 1` | **Playwright 이관 미완료 — kube 관측 의존.** 기대 결과가 Lease·PVC·pod spec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**다. | `control-plane/test/e2e_auth_pool_1_lease_mount_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_auth_pool_1_lease_mount_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다. |
 | `agent-auth-pool.md#시나리오 2` | **Playwright 이관 미완료 — kube 관측 의존.** 기대 결과가 Lease·PVC·pod spec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**다. | `control-plane/test/e2e_auth_pool_2_exhausted_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_auth_pool_2_exhausted_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다. |
 | `agent-auth-pool.md#시나리오 3` | **Playwright 이관 미완료 — kube 관측 의존.** 기대 결과가 Lease·PVC·pod spec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**다. | `control-plane/test/e2e_auth_pool_3_release_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_auth_pool_3_release_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다. |
+| `agent-auth-pool.md#시나리오 6` | **기능이 막 착지했고 SUT 에 이 왕복을 도는 spec 이 없다.** 이 시나리오는 살아 있는 `codex-chat` 파드와 그 슬롯 원장의 작업 하나를 전제하고, claim 만료·재대조까지 시간을 움직여야 한다 — e2e 하네스가 아직 그 상태를 세우지 않는다. | 없음 | 이 모델 | SUT 가 작업이 있는 `codex-chat` 세션을 세우고 claim TTL 을 테스트가 넘길 수 있게 되면 `web/e2e/` 최상위 전용 spec 이 착지하고 이 행을 같은 PR 에서 제거한다. | 단위: `data-plane/cmd/agent/session_ledger_user_requests_test.go`(저장·멱등·작업 연결·순서·claim 경합·dispatch 뒤 죽음의 재대조·작업 삭제 뒤 보존), `control-plane/internal/api/ledger_test.go`(경로의 201/200·404·501·400 과 저장이 세션을 깨우지 않는 것). |
+| `agent-auth-pool.md#시나리오 7` | **기능이 막 착지했고 SUT 에 이 왕복을 도는 spec 이 없다.** 선택지의 기준 version 소멸과 이력 순서는 살아 있는 `codex-chat` 파드와 작업·요청 수명주기를 모두 전제한다 — e2e 하네스가 아직 그 상태를 세우지 않는다. | 없음 | 이 모델 | SUT 가 작업·요청이 있는 `codex-chat` 세션을 세우면 `web/e2e/` 최상위 전용 spec 이 착지하고 이 행을 같은 PR 에서 제거한다. | 단위: `data-plane/cmd/agent/session_ledger_task_choices_test.go`(기준 version 소멸·conflict·경계·replay·이력 순서·seq 페이지·뷰 403/405/400), `control-plane/internal/api/ledger_test.go`(이력 경로의 페이지·작업 범위·남의 테넌트 404·형식 400, 작업 페이지의 선택지). |
+| `agent-auth-pool.md#시나리오 8` | **기능이 막 착지했고 SUT 에 이 왕복을 도는 spec 이 없다.** 이관·커토버·롤백은 살아 있는 `codex-chat` 파드와 **옮길 거리가 있는 원장**(선택지·접수된 요청·모니터 행)을 전제하고, 기대 결과 (h) 는 **옛 이미지로의 복원**까지 요구한다 — e2e 하네스가 아직 그 상태도, 이미지 되돌리기도 세우지 않는다. | 없음 | 이 모델 | SUT 가 옮길 거리가 있는 `codex-chat` 원장과 이미지 되돌리기를 세우면 `web/e2e/` 최상위 전용 spec 이 착지하고 이 행을 같은 PR 에서 제거한다. 그때까지 스냅샷 복원 리허설은 배포 뒤 검증(세션 원장 계약 §「Verification and rollout boundary」)이 소유한다. | 단위: `data-plane/cmd/agent/session_work_migrate_test.go`(dry run 무변경·원장이 적은 것만 이관·손상 DB 거절·멱등과 재개·펜스의 쓰기 거절·스냅샷 없는 펜스 거절·사용자 테이블 불변·원장이 롤백을 위해 남는 것·커토버의 투영과 요청→턴·낡은 턴 선택지 거절), `data-plane/cmd/agent/session_work_test.go`(합의한 컬럼·version CAS·턴 수명주기·단일 승자). |
 | `codex-task-workload.md#시나리오 2` | **Playwright 이관 미완료 — kube 관측 의존.** 기대 결과가 Lease·PVC·pod spec 처럼 브라우저로도 control-plane HTTP API 로도 관측되지 않는다. 규칙 4의 **예외 전환 후보**다. | `control-plane/test/e2e_codex_task_2_pod_shape_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지 **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_codex_task_2_pod_shape_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다. |
 | `codex-task-workload.md#시나리오 4` | **Playwright 이관 미완료 — kube 관측 의존(일부).** `/config`·생성·조회는 HTTP API 로 보이지만 「파드까지 간다」는 주 컨테이너 env 로만 관측된다. | `control-plane/test/e2e_codex_task_4_effort_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지(파드 env 단언은 규칙 4 예외로 분리) **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_codex_task_4_effort_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다. |
 | `claude-code-workload.md#시나리오 11` | **Playwright 이관 미완료 — kube 관측 의존(일부).** `/config`·생성·조회는 HTTP API 로 보이지만 「파드까지 간다」는 주 컨테이너 env 로만 관측된다. | `control-plane/test/e2e_claude_code_11_effort_test.go` | 이 모델 | `web/e2e/` 최상위 전용 spec 착지(파드 env 단언은 규칙 4 예외로 분리) **또는** 규칙 4 예외로 전환(대체 검증 수단 = `control-plane/test/e2e_claude_code_11_effort_test.go`). 어느 쪽이든 이 행을 같은 PR 에서 제거한다. | 그 Go 파일이 지금 이 시나리오를 온전히 검증한다. |
@@ -601,9 +604,9 @@ e2e 자동 검증이 곤란해 전용 파일을 두지 않는 시나리오. 등�
 ## 집계
 
 <!-- scenario-summary:begin -->
-- 시나리오 총계: 83
+- 시나리오 총계: 86
 - 예외: 13
-- 유예: 64
+- 유예: 67
 - 시나리오 매칭 파일: 6
 - 공백: 0
 <!-- scenario-summary:end -->

@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 )
 
@@ -29,6 +30,11 @@ type CreateRequest struct {
 	// Tenant names the owning tenant (AC-K2). The API fills it from the
 	// caller; the manager stores it verbatim.
 	Tenant string
+	// MonitorFor names the parent session this one monitors. The API fills it
+	// after checking the parent exists in the same tenant, and it is immutable
+	// afterwards: the managed pair is what the control plane later trusts, so
+	// a workload cannot claim a parent slot by asking.
+	MonitorFor string
 }
 
 // RestoreOptions changes what a restore from snapshot brings back. A nil
@@ -118,10 +124,31 @@ type Manager interface {
 	// person; AnswerQuestion answers one (AC-E2).
 	Questions(ctx context.Context, id string) ([]PendingQuestion, error)
 	AnswerQuestion(ctx context.Context, id, questionID string, answers map[string]string) error
+	// Steer hands a message to a codex session's running turn instead of the
+	// queue behind it (AC-J9). The answer says whether that turn took it.
+	Steer(ctx context.Context, id, text string) (Steered, error)
 	// ToolApprovals lists the tool calls a claude-code session's running turn
 	// put to its owner; DecideToolApproval relays one decision (AC-E2).
 	ToolApprovals(ctx context.Context, id string) (ToolApprovalPage, error)
 	DecideToolApproval(ctx context.Context, id, approvalID string, decision ToolApprovalDecision) error
+	// WorkTasks and WorkTurns read the agreed work records — the task row and
+	// the turn row — read only and without waking the session (AC-N9). A
+	// task's turns are its history: there is no separate history read, because
+	// a past management event was never a turn (AC-N10).
+	WorkTasks(ctx context.Context, id string, limit int, afterID, status, sessionID string) (WorkTaskPage, error)
+	WorkTurns(ctx context.Context, id, taskID string, afterTurnID int64, limit int, openOnly bool) (WorkTurnPage, error)
+	// CreateWorkRequest stores one person's request as the next turn of a
+	// task. It writes no task field and starts no turn of the session's own:
+	// the parent finds it when it next reads the task's open turns (AC-N10).
+	CreateWorkRequest(ctx context.Context, id string, in WorkRequestInput) (WorkRequestStored, error)
+	// WorkWriter, SealWorkWriter and CallWork are the monitor pair's hold on the
+	// same records: who writes them, the handover that moves that, and a bound
+	// monitor's own calls. SealWorkWriter returning is the evidence the previous
+	// writer stopped — it and every write take the same slot database — so the
+	// caller opens the next writer only after it (work_writer.go).
+	WorkWriter(ctx context.Context, id string) (WorkWriter, error)
+	SealWorkWriter(ctx context.Context, id string, in WorkSeal) (WorkSealResult, error)
+	CallWork(ctx context.Context, id, name string, args json.RawMessage) (WorkCallResult, error)
 	// Recover calls admit with the recovered record before anything is
 	// written, so the caller decides who may see it (AC-K2).
 	Recover(ctx context.Context, id string, opts RestoreOptions, admit func(*Session) error) (*Session, error)

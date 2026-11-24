@@ -69,6 +69,9 @@ func TestCodex_OnePodWithLoopbackK3SProxy(t *testing.T) {
 			t.Errorf("platform-default model must come from codex-cfg's optional key, got %+v", e)
 		}
 	}
+	if ref := optionalConfigMapRef(agent, k8s.CodexReasoningEffortEnvVar); ref == nil || ref.Name != "codex-cfg" || ref.Key != k8s.CodexReasoningEffortConfigKey {
+		t.Errorf("%s must come from codex-cfg's optional reasoning-effort key (AC-J1), got %+v", k8s.CodexReasoningEffortEnvVar, ref)
+	}
 	proxy := container(t, pod, k8s.K3SMCPProxyContainerName)
 	want := map[string]string{
 		"DATA_PLANE_WORKLOAD":         "k3s-mcp-proxy",
@@ -180,4 +183,16 @@ func TestCodexChat_RefusesWithoutSlot(t *testing.T) {
 	if n := len(listPods(t, cs)); n != 0 {
 		t.Fatalf("pods = %d, want none", n)
 	}
+}
+
+// optionalConfigMapRef is the ConfigMap key an env var reads, nil unless it is
+// an optional configMapKeyRef.
+func optionalConfigMapRef(c corev1.Container, name string) *corev1.ConfigMapKeySelector {
+	for _, e := range c.Env {
+		if e.Name == name && e.ValueFrom != nil && e.ValueFrom.ConfigMapKeyRef != nil &&
+			e.ValueFrom.ConfigMapKeyRef.Optional != nil && *e.ValueFrom.ConfigMapKeyRef.Optional {
+			return e.ValueFrom.ConfigMapKeyRef
+		}
+	}
+	return nil
 }

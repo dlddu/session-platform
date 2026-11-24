@@ -7,10 +7,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,12 +25,16 @@ import (
 
 // Service is the concrete Manager. It owns no workload itself (AC-A1).
 type Service struct {
-	orch               k8s.PodOrchestrator
-	store              store.StateStore
-	ckpts              map[session.WorkloadType]archive.Checkpointer
-	agent              agent.Client
-	now                func() time.Time // injectable clock for tests
-	leaseRenewInterval time.Duration
+	orch  k8s.PodOrchestrator
+	store store.StateStore
+	ckpts map[session.WorkloadType]archive.Checkpointer
+	agent agent.Client
+	// monitorPairWriterKey derives each session sidecar's seal credential. Empty
+	// means this deployment cannot hand work records over, and the pair's
+	// opt-in declines rather than running without that boundary.
+	monitorPairWriterKey []byte
+	now                  func() time.Time // injectable clock for tests
+	leaseRenewInterval   time.Duration
 	// authPools are the login slot pools by the type that leases from them
 	// (AC-N2): codex-task and codex-manager.
 	authPools map[session.WorkloadType]k8s.AuthPool
@@ -105,6 +111,13 @@ func WithAuthPool(workload session.WorkloadType, pool k8s.AuthPool) Option {
 
 // WithClock replaces the service clock, which a test must own to pin AC-F3's
 // idle exception (docs/test/approval-gate.md scenario 5).
+// WithMonitorPairWriterKey gives the service the key each session sidecar's
+// seal credential is derived from. It is the same key the orchestrator derives
+// the sidecar's env from, so the two agree without anything being stored.
+func WithMonitorPairWriterKey(key []byte) Option {
+	return func(s *Service) { s.monitorPairWriterKey = key }
+}
+
 func WithClock(now func() time.Time) Option {
 	return func(s *Service) {
 		if now != nil {
@@ -288,6 +301,7 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 		Plugins:         plugins,
 		ReasoningEffort: effort,
 		Tenant:          req.Tenant,
+		MonitorFor:      req.MonitorFor,
 		Name:            name,
 		State:           session.StateActive,
 		Pod:             pods.Workload.Name,
@@ -579,6 +593,43 @@ func (s *Service) AnswerQuestion(ctx context.Context, id, questionID string, ans
 	return nil
 }
 
+// steerAgent is the agent capability behind a mid-turn message (AC-J9).
+type steerAgent interface {
+	Steer(ctx context.Context, pod, text string) (session.Steered, error)
+}
+
+// Steer hands text to the session's running turn instead of the queue behind
+// it (AC-J9). Passive like Questions: it neither restores a snapshot nor
+// promotes an idle session — a session with no pod has no running turn, so
+// there is nothing to steer and the answer says so.
+func (s *Service) Steer(ctx context.Context, id, text string) (session.Steered, error) {
+	if text == "" {
+		return session.Steered{}, fmt.Errorf("%w: text is required", session.ErrInvalidInput)
+	}
+	sess, err := s.Get(ctx, id)
+	if err != nil {
+		return session.Steered{}, err
+	}
+	if !session.SteerableWorkload(sess.WorkloadType) {
+		return session.Steered{}, fmt.Errorf("%w: mid-turn messages are taken by codex sessions only", session.ErrInvalidState)
+	}
+	if sess.State == session.StateSnapshot || sess.Pod == "" {
+		return session.Steered{Status: "rejected", Reason: "no turn is running"}, nil
+	}
+	agentS, ok := s.agent.(steerAgent)
+	if !ok {
+		return session.Steered{Status: "rejected", Reason: "no turn is running"}, nil
+	}
+	steered, err := agentS.Steer(ctx, sess.Pod, text)
+	if err != nil {
+		return session.Steered{}, err
+	}
+	if steered.Applied() {
+		s.touch(ctx, id)
+	}
+	return steered, nil
+}
+
 // toolApprovalAgent is the agent capability behind a claude-code turn's tool
 // calls waiting on the session owner (AC-E2, 「턴 중 도구 승인」).
 type toolApprovalAgent interface {
@@ -669,6 +720,77 @@ func (s *Service) questionTarget(ctx context.Context, id string) (*session.Sessi
 	}
 	return sess, agentQ, nil
 }
+
+// workRequestAgent is the agent capability behind the one write on the work
+// path: a person's request becoming the next turn of a task (AC-N10).
+type workRequestAgent interface {
+	CreateWorkRequest(ctx context.Context, pod string, in session.WorkRequestInput) (session.WorkRequestStored, error)
+}
+
+// CreateWorkRequest stores one person's request as the next turn of a task of
+// the chat slot (AC-N10, the write side of the work records).
+//
+// It is as passive as the reads beside it: it neither restores a snapshot nor
+// counts as an access, so a person leaving a request never wakes the session
+// and never moves its idle clock — the parent picks it up when it next reads
+// the task's open turns. A session with no live pod cannot be written to, which
+// is reported rather than swallowed: the caller can say the request was not
+// stored instead of implying it was.
+//
+// The slot is reached through the pod holding it now, exactly as on the read
+// side, so a request lands in the records the current chat sees.
+func (s *Service) CreateWorkRequest(
+	ctx context.Context, id string, in session.WorkRequestInput,
+) (session.WorkRequestStored, error) {
+	var empty session.WorkRequestStored
+	if err := validateWorkRequest(in); err != nil {
+		return empty, err
+	}
+	sess, err := s.Get(ctx, id)
+	if err != nil {
+		return empty, err
+	}
+	if sess.WorkloadType != session.WorkloadTypeCodexManager {
+		return empty, fmt.Errorf("%w: only codex-chat sessions keep work records", session.ErrWorkUnsupported)
+	}
+	if sess.State == session.StateSnapshot || sess.Pod == "" {
+		return empty, session.ErrWorkUnavailable
+	}
+	agentR, ok := s.agent.(workRequestAgent)
+	if !ok {
+		return empty, fmt.Errorf("%w: this deployment's agent cannot store work requests", session.ErrWorkUnsupported)
+	}
+	return agentR.CreateWorkRequest(ctx, sess.Pod, in)
+}
+
+// validateWorkRequest bounds what reaches the slot. The slot applies the same
+// rules itself; refusing here keeps a malformed request from costing a hop into
+// the pod, and keeps the message about the field rather than the hop.
+func validateWorkRequest(in session.WorkRequestInput) error {
+	if !workRecordID.MatchString(in.ID) {
+		return fmt.Errorf("%w: id must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
+	}
+	if !workRecordID.MatchString(in.TaskID) {
+		return fmt.Errorf("%w: task_id must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
+	}
+	if !workRecordID.MatchString(in.Author) {
+		return fmt.Errorf("%w: author must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
+	}
+	if text := strings.TrimSpace(in.Text); text == "" || len(in.Text) > session.WorkRequestTextMax {
+		return fmt.Errorf("%w: text must be 1..%d characters", session.ErrInvalidInput, session.WorkRequestTextMax)
+	}
+	// A pick names the turn it was offered on. Zero or negative is not a turn
+	// id, and refusing it here keeps a caller from learning "stale" for a
+	// number that was never a turn in the first place.
+	if in.ChoiceTurnID != nil && *in.ChoiceTurnID < 1 {
+		return fmt.Errorf("%w: choice_turn_id must be a positive turn id", session.ErrInvalidInput)
+	}
+	return nil
+}
+
+// workRecordID is the work records' own id shape, so an id this service accepts
+// is one the slot will accept too.
+var workRecordID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // Switch makes the target session active — promoting idle or restoring a
 // snapshot as needed — and is a no-op for an already-active session (AC-C4).
@@ -1581,4 +1703,158 @@ func (s *Service) releaseAuthSlotBestEffort(workload session.WorkloadType, id st
 	if err := pool.Release(releaseCtx, id, signedIn); err != nil {
 		slog.Warn("auth slot release failed; the next acquire reclaims it", "session", id, "err", err)
 	}
+}
+
+// workAgent is the agent capability behind the agreed work records (AC-N9).
+type workAgent interface {
+	WorkTasks(ctx context.Context, pod string, limit int, afterID, status, sessionID string) (session.WorkTaskPage, error)
+	WorkTurns(ctx context.Context, pod, taskID string, afterTurnID int64, limit int, openOnly bool) (session.WorkTurnPage, error)
+}
+
+// workWriterAgent is the agent capability behind the seal that says who writes
+// a slot's work records, and behind a bound monitor's calls on them.
+type workWriterAgent interface {
+	WorkWriter(ctx context.Context, pod, token string) (session.WorkWriter, error)
+	SealWorkWriter(ctx context.Context, pod, token string, in session.WorkSeal) (session.WorkSealResult, error)
+	CallWork(ctx context.Context, pod, token, name string, args json.RawMessage) (session.WorkCallResult, error)
+}
+
+// workWritable is workReadable for the seal: the same checks, and the agent has
+// to offer the writer path as well. A session with no live pod is unavailable
+// rather than unsealed — the records are on the volume and so is the seal, and
+// answering "nobody has them" would let a caller open a second writer.
+func (s *Service) workWritable(ctx context.Context, id string) (*session.Session, workWriterAgent, error) {
+	sess, _, err := s.workReadable(ctx, id)
+	if err != nil {
+		return sess, nil, err
+	}
+	agentW, ok := s.agent.(workWriterAgent)
+	if !ok {
+		return sess, nil, fmt.Errorf("%w: this deployment's agent cannot hand work records over",
+			session.ErrWorkUnsupported)
+	}
+	return sess, agentW, nil
+}
+
+// writerToken is the credential the session's sidecar requires on the seal
+// routes. A deployment with no key derives none, and this path is refused
+// rather than attempted — so the pair's opt-in declines instead of running
+// without the boundary (session/writer_token.go).
+func (s *Service) writerToken(sessionID string) (string, error) {
+	token := session.MonitorPairWriterToken(s.monitorPairWriterKey, sessionID)
+	if token == "" {
+		return "", fmt.Errorf("%w: this deployment has no monitor-pair writer key, so work "+
+			"records cannot be handed over", session.ErrWorkUnsupported)
+	}
+	return token, nil
+}
+
+// WorkWriter reads who may write one session's work records.
+func (s *Service) WorkWriter(ctx context.Context, id string) (session.WorkWriter, error) {
+	sess, agentW, err := s.workWritable(ctx, id)
+	if err != nil {
+		return session.WorkWriter{}, err
+	}
+	token, err := s.writerToken(id)
+	if err != nil {
+		return session.WorkWriter{}, err
+	}
+	return agentW.WorkWriter(ctx, sess.Pod, token)
+}
+
+// SealWorkWriter hands one session's work records to its monitor, or gives them
+// back. When it returns without error the previous writer is already refused —
+// the slot moved the seal in the transaction that every write to those records
+// contends with — so the caller may open the next writer at that point and must
+// not before (AC-N9, monitor pair).
+func (s *Service) SealWorkWriter(
+	ctx context.Context, id string, in session.WorkSeal,
+) (session.WorkSealResult, error) {
+	var empty session.WorkSealResult
+	if in.Writer != session.WorkWriterSession && in.Writer != session.WorkWriterMonitor {
+		return empty, fmt.Errorf("%w: writer must be %q or %q",
+			session.ErrInvalidInput, session.WorkWriterSession, session.WorkWriterMonitor)
+	}
+	sess, agentW, err := s.workWritable(ctx, id)
+	if err != nil {
+		return empty, err
+	}
+	token, err := s.writerToken(id)
+	if err != nil {
+		return empty, err
+	}
+	return agentW.SealWorkWriter(ctx, sess.Pod, token, in)
+}
+
+// CallWork makes one work tool call against a session's records on behalf of
+// its bound monitor. The slot decides whether the monitor may write, from the
+// seal; this only carries the call.
+func (s *Service) CallWork(
+	ctx context.Context, id, name string, args json.RawMessage,
+) (session.WorkCallResult, error) {
+	var empty session.WorkCallResult
+	sess, agentW, err := s.workWritable(ctx, id)
+	if err != nil {
+		return empty, err
+	}
+	token, err := s.writerToken(id)
+	if err != nil {
+		return empty, err
+	}
+	return agentW.CallWork(ctx, sess.Pod, token, name, args)
+}
+
+// workReadable is the check every call on this path shares: the slot keeps work
+// records, a live pod holds the slot now, and this deployment's agent can be
+// asked. The records belong to the slot rather than to the session, so a
+// session with no live pod is unavailable rather than empty — the rows are
+// still on the volume, and claiming "no tasks" would be wrong.
+func (s *Service) workReadable(ctx context.Context, id string) (*session.Session, workAgent, error) {
+	sess, err := s.Get(ctx, id)
+	if err != nil {
+		return sess, nil, err
+	}
+	if sess.WorkloadType != session.WorkloadTypeCodexManager {
+		return sess, nil, fmt.Errorf("%w: only codex-chat sessions keep work records", session.ErrWorkUnsupported)
+	}
+	if sess.State == session.StateSnapshot || sess.Pod == "" {
+		return sess, nil, session.ErrWorkUnavailable
+	}
+	agentW, ok := s.agent.(workAgent)
+	if !ok {
+		return sess, nil, fmt.Errorf("%w: this deployment's agent offers no work records", session.ErrWorkUnsupported)
+	}
+	return sess, agentW, nil
+}
+
+// WorkTasks reads one keyset page of the slot's work tasks (AC-N9). Passive:
+// no restore, no access, no turn — opening a panel never wakes a session.
+func (s *Service) WorkTasks(
+	ctx context.Context, id string, limit int, afterID, status, sessionID string,
+) (session.WorkTaskPage, error) {
+	empty := session.WorkTaskPage{Tasks: []session.WorkTaskRecord{}}
+	if status != "" && !session.IsWorkStatus(status) {
+		return empty, fmt.Errorf("%w: status must be one of %s",
+			session.ErrInvalidInput, strings.Join(session.WorkStatuses, ", "))
+	}
+	sess, agentW, err := s.workReadable(ctx, id)
+	if err != nil {
+		return empty, err
+	}
+	return agentW.WorkTasks(ctx, sess.Pod, limit, afterID, status, sessionID)
+}
+
+// WorkTurns reads one keyset page of one task's turns (AC-N9).
+func (s *Service) WorkTurns(
+	ctx context.Context, id, taskID string, afterTurnID int64, limit int, openOnly bool,
+) (session.WorkTurnPage, error) {
+	empty := session.WorkTurnPage{Turns: []session.WorkTurn{}}
+	if !workRecordID.MatchString(taskID) {
+		return empty, fmt.Errorf("%w: task id must be 1..128 letters, digits, _ or -", session.ErrInvalidInput)
+	}
+	sess, agentW, err := s.workReadable(ctx, id)
+	if err != nil {
+		return empty, err
+	}
+	return agentW.WorkTurns(ctx, sess.Pod, taskID, afterTurnID, limit, openOnly)
 }

@@ -60,13 +60,27 @@ func newTestSessionDB(t *testing.T) (*sessionDB, http.Handler) {
 // newTestSessionDBWithRawSQL builds the debug sidecar (SESSION_DB_RAW_SQL=debug).
 func newTestSessionDBWithRawSQL(t *testing.T, rawSQL bool) (*sessionDB, http.Handler) {
 	t.Helper()
-	db, err := newSessionDB(t.TempDir(), rawSQL, testLogger())
+	db, err := newSessionDB(t.TempDir(), rawSQL, "", testLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
 	return db, http.HandlerFunc(db.serveMCP)
 }
+
+// workToolNames is the whole surface, and now the same one for every slot this
+// image serves (AC-N10). Nothing the transition needed is in this image: the
+// ledger tools, the migration, the rollback export, the retirement, its
+// snapshot pair and the state report they were read through are all gone, and
+// none is re-offered under another name. A call to one of those names is
+// answered with what is true instead rather than being listed.
+//
+// The order says what each group is: the agreed records first, then the
+// parent's own bookkeeping beside a task, then its monitoring loops.
+const workToolNames = "task_get,task_list,task_put,task_delete," +
+	"turn_append,turn_patch,turn_list,turn_dispatch," +
+	"task_book_get,task_book_put," +
+	"monitor_get,monitor_list,monitor_put,monitor_delete"
 
 // sessionDBToolNames is what the model is offered by one sidecar.
 func sessionDBToolNames(t *testing.T, h http.Handler) []string {
@@ -83,8 +97,8 @@ func sessionDBToolNames(t *testing.T, h http.Handler) []string {
 // ledger is the whole surface a chat session gets.
 func TestSessionDBMCP_RawSQLIsDebugOnly(t *testing.T) {
 	_, h := newTestSessionDB(t)
-	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != "ledger_get,ledger_list,ledger_put,ledger_delete" {
-		t.Fatalf("tools = %v, want the ledger alone", names)
+	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != workToolNames {
+		t.Fatalf("tools = %v, want the work records alone", names)
 	}
 	for _, name := range []string{"raw_query", "raw_exec"} {
 		resp := sessionDBCall(t, h, "tools/call", map[string]any{
@@ -101,9 +115,9 @@ func TestSessionDBMCP_RawSQLIsDebugOnly(t *testing.T) {
 		t.Fatalf("argument-less raw_exec = %+v", resp.Error)
 	}
 	if r := sessionDBCall(t, h, "tools/call", map[string]any{
-		"name": "ledger_get", "arguments": map[string]any{"id": "absent"},
+		"name": "task_get", "arguments": map[string]any{"id": "absent"},
 	}); r.Error != nil {
-		t.Fatalf("ledger_get = %+v, want a tool result: the ledger does not need the opt-in", r.Error)
+		t.Fatalf("task_get = %+v, want a tool result: the work records do not need the opt-in", r.Error)
 	}
 }
 
@@ -133,8 +147,8 @@ func TestSessionDBMCP_RawExecThenRawQuery(t *testing.T) {
 	if init.Error != nil || init.Result.(map[string]any)["serverInfo"].(map[string]any)["name"] != sessionDBMCPServerName {
 		t.Fatalf("initialize = %+v", init)
 	}
-	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != "raw_query,raw_exec,ledger_get,ledger_list,ledger_put,ledger_delete" {
-		t.Fatalf("tools = %v, want raw and ledger tools", names)
+	if names := sessionDBToolNames(t, h); strings.Join(names, ",") != "raw_query,raw_exec,"+workToolNames {
+		t.Fatalf("tools = %v, want raw and the work tools", names)
 	}
 
 	if out, isErr := sessionDBTool(t, h, "raw_exec",
@@ -215,7 +229,7 @@ func TestSessionDBMCP_BlobsAreJSONSafe(t *testing.T) {
 // K3s MCP meanwhile).
 func TestSessionDBMCP_OpensLazily(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "db")
-	db, err := newSessionDB(dir, true, testLogger())
+	db, err := newSessionDB(dir, true, "", testLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +244,7 @@ func TestSessionDBMCP_OpensLazily(t *testing.T) {
 	if out, isErr := sessionDBTool(t, h, "raw_query", "SELECT 1 AS one"); isErr {
 		t.Fatalf("after mkdir: %v", out)
 	}
-	if _, err := newSessionDB("relative", false, testLogger()); err == nil {
+	if _, err := newSessionDB("relative", false, "", testLogger()); err == nil {
 		t.Fatal("a relative directory must be refused")
 	}
 }

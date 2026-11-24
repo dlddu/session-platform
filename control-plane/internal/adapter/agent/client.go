@@ -351,6 +351,53 @@ func (c *HTTPClient) DecideToolApproval(ctx context.Context, pod, approvalID str
 	}
 }
 
+// Steer hands a message to the session's running turn (AC-J9). It is an
+// optional capability, not part of the Client interface: only the Codex
+// workloads' agent takes it. The answer distinguishes a message the turn
+// took (applied) from one that never reached it, so the caller can queue a
+// rejected message behind the turn instead of calling it delivered.
+func (c *HTTPClient) Steer(ctx context.Context, pod, text string) (session.Steered, error) {
+	ip, err := c.resolve(ctx, pod)
+	if err != nil {
+		return session.Steered{}, err
+	}
+	body, err := json.Marshal(map[string]string{"text": text})
+	if err != nil {
+		return session.Steered{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL(ip)+"/steer", strings.NewReader(string(body)))
+	if err != nil {
+		return session.Steered{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return session.Steered{}, fmt.Errorf("steer session pod %s: %w", pod, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	var out session.Steered
+	switch resp.StatusCode {
+	case http.StatusOK:
+		if err := json.Unmarshal(raw, &out); err != nil {
+			return session.Steered{}, fmt.Errorf("steer session pod %s: decode: %w", pod, err)
+		}
+		return out, nil
+	case http.StatusConflict:
+		// Either no turn is running or codex refused the message. Both are
+		// rejections the caller acts on, not transport errors.
+		if json.Unmarshal(raw, &out) == nil && out.Status != "" {
+			return out, nil
+		}
+		return session.Steered{Status: "rejected", Reason: strings.TrimSpace(string(raw))}, nil
+	case http.StatusBadRequest:
+		return session.Steered{}, fmt.Errorf("%w: %s", session.ErrInvalidInput, strings.TrimSpace(string(raw)))
+	default:
+		return session.Steered{}, fmt.Errorf("steer session pod %s: agent returned %d: %s",
+			pod, resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+}
+
 // PendingQuestions lists the AskUserQuestion calls a claude-code turn waits on
 // (AC-E2). Like AwaitingApproval it is an optional capability, not part of
 // the Client interface.
@@ -588,4 +635,38 @@ func (c *HTTPClient) Stream(ctx context.Context, pod string, offset int64) (io.R
 		return nil, fmt.Errorf("stream from session pod %s: unexpected content type %q", pod, contentType)
 	}
 	return resp.Body, nil
+}
+
+// ledgerAnswered says whether a body came from the ledger itself: its errors
+// are JSON carrying a code. A pod from before these routes answers with the
+// mux's plain "404 page not found", which is a different fact.
+func ledgerAnswered(raw []byte) bool {
+	var answer struct {
+		Code string `json:"code"`
+	}
+	return json.Unmarshal(raw, &answer) == nil && strings.TrimSpace(answer.Code) != ""
+}
+
+// ledgerCode is the ledger's own class for a refusal, empty when the body did
+// not come from the ledger.
+func ledgerCode(raw []byte) string {
+	var answer struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(raw, &answer) != nil {
+		return ""
+	}
+	return strings.TrimSpace(answer.Code)
+}
+
+// ledgerMessage is the sidecar's own sentence, which names the ledger's view of
+// what went wrong without naming its database file.
+func ledgerMessage(raw []byte) string {
+	var answer struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &answer); err == nil && strings.TrimSpace(answer.Error) != "" {
+		return answer.Error
+	}
+	return strings.TrimSpace(string(raw))
 }

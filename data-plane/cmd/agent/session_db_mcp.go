@@ -4,7 +4,7 @@
 // mounts that directory; it reaches the database only through this endpoint,
 // which the managed config.toml registers as the `db` MCP server.
 //
-// The versioned task ledger is the whole surface a chat session gets. Raw SQL
+// The versioned work records are the whole surface a chat session gets. Raw SQL
 // is a debug tool: it is neither listed nor callable unless the deployment
 // opts the sidecar in with SESSION_DB_RAW_SQL=debug.
 package main
@@ -59,16 +59,22 @@ const (
 type sessionDB struct {
 	path string
 	// rawSQL is the debug opt-in: false leaves raw_query and raw_exec out of
-	// tools/list and refuses them in tools/call. The ledger does not read it —
-	// its own statements are this type's methods, not model-supplied SQL.
+	// tools/list and refuses them in tools/call. The record tools do not read
+	// it — their statements are this type's methods, not model-supplied SQL.
 	rawSQL bool
-	logger *slog.Logger
+	// pairRole is what the control plane put on this container
+	// (MONITOR_PAIR_ROLE). "parent" means this session's work is owned by its
+	// bound monitor: the record tools still read, and every write is refused
+	// here, in tools/call, not merely left out of tools/list. Empty is an
+	// unpaired or legacy session and changes nothing.
+	pairRole string
+	logger   *slog.Logger
 
 	mu sync.Mutex
 	db *sql.DB
 }
 
-func newSessionDB(dir string, rawSQL bool, logger *slog.Logger) (*sessionDB, error) {
+func newSessionDB(dir string, rawSQL bool, pairRole string, logger *slog.Logger) (*sessionDB, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" || !filepath.IsAbs(dir) {
 		return nil, fmt.Errorf("%s must be an absolute path", sessionDBDirEnv)
@@ -77,9 +83,10 @@ func newSessionDB(dir string, rawSQL bool, logger *slog.Logger) (*sessionDB, err
 		logger = slog.Default()
 	}
 	return &sessionDB{
-		path:   filepath.Join(filepath.Clean(dir), sessionDBFileName),
-		rawSQL: rawSQL,
-		logger: logger,
+		pairRole: strings.TrimSpace(pairRole),
+		path:     filepath.Join(filepath.Clean(dir), sessionDBFileName),
+		rawSQL:   rawSQL,
+		logger:   logger,
 	}, nil
 }
 
@@ -223,12 +230,12 @@ func sessionDBValue(v any) any {
 	}
 }
 
-// sessionDBToolDefinitions lists the ledger, and the raw SQL pair only for a
-// sidecar opted into debug: a tool the model cannot see is one it cannot be
-// talked into using.
+// sessionDBToolDefinitions lists the work records, and the raw SQL pair only
+// for a sidecar opted into debug: a tool the model cannot see is one it cannot
+// be talked into using.
 func sessionDBToolDefinitions(rawSQL bool) []map[string]any {
 	if !rawSQL {
-		return ledgerToolDefinitions()
+		return workToolDefinitions()
 	}
 	statement := func(what string) map[string]any {
 		return map[string]any{
@@ -259,7 +266,25 @@ func sessionDBToolDefinitions(rawSQL bool) []map[string]any {
 				"return the rows affected and the last insert rowid. These are SQLite connection counters, NOT committed change totals (DDL/ROLLBACK can retain old values). Without params, several statements separated by ; run in order. Open transactions are rolled back at call end, so a transaction begins and commits within one call.",
 			"inputSchema": statement("The SQLite statement or statements to run."),
 		},
-	}, ledgerToolDefinitions()...)
+	}, workToolDefinitions()...)
+}
+
+// toolDefinitions is what this sidecar's tools/list answers.
+//
+// It used to depend on the database: while a slot could still be mid-move, the
+// transition's own tools were listed only where there was something left to
+// move, so the model was not shown a call whose only possible answer was a
+// refusal. Those tools are gone (session_work_state.go), and with them the one
+// reason this list differed between slots — so it is now the same surface
+// everywhere, read from no state at all. A sidecar whose volume is not ready
+// yet therefore answers the same list as a healthy one instead of a shorter one
+// that looks like a deployment without these tools.
+//
+// The refusals stay in place for a client holding an older list: it is told what
+// to call instead (session_work.go), because a list is a hint and a guard is a
+// guarantee.
+func (s *sessionDB) toolDefinitions(context.Context) []map[string]any {
+	return sessionDBToolDefinitions(s.rawSQL)
 }
 
 // callTool runs one tool. A statement that fails is a tool result with
@@ -273,8 +298,20 @@ func (s *sessionDB) callTool(ctx context.Context, params json.RawMessage) (any, 
 	if err := json.Unmarshal(params, &call); err != nil || call.Name == "" {
 		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: "tools/call needs a name and arguments"}
 	}
-	if strings.HasPrefix(call.Name, "ledger_") {
-		return s.callLedger(ctx, call.Name, call.Arguments)
+	if isWorkTool(call.Name) {
+		// The slot MCP is the session's own model. A monitor never reaches the
+		// records this way: it goes through the control plane, which is the only
+		// caller that can be told apart from the session itself.
+		return s.callWork(ctx, workCallerSelf, call.Name, call.Arguments)
+	}
+	// A name this image removed is answered with the call that does the job
+	// instead. The ledger tools, the migration, the rollback export and now the
+	// retirement with its snapshot tools are gone (AC-N10), and a parent that
+	// still holds an older tools/list learns the successor rather than "unknown
+	// tool" (session_work.go).
+	if successor := workRemovedToolSuccessor(call.Name); successor != "" {
+		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: call.Name +
+			" is not a tool on this slot any more; use " + successor}
 	}
 	// The name is checked before the arguments: a raw call on a sidecar that is
 	// not opted in has to say so, not fail on the SQL it was never going to run.
@@ -283,7 +320,7 @@ func (s *sessionDB) callTool(ctx context.Context, params json.RawMessage) (any, 
 	}
 	if !s.rawSQL {
 		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: call.Name +
-			" is off: this session database offers the ledger tools, and raw SQL only where the sidecar has " +
+			" is off: this session database offers the work record tools, and raw SQL only where the sidecar has " +
 			sessionDBRawSQLEnv + "=" + sessionDBRawSQLDebug}
 	}
 	var stmt sessionDBStatement
@@ -384,7 +421,7 @@ func (s *sessionDB) serveMCP(w http.ResponseWriter, r *http.Request) {
 			"serverInfo":      map[string]any{"name": sessionDBMCPServerName, "version": sessionMCPServerVersion},
 		})
 	case "tools/list":
-		writeJSONRPCResult(w, req.ID, map[string]any{"tools": sessionDBToolDefinitions(s.rawSQL)})
+		writeJSONRPCResult(w, req.ID, map[string]any{"tools": s.toolDefinitions(r.Context())})
 	case "tools/call":
 		result, rpcErr := s.callTool(r.Context(), req.Params)
 		if rpcErr != nil {
@@ -399,16 +436,29 @@ func (s *sessionDB) serveMCP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// withSessionDBMCP puts the database endpoint in front of the K3s MCP proxy.
-// The path is matched exactly and is not the K3s MCP's, so every other request
-// still reaches the proxy and its deny filter unchanged.
+// withSessionDBMCP puts the database endpoints in front of the K3s MCP proxy:
+// the session's own `db` MCP, and the work record views the control plane reads
+// (session_work_http.go). Every path is matched exactly and none is the K3s
+// MCP's, so every other request still reaches the proxy and its deny filter
+// unchanged.
 func withSessionDBMCP(proxy http.Handler, db *sessionDB) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == sessionDBMCPPath {
+		switch r.URL.Path {
+		case sessionDBMCPPath:
 			db.serveMCP(w, r)
-			return
+		case sessionDBWorkRequestsPath:
+			db.serveWorkRequests(w, r)
+		case sessionDBWorkTasksPath:
+			db.serveWorkTasks(w, r)
+		case sessionDBWorkTurnsPath:
+			db.serveWorkTurns(w, r)
+		case sessionDBWorkWriterPath:
+			db.serveWorkWriter(w, r)
+		case sessionDBWorkCallPath:
+			db.serveWorkCall(w, r)
+		default:
+			proxy.ServeHTTP(w, r)
 		}
-		proxy.ServeHTTP(w, r)
 	})
 }
 
@@ -429,7 +479,7 @@ func sessionDBMCPURLFromEnv() (string, error) {
 
 // sessionDBRawSQLFromEnv reads the debug opt-in. Unset is off; any value other
 // than the one that means debug is an error, because a typo that silently
-// served the ledger alone would look like the tools had been removed.
+// served the record tools alone would look like raw SQL had been removed.
 func sessionDBRawSQLFromEnv() (bool, error) {
 	switch raw := strings.TrimSpace(os.Getenv(sessionDBRawSQLEnv)); raw {
 	case "":

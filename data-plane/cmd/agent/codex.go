@@ -57,8 +57,9 @@ const (
 	codexRenderConfigCommand = "codex-render-config"
 	defaultCodexAgentBinary  = "/agent"
 
-	codexK3SServerName    = "k3s"
-	codexSkillsServerName = "skills"
+	codexK3SServerName     = "k3s"
+	codexSkillsServerName  = "skills"
+	codexMonitorServerName = "monitor_pair"
 	// codexSessionDBServerName is the sidecar's session DB MCP (AC-N6).
 	codexSessionDBServerName = "db"
 	// codexSchedulerServerName is the sidecar's scheduler MCP (AC-P1).
@@ -84,8 +85,8 @@ var codexReasoningEfforts = []string{"minimal", "low", "medium", "high", "xhigh"
 type codexCLI struct {
 	// task selects codex-task's surface (AC-M1) over codex-manager's (AC-J5).
 	task bool
-	// effort is codex-task's session reasoning effort (AC-M4), empty for the
-	// model's default.
+	// effort is the session's reasoning effort (AC-M4) or the type's
+	// ConfigMap default (AC-J1), empty for the model's default.
 	effort string
 	// k3sProxyURL is the loopback k3s-mcp-proxy sidecar (AC-J6).
 	k3sProxyURL string
@@ -152,6 +153,15 @@ func (c codexCLI) schedulerStateURL() string {
 	return schedulerStateURLFor(c.schedulerURL)
 }
 
+// sessionDBMCPURL makes this workload the relay's workReporter
+// (session_work_records.go). Without it no type in this package implements that
+// interface, so the relay's capability check fails on every slot and every work
+// read answers 501 — "this session keeps no work records" about a slot that
+// keeps them. codex-task leaves sessionDBURL empty, which is the real 501.
+func (c codexCLI) sessionDBMCPURL() string {
+	return c.sessionDBURL
+}
+
 func (codexCLI) newProjector(dst io.Writer) io.WriteCloser {
 	return newCodexStreamProjector(dst)
 }
@@ -174,6 +184,10 @@ func (c codexCLI) ensureHome(homeDir string, _ toolSurface) error {
 		skillsDir:    skillsDir,
 		sessionDBURL: c.sessionDBURL,
 		schedulerURL: c.schedulerURL,
+		// The bridge is configured by the control plane's own env on this
+		// container; nothing here asks the model or the sidecar for it.
+		monitorPairURL:       strings.TrimSpace(os.Getenv(monitorPairURLEnv)),
+		monitorPairTokenFile: strings.TrimSpace(os.Getenv(monitorPairTokenFileEnv)),
 	}
 	if sidecar.configured {
 		mcpURL, err := k3sProxyMCPURL(c.k3sProxyURL)
@@ -308,18 +322,14 @@ func newCodexWorkloadFromEnv(workload string, logger *slog.Logger, restoreMode b
 	if cli.schedulerURL, err = schedulerMCPURLFromEnv(os.Getenv); err != nil {
 		return nil, err
 	}
+	// codex-manager's effort is only ever the ConfigMap default (AC-J1).
+	if effort != "" && !slices.Contains(codexReasoningEfforts, effort) {
+		return nil, fmt.Errorf("%s must be one of %s, got %q", codexReasoningEffortEnv, strings.Join(codexReasoningEfforts, ", "), effort)
+	}
+	cli.effort = effort
 	if workload == workloadCodexTask {
-		if effort != "" && !slices.Contains(codexReasoningEfforts, effort) {
-			return nil, fmt.Errorf("%s must be one of %s, got %q", codexReasoningEffortEnv, strings.Join(codexReasoningEfforts, ", "), effort)
-		}
 		cli.task = true
-		cli.effort = effort
 	} else {
-		if effort != "" {
-			// AC-E8: codex-manager takes no effort, so one here is a spec this
-			// agent was not built for.
-			return nil, fmt.Errorf("codex-manager does not take %s", codexReasoningEffortEnv)
-		}
 		if cli.sessionDBURL, err = sessionDBMCPURLFromEnv(); err != nil {
 			return nil, err
 		}
@@ -355,6 +365,13 @@ func runAgentSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer
 	switch args[0] {
 	case autoArchivePreStopCmd:
 		return runAutoArchivePreStop(args[1:], stdout, stderr), true
+	case monitorMCPCommand:
+		logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+		if err := serveMonitorMCP(stdin, stdout, os.Getenv(monitorPairURLEnv), os.Getenv(monitorPairTokenFileEnv), logger); err != nil {
+			fmt.Fprintln(stderr, "monitor-mcp:", err)
+			return 1, true
+		}
+		return 0, true
 	case codexSkillsMCPCommand:
 		logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 		if err := serveCodexSkillsMCP(stdin, stdout, os.Getenv(codexSkillsDirEnv), os.Getenv(codexAgentURLEnv), logger); err != nil {

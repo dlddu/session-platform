@@ -28,3 +28,32 @@ const (
 func (w WorkloadType) IsCodex() bool {
 	return w == WorkloadTypeCodexManager || w == WorkloadTypeCodexTask
 }
+
+// Steered is what one mid-turn message did (AC-J9). Applied means codex put
+// it into the turn that was running; anything else is a rejection with the
+// reason the runner reported, so a caller can tell "the turn took it" from
+// "it never reached the turn" and queue it behind the turn instead.
+type Steered struct {
+	Status string `json:"status"`
+	TurnID string `json:"turnId,omitempty"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// SteerStatusApplied is the one status that means the running turn has it.
+const SteerStatusApplied = "applied"
+
+// Applied reports whether the running turn took the message.
+func (s Steered) Applied() bool { return s.Status == SteerStatusApplied }
+
+// SteerableWorkload reports whether this type's turns take mid-turn messages
+// (AC-J9) — the Codex workloads, whose runner speaks the app server's
+// turn/steer. claude-code's mid-turn surface is its own (AC-E2 questions and
+// tool approvals), not free text.
+func SteerableWorkload(t WorkloadType) bool {
+	switch t {
+	case WorkloadTypeCodexManager, WorkloadTypeCodexTask, legacyWorkloadTypeCodex:
+		return true
+	default:
+		return false
+	}
+}

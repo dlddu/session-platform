@@ -66,6 +66,11 @@ type codexConfig struct {
 	k3sMCPURL string
 	// sessionDBURL is the sidecar's session DB MCP (AC-N6), or empty.
 	sessionDBURL string
+	// monitorPairURL and monitorPairTokenFile are the control plane's
+	// monitor-pair API and this container's projected token for it. Both empty
+	// leaves the bridge out of the model's MCP config entirely.
+	monitorPairURL       string
+	monitorPairTokenFile string
 	// schedulerURL is the sidecar's scheduler MCP (AC-P1), or empty.
 	schedulerURL string
 	// agentBinary is this binary, which codex spawns as the skills MCP.
@@ -125,6 +130,20 @@ func renderCodexConfig(cfg codexConfig) []byte {
 		doc.set("url", tomlString(cfg.schedulerURL))
 		doc.set("default_tools_approval_mode", tomlString("approve"))
 		doc.set("tool_timeout_sec", tomlInt(int64(codexSchedulerToolTimeout/time.Second)))
+	}
+	// The monitor-pair bridge runs as this binary in this container, because
+	// that is where the projected pair token is: the shared K3s MCP runs
+	// elsewhere and cannot read it, and the sidecars do not have it.
+	if cfg.monitorPairURL != "" && cfg.monitorPairTokenFile != "" {
+		doc.table("mcp_servers", codexMonitorServerName)
+		doc.set("command", tomlString(cfg.agentBinary))
+		doc.set("args", tomlStringArray([]string{monitorMCPCommand}))
+		doc.set("env", tomlInlineStringTable([][2]string{
+			{monitorPairURLEnv, cfg.monitorPairURL},
+			{monitorPairTokenFileEnv, cfg.monitorPairTokenFile},
+		}))
+		doc.set("default_tools_approval_mode", tomlString("approve"))
+		doc.set("tool_timeout_sec", tomlInt(int64(monitorMCPTimeout/time.Second)))
 	}
 	doc.table("mcp_servers", codexSkillsServerName)
 	doc.set("command", tomlString(cfg.agentBinary))

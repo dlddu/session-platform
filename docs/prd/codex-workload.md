@@ -35,7 +35,7 @@
 ## Acceptance Criteria
 
 ### AC-J1: 워크로드 타입 `codex-manager` 선택 (별칭 `codex-chat`, 옛 이름 `codex`)
-- **설명**: 세션 생성 요청의 `workloadType` 허용값은 `codex-manager`다. 옛 이름 `codex-chat`은 **생성 요청과 테넌트 `workloadTypes` 에서도 받아** `codex-manager`로 읽고(2026-11-17 이름 변경 전에 쓰던 호출자와 테넌트 설정이 그대로 동작한다), 저장된 세션 레코드의 `codex-chat`·`codex`도 같은 타입으로 읽어 목록·조회·복원이 깨지지 않게 하며 다음 쓰기가 새 이름으로 저장한다. 더 오래된 `codex`는 **저장된 레코드에서만** 읽는다 — 생성 요청과 테넌트 설정에서 `codex`는 모르는 타입이다(생성 400, 테넌트 설정은 기동 실패). 응답·`GET /config`·파드 라벨·`DATA_PLANE_WORKLOAD`는 언제나 `codex-manager`를 쓴다. *2026-11-07*: 처음엔 `codex`를 생성 요청·테넌트 설정에서도 별칭으로 받았으나 호출하는 쪽(pocket-aide #395, homelab-k3s-mcp #321, flux-cd-apps #115)이 모두 새 이름으로 옮겨 걷었다(사용자 결정). *2026-11-17*: `codex-chat` → `codex-manager` 에서는 그 걷어내기를 되풀이하지 않기로 했다 — 별칭을 input 경로에 남긴다. 이 타입은 모델만 받고 `reasoningEffort`는 받지 않는다(AC-E8). 필드 생략만 `shell`로 해석하는 규칙, 허용값 밖 입력을 pod 생성 전에 400으로 거부하는 규칙, 타입 불변 규칙은 AC-E1과 같다. control plane은 이 타입에 대해 **워크로드 파드 하나**를 띄운다 — 주 컨테이너(Codex 러너)와 loopback K3s MCP 프록시 사이드카(AC-J6). 보조 파드는 없다. 이미지는 control plane 설정 `DATA_PLANE_CODEX_IMAGE`이고, 비어 있거나 슬롯 풀 크기(`CODEX_CHAT_AUTH_SLOTS`, `agent-auth-pool.md` AC-N6 — 풀 이름은 옛 이름 `codex-chat` 을 유지한다)가 0이면 `GET /config`가 이 타입을 내놓지 않고 생성은 pod 없이 실패한다(AC-E1과 같은 규칙, *2026-11-09* 슬롯 조건 추가). 파드는 그 슬롯 PVC를 함께 마운트한다(AC-J3·AC-N6). `model`은 AC-E6의 계약을 따른다 — 생략은 `platform-default`이며 이때 파드는 ConfigMap `codex-config`의 선택 `model` 키를 `CODEX_MODEL`로 받고, 키가 없으면 Codex가 로그인한 플랜의 기본 모델을 쓴다. UI 모델 카탈로그는 같은 ConfigMap의 `models`(control plane `CODEX_MODELS`)다.
+- **설명**: 세션 생성 요청의 `workloadType` 허용값은 `codex-manager`다. 옛 이름 `codex-chat`은 **생성 요청과 테넌트 `workloadTypes` 에서도 받아** `codex-manager`로 읽고(2026-11-17 이름 변경 전에 쓰던 호출자와 테넌트 설정이 그대로 동작한다), 저장된 세션 레코드의 `codex-chat`·`codex`도 같은 타입으로 읽어 목록·조회·복원이 깨지지 않게 하며 다음 쓰기가 새 이름으로 저장한다. 더 오래된 `codex`는 **저장된 레코드에서만** 읽는다 — 생성 요청과 테넌트 설정에서 `codex`는 모르는 타입이다(생성 400, 테넌트 설정은 기동 실패). 응답·`GET /config`·파드 라벨·`DATA_PLANE_WORKLOAD`는 언제나 `codex-manager`를 쓴다. *2026-11-07*: 처음엔 `codex`를 생성 요청·테넌트 설정에서도 별칭으로 받았으나 호출하는 쪽(pocket-aide #395, homelab-k3s-mcp #321, flux-cd-apps #115)이 모두 새 이름으로 옮겨 걷었다(사용자 결정). *2026-11-17*: `codex-chat` → `codex-manager` 에서는 그 걷어내기를 되풀이하지 않기로 했다 — 별칭을 input 경로에 남긴다. 이 타입은 모델만 받고 `reasoningEffort`는 받지 않는다(AC-E8). *2026-11-21*: 대신 배포가 이 타입 전체의 추론 수준을 정한다 — 파드는 ConfigMap `codex-config`의 선택 키 `reasoning-effort`(`minimal`·`low`·`medium`·`high`·`xhigh`)를 `CODEX_REASONING_EFFORT`로 받고 러너는 `--effort <값>`으로 쓴다. 키가 없으면 모델의 기본값이고, 목록 밖 값은 에이전트가 기동을 거부한다. 값은 파드를 띄울 때 읽으므로 기존 세션은 다음 파드(복원 포함)부터 바뀐다. 필드 생략만 `shell`로 해석하는 규칙, 허용값 밖 입력을 pod 생성 전에 400으로 거부하는 규칙, 타입 불변 규칙은 AC-E1과 같다. control plane은 이 타입에 대해 **워크로드 파드 하나**를 띄운다 — 주 컨테이너(Codex 러너)와 loopback K3s MCP 프록시 사이드카(AC-J6). 보조 파드는 없다. 이미지는 control plane 설정 `DATA_PLANE_CODEX_IMAGE`이고, 비어 있거나 슬롯 풀 크기(`CODEX_CHAT_AUTH_SLOTS`, `agent-auth-pool.md` AC-N6 — 풀 이름은 옛 이름 `codex-chat` 을 유지한다)가 0이면 `GET /config`가 이 타입을 내놓지 않고 생성은 pod 없이 실패한다(AC-E1과 같은 규칙, *2026-11-09* 슬롯 조건 추가). 파드는 그 슬롯 PVC를 함께 마운트한다(AC-J3·AC-N6). `model`은 AC-E6의 계약을 따른다 — 생략은 `platform-default`이며 이때 파드는 ConfigMap `codex-config`의 선택 `model` 키를 `CODEX_MODEL`로 받고, 키가 없으면 Codex가 로그인한 플랜의 기본 모델을 쓴다. UI 모델 카탈로그는 같은 ConfigMap의 `models`(control plane `CODEX_MODELS`)다.
 - **달성 가치**: V8, V1
 - **구체화 대상**: AC-A1의 "실제 세션 워크로드" — 다섯 갈래로 분기한다 (… AC-G2~G6=`minimax-code`, AC-J2~J6=`codex`)
 - **검증 방법**: `workloadType=codex`로 세션을 생성하면 컨테이너 둘(주 컨테이너 + `k3s-mcp-proxy`)의 워크로드 파드 하나만 기동되고 조회 응답의 타입·모델이 기대값임을 확인한다. 이미지 미설정 배포에서는 `GET /config`에 타입이 없고 생성이 pod 없이 실패함을 확인한다.
@@ -114,6 +114,42 @@
 - **구체화 대상**: AC-E2의 「턴의 백그라운드 작업은 그 턴 안에서 끝낸다」(2026-11-12)를 Codex 하위 에이전트에 맞춘 것
 - **검증 방법**: 러너 단위 테스트(가짜 app server)로 확인한다. 메인 턴이 끝날 때 도는 하위 에이전트를 기다린 뒤, 그 마지막 메시지를 세션 출력 안내 줄에 남기고 메인 스레드에 턴을 더 열지 않는다(*2026-11-14 개정*). 하위 에이전트의 메시지는 메인 답으로 투영되지 않는다. 대기 상한을 넘은 에이전트는 `turn/interrupt`로 중단되고 「중단」으로 보고된다. 메인 턴 중에 끝난 에이전트는 안내 줄에 싣지 않는다. 하위 에이전트의 금지 아이템은 턴을 멈춘다. 실 하위 에이전트 왕복은 실 ChatGPT 로그인 뒤의 턴이라 e2e로 돌리지 않는다(`../test/codex-workload.md` 시나리오 8).
 
+### AC-J9: 도는 턴에 메시지를 끼워 넣는다 (중간 전달)
+
+- **설명**: 턴이 도는 동안 사용자가 보낸 메시지를 **그 턴 안으로** 넣어 실행 방향을 바꾼다 — 다음 턴으로 미루는 큐가 아니다.
+  Codex app-server 가 주는 `turn/steer`(Codex 0.166.0 프로토콜 v2 `TurnSteerParams`)가 그 수단이고, 러너는 그것만 쓴다.
+  프로세스를 죽이거나 세션을 다시 띄워 흉내내지 않는다 — 그 길은 이미 시작된 도구 실행의 부작용을 되돌리지 못한다.
+  - **전달 경로**: 에이전트가 러너의 **stdin** 에 한 줄짜리 JSON(`{"type":"steer","id":…,"text":…}`)을 쓴다. 러너는
+    `turn/steer {threadId, expectedTurnId, input:[{type:"text",text}], clientUserMessageId}` 로 넘기고, 결과를 stdout 에
+    `{"type":"session_platform.steer","id":…,"status":"applied"|"rejected","turn_id":…,"reason":…}` 한 줄로 답한다.
+    이 줄은 세션 출력 투영에서 빠진다 — 사람이 읽는 대화에 프로토콜 줄이 섞이지 않는다.
+  - **접수와 반영을 가른다**: `applied` 는 **codex 가 그 턴에 넣었다**는 뜻이고, 그 밖은 모두 `rejected` 다.
+    `expectedTurnId` 는 SDK 자신의 선행조건이라 — 「그 턴이 아직 활성일 때만」 — 턴이 끝나는 순간과 겹친 전달은
+    codex 가 거부하고, 러너는 그것을 `rejected` 로 그대로 알린다. 전달했다고 말하고 아무 데도 닿지 않는 경우가 없다.
+  - **seq 는 늘어나지 않는다**: 중간 전달은 write 가 아니다. `input/output/end seq=n` 마커의 턴 경계를 건드리지 않고,
+    큐에 들어가지도 않는다 — 도는 턴 하나에 메시지가 더해질 뿐이다. 러너의 그 턴 프롬프트는 받은 프롬프트 그대로다.
+  - **순서와 중복**: 러너는 전달을 직렬로 처리한다(한 번에 하나). 같은 메시지를 두 번 보내면 `clientUserMessageId` 가
+    같아 codex 쪽에서 같은 메시지로 식별된다.
+  - **턴이 없으면 거부**: 턴이 시작되기 전에 온 전달은 그 턴이 열릴 때까지 기다리고, 턴이 끝났거나 아예 시작하지 못했으면
+    `rejected`(`no turn is running`)로 답한다 — 기다리다 영원히 묻히는 줄이 없다.
+- **달성 가치**: V3
+- **검증 방법**: 러너 단위 테스트(가짜 app server)로 — ① 도는 턴에 `turn/steer` 가 `expectedTurnId`·프롬프트 ID 와 함께
+  가고 답이 `applied` 이며 `turn/start` 는 여전히 한 번뿐인지, ② codex 가 거부하면 그 사유가 `rejected` 로 그대로 오는지,
+  ③ 턴이 시작하지 못하면 `no turn is running` 으로 거부되고 `turn/steer` 를 부르지 않는지. 에이전트 단위 테스트로 —
+  ④ 전달이 러너 stdin 에 한 줄로 나가고 러너의 응답이 요청의 결과로 돌아오는지, ⑤ 거부 사유가 보존되는지,
+  ⑥ 턴이 없거나 빈·과대 텍스트면 러너에 닿지 않는지, ⑦ 턴이 끝나면 기다리던 전달이 거부로 풀리는지,
+  ⑧ 두 메시지의 응답이 ID 로 각자에게 가는지, ⑨ 응답 줄이 세션 출력에 쓰이지 않는지. 컨트롤 플레인 API 테스트로 —
+  ⑩ 적용이 200 이고 파드에 그 문구가 그대로 닿는지, ⑪ 거부가 409 + 사유인지, ⑫ 다른 타입이 422 · 빈 텍스트가 400 ·
+  없는 세션이 404 인지. 실 모델 왕복은 실 ChatGPT 로그인이 필요해 e2e 로 돌리지 않는다(AC-J3 의 예외와 같다).
+
+  - **배선**(2026-11-17): 컨트롤 플레인 `POST /api/v1/sessions/{id}/steer` `{"text":…}` → 에이전트 `POST /steer`
+    → 러너 stdin. 에이전트는 턴이 도는 동안에만 러너 stdin 파이프를 열고(턴이 끝나면 닫는다), 러너의 응답 줄을
+    스트림 투영이 **데스크로 돌려주고 세션 출력에서는 빼** 기다리던 요청에 짝지어 준다. 응답은 `applied` 면 200,
+    아니면 **409 + 사유**다 — 「접수했지만 어디에도 닿지 않음」이 없다. 전달은 메시지 ID 로 짝지어지므로 두 메시지가
+    엇갈리지 않고, 턴이 끝나 러너가 없어지면 기다리던 전달은 거부로 풀린다(멈춰 있지 않는다).
+    `codex-chat`·`codex-task` 만 받는다 — 다른 타입은 422(`claude-code` 의 턴 중 표면은 AC-E2 의 질문·도구 승인이다).
+  - 세션이 스냅샷이거나 파드가 없으면 도는 턴이 없으므로 복원·승격 없이 거부로 답한다(읽기처럼 수동적이다).
+
 ## 결정 사항 (2026-11-05, 사용자)
 - **SDK 기반**: 러너는 `@openai/codex-sdk`(고정 버전)로 스레드를 시작·재개한다. CLI 직접 호출이 아니다. *2026-11-13 개정*: `codex app-server`로 바꿨다(아래 2026-11-13).
 - **로그인 단위는 세션**: 플랫폼 공용 계정·테넌트별 계정을 두지 않는다. ChatGPT의 refresh token이 사용 중 갱신되는 구조라 계정 하나를 여러 파드에 복사하면 서로를 무효화할 수 있다 — 세션 단위 로그인은 그 공유 자체를 없앤다.
@@ -130,6 +166,9 @@
 
 ## 결정 사항 (2026-11-13, 사용자)
 - **app server로 전환, 하위 에이전트는 답 뒤에도 돈다** (AC-J2·J8): 채팅 세션에 셸·파일 편집은 필요 없지만, 하위 에이전트를 백그라운드로 돌리고 MCP 도구를 쓰는 것은 필요하다. `codex exec`(SDK)는 메인 턴이 끝나면 하위 에이전트까지 내리므로, 러너가 상주하는 `codex app-server`를 직접 구동한다. 대기는 claude-code의 백그라운드 대기(AC-E2, 2026-11-12)와 같은 10분이다. 다만 멈추는 방식이 다르다 — claude-code는 모델에게 `TaskStop`을 시키지만, Codex는 러너가 하위 에이전트의 턴을 직접 중단하고 결과를 「중단」으로 넘긴다. Codex에는 다음 턴에 붙는 「stopped」 알림 문제가 없기 때문이다. SDK 의존은 걷고, 같은 고정 버전의 `@openai/codex` 바이너리만 둔다.
+
+## 결정 사항 (2026-11-21, 사용자)
+- **채팅 세션의 추론 수준은 배포가 정한다** (AC-J1): GPT-6.2 모델의 기본 추론 수준이 `low`라(GPT-6 Astra는 `medium`), 운영 채팅은 `xhigh`로 둔다. 세션마다 고르는 필드는 여전히 두지 않고, `model`과 같은 자리(ConfigMap `codex-config`의 선택 키)에 둔다.
 
 ## 남은 일
 - ~~운영 배포에서 `CODEX_ARCHIVE_ENABLED`를 켜는 것~~ — 2026-11-05 켰다. PR 프리뷰 오버레이의 false 덮어쓰기(flux-cd-apps #109)가 먼저 들어갔다.

@@ -99,6 +99,7 @@ type commandRunner interface {
 type runnerOptions struct {
 	Dir    string
 	Env    []string
+	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
 }
@@ -115,6 +116,7 @@ func (execCommandRunner) Run(ctx context.Context, argv []string, opts runnerOpti
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = opts.Dir
 	cmd.Env = opts.Env
+	cmd.Stdin = opts.Stdin
 	cmd.Stdout = opts.Stdout
 	cmd.Stderr = opts.Stderr
 	// A tool may start a background process, so each one-shot invocation gets
@@ -231,6 +233,9 @@ type claudeWorkload struct {
 	// owner's decision (AC-E2, claude_approvals.go) — not the approval gate's
 	// waits above.
 	toolApprovals toolApprovalDesk
+	// steer carries messages into the running turn on the runner's stdin
+	// (AC-J9, codex_steer.go). Open only while a turn runs.
+	steer steerDesk
 
 	mu                      sync.Mutex
 	cond                    *sync.Cond
@@ -454,6 +459,28 @@ func (c *claudeWorkload) timestamp() string {
 	return c.now().UTC().Format(time.RFC3339)
 }
 
+// openTurnSeq reports the last turn of a restored scrollback when it has no end
+// marker: the pod that wrote the archive went away mid-turn without closing it
+// (docs/prd/claude-code-workload.md AC-E3).
+func openTurnSeq(scrollback []byte) (int, bool) {
+	lead := []byte(claudeTurnMarkerLead + "input seq=")
+	i := bytes.LastIndex(scrollback, lead)
+	if i < 0 {
+		return 0, false
+	}
+	digits := scrollback[i+len(lead):]
+	n := bytes.IndexAny(digits, " \n")
+	if n <= 0 {
+		return 0, false
+	}
+	seq, err := strconv.Atoi(string(digits[:n]))
+	if err != nil {
+		return 0, false
+	}
+	end := []byte(claudeTurnMarkerLead + "end seq=" + strconv.Itoa(seq) + " ")
+	return seq, !bytes.Contains(scrollback[i:], end)
+}
+
 func claudeTurnMarker(kind string, seq int, fields ...string) string {
 	return claudeTurnMarkerLead + kind + " seq=" + strconv.Itoa(seq) + strings.Join(append([]string{""}, fields...), " ") + "\n"
 }
@@ -512,15 +539,37 @@ func (c *claudeWorkload) runWorker() {
 		stdoutUTF8 := newUTF8NormalizingWriter(output)
 		stdout := c.cli.newProjector(stdoutUTF8)
 		stderr := newUTF8NormalizingWriter(output)
+		// A workload whose turns take mid-turn messages (AC-J9) gets a pipe
+		// on the runner's stdin for as long as the turn runs. The desk holds
+		// the write end; closing it at the turn's end is what tells the
+		// runner's reader that no more messages are coming.
+		var steerIn io.Reader
+		closeSteer := func() {}
+		if steerer, ok := c.cli.(steerable); ok && steerer.takesSteering() {
+			stdin, closePipe, err := c.steer.openPipe()
+			if err != nil {
+				c.logger.Error("open the steering pipe; this turn takes no mid-turn messages", "err", c.redactString(err.Error()))
+			} else {
+				steerIn = stdin
+				if projector, ok := stdout.(*codexStreamProjector); ok {
+					projector.withSteerDesk(&c.steer)
+				}
+				closeSteer = closePipe
+			}
+		}
 		runCtx, cancelRun := context.WithTimeout(c.ctx, c.runTimeout)
 		stopSlotWatch := c.watchAuthSlot()
 		err := c.runner.Run(runCtx, c.argv(prompt, resume, job.toolApprovals), runnerOptions{
 			Dir:    c.workDir,
 			Env:    environmentWithHome(c.homeDir),
+			Stdin:  steerIn,
 			Stdout: stdout,
 			Stderr: stderr,
 		})
 		timedOut := errors.Is(runCtx.Err(), context.DeadlineExceeded)
+		// The runner has exited: nothing can be steered into this turn any
+		// more, and whoever still waits is told so.
+		closeSteer()
 		cancelRun()
 		stopSlotWatch()
 		c.pushAuthSlot()
@@ -1024,6 +1073,10 @@ func (c *claudeWorkload) restore(r io.Reader) error {
 	// put up must not land on this one (AC-E2, 「턴 중 도구 승인」).
 	c.toolApprovals.rotateEpoch()
 	c.out.restore(scrollbackBytes)
+	if seq, open := openTurnSeq(scrollbackBytes); open {
+		c.logger.Warn("the archive ends inside a turn; closing it as canceled", "seq", seq)
+		c.endTurn(seq, "canceled")
+	}
 	c.mu.Lock()
 	c.turns = bytes.Count(scrollbackBytes, []byte(claudeTurnMarkerLead+"input "))
 	c.hasRun = hasRun
@@ -1451,6 +1504,37 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 		serveAgentScheduler(w, r, c)
 	})
 
+	// AC-N9/AC-N10: the agreed work records, relayed from the sidecar that
+	// mounts the slot's database. Read-only and passive — a read starts no turn,
+	// counts as no access and restores no snapshot.
+	mux.HandleFunc("GET "+agentWorkTasksPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentWorkTasks(w, r, c)
+	})
+	mux.HandleFunc("GET "+agentWorkTurnsPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentWorkTurns(w, r, c)
+	})
+
+	// The one write: a person's request becomes the next turn of a task. It
+	// starts no turn of the session's own — the parent picks it up when it next
+	// reads the task's open turns.
+	mux.HandleFunc("POST "+agentWorkRequestsPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentWorkRequests(w, r, c)
+	})
+
+	// The handover: who may write these records, and the bound monitor's own
+	// calls on them. Both are the control plane's — a session cannot hand its
+	// own work over, and a monitor reaches it only this way
+	// (session_work_seal.go).
+	mux.HandleFunc("GET "+agentWorkWriterPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentWorkWriter(w, r, c)
+	})
+	mux.HandleFunc("POST "+agentWorkWriterPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentWorkWriter(w, r, c)
+	})
+	mux.HandleFunc("POST "+agentWorkCallPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentWorkCall(w, r, c)
+	})
+
 	mux.HandleFunc("GET /attach", func(w http.ResponseWriter, r *http.Request) {
 		if !c.isReady() {
 			http.Error(w, "claude workload is awaiting restore", http.StatusServiceUnavailable)
@@ -1504,6 +1588,42 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"queued"}`))
+	})
+
+	// AC-J9: a message for the turn that is running, not for the queue
+	// behind it. The answer says applied only when codex took it into that
+	// turn; anything else is a rejection with its reason.
+	mux.HandleFunc("POST "+steerPath, func(w http.ResponseWriter, r *http.Request) {
+		steerer, ok := c.cli.(steerable)
+		if !ok || !steerer.takesSteering() {
+			http.Error(w, errSteerUnsupported.Error(), http.StatusBadRequest)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxSteerBodyBytes)
+		var body struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "read steered message: "+c.redactString(err.Error()), http.StatusBadRequest)
+			return
+		}
+		outcome, err := c.steer.steer(r.Context(), strings.TrimSpace(body.Text))
+		switch {
+		case errors.Is(err, errSteerInvalid):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		case errors.Is(err, errSteerNoTurn):
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		case err != nil:
+			http.Error(w, c.redactString(err.Error()), http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if !outcome.applied() {
+			w.WriteHeader(http.StatusConflict)
+		}
+		_ = json.NewEncoder(w).Encode(outcome)
 	})
 
 	mux.HandleFunc("GET /read", func(w http.ResponseWriter, r *http.Request) {

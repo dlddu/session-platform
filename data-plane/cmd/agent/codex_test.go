@@ -439,9 +439,21 @@ func TestNewCodexWorkloadFromEnv(t *testing.T) {
 		t.Fatal("a session DB MCP off loopback must be refused")
 	}
 	t.Setenv(sessionDBMCPURLEnv, "")
-	t.Setenv(codexReasoningEffortEnv, "high")
+	t.Setenv(codexReasoningEffortEnv, "max")
 	if _, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err == nil {
-		t.Fatal("codex-manager takes no reasoning effort (AC-E8)")
+		t.Fatal("max is not a codex effort")
+	}
+	// AC-J1: codex-manager's effort is the codex-config default.
+	t.Setenv(codexReasoningEffortEnv, "xhigh")
+	if w, err := newCodexWorkloadFromEnv(workloadCodexManager, testLogger(), true); err != nil {
+		t.Fatalf("codex-manager with a default effort: %v", err)
+	} else {
+		got := w.argv("p", false, false)
+		want := []string{"/opt/runner", "--model", "gpt-6", "--effort", "xhigh", "--", "p"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("argv = %q, want %q", got, want)
+		}
+		w.Close()
 	}
 	t.Setenv(codexReasoningEffortEnv, "")
 	t.Setenv(codexModelEnv, "bad model")
@@ -480,10 +492,16 @@ func TestNewCodexWorkloadFromEnvAcceptsPreviousName(t *testing.T) {
 	if got := cli.workloadName(); got != workloadCodexManager {
 		t.Errorf("workloadName() = %q, want %q", got, workloadCodexManager)
 	}
-	// AC-E8 still holds under the old name: this type takes no effort.
-	t.Setenv(codexReasoningEffortEnv, "high")
+	// The rules do not loosen under the old name either: the effort is the
+	// deployment's (AC-J1, from the codex-config ConfigMap), and a value
+	// outside AC-M4's list still refuses to start.
+	t.Setenv(codexReasoningEffortEnv, "xhigh")
+	if _, err := newCodexWorkloadFromEnv(legacyWorkloadCodexChat, testLogger(), true); err != nil {
+		t.Fatalf("the previous name refused the deployment's effort: %v", err)
+	}
+	t.Setenv(codexReasoningEffortEnv, "max")
 	if _, err := newCodexWorkloadFromEnv(legacyWorkloadCodexChat, testLogger(), true); err == nil {
-		t.Fatal("the previous name must not loosen AC-E8")
+		t.Fatal("the previous name must not accept an effort outside the list")
 	}
 }
 

@@ -89,6 +89,7 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/sessions/{id}/stream", a.streamSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/read", a.readSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/write", a.writeSession)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/steer", a.steerSession)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/switch", a.switchSession)
 
 	mux.HandleFunc("POST /api/v1/sessions/{id}/snapshot", a.snapshotSession)
@@ -98,6 +99,18 @@ func (a *API) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/sessions/{id}/tool-approvals", a.listToolApprovals)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/tool-approvals/{approvalId}/decide", a.decideToolApproval)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/recover", a.recoverSession)
+	// AC-N9/AC-N10: the agreed work records, which are the whole task surface.
+	// The ledger routes that used to sit beside these are gone with the ledger
+	// they read: a page with nowhere to put a task's description and completion
+	// criteria or anything a turn holds could show that work exists but never
+	// the work, and there is no second set of rows behind it any more.
+	//
+	// A task's turns are its history, so there is no separate history route — a
+	// past management event was never a turn, and dressing one up as a turn
+	// would put words in a person's mouth.
+	mux.HandleFunc("GET /api/v1/sessions/{id}/work/tasks", a.listWorkTasks)
+	mux.HandleFunc("GET /api/v1/sessions/{id}/work/tasks/{taskID}/turns", a.listWorkTurns)
+	mux.HandleFunc("POST /api/v1/sessions/{id}/work/tasks/{taskID}/requests", a.createWorkRequest)
 }
 
 // ---- request/response DTOs ----
@@ -128,6 +141,11 @@ type createReq struct {
 	Plugins json.RawMessage `json:"plugins"`
 	// ReasoningEffort is raw for the same reason; its contract is AC-E8.
 	ReasoningEffort json.RawMessage `json:"reasoningEffort"`
+
+	// MonitorFor asks for this session to be the monitor of that parent
+	// session. The server checks the parent and records the pair; the value is
+	// not trusted from any later request.
+	MonitorFor string `json:"monitorFor"`
 
 	// MemoryMultiplier is a pointer only so an explicit 0 is refused rather
 	// than read as omitted.
@@ -345,9 +363,29 @@ func (a *API) createSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	monitorFor := strings.TrimSpace(req.MonitorFor)
+	if monitorFor != "" {
+		// The pair is assigned here, once, against the stored parent record:
+		// the parent must exist and sit in the same tenant as the session being
+		// created. Nothing later may change it.
+		parent, err := a.mgr.Get(r.Context(), monitorFor)
+		if err != nil {
+			writeErr(w, err)
+			return
+		}
+		if parent.Tenant != tenant {
+			writeErr(w, session.ErrInvalidInput)
+			return
+		}
+		if parent.MonitorFor != "" {
+			// A monitor may not itself be monitored: the chain is one deep.
+			writeErr(w, session.ErrInvalidInput)
+			return
+		}
+	}
 	sess, err := a.mgr.Create(r.Context(), session.CreateRequest{
 		Name: req.Name, WorkloadType: workload, Model: model, Plugins: plugins, ReasoningEffort: effort,
-		MemoryMultiplier: valueOr(req.MemoryMultiplier, 0), Tenant: tenant,
+		MemoryMultiplier: valueOr(req.MemoryMultiplier, 0), Tenant: tenant, MonitorFor: monitorFor,
 	})
 	if err != nil {
 		writeErr(w, err)
@@ -629,6 +667,30 @@ func (a *API) answerQuestion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, answerQuestionResp{Status: "answered"})
 }
 
+// steerSession hands a message to the running turn rather than the queue
+// behind it (AC-J9). The answer tells applied from rejected: a caller that
+// wanted the running turn to see it must not treat a rejection as delivery.
+func (a *API) steerSession(w http.ResponseWriter, r *http.Request) {
+	if !a.authorizeSession(w, r) {
+		return
+	}
+	var req steerReq
+	if err := decodeRequestBody(r.Body, &req, true); err != nil {
+		writeErr(w, err)
+		return
+	}
+	steered, err := a.mgr.Steer(r.Context(), r.PathValue("id"), strings.TrimSpace(req.Text))
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	status := http.StatusOK
+	if !steered.Applied() {
+		status = http.StatusConflict
+	}
+	writeJSON(w, status, steered)
+}
+
 // listToolApprovals lists the tool calls a claude-code session's running turn
 // put to its owner (AC-E2).
 func (a *API) listToolApprovals(w http.ResponseWriter, r *http.Request) {
@@ -692,6 +754,11 @@ type answerQuestionReq struct {
 	Answers map[string]string `json:"answers"`
 }
 
+// steerReq is one mid-turn message (AC-J9).
+type steerReq struct {
+	Text string `json:"text"`
+}
+
 type answerQuestionResp struct {
 	Status string `json:"status"`
 }
@@ -715,6 +782,13 @@ func (a *API) caller(w http.ResponseWriter, r *http.Request) (tenancy.Caller, bo
 // authorizeSession admits a session-id route only for a caller that sees the
 // session. Another tenant's session answers exactly like a missing one, so a
 // tenant cannot learn which ids exist (AC-K2).
+// AuthorizeSession is authorizeSession for another route set in this package's
+// deployment — the monitor pair's backend routes reuse it so the ownership
+// rule is written once.
+func (a *API) AuthorizeSession(w http.ResponseWriter, r *http.Request) bool {
+	return a.authorizeSession(w, r)
+}
+
 func (a *API) authorizeSession(w http.ResponseWriter, r *http.Request) bool {
 	_, ok := a.authorizedCaller(w, r)
 	return ok
@@ -882,6 +956,17 @@ func writeErr(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	case errors.Is(err, session.ErrPluginRefreshFailed):
 		status = http.StatusBadGateway
+	case errors.Is(err, session.ErrWorkUnsupported):
+		status = http.StatusNotImplemented
+	case errors.Is(err, session.ErrWorkChoiceStale):
+		// The screen is out of date, not the request: 409 with the slot's own
+		// sentence, so the caller can re-read the task and keep the words the
+		// person already typed.
+		status = http.StatusConflict
+	case errors.Is(err, session.ErrWorkUnavailable):
+		// Not 404 and not an empty page: the records exist on the slot, they just
+		// cannot be reached while no pod holds it. Reading never starts one.
+		status = http.StatusConflict
 	case errors.Is(err, session.ErrAuthPoolExhausted):
 		// The wrapped cause names slots and holders; clients only get the class.
 		writeJSON(w, http.StatusServiceUnavailable, errResp{Error: session.ErrAuthPoolExhausted.Error()})
