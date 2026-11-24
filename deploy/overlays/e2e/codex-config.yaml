@@ -1,0 +1,27 @@
+# The codex ConfigMap for the kind SUT, carrying one key: the manager pair's
+# opt-in (AC-N11). Production's own `codex-config` is not in the base either
+# (deploy/base/codex-config-configmap.example.yaml is example-only), so without
+# this file the key is simply absent here and every codex-manager pod runs the
+# single lane — which is why `agent-auth-pool.md#시나리오 9` had no SUT to run on.
+#
+# Deliberately *only* that key. `model`, `models`, `reasoning-effort`,
+# `k3s-mcp-url`, `plugin-marketplace-url` and `session-db-raw-sql` are all read
+# with `optional: true`, so leaving them out keeps every other codex e2e seeing
+# exactly what it saw before this ConfigMap existed: the model stays the plan's
+# own default, there is no effort override, and the sidecar offers the records
+# alone with no raw SQL.
+#
+# Turning the pair on here is SUT-wide rather than per-session on purpose — it
+# is a deployment decision in the product too (a chat cannot ask for a second
+# lane of itself), so there is no per-session switch to use instead. The pair
+# adds no container, no port, no Service and no NetworkPolicy, and the parent
+# lane keeps the agent's own paths, so the other codex-manager suites address
+# the same chat they always did.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: codex-config
+  labels:
+    app: control-plane
+data:
+  manager-monitor-lane: "1"

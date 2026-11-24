@@ -154,6 +154,74 @@ func TestLaneSurfaceSplitsReadsFromWrites(t *testing.T) {
 	}
 }
 
+// laneToolDescription is one tool's description as that lane's tools/list
+// actually serves it — what the model is given, not what the source says.
+func laneToolDescription(t *testing.T, db *sessionDB, caller workCaller, name string) string {
+	t.Helper()
+	list := sessionDBCall(t, sessionDBLaneHandler(db, caller), "tools/list", map[string]any{})
+	for _, tool := range list.Result.(map[string]any)["tools"].([]any) {
+		entry := tool.(map[string]any)
+		if entry["name"] == name {
+			description, _ := entry["description"].(string)
+			return description
+		}
+	}
+	t.Fatalf("%s is not on this lane's surface", name)
+	return ""
+}
+
+// TestRelaySendSaysWhatHandingOverDoesToTheRecipient is the role guidance as
+// loaded rather than as intended. A lane gets no instructions file — its whole
+// brief is its tool surface — so the two facts a sender acts on have to be in
+// these descriptions or they are nowhere: that a parent cannot write the
+// records, which is why a change it agreed with the person has to be handed
+// over, and that handing over to the monitor starts that lane while handing
+// over to the parent does not.
+//
+// The second one is why this test exists. Before the sidecar woke the lane,
+// relay_send truthfully said no turn starts; it now does for the monitor, and a
+// parent still reading the old sentence would believe its handover sits there
+// until a person pokes the monitor — the exact gap the pair exists to close.
+func TestRelaySendSaysWhatHandingOverDoesToTheRecipient(t *testing.T) {
+	db, parent, monitor := newRelayTestDB(t)
+
+	// In order: that the parent does not write the records, that handing over
+	// runs the monitor, that it keeps being asked until settled, and where the
+	// parent reads the outcome.
+	fromParent := laneToolDescription(t, db, parent, relaySendTool)
+	for _, want := range []string{
+		"yours to read",
+		"is then started",
+		"until the message is settled",
+		relayStatusTool,
+	} {
+		if !strings.Contains(fromParent, want) {
+			t.Errorf("the parent's %s description does not say %q:\n%s", relaySendTool, want, fromParent)
+		}
+	}
+	if strings.Contains(fromParent, "no turn starts") {
+		t.Errorf("the parent's %s description still says no turn starts; the sidecar starts one:\n%s",
+			relaySendTool, fromParent)
+	}
+
+	// The other direction says the opposite, and must: a turn started here
+	// would put text in front of a person who did not speak.
+	fromMonitor := laneToolDescription(t, db, monitor, relaySendTool)
+	if !strings.Contains(fromMonitor, "No turn starts for the parent") {
+		t.Errorf("the monitor's %s description does not say the parent is not started:\n%s",
+			relaySendTool, fromMonitor)
+	}
+	if strings.Contains(fromMonitor, "is then started") {
+		t.Errorf("the monitor's %s description claims it starts the parent:\n%s", relaySendTool, fromMonitor)
+	}
+
+	// An unpaired manager is shown neither sentence, because it is shown no
+	// relay at all.
+	if names := laneNames(t, db, workCaller{}); containsString(names, relaySendTool) {
+		t.Errorf("an unpaired manager is offered %s", relaySendTool)
+	}
+}
+
 // TestParentLaneCannotWriteTheRecords is the guard rather than the menu: a
 // client holding a list from before the pair still cannot write, and it learns
 // which lane owns the records and how to hand the change over.

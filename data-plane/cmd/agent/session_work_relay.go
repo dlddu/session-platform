@@ -160,6 +160,22 @@ func relayToolDefinitions(lane string) []map[string]any {
 	}
 	other := relayOtherLane(lane)
 	str := func() map[string]any { return map[string]any{"type": "string"} }
+	// What handing over does to the recipient, which is not the same in both
+	// directions and is the part a lane cannot work out from the schema.
+	//
+	// It is here rather than left to the model's own reading because the two
+	// facts a sender acts on are both invisible in the arguments: that a parent
+	// cannot write the records at all, so handing over is the only way a change
+	// it decided with the person ever lands; and that handing over to the
+	// monitor does start that lane working (the sidecar asks the database again
+	// until the message is settled, session_work_relay_wake.go), while handing
+	// over to the parent does not, because a parent turn is a person's turn.
+	handover := "The records are the monitor lane's to write and yours to read, so a change you settled with the person reaches them by being handed over here rather than written. " +
+		"The monitor is then started to work it — the sidecar that holds the records keeps asking until the message is settled, so this does not wait for anyone to prompt that lane. Read what came of it with " + relayStatusTool + "."
+	if lane == relayLaneMonitor {
+		handover = "No turn starts for the parent: a parent turn is a turn the person began, so it reads its inbox when it next answers them. " +
+			"Report what you did here rather than waiting to be asked, and put a long answer in the turn's response, which this can name."
+	}
 	message := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -175,7 +191,8 @@ func relayToolDefinitions(lane string) []map[string]any {
 		{
 			"name": relaySendTool,
 			"description": "Hands one message to the " + other + " lane of this manager. You are the " + lane +
-				" lane: the recipient is the other lane and cannot be chosen. The message waits in the database, so it survives the other lane being mid-turn, its turn ending and either lane restarting — nothing is sent into a conversation and no turn starts. " +
+				" lane: the recipient is the other lane and cannot be chosen. The message waits in the database, so it survives the other lane being mid-turn, its turn ending and either lane restarting — nothing is sent into a conversation. " +
+				handover + " " +
 				"request_id makes a resend safe: the same id with the same message returns the answer that was committed the first time, and the same id with a different message is a conflict rather than a second message. Reusing a message id for different words is also a conflict.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 				"id": str(), "request_id": str(), "message": message,
