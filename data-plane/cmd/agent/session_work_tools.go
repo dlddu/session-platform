@@ -94,7 +94,7 @@ func workToolDefinitions() []map[string]any {
 		},
 		{
 			"name":        "turn_list",
-			"description": "One task's turns, oldest id first. open=true selects only the turns that still need the parent: a request arrived and the turn has no ended_at. after_turn_id is the keyset cursor, limit 1..100 (default 20). dispatches carries, beside the turns, what was already recorded as going outside this database for them — turn_id, operation_key, operation_target, dispatch_state, dispatched_at — so a parent that lost a reply or restarted reads whether it already acted instead of acting again. Reading changes nothing — a turn is consumed by writing its response and ended_at.",
+			"description": "One task's turns, oldest id first. open=true selects only the turns that still need the parent: a request arrived and the turn has no ended_at. after_turn_id is the keyset cursor, limit 1..100 (default 20). Reading changes nothing — a turn is consumed by writing its response and ended_at.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 				"task_id": str(), "open": map[string]any{"type": "boolean"},
 				"after_turn_id": integer(0), "limit": limit,

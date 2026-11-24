@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,16 +24,12 @@ import (
 
 // Service is the concrete Manager. It owns no workload itself (AC-A1).
 type Service struct {
-	orch  k8s.PodOrchestrator
-	store store.StateStore
-	ckpts map[session.WorkloadType]archive.Checkpointer
-	agent agent.Client
-	// monitorPairWriterKey derives each session sidecar's seal credential. Empty
-	// means this deployment cannot hand work records over, and the pair's
-	// opt-in declines rather than running without that boundary.
-	monitorPairWriterKey []byte
-	now                  func() time.Time // injectable clock for tests
-	leaseRenewInterval   time.Duration
+	orch               k8s.PodOrchestrator
+	store              store.StateStore
+	ckpts              map[session.WorkloadType]archive.Checkpointer
+	agent              agent.Client
+	now                func() time.Time // injectable clock for tests
+	leaseRenewInterval time.Duration
 	// authPools are the login slot pools by the type that leases from them
 	// (AC-N2): codex-task and codex-manager.
 	authPools map[session.WorkloadType]k8s.AuthPool
@@ -111,13 +106,6 @@ func WithAuthPool(workload session.WorkloadType, pool k8s.AuthPool) Option {
 
 // WithClock replaces the service clock, which a test must own to pin AC-F3's
 // idle exception (docs/test/approval-gate.md scenario 5).
-// WithMonitorPairWriterKey gives the service the key each session sidecar's
-// seal credential is derived from. It is the same key the orchestrator derives
-// the sidecar's env from, so the two agree without anything being stored.
-func WithMonitorPairWriterKey(key []byte) Option {
-	return func(s *Service) { s.monitorPairWriterKey = key }
-}
-
 func WithClock(now func() time.Time) Option {
 	return func(s *Service) {
 		if now != nil {
@@ -301,7 +289,6 @@ func (s *Service) Create(ctx context.Context, req session.CreateRequest) (*sessi
 		Plugins:         plugins,
 		ReasoningEffort: effort,
 		Tenant:          req.Tenant,
-		MonitorFor:      req.MonitorFor,
 		Name:            name,
 		State:           session.StateActive,
 		Pod:             pods.Workload.Name,
@@ -1709,99 +1696,6 @@ func (s *Service) releaseAuthSlotBestEffort(workload session.WorkloadType, id st
 type workAgent interface {
 	WorkTasks(ctx context.Context, pod string, limit int, afterID, status, sessionID string) (session.WorkTaskPage, error)
 	WorkTurns(ctx context.Context, pod, taskID string, afterTurnID int64, limit int, openOnly bool) (session.WorkTurnPage, error)
-}
-
-// workWriterAgent is the agent capability behind the seal that says who writes
-// a slot's work records, and behind a bound monitor's calls on them.
-type workWriterAgent interface {
-	WorkWriter(ctx context.Context, pod, token string) (session.WorkWriter, error)
-	SealWorkWriter(ctx context.Context, pod, token string, in session.WorkSeal) (session.WorkSealResult, error)
-	CallWork(ctx context.Context, pod, token, name string, args json.RawMessage) (session.WorkCallResult, error)
-}
-
-// workWritable is workReadable for the seal: the same checks, and the agent has
-// to offer the writer path as well. A session with no live pod is unavailable
-// rather than unsealed — the records are on the volume and so is the seal, and
-// answering "nobody has them" would let a caller open a second writer.
-func (s *Service) workWritable(ctx context.Context, id string) (*session.Session, workWriterAgent, error) {
-	sess, _, err := s.workReadable(ctx, id)
-	if err != nil {
-		return sess, nil, err
-	}
-	agentW, ok := s.agent.(workWriterAgent)
-	if !ok {
-		return sess, nil, fmt.Errorf("%w: this deployment's agent cannot hand work records over",
-			session.ErrWorkUnsupported)
-	}
-	return sess, agentW, nil
-}
-
-// writerToken is the credential the session's sidecar requires on the seal
-// routes. A deployment with no key derives none, and this path is refused
-// rather than attempted — so the pair's opt-in declines instead of running
-// without the boundary (session/writer_token.go).
-func (s *Service) writerToken(sessionID string) (string, error) {
-	token := session.MonitorPairWriterToken(s.monitorPairWriterKey, sessionID)
-	if token == "" {
-		return "", fmt.Errorf("%w: this deployment has no monitor-pair writer key, so work "+
-			"records cannot be handed over", session.ErrWorkUnsupported)
-	}
-	return token, nil
-}
-
-// WorkWriter reads who may write one session's work records.
-func (s *Service) WorkWriter(ctx context.Context, id string) (session.WorkWriter, error) {
-	sess, agentW, err := s.workWritable(ctx, id)
-	if err != nil {
-		return session.WorkWriter{}, err
-	}
-	token, err := s.writerToken(id)
-	if err != nil {
-		return session.WorkWriter{}, err
-	}
-	return agentW.WorkWriter(ctx, sess.Pod, token)
-}
-
-// SealWorkWriter hands one session's work records to its monitor, or gives them
-// back. When it returns without error the previous writer is already refused —
-// the slot moved the seal in the transaction that every write to those records
-// contends with — so the caller may open the next writer at that point and must
-// not before (AC-N9, monitor pair).
-func (s *Service) SealWorkWriter(
-	ctx context.Context, id string, in session.WorkSeal,
-) (session.WorkSealResult, error) {
-	var empty session.WorkSealResult
-	if in.Writer != session.WorkWriterSession && in.Writer != session.WorkWriterMonitor {
-		return empty, fmt.Errorf("%w: writer must be %q or %q",
-			session.ErrInvalidInput, session.WorkWriterSession, session.WorkWriterMonitor)
-	}
-	sess, agentW, err := s.workWritable(ctx, id)
-	if err != nil {
-		return empty, err
-	}
-	token, err := s.writerToken(id)
-	if err != nil {
-		return empty, err
-	}
-	return agentW.SealWorkWriter(ctx, sess.Pod, token, in)
-}
-
-// CallWork makes one work tool call against a session's records on behalf of
-// its bound monitor. The slot decides whether the monitor may write, from the
-// seal; this only carries the call.
-func (s *Service) CallWork(
-	ctx context.Context, id, name string, args json.RawMessage,
-) (session.WorkCallResult, error) {
-	var empty session.WorkCallResult
-	sess, agentW, err := s.workWritable(ctx, id)
-	if err != nil {
-		return empty, err
-	}
-	token, err := s.writerToken(id)
-	if err != nil {
-		return empty, err
-	}
-	return agentW.CallWork(ctx, sess.Pod, token, name, args)
 }
 
 // workReadable is the check every call on this path shares: the slot keeps work

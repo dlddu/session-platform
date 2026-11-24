@@ -60,7 +60,7 @@ func newTestSessionDB(t *testing.T) (*sessionDB, http.Handler) {
 // newTestSessionDBWithRawSQL builds the debug sidecar (SESSION_DB_RAW_SQL=debug).
 func newTestSessionDBWithRawSQL(t *testing.T, rawSQL bool) (*sessionDB, http.Handler) {
 	t.Helper()
-	db, err := newSessionDB(t.TempDir(), rawSQL, "", testLogger())
+	db, err := newSessionDB(t.TempDir(), rawSQL, testLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestSessionDBMCP_BlobsAreJSONSafe(t *testing.T) {
 // K3s MCP meanwhile).
 func TestSessionDBMCP_OpensLazily(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "db")
-	db, err := newSessionDB(dir, true, "", testLogger())
+	db, err := newSessionDB(dir, true, testLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestSessionDBMCP_OpensLazily(t *testing.T) {
 	if out, isErr := sessionDBTool(t, h, "raw_query", "SELECT 1 AS one"); isErr {
 		t.Fatalf("after mkdir: %v", out)
 	}
-	if _, err := newSessionDB("relative", false, "", testLogger()); err == nil {
+	if _, err := newSessionDB("relative", false, testLogger()); err == nil {
 		t.Fatal("a relative directory must be refused")
 	}
 }

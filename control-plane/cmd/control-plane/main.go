@@ -90,7 +90,6 @@ func main() {
 		"claude_code_default_model", cfg.claudeCodeDefaultModel,
 		"claude_code_models", len(cfg.claudeCodeModels),
 		"repo_access_enabled", cfg.repoAccess.enabled,
-		"monitor_pair_enabled", cfg.monitorPair.enabled,
 		"drop_url", cfg.dropURL,
 		"high_memory_node_selector", cfg.highMemoryNodeSelector,
 		"high_memory_tolerations", len(cfg.highMemoryTolerations),
@@ -104,12 +103,6 @@ func main() {
 
 	// The store is built below; pods are only built once it is set.
 	var autoArchiveStore *checkpointstore.S3
-	pairs, err := openMonitorPairs(context.Background(), cfg.monitorPair)
-	if err != nil {
-		logger.Error("monitor pair store unavailable", "err", err)
-		os.Exit(1)
-	}
-	defer pairs.close()
 	orch := k8s.NewClientOrchestrator(client, namespace,
 		k8s.WithAutoArchive(func(sessionID, pod string) (string, error) {
 			if autoArchiveStore == nil {
@@ -136,12 +129,6 @@ func main() {
 		k8s.WithSharedVolume(cfg.sharedVolumeStorageClass, cfg.sharedVolumeSize),
 		k8s.WithHighMemoryPlacement(cfg.highMemoryNodeSelector, cfg.highMemoryTolerations),
 		k8s.WithRepoAccess(cfg.repoAccess.helperURL(namespace)),
-		k8s.WithMonitorPair(cfg.monitorPair.workloadURL(namespace)),
-		k8s.WithMonitorPairRoles(pairs.roleOf),
-		// The seal credential goes on each session's sidecar, derived from this
-		// key. The same key is given to the service below, so the two agree
-		// without anything being stored (internal/session/writer_token.go).
-		k8s.WithMonitorPairWriterKey(cfg.monitorPair.writerKeyFor()),
 		k8s.WithDropURL(cfg.dropURL))
 	store := configmap.NewStore(client, namespace)
 	// Shell I/O (write→stdin, read→scrollback delta) AND checkpoint/restore ride
@@ -169,9 +156,7 @@ func main() {
 		logger.Info("shell filesystem archive enabled", "store", cfg.checkpointStoreDesc())
 	}
 
-	serviceOpts := []service.Option{
-		service.WithMonitorPairWriterKey(cfg.monitorPair.writerKeyFor()),
-	}
+	var serviceOpts []service.Option
 	if cfg.claudeArchiveEnabled {
 		if cfg.dataPlaneClaudeCodeImage == "" {
 			logger.Error("CLAUDE_CODE_ARCHIVE_ENABLED needs DATA_PLANE_CLAUDE_CODE_IMAGE")
@@ -233,14 +218,13 @@ func main() {
 
 	mux := http.NewServeMux()
 	claudeDefaultModel, claudeModels := cfg.claudeAuth.claudeCodeModelConfig(cfg.claudeCodeDefaultModel, cfg.claudeCodeModels)
-	productAPI := api.New(mgr,
+	api.New(mgr,
 		api.WithClaudeCodeModelConfig(claudeDefaultModel, claudeModels),
 		api.WithWorkloadModelConfig(session.WorkloadTypeCodexManager, cfg.codex.defaultModel, cfg.codex.models),
 		api.WithWorkloadModelConfig(session.WorkloadTypeCodexTask, cfg.codexTask.defaultModel, cfg.codexTask.models),
 		api.WithOfferedWorkloadTypes(cfg.offeredWorkloadTypes()...),
 		cfg.tenancy.apiOption(client),
-	)
-	productAPI.Routes(mux)
+	).Routes(mux)
 	repoAccess, err := openRepoAccess(context.Background(), cfg.repoAccess)
 	if err != nil {
 		logger.Error("repo access misconfigured", "err", err)
@@ -248,7 +232,6 @@ func main() {
 	}
 	defer repoAccess.close()
 	repoAccess.routes(mux, client, namespace, mgr, logger)
-	pairs.routes(mux, client, namespace, mgr, productAPI.AuthorizeSession, logger)
 	mux.Handle("/", static.Handler())
 
 	srv := &http.Server{
@@ -343,7 +326,6 @@ type config struct {
 	claudeAuth              claudeAuthConfig
 	tenancy                 tenancyConfig
 	repoAccess              repoAccessConfig
-	monitorPair             monitorPairConfig
 	dropURL                 string // drop's in-cluster URL for helper pods (docs/prd/drop-file-share.md AC-I2)
 }
 
@@ -493,7 +475,6 @@ func loadConfig() (config, error) {
 		claudeAuth:               claudeAuth,
 		tenancy:                  tenants,
 		repoAccess:               loadRepoAccessConfig(),
-		monitorPair:              loadMonitorPairConfig(),
 		dropURL:                  env("DROP_URL", ""),
 	}, nil
 }
