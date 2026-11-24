@@ -75,6 +75,10 @@ func (f *bridgeControlPlane) handler() http.Handler {
 		record(r)
 		_ = json.NewEncoder(w).Encode(map[string]any{"item": map[string]any{"requestId": r.PathValue("requestID"), "state": "forwarded", "turnId": 12}})
 	})
+	mux.HandleFunc("POST /api/v1/internal/monitor/work/call", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"{\"turn\":{\"id\":12}}"}],"isError":false}`))
+	})
 	mux.HandleFunc("POST /api/v1/internal/monitor/work/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		record(r)
 		_ = json.NewEncoder(w).Encode(map[string]any{"published": "tasks"})
@@ -193,7 +197,8 @@ func TestBridgeOffersTheParentReadsAndIntakeOnly(t *testing.T) {
 func TestBridgeOffersTheMonitorItsOwnWrites(t *testing.T) {
 	_, call := bridge(t, "monitor")
 	names := strings.Join(bridgeToolNames(t, call("tools/list", nil)), ",")
-	for _, want := range []string{"pair_bind", "inbox_drain", "inbox_mark_forwarded", "inbox_mark_refused", "work_publish"} {
+	for _, want := range []string{"pair_bind", "inbox_drain", "inbox_mark_forwarded", "inbox_mark_refused",
+		"work_write", "work_publish"} {
 		if !strings.Contains(names, want) {
 			t.Fatalf("monitor is missing %q; got %s", want, names)
 		}
@@ -273,6 +278,17 @@ func TestBridgeMonitorBindsDrainsAndRecordsTheTurn(t *testing.T) {
 		"name": "inbox_mark_forwarded", "arguments": map[string]any{"request_id": "req-held", "turn_id": 12, "session_seq": 4}}))
 	if !strings.Contains(marked, `"turnId":12`) {
 		t.Fatalf("inbox_mark_forwarded = %s", marked)
+	}
+	// The monitor's write goes to the pair's work-call route, which carries it
+	// to the records it was handed — not to a slot of its own.
+	written := bridgeToolText(t, call("tools/call", map[string]any{
+		"name": "work_write", "arguments": map[string]any{
+			"name": "turn_append",
+			"args": map[string]any{"task_id": "task-1", "request_id": "r-1",
+				"turn": map[string]any{"request": "이어서 해 줘"}},
+		}}))
+	if !strings.Contains(written, `\"id\":12`) {
+		t.Fatalf("work_write = %s", written)
 	}
 	published := bridgeToolText(t, call("tools/call", map[string]any{
 		"name": "work_publish", "arguments": map[string]any{"kind": "tasks", "payload": map[string]any{"tasks": []any{}}}}))

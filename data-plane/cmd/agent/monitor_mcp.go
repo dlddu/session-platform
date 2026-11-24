@@ -234,6 +234,18 @@ func monitorPairToolDefinitions(role string) []map[string]any {
 				}, "request_id", "detail"),
 			},
 			map[string]any{
+				"name": "work_write",
+				"description": "부모의 작업 레코드에 쓴다 — task_put·turn_append·turn_patch·turn_dispatch 등 슬롯 작업 도구 한 번의 " +
+					"호출을 이 쌍이 인계받은 원장에 대고 수행한다. 원장은 부모 슬롯에 그대로 있고 넘어온 것은 쓰기 " +
+					"권한이므로, 전환 전 이력과 여기서 쓰는 턴이 한 히스토리다. args 는 그 도구가 받는 인자 그대로이고 " +
+					"CAS·영수증·claim 토큰·기장 규칙도 그대로다. 인계받지 않은 원장에 대고는 거절된다.",
+				"inputSchema": obj(map[string]any{
+					"name": map[string]any{"type": "string",
+						"description": "슬롯 작업 도구 이름 (task_put, turn_append, turn_patch, turn_dispatch, ...)"},
+					"args": map[string]any{"type": "object", "description": "그 도구의 인자 그대로"},
+				}, "name", "args"),
+			},
+			map[string]any{
 				"name": "work_publish",
 				"description": "작업을 등록·변경·완료한 뒤 그 커밋된 상태를 발행한다. 부모는 이 발행본으로 자기가 한 번도 조회하지 않은 작업까지 " +
 					"모니터가 꺼진 동안 읽는다. kind 는 \"tasks\"(목록) 또는 \"turns\"(한 작업의 이력, key 는 작업 id).",
@@ -338,6 +350,14 @@ func (s *monitorMCPServer) call(name string, raw json.RawMessage) (string, bool)
 		}
 		return s.text(http.MethodPost, "/api/v1/internal/monitor/inbox/"+id+"/refused",
 			map[string]any{"detail": detail})
+	case "work_write":
+		tool := str("name")
+		callArgs, ok := args["args"]
+		if tool == "" || !ok {
+			return "name and args are required", true
+		}
+		return s.text(http.MethodPost, "/api/v1/internal/monitor/work/call",
+			map[string]any{"name": tool, "args": callArgs})
 	case "work_publish":
 		kind := str("kind")
 		payload, ok := args["payload"]

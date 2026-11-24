@@ -30,7 +30,7 @@
 | 2026-11-22 | `data-plane/cmd/agent/session_work_pair_test.go` | 15 | `df23dc111a47` | — | 등재 — 2026-11-22 신규 파일(쌍 역할 쓰기 경계). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
 | 2026-11-23 | `data-plane/cmd/agent/monitor_e2e_test.go` | 86 | `93b175f890f0` | — | 등록 — 2026-11-23 신규 파일(모니터 단일 흐름 E2E fixture). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
 | 2026-11-22 | `data-plane/cmd/agent/monitor_mcp.go` | 30 | `73f3010ded84` | — | 등록 — 2026-11-22 신규 파일(모니터 페어 로컬 MCP 브리지). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
-| 2026-11-22 | `data-plane/cmd/agent/monitor_mcp_test.go` | 24 | `f6c8d7c21595` | — | 등록 — 2026-11-22 신규 파일(모니터 페어 로컬 MCP 브리지). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
+| 2026-11-22 | `data-plane/cmd/agent/monitor_mcp_test.go` | 26 | `76b0e8009547` | — | 등록 — 2026-11-22 신규 파일(모니터 페어 로컬 MCP 브리지). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
 | 2026-11-22 | `control-plane/internal/adapter/k8s/monitor_pair.go` | 36 | `fcbe83306b6a` | — | 등록 — 2026-11-22 신규 파일(모니터 페어 프로덕션 배선·토큰 투영). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
 | 2026-11-22 | `control-plane/internal/adapter/k8s/monitor_pair_test.go` | 6 | `c274ddd1cf33` | — | 등록 — 2026-11-22 신규 파일(모니터 페어 프로덕션 배선·토큰 투영). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
 | 2026-11-22 | `control-plane/cmd/control-plane/monitor_pair.go` | 21 | `722804311c7a` | — | 등록 — 2026-11-22 신규 파일(모니터 페어 프로덕션 배선·토큰 투영). 필요성 기준 판정 대기 — 판정 칸 `—` 유지. |
