@@ -70,13 +70,13 @@ func TestSessionDBSidecarCanWakeTheMonitorLane(t *testing.T) {
 	for _, e := range s[0].Env {
 		env[e.Name] = e
 	}
-	wake, ok := env[ManagerMonitorWakeURLEnvVar]
+	wake, ok := env[ManagerMonitorWriteURLEnvVar]
 	if !ok {
-		t.Fatalf("sidecar env = %+v, want %s", s[0].Env, ManagerMonitorWakeURLEnvVar)
+		t.Fatalf("sidecar env = %+v, want %s", s[0].Env, ManagerMonitorWriteURLEnvVar)
 	}
 	if wake.Value != "http://127.0.0.1:8080/monitor/write" {
 		t.Fatalf("%s = %q, want the monitor lane's write on this pod's loopback",
-			ManagerMonitorWakeURLEnvVar, wake.Value)
+			ManagerMonitorWriteURLEnvVar, wake.Value)
 	}
 	optIn, ok := env[ManagerMonitorLaneEnvVar]
 	if !ok || optIn.ValueFrom == nil || optIn.ValueFrom.ConfigMapKeyRef == nil {
@@ -100,7 +100,7 @@ func TestSessionDBSidecarCanWakeTheMonitorLane(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range s[0].Env {
-		if e.Name == ManagerMonitorWakeURLEnvVar {
+		if e.Name == ManagerMonitorWriteURLEnvVar {
 			t.Fatal("a worker's sidecar received a monitor lane address")
 		}
 	}

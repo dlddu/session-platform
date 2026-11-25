@@ -27,21 +27,22 @@
 //     deletes. Two sessions for one person's chat would be two of each, and the
 //     pair would have to agree about which of them a snapshot was of.
 //
-// What the two lanes are for, and the division the relay enforces: the parent
-// talks to the person and reads the records; the monitor moves the work and owns
-// writing the records. The parent hands over what it learns from the person
-// (relay_send) and reads back what came of it (relay_status); nothing about this
+// What the two lanes are for, and the division the platform enforces: the
+// parent talks to the person and reads the records; the monitor does the work
+// and owns writing the records. The parent hands the person's request straight
+// to the monitor and is given a receipt it can ask about later, without waiting
+// for the turn (session_work_lane.go, turn_ticket.go); nothing about this
 // division is advisory — the records' write tools are not on the parent lane's
 // surface (session_db_mcp.go).
 //
 // What a lane does *not* keep: the monitor's conversation is not in the
 // session's archive. Its state directory sits beside the archived tree rather
 // than inside it, so a snapshot, a restore and a container restart all start the
-// monitor with a fresh conversation. That is deliberate. The monitor's record of
-// what it was doing is the slot's database — its monitoring rows and its
-// unsettled relay messages — and recovering from there is a property worth
-// having rather than a gap: a lane that came back with a conversation it could
-// not trust would still have to read the records to know where it stood.
+// monitor with a fresh conversation. That is deliberate, and it is why a receipt
+// only means anything within the run that issued it. What lasts is the work
+// ledger the monitor writes and the parent reads — a lane that came back with a
+// conversation it could not trust would have to read the records anyway to know
+// where it stood.
 package main
 
 import (
@@ -88,7 +89,39 @@ const (
 	// claim a lane that is not there. Keep in sync with
 	// control-plane/internal/adapter/agent (agentLanesPath).
 	agentLanesPath = "/lanes"
+
+	// The two lanes of a manager. They are also the two values of the role a
+	// lane's MCP registration carries (session_db_mcp.go): a caller's role is
+	// never an argument, because a lane that could name itself could act as the
+	// other one.
+	laneParent  = "parent"
+	laneMonitor = "monitor"
 )
+
+var laneRoles = []string{laneParent, laneMonitor}
+
+func isLaneRole(s string) bool { return containsString(laneRoles, s) }
+
+// otherLane is the lane a given one hands work to. It is derived, never given:
+// a manager has two lanes, so "the other one" is the whole addressing scheme
+// and there is nothing for a caller to aim somewhere else.
+func otherLane(lane string) string {
+	if lane == laneParent {
+		return laneMonitor
+	}
+	return laneParent
+}
+
+// workCaller is who is calling the slot's database: which lane of the manager,
+// and which incarnation of that lane. Both are configuration — the lane's MCP
+// registration, rendered by the platform on every boot — rather than arguments,
+// which is what makes them an identity the model cannot assert
+// (session_db_mcp.go). An empty lane is a manager running a single lane, which
+// is every slot provisioned before the pair.
+type workCaller struct {
+	lane        string
+	incarnation string
+}
 
 // managerLanePaths is what a lane answers: its conversation and the diagnostics
 // that are about that conversation. Everything else an agent serves —
@@ -103,17 +136,20 @@ var managerLanePaths = map[string]bool{
 	"/stream":  true,
 	"/queue":   true,
 	"/steer":   true,
+	// One queued prompt of this lane, by the receipt its write returned
+	// (turn_ticket.go). Loopback-only, like /queue: the caller is the sidecar
+	// answering the other lane's "what came of what I asked".
+	agentTurnPath: true,
 }
 
 // managerLane is which lane a workload is, and the state that is its own.
 type managerLane struct {
-	// role is relayLaneParent or relayLaneMonitor, empty for a manager running
+	// role is laneParent or laneMonitor, empty for a manager running
 	// a single lane.
 	role string
 	// incarnation is this run of this lane. It is minted at start and reaches
-	// the database through the lane's MCP address, which is how a relay message
-	// a lane held when it died becomes claimable again exactly once
-	// (session_work_relay.go).
+	// the database through the lane's MCP address, so the role a caller acts as
+	// is configuration rather than an argument (session_db_mcp.go).
 	incarnation string
 	// stateDir overrides the pod's state directory; empty keeps it.
 	stateDir string
@@ -206,8 +242,8 @@ func sessionDBLaneMCPURL(raw, lane, incarnation string) (string, error) {
 	if parsed.Path != sessionDBMCPPath {
 		return "", errNotALaneDBURL
 	}
-	if !isRelayLane(lane) {
-		return "", fmt.Errorf("a manager lane is %s", strings.Join(relayLanes, " or "))
+	if !isLaneRole(lane) {
+		return "", fmt.Errorf("a manager lane is %s", strings.Join(laneRoles, " or "))
 	}
 	if !workID.MatchString(incarnation) {
 		return "", errors.New("an incarnation is 1..128 letters, digits, _ or -")
@@ -281,12 +317,12 @@ func serveManagerLanes(w http.ResponseWriter, parent, monitor *claudeWorkload) {
 		return
 	}
 	inventory.Lanes = append(inventory.Lanes, laneView{
-		Role: relayLaneParent, Path: "/read", Ready: parent.isReady(),
+		Role: laneParent, Path: "/read", Ready: parent.isReady(),
 	})
 	if monitor != nil {
 		inventory.Paired = true
 		inventory.Lanes = append(inventory.Lanes, laneView{
-			Role: relayLaneMonitor, Path: managerLanePathPrefix + "/read", Ready: monitor.isReady(),
+			Role: laneMonitor, Path: managerLanePathPrefix + "/read", Ready: monitor.isReady(),
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")

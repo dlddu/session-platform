@@ -171,7 +171,7 @@ func main() {
 				logger.Error("unsafe agent credential configuration", "workload", workload, "err", err)
 				os.Exit(1)
 			}
-			parentLane = managerLane{role: relayLaneParent, incarnation: incarnation, slot: slot}
+			parentLane = managerLane{role: laneParent, incarnation: incarnation, slot: slot}
 		}
 		claude, err := newCodexWorkloadFromEnv(workload, logger, restoreMode, parentLane)
 		if err != nil {
@@ -193,7 +193,7 @@ func main() {
 			// waiting would leave the work unattended for the whole restore.
 			// What it recovers is in the slot's database (session_work_relay.go).
 			monitor, err := newCodexWorkloadFromEnv(workload, logger, false, managerLane{
-				role:        relayLaneMonitor,
+				role:        laneMonitor,
 				incarnation: monitorIncarnation,
 				stateDir:    managerMonitorStateDir(claude.stateDir),
 				slot:        parentLane.slot,
@@ -300,12 +300,13 @@ func main() {
 				os.Exit(1)
 			}
 			defer db.Close()
-			// What makes the monitor lane run what the parent hands it: the
-			// sidecar owns the rows, so the sidecar is what wakes the lane
-			// (AC-N11, session_work_relay_wake.go).
-			wakeURL, err := monitorWakeURLFromEnv(os.Getenv)
+			// How the parent lane gets work done: it hands the request to
+			// this sidecar, which puts it on the monitor lane's own queue and
+			// returns the receipt that lane issued (AC-N11,
+			// session_work_lane.go).
+			writeURL, err := monitorWriteURLFromEnv(os.Getenv)
 			if err != nil {
-				logger.Error("invalid monitor lane wake URL", "err", err)
+				logger.Error("invalid monitor lane write URL", "err", err)
 				os.Exit(1)
 			}
 			paired, err := managerPairOptIn()
@@ -313,20 +314,19 @@ func main() {
 				logger.Error("invalid manager lane configuration", "err", err)
 				os.Exit(1)
 			}
-			// The opt-in decides whether the sweep runs; the address is only
-			// where it would knock. An unpaired pod has an address and no lane,
-			// which is simply no sweep — but a paired pod with no address would
-			// be a pod that stores handovers and runs none of them, so it fails
-			// to start rather than look like a working pair.
-			if paired && wakeURL == "" {
-				logger.Error("the manager pair is on but this sidecar has no monitor lane address to wake",
-					"env", managerMonitorWakeURLEnv)
+			// The opt-in decides whether the handover exists; the address is
+			// only where it lands. An unpaired pod has an address and no second
+			// lane, which is simply no handover — but a paired pod with no
+			// address would offer the parent a call that could reach nothing,
+			// so it fails to start rather than look like a working pair.
+			if paired && writeURL == "" {
+				logger.Error("the manager pair is on but this sidecar has no monitor lane address to hand work to",
+					"env", managerMonitorWriteURLEnv)
 				os.Exit(1)
 			}
 			if paired {
-				db.waker = newRelayWaker(db.monitorRelayWakeSet, newHTTPRelayWakeTarget(wakeURL), logger)
-				go db.waker.run(context.Background())
-				logger.Info("monitor lane relay wake enabled", "write_url", wakeURL, "sweep", relayWakeSweep)
+				db.monitorLane = newMonitorLaneClient(writeURL)
+				logger.Info("manager lane handover enabled", "write_url", writeURL)
 			}
 			handler = withSessionDBMCP(proxy, db)
 			logger.Info("session db mcp enabled", "path", sessionDBMCPPath, "raw_sql", rawSQL)
@@ -537,6 +537,31 @@ func (b *scrollback) Since(offset int) ([]byte, int) {
 	out := make([]byte, n-offset)
 	copy(out, b.buf[offset:])
 	return out, n
+}
+
+// size is the current accumulated length, which is also the offset the next
+// append will start at. A turn's receipt records this before and after its own
+// output so the receipt can be resolved to exactly that turn's bytes later
+// (turn_ticket.go).
+func (b *scrollback) size() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.buf)
+}
+
+// slice returns a copy of one recorded span. Within a run the buffer is
+// append-only, so a span taken earlier still names the same bytes; a span that
+// a restore has invalidated is clamped away rather than returning a later
+// turn's words.
+func (b *scrollback) slice(from, to int) []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if from < 0 || to > len(b.buf) || from >= to {
+		return nil
+	}
+	out := make([]byte, to-from)
+	copy(out, b.buf[from:to])
+	return out
 }
 
 // snapshot returns a copy of the full accumulated buffer, for serialization into

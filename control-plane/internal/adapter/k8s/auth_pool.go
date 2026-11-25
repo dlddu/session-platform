@@ -529,21 +529,22 @@ const (
 	ManagerMonitorStateDirEnvVar = "MANAGER_MONITOR_STATE_DIR"
 	managerMonitorStateDir       = workloadStateVolumePath + "/state-monitor"
 
-	// ManagerMonitorWakeURLEnvVar is the monitor lane's own write address, given
-	// to the sidecar that holds the slot's database (AC-N11). The sidecar is
-	// what starts the monitor's turn when the parent hands it a message: it owns
-	// the rows, and a record nobody runs is a pair in shape only. The hop is the
-	// one the scheduler already makes (SchedulerAgentURLEnvVar) — loopback,
-	// inside this pod, onto the lane's own queue.
+	// ManagerMonitorWriteURLEnvVar is the monitor lane's own write address,
+	// given to the sidecar that holds the slot's database (AC-N11). The parent
+	// lane hands the person's request to that sidecar, which puts it on this
+	// address and returns the receipt the lane issued for it — so the parent
+	// does not wait for a turn it did not start. The hop is the one the
+	// scheduler already makes (SchedulerAgentURLEnvVar): loopback, inside this
+	// pod, onto the lane's own queue.
 	//
 	// The address is unconditional — it is a fact about this pod's shape, not a
 	// decision — and the pair's opt-in travels beside it to decide whether the
-	// sweep runs at all. That way an unpaired manager's sidecar simply never
-	// sweeps, while a paired one that somehow has no address to wake fails to
-	// start instead of storing handovers nothing will ever run. Keep in sync
-	// with data-plane/cmd/agent.
-	ManagerMonitorWakeURLEnvVar = "MANAGER_MONITOR_WAKE_URL"
-	managerMonitorWakePath      = "/monitor/write"
+	// handover exists at all. That way an unpaired manager's sidecar simply has
+	// no second lane to offer, while a paired one that somehow has no address
+	// fails to start instead of offering the parent a call that reaches nothing.
+	// Keep in sync with data-plane/cmd/agent.
+	ManagerMonitorWriteURLEnvVar = "MANAGER_MONITOR_WRITE_URL"
+	managerMonitorWritePath      = "/monitor/write"
 
 	// SessionDBRawSQLEnvVar carries the raw SQL debug opt-in to the sidecar,
 	// which refuses any value but `debug`. Keep in sync with
@@ -624,7 +625,7 @@ func attachSessionDB(container *corev1.Container, sidecars []corev1.Container, w
 		// wake when a handover commits, and the same opt-in the workload reads,
 		// so the pair cannot be half on (AC-N11).
 		optionalConfigMapEnv(ManagerMonitorLaneEnvVar, configMap, CodexManagerMonitorLaneConfigKey),
-		managerMonitorWakeEnv(agentPort))
+		managerMonitorWriteEnv(agentPort))
 	container.Env = append(container.Env,
 		corev1.EnvVar{Name: SessionDBMCPURLEnvVar, Value: CodexChatSessionDBMCPURL},
 		// The pair's opt-in and where its second lane lives (AC-N11). Both go
@@ -634,13 +635,13 @@ func attachSessionDB(container *corev1.Container, sidecars []corev1.Container, w
 	return []corev1.Container{slotInitContainer(image)}, nil
 }
 
-// managerMonitorWakeEnv is the monitor lane's write address on this pod's
+// managerMonitorWriteEnv is the monitor lane's write address on this pod's
 // loopback. It is the agent's own port — the lanes share one listener, and the
 // lane is a path prefix (AC-N11) — so there is no second port to get wrong.
-func managerMonitorWakeEnv(agentPort int) corev1.EnvVar {
+func managerMonitorWriteEnv(agentPort int) corev1.EnvVar {
 	return corev1.EnvVar{
-		Name:  ManagerMonitorWakeURLEnvVar,
-		Value: "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(agentPort)) + managerMonitorWakePath,
+		Name:  ManagerMonitorWriteURLEnvVar,
+		Value: "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(agentPort)) + managerMonitorWritePath,
 	}
 }
 

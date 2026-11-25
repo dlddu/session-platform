@@ -119,13 +119,14 @@ func workToolDefinitions(lane string) []map[string]any {
 
 // workSurfaceTail is everything after the agreed records, in the order a reader
 // of tools/list should meet it: the parent's own bookkeeping beside a task, its
-// monitoring loops, and — for a caller that is one of a manager's two lanes —
-// the relay it hands work over on. Nothing from the transition is here — not the
-// move, not its snapshots, and not the state report, which is not re-offered
-// under another name either (session_work.go, workRemovedTools).
+// monitoring loops, and — for the parent lane of a manager that runs the pair —
+// the two calls it hands work to the monitor with (session_work_lane.go).
+// Nothing from the transition is here — not the move, not its snapshots, and
+// not the state report, which is not re-offered under another name either
+// (session_work.go, workRemovedTools).
 func workSurfaceTail(lane string) []map[string]any {
 	tail := append(taskBookToolDefinitions(), monitorToolDefinitions()...)
-	return append(tail, relayToolDefinitions(lane)...)
+	return append(tail, laneHandoverToolDefinitions(lane)...)
 }
 
 func validateWork(name string, a workArgs) error {
@@ -174,9 +175,6 @@ func validateWork(name string, a workArgs) error {
 	switch name {
 	case monitorGetTool, monitorListTool, monitorPutTool, monitorDeleteTool:
 		return validateMonitorTool(name, a)
-	}
-	if isRelayTool(name) {
-		return validateRelayTool(name, a)
 	}
 	// The reads that take no version: they name no record whose state a caller
 	// could be holding, so there is no counter for them to hold.

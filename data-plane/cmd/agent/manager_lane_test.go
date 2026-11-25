@@ -217,10 +217,10 @@ func TestAgentLanesInventoryComesFromThePod(t *testing.T) {
 	if !paired.Paired || len(paired.Lanes) != 2 {
 		t.Fatalf("paired inventory = %+v, want two lanes and paired=true", paired)
 	}
-	if paired.Lanes[0].Role != relayLaneParent || paired.Lanes[0].Path != "/read" {
+	if paired.Lanes[0].Role != laneParent || paired.Lanes[0].Path != "/read" {
 		t.Fatalf("first lane = %+v, want the parent on the agent's own path", paired.Lanes[0])
 	}
-	if paired.Lanes[1].Role != relayLaneMonitor || paired.Lanes[1].Path != managerLanePathPrefix+"/read" {
+	if paired.Lanes[1].Role != laneMonitor || paired.Lanes[1].Path != managerLanePathPrefix+"/read" {
 		t.Fatalf("second lane = %+v, want the monitor under %s", paired.Lanes[1], managerLanePathPrefix)
 	}
 
@@ -230,7 +230,7 @@ func TestAgentLanesInventoryComesFromThePod(t *testing.T) {
 	single, lone := newClaudeTestServer(t, newFakeClaudeRunner(), "gpt-6-sol", false, nil)
 	_ = single
 	unpaired := get(lone.URL + agentLanesPath)
-	if unpaired.Paired || len(unpaired.Lanes) != 1 || unpaired.Lanes[0].Role != relayLaneParent {
+	if unpaired.Paired || len(unpaired.Lanes) != 1 || unpaired.Lanes[0].Role != laneParent {
 		t.Fatalf("unpaired inventory = %+v, want one parent lane and paired=false", unpaired)
 	}
 }
@@ -303,26 +303,26 @@ func TestManagerMonitorStateDirSitsOutsideTheArchive(t *testing.T) {
 // managed config rather than in any argument the model can write.
 func TestSessionDBLaneMCPURLCarriesTheRole(t *testing.T) {
 	base := "http://127.0.0.1:8099" + sessionDBMCPPath
-	got, err := sessionDBLaneMCPURL(base, relayLaneMonitor, "a1b2c3")
+	got, err := sessionDBLaneMCPURL(base, laneMonitor, "a1b2c3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "http://127.0.0.1:8099" + sessionDBLaneMCPPath(relayLaneMonitor, "a1b2c3")
+	want := "http://127.0.0.1:8099" + sessionDBLaneMCPPath(laneMonitor, "a1b2c3")
 	if got != want {
 		t.Fatalf("lane URL = %q, want %q", got, want)
 	}
 	if _, err := sessionDBLaneMCPURL(base, "auditor", "a1b2c3"); err == nil {
 		t.Fatal("a role that is not a lane must be refused rather than addressed")
 	}
-	if _, err := sessionDBLaneMCPURL(base, relayLaneParent, "bad/incarnation"); err == nil {
+	if _, err := sessionDBLaneMCPURL(base, laneParent, "bad/incarnation"); err == nil {
 		t.Fatal("an incarnation that is not an id must be refused")
 	}
-	if _, err := sessionDBLaneMCPURL("http://127.0.0.1:8099/elsewhere", relayLaneParent, "a1"); err == nil {
+	if _, err := sessionDBLaneMCPURL("http://127.0.0.1:8099/elsewhere", laneParent, "a1"); err == nil {
 		t.Fatal("a non-database address must not be guessed at")
 	}
 	// An unconfigured database is not an error: a slot without one has no lane
 	// address to derive and the workload still starts.
-	if got, err := sessionDBLaneMCPURL("", relayLaneParent, "a1"); err != nil || got != "" {
+	if got, err := sessionDBLaneMCPURL("", laneParent, "a1"); err != nil || got != "" {
 		t.Fatalf("empty URL = %q, %v; want it left empty", got, err)
 	}
 }
@@ -339,8 +339,8 @@ func TestSessionDBLaneCallerComesFromTheAddress(t *testing.T) {
 	}{
 		{path: sessionDBMCPPath, underPrefix: false},
 		{path: "/session-db/other", underPrefix: false},
-		{path: sessionDBLaneMCPPath(relayLaneParent, "run1"), underPrefix: true, wantLane: relayLaneParent, wantRun: "run1"},
-		{path: sessionDBLaneMCPPath(relayLaneMonitor, "run2"), underPrefix: true, wantLane: relayLaneMonitor, wantRun: "run2"},
+		{path: sessionDBLaneMCPPath(laneParent, "run1"), underPrefix: true, wantLane: laneParent, wantRun: "run1"},
+		{path: sessionDBLaneMCPPath(laneMonitor, "run2"), underPrefix: true, wantLane: laneMonitor, wantRun: "run2"},
 		{path: sessionDBLanePathPrefix, underPrefix: true, wantRefusal: true},
 		{path: sessionDBLanePathPrefix + "/monitor", underPrefix: true, wantRefusal: true},
 		{path: sessionDBLanePathPrefix + "/monitor/run/extra", underPrefix: true, wantRefusal: true},

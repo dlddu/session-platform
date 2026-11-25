@@ -155,8 +155,8 @@ func TestAuthSlotUnchangedCopyIsNotAConflict(t *testing.T) {
 // pods racing renames on a network filesystem.
 func TestAuthSlotLanesShareOneObject(t *testing.T) {
 	slot := newTestAuthSlot(t, codexAuthFile, codexAuthHomeRel)
-	parentLane := managerLane{role: relayLaneParent, incarnation: "p1", slot: slot}
-	monitorLane := managerLane{role: relayLaneMonitor, incarnation: "m1", slot: parentLane.slot}
+	parentLane := managerLane{role: laneParent, incarnation: "p1", slot: slot}
+	monitorLane := managerLane{role: laneMonitor, incarnation: "m1", slot: parentLane.slot}
 	if monitorLane.slot != parentLane.slot {
 		t.Fatal("the two lanes must hold the same slot object, not two views of one file")
 	}

@@ -71,12 +71,11 @@ type sessionDB struct {
 	// it — their statements are this type's methods, not model-supplied SQL.
 	rawSQL bool
 	logger *slog.Logger
-	// waker is what turns a committed relay_send into a monitor turn
-	// (session_work_relay_wake.go). Nil for a pod that does not run the pair,
-	// and nil is not a degraded mode — it is a sidecar with no second lane to
-	// wake. The nudge it gets is only a nudge: the waker's own sweep reads the
-	// same rows, so a nil or a missed one costs latency and never a message.
-	waker *relayWaker
+	// monitorLane is the lane this sidecar hands the parent's requests to
+	// (session_work_lane.go). Nil for a pod that does not run the pair, and
+	// nil is not a degraded mode — it is a sidecar with no second lane to hand
+	// anything to, which is what every unpaired manager is.
+	monitorLane *monitorLaneClient
 
 	mu sync.Mutex
 	db *sql.DB
@@ -287,7 +286,7 @@ func sessionDBToolDefinitions(rawSQL bool, caller workCaller) []map[string]any {
 // the reads plus the relay for the parent that does not.
 func laneToolDefinitions(lane string) []map[string]any {
 	all := workToolDefinitions(lane)
-	if lane != relayLaneParent {
+	if lane != laneParent {
 		return all
 	}
 	offered := make([]map[string]any, 0, len(all))
@@ -334,19 +333,16 @@ func (s *sessionDB) callTool(ctx context.Context, caller workCaller, params json
 	// that the record it sent was malformed. This is the guard behind the list —
 	// it answers a client holding a list from before the pair, and it is what
 	// makes the role an enforced boundary rather than a filtered menu.
-	if caller.lane == relayLaneParent && isWorkLedgerWrite(call.Name) {
+	if caller.lane == laneParent && isWorkLedgerWrite(call.Name) {
 		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: call.Name +
 			" is the monitor lane's to call: this manager's parent lane reads the work records and does not write them. " +
-			"Hand the change to the monitor with " + relaySendTool + " and read the result with " + relayStatusTool}
+			"Hand the request to the monitor with " + laneAskTool + " and read what came of it with " + laneAnswerTool}
 	}
-	// The other side of the same check. The relay is a handover between two
-	// lanes, so a database serving one has no second lane to address — and the
-	// generic argument refusal behind this would say only that the call was
-	// malformed, which is not what is wrong with it.
-	if isRelayTool(call.Name) && !isRelayLane(caller.lane) {
-		return nil, &jsonRPCError{Code: jsonRPCInvalidParams, Message: call.Name +
-			" is the handover between a manager's two lanes; this session database is serving a single lane, " +
-			"so there is no other lane to hand a message to"}
+	// The handover's own refusals are specific for the same reason — a caller
+	// that cannot use these tools has to learn which lane they belong to, not
+	// that its arguments were wrong (session_work_lane.go).
+	if isLaneHandoverTool(call.Name) {
+		return s.callLaneHandover(ctx, caller, call.Name, call.Arguments)
 	}
 	if isWorkTool(call.Name) {
 		return s.callWork(ctx, caller, call.Name, call.Arguments)
@@ -534,8 +530,8 @@ func sessionDBLaneCaller(path string) (caller workCaller, underPrefix bool, refu
 	if path == sessionDBLanePathPrefix || len(parts) != 2 {
 		return workCaller{}, true, "a lane address is " + sessionDBLanePathPrefix + "/<role>/<incarnation>"
 	}
-	if !isRelayLane(parts[0]) {
-		return workCaller{}, true, "a manager lane is " + strings.Join(relayLanes, " or ")
+	if !isLaneRole(parts[0]) {
+		return workCaller{}, true, "a manager lane is " + strings.Join(laneRoles, " or ")
 	}
 	if !workID.MatchString(parts[1]) {
 		return workCaller{}, true, "an incarnation is 1..128 letters, digits, _ or -"

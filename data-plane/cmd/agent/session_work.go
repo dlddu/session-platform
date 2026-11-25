@@ -112,30 +112,7 @@ CREATE TABLE IF NOT EXISTS sp_work_monitor (
 	version INTEGER NOT NULL,
 	updated_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS sp_work_relay (
-	id TEXT PRIMARY KEY,
-	seq INTEGER NOT NULL UNIQUE,
-	sender TEXT NOT NULL,
-	recipient TEXT NOT NULL,
-	kind TEXT NOT NULL,
-	subject TEXT NOT NULL,
-	body TEXT NOT NULL,
-	task_id TEXT,
-	state TEXT NOT NULL,
-	result TEXT,
-	version INTEGER NOT NULL,
-	attempts INTEGER NOT NULL,
-	sent_at TEXT NOT NULL,
-	claimed_at TEXT,
-	settled_at TEXT
-);
-CREATE INDEX IF NOT EXISTS sp_work_relay_inbox ON sp_work_relay (recipient, state, seq);
-CREATE TABLE IF NOT EXISTS sp_work_relay_claim (
-	message_id TEXT PRIMARY KEY,
-	claim_token TEXT NOT NULL,
-	incarnation TEXT NOT NULL,
-	claimed_at TEXT NOT NULL
-);`
+`
 
 // The records that existed only to manage the move onto the work records, and
 // that this image removes once a slot is past it: the step logs of the
@@ -354,25 +331,10 @@ type workArgs struct {
 	// Monitor is one of the parent's own monitoring loops, which is not a task
 	// and never was (session_work_monitor.go).
 	Monitor *workMonitorInput `json:"monitor,omitempty"`
-	// ClaimToken proves the caller is the parent that took this turn, or the
-	// lane that took a relay message. It is internal management state, not a
-	// field of the agreed turn (session_work_turns.go, session_work_relay.go).
+	// ClaimToken proves the caller is the parent that took this turn. It is
+	// internal management state, not a field of the agreed turn
+	// (session_work_turns.go).
 	ClaimToken string `json:"claim_token,omitempty"`
-	// Message is one handover between the two lanes of a manager. Its sender
-	// and recipient are not in it: a lane's own role comes from its MCP
-	// registration, so neither lane can send as the other
-	// (session_work_relay.go).
-	Message *relayInput `json:"message,omitempty"`
-	// Box selects which side of the relay a list reads — what was sent to this
-	// lane, or what it sent.
-	Box string `json:"box,omitempty"`
-	// AfterSeq is the relay's page cursor. It is the message's own arrival
-	// number, so a page boundary neither repeats nor skips one.
-	AfterSeq *int64 `json:"after_seq,omitempty"`
-	// Outcome and Result settle a relay message: processed or failed, and what
-	// the sender reads about it.
-	Outcome string `json:"outcome,omitempty"`
-	Result  string `json:"result,omitempty"`
 }
 
 var workTools = []string{
@@ -385,11 +347,6 @@ var workTools = []string{
 	// became tasks. They used to be rows in the ledger; they are a record of
 	// their own now (session_work_monitor.go).
 	monitorGetTool, monitorListTool, monitorPutTool, monitorDeleteTool,
-	// The handover between a manager's two lanes, which is neither a task nor a
-	// turn: it is what the parent and the monitor pass each other and how they
-	// learn it was dealt with (session_work_relay.go). These are listed only to
-	// a caller that is one of the two lanes.
-	relaySendTool, relayListTool, relayClaimTool, relayAckTool, relayStatusTool,
 }
 
 // workLedgerWrites are the calls that change the work records a person reads —
@@ -478,7 +435,7 @@ func isWorkMutation(name string) bool {
 		taskBookPutTool, monitorPutTool, monitorDeleteTool:
 		return true
 	}
-	return isRelayMutation(name)
+	return false
 }
 
 // migrateWork creates this namespace transactionally on first use and refuses a
@@ -705,8 +662,6 @@ func (s *sessionDB) work(ctx context.Context, caller workCaller, name string, a 
 		result, err = putWorkLegacy(ctx, tx, a, now)
 	case monitorGetTool, monitorListTool, monitorPutTool, monitorDeleteTool:
 		result, err = runMonitorTool(ctx, tx, name, a, now)
-	case relaySendTool, relayListTool, relayClaimTool, relayAckTool, relayStatusTool:
-		result, err = runRelayTool(ctx, tx, name, caller.lane, caller.incarnation, a, now)
 	default:
 		return nil, workFail("invalid_argument", "unknown work tool")
 	}
@@ -755,13 +710,6 @@ func (s *sessionDB) callWork(ctx context.Context, caller workCaller, name string
 			known = workError{"storage_error", "work storage operation failed; whether it committed is unknown"}
 		}
 		return sessionDBToolResult(known, true), nil
-	}
-	if name == relaySendTool && caller.lane == relayLaneParent {
-		// The row is committed, so the monitor has work. This only shortens the
-		// wait: the waker's sweep would find the same row on its own, which is
-		// what makes a nudge that never arrives harmless
-		// (session_work_relay_wake.go).
-		s.waker.notify()
 	}
 	return sessionDBToolResult(result, false), nil
 }
