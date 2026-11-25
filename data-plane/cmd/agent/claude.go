@@ -206,6 +206,9 @@ type promptJob struct {
 	// (AC-E2). The policy's denials stay denials: they are never put to a
 	// person.
 	toolApprovals bool
+	// ticket is the receipt this prompt's write returned, so the turn it
+	// becomes can be reported back to whoever queued it (turn_ticket.go).
+	ticket uint64
 }
 
 // claudeWorkload owns one session's one-shot Claude invocations. A single
@@ -222,6 +225,9 @@ type claudeWorkload struct {
 	tools    toolSurface
 	cli      agentCLI
 	out      scrollback
+	// tickets is the receipt book for prompts queued on this lane
+	// (turn_ticket.go). It is per-run, like the scrollback the answers live in.
+	tickets  *turnTicketBook
 	authSlot *authSlot
 
 	// approvals is what AC-F3's idle exception is decided from.
@@ -342,6 +348,7 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 		runOutputLimit:  runOutputLimit,
 		scrollbackLimit: scrollbackLimit,
 		queue:           list.New(),
+		tickets:         newTurnTicketBook(),
 		now:             time.Now,
 		ctx:             ctx,
 		cancel:          cancel,
@@ -394,28 +401,35 @@ func (c *claudeWorkload) Close() {
 	<-c.workerDone
 }
 
-func (c *claudeWorkload) enqueue(prompt string, toolApprovals bool) error {
+// enqueue takes one prompt and returns the receipt for the turn it will become
+// (turn_ticket.go). A refusal returns no receipt: there is no turn to ask about,
+// and a number handed out for a prompt that was never queued is exactly the
+// dangling receipt the ticket book must not have.
+func (c *claudeWorkload) enqueue(prompt string, toolApprovals bool) (string, error) {
 	if toolApprovals && !c.relaysToolApprovals() {
-		return errToolApprovalsUnsupported
+		return "", errToolApprovalsUnsupported
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	switch {
 	case c.stopping:
-		return errClaudeStopping
+		return "", errClaudeStopping
 	case !c.ready:
-		return errClaudeAwaitingRestore
+		return "", errClaudeAwaitingRestore
 	case !c.accepting:
-		return errClaudeAdmissionClosed
+		return "", errClaudeAdmissionClosed
 	case c.out.claudeFullAt(c.scrollbackLimit, claudeOutputLimitMarker):
-		return errClaudeOutputFull
+		return "", errClaudeOutputFull
 	case c.queue.Len() >= maxClaudeQueuedPrompts || c.queuedBytes+len(prompt) > maxClaudeQueuedBytes:
-		return errClaudeQueueFull
+		return "", errClaudeQueueFull
 	}
-	c.queue.PushBack(promptJob{prompt: prompt, toolApprovals: toolApprovals})
+	// Taken under the same lock as the queue append, so two writes at once get
+	// two receipts and two entries however alike their prompts are.
+	ticket := c.tickets.issue(c.timestamp())
+	c.queue.PushBack(promptJob{prompt: prompt, toolApprovals: toolApprovals, ticket: ticket})
 	c.queuedBytes += len(prompt)
 	c.cond.Signal()
-	return nil
+	return formatTurnTicket(ticket), nil
 }
 
 // appendPlatformNotice writes one platform-generated in-band marker into the
@@ -529,6 +543,10 @@ func (c *claudeWorkload) runWorker() {
 		c.mu.Unlock()
 
 		prompt := c.openTurn(seq, job.prompt)
+		// Recorded after the input marker and the request are in the buffer, so
+		// this turn's answer starts where its own output starts and the request
+		// is not quoted back inside it (turn_ticket.go).
+		c.tickets.begin(job.ticket, seq, c.out.size(), c.timestamp())
 		output := newClaudeOutputSink(
 			&c.out,
 			c.redact,
@@ -580,7 +598,11 @@ func (c *claudeWorkload) runWorker() {
 		err = errors.Join(err, stdoutUTF8.Close())
 		err = errors.Join(err, stderr.Close())
 		err = errors.Join(err, output.Close())
-		c.endTurn(seq, claudeTurnStatus(err, timedOut))
+		// Closed before the end marker goes in, so the recorded span is the
+		// turn's own output and not the platform's bookkeeping around it.
+		turnStatus := claudeTurnStatus(err, timedOut)
+		c.tickets.end(job.ticket, c.out.size(), turnStatus, c.timestamp())
+		c.endTurn(seq, turnStatus)
 		c.dropTurnQuestions(seq)
 		c.dropTurnToolApprovals(seq)
 		c.mu.Lock()
@@ -1473,8 +1495,19 @@ func loadClaudeManagedSettings(homeDir string) (claudeManagedSettings, error) {
 	return settings, nil
 }
 
-func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
+// claudeRoutes serves one agent workload. monitor is the second lane of a
+// manager pod, which this pod reports beside the first one so that a reader
+// outside the session can see both and the pod they are in (AC-N11,
+// manager_lane.go); it is nil for every workload that is the only one in its
+// pod, and for the monitor lane's own routes.
+func claudeRoutes(logger *slog.Logger, c *claudeWorkload, monitor *claudeWorkload) http.Handler {
 	mux := http.NewServeMux()
+
+	// Which conversations this pod runs. It is the pod's answer rather than a
+	// lane's, and it is passive: asking changes nothing and wakes nothing.
+	mux.HandleFunc("GET "+agentLanesPath, func(w http.ResponseWriter, _ *http.Request) {
+		serveManagerLanes(w, c, monitor)
+	})
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1502,6 +1535,13 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 	})
 	mux.HandleFunc("GET "+agentSchedulerPath, func(w http.ResponseWriter, r *http.Request) {
 		serveAgentScheduler(w, r, c)
+	})
+
+	// What came of one prompt this lane was given, by the receipt its write
+	// returned (AC-N11, turn_ticket.go). Loopback-only: the caller is the
+	// sidecar answering the other lane.
+	mux.HandleFunc("GET "+agentTurnPath, func(w http.ResponseWriter, r *http.Request) {
+		serveAgentTurn(w, r, c)
 	})
 
 	// AC-N9/AC-N10: the agreed work records, relayed from the sidecar that
@@ -1557,7 +1597,8 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := c.enqueue(string(prompt), toolApprovals); err != nil {
+		ticket, err := c.enqueue(string(prompt), toolApprovals)
+		if err != nil {
 			switch {
 			case errors.Is(err, errToolApprovalsUnsupported):
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1572,8 +1613,11 @@ func claudeRoutes(logger *slog.Logger, c *claudeWorkload) http.Handler {
 			}
 			return
 		}
+		// The receipt travels back with the acceptance, which is what lets the
+		// caller stop waiting and still be able to ask later (turn_ticket.go).
+		// Every client that predates receipts reads `status` and ignores this.
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"queued"}`))
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "queued", "ticket": ticket})
 	})
 
 	// AC-J9: a message for the turn that is running, not for the queue

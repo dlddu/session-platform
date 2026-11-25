@@ -111,7 +111,8 @@ CREATE TABLE IF NOT EXISTS sp_work_monitor (
 	note TEXT NOT NULL,
 	version INTEGER NOT NULL,
 	updated_at TEXT NOT NULL
-);`
+);
+`
 
 // The records that existed only to manage the move onto the work records, and
 // that this image removes once a slot is past it: the step logs of the
@@ -346,6 +347,19 @@ var workTools = []string{
 	// became tasks. They used to be rows in the ledger; they are a record of
 	// their own now (session_work_monitor.go).
 	monitorGetTool, monitorListTool, monitorPutTool, monitorDeleteTool,
+}
+
+// workLedgerWrites are the calls that change the work records a person reads —
+// the records the monitor lane owns (AC-N11). They are not refused here but in
+// front of the arguments (session_db_mcp.go), so a parent lane learns that the
+// records are not its to write rather than that its arguments were wrong.
+func isWorkLedgerWrite(name string) bool {
+	switch name {
+	case "task_put", "task_delete", "turn_append", "turn_patch", "turn_dispatch",
+		taskBookPutTool, monitorPutTool, monitorDeleteTool:
+		return true
+	}
+	return false
 }
 
 // workRemovedTools names what to call instead of a tool that is gone. The
@@ -586,7 +600,13 @@ func storeWorkReceipt(ctx context.Context, tx *sql.Tx, requestID, fingerprint st
 
 // work runs one tool in its own transaction, so a record and the receipt that
 // makes it replayable commit together or not at all.
-func (s *sessionDB) work(ctx context.Context, name string, a workArgs) (any, error) {
+//
+// caller is which lane of this manager is calling and which incarnation of it.
+// Both come from the lane's own MCP registration, which the platform renders and
+// the model cannot change, so they are configuration rather than arguments — a
+// lane cannot claim to be the other one, and an incarnation cannot claim to be
+// an earlier one whose work it is recovering (session_db_mcp.go).
+func (s *sessionDB) work(ctx context.Context, caller workCaller, name string, a workArgs) (any, error) {
 	if err := validateWork(name, a); err != nil {
 		return nil, err
 	}
@@ -662,7 +682,7 @@ func (s *sessionDB) work(ctx context.Context, name string, a workArgs) (any, err
 // callWork is the tools/call entry. Unknown and null-valued fields are refused
 // before anything runs, so a caller that misspells a field learns that rather
 // than having it silently ignored.
-func (s *sessionDB) callWork(ctx context.Context, name string, raw json.RawMessage) (any, *jsonRPCError) {
+func (s *sessionDB) callWork(ctx context.Context, caller workCaller, name string, raw json.RawMessage) (any, *jsonRPCError) {
 	var fields map[string]json.RawMessage
 	err := json.Unmarshal(raw, &fields)
 	var a workArgs
@@ -673,7 +693,7 @@ func (s *sessionDB) callWork(ctx context.Context, name string, raw json.RawMessa
 		err = decoder.Decode(&a)
 	}
 	if err == nil {
-		err = checkWorkFields(name, fields)
+		err = checkWorkFields(caller.lane, name, fields)
 	}
 	if err == nil && fields["turn"] != nil {
 		err = readWorkTurnFields(&a, fields["turn"])
@@ -683,7 +703,7 @@ func (s *sessionDB) callWork(ctx context.Context, name string, raw json.RawMessa
 	}
 	ctx, cancel := context.WithTimeout(ctx, sessionDBCallTimeout)
 	defer cancel()
-	result, err := s.work(ctx, name, a)
+	result, err := s.work(ctx, caller, name, a)
 	if err != nil {
 		var known workError
 		if !errors.As(err, &known) {
@@ -694,8 +714,8 @@ func (s *sessionDB) callWork(ctx context.Context, name string, raw json.RawMessa
 	return sessionDBToolResult(result, false), nil
 }
 
-func checkWorkFields(name string, fields map[string]json.RawMessage) error {
-	for _, definition := range workToolDefinitions() {
+func checkWorkFields(lane, name string, fields map[string]json.RawMessage) error {
+	for _, definition := range workToolDefinitions(lane) {
 		if definition["name"] != name {
 			continue
 		}

@@ -105,6 +105,16 @@ type Manager interface {
 	List(ctx context.Context) ([]*Session, error)
 	Read(ctx context.Context, id string, offset int64) (*ReadResult, error)
 	Stream(ctx context.Context, id string, offset int64) (io.ReadCloser, error)
+	// ReadLane and StreamLane are Read and Stream on one conversation of a
+	// manager pod (AC-N11). The parent lane is the session's own output, so
+	// they answer exactly as Read and Stream do for it; another lane needs the
+	// pod to be running that lane.
+	ReadLane(ctx context.Context, id string, lane Lane, offset int64) (*ReadResult, error)
+	StreamLane(ctx context.Context, id string, lane Lane, offset int64) (io.ReadCloser, error)
+	// SessionLanes reports the conversations this session's pod runs and the
+	// pod each runs in — the one answer that says the pair is in one pod. It is
+	// passive like the work reads: it starts no turn and restores no snapshot.
+	SessionLanes(ctx context.Context, id string) (LanePage, error)
 	Write(ctx context.Context, id, payload string) (*WriteResult, error)
 	// WriteTurn is Write with what the caller chose for the one turn the
 	// write queues (AC-E2).

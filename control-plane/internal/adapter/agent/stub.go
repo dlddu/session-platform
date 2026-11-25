@@ -37,6 +37,12 @@ type StubClient struct {
 	mu      sync.Mutex
 	bufs    map[string][]byte
 	steered map[string][]string
+	// The lane half (AC-N11, stub_lane.go): one buffer and one write log per
+	// (pod, lane), and what this stub's pod says about itself.
+	laneBufs        map[laneKey][]byte
+	laneWrites      map[laneKey][]string
+	lanePaired      bool
+	laneUnreachable bool
 }
 
 var _ Client = (*StubClient)(nil)
@@ -105,8 +111,14 @@ func (c *StubClient) Read(_ context.Context, pod string, offset int64) (string, 
 
 func (c *StubClient) Stream(_ context.Context, pod string, offset int64) (io.ReadCloser, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	buf := append([]byte(nil), c.bufs[pod]...)
+	c.mu.Unlock()
+	return c.streamBytes(buf, offset)
+}
+
+// streamBytes is the stub's SSE shape over one buffer, shared by the pod's own
+// stream and a lane's (stub_lane.go) so both answer the same event contract.
+func (c *StubClient) streamBytes(buf []byte, offset int64) (io.ReadCloser, error) {
 	n := int64(len(buf))
 	if offset < 0 {
 		return nil, fmt.Errorf("negative stream offset")

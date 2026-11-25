@@ -65,7 +65,15 @@ func newTestSessionDBWithRawSQL(t *testing.T, rawSQL bool) (*sessionDB, http.Han
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	return db, http.HandlerFunc(db.serveMCP)
+	return db, sessionDBLaneHandler(db, workCaller{})
+}
+
+// sessionDBLaneHandler serves one lane's address. workCaller{} is the manager
+// that runs a single lane, which is what every slot before the pair registers.
+func sessionDBLaneHandler(db *sessionDB, caller workCaller) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		db.serveMCP(w, r, caller)
+	})
 }
 
 // workToolNames is the whole surface, and now the same one for every slot this
@@ -234,7 +242,7 @@ func TestSessionDBMCP_OpensLazily(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	h := http.HandlerFunc(db.serveMCP)
+	h := sessionDBLaneHandler(db, workCaller{})
 	if _, isErr := sessionDBTool(t, h, "raw_query", "SELECT 1"); !isErr {
 		t.Fatal("a missing directory must fail the call")
 	}

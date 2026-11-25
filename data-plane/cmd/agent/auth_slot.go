@@ -46,8 +46,20 @@ type authSlot struct {
 	logger *slog.Logger
 
 	// mu serialises copies: the in-turn poll and the end-of-turn copy must not
-	// interleave their renames. It also guards the turn state below.
+	// interleave their renames. It also guards the per-home state below.
 	mu sync.Mutex
+	// homes is the turn state of each HOME this slot serves, keyed by it.
+	//
+	// A manager that runs two lanes (AC-N11) has two HOMEs on one login: the
+	// lanes take turns at the same time, and each has its own copy of the file.
+	// One `placed` flag would mean one lane's pull decided whether the other
+	// lane's missing file counted as a logout, so the state is per HOME. A
+	// workload with a single HOME has exactly one entry and behaves as it did.
+	homes map[string]*authSlotHome
+}
+
+// authSlotHome is what the slot knows about one HOME it keeps equal.
+type authSlotHome struct {
 	// placed is true when this turn's pull succeeded and left the slot's file
 	// in HOME. Only then does a file missing at turn end mean the CLI logged
 	// out; a failed pull also leaves HOME without the file, and reading that
@@ -57,6 +69,15 @@ type authSlot struct {
 	// holds a login newer than the slot's, so the next pull must not
 	// overwrite it with the older copy.
 	unpushed bool
+	// baseline is the slot content this HOME started from — what its last
+	// successful pull read, or what its last successful push left. A copy back
+	// is only taken when the slot still holds it, so one lane never writes over
+	// a login the other lane refreshed while it was running. The lane that is
+	// behind re-adopts the newer file on its next pull instead.
+	baseline []byte
+	// hasBaseline distinguishes "started from an empty slot" from "has not
+	// looked yet": the first may write, the second must read first.
+	hasBaseline bool
 }
 
 // newAuthSlotFromEnv returns the slot this pod mounts, or an error when the
@@ -113,20 +134,24 @@ func (s *authSlot) signedIn() bool {
 func (s *authSlot) pull(home string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.placed = false
+	state := s.homeLocked(home)
+	state.placed = false
 	target := s.homePath(home)
-	if s.unpushed {
+	if state.unpushed {
 		if err := s.copyBackLocked(home, false); err != nil {
 			_, have, _ := readLoginFile(target)
-			s.placed = have
+			state.placed = have
 			return fmt.Errorf("save the unsaved login before the turn: %w", err)
 		}
-		s.unpushed = false
+		state.unpushed = false
 	}
 	content, ok, err := readLoginFile(s.slotPath())
 	if err != nil {
 		return err
 	}
+	// Whatever the slot holds now is this turn's starting point, including its
+	// absence: a copy back is measured against it.
+	state.baseline, state.hasBaseline = content, true
 	if !ok {
 		if err := os.Remove(target); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("remove stale login: %w", err)
@@ -139,8 +164,21 @@ func (s *authSlot) pull(home string) error {
 			return err
 		}
 	}
-	s.placed = true
+	state.placed = true
 	return nil
+}
+
+// homeLocked is this HOME's turn state, created on first use.
+func (s *authSlot) homeLocked(home string) *authSlotHome {
+	if s.homes == nil {
+		s.homes = map[string]*authSlotHome{}
+	}
+	state, ok := s.homes[home]
+	if !ok {
+		state = &authSlotHome{}
+		s.homes[home] = state
+	}
+	return state
 }
 
 // push runs after a turn: whatever the CLI left in HOME is the login now. A
@@ -149,9 +187,10 @@ func (s *authSlot) pull(home string) error {
 func (s *authSlot) push(home string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	err := s.copyBackLocked(home, s.placed)
-	if err != nil && !errors.Is(err, errLoginNotJSON) {
-		s.unpushed = true
+	state := s.homeLocked(home)
+	err := s.copyBackLocked(home, state.placed)
+	if err != nil && !errors.Is(err, errLoginNotJSON) && !errors.Is(err, errLoginOverwritten) {
+		state.unpushed = true
 	}
 	return err
 }
@@ -169,12 +208,30 @@ func (s *authSlot) pushIfPresent(home string) error {
 // with no usable login if the pod died before the next copy.
 var errLoginNotJSON = errors.New("the login file in HOME is not valid JSON; the slot keeps its copy")
 
+// errLoginOverwritten is the slot having moved on since this HOME pulled it:
+// another lane of the same manager refreshed the login while this one was
+// running (AC-N11). It is not a failure to retry — the slot holds the newer
+// file, and this HOME adopts it on its next pull — so it never sets unpushed,
+// which would push the older copy back over it.
+var errLoginOverwritten = errors.New("another lane refreshed this login while the turn ran; the slot keeps the newer copy")
+
 func (s *authSlot) copyBackLocked(home string, removeWhenAbsent bool) error {
 	content, ok, err := readLoginFile(s.homePath(home))
 	if err != nil {
 		return err
 	}
 	slot := s.slotPath()
+	current, have, readErr := readLoginFile(slot)
+	// The compare-and-swap: this HOME may only replace the login it started
+	// from. With a single HOME the baseline is always what the slot holds, so
+	// this is transparent; with two, it is what stops the slower lane from
+	// undoing the faster lane's refresh.
+	if state := s.homeLocked(home); state.hasBaseline && readErr == nil {
+		started := state.baseline
+		if (have && !bytes.Equal(current, started)) || (!have && len(started) > 0) {
+			return errLoginOverwritten
+		}
+	}
 	if !ok {
 		if !removeWhenAbsent {
 			return nil
@@ -182,16 +239,28 @@ func (s *authSlot) copyBackLocked(home string, removeWhenAbsent bool) error {
 		if err := os.Remove(slot); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("remove slot login: %w", err)
 		}
+		s.rebaseLocked(home, nil)
 		return syncDir(s.dir)
 	}
 	if !json.Valid(content) {
 		return errLoginNotJSON
 	}
-	current, have, err := readLoginFile(slot)
-	if err == nil && have && bytes.Equal(current, content) {
+	if readErr == nil && have && bytes.Equal(current, content) {
+		s.rebaseLocked(home, content)
 		return nil
 	}
-	return writeLoginFile(slot, content)
+	if err := writeLoginFile(slot, content); err != nil {
+		return err
+	}
+	s.rebaseLocked(home, content)
+	return nil
+}
+
+// rebaseLocked records what this HOME left in the slot, so its next copy back
+// compares against what it actually wrote rather than what it first read.
+func (s *authSlot) rebaseLocked(home string, content []byte) {
+	state := s.homeLocked(home)
+	state.baseline, state.hasBaseline = content, true
 }
 
 // watch copies a refreshed login back while a turn runs, so a pod that dies
@@ -215,7 +284,12 @@ func (s *authSlot) watch(home string) (stop func()) {
 			case <-ticker.C:
 				// A half-written file is the CLI mid-rewrite; the next tick or
 				// the turn-end copy picks up the finished one.
-				if err := s.pushIfPresent(home); err != nil && !errors.Is(err, errLoginNotJSON) {
+				if err := s.pushIfPresent(home); errors.Is(err, errLoginOverwritten) {
+					// The other lane of this manager refreshed first. Saying so
+					// once per poll would be a log line a second; the pull that
+					// adopts the newer file is the event worth having.
+					s.log().Debug("the auth slot moved on while this turn ran", "home", home)
+				} else if err != nil && !errors.Is(err, errLoginNotJSON) {
 					s.log().Warn("copy the refreshed login to the auth slot", "err", err)
 				}
 			}

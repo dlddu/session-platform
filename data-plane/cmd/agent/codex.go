@@ -297,7 +297,12 @@ func validateLoopbackSidecarEndpoint(raw string, wantPort int) error {
 
 // newCodexWorkloadFromEnv builds a codex agent from the pod environment the
 // control plane injects (AC-J1, AC-J6; AC-M1, AC-M2, AC-M4).
-func newCodexWorkloadFromEnv(workload string, logger *slog.Logger, restoreMode bool) (*claudeWorkload, error) {
+//
+// lane is which lane of a manager pair this workload is (AC-N11,
+// manager_lane.go). The zero lane is a workload that is the only one in its pod,
+// which is every type but a paired manager and every manager created before the
+// pair.
+func newCodexWorkloadFromEnv(workload string, logger *slog.Logger, restoreMode bool, lane managerLane) (*claudeWorkload, error) {
 	proxy, err := validateCodexClientEnv()
 	if err != nil {
 		return nil, err
@@ -309,10 +314,15 @@ func newCodexWorkloadFromEnv(workload string, logger *slog.Logger, restoreMode b
 	cli := newCodexCLI(proxy, logger)
 	cli.agentURL = loopbackAgentURL(env("DATA_PLANE_AGENT_ADDR", defaultAddr))
 	effort := os.Getenv(codexReasoningEffortEnv)
-	// Both types keep their ChatGPT login in a pool slot (AC-M2, AC-N6).
-	slot, err := newAuthSlotFromEnv(codexAuthFile, codexAuthHomeRel, logger)
-	if err != nil {
-		return nil, err
+	// Both types keep their ChatGPT login in a pool slot (AC-M2, AC-N6). A
+	// manager's two lanes share one slot object: the login is one file, and one
+	// process's lock is what keeps their copies from racing (auth_slot.go).
+	slot := lane.slot
+	if slot == nil {
+		slot, err = newAuthSlotFromEnv(codexAuthFile, codexAuthHomeRel, logger)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if cli.schedulerURL, err = schedulerMCPURLFromEnv(os.Getenv); err != nil {
 		return nil, err
@@ -328,9 +338,21 @@ func newCodexWorkloadFromEnv(workload string, logger *slog.Logger, restoreMode b
 		if cli.sessionDBURL, err = sessionDBMCPURLFromEnv(); err != nil {
 			return nil, err
 		}
+		// A lane calls the database as itself. Deriving the address here rather
+		// than taking one from the environment keeps the lane's identity tied to
+		// the workload the platform started as that lane (AC-N11).
+		if cli.sessionDBURL != "" && lane.role != "" {
+			if cli.sessionDBURL, err = sessionDBLaneMCPURL(cli.sessionDBURL, lane.role, lane.incarnation); err != nil {
+				return nil, err
+			}
+		}
+	}
+	stateDir := env("CLAUDE_CODE_STATE_DIR", defaultClaudeStateDir)
+	if lane.stateDir != "" {
+		stateDir = lane.stateDir
 	}
 	return newClaudeWorkload(claudeConfig{
-		StateDir:    env("CLAUDE_CODE_STATE_DIR", defaultClaudeStateDir),
+		StateDir:    stateDir,
 		Model:       env(codexModelEnv, platformDefaultModel),
 		Binary:      env(codexRunnerBinaryEnv, defaultCodexRunnerBinary),
 		RestoreMode: restoreMode,

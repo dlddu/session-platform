@@ -494,9 +494,20 @@ func (s *Service) WriteTurn(ctx context.Context, id, payload string, opts sessio
 	}, nil
 }
 
-// turnWriter is how this write reaches the agent: the plain write, or the one
-// that asks for the owner's decision on the turn's tool calls.
+// turnWriter is how this write reaches the agent: the plain write, the one that
+// asks for the owner's decision on the turn's tool calls, or the one that lands
+// on a lane that is not the person's chat (AC-N11, lane.go).
+//
+// The lane is decided before the approval capability because the two are
+// mutually exclusive: a write that named both would otherwise get whichever the
+// order of these checks happened to prefer.
 func (s *Service) turnWriter(sess *session.Session, opts session.WriteOptions) (func(context.Context, string, string) error, error) {
+	if !opts.Lane.IsDefault() {
+		if opts.ToolApprovals {
+			return nil, errLaneWithToolApprovals
+		}
+		return s.laneWriter(sess, opts.Lane)
+	}
 	if !opts.ToolApprovals {
 		return s.agent.Write, nil
 	}

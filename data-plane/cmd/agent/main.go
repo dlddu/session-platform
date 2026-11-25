@@ -150,14 +150,62 @@ func main() {
 			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode,
 			"auth_mode", auth.mode, "effort", auth.effort)
 	case workloadCodexManager, legacyWorkloadCodexChat, workloadCodexTask:
-		claude, err := newCodexWorkloadFromEnv(workload, logger, restoreMode)
+		parentLane := managerLane{}
+		paired, err := managerPairEnabled(workload)
+		if err != nil {
+			logger.Error("invalid manager lane configuration", "workload", workload, "err", err)
+			os.Exit(1)
+		}
+		if paired {
+			// Both lanes are built before either starts serving: a pod that can
+			// only start one of them is a pod whose person-facing chat would
+			// hand work to a lane that is not there, so it fails to start
+			// instead (AC-N11).
+			incarnation, err := newLaneIncarnation()
+			if err != nil {
+				logger.Error("failed to mint this run's lane identity", "workload", workload, "err", err)
+				os.Exit(1)
+			}
+			slot, err := newAuthSlotFromEnv(codexAuthFile, codexAuthHomeRel, logger)
+			if err != nil {
+				logger.Error("unsafe agent credential configuration", "workload", workload, "err", err)
+				os.Exit(1)
+			}
+			parentLane = managerLane{role: laneParent, incarnation: incarnation, slot: slot}
+		}
+		claude, err := newCodexWorkloadFromEnv(workload, logger, restoreMode, parentLane)
 		if err != nil {
 			logger.Error("failed to initialise agent workload", "workload", workload, "err", err)
 			os.Exit(1)
 		}
 		a.claude = claude
 		logger.Info("agent workload started", "workload", workload, "addr", addr,
-			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode)
+			"model", claude.model, "state_dir", claude.stateDir, "restore_mode", restoreMode,
+			"lane", parentLane.role)
+		if paired {
+			monitorIncarnation, err := newLaneIncarnation()
+			if err != nil {
+				logger.Error("failed to mint this run's lane identity", "workload", workload, "err", err)
+				os.Exit(1)
+			}
+			// The monitor lane is never in restore mode: its conversation is
+			// not in the archive, so there is nothing for it to wait for, and
+			// waiting would leave the work unattended for the whole restore.
+			// What it recovers is in the slot's database (session_work_relay.go).
+			monitor, err := newCodexWorkloadFromEnv(workload, logger, false, managerLane{
+				role:        laneMonitor,
+				incarnation: monitorIncarnation,
+				stateDir:    managerMonitorStateDir(claude.stateDir),
+				slot:        parentLane.slot,
+			})
+			if err != nil {
+				logger.Error("failed to initialise the monitor lane", "workload", workload, "err", err)
+				os.Exit(1)
+			}
+			a.monitor = monitor
+			logger.Info("monitor lane started", "workload", workload,
+				"state_dir", monitor.stateDir, "path_prefix", managerLanePathPrefix)
+		}
 	case workloadMiniMaxCode:
 		claude, err := newMiniMaxWorkloadFromEnv(logger, restoreMode)
 		if err != nil {
@@ -252,6 +300,34 @@ func main() {
 				os.Exit(1)
 			}
 			defer db.Close()
+			// How the parent lane gets work done: it hands the request to
+			// this sidecar, which puts it on the monitor lane's own queue and
+			// returns the receipt that lane issued (AC-N11,
+			// session_work_lane.go).
+			writeURL, err := monitorWriteURLFromEnv(os.Getenv)
+			if err != nil {
+				logger.Error("invalid monitor lane write URL", "err", err)
+				os.Exit(1)
+			}
+			paired, err := managerPairOptIn()
+			if err != nil {
+				logger.Error("invalid manager lane configuration", "err", err)
+				os.Exit(1)
+			}
+			// The opt-in decides whether the handover exists; the address is
+			// only where it lands. An unpaired pod has an address and no second
+			// lane, which is simply no handover — but a paired pod with no
+			// address would offer the parent a call that could reach nothing,
+			// so it fails to start rather than look like a working pair.
+			if paired && writeURL == "" {
+				logger.Error("the manager pair is on but this sidecar has no monitor lane address to hand work to",
+					"env", managerMonitorWriteURLEnv)
+				os.Exit(1)
+			}
+			if paired {
+				db.monitorLane = newMonitorLaneClient(writeURL)
+				logger.Info("manager lane handover enabled", "write_url", writeURL)
+			}
 			handler = withSessionDBMCP(proxy, db)
 			logger.Info("session db mcp enabled", "path", sessionDBMCPPath, "raw_sql", rawSQL)
 		}
@@ -312,6 +388,9 @@ func main() {
 		if a.claude != nil {
 			a.claude.Close()
 		}
+		if a.monitor != nil {
+			a.monitor.Close()
+		}
 		if sh := a.current(); sh != nil {
 			// A paused tree would hold SIGHUP pending until the kill timeout.
 			a.resumePaused()
@@ -331,6 +410,10 @@ type agent struct {
 	shellPath string
 	stateDir  string
 	claude    *claudeWorkload
+	// monitor is the second lane of a manager pod: its own conversation,
+	// queue and cursor, served under managerLanePathPrefix (AC-N11,
+	// manager_lane.go). Nil for every workload that is the only one in its pod.
+	monitor *claudeWorkload
 
 	mu     sync.Mutex
 	sh     *shellProc
@@ -454,6 +537,31 @@ func (b *scrollback) Since(offset int) ([]byte, int) {
 	out := make([]byte, n-offset)
 	copy(out, b.buf[offset:])
 	return out, n
+}
+
+// size is the current accumulated length, which is also the offset the next
+// append will start at. A turn's receipt records this before and after its own
+// output so the receipt can be resolved to exactly that turn's bytes later
+// (turn_ticket.go).
+func (b *scrollback) size() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.buf)
+}
+
+// slice returns a copy of one recorded span. Within a run the buffer is
+// append-only, so a span taken earlier still names the same bytes; a span that
+// a restore has invalidated is clamped away rather than returning a later
+// turn's words.
+func (b *scrollback) slice(from, to int) []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if from < 0 || to > len(b.buf) || from >= to {
+		return nil
+	}
+	out := make([]byte, to-from)
+	copy(out, b.buf[from:to])
+	return out
 }
 
 // snapshot returns a copy of the full accumulated buffer, for serialization into
@@ -606,7 +714,13 @@ var upgrader = websocket.Upgrader{
 
 func routes(logger *slog.Logger, a *agent) http.Handler {
 	if a.claude != nil {
-		return claudeRoutes(logger, a.claude)
+		parent := claudeRoutes(logger, a.claude, a.monitor)
+		if a.monitor == nil {
+			return parent
+		}
+		// The monitor lane's conversation goes beside the parent's on the same
+		// port, and only its conversation (manager_lane.go).
+		return withManagerMonitorLane(parent, claudeRoutes(logger, a.monitor, nil), logger)
 	}
 	mux := http.NewServeMux()
 

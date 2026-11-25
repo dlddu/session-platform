@@ -269,7 +269,7 @@ func TestNoTransitionToolSurvivesUnderAnyName(t *testing.T) {
 	}
 	// And no surviving tool advertises itself as the way to reach one of the
 	// removed calls, which is how a replacement would arrive under a new name.
-	for _, definition := range sessionDBToolDefinitions(false) {
+	for _, definition := range sessionDBToolDefinitions(false, workCaller{}) {
 		name, _ := definition["name"].(string)
 		text, _ := definition["description"].(string)
 		for _, dead := range gone {
