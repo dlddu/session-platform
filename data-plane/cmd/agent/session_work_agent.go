@@ -32,24 +32,28 @@ const (
 )
 
 func sessionWorkTasksURLFor(mcpURL string) string {
-	if mcpURL == "" {
-		return ""
-	}
-	return strings.TrimSuffix(mcpURL, sessionDBMCPPath) + sessionDBWorkTasksPath
+	return sessionWorkURLFor(mcpURL, sessionDBWorkTasksPath)
 }
 
 func sessionWorkTurnsURLFor(mcpURL string) string {
-	if mcpURL == "" {
-		return ""
-	}
-	return strings.TrimSuffix(mcpURL, sessionDBMCPPath) + sessionDBWorkTurnsPath
+	return sessionWorkURLFor(mcpURL, sessionDBWorkTurnsPath)
 }
 
 func sessionWorkRequestsURLFor(mcpURL string) string {
+	return sessionWorkURLFor(mcpURL, sessionDBWorkRequestsPath)
+}
+
+// sessionWorkURLFor keeps only the sidecar's host: a manager lane's MCP address
+// carries the lane in its path, and the work views are the slot's, not a lane's.
+func sessionWorkURLFor(mcpURL, path string) string {
 	if mcpURL == "" {
 		return ""
 	}
-	return strings.TrimSuffix(mcpURL, sessionDBMCPPath) + sessionDBWorkRequestsPath
+	parsed, err := url.Parse(mcpURL)
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	return (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: path}).String()
 }
 
 // serveAgentWorkRequests relays one stored request to the sidecar. It is a

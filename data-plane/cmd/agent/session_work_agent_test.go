@@ -109,6 +109,57 @@ func TestWorkRelayServesASlotThatKeepsRecords(t *testing.T) {
 	}
 }
 
+// AC-N11: a parent lane registers the database at a lane address, and the
+// relay still has to reach the slot's work paths rather than paths under it.
+func TestWorkRelayFromALaneAddressReachesTheSlotPaths(t *testing.T) {
+	var got []string
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case sessionDBWorkTasksPath:
+			_, _ = w.Write([]byte(`{"tasks":[]}`))
+		case sessionDBWorkTurnsPath:
+			_, _ = w.Write([]byte(`{"task_id":"t-1","turns":[]}`))
+		case sessionDBWorkRequestsPath:
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"turn":{"id":7}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(sidecar.Close)
+	laneURL, err := sessionDBLaneMCPURL(sidecar.URL+sessionDBMCPPath, laneParent, "inc-1")
+	if err != nil {
+		t.Fatalf("lane url: %v", err)
+	}
+	srv := relayTestWorkload(t, laneURL)
+
+	for _, path := range []string{agentWorkTasksPath, agentWorkTurnsPath + "?task_id=t-1"} {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s = %d, want the sidecar's page", path, resp.StatusCode)
+		}
+	}
+	made, err := http.Post(srv.URL+agentWorkRequestsPath, "application/json",
+		strings.NewReader(`{"task_id":"t-1","request":"이거 해 줘"}`))
+	if err != nil {
+		t.Fatalf("work request: %v", err)
+	}
+	made.Body.Close()
+	if made.StatusCode != http.StatusCreated {
+		t.Fatalf("work request = %d, want the sidecar's 201", made.StatusCode)
+	}
+	want := []string{sessionDBWorkTasksPath, sessionDBWorkTurnsPath, sessionDBWorkRequestsPath}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("sidecar saw %v, want %v", got, want)
+	}
+}
+
 // The other side of the same decision: a slot whose type keeps no session
 // database says so with 501 rather than an empty page, which would claim the
 // session has no work.
