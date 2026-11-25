@@ -1,4 +1,5 @@
 // mockup: docs/mockups/new-session.html
+import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
@@ -35,33 +36,84 @@ const WORKLOAD_ORDER: WorkloadType[] = [
   "codex-task",
 ];
 
+// The card chip draws the mockup's own 15×15 inline SVG, transcribed 1:1
+// (docs/mockups/new-session.html:487·494·501·508·515). The text glyphs
+// ($ · ◇ · ⏸) were not in the mockup — the chip is the one place where the
+// mockup draws a shape, so the shape belongs to the card, not to a font.
+const shellCardIcon = (
+  <svg
+    width="15"
+    height="15"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="m5 8 4 4-4 4M12 16h7" />
+    <rect x="2" y="3" width="20" height="18" rx="2.5" />
+  </svg>
+);
+
+const agentCardIcon = (
+  <svg
+    width="15"
+    height="15"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" />
+    <circle cx="12" cy="12" r="3.2" />
+  </svg>
+);
+
+const gatedCardIcon = (
+  <svg
+    width="15"
+    height="15"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M12 2 21 6v6c0 5-3.8 8.9-9 10-5.2-1.1-9-5-9-10V6l9-4Z" />
+    <path d="M9 12l2 2 4-4" />
+  </svg>
+);
+
 const WORKLOAD_CARDS: Record<
   WorkloadType,
-  { icon: string; iconClass?: string; wide?: boolean; description: string }
+  { icon: ReactNode; wide?: boolean; description: string }
 > = {
-  shell: { icon: "$", description: "Interactive bash. You type the commands." },
+  shell: {
+    icon: shellCardIcon,
+    description: "Interactive bash. You type the commands.",
+  },
   "claude-code": {
-    icon: "◇",
-    iconClass: "agent",
+    icon: agentCardIcon,
     description: "Agent CLI. You send prompts, it does the work.",
   },
   "minimax-code": {
-    icon: "⏸",
-    iconClass: "gated",
+    icon: gatedCardIcon,
     wide: true,
     description:
       "MiniMax Code CLI behind the approval gate — it cannot reach the outside on its own; external calls wait for approval.",
   },
   "codex-manager": {
-    icon: "◇",
-    iconClass: "agent",
+    icon: agentCardIcon,
     wide: true,
     description:
       "Long-running Codex manager on your ChatGPT plan. Conversation, plugin skills and K3s MCP only.",
   },
   "codex-task": {
-    icon: "◇",
-    iconClass: "agent",
+    icon: agentCardIcon,
     wide: true,
     description:
       "Codex coding agent with a shell, file edits and network. Uses a login slot from the platform pool.",
@@ -424,12 +476,7 @@ export function NewSession() {
                       {type === "shell" ? (
                         <span className="workload-default">default</span>
                       ) : null}
-                      <span
-                        className={
-                          "workload-icon" + (card.iconClass ? " " + card.iconClass : "")
-                        }
-                        aria-hidden="true"
-                      >
+                      <span className="workload-icon" aria-hidden="true">
                         {card.icon}
                       </span>
                       <strong>{type}</strong>
