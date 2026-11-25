@@ -94,6 +94,16 @@
   }
   .slist .nm{font-weight:600}
   .slist .when{color:var(--text-faint);font-size:12px}
+  /* tenant filter + tenant tag (AC-K2 · AC-K4) — 구현 Sessions.tsx·SessionCard.tsx 와 같은 구조 */
+  .tenant-filter{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 16px}
+  .tenant-filter .lab{margin:0}
+  .tenant-filter button{font:inherit;font-size:12px;color:var(--text-dim);background:var(--surface-2);
+    border:1px solid var(--line);border-radius:var(--r-sm);padding:5px 10px;cursor:pointer}
+  .tenant-filter button.sel{color:var(--text);border-color:var(--line-2);background:var(--surface-3)}
+  .tenant-tag{font-size:11.5px;color:var(--text-dim);border:1px solid var(--line-2);
+    border-radius:5px;padding:1px 6px;white-space:nowrap}
+  .empty{padding:18px;text-align:center;color:var(--text-faint);font-size:13px;
+    border:1px dashed var(--line-2);border-radius:var(--r-sm);margin-bottom:16px}
 
   .prov{list-style:none;margin:0 0 18px;padding:0}
   .prov li{display:flex;gap:10px;align-items:center;padding:7px 0;color:var(--text-dim);font-size:13px}
@@ -269,10 +279,19 @@
         목록에 그대로 남아 있고, 다시 열면 접기 전 상태에서 이어집니다.
       </div>
 
+      <div class="tenant-filter" role="group" aria-label="테넌트로 좁히기">
+        <span class="lab">Tenant</span>
+        <button type="button" class="sel" aria-pressed="true" data-tenant-filter="all">All</button>
+        <button type="button" aria-pressed="false" data-tenant-filter="pocket-aide">pocket-aide</button>
+        <button type="button" aria-pressed="false" data-tenant-filter="ops-bot">ops-bot</button>
+        <button type="button" aria-pressed="false" data-tenant-filter="none">No tenant</button>
+      </div>
+
       <ul class="slist">
-        <li>
+        <li data-tenant="pocket-aide">
           <span class="nm mono">refactor-billing</span>
           <span class="pill snap">snapshot</span>
+          <span class="tenant-tag" title="tenant=pocket-aide">pocket-aide</span>
           <span class="when" id="confirm-when">방금 접음 · 다시 열 수 있음</span>
           <span class="spacer"></span>
           <a class="btn small" style="text-decoration:none"
@@ -286,6 +305,8 @@
           <span class="when">방금 활동</span>
         </li>
       </ul>
+
+      <p class="empty" data-state="empty" data-tenant-empty hidden>이 테넌트에 해당하는 세션이 없습니다 — 다른 테넌트를 고르거나 All 로 돌아가면 다시 보입니다.</p>
 
       <dl class="kv">
         <dt>보관된 것</dt><dd>홈 디렉터리의 파일 · 출력 이력 · 받아둔 출력 커서</dd>
@@ -363,6 +384,40 @@
     noteIn(notify, notify.checked
       ? '접기가 끝나면 알림을 보냅니다. 접기 자체는 알림과 무관하게 즉시 시작됩니다.'
       : '알림 없이 접습니다.');
+  });
+
+  /* ---------- tenant filter (AC-K2 · AC-K4) ---------- */
+  var tenant = 'all';
+  var tenantBtns = Array.prototype.slice.call(document.querySelectorAll('[data-tenant-filter]'));
+  var tenantRows = Array.prototype.slice.call(document.querySelectorAll('[data-screen="sessions"] ul.slist > li'));
+  var tenantEmpty = document.querySelector('[data-screen="sessions"] [data-tenant-empty]');
+
+  function tenantOk(li) {
+    if (tenant === 'all') return true;
+    if (tenant === 'none') return !li.getAttribute('data-tenant');
+    return li.getAttribute('data-tenant') === tenant;
+  }
+
+  function applyTenantFilter() {
+    var shown = 0;
+    tenantRows.forEach(function (li) {
+      var ok = tenantOk(li);
+      li.hidden = !ok;
+      if (ok) shown += 1;
+    });
+    if (tenantEmpty) tenantEmpty.hidden = shown !== 0;
+    tenantBtns.forEach(function (b) {
+      var on = b.getAttribute('data-tenant-filter') === tenant;
+      b.classList.toggle('sel', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+
+  tenantBtns.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      tenant = btn.getAttribute('data-tenant-filter');
+      applyTenantFilter();
+    });
   });
 
   /* ---------- STP-freeze-now ---------- */

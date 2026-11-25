@@ -356,12 +356,12 @@ DOM이 정본이고, 표와 DOM이 어긋나면 `tools/journey-prototype.test.mj
 | `JRN-approval-gated-work` | `STP-approval-decide` | `gated-workspace` | `result` |
 | `JRN-approval-gated-work` | `STP-gated-result` | `gated-workspace` | `info` · `result` |
 | `JRN-idle-resume` | `STP-step-away` | `workspace` | `error` · `info` · `result` |
-| `JRN-idle-resume` | `STP-auto-freeze` | `sessions` | `info` · `result` |
+| `JRN-idle-resume` | `STP-auto-freeze` | `sessions` | `empty` · `info` · `result` |
 | `JRN-idle-resume` | `STP-reaccess` | `restore` | `error` · `result` |
 | `JRN-idle-resume` | `STP-restore-resume` | `workspace` | `info` · `result` |
 | `JRN-manual-freeze` | `STP-freeze-decision` | `workspace` | `error` · `result` |
 | `JRN-manual-freeze` | `STP-freeze-now` | `workspace` | `error` · `result` |
-| `JRN-manual-freeze` | `STP-freeze-confirm` | `sessions` | `success` · `result` |
+| `JRN-manual-freeze` | `STP-freeze-confirm` | `sessions` | `empty` · `success` · `result` |
 | `JRN-multi-session-switch` | `STP-session-list` | `sessions` | `error` · `empty` · `result` |
 | `JRN-multi-session-switch` | `STP-switch-away` | `workspace` | `info` · `result` |
 | `JRN-multi-session-switch` | `STP-target-activation` | `workspace` | `info` · `result` |
@@ -374,9 +374,9 @@ DOM이 정본이고, 표와 DOM이 어긋나면 `tools/journey-prototype.test.mj
 | `JRN-session-creation` | `STP-create-request` | `new-session` | `error` · `result` |
 | `JRN-session-creation` | `STP-workspace-entry` | `workspace` | `error` · `result` |
 | `JRN-session-creation` | `STP-isolated-work` | `workspace` | `result` |
-| `JRN-session-deletion` | `STP-delete-intent` | `sessions` | `result` |
+| `JRN-session-deletion` | `STP-delete-intent` | `sessions` | `empty` · `result` |
 | `JRN-session-deletion` | `STP-delete-confirm` | `delete-session-dialog` | `error` · `warning` · `result` |
-| `JRN-session-deletion` | `STP-delete-settled` | `sessions` | `success` · `result` |
+| `JRN-session-deletion` | `STP-delete-settled` | `sessions` | `empty` · `success` · `result` |
 | `JRN-shell-interaction` | `STP-shell-attach` | `workspace` | `info` · `result` |
 | `JRN-shell-interaction` | `STP-command-input` | `workspace` | `warning` · `result` |
 | `JRN-shell-interaction` | `STP-output-read` | `workspace` | `warning` · `error` · `result` |
@@ -454,6 +454,7 @@ DOM이 정본이고, 표와 DOM이 어긋나면 `tools/journey-prototype.test.mj
 
 ## 마지막 갱신
 
+- **2026-11-25** — **여정 mockup의 `sessions` 화면에 테넌트 필터·태그 (AC-K2·AC-K4)**: `docs/journeys/JRN-idle-resume`·`JRN-manual-freeze`·`JRN-multi-session-switch`·`JRN-session-deletion` 4개 페이지의 `sessions` 화면 5곳에 구현 `web/src/screens/Sessions.tsx` 의 테넌트 필터(전체 · 각 테넌트 · 무소속)와 `web/src/app/SessionCard.tsx` 의 테넌트 태그를 그렸다 — 이전엔 이 페이지들이 구현 화면의 단면이었다(화면 목업 `index.html` 에는 있고 여정 페이지에는 없던 축). 테넌트 필터가 0건을 만들 수 있으므로 `STP-session-list` 밖의 4개 화면에 `empty` 안내가 늘었고 아래 「단계별 화면·상태 목록」의 해당 4행에 `empty` 를 더했다. 테넌트 이름은 자리표시자다(`pocket-aide`·`ops-bot` — 「mockup 내용의 잠정성」 §테넌트 예시와 같다).
 - **2026-11-14** — **턴 중 질문 카드 SPA 구현 (AC-E2)**: `web/src/app/QuestionCard.tsx`가 `claude-code` 턴의 `AskUserQuestion`에 답하는 콘솔 안 카드를 그린다. 대응 mockup이 없어 매핑 표에 ❌로 등재했다(매핑된 구현 파일 13→14). `agent-workspace.html`에 질문 대기 상태를 그리는 것은 후속이다.
 - **2026-11-07** — **Codex 채팅용·작업용 분리와 추론 수준 (AC-J1·AC-M1·AC-E8·AC-M4)**: `codex`가 `codex-manager`으로 이름이 바뀌고 작업용 `codex-task`가 생기면서 세 mockup을 같은 PR의 SPA 구현과 함께 고쳤다. `new-session.html`은 `codex` 카드를 `codex-manager`으로 바꾸고 `codex-task` 카드(셸·파일 편집·네트워크, 로그인 슬롯)를 더했으며, 모델 아래에 `Reasoning effort` 세그먼트(첫 칸 CLI default = 필드 생략)를 `claude-code`·`codex-task`에서만 보이게 그렸다. `codex-task`의 고정 안내문은 로그인 슬롯(AC-N2) 문장이다(`claude-code`는 게이트웨이 모드에서도 같은 화면이라 안내문을 바꾸지 않았다). `index.html`·`agent-workspace.html`은 타입 리터럴만 `codex-manager`으로 바꿨다. 새 여정 단계 없이 기존 `STP-workload-choice`에 붙였다. mockup 수·매핑 표의 행·패널 구조·여정 커버리지 합계는 변하지 않았다.
 - **2026-11-05** — **`codex` 워크로드 타입과 테넌트 반영 (AC-J1·AC-J3 · AC-K2·AC-K4)**: 다섯 번째 워크로드 타입 `codex`(ChatGPT 구독으로 도는 Codex SDK 에이전트)와 ServiceAccount 기반 테넌트가 상류에 들어오면서 세 mockup을 같은 PR의 SPA 구현과 함께 고쳤다. `new-session.html`에 `codex` 타입 카드(문구는 제어면 카탈로그의 description 그대로)와 그 타입의 고정 안내문을 넣고, 타입 카드 앞에 테넌트 선택(기본 No tenant · 고르면 그 테넌트가 받은 타입 카드만 남음)과 테넌트 호출자용 고정 한 줄 `Tenant: <name>`을 쿼리 `?tenancy=`로 갈라 그렸다. `index.html`에는 테넌트 필터(All · 테넌트별 · No tenant, `?tenant=`로 공유)와 카드 푸터의 테넌트 태그, `codex → agent-workspace.html` 경로·`◇ codex` 태그·세션 카드 2건을 더했다. `agent-workspace.html`에는 `codex` 세션 1건을 더해 첫 턴의 ChatGPT 기기 로그인 notice 줄(인증 URL·일회용 코드·로그인 완료)과 입력 줄 아래 안내 한 줄 "First prompt signs this session in to ChatGPT — watch the transcript for a link and code."를 그리고, Workload 패널의 자격 증명 행을 이 타입에서만 `Login: ChatGPT · this session only`로 바꿨다. 테넌트가 하나도 없는 배포에서 두 화면은 이전과 같다. 새 여정 단계 없이 기존 `STP-workload-choice`·`STP-session-list`·`STP-prompt-submit`·`STP-response-watch`에 붙였다. mockup 수·매핑 표의 행·패널 구조·여정 커버리지 합계는 변하지 않았다.
