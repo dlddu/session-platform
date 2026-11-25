@@ -32,8 +32,10 @@
 // What this file deliberately does NOT assert, and why:
 //
 //   - that a model reads the wake prompt and decides to claim. No login, no
-//     model. The prompt's wording is checked where it is built
-//     (session_work_relay_wake_test.go); that a *turn* ran is checked here.
+//     model — and with no login the CLI hangs rather than answering, so a woken
+//     turn here never gets past being started. What this file buys is that the
+//     turn was started by the sidecar and given the wake prompt and nothing
+//     else; what the model would then do with it is the unit test's.
 //   - claim recovery after a workload-container restart. The scenario's
 //     expected result (h) wants the container restarted on its own, and the
 //     harness has no container-level restart — deleting the pod takes the
@@ -69,8 +71,17 @@ const (
 	// own MCP address, role and incarnation included.
 	lanePairDBTable = "[mcp_servers.db]"
 	// The one message this test hands over. Keep it in step with the probe.
-	lanePairHandoverID = "e2e-handover-1"
-	lanePairTaskID     = "e2e-rollout"
+	lanePairHandoverID      = "e2e-handover-1"
+	lanePairTaskID          = "e2e-rollout"
+	lanePairHandoverSubject = "the person chose the staged rollout"
+	lanePairHandoverBody    = "Record the choice on the work and take the first step."
+	// What the person says to the parent. Distinct from everything else here so
+	// its absence from the monitor's buffer means something.
+	lanePairParentPrompt = "e2e-parent-prompt-keep-this-lane-busy"
+	// A phrase from the wake prompt the sidecar sends (relayWakePrompt in
+	// data-plane/cmd/agent/session_work_relay_wake.go). Finding it in the
+	// monitor lane's scrollback is the wake, in the lane's own words.
+	lanePairWakePhrase = "has handed you work that nobody has settled"
 )
 
 // lanePairPod is the session's one pod, its workload container and its sidecar.
@@ -195,21 +206,29 @@ func laneCall(t *testing.T, ctx context.Context, cs kubernetes.Interface, cfg *r
 // shell so that no exec round trip sits between the two.
 //
 // $1 is the JSON-RPC body, $2 the parent lane's MCP address, $3 the monitor
-// lane's queue and $4 the parent's. It prints `SEND <reply>`, then `BOTH`
-// (whether one sample ever caught both lanes mid-turn), `MFIN` (the monitor's
-// finished-turn count, which only the sidecar can have moved) and `SAMPLES`.
+// lane's queue and $4 the parent's. It prints `SEND <reply>`, then:
 //
-// It polls with no sleep on purpose: the whole observable window is one turn
-// that fails for want of a login, so the loop has to be faster than that turn.
-// It stops as soon as the monitor's count moves, which is when there is nothing
-// further to see.
+//	MSTART  whether the monitor was ever seen mid-turn — a turn on that lane
+//	        that only the sidecar can have started
+//	BOTH    whether one sample caught *both* lanes mid-turn at once
+//	MFIN    the monitor's finished-turn count
+//	SAMPLES how many samples it took
+//
+// MSTART rather than MFIN is the wake signal, which the first run of this test
+// got wrong. A turn here has no login to run against and the CLI does not fail
+// fast; it hangs until the agent's 30-minute run timeout. So `finished` stays 0
+// long after the wake has plainly happened, and waiting on it only ever times
+// out. A lane that is mid-turn has been started, which is the whole claim.
+//
+// It polls with no sleep so that a fast turn, if the CLI ever gains one, is
+// still caught, and stops as soon as there is nothing further to learn.
 const lanePairWakeProbe = `set -u
 body=$1; mcp=$2; mq=$3; pq=$4
 printf 'SEND '
 curl -sS -X POST -H 'content-type: application/json' --data-binary "$body" "$mcp"
 printf '\n'
-both=no; mfin=0; samples=0
-end=$(( $(date +%s) + 90 ))
+mstart=no; both=no; mfin=0; samples=0
+end=$(( $(date +%s) + 120 ))
 while [ "$(date +%s)" -lt "$end" ]; do
   samples=$(( samples + 1 ))
   m=$(curl -sS "$mq" 2>/dev/null) || m=''
@@ -217,16 +236,19 @@ while [ "$(date +%s)" -lt "$end" ]; do
   [ -n "$m" ] || continue
   # Plain field reads, never jq's "//": that operator treats false as absent,
   # so '.idle // "true"' would report a busy lane as idle and this loop would
-  # never see an overlap at all.
+  # never see a started turn or an overlap at all.
   mi=$(printf '%s' "$m" | jq -r '.idle' 2>/dev/null)
   mf=$(printf '%s' "$m" | jq -r '.finished' 2>/dev/null)
   pi=$(printf '%s' "$p" | jq -r '.idle' 2>/dev/null)
   case "$mf" in ''|null) mf=0 ;; esac
   mfin=$mf
-  if [ "$mi" = false ] && [ "$pi" = false ]; then both=yes; fi
-  if [ "$mfin" -gt 0 ]; then break; fi
+  if [ "$mi" = false ]; then
+    mstart=yes
+    if [ "$pi" = false ]; then both=yes; fi
+  fi
+  if [ "$both" = yes ] || [ "$mfin" -gt 0 ]; then break; fi
 done
-printf 'BOTH %s\nMFIN %s\nSAMPLES %s\n' "$both" "$mfin" "$samples"
+printf 'MSTART %s\nBOTH %s\nMFIN %s\nSAMPLES %s\n' "$mstart" "$both" "$mfin" "$samples"
 `
 
 // relaySendBody is the handover as a JSON-RPC request: the call the parent's
@@ -238,8 +260,8 @@ func relaySendBody(t *testing.T) []byte {
 		"params": map[string]any{"name": "relay_send", "arguments": map[string]any{
 			"id": lanePairHandoverID, "request_id": "e2e-parent-send-1",
 			"message": map[string]any{
-				"kind": "decision", "subject": "the person chose the staged rollout",
-				"body": "Record the choice on the work and take the first step.",
+				"kind": "decision", "subject": lanePairHandoverSubject,
+				"body": lanePairHandoverBody,
 			},
 		}},
 	})
@@ -329,6 +351,25 @@ func readLane(t *testing.T, id, lane string, offset int64) readResp {
 		t.Fatalf("decode read: %v body=%s", err, raw)
 	}
 	return out
+}
+
+// eventuallyLaneContains waits for one lane's scrollback to carry a phrase and
+// returns the whole buffer. A turn writes its prompt as it begins, so this is
+// how a lane says what it was asked to do.
+func eventuallyLaneContains(t *testing.T, id, lane, phrase string) string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Minute)
+	var last string
+	for {
+		last = readLane(t, id, lane, 0).Payload
+		if strings.Contains(last, phrase) {
+			return last
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the %s lane's buffer never carried %q; it holds:\n%s", lane, phrase, last)
+		}
+		time.Sleep(2 * time.Second)
+	}
 }
 
 func writeLane(t *testing.T, id, lane, payload string) int {
@@ -472,36 +513,45 @@ func TestAuthPool9_ParentHandsOverAndTheWokenMonitorMovesTheWork(t *testing.T) {
 	}
 	t.Logf("parent lane loaded %d tools: %s", len(parentNames), strings.Join(parentNames, " "))
 
-	// ---- keep the parent busy, so the monitor's turn has to overlap it ----
-	// A codex turn on this SUT has no login to run against and fails fast, so
-	// one prompt would be over before the monitor started. A queue of them
-	// holds the parent's single serial worker for long enough that the monitor
-	// running at all is the two contexts running at once.
-	for i := 0; i < 48; i++ {
-		if status := writeLane(t, s.ID, "", fmt.Sprintf("hold the parent lane busy (%d)", i)); status != http.StatusOK {
+	// ---- the person speaks to the parent, which keeps that lane busy ------
+	// Two prompts, not a queue full of them: a turn here has no login to run
+	// against and the CLI hangs rather than failing, so the first one holds the
+	// parent's serial worker for as long as this test could ever need and the
+	// second proves the queue behind it is the parent's own. Writing with no
+	// lane at all is the person's chat, exactly as it was before the pair.
+	for i := 0; i < 2; i++ {
+		if status := writeLane(t, s.ID, "", fmt.Sprintf("%s (%d)", lanePairParentPrompt, i)); status != http.StatusOK {
 			t.Fatalf("write %d to the parent lane: %d", i, status)
 		}
 	}
 
 	// ---- hand over, and watch both lanes from inside the pod -------------
-	// The send and the watching are one exec on purpose. A turn here has no
-	// login to run against and fails in well under a second, so sampling the
-	// queues from the test runner — a fresh exec round trip each time — would
-	// reliably miss the window the wake opens. Issuing the handover and then
-	// polling both /queue endpoints in the same in-pod loop samples at curl
-	// speed instead, which is the only way the overlap is observable at all on
-	// this SUT.
+	// The send and the watching are one exec, and the queues are the only way
+	// to see a lane mid-turn: /queue is loopback-only, so it cannot be read
+	// from the test runner at all. Keeping the send in the same shell also
+	// means the first sample lands milliseconds after the handover commits,
+	// which costs nothing and would matter if a turn here were ever quick.
+	//
+	// It is not quick: with no login the CLI hangs rather than failing, so a
+	// woken turn sits there until the agent's 30-minute run timeout. That is
+	// what makes the overlap easy to catch here and what makes `finished` the
+	// wrong thing to wait on (see lanePairWakeProbe).
 	probe := execOut(t, ctx, cs, cfg, p.pod.Name, "sh", "-c", lanePairWakeProbe, "sh",
 		string(relaySendBody(t)), parentMCP, monitorQueueURL, parentQueueURL)
 	handover := probeHandover(t, probe)
+	// Every reading is logged before anything fails on one of them, so a red run
+	// says which of the three it was.
+	t.Logf("wake probe: MSTART=%s BOTH=%s MFIN=%s SAMPLES=%s",
+		probeField(t, probe, "MSTART"), probeField(t, probe, "BOTH"),
+		probeField(t, probe, "MFIN"), probeField(t, probe, "SAMPLES"))
 	if handover["state"] != "pending" {
 		t.Fatalf("relay_send committed %v, want a pending message\nprobe:\n%s", handover["state"], probe)
 	}
 	// Nothing in this test wrote to the monitor lane and the control plane never
-	// addressed it, so a finished turn there is the sidecar's loopback hop and
+	// addressed it, so a turn running there is the sidecar's loopback hop and
 	// nothing else. This is the clause the whole file exists for.
-	if probeField(t, probe, "MFIN") == "0" {
-		t.Fatalf("the monitor lane never finished a turn; nothing but the sidecar could start one\nprobe:\n%s", probe)
+	if probeField(t, probe, "MSTART") != "yes" {
+		t.Fatalf("the monitor lane never went mid-turn; nothing but the sidecar could start one\nprobe:\n%s", probe)
 	}
 	if probeField(t, probe, "BOTH") == "yes" {
 		t.Log("saw the parent and monitor lanes mid-turn in the same sample: " +
@@ -513,6 +563,27 @@ func TestAuthPool9_ParentHandsOverAndTheWokenMonitorMovesTheWork(t *testing.T) {
 		t.Logf("did not catch both lanes mid-turn in one sample (%s samples) — the simultaneity clause "+
 			"stays with data-plane/cmd/agent/session_work_relay_wake_test.go, which holds a parent turn "+
 			"open for the whole monitor round trip", probeField(t, probe, "SAMPLES"))
+	}
+
+	// ---- what the woken lane was actually given --------------------------
+	// The strongest form of the same claim, on the product's own read surface
+	// rather than a loopback diagnostic: a turn writes its prompt into the
+	// lane's scrollback as it begins, so reading the monitor lane shows the
+	// words the sidecar sent. Nobody else wrote to this lane.
+	//
+	// And it shows what the prompt does *not* carry. The wake is level-
+	// triggered rather than a delivery, so the message's own words must be
+	// absent — the database is where the work is, and a prompt carrying the
+	// message could disagree with it.
+	monitorBuffer := eventuallyLaneContains(t, s.ID, "monitor", lanePairWakePhrase)
+	for _, leaked := range []string{lanePairHandoverBody, lanePairHandoverSubject} {
+		if strings.Contains(monitorBuffer, leaked) {
+			t.Errorf("the wake prompt carried the message's own words (%q); it is a wake, not a delivery",
+				leaked)
+		}
+	}
+	if strings.Contains(monitorBuffer, lanePairParentPrompt) {
+		t.Error("the person's prompt to the parent appears in the monitor lane's buffer")
 	}
 
 	// The parent may not write the records even holding a list that says it can:
@@ -586,13 +657,28 @@ func TestAuthPool9_ParentHandsOverAndTheWokenMonitorMovesTheWork(t *testing.T) {
 	}
 
 	// ---- two conversations, two cursors ----------------------------------
-	// The person's prompts went to the parent lane. The monitor's buffer is its
-	// own, so the parent's words are not in it and the offsets do not mean the
-	// same thing.
+	// Separation both ways, which is stronger than either half: the person's
+	// words are on the parent lane and only there, the sidecar's wake is on the
+	// monitor lane and only there, and the two cursors are counted apart.
 	parentRead := readLane(t, s.ID, "parent", 0)
 	monitorRead := readLane(t, s.ID, "monitor", 0)
-	if strings.Contains(monitorRead.Payload, "hold the parent lane busy") {
-		t.Error("the parent's prompts are in the monitor lane's buffer; the conversations are supposed to be separate")
+	if !strings.Contains(parentRead.Payload, lanePairParentPrompt) {
+		t.Errorf("the person's prompt is not in the parent lane's buffer:\n%s", parentRead.Payload)
+	}
+	if strings.Contains(parentRead.Payload, lanePairWakePhrase) {
+		t.Error("the sidecar's wake prompt is in the parent lane's buffer; the parent is never woken")
+	}
+	if strings.Contains(monitorRead.Payload, lanePairParentPrompt) {
+		t.Error("the person's prompt is in the monitor lane's buffer; the conversations are separate")
+	}
+	if !strings.Contains(monitorRead.Payload, lanePairWakePhrase) {
+		t.Errorf("the wake is not in the monitor lane's buffer:\n%s", monitorRead.Payload)
+	}
+	// An offset means nothing across lanes, so a cursor from one must not be
+	// read as a position in the other.
+	if other := readLane(t, s.ID, "monitor", parentRead.NextOffset); other.NextOffset < parentRead.NextOffset &&
+		strings.Contains(other.Payload, lanePairParentPrompt) {
+		t.Error("the parent's cursor read the parent's own words out of the monitor lane")
 	}
 	t.Logf("parent cursor %d, monitor cursor %d", parentRead.NextOffset, monitorRead.NextOffset)
 	if status := writeLane(t, s.ID, "Monitor", "a misspelt lane"); status != http.StatusBadRequest {
