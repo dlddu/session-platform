@@ -38,8 +38,6 @@ func TestCodex2_OnePodTokenOnlyInSidecar(t *testing.T) {
 	if len(pod.Spec.Containers) != 2 {
 		t.Fatalf("containers = %d, want the agent and k3s-mcp-proxy", len(pod.Spec.Containers))
 	}
-	// AC-N6: the one claim is the session's codex-manager slot, split by subPath
-	// so the agent sees only the login and the sidecar only the database.
 	var claims []string
 	for _, v := range pod.Spec.Volumes {
 		if v.PersistentVolumeClaim != nil {

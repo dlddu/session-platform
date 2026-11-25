@@ -39,10 +39,8 @@ type Steered struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// SteerStatusApplied is the one status that means the running turn has it.
 const SteerStatusApplied = "applied"
 
-// Applied reports whether the running turn took the message.
 func (s Steered) Applied() bool { return s.Status == SteerStatusApplied }
 
 // SteerableWorkload reports whether this type's turns take mid-turn messages

@@ -1,7 +1,5 @@
 //go:build integration
 
-// AC-J1/AC-J3/AC-J6 on the real client-go orchestrator: the pod a codex
-// session is submitted as. Same fake clientset helpers as the other suites.
 package integration_test
 
 import (
@@ -170,8 +168,6 @@ func TestCodexChat_SlotSplitsLoginAndDatabase(t *testing.T) {
 	}
 }
 
-// codex-manager now needs a slot like codex-task (AC-N6): a spec without one is
-// refused before any pod exists.
 func TestCodexChat_RefusesWithoutSlot(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t,
 		k8s.WithImage("ghcr.io/dlddu/session-platform-data-plane:dev"),
@@ -185,8 +181,6 @@ func TestCodexChat_RefusesWithoutSlot(t *testing.T) {
 	}
 }
 
-// optionalConfigMapRef is the ConfigMap key an env var reads, nil unless it is
-// an optional configMapKeyRef.
 func optionalConfigMapRef(c corev1.Container, name string) *corev1.ConfigMapKeySelector {
 	for _, e := range c.Env {
 		if e.Name == name && e.ValueFrom != nil && e.ValueFrom.ConfigMapKeyRef != nil &&

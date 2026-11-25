@@ -15,21 +15,6 @@ import (
 	"time"
 )
 
-// The two Codex workloads run codex's app server through a small Node runner,
-// codex-runner (data-plane/codex-runner), on the claude-code runner
-// (AC-E2~E5): queue, bounds, cursor, archive and resume flag are
-// claudeWorkload's. This file is the CLI-specific half; the managed config is
-// codex_config.go's, the plugin skills codex_skills.go's, the skills MCP
-// codex_skills_mcp.go's and the output projection codex_stream.go's.
-//
-// codex-manager (docs/prd/codex-workload.md, AC-J1~J8) is the long-lived chat
-// session: no shell, a ChatGPT login made through a device code the runner
-// forwards (AC-J3) and kept in the pool slot this pod mounts, and a session
-// database the sidecar serves from the same slot (AC-N6). codex-task (docs/prd/codex-task-workload.md,
-// AC-M1~M4) is the coding session: claude-code's tool level, and a login that
-// lives in the pool slot this pod mounts (AC-M2, docs/prd/agent-auth-pool.md).
-// In both, the only platform secret in the pod is the K3s MCP token, and it
-// stays in the loopback k3s-mcp-proxy sidecar (AC-J6).
 const (
 	workloadCodexManager = "codex-manager"
 	workloadCodexTask    = "codex-task"
@@ -45,11 +30,8 @@ const (
 	codexRunnerBinaryEnv     = "CODEX_RUNNER_BIN"
 	defaultCodexRunnerBinary = "/usr/local/bin/codex-runner"
 
-	// codexSkillsDirEnv tells the skills MCP which directory it serves.
 	codexSkillsDirEnv = "CODEX_SKILLS_DIR"
-	// codexAgentURLEnv tells the skills MCP where the agent listens on
-	// loopback, for refresh_skills (AC-J7).
-	codexAgentURLEnv = "SESSION_PLATFORM_AGENT_URL"
+	codexAgentURLEnv  = "SESSION_PLATFORM_AGENT_URL"
 	// The agent binary doubles as two helpers, selected by its first argument
 	// (runAgentSubcommand): the stdio skills MCP that codex spawns, and the
 	// config renderer the image build runs its surface check against.
@@ -57,15 +39,11 @@ const (
 	codexRenderConfigCommand = "codex-render-config"
 	defaultCodexAgentBinary  = "/agent"
 
-	codexK3SServerName    = "k3s"
-	codexSkillsServerName = "skills"
-	// codexSessionDBServerName is the sidecar's session DB MCP (AC-N6).
+	codexK3SServerName       = "k3s"
+	codexSkillsServerName    = "skills"
 	codexSessionDBServerName = "db"
-	// codexSchedulerServerName is the sidecar's scheduler MCP (AC-P1).
 	codexSchedulerServerName = "scheduler"
 
-	// The slot login file of both codex types and its HOME place (AC-M2,
-	// AC-N6).
 	codexAuthFile    = "auth.json"
 	codexAuthHomeRel = codexConfigDirName + "/" + codexAuthFile
 
@@ -75,36 +53,24 @@ const (
 	codexSidecarWait = 90 * time.Second
 )
 
-// codexReasoningEfforts is AC-M4's list.
 var codexReasoningEfforts = []string{"minimal", "low", "medium", "high", "xhigh"}
 
 // codexCLI is the agentCLI for codex-runner. It takes no provider address and
 // no key: the runner's codex child signs in with a ChatGPT account — the
 // session's own (AC-J3) or its slot's (AC-M2).
 type codexCLI struct {
-	// task selects codex-task's surface (AC-M1) over codex-manager's (AC-J5).
-	task bool
-	// effort is the session's reasoning effort (AC-M4) or the type's
-	// ConfigMap default (AC-J1), empty for the model's default.
-	effort string
-	// k3sProxyURL is the loopback k3s-mcp-proxy sidecar (AC-J6).
+	task        bool
+	effort      string
 	k3sProxyURL string
-	// agentBinary is what codex spawns as the skills MCP.
 	agentBinary string
 	// agentURL is this agent on loopback, which the skills MCP's
 	// refresh_skills calls (AC-J7); empty offers no refresh tool.
-	agentURL string
-	// sessionDBURL is the sidecar's session DB MCP (AC-N6), codex-manager only;
-	// empty registers no `db` server.
+	agentURL     string
 	sessionDBURL string
-	// schedulerURL is the sidecar's scheduler MCP (AC-P1); empty registers no
-	// `scheduler` server.
 	schedulerURL string
 	// probeSidecar reads what the sidecar offers; a field so tests need no
 	// server. It reports what it learned even when it also returns an error.
-	probeSidecar func(proxyURL string) (codexSidecar, error)
-	// refreshSidecar asks the sidecar to clone the marketplace again (AC-J7);
-	// a field for the same reason.
+	probeSidecar   func(proxyURL string) (codexSidecar, error)
 	refreshSidecar func(proxyURL string) (miniMaxRefreshResult, error)
 	logger         *slog.Logger
 }
@@ -327,7 +293,6 @@ func newCodexWorkloadFromEnv(workload string, logger *slog.Logger, restoreMode b
 	if cli.schedulerURL, err = schedulerMCPURLFromEnv(os.Getenv); err != nil {
 		return nil, err
 	}
-	// codex-manager's effort is only ever the ConfigMap default (AC-J1).
 	if effort != "" && !slices.Contains(codexReasoningEfforts, effort) {
 		return nil, fmt.Errorf("%s must be one of %s, got %q", codexReasoningEffortEnv, strings.Join(codexReasoningEfforts, ", "), effort)
 	}
@@ -373,8 +338,6 @@ func codexRedactionLiterals() []string {
 	return normaliseRedactionLiterals(literals)
 }
 
-// runAgentSubcommand runs the helper modes selected by the first argument and
-// reports whether it handled one. Neither starts the HTTP agent.
 func runAgentSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer) (int, bool) {
 	if len(args) == 0 {
 		return 0, false
@@ -435,8 +398,6 @@ func renderCodexConfigForHome(home string, task bool) error {
 	return writeCodexConfig(filepath.Join(home, codexConfigDirName, codexConfigFileName), renderCodexConfig(cfg))
 }
 
-// loopbackAgentURL is the agent's own listen address as the skills MCP reaches
-// it on loopback, or "" when the agent does not listen there.
 func loopbackAgentURL(addr string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil || port == "" {

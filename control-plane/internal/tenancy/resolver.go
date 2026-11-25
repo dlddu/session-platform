@@ -22,20 +22,16 @@ const DefaultAudience = "session-platform"
 
 const serviceAccountPrefix = "system:serviceaccount:"
 
-// Resolver turns a request into its Caller (AC-K1, AC-K4).
 type Resolver interface {
 	Resolve(r *http.Request) (Caller, error)
 }
 
-// TokenReviewResolver proves bearer tokens with the TokenReview API.
 type TokenReviewResolver struct {
 	client   kubernetes.Interface
 	audience string
 	config   *Config
 }
 
-// NewTokenReviewResolver builds a resolver over cfg. An empty audience means
-// DefaultAudience.
 func NewTokenReviewResolver(client kubernetes.Interface, audience string, cfg *Config) *TokenReviewResolver {
 	if strings.TrimSpace(audience) == "" {
 		audience = DefaultAudience
@@ -89,9 +85,6 @@ func (v *TokenReviewResolver) review(ctx context.Context, token string) (string,
 	return namespace, name, nil
 }
 
-// StaticResolver resolves every request to one caller. Tests and deployments
-// without tenancy use it.
 type StaticResolver Caller
 
-// Resolve implements Resolver.
 func (s StaticResolver) Resolve(*http.Request) (Caller, error) { return Caller(s), nil }

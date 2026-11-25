@@ -28,13 +28,10 @@ import (
 // archived, so the sync is redone on every boot and restore.
 const codexSkillNameSeparator = "--"
 
-// codexSidecar is what the K3s MCP proxy sidecar offered this boot.
 type codexSidecar struct {
-	// configured is the proxy's own report that it holds a K3s MCP token.
 	configured bool
 	plugins    []miniMaxSeedPlugin
-	// revision is the marketplace commit the plugins were read from.
-	revision string
+	revision   string
 }
 
 // codexSkill is one skill directory: its files keyed by slash path.
@@ -300,8 +297,6 @@ func syncCodexSkills(skillsDir string, skills map[string]codexSkill, logger *slo
 	return changes, nil
 }
 
-// codexSkillMatches reports whether the installed dir holds exactly skill's
-// files, the marker aside.
 func codexSkillMatches(dir string, skill codexSkill) (bool, error) {
 	found := 0
 	same := true

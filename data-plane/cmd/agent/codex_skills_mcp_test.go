@@ -103,7 +103,6 @@ func toolText(t *testing.T, response map[string]any) (string, bool) {
 	return content[0].(map[string]any)["text"].(string), result["isError"].(bool)
 }
 
-// AC-J5: the stdio handshake codex performs, then both tools.
 func TestCodexSkillsMCPHandshake(t *testing.T) {
 	root := writeSkillTree(t)
 	responses := runSkillsMCP(t, root,
@@ -253,9 +252,6 @@ func TestCodexSkillsMCPFrameLimit(t *testing.T) {
 	}
 }
 
-// AC-J7: refresh_skills is offered only with an agent to call, posts to the
-// in-turn route, and words the agent's answer — a result or a refusal — for
-// the model without failing the MCP.
 func TestCodexSkillsMCPRefreshSkills(t *testing.T) {
 	root := writeSkillTree(t)
 	listFrame := `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`

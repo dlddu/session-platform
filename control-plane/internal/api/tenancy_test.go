@@ -100,8 +100,6 @@ func listNames(t *testing.T, srv *httptest.Server, tenant, query string) []strin
 	return names
 }
 
-// AC-K2: a tenant creates into its own tenant and lists only its own
-// sessions; the operator sees all and can filter.
 func TestTenancyScopesCreateAndList(t *testing.T) {
 	srv := newTenantServer(t)
 	a := mustCreate(t, srv, "alpha", map[string]any{"name": "a1"})
@@ -132,7 +130,6 @@ func TestTenancyScopesCreateAndList(t *testing.T) {
 	}
 }
 
-// AC-K2: every session-id route answers another tenant's session as missing.
 func TestTenancyHidesOtherTenantsSessions(t *testing.T) {
 	srv := newTenantServer(t)
 	b := mustCreate(t, srv, "beta", map[string]any{"name": "b1", "workloadType": "claude-code"})
@@ -164,8 +161,6 @@ func TestTenancyHidesOtherTenantsSessions(t *testing.T) {
 	}
 }
 
-// AC-K3: the owning tenant must be granted the workload type, and a tenant
-// cannot create into another tenant.
 func TestTenancyCreateRules(t *testing.T) {
 	srv := newTenantServer(t)
 	cases := []struct {
@@ -186,7 +181,6 @@ func TestTenancyCreateRules(t *testing.T) {
 		{"wildcard tenant default shell", "omni", map[string]any{"name": "x"}, http.StatusCreated},
 		{"wildcard tenant any type", "omni", map[string]any{"name": "x", "workloadType": "claude-code"}, http.StatusCreated},
 		{"wildcard tenant unknown type", "omni", map[string]any{"name": "x", "workloadType": "vim"}, http.StatusBadRequest},
-		// A caller that has not moved off the previous name still creates (AC-J1).
 		{"operator into wildcard tenant", "", map[string]any{"name": "x", "tenant": "omni", "workloadType": "codex-chat"}, http.StatusCreated},
 	}
 	for _, tc := range cases {
@@ -199,8 +193,6 @@ func TestTenancyCreateRules(t *testing.T) {
 	}
 }
 
-// AC-K3/AC-K4: /config shows a tenant only its granted types and the operator
-// the tenant set to pick from.
 func TestTenancyRuntimeConfig(t *testing.T) {
 	srv := newTenantServer(t)
 	type cfgResp struct {
@@ -249,7 +241,6 @@ func TestTenancyRuntimeConfig(t *testing.T) {
 	}
 }
 
-// AC-K1: a refused caller never falls back to the operator.
 func TestTenancyRefusedCaller(t *testing.T) {
 	srv := newTenantServer(t)
 	for _, path := range []string{"/api/v1/sessions", "/api/v1/config"} {
@@ -259,8 +250,6 @@ func TestTenancyRefusedCaller(t *testing.T) {
 	}
 }
 
-// AC-K4: repo access management is the operator's; any bearer caller — a
-// tenant or not — is refused before the route runs.
 func TestRepoAccessAdminIsOperatorOnly(t *testing.T) {
 	mux := http.NewServeMux()
 	api.NewRepoAccess(nil, nil, nil, nil).Routes(mux)
