@@ -17,9 +17,11 @@ const (
 )
 
 // prepareClaudeProcessIsolation makes orphaned grandchildren reparent to the
-// agent rather than an unrelated namespace init. It complements the per-run
-// process group: tools that explicitly call setsid still become discoverable
-// direct children after the CLI exits.
+// caller rather than an unrelated namespace init. Each invocation's reaper
+// helper calls it for itself, which is what keeps one invocation's detached
+// tools reachable by that invocation and no other; the agent calls it as well,
+// so a tool that outlives its reaper still lands on a live process instead of
+// leaking out of the pod's process tree.
 func prepareClaudeProcessIsolation() error {
 	_, _, errno := syscall.RawSyscall6(
 		syscall.SYS_PRCTL,
@@ -33,10 +35,15 @@ func prepareClaudeProcessIsolation() error {
 	return nil
 }
 
-// killAndReapClaudeDescendants runs only after cmd.Wait has reaped the direct
-// CLI process. The Claude worker is the sole subprocess owner in this workload
-// mode, so any remaining descendants are detached tools from that invocation.
-func killAndReapClaudeDescendants() error {
+// killAndReapOwnDescendants kills and waits on every process that has
+// reparented onto the caller.
+//
+// It waits on any child, so it may only run in a process whose children all
+// belong to one invocation — the claude-reaper helper. Running it in the agent
+// is what the manager pod's two lanes could not survive: the agent runs their
+// invocations concurrently on one execCommandRunner, so the lane that finished
+// first killed the other lane's CLI and took its exit status.
+func killAndReapOwnDescendants() error {
 	deadline := time.Now().Add(claudeDescendantKillGrace)
 	var errs []error
 	for {
@@ -71,15 +78,78 @@ func killAndReapClaudeDescendants() error {
 	}
 }
 
+// reclaimClaudeSession kills and waits on whatever is left of one invocation's
+// session. The agent gives every invocation its own session (Setsid in
+// execCommandRunner.Run) and the session id is the reaper's pid, so this
+// reaches that invocation's processes and nothing else: no sibling lane's CLI,
+// and no status another wait is owed.
+//
+// It is the agent's backstop for the one path where the reaper does not clean
+// up after itself — its WaitDelay kill. A tool that called setsid for itself
+// left this session and is left to the agent's own subreaper adoption, which
+// is why prepareClaudeProcessIsolation still runs in the agent.
+func reclaimClaudeSession(sid int) error {
+	if sid <= 1 {
+		return fmt.Errorf("refusing to reclaim claude session %d", sid)
+	}
+	deadline := time.Now().Add(claudeDescendantKillGrace)
+	var errs []error
+	for {
+		members, err := claudeSessionMembers(sid)
+		if err != nil {
+			return errors.Join(append(errs, err)...)
+		}
+		if len(members) == 0 {
+			return errors.Join(errs...)
+		}
+		for _, pid := range members {
+			if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+				errs = append(errs, fmt.Errorf("kill leftover claude process %d: %w", pid, err))
+			}
+		}
+		// Waited on by pid, never on -1: a sibling lane's invocation is a child
+		// of this same agent, and a wait on any child would take its status.
+		for _, pid := range members {
+			var status syscall.WaitStatus
+			if _, err := syscall.Wait4(pid, &status, syscall.WNOHANG, nil); err != nil &&
+				!errors.Is(err, syscall.ECHILD) {
+				errs = append(errs, fmt.Errorf("reap leftover claude process %d: %w", pid, err))
+			}
+		}
+		if time.Now().After(deadline) {
+			errs = append(errs, errors.New("timed out reclaiming the claude invocation session"))
+			return errors.Join(errs...)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func directClaudeChildren(parentPID int) ([]int, error) {
+	return scanClaudeProcesses(func(stat claudeProcStat) bool { return stat.ppid == parentPID })
+}
+
+func claudeSessionMembers(sid int) ([]int, error) {
+	return scanClaudeProcesses(func(stat claudeProcStat) bool { return stat.session == sid })
+}
+
+// claudeProcStat is the part of /proc/<pid>/stat this file matches on.
+type claudeProcStat struct {
+	pid     int
+	ppid    int
+	pgrp    int
+	session int
+}
+
+func scanClaudeProcesses(match func(claudeProcStat) bool) ([]int, error) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
-		return nil, fmt.Errorf("scan /proc for claude children: %w", err)
+		return nil, fmt.Errorf("scan /proc for claude processes: %w", err)
 	}
-	var children []int
+	self := os.Getpid()
+	var matched []int
 	for _, entry := range entries {
 		pid, err := strconv.Atoi(entry.Name())
-		if err != nil || pid == parentPID {
+		if err != nil || pid == self {
 			continue
 		}
 		data, err := os.ReadFile("/proc/" + entry.Name() + "/stat")
@@ -89,20 +159,36 @@ func directClaudeChildren(parentPID int) ([]int, error) {
 		if err != nil {
 			return nil, err
 		}
-		// comm is parenthesized and may contain spaces or ')', so split only
-		// after its final ')' before reading state and PPID.
-		endComm := bytes.LastIndexByte(data, ')')
-		if endComm < 0 {
-			continue
-		}
-		fields := strings.Fields(string(data[endComm+1:]))
-		if len(fields) < 2 {
-			continue
-		}
-		ppid, err := strconv.Atoi(fields[1])
-		if err == nil && ppid == parentPID {
-			children = append(children, pid)
+		stat, ok := parseClaudeProcStat(pid, data)
+		if ok && match(stat) {
+			matched = append(matched, pid)
 		}
 	}
-	return children, nil
+	return matched, nil
+}
+
+func parseClaudeProcStat(pid int, data []byte) (claudeProcStat, bool) {
+	// comm is parenthesized and may contain spaces or ')', so split only after
+	// its final ')' before reading state, PPID, process group and session.
+	endComm := bytes.LastIndexByte(data, ')')
+	if endComm < 0 {
+		return claudeProcStat{}, false
+	}
+	fields := strings.Fields(string(data[endComm+1:]))
+	if len(fields) < 4 {
+		return claudeProcStat{}, false
+	}
+	ppid, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return claudeProcStat{}, false
+	}
+	pgrp, err := strconv.Atoi(fields[2])
+	if err != nil {
+		return claudeProcStat{}, false
+	}
+	session, err := strconv.Atoi(fields[3])
+	if err != nil {
+		return claudeProcStat{}, false
+	}
+	return claudeProcStat{pid: pid, ppid: ppid, pgrp: pgrp, session: session}, true
 }
