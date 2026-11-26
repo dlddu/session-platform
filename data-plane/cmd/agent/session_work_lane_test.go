@@ -59,7 +59,7 @@ func TestLaneSurfaceSplitsReadsFromWrites(t *testing.T) {
 	monitorTools := laneNames(t, db, monitor)
 
 	writes := []string{"task_put", "task_delete", "turn_append", "turn_patch", "turn_dispatch",
-		taskBookPutTool, monitorPutTool, monitorDeleteTool}
+		taskBookPutTool, monitorPutTool, monitorDeleteTool, taskCancelBackfillTool}
 	for _, name := range writes {
 		if containsString(parentTools, name) {
 			t.Errorf("the parent lane is offered %s; the monitor lane owns writing the records", name)
