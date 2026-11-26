@@ -110,38 +110,51 @@ func (execCommandRunner) Run(ctx context.Context, argv []string, opts runnerOpti
 	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
 		return errors.New("runner needs an executable")
 	}
+	// Kept for the agent itself: a tool that outlives its invocation's reaper
+	// reparents here rather than leaking out of the pod's process tree, and
+	// reclaimClaudeSession below can then wait on it.
 	if err := prepareClaudeProcessIsolation(); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate the agent binary for the claude reaper: %w", err)
+	}
+	// The CLI runs under this invocation's own reaper (claude_reaper_linux.go),
+	// never directly: a manager pod's two lanes run concurrently on this one
+	// runner, and only a per-invocation subreaper can tell one invocation's
+	// detached tools from the other's.
+	reaperArgv := claudeReaperArgv(self, argv)
+	cmd := exec.CommandContext(ctx, reaperArgv[0], reaperArgv[1:]...)
 	cmd.Dir = opts.Dir
 	cmd.Env = opts.Env
 	cmd.Stdin = opts.Stdin
 	cmd.Stdout = opts.Stdout
 	cmd.Stderr = opts.Stderr
-	// A tool may start a background process, so each one-shot invocation gets
-	// its own process group and the whole group is killed, not just the CLI.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Its own session, whose id is the reaper's pid. That id is this
+	// invocation's alone, so the cleanup after Wait reaches this invocation's
+	// leftovers and no sibling lane's running CLI.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.WaitDelay = claudeProcessGroupDrainTimeout
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return os.ErrProcessDone
 		}
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		// SIGTERM to the reaper, not SIGKILL to the group: the reaper has to
+		// outlive the cancel long enough to kill and wait on this
+		// invocation's tools. WaitDelay above is the backstop if it does not,
+		// and reclaimClaudeSession below cleans up after that backstop.
+		err := syscall.Kill(cmd.Process.Pid, syscall.SIGTERM)
 		if errors.Is(err, syscall.ESRCH) {
 			return os.ErrProcessDone
 		}
 		return err
 	}
-	err := cmd.Run()
+	err = cmd.Run()
 	if cmd.Process != nil {
-		if cleanupErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); cleanupErr != nil &&
-			!errors.Is(cleanupErr, syscall.ESRCH) {
-			err = errors.Join(err, fmt.Errorf("clean claude process group: %w", cleanupErr))
+		if cleanupErr := reclaimClaudeSession(cmd.Process.Pid); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
 		}
-	}
-	if cleanupErr := killAndReapClaudeDescendants(); cleanupErr != nil {
-		err = errors.Join(err, cleanupErr)
 	}
 	return err
 }
