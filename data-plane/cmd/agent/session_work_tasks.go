@@ -73,6 +73,17 @@ func readWorkTask(ctx context.Context, tx *sql.Tx, id string) (any, error) {
 	if latest != nil {
 		result["latest_turn"] = *latest
 	}
+	// The title this task had before a one-off took a management prefix off it,
+	// when there was one. Absent for every task whose title was never
+	// decorated, which is most of them — an empty string on every other task
+	// would read as "the title used to be nothing" (session_work_cancel.go).
+	original, decorated, err := originalTitleOf(ctx, tx, id)
+	if err != nil {
+		return nil, err
+	}
+	if decorated {
+		result["original_title"] = original
+	}
 	return result, nil
 }
 

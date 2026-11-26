@@ -337,10 +337,79 @@ preserved verbatim beside it.
 
 `sp_work_tasks` — `id`, `session_id` (null means unassigned), `title`,
 `description`, `completion_criteria`, `status`, `version`, `created_at`,
-`updated_at` (null means never recorded). Status is the ledger's own domain
-unchanged — `planned`, `running`, `blocked`, `review`, `completed`, `unknown`:
-a migration that renamed a status would move work a person had already seen as
-blocked or completed.
+`updated_at` (null means never recorded). Status is the ledger's own domain plus
+one addition — `planned`, `running`, `blocked`, `review`, `completed`,
+`cancelled`, `unknown`. Nothing is renamed, and the addition is additive for the
+same reason a rename is refused: a renamed status would move work a person had
+already seen as blocked or completed, and an additive one leaves every status a
+slot already holds reading as itself.
+
+### Cancelling a task
+
+`cancelled` is a task that was called off and will not be finished. It is its
+own status rather than a flavour of `completed` because the two answer different
+questions — `completed` says the completion criteria were met — and a reader
+that cannot tell them apart counts abandoned work as delivered.
+
+Both are **terminal**: they are where a task stops rather than a step on the way
+there. A reader that groups finished work groups the two together; a reader that
+asks what was delivered asks for `completed` alone. The two groupings are named
+once on each side so they cannot drift apart (`workTerminalStatuses` on the
+slot).
+
+**Cancelling says where a task stopped. It does not rewrite how it got there.**
+A cancelled task keeps every turn it had, including one that is still open — a
+request nobody answered is what actually happened, and closing it would write an
+end nobody gave. It keeps what its turns' dispatch records say, too: an
+operation the parent already handed to another system happened, and calling the
+task off does not unhappen it. So the status carries no cleanup of its own.
+
+#### The backfill, and what counts as evidence
+
+Before this status existed, a parent that called a task off had two places to
+put the fact and neither was the status: its own bookkeeping, which nothing a
+person reads shows, and the title, where a `[취소]` prefix was the only way to
+make it visible. So the fact was recorded twice, in neither place the status
+filter reads, and the task went on counting as delivered.
+
+`task_cancel_backfill({request_id, after_id?, limit?, dry_run?})` writes the
+status onto those tasks. It names no task and holds no task version — it is not
+a parent changing a task it read — and it finds its own candidates from what the
+bookkeeping already says.
+
+**Only a structured, explicit statement counts**: `details.cancelled` as a JSON
+boolean `true`, or `details.cancellation` as a JSON object. The object's presence
+is the whole statement; what is inside it (when, by whom, why) is the parent's
+own and is not read. Everything else is left alone or reported, never
+interpreted:
+
+| In the bookkeeping | What the backfill does |
+| --- | --- |
+| `"cancelled": true` / `"cancellation": {…}` | writes the status |
+| `"cancelled": false` | nothing — an explicit no is a statement too |
+| prose that says it was cancelled | nothing — a sentence is not a flag |
+| a `[취소]` title prefix, with no statement | nothing — see below |
+| `"cancelled": "true"` (not a boolean) | reports it as refused |
+| `"cancelled": false` **and** `"cancellation": {…}` | reports it as refused |
+| details that are not readable JSON | reports it as refused |
+
+The title is deliberately not evidence. A title is written for a person to read,
+and reading one as a machine-readable flag is how a task called
+`[취소] 취소 흐름 점검` gets called off for being *about* cancellation. The
+prefix is management decoration, so a task the backfill does write has the
+prefix taken off its title — and the title it had is kept verbatim in
+`sp_work_task_title_original` and answered by `task_get` as `original_title`,
+because the cleanup happens once and nobody can check a one-off against an
+original it threw away. A title that is nothing but the prefix keeps the title it
+has, reported as `title_kept`: a task has to have a title.
+
+The answer reports `scanned`, every task written with the status it came from
+and the field that stated it, `already_cancelled`, `refused` with reasons, and
+`counted_as_delivered` — how many of the written tasks had been sitting at
+`completed`, which is the number this one-off exists for. `dry_run` reports all
+of that and writes nothing. Rerunning writes nothing new: a task it already
+wrote is simply already cancelled, and the first `original_title` recorded wins
+so a second pass cannot record an already-cleaned title as the original.
 
 `sp_work_turns` — `id`, `task_id`, `session_seq`, `request` (the person's words,
 verbatim), `instruction` (what the parent passed to the session doing the work),
@@ -360,7 +429,8 @@ cannot be an attachment.
 ### API
 
 `task_get`, `task_list`, `task_put`, `task_delete`, `turn_append`, `turn_patch`,
-`turn_list`, `turn_dispatch`, and the two migration tools below. Reads change
+`turn_list`, `turn_dispatch`, the one-off `task_cancel_backfill`
+(§「Cancelling a task」), and the two migration tools below. Reads change
 nothing; `task_get` carries `turns_total` and the latest turn, so a parent sees
 at a glance whether a request is waiting, and `turn_list({open: true})` selects
 the turns that still need it — a request arrived and the turn has no `ended_at`.

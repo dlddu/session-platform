@@ -166,10 +166,17 @@ type WorkRequestStored struct {
 	Replayed bool     `json:"replayed"`
 }
 
-// WorkStatuses is the task status domain, the ledger's own unchanged: a
-// migration that renamed a status would move work a person had already seen as
-// blocked or completed.
-var WorkStatuses = []string{"planned", "running", "blocked", "review", "completed", "unknown"}
+// WorkStatuses is the task status domain: the ledger's own, plus cancelled.
+// Nothing is renamed — a rename would move work a person had already seen as
+// blocked or completed — and the addition is additive for the same reason.
+//
+// cancelled is a task that was called off and will not be finished. It is kept
+// apart from completed because the two answer different questions: completed
+// says the completion criteria were met, and a filter that cannot tell them
+// apart counts abandoned work as delivered. Keep in step with the slot's own
+// domain (data-plane/cmd/agent/session_work.go, workStatuses) — a status the
+// slot writes and this filter refuses would be work nobody out here can select.
+var WorkStatuses = []string{"planned", "running", "blocked", "review", "completed", "cancelled", "unknown"}
 
 // IsWorkStatus reports whether raw is a status the work records use. A filter
 // outside the domain is refused rather than answered with an empty page, which

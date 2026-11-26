@@ -67,7 +67,7 @@ func workToolDefinitions(lane string) []map[string]any {
 					"title":               str(),
 					"description":         map[string]any{"type": "string", "description": "What the task is for and what it requires."},
 					"completion_criteria": map[string]any{"type": "string", "description": "How this task will be known to be done."},
-					"status":              map[string]any{"type": "string", "description": "planned, running, blocked, review, completed or unknown."},
+					"status":              map[string]any{"type": "string", "description": "planned, running, blocked, review, completed, cancelled or unknown. completed means the completion criteria were met; cancelled means the task was called off and will not be finished. Both are terminal, and they are not interchangeable — a reader that cannot tell them apart counts abandoned work as delivered."},
 				}, "required": []string{"session_id", "title", "description", "completion_criteria", "status"}, "additionalProperties": false},
 			}, "required": []string{"id", "request_id", "expected_version", "task"}, "additionalProperties": false},
 		},
@@ -119,13 +119,18 @@ func workToolDefinitions(lane string) []map[string]any {
 
 // workSurfaceTail is everything after the agreed records, in the order a reader
 // of tools/list should meet it: the parent's own bookkeeping beside a task, its
-// monitoring loops, and — for the parent lane of a manager that runs the pair —
-// the two calls it hands work to the monitor with (session_work_lane.go).
+// monitoring loops, the one-off that writes the cancelled status onto tasks
+// whose cancellation only that bookkeeping recorded, and — for the parent lane
+// of a manager that runs the pair — the two calls it hands work to the monitor
+// with (session_work_lane.go). The one-off sits after the records' own calls
+// because it is the only one of them that is not part of running a task: it is
+// read once, run once and then has nothing to do (session_work_cancel.go).
 // Nothing from the transition is here — not the move, not its snapshots, and
 // not the state report, which is not re-offered under another name either
 // (session_work.go, workRemovedTools).
 func workSurfaceTail(lane string) []map[string]any {
 	tail := append(taskBookToolDefinitions(), monitorToolDefinitions()...)
+	tail = append(tail, taskCancelBackfillDefinition())
 	return append(tail, laneHandoverToolDefinitions(lane)...)
 }
 
@@ -175,6 +180,17 @@ func validateWork(name string, a workArgs) error {
 	switch name {
 	case monitorGetTool, monitorListTool, monitorPutTool, monitorDeleteTool:
 		return validateMonitorTool(name, a)
+	case taskCancelBackfillTool:
+		// It names no task, so there is no version for a caller to hold: it finds
+		// its own candidates from what the bookkeeping already says
+		// (session_work_cancel.go).
+		if a.Limit < 0 || a.Limit > workListLimitMax {
+			return bad("invalid pagination")
+		}
+		if a.AfterID != "" && !workID.MatchString(a.AfterID) {
+			return bad("invalid after_id")
+		}
+		return nil
 	}
 	// The reads that take no version: they name no record whose state a caller
 	// could be holding, so there is no counter for them to hold.

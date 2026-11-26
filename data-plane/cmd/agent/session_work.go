@@ -8,7 +8,10 @@
 // token and the outside action it recorded — sits in records of its own beside
 // them, each named for what it is: sp_work_task_book
 // (session_work_parent.go), sp_work_monitor (session_work_monitor.go),
-// sp_work_turn_claim and sp_work_turn_admin.
+// sp_work_turn_claim and sp_work_turn_admin. sp_work_task_title_original is
+// there for the same reason: the title a task had before a one-off took a
+// management prefix off it is a record of that cleanup, not a second title
+// column (session_work_cancel.go).
 //
 // The ledger these records came from is gone, and so is everything that moved
 // it: the migration, the rollback export, the retirement, the snapshot tools
@@ -97,6 +100,11 @@ CREATE TABLE IF NOT EXISTS sp_work_task_book (
 	details TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sp_work_task_origin (task_id TEXT PRIMARY KEY, origin TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sp_work_task_title_original (
+	task_id TEXT PRIMARY KEY,
+	title TEXT NOT NULL,
+	recorded_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sp_work_turn_origin (
 	turn_id INTEGER PRIMARY KEY,
 	origin TEXT NOT NULL,
@@ -196,10 +204,38 @@ const (
 	workSnapshotNameTries = 50
 )
 
-// workStatuses is the task status domain. It is the ledger's own domain
-// unchanged: a migration that renamed a status would move work a person had
-// already seen as blocked or completed.
-var workStatuses = []string{"planned", "running", "blocked", "review", "completed", "unknown"}
+// workStatuses is the task status domain: the ledger's own, plus cancelled.
+// Nothing here is renamed — a rename would move work a person had already seen
+// as blocked or completed — and the one addition is additive for the same
+// reason, so every status a slot already holds still reads as itself.
+//
+// cancelled is a task that was called off and will not be finished. It is its
+// own status rather than a flavour of completed because the two answer
+// different questions: completed says the completion criteria were met, and a
+// reader that cannot tell them apart counts abandoned work as delivered. Before
+// this status existed a parent had to write completed and say "cancelled"
+// somewhere a person could see — in the title, and in its own bookkeeping — so
+// the fact was recorded twice and in neither place the status filter reads.
+//
+// It is terminal in the same sense completed is: it is where a task stops, not
+// a step on the way. It carries no cleanup of its own — see
+// session_work_cancel.go for what cancelling a task deliberately does not do to
+// its turns and the outside actions they recorded.
+var workStatuses = []string{"planned", "running", "blocked", "review", "completed", "cancelled", "unknown"}
+
+// workTerminalStatuses are the statuses a task is finished at, whether or not
+// its criteria were met. Named once so a reader that groups "done" one way
+// cannot drift from one that groups it another.
+var workTerminalStatuses = []string{"completed", "cancelled"}
+
+func isTerminalWorkStatus(s string) bool {
+	for _, candidate := range workTerminalStatuses {
+		if candidate == s {
+			return true
+		}
+	}
+	return false
+}
 
 func isWorkStatus(s string) bool {
 	for _, candidate := range workStatuses {
@@ -347,16 +383,23 @@ var workTools = []string{
 	// became tasks. They used to be rows in the ledger; they are a record of
 	// their own now (session_work_monitor.go).
 	monitorGetTool, monitorListTool, monitorPutTool, monitorDeleteTool,
+	// The one-off that writes the cancelled status onto tasks whose cancellation
+	// the parent had already recorded in its own bookkeeping, back when there was
+	// no status to write it to (session_work_cancel.go).
+	taskCancelBackfillTool,
 }
 
 // workLedgerWrites are the calls that change the work records a person reads —
 // the records the monitor lane owns (AC-N11). They are not refused here but in
 // front of the arguments (session_db_mcp.go), so a parent lane learns that the
 // records are not its to write rather than that its arguments were wrong.
+// The one-off is one of them: it writes a task's status and title, which is
+// exactly what a person reads, so it belongs to the lane that owns those rows
+// even though it runs once (session_work_cancel.go).
 func isWorkLedgerWrite(name string) bool {
 	switch name {
 	case "task_put", "task_delete", "turn_append", "turn_patch", "turn_dispatch",
-		taskBookPutTool, monitorPutTool, monitorDeleteTool:
+		taskBookPutTool, monitorPutTool, monitorDeleteTool, taskCancelBackfillTool:
 		return true
 	}
 	return false
@@ -432,7 +475,7 @@ func isWorkTool(name string) bool {
 func isWorkMutation(name string) bool {
 	switch name {
 	case "task_put", "task_delete", "turn_append", "turn_patch", "turn_dispatch",
-		taskBookPutTool, monitorPutTool, monitorDeleteTool:
+		taskBookPutTool, monitorPutTool, monitorDeleteTool, taskCancelBackfillTool:
 		return true
 	}
 	return false
@@ -662,6 +705,8 @@ func (s *sessionDB) work(ctx context.Context, caller workCaller, name string, a 
 		result, err = putWorkLegacy(ctx, tx, a, now)
 	case monitorGetTool, monitorListTool, monitorPutTool, monitorDeleteTool:
 		result, err = runMonitorTool(ctx, tx, name, a, now)
+	case taskCancelBackfillTool:
+		result, err = backfillCancelledTasks(ctx, tx, a, now)
 	default:
 		return nil, workFail("invalid_argument", "unknown work tool")
 	}
