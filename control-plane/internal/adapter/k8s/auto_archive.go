@@ -16,8 +16,7 @@ const (
 	// AutoArchiveGracePeriodSeconds covers the archive and its upload, which
 	// the agent bounds below it, and the spot interruption's two minutes.
 	AutoArchiveGracePeriodSeconds int64 = 110
-	// AutoArchiveRunPath archives and uploads, on the workload pod's agent.
-	AutoArchiveRunPath = "/auto-archive/run"
+	AutoArchiveRunPath                  = "/auto-archive/run"
 	// AutoArchiveHoldPath keeps a gated session's helper pod relaying until
 	// the workload pod's upload is through.
 	AutoArchiveHoldPath = "/auto-archive/hold"
@@ -26,10 +25,8 @@ const (
 	agentBinaryPath           = "/agent"
 )
 
-// AutoArchiveBase returns the upload URL without its signature for a pod.
 type AutoArchiveBase func(sessionID, pod string) (string, error)
 
-// WithAutoArchive prepares the pods of the given workload types for AC-B5.
 func WithAutoArchive(base AutoArchiveBase, types ...session.WorkloadType) Option {
 	return func(o *ClientOrchestrator) {
 		if base == nil || len(types) == 0 {

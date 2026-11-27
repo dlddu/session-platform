@@ -85,8 +85,6 @@ func freezeAndDelete(t *testing.T, srv *httptest.Server, tenant string, body map
 	return s
 }
 
-// AC-B4 with AC-K2: a deleted session comes back for its own tenant and the
-// operator, and stays invisible to everyone else.
 func TestRecoverSessionRoute(t *testing.T) {
 	srv := newRecoverServers(t, recoverTenants)[0]
 	gone := freezeAndDelete(t, srv, "alpha", map[string]any{"name": "a1"})
@@ -140,7 +138,6 @@ func TestRecoverSessionRouteRechecksTheTypeGrant(t *testing.T) {
 	}
 }
 
-// recover takes the same optional memoryMultiplier as switch.
 func TestRecoverSessionRouteMemoryMultiplier(t *testing.T) {
 	srv := newRecoverServers(t, recoverTenants)[0]
 	gone := freezeAndDelete(t, srv, "alpha", map[string]any{"name": "a1"})

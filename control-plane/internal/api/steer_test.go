@@ -17,7 +17,6 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-// steerServer is the API with a stub agent the test can steer the answer of.
 func steerServer(t *testing.T) (*httptest.Server, *agent.StubClient) {
 	t.Helper()
 	orch := k8s.NewStubOrchestrator("sessions")
@@ -42,8 +41,6 @@ func steer(t *testing.T, url, id string, body map[string]any) (int, session.Stee
 	return resp.StatusCode, out
 }
 
-// AC-J9: a codex session's running turn takes the message, and the answer
-// says applied — 200, with the turn it landed in.
 func TestSteerSession_AppliedReachesThePod(t *testing.T) {
 	srv, stub := steerServer(t)
 	defer srv.Close()

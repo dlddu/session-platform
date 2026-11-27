@@ -1,5 +1,3 @@
-# session-platform — root build orchestration.
-# `make build` produces the control-plane binary with the React SPA embedded.
 
 CP_DIR      := control-plane
 DP_DIR      := data-plane

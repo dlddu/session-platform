@@ -8,8 +8,6 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// AC-E2: the question routes are a claude-code session's own and are scoped
-// like every other session-id route.
 func TestQuestionEndpoints(t *testing.T) {
 	srv := newTenantServer(t)
 	resp, body := tenantCall(t, srv, http.MethodPost, "/api/v1/sessions", "beta", map[string]string{"name": "cc", "workloadType": "claude-code"})

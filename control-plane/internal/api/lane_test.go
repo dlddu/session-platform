@@ -275,7 +275,6 @@ func TestMonitorLaneIsOnlyAManagers(t *testing.T) {
 	}
 }
 
-// readLane reads one lane through the API and returns its cursor and payload.
 func readLane(t *testing.T, srv *httptest.Server, id, lane string, offset int64) (int64, string) {
 	t.Helper()
 	body := map[string]any{"offset": offset}
