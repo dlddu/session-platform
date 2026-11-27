@@ -327,6 +327,16 @@ func newCodexWorkloadFromEnv(workload string, logger *slog.Logger, restoreMode b
 	if cli.schedulerURL, err = schedulerMCPURLFromEnv(os.Getenv); err != nil {
 		return nil, err
 	}
+	// A lane registers the scheduler as itself, for the reason it calls the
+	// database as itself: the address is what says which conversation a round
+	// runs in, so a lane cannot register a schedule that fires in the other
+	// one — and the monitor's watching never surfaces in the person's chat
+	// (AC-P4).
+	if cli.schedulerURL != "" && lane.role != "" {
+		if cli.schedulerURL, err = schedulerLaneMCPURL(cli.schedulerURL, lane.role, lane.incarnation); err != nil {
+			return nil, err
+		}
+	}
 	// codex-manager's effort is only ever the ConfigMap default (AC-J1).
 	if effort != "" && !slices.Contains(codexReasoningEfforts, effort) {
 		return nil, fmt.Errorf("%s must be one of %s, got %q", codexReasoningEffortEnv, strings.Join(codexReasoningEfforts, ", "), effort)

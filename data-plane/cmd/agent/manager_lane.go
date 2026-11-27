@@ -123,6 +123,41 @@ type workCaller struct {
 	incarnation string
 }
 
+// laneMCPPath is the address one lane registers for a server the sidecar
+// serves under prefix: <prefix>/<role>/<incarnation>. The incarnation is this
+// run of the lane, so a restart changes the address the lane calls from and the
+// server can tell the two runs apart.
+func laneMCPPath(prefix, lane, incarnation string) string {
+	return prefix + "/" + lane + "/" + incarnation
+}
+
+// laneCallerFromPath reads such an address back. It reports whether the path is
+// one of this prefix's at all, so a path that is not is left to the routes
+// beside it, and a malformed one under the prefix is refused by name rather
+// than falling through to whatever handler sits behind it.
+//
+// Two of the sidecar's servers are addressed this way — the slot's database
+// (session_db_mcp.go) and the scheduler (scheduler.go) — and they read it with
+// this one function on purpose: the role a caller acts as is the address it
+// arrived on, so two parsers that could disagree about what an address means
+// would be two different answers to "which lane is this".
+func laneCallerFromPath(prefix, path string) (caller workCaller, underPrefix bool, refusal string) {
+	if path != prefix && !strings.HasPrefix(path, prefix+"/") {
+		return workCaller{}, false, ""
+	}
+	parts := strings.Split(strings.TrimPrefix(path, prefix+"/"), "/")
+	if path == prefix || len(parts) != 2 {
+		return workCaller{}, true, "a lane address is " + prefix + "/<role>/<incarnation>"
+	}
+	if !isLaneRole(parts[0]) {
+		return workCaller{}, true, "a manager lane is " + strings.Join(laneRoles, " or ")
+	}
+	if !workID.MatchString(parts[1]) {
+		return workCaller{}, true, "an incarnation is 1..128 letters, digits, _ or -"
+	}
+	return workCaller{lane: parts[0], incarnation: parts[1]}, true, ""
+}
+
 // managerLanePaths is what a lane answers: its conversation and the diagnostics
 // that are about that conversation. Everything else an agent serves —
 // checkpoint, restore, the auth slot's state, the work views the control plane

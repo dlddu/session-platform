@@ -331,9 +331,18 @@ func main() {
 			handler = withSessionDBMCP(proxy, db)
 			logger.Info("session db mcp enabled", "path", sessionDBMCPPath, "raw_sql", rawSQL)
 		}
-		// A codex sidecar also keeps the session's schedules (AC-P1~P3).
+		// A codex sidecar also keeps the session's schedules (AC-P1~P4). The
+		// pair's opt-in is read again here rather than carried from above,
+		// because it is read here for a different question — which
+		// conversations this sidecar has to run a round in (AC-P4) — and a
+		// sidecar whose database is not mounted still keeps schedules.
 		if raw := os.Getenv(schedulerAgentURLEnv); raw != "" {
-			agent, err := newHTTPSchedulerAgent(raw)
+			paired, err := managerPairOptIn()
+			if err != nil {
+				logger.Error("invalid manager lane configuration", "err", err)
+				os.Exit(1)
+			}
+			agent, err := newHTTPSchedulerAgent(raw, paired)
 			if err != nil {
 				logger.Error("invalid scheduler agent URL", "err", err)
 				os.Exit(1)
