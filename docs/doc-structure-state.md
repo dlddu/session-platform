@@ -27,7 +27,7 @@
 - 사용자 여정: **10개** — 전부 가치에 연결됨 (고아 여정 0). `JRN-session-deletion`은 **연결이 부분적**(아래 위험 참고)
 - 여정 단계: **37개** (session-creation 3 · idle-resume 4 · multi-session-switch 4 · concurrent-access 3 ·
   shell-interaction 4 · agent-prompt-loop 5 · manual-freeze 3 · session-deletion 3 · approval-gated-work 4 · repo-access 4)
-- Mockup: **7개** (`mockups/`: index, new-session, workspace, agent-workspace, gated-workspace, restore, repo-access — 마지막 것은 아직 SPA 구현 없음) — 매핑 단일 소스는 `mockups/README.md`
+- Mockup: **7개** (`mockups/`: index, new-session, workspace, agent-workspace, gated-workspace, restore, repo-access — 7개 모두 SPA 구현이 있다) — 매핑 단일 소스는 `mockups/README.md`
 - 여정 mockup 페이지: **9개 / 판정 대상 9개** (`journeys/`: `JRN-session-creation`, `JRN-shell-interaction`, `JRN-idle-resume`, `JRN-manual-freeze`, `JRN-session-deletion`, `JRN-multi-session-switch`, `JRN-agent-prompt-loop`, `JRN-approval-gated-work`, `JRN-repo-access`) — 여정 하나 = 페이지 하나 층위. 화면 단위 mockup 7개와 **다른 지표**이며 매핑은 같은 `mockups/README.md`의 "여정 → 여정 mockup 페이지 매핑" 표. 마크업 규약 `journeys/README.md`, 집행은 CI `docs-journey-mockup`
 - 디자인 시스템: **정의됨 — 정본은 코드** (`web/src/design/tokens.css` 토큰·프리미티브, `web/src/app/shell.css` 컴포넌트·패턴 약 45종, 색인 `web/src/design/README.md`). mockup 7개는 아직 **미연결**
 - 주입형 스킬(`.claude/skills/`): **설치됨** — `ui-with-design-system`, `screen-with-mockup-and-design-system`
@@ -104,10 +104,10 @@
 ## 위험 진단
 
 ### 🔴 가치 측 위험
-- **고아 여정**: 없음 (9개 여정 모두 유효한 가치 참조)
-- **고아 mockup**: 없음 — 인덱스(`mockups/README.md`)로 6개 전부 여정/가치에 매핑됨
+- **고아 여정**: 없음 (10개 여정 모두 유효한 가치 참조)
+- **고아 mockup**: 없음 — 인덱스(`mockups/README.md`)로 7개 전부 여정/가치에 매핑됨
 - **시각화 없는 가치**: 없음
-- **페르소나 미검증**: 여정 9개·단계 33개가 실사용자로 검증된 적 없는 P1 위에 서 있다
+- **페르소나 미검증**: 여정 10개·단계 37개가 실사용자로 검증된 적 없는 P1 위에 서 있다
   (`user-journeys/README.md` 미해결 항목). 이 사슬에서 가장 오래된 미해결 항목이다.
 
 ### 🟠 문서화가 구현보다 뒤처진 영역 (2026-08-30 신규 인지)
@@ -142,7 +142,7 @@
   `Workspace.tsx`의 1:N 대응으로 옮겨갔다. 이 문서의 집계(여정·단계·mockup)는 **변하지 않는다** — 구현 층위다.
 
 ### 🟢 디자인 시스템 측 위험
-- **임의 스타일 mockup**: **6개 전부 유지**(2026-09-03 `gated-workspace` 추가). 정본이 생겼으므로 원인이 "시스템 부재"에서 **"정본 미참조"**로 바뀌었다(복제 규모는 「토큰 복제 원장」이 정본). 마이그레이션은 미수행 — mockup을 정본에 물릴지, 아니면 "mockup은 스케치이므로 복제를 수용"할지 **결정 대기**.
+- **임의 스타일 mockup**: **7개 전부 유지**(2026-10-24 `repo-access` 추가). 정본이 생겼으므로 원인이 "시스템 부재"에서 **"정본 미참조"**로 바뀌었다(복제 규모는 「토큰 복제 원장」이 정본). 마이그레이션은 미수행 — mockup을 정본에 물릴지, 아니면 "mockup은 스케치이므로 복제를 수용"할지 **결정 대기**.
 - **✅ 해결됨 (2026-08-08 (4)) — 디자인 시스템 부재**: `web/src/design/`를 정본으로 확정.
 - **✅ 해결됨 (2026-08-08 (4)) — 주입형 스킬 미설치**: `.claude/skills/` 2종 설치 완료.
 - **⚠️ SPA 자체는 검증 대상 밖**: `web/src/screens/`의 실제 화면이 정본을 얼마나 지키는지는 아직 확인하지 않았다.
@@ -174,7 +174,7 @@
 | 우선순위 | 항목 | 권장 대응 |
 |---------|------|-----------|
 | 🔴 | 페르소나 미검증 | 실사용자 1~2명 인터뷰로 P1 확정 또는 폐기 (product-doc-engineer) |
-| 🟠 | 세션 삭제 mockup 3단계 부재 (화면 단위 층위) | 여정 층위는 `journeys/JRN-session-deletion/`으로 해소됨(2026-09-03 (11)). `mockups/` 화면 단위 6종에는 여전히 없다 — mockup 추가 또는 "여정 페이지로 갈음" 결정 |
+| 🟠 | 세션 삭제 mockup 3단계 부재 (화면 단위 층위) | 여정 층위는 `journeys/JRN-session-deletion/`으로 해소됨(2026-09-03 (11)). `mockups/` 화면 단위 7종에는 여전히 없다 — mockup 추가 또는 "여정 페이지로 갈음" 결정 |
 | 🟠 | 세션 삭제·수동 동결의 PRD AC 부재 | 전용 AC 신설 여부 결정 (product-doc-engineer) |
 | 🟡 | 누락 단계 `STP-reaccess`·`STP-switch-back`·`STP-freeze-decision` | mockup 추가 또는 의도적 제외 결정 |
 | 🟠 | `STP-approval-decide`의 소유권 (2026-09-03) | 승인 결정 화면이 레포 밖 — ⚪(비대상) 수용 또는 세션 쪽 요약 화면 신설 결정 |
@@ -189,6 +189,7 @@
 
 | 시점 | 변경 내용 | 이전 상태 | 이후 상태 |
 |------|-----------|-----------|-----------|
+| 2026-11-25 | **집계·상태 정정 — `doc-structure-state.md`의 낡은 서술을 실물에 맞췄다.** 여정·단계·mockup·여정 페이지 수는 그대로(여정 10 · 단계 37 · mockup 7 · 페이지 9/9)지만, 위험 진단과 요약의 몇 행이 옛 판의 수치를 그대로 들고 있었다 — 고아 여정(9개)·페르소나 미검증(여정 9개·단계 33개)·고아 mockup(6개)·임의 스타일 mockup(6개)·`mockups/` 화면 단위 6종. 또 요약의 mockup 목록은 `repo-access` 를 「아직 SPA 구현 없음」으로 적었는데 `web/src/screens/RepoAccess.tsx` 가 있고 `mockups/README.md` 의 「구현이 없는 mockup」 표가 빌었다 — 그 표는 비어 있다. 수치는 여정 10 · 단계 37 · mockup 7 · 페이지 9/9 가 맞다 | 집계 행 6곳의 낡은 서술(mockup 6개·여정 9개·단계 33개·repo-access 미구현) | 여정 10 · 단계 37 · mockup 7 · 페이지 9/9 (집계 수치 자체는 변하지 않았다) |
 | 2026-11-05 | **`approval-gated` 타입 제거의 하류 반영 — 승인 게이트는 타입의 능력**. 상류 PRD가 `approval-gate.md`(AC-F1 폐기, AC-F2~F6 유지, 적용 타입 `minimax-code`)로 바뀐 것을 하류에 맞췄다. 여정 `JRN-approval-gated-work`는 식별자를 유지한 채 「게이트가 걸린 세션」의 여정 v0.2로 재작성(달성 가치 V8 → V1 — 타입 선택은 `JRN-agent-prompt-loop`의 `STP-workload-choice`가 계속 담는다), `JRN-agent-prompt-loop`·`JRN-repo-access`는 갈래 서술만 고쳤다. mockup은 `new-session.html`의 `approval-gated` 카드를 걷고 `minimax-code` 카드를 게이트 타입으로, `index.html`·`gated-workspace.html`·`repo-access.html`의 예시 세션을 `minimax-code`로 바꿨다. 여정 페이지 3종(`JRN-approval-gated-work`·`JRN-agent-prompt-loop`·`JRN-session-creation`)의 타입 선택지도 같다. 구현(SPA)은 같은 변경에서 `GET /config`의 `approvalGate`를 따르게 됐다. | 여정 10 · 단계 37 · mockup 7 · 페이지 9/9 | 같음(수치 변화 없음) |
 | 2026-11-01 | **CRIU 퇴역의 하류 반영 (AC-D4 개정)**. 상류에서 모든 타입의 동결이 파일시스템 아카이브로 통일되고 쉘의 보존 대상이 「홈 디렉터리 파일 + 출력 이력, 복원은 새 쉘」로 좁아져, 그 계약을 말하던 하류 표면을 맞췄다: 여정 문서 `JRN-shell-interaction`(v0.3 — `STP-shell-state-carry`·분기표·지표)·`JRN-idle-resume`(v0.3 — 완료 기준·`STP-restore-resume`)·`JRN-multi-session-switch`(v0.3 — 완료 기준 단서)와 README 열린 결정(바쁜 쉘 동결은 이제 작업 중단을 뜻함), 여정 mockup 페이지 넷(`JRN-idle-resume`·`JRN-manual-freeze`·`JRN-multi-session-switch`·`JRN-shell-interaction`의 보존/비보존 카피), 화면 mockup 여섯의 CRIU·「exactly where it froze」 카피(`mockups/README.md` 2026-11-01 항목), SPA `Restore.tsx`·`SessionCard.tsx`. **단계 식별자·분기 행 수·여정·단계·mockup 수와 커버리지 합계는 변하지 않는다** — 바뀐 것은 무엇이 보존되는가의 서술뿐이다. 가치도 변하지 않는다. | 여정 10 · 단계 37 · mockup 7 · 여정 페이지 9/9 | 동일 (내용만 갱신) |
 | 2026-11-05 | **`codex` 수동 플러그인 새로고침(AC-J7)의 하류 반영**. 새 여정·단계 없이 `JRN-agent-prompt-loop`(v0.4)의 `STP-conversation-carry`에 분기 1행 — 오래 쓰는 Codex 세션에서 플랫폼 스킬이 바뀌면 `Refresh plugin skills`로 대화를 유지한 채 받는다 — 을 더했다. 여정 페이지 `journeys/JRN-agent-prompt-loop/`에 같은 분기와 안내 배너(`info`)를, 화면 구현 `Workspace`의 Actions 패널에 `codex` 세션 전용 버튼을 두었다(기존 `.btn-ghost`). **가치는 변하지 않았다** — V3 상속. | 여정 10, 단계 37, mockup 7, 여정 페이지 9/9 | 같음 (분기 +1) |
