@@ -10,12 +10,6 @@ import (
 	"time"
 )
 
-// AC-J7: a long-lived codex session takes a plugin update without losing its
-// conversation. Nothing refreshes on its own; the operator asks, between turns.
-// The sidecar clones the marketplace again and the agent syncs the managed
-// skills from it. The platform does not write into the conversation: the
-// refresh leaves a transcript line for the user, and an in-turn refresh_skills
-// call names the changes in its own tool result.
 const (
 	// pluginRefreshPath is the agent route the control plane calls.
 	pluginRefreshPath = "/plugins/refresh"
@@ -30,8 +24,6 @@ const (
 	codexRevisionDisplayChars = 12
 )
 
-// pluginRefresh is what a refresh did, as the agent and the control plane
-// report it.
 type pluginRefresh struct {
 	State    string   `json:"state"`
 	Revision string   `json:"revision,omitempty"`
@@ -40,8 +32,6 @@ type pluginRefresh struct {
 	Removed  []string `json:"removed"`
 }
 
-// pluginRefresher is an agentCLI whose platform plugins can be fetched again
-// in a running session.
 type pluginRefresher interface {
 	refreshPlugins(homeDir string) (pluginRefresh, error)
 }
