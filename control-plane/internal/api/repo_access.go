@@ -12,7 +12,6 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// RepoAccessStore is the subset of *repoaccess.Store the handlers use.
 type RepoAccessStore interface {
 	List(ctx context.Context) ([]repoaccess.Entry, error)
 	Allowed(ctx context.Context, repo string) (bool, error)

@@ -34,8 +34,6 @@ type Verifier struct {
 	helperRole     string
 }
 
-// New builds a verifier for tokens of serviceAccount in namespace, minted for
-// audience, whose bound pod carries sessionLabel and roleLabel=helperRole.
 func New(client kubernetes.Interface, namespace, serviceAccount, audience, sessionLabel, roleLabel, helperRole string) *Verifier {
 	return &Verifier{
 		client: client, namespace: namespace, serviceAccount: serviceAccount, audience: audience,

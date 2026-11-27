@@ -23,10 +23,8 @@ import (
 )
 
 const (
-	// monitorLanePathPrefix is where the monitor lane's conversation is served.
 	monitorLanePathPrefix = "/monitor"
-	// agentLanesPath is what a pod answers about its own lanes.
-	agentLanesPath = "/lanes"
+	agentLanesPath        = "/lanes"
 )
 
 // lanePathPrefix is where one lane's conversation is served. The parent lane is
@@ -42,7 +40,6 @@ func lanePathPrefix(lane session.Lane) (string, error) {
 	return "", fmt.Errorf("%w: %q is not a lane of a manager pod", session.ErrInvalidInput, lane)
 }
 
-// ReadLane reads one lane's output after offset.
 func (c *HTTPClient) ReadLane(ctx context.Context, pod string, lane session.Lane, offset int64) (string, int64, error) {
 	prefix, err := lanePathPrefix(lane)
 	if err != nil {
@@ -61,7 +58,6 @@ func (c *HTTPClient) WriteLane(ctx context.Context, pod string, lane session.Lan
 	return c.write(ctx, pod, prefix, payload, nil)
 }
 
-// StreamLane opens one lane's live output.
 func (c *HTTPClient) StreamLane(ctx context.Context, pod string, lane session.Lane, offset int64) (io.ReadCloser, error) {
 	prefix, err := lanePathPrefix(lane)
 	if err != nil {

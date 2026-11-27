@@ -16,14 +16,10 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// AutoArchiveURLLifetime is how long a signed automatic-archive upload URL
-// stays valid (AC-B5).
 const AutoArchiveURLLifetime = MinSigningLifetime
 
 var podNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
-// writerMetadataKey is the object metadata naming the archive's writer
-// (session.SnapshotWriter, session.PodWriter); S3 sends it as x-amz-meta-writer.
 const writerMetadataKey = "writer"
 
 func writerMetadata(writer string) map[string]string {
@@ -135,7 +131,6 @@ func (s *S3) signAutoArchive(ctx context.Context, sessionID, pod string) (*v4.Pr
 	return req, nil
 }
 
-// URLBase strips the query and fragment from raw.
 func URLBase(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -145,8 +140,6 @@ func URLBase(raw string) (string, error) {
 	return u.String(), nil
 }
 
-// ArchiveWriter reports who last wrote the object at ref, and whether there
-// is an object at all.
 func (s *S3) ArchiveWriter(ctx context.Context, ref string) (string, bool, error) {
 	bucket, key, err := parseRef(ref)
 	if err != nil {

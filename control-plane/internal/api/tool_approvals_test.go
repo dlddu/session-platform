@@ -8,9 +8,6 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// AC-E2 「턴 중 도구 승인」: the tool approval routes are a claude-code
-// session's own, are scoped like every other session-id route, and refuse a
-// decision that does not name the call it was taken on.
 func TestToolApprovalEndpoints(t *testing.T) {
 	srv := newTenantServer(t)
 	resp, body := tenantCall(t, srv, http.MethodPost, "/api/v1/sessions", "beta", map[string]string{"name": "cc", "workloadType": "claude-code"})

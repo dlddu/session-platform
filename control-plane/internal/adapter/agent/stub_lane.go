@@ -96,7 +96,6 @@ func (c *StubClient) StreamLane(ctx context.Context, pod string, lane session.La
 	return c.streamBytes(buf, offset)
 }
 
-// Lanes answers which conversations this stub's pod runs.
 func (c *StubClient) Lanes(_ context.Context, pod string) (session.LaneInventory, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

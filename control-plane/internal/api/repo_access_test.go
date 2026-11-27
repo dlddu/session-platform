@@ -24,7 +24,6 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// helpers maps bearer tokens to the session whose helper holds them.
 type helpers map[string]string
 
 func (h helpers) SessionID(r *http.Request) (string, error) {
