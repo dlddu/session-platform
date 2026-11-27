@@ -85,6 +85,16 @@
   }
   .slist .nm{font-weight:600}
   .slist .when{color:var(--text-faint);font-size:12px}
+  /* tenant filter + tenant tag (AC-K2 · AC-K4) — 구현 Sessions.tsx·SessionCard.tsx 와 같은 구조 */
+  .tenant-filter{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 16px}
+  .tenant-filter .lab{margin:0}
+  .tenant-filter button{font:inherit;font-size:12px;color:var(--text-dim);background:var(--surface-2);
+    border:1px solid var(--line);border-radius:var(--r-sm);padding:5px 10px;cursor:pointer}
+  .tenant-filter button.sel{color:var(--text);border-color:var(--line-2);background:var(--surface-3)}
+  .tenant-tag{font-size:11.5px;color:var(--text-dim);border:1px solid var(--line-2);
+    border-radius:5px;padding:1px 6px;white-space:nowrap}
+  .empty{padding:18px;text-align:center;color:var(--text-faint);font-size:13px;
+    border:1px dashed var(--line-2);border-radius:var(--r-sm);margin-bottom:16px}
   .slist li.gone{opacity:.35;text-decoration:line-through}
 
   .kv{display:grid;grid-template-columns:120px 1fr;gap:4px 14px;font-size:12.5px;margin:14px 0 0}
@@ -144,10 +154,19 @@
         </select>
       </label>
 
+      <div class="tenant-filter" role="group" aria-label="테넌트로 좁히기">
+        <span class="lab">Tenant</span>
+        <button type="button" class="sel" aria-pressed="true" data-tenant-filter="all">All</button>
+        <button type="button" aria-pressed="false" data-tenant-filter="pocket-aide">pocket-aide</button>
+        <button type="button" aria-pressed="false" data-tenant-filter="ops-bot">ops-bot</button>
+        <button type="button" aria-pressed="false" data-tenant-filter="none">No tenant</button>
+      </div>
+
       <ul class="slist" id="list">
-        <li data-session-state="snapshot">
+        <li data-session-state="snapshot" data-tenant="pocket-aide">
           <span class="nm mono">spike-tokenizer</span>
           <span class="pill snap">snapshot</span>
+          <span class="tenant-tag" title="tenant=pocket-aide">pocket-aide</span>
           <span class="when">9일 전 활동 · 실험용, 결론 남김</span>
           <span class="spacer"></span>
           <button class="btn small" id="btn-pick" data-advance-to="STP-delete-confirm">지우기</button>
@@ -161,12 +180,15 @@
                   data-branch-row="6"
                   data-branch-target="STP-delete-confirm">지우기</button>
         </li>
-        <li data-session-state="active">
+        <li data-session-state="active" data-tenant="ops-bot">
           <span class="nm mono">refactor-billing</span>
           <span class="pill on">active</span>
+          <span class="tenant-tag" title="tenant=ops-bot">ops-bot</span>
           <span class="when">방금 활동 · 살아 있어야 하는 세션</span>
         </li>
       </ul>
+
+      <p class="empty" data-state="empty" data-tenant-empty id="list-empty" hidden>이 테넌트에 해당하는 세션이 없습니다 — 다른 테넌트를 고르거나 All 로 돌아가면 다시 보입니다.</p>
 
       <p class="state-note" data-state="result" data-state-note hidden></p>
 
@@ -259,10 +281,19 @@
         pod와 점유 자원이 회수되고 세션 기록이 제거되었습니다.</span>
       </div>
 
-      <ul class="slist">
-        <li class="gone" id="settled-gone">
+      <div class="tenant-filter" role="group" aria-label="테넌트로 좁히기">
+        <span class="lab">Tenant</span>
+        <button type="button" class="sel" aria-pressed="true" data-tenant-filter="all">All</button>
+        <button type="button" aria-pressed="false" data-tenant-filter="pocket-aide">pocket-aide</button>
+        <button type="button" aria-pressed="false" data-tenant-filter="ops-bot">ops-bot</button>
+        <button type="button" aria-pressed="false" data-tenant-filter="none">No tenant</button>
+      </div>
+
+      <ul class="slist" id="settled-list">
+        <li class="gone" id="settled-gone" data-tenant="pocket-aide">
           <span class="nm mono" id="settled-gone-name">spike-tokenizer</span>
           <span class="pill">없음</span>
+          <span class="tenant-tag" title="tenant=pocket-aide">pocket-aide</span>
           <span class="when">삭제됨 — 이후 접근하면 없음(404)으로 응답합니다</span>
         </li>
         <li>
@@ -271,6 +302,8 @@
           <span class="when">방금 활동</span>
         </li>
       </ul>
+
+      <p class="empty" data-state="empty" data-tenant-empty id="settled-empty" hidden>이 테넌트에 해당하는 세션이 없습니다 — 다른 테넌트를 고르거나 All 로 돌아가면 다시 보입니다.</p>
 
       <dl class="kv">
         <dt>정리된 것</dt><dd>세션 기록 · 워크로드 파드 · 점유 CPU·메모리<span id="settled-snap" hidden> · 저장된 스냅샷</span></dd>
@@ -347,14 +380,59 @@
 
   /* ---------- STP-delete-intent ---------- */
   var filter = $('list-filter');
+  var tenant = 'all';                       // 테넌트 필터 (AC-K2 · AC-K4)
+  var tenantBtns = Array.prototype.slice.call(document.querySelectorAll('[data-tenant-filter]'));
+
+  function tenantOk(li) {
+    if (tenant === 'all') return true;
+    if (tenant === 'none') return !li.getAttribute('data-tenant');
+    return li.getAttribute('data-tenant') === tenant;
+  }
+
+  function applyListFilter() {
+    var want = filter.value;
+    var shown = 0;
+    Array.prototype.forEach.call($('list').children, function (li) {
+      var ok = tenantOk(li) && (want === 'all' || li.getAttribute('data-state') === want);
+      li.hidden = !ok;
+      if (ok) shown += 1;
+    });
+    $('list-empty').hidden = shown !== 0;
+  }
+
+  function applySettledFilter() {
+    var shown = 0;
+    Array.prototype.forEach.call($('settled-list').children, function (li) {
+      var ok = tenantOk(li);
+      li.hidden = !ok;
+      if (ok) shown += 1;
+    });
+    $('settled-empty').hidden = shown !== 0;
+  }
+
+  function applyTenantFilter() {
+    tenantBtns.forEach(function (b) {
+      var on = b.getAttribute('data-tenant-filter') === tenant;
+      b.classList.toggle('sel', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    applyListFilter();
+    applySettledFilter();
+  }
+
   filter.addEventListener('change', function () {
     var want = filter.value;
-    Array.prototype.forEach.call($('list').children, function (li) {
-      li.hidden = want !== 'all' && li.getAttribute('data-state') !== want;
-    });
+    applyListFilter();
     noteIn(filter, want === 'all'
       ? '전체 세션을 봅니다.'
       : want + ' 상태의 세션만 봅니다 — 정리 대상은 대개 오래 접혀 있던 쪽입니다.');
+  });
+
+  tenantBtns.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      tenant = btn.getAttribute('data-tenant-filter');
+      applyTenantFilter();
+    });
   });
 
   $('btn-pick-snap').addEventListener('click', function () {

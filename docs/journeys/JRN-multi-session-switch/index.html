@@ -86,6 +86,14 @@
   }
   .slist .nm{font-weight:600}
   .slist .when{color:var(--text-faint);font-size:12px}
+  /* tenant filter + tenant tag (AC-K2 · AC-K4) — 구현 Sessions.tsx·SessionCard.tsx 와 같은 구조 */
+  .tenant-filter{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 16px}
+  .tenant-filter .lab{margin:0}
+  .tenant-filter button{font:inherit;font-size:12px;color:var(--text-dim);background:var(--surface-2);
+    border:1px solid var(--line);border-radius:var(--r-sm);padding:5px 10px;cursor:pointer}
+  .tenant-filter button.sel{color:var(--text);border-color:var(--line-2);background:var(--surface-3)}
+  .tenant-tag{font-size:11.5px;color:var(--text-dim);border:1px solid var(--line-2);
+    border-radius:5px;padding:1px 6px;white-space:nowrap}
   .empty{padding:18px;text-align:center;color:var(--text-faint);font-size:13px;
     border:1px dashed var(--line-2);border-radius:var(--r-sm);margin-bottom:16px}
 
@@ -168,11 +176,20 @@
         </label>
       </div>
 
+      <div class="tenant-filter" role="group" aria-label="테넌트로 좁히기">
+        <span class="lab">Tenant</span>
+        <button type="button" class="sel" aria-pressed="true" data-tenant-filter="all">All</button>
+        <button type="button" aria-pressed="false" data-tenant-filter="pocket-aide">pocket-aide</button>
+        <button type="button" aria-pressed="false" data-tenant-filter="ops-bot">ops-bot</button>
+        <button type="button" aria-pressed="false" data-tenant-filter="none">No tenant</button>
+      </div>
+
       <ul class="slist" id="session-list">
-        <li data-session-state="active" data-name="refactor-billing">
+        <li data-session-state="active" data-name="refactor-billing" data-tenant="pocket-aide">
           <span class="nm mono">refactor-billing</span>
           <span class="pill on">active</span>
           <span class="pill mono">shell</span>
+          <span class="tenant-tag" title="tenant=pocket-aide">pocket-aide</span>
           <span class="when">2분 전 활동 · 빌드 실행 중</span>
           <span class="spacer"></span>
           <button class="btn small primary" id="btn-open-a" data-advance-to="STP-switch-away">이어서 작업하기</button>
@@ -183,10 +200,11 @@
           <span class="pill mono">claude-code</span>
           <span class="when">3시간 전 접힘 · 다시 열 수 있음</span>
         </li>
-        <li data-session-state="active" data-name="docs-portal">
+        <li data-session-state="active" data-name="docs-portal" data-tenant="ops-bot">
           <span class="nm mono">docs-portal</span>
           <span class="pill on">active</span>
           <span class="pill mono">shell</span>
+          <span class="tenant-tag" title="tenant=ops-bot">ops-bot</span>
           <span class="when">어제 활동</span>
         </li>
       </ul>
@@ -416,13 +434,21 @@ $ </div>
   var fState = $('filter-state');
   var fName = $('filter-name');
   var rows = Array.prototype.slice.call($('session-list').querySelectorAll('li'));
+  var tenant = 'all';                       // 테넌트 필터 (AC-K2 · AC-K4)
+
+  function tenantOk(li) {
+    if (tenant === 'all') return true;
+    if (tenant === 'none') return !li.getAttribute('data-tenant');
+    return li.getAttribute('data-tenant') === tenant;
+  }
 
   function applyFilter() {
     var st = fState.value;
     var q = fName.value.trim().toLowerCase();
     var shown = 0;
     rows.forEach(function (li) {
-      var ok = (st === 'all' || li.getAttribute('data-state') === st) &&
+      var ok = tenantOk(li) &&
+               (st === 'all' || li.getAttribute('data-state') === st) &&
                (!q || li.getAttribute('data-name').indexOf(q) >= 0);
       li.hidden = !ok;
       if (ok) shown += 1;
@@ -431,6 +457,19 @@ $ </div>
   }
   fState.addEventListener('change', applyFilter);
   fName.addEventListener('input', applyFilter);
+
+  var tenantBtns = Array.prototype.slice.call(document.querySelectorAll('[data-tenant-filter]'));
+  tenantBtns.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      tenant = btn.getAttribute('data-tenant-filter');
+      tenantBtns.forEach(function (b) {
+        var on = b === btn;
+        b.classList.toggle('sel', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+      applyFilter();
+    });
+  });
 
   /* ---------- STP-switch-away ---------- */
   var frozenTarget = false;
