@@ -13,42 +13,142 @@ import (
 	"time"
 )
 
+// fakeSchedulerAgent is this pod's conversations in memory. One entry per
+// lane, so a test can hold the person's chat busy while the monitor is idle,
+// and each lane issues receipts for what it queues the way a real one does
+// (turn_ticket.go).
 type fakeSchedulerAgent struct {
-	mu       sync.Mutex
-	state    agentQueueState
-	writes   []string
+	mu      sync.Mutex
+	lanes   map[string]*fakeSchedulerLane
+	monitor bool
+}
+
+// fakeSchedulerLane is one conversation: its queue state, what was written to
+// it and the receipts it has issued.
+type fakeSchedulerLane struct {
+	state  agentQueueState
+	writes []string
+	issued []*fakeSchedulerTicket
+	// writeErr is this lane refusing what it is given, as a lane does when its
+	// queue is full or it is checkpointing. It is per lane: one conversation
+	// refusing a round says nothing about the other.
 	writeErr error
+	// noTicket is a lane too old to issue receipts, whose rounds are settled
+	// from the queue state alone.
+	noTicket bool
 }
 
-func (f *fakeSchedulerAgent) queueState(context.Context) (agentQueueState, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.state, nil
-}
+type fakeSchedulerTicket struct{ id, epoch, state string }
 
-func (f *fakeSchedulerAgent) write(_ context.Context, prompt string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.writeErr != nil {
-		return f.writeErr
+func newFakeSchedulerAgent(lanes ...string) *fakeSchedulerAgent {
+	f := &fakeSchedulerAgent{lanes: map[string]*fakeSchedulerLane{}}
+	for _, lane := range lanes {
+		f.at(lane)
+		if lane == laneMonitor {
+			f.monitor = true
+		}
 	}
-	f.writes = append(f.writes, prompt)
-	f.state.Idle = false
-	return nil
+	return f
 }
 
-// finishTurn marks the queued run done, as the agent would after its turn.
-func (f *fakeSchedulerAgent) finishTurn() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.state.Idle = true
-	f.state.Finished++
+// at is one lane's record, created on demand so a test names only the lanes it
+// uses.
+func (f *fakeSchedulerAgent) at(lane string) *fakeSchedulerLane {
+	if l, ok := f.lanes[lane]; ok {
+		return l
+	}
+	l := &fakeSchedulerLane{state: agentQueueState{Idle: true, Epoch: "e1"}}
+	f.lanes[lane] = l
+	return l
 }
 
-func (f *fakeSchedulerAgent) writeCount() int {
+func (f *fakeSchedulerAgent) reaches(lane string) bool {
+	switch lane {
+	case "", laneParent:
+		return true
+	case laneMonitor:
+		return f.monitor
+	default:
+		return false
+	}
+}
+
+func (f *fakeSchedulerAgent) queueState(_ context.Context, lane string) (agentQueueState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return len(f.writes)
+	return f.at(lane).state, nil
+}
+
+func (f *fakeSchedulerAgent) write(_ context.Context, lane, prompt string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	l := f.at(lane)
+	if l.writeErr != nil {
+		return "", l.writeErr
+	}
+	l.writes = append(l.writes, prompt)
+	l.state.Idle = false
+	if l.noTicket {
+		return "", nil
+	}
+	issued := &fakeSchedulerTicket{
+		id:    fmt.Sprintf("%s-%d", l.state.Epoch, len(l.issued)+1),
+		epoch: l.state.Epoch, state: turnTicketQueued,
+	}
+	l.issued = append(l.issued, issued)
+	return issued.id, nil
+}
+
+func (f *fakeSchedulerAgent) turnState(_ context.Context, lane, ticket string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	l := f.at(lane)
+	for _, issued := range l.issued {
+		if issued.id != ticket {
+			continue
+		}
+		if issued.epoch != l.state.Epoch {
+			return turnTicketUnknownRun, nil
+		}
+		return issued.state, nil
+	}
+	return turnTicketAbsent, nil
+}
+
+// finishTurn ends the turn one lane was given, as that lane would: idle again,
+// one more turn finished, and that round's receipt done.
+func (f *fakeSchedulerAgent) finishTurn(lane string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	l := f.at(lane)
+	l.state.Idle = true
+	l.state.Finished++
+	for i := len(l.issued) - 1; i >= 0; i-- {
+		if l.issued[i].epoch == l.state.Epoch {
+			l.issued[i].state = turnTicketDone
+			break
+		}
+	}
+}
+
+// restart is one lane coming back as a new run: a new epoch, an empty queue,
+// and receipts that no longer name a turn of the run it is in.
+func (f *fakeSchedulerAgent) restart(lane, epoch string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.at(lane).state = agentQueueState{Idle: true, Epoch: epoch}
+}
+
+func (f *fakeSchedulerAgent) writeCount(lane string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.at(lane).writes)
+}
+
+func (f *fakeSchedulerAgent) wrote(lane string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.at(lane).writes...)
 }
 
 type testClock struct{ t time.Time }
@@ -59,7 +159,7 @@ func (c *testClock) set(t time.Time)         { c.t = t }
 
 func newTestScheduler(t *testing.T) (*scheduler, *fakeSchedulerAgent, *testClock) {
 	t.Helper()
-	agent := &fakeSchedulerAgent{state: agentQueueState{Idle: true, Epoch: "e1"}}
+	agent := newFakeSchedulerAgent("")
 	clock := &testClock{t: time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)}
 	s := newScheduler(agent, nil)
 	s.now = clock.now
@@ -95,75 +195,93 @@ func TestSchedulerToolLimits(t *testing.T) {
 	s, _, _ := newTestScheduler(t)
 	refused := []func() error{
 		func() error {
-			_, err := s.scheduleOnce(scheduleOnceArgs{Prompt: "x", Delay: "in half an hour"})
-			return err
-		},
-		func() error { _, err := s.scheduleOnce(scheduleOnceArgs{Prompt: "x", Delay: "PT30S"}); return err },
-		func() error { _, err := s.scheduleOnce(scheduleOnceArgs{Prompt: "x", Delay: "P8D"}); return err },
-		func() error {
-			_, err := s.scheduleOnce(scheduleOnceArgs{Prompt: "x", At: "2026-11-09T09:00:00"})
+			_, err := s.scheduleOnce(workCaller{}, scheduleOnceArgs{Prompt: "x", Delay: "in half an hour"})
 			return err
 		},
 		func() error {
-			_, err := s.scheduleOnce(scheduleOnceArgs{Prompt: "x", Delay: "PT5M", At: "2026-11-09T09:00:00Z"})
+			_, err := s.scheduleOnce(workCaller{}, scheduleOnceArgs{Prompt: "x", Delay: "PT30S"})
 			return err
 		},
-		func() error { _, err := s.scheduleOnce(scheduleOnceArgs{Prompt: "  ", Delay: "PT5M"}); return err },
 		func() error {
-			_, err := s.scheduleOnce(scheduleOnceArgs{Prompt: strings.Repeat("a", schedulerMaxPromptBytes+1), Delay: "PT5M"})
+			_, err := s.scheduleOnce(workCaller{}, scheduleOnceArgs{Prompt: "x", Delay: "P8D"})
 			return err
 		},
-		func() error { _, err := s.loopCreate(loopCreateArgs{Prompt: "x", Interval: "PT30S"}); return err },
-		func() error { _, err := s.loopCreate(loopCreateArgs{Prompt: "x", Interval: "PT25H"}); return err },
 		func() error {
-			_, err := s.loopCreate(loopCreateArgs{Prompt: "x", Interval: "PT5M", FallbackInterval: "PT5M"})
+			_, err := s.scheduleOnce(workCaller{}, scheduleOnceArgs{Prompt: "x", At: "2026-11-09T09:00:00"})
 			return err
 		},
-		func() error { _, err := s.loopCreate(loopCreateArgs{Prompt: "x", ExpiresIn: "P8D"}); return err },
+		func() error {
+			_, err := s.scheduleOnce(workCaller{}, scheduleOnceArgs{Prompt: "x", Delay: "PT5M", At: "2026-11-09T09:00:00Z"})
+			return err
+		},
+		func() error {
+			_, err := s.scheduleOnce(workCaller{}, scheduleOnceArgs{Prompt: "  ", Delay: "PT5M"})
+			return err
+		},
+		func() error {
+			_, err := s.scheduleOnce(workCaller{}, scheduleOnceArgs{Prompt: strings.Repeat("a", schedulerMaxPromptBytes+1), Delay: "PT5M"})
+			return err
+		},
+		func() error {
+			_, err := s.loopCreate(workCaller{}, loopCreateArgs{Prompt: "x", Interval: "PT30S"})
+			return err
+		},
+		func() error {
+			_, err := s.loopCreate(workCaller{}, loopCreateArgs{Prompt: "x", Interval: "PT25H"})
+			return err
+		},
+		func() error {
+			_, err := s.loopCreate(workCaller{}, loopCreateArgs{Prompt: "x", Interval: "PT5M", FallbackInterval: "PT5M"})
+			return err
+		},
+		func() error {
+			_, err := s.loopCreate(workCaller{}, loopCreateArgs{Prompt: "x", ExpiresIn: "P8D"})
+			return err
+		},
 	}
 	for i, call := range refused {
 		if err := call(); err == nil {
 			t.Errorf("call %d accepted", i)
 		}
 	}
-	if len(s.list()) != 0 {
-		t.Fatalf("refused calls left schedules: %v", s.list())
+	if len(s.list(workCaller{})) != 0 {
+		t.Fatalf("refused calls left schedules: %v", s.list(workCaller{}))
 	}
 
-	view, err := s.scheduleOnce(scheduleOnceArgs{Prompt: "check the PR", At: "2026-11-09T09:30:00+09:00"})
+	view, err := s.scheduleOnce(workCaller{}, scheduleOnceArgs{Prompt: "check the PR", At: "2026-11-09T09:30:00+09:00"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if view.NextRunAt != "2026-11-09T00:30:00Z" || view.Kind != "once" {
 		t.Fatalf("once view = %+v", view)
 	}
-	fixed, err := s.loopCreate(loopCreateArgs{Prompt: "poll", Interval: "PT5M"})
+	fixed, err := s.loopCreate(workCaller{}, loopCreateArgs{Prompt: "poll", Interval: "PT5M"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.loopNext(loopNextArgs{ID: fixed.ID, Delay: "PT2M"}); err == nil {
+	if _, err := s.loopNext(workCaller{}, loopNextArgs{ID: fixed.ID, Delay: "PT2M"}); err == nil {
 		t.Fatal("loop_next on a fixed loop accepted")
 	}
-	if _, err := s.loopNext(loopNextArgs{ID: view.ID, Delay: "PT2M"}); err == nil {
+	if _, err := s.loopNext(workCaller{}, loopNextArgs{ID: view.ID, Delay: "PT2M"}); err == nil {
 		t.Fatal("loop_next on a once schedule accepted")
 	}
-	paced, err := s.loopCreate(loopCreateArgs{Prompt: "watch", ExpiresIn: "PT1H"})
+	paced, err := s.loopCreate(workCaller{}, loopCreateArgs{Prompt: "watch", ExpiresIn: "PT1H"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if paced.Kind != "loop_self_paced" || paced.Fallback != "PT10M" || paced.ExpiresAt != "2026-11-09T01:00:00Z" {
 		t.Fatalf("self-paced view = %+v", paced)
 	}
-	if _, err := s.loopNext(loopNextArgs{ID: paced.ID, Delay: "PT2H"}); err == nil {
+	if _, err := s.loopNext(workCaller{}, loopNextArgs{ID: paced.ID, Delay: "PT2H"}); err == nil {
 		t.Fatal("loop_next past the loop's expiry accepted")
 	}
 
-	for len(s.list()) < schedulerMaxSchedules {
-		if _, err := s.loopCreate(loopCreateArgs{Prompt: "fill", Interval: "PT1H"}); err != nil {
+	for len(s.list(workCaller{})) < schedulerMaxSchedules {
+		if _, err := s.loopCreate(workCaller{}, loopCreateArgs{Prompt: "fill", Interval: "PT1H"}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.loopCreate(loopCreateArgs{Prompt: "one too many", Interval: "PT1H"}); err == nil {
+	if _, err := s.loopCreate(workCaller{}, loopCreateArgs{Prompt: "one too many", Interval: "PT1H"}); err == nil {
 		t.Fatal("schedule past the per-session limit accepted")
 	}
 }
@@ -171,35 +289,35 @@ func TestSchedulerToolLimits(t *testing.T) {
 func TestSchedulerOnceRunsWhenIdleAndOnlyOnce(t *testing.T) {
 	s, agent, clock := newTestScheduler(t)
 	ctx := context.Background()
-	if _, err := s.scheduleOnce(scheduleOnceArgs{Prompt: "check the PR", Delay: "PT30M"}); err != nil {
+	if _, err := s.scheduleOnce(workCaller{}, scheduleOnceArgs{Prompt: "check the PR", Delay: "PT30M"}); err != nil {
 		t.Fatal(err)
 	}
 	s.tick(ctx)
-	if agent.writeCount() != 0 {
+	if agent.writeCount("") != 0 {
 		t.Fatal("ran before its time")
 	}
 	clock.advance(30 * time.Minute)
-	agent.state.Idle = false // a person's turn is running
+	agent.at("").state.Idle = false // a person's turn is running
 	s.tick(ctx)
-	if agent.writeCount() != 0 {
+	if agent.writeCount("") != 0 {
 		t.Fatal("ran while the agent was busy")
 	}
-	agent.state.Idle = true
+	agent.at("").state.Idle = true
 	s.tick(ctx)
-	if agent.writeCount() != 1 {
-		t.Fatalf("writes = %d, want 1", agent.writeCount())
+	if agent.writeCount("") != 1 {
+		t.Fatalf("writes = %d, want 1", agent.writeCount(""))
 	}
-	if agent.writes[0] != "check the PR" {
-		t.Fatalf("run prompt = %q", agent.writes[0])
+	if agent.wrote("")[0] != "check the PR" {
+		t.Fatalf("run prompt = %q", agent.wrote("")[0])
 	}
-	if views := s.list(); len(views) != 1 || !views[0].Running {
+	if views := s.list(workCaller{}); len(views) != 1 || !views[0].Running {
 		t.Fatalf("running schedule not listed: %+v", views)
 	}
 	s.tick(ctx) // turn still running
-	agent.finishTurn()
+	agent.finishTurn("")
 	s.tick(ctx)
-	if len(s.list()) != 0 {
-		t.Fatalf("once schedule left after its run: %+v", s.list())
+	if len(s.list(workCaller{})) != 0 {
+		t.Fatalf("once schedule left after its run: %+v", s.list(workCaller{}))
 	}
 	if active, _ := s.state(); active != 0 {
 		t.Fatalf("active = %d", active)
@@ -209,71 +327,71 @@ func TestSchedulerOnceRunsWhenIdleAndOnlyOnce(t *testing.T) {
 func TestSchedulerFixedLoopSkipsOverrunSlots(t *testing.T) {
 	s, agent, clock := newTestScheduler(t)
 	ctx := context.Background()
-	if _, err := s.loopCreate(loopCreateArgs{Prompt: "poll", Interval: "PT5M"}); err != nil {
+	if _, err := s.loopCreate(workCaller{}, loopCreateArgs{Prompt: "poll", Interval: "PT5M"}); err != nil {
 		t.Fatal(err)
 	}
 	s.tick(ctx) // first run right away
-	if agent.writeCount() != 1 {
-		t.Fatalf("writes = %d", agent.writeCount())
+	if agent.writeCount("") != 1 {
+		t.Fatalf("writes = %d", agent.writeCount(""))
 	}
-	if agent.writes[0] != "poll" {
-		t.Fatalf("run prompt = %q, want the schedule's prompt alone", agent.writes[0])
+	if agent.wrote("")[0] != "poll" {
+		t.Fatalf("run prompt = %q, want the schedule's prompt alone", agent.wrote("")[0])
 	}
 	clock.advance(17 * time.Minute) // the turn overran three slots
-	agent.finishTurn()
+	agent.finishTurn("")
 	s.tick(ctx)
-	if got := s.list()[0].NextRunAt; got != "2026-11-09T00:20:00Z" {
+	if got := s.list(workCaller{})[0].NextRunAt; got != "2026-11-09T00:20:00Z" {
 		t.Fatalf("next run = %s, want the first slot after now", got)
 	}
 	s.tick(ctx)
-	if agent.writeCount() != 1 {
+	if agent.writeCount("") != 1 {
 		t.Fatal("overrun slots were run")
 	}
 	clock.set(time.Date(2026, 11, 9, 0, 20, 0, 0, time.UTC))
 	s.tick(ctx)
-	if agent.writeCount() != 2 || s.list()[0].Runs != 2 {
-		t.Fatalf("second run missing: %v", agent.writes)
+	if agent.writeCount("") != 2 || s.list(workCaller{})[0].Runs != 2 {
+		t.Fatalf("second run missing: %v", agent.wrote(""))
 	}
 }
 
 func TestSchedulerSelfPacedLoop(t *testing.T) {
 	s, agent, clock := newTestScheduler(t)
 	ctx := context.Background()
-	view, err := s.loopCreate(loopCreateArgs{Prompt: "watch the rollout", FallbackInterval: "PT15M"})
+	view, err := s.loopCreate(workCaller{}, loopCreateArgs{Prompt: "watch the rollout", FallbackInterval: "PT15M"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.tick(ctx)
-	if agent.writes[0] != "watch the rollout" {
-		t.Fatalf("run prompt = %q, want the schedule's prompt alone", agent.writes[0])
+	if agent.wrote("")[0] != "watch the rollout" {
+		t.Fatalf("run prompt = %q, want the schedule's prompt alone", agent.wrote("")[0])
 	}
 	// The run asks for two minutes, then finishes.
 	clock.advance(time.Minute)
-	if _, err := s.loopNext(loopNextArgs{ID: view.ID, Delay: "PT2M"}); err != nil {
+	if _, err := s.loopNext(workCaller{}, loopNextArgs{ID: view.ID, Delay: "PT2M"}); err != nil {
 		t.Fatal(err)
 	}
 	clock.advance(time.Minute)
-	agent.finishTurn()
+	agent.finishTurn("")
 	s.tick(ctx)
-	if got := s.list()[0].NextRunAt; got != "2026-11-09T00:03:00Z" {
+	if got := s.list(workCaller{})[0].NextRunAt; got != "2026-11-09T00:03:00Z" {
 		t.Fatalf("next run = %s, want loop_next's time", got)
 	}
 	clock.set(time.Date(2026, 11, 9, 0, 3, 0, 0, time.UTC))
 	s.tick(ctx)
-	if agent.writeCount() != 2 {
-		t.Fatalf("writes = %d", agent.writeCount())
+	if agent.writeCount("") != 2 {
+		t.Fatalf("writes = %d", agent.writeCount(""))
 	}
 	// This run calls nothing: the fallback interval applies from its end.
 	clock.advance(4 * time.Minute)
-	agent.finishTurn()
+	agent.finishTurn("")
 	s.tick(ctx)
-	if got := s.list()[0].NextRunAt; got != "2026-11-09T00:22:00Z" {
+	if got := s.list(workCaller{})[0].NextRunAt; got != "2026-11-09T00:22:00Z" {
 		t.Fatalf("next run = %s, want end + fallback", got)
 	}
-	if _, err := s.cancel(scheduleIDArgs{ID: view.ID}); err != nil {
+	if _, err := s.cancel(workCaller{}, scheduleIDArgs{ID: view.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if len(s.list()) != 0 {
+	if len(s.list(workCaller{})) != 0 {
 		t.Fatal("cancel left the loop")
 	}
 }
@@ -281,54 +399,54 @@ func TestSchedulerSelfPacedLoop(t *testing.T) {
 func TestSchedulerRunEndsOnAgentRestartAndRetriesFailedWrite(t *testing.T) {
 	s, agent, clock := newTestScheduler(t)
 	ctx := context.Background()
-	if _, err := s.loopCreate(loopCreateArgs{Prompt: "poll", Interval: "PT5M"}); err != nil {
+	if _, err := s.loopCreate(workCaller{}, loopCreateArgs{Prompt: "poll", Interval: "PT5M"}); err != nil {
 		t.Fatal(err)
 	}
 	s.tick(ctx)
-	agent.state = agentQueueState{Idle: true, Finished: 0, Epoch: "e2"} // restarted, queue lost
+	agent.restart("", "e2") // restarted, queue lost
 	s.tick(ctx)
-	if s.running != nil {
+	if len(s.running) != 0 {
 		t.Fatal("run outlived the agent restart")
 	}
 
 	clock.advance(5 * time.Minute)
-	agent.writeErr = errors.New("agent write: 409 checkpoint in progress")
+	agent.at("").writeErr = errors.New("agent write: 409 checkpoint in progress")
 	s.tick(ctx)
-	if s.running != nil || s.list()[0].Runs != 1 {
-		t.Fatalf("failed write left state: running=%v runs=%d", s.running, s.list()[0].Runs)
+	if len(s.running) != 0 || s.list(workCaller{})[0].Runs != 1 {
+		t.Fatalf("failed write left state: running=%d runs=%d", len(s.running), s.list(workCaller{})[0].Runs)
 	}
-	agent.writeErr = nil
+	agent.at("").writeErr = nil
 	s.tick(ctx)
-	if agent.writeCount() != 1 {
+	if agent.writeCount("") != 1 {
 		t.Fatal("retried before the retry delay")
 	}
 	clock.advance(schedulerRetryDelay)
 	s.tick(ctx)
-	if agent.writeCount() != 2 {
-		t.Fatalf("writes = %d after the retry delay", agent.writeCount())
+	if agent.writeCount("") != 2 {
+		t.Fatalf("writes = %d after the retry delay", agent.writeCount(""))
 	}
 }
 
 func TestSchedulerLoopExpires(t *testing.T) {
 	s, agent, clock := newTestScheduler(t)
 	ctx := context.Background()
-	if _, err := s.loopCreate(loopCreateArgs{Prompt: "poll", Interval: "PT40M", ExpiresIn: "PT1H"}); err != nil {
+	if _, err := s.loopCreate(workCaller{}, loopCreateArgs{Prompt: "poll", Interval: "PT40M", ExpiresIn: "PT1H"}); err != nil {
 		t.Fatal(err)
 	}
 	s.tick(ctx)
-	agent.finishTurn()
+	agent.finishTurn("")
 	clock.advance(time.Minute)
 	s.tick(ctx) // next slot 00:40 is before expiry 01:00
-	if len(s.list()) != 1 {
+	if len(s.list(workCaller{})) != 1 {
 		t.Fatal("loop ended early")
 	}
 	clock.set(time.Date(2026, 11, 9, 0, 40, 0, 0, time.UTC))
 	s.tick(ctx)
-	agent.finishTurn()
+	agent.finishTurn("")
 	clock.advance(time.Minute)
 	s.tick(ctx) // next slot 01:20 is past expiry
-	if len(s.list()) != 0 {
-		t.Fatalf("loop outlived its expiry: %+v", s.list())
+	if len(s.list(workCaller{})) != 0 {
+		t.Fatalf("loop outlived its expiry: %+v", s.list(workCaller{}))
 	}
 }
 
@@ -445,7 +563,7 @@ func TestSchedulerURLsFromEnv(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{"http://10.0.0.1:8090", "https://127.0.0.1:8090", ""} {
-		if _, err := newHTTPSchedulerAgent(bad); err == nil {
+		if _, err := newHTTPSchedulerAgent(bad, false); err == nil {
 			t.Errorf("agent URL %q accepted", bad)
 		}
 	}
@@ -470,19 +588,20 @@ func newTestClaudeWorkload(t *testing.T) *claudeWorkload {
 	return c
 }
 
-// AC-P2 end to end on a real queue: the sidecar's run goes through POST
-// /write as a turn, and the run is settled from GET /queue once it finished.
+// AC-P2·AC-P4 end to end on a real queue: the sidecar's round goes through
+// POST /write as a turn of that conversation, and the round is settled by the
+// receipt that write returned (turn_ticket.go) rather than by counting turns.
 func TestSchedulerRunsThroughTheAgentQueue(t *testing.T) {
 	runner := newFakeClaudeRunner()
 	c, srv := newClaudeTestServer(t, runner, "m", false, nil)
-	agent, err := newHTTPSchedulerAgent(srv.URL)
+	agent, err := newHTTPSchedulerAgent(srv.URL, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := newScheduler(agent, testLogger())
 	clock := &testClock{t: time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)}
 	s.now = clock.now
-	if _, err := s.scheduleOnce(scheduleOnceArgs{Prompt: "check the PR", Delay: "PT1M"}); err != nil {
+	if _, err := s.scheduleOnce(workCaller{}, scheduleOnceArgs{Prompt: "check the PR", Delay: "PT1M"}); err != nil {
 		t.Fatal(err)
 	}
 	clock.advance(time.Minute)
@@ -492,11 +611,349 @@ func TestSchedulerRunsThroughTheAgentQueue(t *testing.T) {
 	if prompt := run.argv[len(run.argv)-1]; prompt != "check the PR" {
 		t.Fatalf("turn prompt = %q", prompt)
 	}
-	eventually(t, "the run settles", func() bool {
+	eventually(t, "the round settles on its receipt", func() bool {
 		s.tick(ctx)
-		return len(s.list()) == 0
+		return len(s.list(workCaller{})) == 0
 	})
-	if got := c.queueState(); !got.Idle || got.Finished != 1 {
-		t.Fatalf("queue state = %+v", got)
+	// The receipt is what settled it — a turn that ended, which the lane's own
+	// counters then record. Both are asserted: the round was one turn of this
+	// conversation, and it is over.
+	eventually(t, "the lane records the finished turn", func() bool {
+		got := c.queueState()
+		return got.Idle && got.Finished == 1
+	})
+}
+
+// newPairedTestScheduler is a scheduler on a pod that runs both lanes, with a
+// caller for each — the identity the lane's own address carries (AC-P4).
+func newPairedTestScheduler(t *testing.T) (*scheduler, *fakeSchedulerAgent, *testClock, workCaller, workCaller) {
+	t.Helper()
+	agent := newFakeSchedulerAgent(laneParent, laneMonitor)
+	clock := &testClock{t: time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)}
+	s := newScheduler(agent, testLogger())
+	s.now = clock.now
+	n := 0
+	s.newID = func() string { n++; return fmt.Sprintf("sch_%08d", n) }
+	return s, agent, clock, laneCaller(laneParent, "parent-run-1"), laneCaller(laneMonitor, "monitor-run-1")
+}
+
+// TestEachLanesSchedulesRunInThatLane is the destination rule and what follows
+// from it: the registration's own address decides where a round lands, and the
+// lanes wait on each other for nothing (AC-P4).
+func TestEachLanesSchedulesRunInThatLane(t *testing.T) {
+	s, agent, clock, parent, monitor := newPairedTestScheduler(t)
+	ctx := context.Background()
+	if _, err := s.scheduleOnce(monitor, scheduleOnceArgs{Prompt: "check the rollout", Delay: "PT30M"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.scheduleOnce(parent, scheduleOnceArgs{Prompt: "say the daily summary", Delay: "PT30M"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The person is mid-conversation: the parent is busy, the monitor is not.
+	agent.at(laneParent).state.Idle = false
+	clock.advance(30 * time.Minute)
+	s.tick(ctx)
+	if got := agent.wrote(laneMonitor); len(got) != 1 || got[0] != "check the rollout" {
+		t.Fatalf("the monitor's round = %v, want the one prompt it registered", got)
+	}
+	if got := agent.writeCount(laneParent); got != 0 {
+		t.Fatalf("the parent took %d rounds while it was busy with a person", got)
+	}
+
+	// Ticking again delivers neither round twice: the monitor holds one round,
+	// and the parent is still busy.
+	s.tick(ctx)
+	if got := agent.writeCount(laneMonitor); got != 1 {
+		t.Fatalf("the monitor's round was delivered %d times", got)
+	}
+
+	// The person's turn ends; the parent's own round goes to the parent.
+	agent.at(laneParent).state.Idle = true
+	s.tick(ctx)
+	if got := agent.wrote(laneParent); len(got) != 1 || got[0] != "say the daily summary" {
+		t.Fatalf("the parent's round = %v", got)
+	}
+	// A round in flight on one lane does not hold the other: both are running.
+	if len(s.running) != 2 {
+		t.Fatalf("rounds in flight = %d, want one per lane", len(s.running))
+	}
+	agent.finishTurn(laneMonitor)
+	s.tick(ctx)
+	if len(s.list(monitor)) != 0 {
+		t.Fatalf("the monitor's once schedule outlived its round: %+v", s.list(monitor))
+	}
+	if len(s.list(parent)) != 1 || !s.list(parent)[0].Running {
+		t.Fatalf("the parent's round was settled by the monitor's: %+v", s.list(parent))
+	}
+}
+
+// TestALaneRefusingARoundDoesNotPauseTheOther keeps the retry per lane: the
+// monitor's queue being full is not a reason the person's chat waits (AC-P4).
+func TestALaneRefusingARoundDoesNotPauseTheOther(t *testing.T) {
+	s, agent, clock, parent, monitor := newPairedTestScheduler(t)
+	ctx := context.Background()
+	agent.at(laneMonitor).writeErr = errors.New("agent write: 429 queue full")
+	if _, err := s.loopCreate(monitor, loopCreateArgs{Prompt: "watch", Interval: "PT5M"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.loopCreate(parent, loopCreateArgs{Prompt: "greet", Interval: "PT5M"}); err != nil {
+		t.Fatal(err)
+	}
+	s.tick(ctx)
+	if got := agent.writeCount(laneParent); got != 1 {
+		t.Fatalf("the parent's round = %d, want one despite the monitor's refusal", got)
+	}
+	if len(s.running) != 1 || s.running[laneParent] == nil {
+		t.Fatalf("a refused round was left in flight: %v", s.running)
+	}
+	if s.list(monitor)[0].Runs != 0 {
+		t.Fatal("a refused round was counted as a run")
+	}
+
+	// The refusal holds that lane back for the retry delay and no longer.
+	agent.at(laneMonitor).writeErr = nil
+	s.tick(ctx)
+	if got := agent.writeCount(laneMonitor); got != 0 {
+		t.Fatal("retried before the retry delay")
+	}
+	clock.advance(schedulerRetryDelay)
+	s.tick(ctx)
+	if got := agent.writeCount(laneMonitor); got != 1 {
+		t.Fatalf("the monitor's round never came back: writes = %d", got)
+	}
+}
+
+// TestOnlyTheOwningLanePacesOrCancelsASchedule is the ownership the address
+// gives: a lane lists, paces and cancels its own schedules and is refused the
+// other lane's by name (AC-P4).
+func TestOnlyTheOwningLanePacesOrCancelsASchedule(t *testing.T) {
+	s, _, _, parent, monitor := newPairedTestScheduler(t)
+	view, err := s.loopCreate(monitor, loopCreateArgs{Prompt: "watch the rollout", FallbackInterval: "PT15M"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each lane sees its own and only its own: a schedule is a prompt that
+	// becomes a turn of that lane's conversation.
+	if got := s.list(monitor); len(got) != 1 || got[0].ID != view.ID {
+		t.Fatalf("the monitor's list = %+v", got)
+	}
+	if got := s.list(parent); len(got) != 0 {
+		t.Fatalf("the parent can see the monitor's schedules: %+v", got)
+	}
+	if got := s.list(workCaller{}); len(got) != 0 {
+		t.Fatalf("a single-lane caller can see a lane's schedules: %+v", got)
+	}
+	for _, call := range []struct {
+		what string
+		err  error
+	}{
+		{"loop_next", func() error { _, err := s.loopNext(parent, loopNextArgs{ID: view.ID, Delay: "PT2M"}); return err }()},
+		{"schedule_cancel", func() error { _, err := s.cancel(parent, scheduleIDArgs{ID: view.ID}); return err }()},
+	} {
+		if call.err == nil {
+			t.Fatalf("the parent was allowed to %s the monitor's schedule", call.what)
+		}
+		if !strings.Contains(call.err.Error(), laneMonitor) {
+			t.Errorf("%s refusal does not name the lane that owns it: %v", call.what, call.err)
+		}
+	}
+	if len(s.list(monitor)) != 1 {
+		t.Fatal("the other lane's refused calls changed the schedule")
+	}
+}
+
+// TestARoundIsPacedByTheRunThatOwnsIt is the compare-and-swap on the round: a
+// leftover of a conversation that is gone cannot move a live loop's next run,
+// and the run that holds the round can — with the same schedule id (AC-P4).
+func TestARoundIsPacedByTheRunThatOwnsIt(t *testing.T) {
+	s, agent, clock, _, monitor := newPairedTestScheduler(t)
+	ctx := context.Background()
+	view, err := s.loopCreate(monitor, loopCreateArgs{Prompt: "watch", FallbackInterval: "PT15M"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.tick(ctx)
+	if agent.writeCount(laneMonitor) != 1 {
+		t.Fatal("the loop's first round never ran")
+	}
+
+	stale := laneCaller(laneMonitor, "monitor-run-0")
+	if _, err := s.loopNext(stale, loopNextArgs{ID: view.ID, Delay: "PT2M"}); err == nil {
+		t.Fatal("an earlier run of the lane paced the round it no longer holds")
+	}
+	// Refusing it changed nothing: the next run is still the round's to set.
+	if _, err := s.loopNext(monitor, loopNextArgs{ID: view.ID, Delay: "PT2M"}); err != nil {
+		t.Fatal(err)
+	}
+	agent.finishTurn(laneMonitor)
+	clock.advance(time.Minute)
+	s.tick(ctx)
+	if got := s.list(monitor)[0].NextRunAt; got != "2026-11-09T00:02:00Z" {
+		t.Fatalf("next run = %s, want the time the round itself set", got)
+	}
+	// With no round in flight, the lane that owns the schedule paces it even
+	// from a later run of itself: a restarted monitor is still this monitor.
+	later := laneCaller(laneMonitor, "monitor-run-2")
+	if _, err := s.loopNext(later, loopNextArgs{ID: view.ID, Delay: "PT5M"}); err != nil {
+		t.Fatalf("the lane could not pace its own loop after restarting: %v", err)
+	}
+	if _, err := s.cancel(later, scheduleIDArgs{ID: view.ID}); err != nil {
+		t.Fatalf("the lane could not end its own loop after restarting: %v", err)
+	}
+	if len(s.list(monitor)) != 0 {
+		t.Fatal("cancel left the loop")
+	}
+}
+
+// TestARoundEndsWhenTheLaneItRanInRestarts is the recovery: the receipt no
+// longer names a turn of the lane's current run, so the round is over rather
+// than waited on forever, and the loop keeps its id and runs again (AC-P4).
+func TestARoundEndsWhenTheLaneItRanInRestarts(t *testing.T) {
+	s, agent, clock, _, monitor := newPairedTestScheduler(t)
+	ctx := context.Background()
+	view, err := s.loopCreate(monitor, loopCreateArgs{Prompt: "watch", Interval: "PT5M"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.tick(ctx)
+	if s.running[laneMonitor] == nil {
+		t.Fatal("the first round never started")
+	}
+	s.tick(ctx)
+	if s.running[laneMonitor] == nil {
+		t.Fatal("a round still queued on the lane was settled")
+	}
+
+	agent.restart(laneMonitor, "e2") // the monitor came back as a new conversation
+	s.tick(ctx)
+	if s.running[laneMonitor] != nil {
+		t.Fatal("the round outlived the lane it was queued on")
+	}
+	if got := s.list(monitor); len(got) != 1 || got[0].ID != view.ID {
+		t.Fatalf("the loop did not survive its lane restarting: %+v", got)
+	}
+	clock.advance(5 * time.Minute)
+	s.tick(ctx)
+	if got := agent.writeCount(laneMonitor); got != 2 {
+		t.Fatalf("rounds delivered = %d, want the next one after the restart", got)
+	}
+}
+
+// TestARoundIsSettledFromTheQueueWhenALaneIssuesNoReceipt keeps the way this
+// always worked for a lane too old to issue receipts: idle again with a turn
+// more finished.
+func TestARoundIsSettledFromTheQueueWhenALaneIssuesNoReceipt(t *testing.T) {
+	s, agent, _, _, monitor := newPairedTestScheduler(t)
+	ctx := context.Background()
+	agent.at(laneMonitor).noTicket = true
+	if _, err := s.scheduleOnce(monitor, scheduleOnceArgs{Prompt: "check", Delay: "PT1M"}); err != nil {
+		t.Fatal(err)
+	}
+	s.now = func() time.Time { return time.Date(2026, 11, 9, 0, 2, 0, 0, time.UTC) }
+	s.tick(ctx)
+	if s.running[laneMonitor] == nil || s.running[laneMonitor].ticket != "" {
+		t.Fatalf("round = %+v, want one in flight without a receipt", s.running[laneMonitor])
+	}
+	s.tick(ctx)
+	if s.running[laneMonitor] == nil {
+		t.Fatal("the round was settled while the lane was still busy")
+	}
+	agent.finishTurn(laneMonitor)
+	s.tick(ctx)
+	if len(s.list(monitor)) != 0 {
+		t.Fatalf("the round never settled: %+v", s.list(monitor))
+	}
+}
+
+// TestAMonitorScheduleIsRefusedWithoutAMonitorLane refuses rather than falling
+// back to the one conversation there is: a round that appeared in the person's
+// chat because the monitor was not there is the mix-up the address prevents.
+func TestAMonitorScheduleIsRefusedWithoutAMonitorLane(t *testing.T) {
+	s, agent, _ := newTestScheduler(t) // a session with one conversation
+	monitor := laneCaller(laneMonitor, "monitor-run-1")
+	if _, err := s.scheduleOnce(monitor, scheduleOnceArgs{Prompt: "check", Delay: "PT30M"}); err == nil {
+		t.Fatal("a monitor's schedule was accepted by a pod with no monitor lane")
+	}
+	if _, err := s.loopCreate(monitor, loopCreateArgs{Prompt: "watch", Interval: "PT5M"}); err == nil {
+		t.Fatal("a monitor's loop was accepted by a pod with no monitor lane")
+	}
+	if len(s.list(monitor)) != 0 || len(s.list(workCaller{})) != 0 {
+		t.Fatal("a refused registration left a schedule")
+	}
+	// The parent's address is the chat either way, so a manager that never
+	// turned the pair on still takes its own schedules.
+	if !agent.reaches(laneParent) {
+		t.Fatal("the parent lane is not reachable")
+	}
+	if _, err := s.scheduleOnce(laneCaller(laneParent, "parent-run-1"),
+		scheduleOnceArgs{Prompt: "greet", Delay: "PT30M"}); err != nil {
+		t.Fatalf("a parent's schedule was refused: %v", err)
+	}
+}
+
+// TestSchedulerLaneAddresses is the address itself: what one lane registers,
+// what the state path beside it is, and that a malformed lane address is
+// refused by name rather than falling through to the proxy behind it.
+func TestSchedulerLaneAddresses(t *testing.T) {
+	const base = "http://127.0.0.1:8093" + schedulerMCPPath
+	laneURL, err := schedulerLaneMCPURL(base, laneMonitor, "monitor-run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if laneURL != "http://127.0.0.1:8093/scheduler/mcp/lane/monitor/monitor-run-1" {
+		t.Fatalf("lane address = %s", laneURL)
+	}
+	// AC-P3's count is the pod's, and the address it is read from has to be
+	// derived from a lane address too — not by trimming a path that is no
+	// longer at the end.
+	if got := schedulerStateURLFor(laneURL); got != "http://127.0.0.1:8093"+schedulerStatePath {
+		t.Fatalf("state URL from a lane address = %s", got)
+	}
+	if got := schedulerStateURLFor(base); got != "http://127.0.0.1:8093"+schedulerStatePath {
+		t.Fatalf("state URL from the single address = %s", got)
+	}
+	if _, err := schedulerLaneMCPURL("", laneMonitor, "monitor-run-1"); err != nil {
+		t.Fatalf("an unset address = %v", err)
+	}
+	for _, bad := range []struct{ raw, lane, incarnation string }{
+		{"http://127.0.0.1:8093/mcp", laneMonitor, "monitor-run-1"},
+		{base, "chat", "monitor-run-1"},
+		{base, laneMonitor, "monitor run 1"},
+		{base, laneMonitor, ""},
+	} {
+		if got, err := schedulerLaneMCPURL(bad.raw, bad.lane, bad.incarnation); err == nil {
+			t.Errorf("%+v accepted as %s", bad, got)
+		}
+	}
+
+	s, _, _, _, monitor := newPairedTestScheduler(t)
+	handler := withScheduler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	}), s)
+	call := func(path string, params any) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params})
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(body))))
+		return rec
+	}
+	rec := call(laneMCPPath(schedulerLanePathPrefix, laneMonitor, "monitor-run-1"),
+		map[string]any{"name": "schedule_once", "arguments": map[string]any{"prompt": "check", "delay": "PT30M"}})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "sch_") {
+		t.Fatalf("a lane's registration = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := s.list(monitor); len(got) != 1 {
+		t.Fatalf("the lane's registration did not land as the lane's: %+v", got)
+	}
+	for _, bad := range []string{
+		schedulerLanePathPrefix,
+		schedulerLanePathPrefix + "/monitor",
+		schedulerLanePathPrefix + "/chat/monitor-run-1",
+		schedulerLanePathPrefix + "/monitor/monitor.run.1",
+		schedulerLanePathPrefix + "/monitor/monitor-run-1/extra",
+	} {
+		if rec := call(bad, map[string]any{"name": "schedule_list"}); rec.Code != http.StatusNotFound {
+			t.Errorf("%s = %d, want a refusal by name rather than the proxy behind it", bad, rec.Code)
+		}
 	}
 }

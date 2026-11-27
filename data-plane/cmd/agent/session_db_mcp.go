@@ -513,37 +513,22 @@ func withSessionDBMCP(proxy http.Handler, db *sessionDB) http.Handler {
 	})
 }
 
-// sessionDBLaneCaller reads a lane address: <prefix>/<role>/<incarnation>.
-// It reports whether the path is one of this prefix's at all, so a path that is
-// not is left to the routes beside it, and a malformed one under the prefix is
+// sessionDBLaneCaller reads a lane address under this prefix
+// (laneCallerFromPath, manager_lane.go), so a path that is not one of this
+// prefix's is left to the routes beside it and a malformed one under it is
 // refused by name rather than falling through to the K3s MCP proxy.
 //
 // The incarnation has the id shape every record here uses, and it is not a
 // secret: what it proves is only that a caller presenting a different one is a
 // different run of that lane, which is what makes a claim left behind by a lane
-// that is gone recoverable exactly once (session_work_relay.go).
+// that is gone recoverable exactly once.
 func sessionDBLaneCaller(path string) (caller workCaller, underPrefix bool, refusal string) {
-	if path != sessionDBLanePathPrefix && !strings.HasPrefix(path, sessionDBLanePathPrefix+"/") {
-		return workCaller{}, false, ""
-	}
-	parts := strings.Split(strings.TrimPrefix(path, sessionDBLanePathPrefix+"/"), "/")
-	if path == sessionDBLanePathPrefix || len(parts) != 2 {
-		return workCaller{}, true, "a lane address is " + sessionDBLanePathPrefix + "/<role>/<incarnation>"
-	}
-	if !isLaneRole(parts[0]) {
-		return workCaller{}, true, "a manager lane is " + strings.Join(laneRoles, " or ")
-	}
-	if !workID.MatchString(parts[1]) {
-		return workCaller{}, true, "an incarnation is 1..128 letters, digits, _ or -"
-	}
-	return workCaller{lane: parts[0], incarnation: parts[1]}, true, ""
+	return laneCallerFromPath(sessionDBLanePathPrefix, path)
 }
 
-// sessionDBLaneMCPPath is the address one lane registers. The incarnation is
-// this run of the lane, so a restart changes the address the lane calls from
-// and the database can tell the two runs apart.
+// sessionDBLaneMCPPath is the address one lane registers.
 func sessionDBLaneMCPPath(lane, incarnation string) string {
-	return sessionDBLanePathPrefix + "/" + lane + "/" + incarnation
+	return laneMCPPath(sessionDBLanePathPrefix, lane, incarnation)
 }
 
 // errSessionDBMCPURL is a SESSION_DB_MCP_URL the workload agent will not

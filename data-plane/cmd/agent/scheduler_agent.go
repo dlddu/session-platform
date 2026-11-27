@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -108,9 +109,24 @@ func schedulerMCPURLFromEnv(getenv func(string) string) (string, error) {
 	return raw, nil
 }
 
+// schedulerStateURLFor is the sidecar's schedule count beside the MCP address
+// this lane registered. It is built from the address's host rather than by
+// trimming its path, because a lane's address carries the lane and the run
+// after the MCP path (AC-P4) and trimming a suffix that is no longer at the
+// end would produce an address with the lane still in it.
+//
+// The count the reaper reads is the pod's, not the lane's (AC-P3): what it
+// decides is whether to reclaim this pod, and either conversation having a
+// schedule is a reason not to.
 func schedulerStateURLFor(mcpURL string) string {
 	if mcpURL == "" {
 		return ""
 	}
-	return strings.TrimSuffix(mcpURL, schedulerMCPPath) + schedulerStatePath
+	parsed, err := url.Parse(mcpURL)
+	if err != nil {
+		return ""
+	}
+	parsed.Path = schedulerStatePath
+	parsed.RawQuery, parsed.Fragment = "", ""
+	return parsed.String()
 }
