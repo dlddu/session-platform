@@ -1166,7 +1166,6 @@ article.card {
   display: grid;
   justify-items: start;
   width: 100%;
-  min-height: 126px;
   padding: 13px;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -1186,36 +1185,39 @@ article.card {
   place-items: center;
   width: 28px;
   height: 28px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-2);
   color: var(--text-dim);
-  font-family: "IBM Plex Mono", monospace;
 }
-.workload-option.selected .workload-icon,
-.workload-option .workload-icon.agent {
+.workload-option.selected .workload-icon {
   color: var(--active);
+  background: color-mix(in srgb, var(--active) 14%, transparent);
+  border-color: color-mix(in srgb, var(--active) 30%, transparent);
 }
-/* The gated card spans both columns — its one-line pitch does not fit the
-   126px square the other two share (mirrors `.type.wide` in the mockup). */
+/* The gated card spans both columns (mirrors `.type.wide` in the mockup). */
 .workload-option.wide {
   grid-column: 1 / -1;
-  min-height: 0;
-}
-.workload-option .workload-icon.gated {
-  color: var(--idle);
 }
 .workload-option strong {
   color: var(--text);
   font-family: "IBM Plex Mono", monospace;
   font-size: 12.5px;
+  font-weight: 600;
+}
+.workload-option.selected strong {
+  color: var(--active);
 }
 .workload-option small {
-  margin-top: 4px;
+  margin-top: 5px;
   color: var(--text-faint);
   font-size: 11px;
-  line-height: 1.4;
+  line-height: 1.45;
+}
+.workload-option.selected .workload-default {
+  border-color: color-mix(in srgb, var(--active) 35%, transparent);
+  color: var(--active);
 }
 .workload-default {
   position: absolute;
