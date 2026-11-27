@@ -428,13 +428,14 @@ let sessions = [
   {id:'6d40', name:'vendor-rates-sync', type:'minimax-code', state:'active', pod:'sess-6d40-p2vq', region:'us-east-1', up:'42m', upMin:42, cpu:19, mem:372, memMax:2048, idleMin:0},
   {id:'b2d7', name:'changelog-autogen', type:'minimax-code', state:'active', pod:'sess-b2d7-q4mf', region:'us-east-1', up:'38m', upMin:38, cpu:18, mem:341, memMax:2048, idleMin:0},
   {id:'e41c', name:'cluster-triage', type:'codex-manager', tenant:'pocket-aide', state:'active', pod:'sess-e41c-v9rn', region:'us-east-1', up:'12m', upMin:12, cpu:9, mem:226, memMax:2048, idleMin:0},
+  {id:'d5a2', name:'fix-invoice-bug', type:'codex-task', tenant:'pocket-aide', state:'active', pod:'sess-d5a2-k8vp', region:'us-east-1', up:'6m', upMin:6, cpu:14, mem:301, memMax:2048, idleMin:0},
   {id:'3f88', name:'nightly-report', type:'shell', tenant:'ops-bot', state:'idle', pod:'sess-3f88-w2tc', region:'us-east-1', up:'1h 52m', upMin:112, cpu:1, mem:150, memMax:1024, idleMin:33, freezeSec:1620},
   {id:'0a17', name:'model-train-7b', type:'shell', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'2h ago', checkpoint:'412 MB', reclaim:'2 vCPU · 4 GB'},
   {id:'c83d', name:'doc-migration', type:'claude-code', state:'snapshot', pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'18m ago', checkpoint:'38 MB archive', reclaim:'1 vCPU · 2 GB'}
 ];
 // 타입에 따라 작업 화면이 갈린다: shell → workspace.html · claude-code · codex → agent-workspace.html
 // · 승인 게이트를 쓰는 타입(minimax-code) → gated-workspace.html (AC-G1 · AC-J1 · docs/prd/approval-gate.md)
-const WS_PAGE = {'claude-code':'agent-workspace.html', 'minimax-code':'gated-workspace.html', 'codex-manager':'agent-workspace.html', 'shell':'workspace.html'};
+const WS_PAGE = {'claude-code':'agent-workspace.html', 'minimax-code':'gated-workspace.html', 'codex-manager':'agent-workspace.html', 'codex-task':'agent-workspace.html', 'shell':'workspace.html'};
 function wsHref(s){
   if(s.state==='snapshot') return `restore.html?id=${s.id}`;
   return `${WS_PAGE[s.type]||'workspace.html'}?id=${s.id}`;
@@ -446,6 +447,8 @@ function typeTag(s){
     return `<span class="pod" style="color:var(--idle)" title="workloadType=minimax-code">⏸ minimax-code</span>`;
   if(s.type==='codex-manager')
     return `<span class="pod" style="color:#b79ae0" title="workloadType=codex-manager">◇ codex-manager</span>`;
+  if(s.type==='codex-task')
+    return `<span class="pod" style="color:#b79ae0" title="workloadType=codex-task">◇ codex-task</span>`;
   return `<span class="pod" style="color:var(--text-faint)" title="workloadType=shell">$ shell</span>`;
 }
 function fmtSec(s){const m=Math.floor(s/60),ss=s%60;return m+':'+String(ss).padStart(2,'0');}
