@@ -33,23 +33,16 @@ const (
 	maxAuthSlotFileBytes = 1 << 20
 )
 
-// authSlot is one workload's login file and the two places it lives.
 type authSlot struct {
-	// dir is the mounted slot PVC.
-	dir string
-	// file is the login file's name inside the slot.
-	file string
-	// homeRel is where the CLI keeps the same file, relative to HOME.
+	dir     string
+	file    string
 	homeRel string
-	// poll is how often a running turn's refreshed login is copied back.
-	poll   time.Duration
-	logger *slog.Logger
+	poll    time.Duration
+	logger  *slog.Logger
 
 	// mu serialises copies: the in-turn poll and the end-of-turn copy must not
 	// interleave their renames. It also guards the per-home state below.
 	mu sync.Mutex
-	// homes is the turn state of each HOME this slot serves, keyed by it.
-	//
 	// A manager that runs two lanes (AC-N11) has two HOMEs on one login: the
 	// lanes take turns at the same time, and each has its own copy of the file.
 	// One `placed` flag would mean one lane's pull decided whether the other
@@ -58,7 +51,6 @@ type authSlot struct {
 	homes map[string]*authSlotHome
 }
 
-// authSlotHome is what the slot knows about one HOME it keeps equal.
 type authSlotHome struct {
 	// placed is true when this turn's pull succeeded and left the slot's file
 	// in HOME. Only then does a file missing at turn end mean the CLI logged
@@ -120,7 +112,6 @@ func (s *authSlot) log() *slog.Logger {
 	return s.logger
 }
 
-// signedIn reports whether the slot holds a login, for GET /auth-slot.
 func (s *authSlot) signedIn() bool {
 	content, ok, err := readLoginFile(s.slotPath())
 	return err == nil && ok && len(bytes.TrimSpace(content)) > 0
@@ -168,7 +159,6 @@ func (s *authSlot) pull(home string) error {
 	return nil
 }
 
-// homeLocked is this HOME's turn state, created on first use.
 func (s *authSlot) homeLocked(home string) *authSlotHome {
 	if s.homes == nil {
 		s.homes = map[string]*authSlotHome{}

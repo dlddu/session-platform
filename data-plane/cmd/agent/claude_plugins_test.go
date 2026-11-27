@@ -12,15 +12,10 @@ import (
 	"testing"
 )
 
-// testClaudePlugin is a managed plugin the tests enable; the platform no longer
-// enables any by default (AC-L1).
 const testClaudePlugin = "session-platform@dlddu-plugins"
 
-// AC-L1: unset means no plugins; a selection is qualified with the platform
-// marketplace, kept in order, and refused when malformed.
 func TestClaudePluginsFromEnv(t *testing.T) {
 	t.Run("unset is no plugins", func(t *testing.T) {
-		// t.Setenv restores the variable once the test ends.
 		t.Setenv(claudePluginsEnv, "")
 		os.Unsetenv(claudePluginsEnv)
 		got, err := claudePluginsFromEnv()
@@ -79,8 +74,6 @@ func TestClaudeManagedSettingsFollowThePodsSelection(t *testing.T) {
 	}
 }
 
-// A session that chose no plugins boots, archives and restores with none, and
-// a restore drops the plugins an older archive enabled (AC-L1).
 func TestClaudeManagedSettingsWithoutPlugins(t *testing.T) {
 	homeDir := t.TempDir()
 	if err := ensureClaudeManagedSettings(homeDir, toolSurface{Plugins: []string{testClaudePlugin}}); err != nil {
@@ -104,8 +97,6 @@ func TestClaudeManagedSettingsWithoutPlugins(t *testing.T) {
 	}
 }
 
-// Plugins from another marketplace are still not the platform's to enable,
-// whatever the session selected.
 func TestClaudeManagedSettingsStillRejectOtherMarketplaces(t *testing.T) {
 	for _, name := range []string{"development@elsewhere", "@dlddu-plugins", "a/b@dlddu-plugins"} {
 		homeDir := t.TempDir()
@@ -274,7 +265,6 @@ func TestClaudePlatformInstallsTheSelectedSeededPlugins(t *testing.T) {
 	p := newTestClaudePlatform(t, codexSidecar{configured: true, plugins: testClaudeSeed, revision: "abc"}, nil, install)
 	selected := []string{"development@dlddu-plugins", "learning@dlddu-plugins"}
 	p.prepare(selected)
-	// A restore in the same pod installs nothing twice.
 	p.prepare(selected)
 
 	if got := p.mcpURL(); got != "http://127.0.0.1:8093/mcp" {
@@ -330,8 +320,6 @@ func TestClaudePlatformAFailedInstallEnablesNothing(t *testing.T) {
 	}
 }
 
-// The sidecar's seed may still fail after its health answered; the K3s MCP
-// it reported is kept.
 func TestClaudePlatformKeepsTheK3SMCPWhenTheSeedFails(t *testing.T) {
 	install := &fakeClaudeInstall{}
 	p := newTestClaudePlatform(t, codexSidecar{configured: true}, errors.New("plugin marketplace bootstrap failed"), install)

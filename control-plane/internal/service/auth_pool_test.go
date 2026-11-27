@@ -52,7 +52,6 @@ func createTask(t *testing.T, h poolHarness, name string) *session.Session {
 	return sess
 }
 
-// AC-N2/L3: a codex-task session holds a slot exactly while it has a pod.
 func TestAuthPoolLeaseFollowsPod(t *testing.T) {
 	ctx := context.Background()
 	h := newStubPoolHarness(t, 1)
@@ -80,7 +79,6 @@ func TestAuthPoolLeaseFollowsPod(t *testing.T) {
 	}
 	b := createTask(t, h, "b")
 
-	// A full pool leaves the frozen session frozen (AC-N3).
 	if _, err := h.svc.Restore(ctx, a.ID); !errors.Is(err, session.ErrAuthPoolExhausted) {
 		t.Fatalf("restore with a full pool err = %v, want exhausted", err)
 	}
@@ -111,7 +109,6 @@ func (failingStart) Start(context.Context, string, k8s.WorkloadSpec) (k8s.Sessio
 	return k8s.SessionPods{}, errors.New("apiserver down")
 }
 
-// A create that never reaches a pod gives its slot back (AC-N2).
 func TestAuthPoolReleasedWhenStartFails(t *testing.T) {
 	stub := k8s.NewStubOrchestrator("sessions")
 	h := newPoolHarness(t, 1, failingStart{stub}, stub)
@@ -123,7 +120,6 @@ func TestAuthPoolReleasedWhenStartFails(t *testing.T) {
 	}
 }
 
-// AC-N2's holder half: a lease whose session record is gone is reclaimed.
 func TestAuthPoolReclaimsGoneHolder(t *testing.T) {
 	h := newStubPoolHarness(t, 1)
 	if _, err := h.pool.Acquire(context.Background(), "deleted-long-ago", nil); err != nil {
@@ -135,7 +131,6 @@ func TestAuthPoolReclaimsGoneHolder(t *testing.T) {
 	}
 }
 
-// A type without a pool takes no slot; claude-code here runs in gateway mode.
 func TestAuthPoolOnlyForPooledTypes(t *testing.T) {
 	h := newStubPoolHarness(t, 1)
 	cc, err := h.svc.Create(context.Background(), session.CreateRequest{Name: "cc", WorkloadType: session.WorkloadTypeClaudeCode, ReasoningEffort: "max"})
@@ -150,7 +145,6 @@ func TestAuthPoolOnlyForPooledTypes(t *testing.T) {
 	}
 }
 
-// AC-E8/AC-M4: efforts outside the type's list never reach a pod.
 func TestCreateRejectsForeignEffort(t *testing.T) {
 	h := newStubPoolHarness(t, 1)
 	for _, req := range []session.CreateRequest{
@@ -171,7 +165,6 @@ func TestCreateRejectsForeignEffort(t *testing.T) {
 	}
 }
 
-// AC-J1: records stored before the codex split read as codex-manager.
 func TestStoredLegacyCodexReadsAsCodexChat(t *testing.T) {
 	h := newStubPoolHarness(t, 1)
 	ctx := context.Background()
@@ -193,7 +186,6 @@ func TestStoredLegacyCodexReadsAsCodexChat(t *testing.T) {
 	}
 }
 
-// AC-J7 applies to both codex types.
 func TestRefreshPluginsCodexTask(t *testing.T) {
 	h := newStubPoolHarness(t, 1)
 	sess := createTask(t, h, "task")

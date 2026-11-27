@@ -45,7 +45,6 @@ func TestCodexTask4_EffortIsFixedAtCreateAndReachesThePod(t *testing.T) {
 	}
 }
 
-// configEfforts is the reasoningEfforts list /config offers for a type.
 func configEfforts(t *testing.T, workloadType string) []string {
 	t.Helper()
 	resp, raw := doAs(t, "", http.MethodGet, "/api/v1/config", nil)
@@ -73,7 +72,6 @@ func configEfforts(t *testing.T, workloadType string) []string {
 	return nil
 }
 
-// assertNoSessionNamed checks a refused create left no session (and so no pod).
 func assertNoSessionNamed(t *testing.T, name string) {
 	t.Helper()
 	for _, s := range listAs(t, "", "") {

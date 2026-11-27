@@ -33,8 +33,6 @@ func readOptional(t *testing.T, path string) (string, bool) {
 	return string(content), true
 }
 
-// AC-N4 1·3: the slot is the authority before a turn, HOME after it, and a
-// logout in HOME empties the slot.
 func TestAuthSlotPullPushAndLogout(t *testing.T) {
 	slot := newTestAuthSlot(t, codexAuthFile, codexAuthHomeRel)
 	home := t.TempDir()
@@ -100,8 +98,6 @@ func TestAuthSlotPullPushAndLogout(t *testing.T) {
 	}
 }
 
-// AC-N4 2: a login the CLI refreshes mid-turn reaches the slot before the
-// turn ends.
 func TestAuthSlotWatchCopiesRefreshMidTurn(t *testing.T) {
 	slot := newTestAuthSlot(t, codexAuthFile, codexAuthHomeRel)
 	home := t.TempDir()
@@ -190,9 +186,6 @@ func archiveNames(t *testing.T, archive []byte) []string {
 	}
 }
 
-// AC-N4 end to end on the worker the pooled types share: the CLI sees the
-// slot's login, its refresh goes back to the slot, the archive leaves the
-// login out, and GET /auth-slot reports the slot.
 func TestClaudeWorkloadSyncsAuthSlotAroundTurns(t *testing.T) {
 	slot := newTestAuthSlot(t, codexAuthFile, codexAuthHomeRel)
 	if err := writeLoginFile(slot.slotPath(), []byte(`{"t":"slot-token"}`)); err != nil {
@@ -261,12 +254,9 @@ func TestAuthSlotRouteWithoutSlotIs404(t *testing.T) {
 	}
 }
 
-// A pull that fails leaves HOME without the login; the turn end must not read
-// that absence as a logout and wipe the slot (AC-N4).
 func TestAuthSlotFailedPullIsNotALogout(t *testing.T) {
 	slot := newTestAuthSlot(t, codexAuthFile, codexAuthHomeRel)
 	home := t.TempDir()
-	// An unreadable slot entry: pull refuses it, so HOME never gets a login.
 	if err := os.Symlink(filepath.Join(t.TempDir(), "elsewhere"), slot.slotPath()); err != nil {
 		t.Fatal(err)
 	}
@@ -281,8 +271,6 @@ func TestAuthSlotFailedPullIsNotALogout(t *testing.T) {
 	}
 }
 
-// A login the turn end could not save stays in HOME: the next pull saves it
-// first instead of overwriting it with the slot's older copy.
 func TestAuthSlotUnsavedLoginSurvivesNextPull(t *testing.T) {
 	slot := newTestAuthSlot(t, codexAuthFile, codexAuthHomeRel)
 	home := t.TempDir()
@@ -295,7 +283,6 @@ func TestAuthSlotUnsavedLoginSurvivesNextPull(t *testing.T) {
 	if err := writeLoginFile(slot.homePath(home), []byte(`{"t":"rotated"}`)); err != nil {
 		t.Fatal(err)
 	}
-	// The slot entry turns into something the copy cannot replace.
 	if err := os.Remove(slot.slotPath()); err != nil {
 		t.Fatal(err)
 	}
@@ -328,8 +315,6 @@ func TestAuthSlotUnsavedLoginSurvivesNextPull(t *testing.T) {
 	}
 }
 
-// A HOME file that is not JSON — caught mid-rewrite — never replaces the
-// slot's login, in the poll or at the turn end.
 func TestAuthSlotCopiesOnlyJSON(t *testing.T) {
 	slot := newTestAuthSlot(t, codexAuthFile, codexAuthHomeRel)
 	home := t.TempDir()

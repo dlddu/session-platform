@@ -66,7 +66,6 @@ func poolLeases(t *testing.T, cs kubernetes.Interface, pool string) []coordinati
 	return list.Items
 }
 
-// heldSlotOf is the slot whose lease names the session as holder, or -1.
 func heldSlotOf(t *testing.T, cs kubernetes.Interface, pool, sessionID string) int {
 	t.Helper()
 	for _, l := range poolLeases(t, cs, pool) {

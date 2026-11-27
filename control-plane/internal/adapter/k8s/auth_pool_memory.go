@@ -19,7 +19,6 @@ type MemoryAuthPool struct {
 
 var _ AuthPool = (*MemoryAuthPool)(nil)
 
-// NewMemoryAuthPool returns a pool of the given size.
 func NewMemoryAuthPool(slots int) *MemoryAuthPool {
 	return &MemoryAuthPool{holders: make([]string, slots), states: make([]*bool, slots)}
 }
@@ -78,14 +77,12 @@ func (p *MemoryAuthPool) Release(_ context.Context, sessionID string, signedIn *
 	return nil
 }
 
-// Holder reports who holds a slot, "" when free.
 func (p *MemoryAuthPool) Holder(slot int) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.holders[slot]
 }
 
-// HeldBy reports the slot a session holds.
 func (p *MemoryAuthPool) HeldBy(sessionID string) (int, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

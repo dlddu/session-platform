@@ -19,8 +19,6 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// AC-E8: the reasoning effort's wire contract — echoed and copied to the pod
-// when the type lists it, refused before provisioning otherwise.
 func TestCreateSessionReasoningEffort(t *testing.T) {
 	srv, orch, _ := newServerWithOrchestrator()
 	defer srv.Close()
@@ -53,8 +51,6 @@ func TestCreateSessionReasoningEffort(t *testing.T) {
 	}
 }
 
-// AC-J1: every caller moved to codex-manager, so a create naming the old type is
-// refused before any pod exists.
 func TestCreateSessionLegacyCodexNameRefused(t *testing.T) {
 	srv, orch, _ := newServerWithOrchestrator()
 	defer srv.Close()
@@ -65,7 +61,6 @@ func TestCreateSessionLegacyCodexNameRefused(t *testing.T) {
 	}
 }
 
-// AC-N2: a full pool is 503 with only the error class on the wire.
 func TestCreateSessionAuthPoolExhausted(t *testing.T) {
 	ckpt := archive.NewStubCheckpointer(true)
 	mgr := service.New(k8s.NewStubOrchestrator("sessions"),
