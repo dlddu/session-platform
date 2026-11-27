@@ -174,7 +174,10 @@ func TestClaudeShutdownEndsADeadlineFreeTurnAtOnce(t *testing.T) {
 		t.Fatal("shutdown did not reclaim the running turn")
 	}
 
-	payload, _ := readViaHTTP(t, srv, 0)
+	// Read the recorded transcript rather than /read: a shut-down workload
+	// refuses reads (503), and what this test is about is what shutdown wrote
+	// before it went.
+	payload := string(c.out.snapshot())
 	if want := turnClose(1, "canceled"); !strings.Contains(payload, want) {
 		t.Fatalf("shutdown left the turn open or mislabelled; output = %q", payload)
 	}
