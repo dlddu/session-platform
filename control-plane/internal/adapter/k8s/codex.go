@@ -51,14 +51,10 @@ const (
 	schedulerMCPPath        = "/scheduler/mcp"
 )
 
-// CodexSchedulerMCPURL is the scheduler MCP on the loopback sidecar.
 var CodexSchedulerMCPURL = K3SMCPProxyLoopbackURL + schedulerMCPPath
 
-// K3SMCPProxyLoopbackURL is where the workload container reaches its sidecar.
 var K3SMCPProxyLoopbackURL = "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(k3sMCPProxyPort))
 
-// WithCodexCredentialsSecret selects the Secret whose optional k3s-mcp-token
-// reaches the codex sidecar.
 func WithCodexCredentialsSecret(name string) Option {
 	return func(o *ClientOrchestrator) {
 		if name = strings.TrimSpace(name); name != "" {
@@ -67,8 +63,6 @@ func WithCodexCredentialsSecret(name string) Option {
 	}
 }
 
-// WithCodexConfigConfigMap selects the ConfigMap holding codex's
-// non-credential keys (model, k3s-mcp-url, plugin-marketplace-url).
 func WithCodexConfigConfigMap(name string) Option {
 	return func(o *ClientOrchestrator) {
 		if name = strings.TrimSpace(name); name != "" {
@@ -77,8 +71,6 @@ func WithCodexConfigConfigMap(name string) Option {
 	}
 }
 
-// WithCodexTaskCredentialsSecret selects the Secret whose optional
-// k3s-mcp-token reaches the codex-task sidecar (AC-M1).
 func WithCodexTaskCredentialsSecret(name string) Option {
 	return func(o *ClientOrchestrator) {
 		if name = strings.TrimSpace(name); name != "" {
@@ -87,7 +79,6 @@ func WithCodexTaskCredentialsSecret(name string) Option {
 	}
 }
 
-// WithCodexTaskConfigConfigMap selects codex-task's non-credential ConfigMap.
 func WithCodexTaskConfigConfigMap(name string) Option {
 	return func(o *ClientOrchestrator) {
 		if name = strings.TrimSpace(name); name != "" {

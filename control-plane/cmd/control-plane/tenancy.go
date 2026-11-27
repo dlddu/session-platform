@@ -10,8 +10,6 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/tenancy"
 )
 
-// tenancyConfig is docs/prd/multitenancy.md's deployment input: the tenant
-// set (AC-K3) and the audience a tenant token must be minted for (AC-K1).
 type tenancyConfig struct {
 	tenants  *tenancy.Config
 	audience string

@@ -15,8 +15,6 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// Tenant is one configured tenant: the ServiceAccounts that speak for it and
-// the workload types its sessions may run (AC-K3).
 type Tenant struct {
 	Name            string                 `json:"name"`
 	ServiceAccounts []string               `json:"serviceAccounts"`
@@ -27,12 +25,10 @@ type Tenant struct {
 // deployment offers — including types added after the tenant was configured.
 const AnyWorkloadType session.WorkloadType = "*"
 
-// Allows reports whether the tenant may create sessions of type w.
 func (t *Tenant) Allows(w session.WorkloadType) bool {
 	return slices.Contains(t.WorkloadTypes, AnyWorkloadType) || slices.Contains(t.WorkloadTypes, w)
 }
 
-// Config is the validated tenant set, indexed both ways.
 type Config struct {
 	tenants   []*Tenant
 	byName    map[string]*Tenant
@@ -45,8 +41,7 @@ type configFile struct {
 
 var (
 	tenantNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
-	// accountPattern is "<namespace>/<serviceaccount>", both DNS-1123 names.
-	accountPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?/[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$`)
+	accountPattern    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?/[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$`)
 )
 
 // Parse reads the SESSION_PLATFORM_TENANTS document. Blank means no tenants:
@@ -112,7 +107,6 @@ func Parse(raw string) (*Config, error) {
 	return cfg, nil
 }
 
-// Tenants returns the tenants in configuration order.
 func (c *Config) Tenants() []*Tenant {
 	if c == nil {
 		return nil
@@ -120,7 +114,6 @@ func (c *Config) Tenants() []*Tenant {
 	return slices.Clone(c.tenants)
 }
 
-// Lookup returns the tenant named name.
 func (c *Config) Lookup(name string) (*Tenant, bool) {
 	if c == nil {
 		return nil, false
@@ -129,7 +122,6 @@ func (c *Config) Lookup(name string) (*Tenant, bool) {
 	return t, ok
 }
 
-// ForServiceAccount returns the tenant that namespace/name speaks for.
 func (c *Config) ForServiceAccount(namespace, name string) (*Tenant, bool) {
 	if c == nil {
 		return nil, false
@@ -138,20 +130,15 @@ func (c *Config) ForServiceAccount(namespace, name string) (*Tenant, bool) {
 	return t, ok
 }
 
-// Caller is who a request speaks for. Exactly one of Operator and Tenant holds.
 type Caller struct {
 	Operator bool
 	Tenant   *Tenant
 }
 
-// OperatorCaller is the caller of a request without a bearer token (AC-K4).
 var OperatorCaller = Caller{Operator: true}
 
-// Sees reports whether the caller may see a session owned by tenant (AC-K2):
-// the operator sees every session, a tenant only its own.
 func (c Caller) Sees(tenant string) bool {
 	return c.Operator || (c.Tenant != nil && c.Tenant.Name == tenant)
 }
 
-// ErrNoTenant reports a proven ServiceAccount that no tenant claims.
 var ErrNoTenant = errors.New("service account belongs to no tenant")

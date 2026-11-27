@@ -19,12 +19,10 @@ import (
 // anything. A line that is not JSON at all is a diagnostic and is passed
 // through, as the other projectors do.
 type codexStreamProjector struct {
-	dst io.Writer
-	buf []byte
-	// discarding is set while the rest of an oversized line is skipped.
+	dst        io.Writer
+	buf        []byte
 	discarding bool
-	// steer, when set, receives the runner's turn/steer replies (AC-J9).
-	steer *steerDesk
+	steer      *steerDesk
 }
 
 const (
@@ -204,7 +202,6 @@ func (p *codexStreamProjector) writeLine(text string) error {
 	return err
 }
 
-// jsonString is raw's string value, or empty for anything that is not one.
 func jsonString(raw json.RawMessage) string {
 	var s string
 	if len(raw) == 0 || json.Unmarshal(raw, &s) != nil {

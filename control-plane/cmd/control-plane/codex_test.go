@@ -44,7 +44,6 @@ func TestCodexArchiveGateNeedsImage(t *testing.T) {
 	}
 }
 
-// AC-J1 with AC-N6: an image and at least one slot.
 func TestOfferedWorkloadTypesIncludesCodexOnlyWithImageAndSlot(t *testing.T) {
 	has := func(c config) bool {
 		for _, w := range c.offeredWorkloadTypes() {

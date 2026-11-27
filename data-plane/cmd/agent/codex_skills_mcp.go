@@ -28,10 +28,9 @@ import (
 const (
 	codexSkillsMCPServerName = "session-platform-skills"
 	maxCodexSkillFileBytes   = 256 << 10
-	// maxCodexSkillsMCPLine bounds one inbound frame; the only client is codex.
-	maxCodexSkillsMCPLine = 1 << 20
-	maxCodexSkillsListed  = 500
-	maxCodexSkillFiles    = 200
+	maxCodexSkillsMCPLine    = 1 << 20
+	maxCodexSkillsListed     = 500
+	maxCodexSkillFiles       = 200
 )
 
 type codexSkillsServer struct {
@@ -39,9 +38,8 @@ type codexSkillsServer struct {
 	// agentURL is the agent's loopback base URL; refresh_skills is offered
 	// only when it is set (AC-J7).
 	agentURL string
-	// client posts the refresh; a field so tests can bound it.
-	client *http.Client
-	logger *slog.Logger
+	client   *http.Client
+	logger   *slog.Logger
 }
 
 // serveCodexSkillsMCP answers requests until stdin closes. A frame it cannot
@@ -507,8 +505,6 @@ func skillFrontMatter(content []byte, field string) string {
 // the sidecar's clone, plus the round trip.
 const codexSkillsRefreshTimeout = codexPluginRefreshTimeout + 15*time.Second
 
-// refreshSkills asks the agent to refresh the plugin skills for the running
-// turn (AC-J7) and words the result for the model.
 func (s codexSkillsServer) refreshSkills() (string, error) {
 	client := s.client
 	if client == nil {

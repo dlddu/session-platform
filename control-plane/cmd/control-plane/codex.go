@@ -13,12 +13,7 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// codexConfig is the codex slice of the control-plane configuration
-// (docs/prd/codex-workload.md, AC-J1, AC-J4~J6), kept apart from the other
-// types' fields so turning codex on changes nothing else.
 type codexConfig struct {
-	// image is the data plane image for `workloadType=codex`. Unset means the
-	// type is not offered and creating one fails (AC-J1, same rule as AC-E1).
 	image string
 	// credentialsSecret holds the optional k3s-mcp-token the sidecar reads.
 	// There is no provider key: the first session on a slot logs in to ChatGPT
@@ -63,7 +58,6 @@ func loadCodexConfig() (codexConfig, error) {
 	}, nil
 }
 
-// offered is AC-J1's rule with AC-N6's slot: an image and at least one slot.
 func (c codexConfig) offered() bool {
 	return c.image != "" && c.pool.slots > 0
 }
@@ -81,8 +75,6 @@ func validateCodexConfig(cfg codexConfig, others map[string]string) error {
 	return nil
 }
 
-// codexArchiveOption installs codex's filesystem-archive checkpointer, or
-// returns nil when its gate is off (AC-J4).
 func codexArchiveOption(cfg codexConfig, client *agent.HTTPClient, store archive.CheckpointStore) (service.Option, error) {
 	if !cfg.archiveEnabled {
 		return nil, nil
