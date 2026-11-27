@@ -526,7 +526,18 @@ const CRED_TX_DEFAULT = document.getElementById('ws-cred-tx').innerHTML;
 const CRED_TX_CODEX = 'No provider key is stored on the platform. The session signs in to ChatGPT on its first prompt, and that login travels inside the session archive. Type and model are <b>immutable</b> for this session.';
 const INPUT_PH = {
   'minimax-code':'send a prompt — runs mcode exec once in the session pod',
-  'codex-manager':'send a prompt — runs one Codex turn in the session pod'
+  'codex-manager':'send a prompt — runs one Codex turn in the session pod',
+  'codex-task':'send a prompt — runs one Codex turn in the session pod'
+};
+// codex 계열(채팅용 manager · 작업용 task)은 실행 모델이 같고 갈리는 것은 카피와 로그인 안내 한 줄뿐이다.
+// 구현(web/src/app/workloadKind.ts의 isCodexWorkload · web/src/screens/Workspace.tsx)과 같은 묶음이다.
+// (열린 형제 PR #277이 같은 파일에 CODEX_TYPES를 쓰므로 이름이 겹치지 않게 한다 — 둘 다 머지면 재선언 SyntaxError.)
+const CODEX_WORKLOAD_TYPES = ['codex-manager','codex-task'];
+// 로그인 안내 한 줄 — codex-manager는 '첫 프롬프트가 로그인한다', codex-task는 '자리(슬롯)가 비면 첫 프롬프트가 로그인한다'
+// (구현 Workspace.tsx의 agent-hint 두 문장을 그대로 쓴다).
+const CODEX_HINT = {
+  'codex-manager':'First prompt signs this session in to ChatGPT — watch the transcript for a link and code.',
+  'codex-task':"If this session's login slot is empty, the first prompt signs it in to ChatGPT — watch the transcript for a link and code."
 };
 // 이 화면은 workloadType이 claude-code · minimax-code · codex인 에이전트 세션 전용이다 (shell 타입은 workspace.html)
 let sessions = [
@@ -542,6 +553,10 @@ let sessions = [
   {id:'e41c', name:'cluster-triage', type:'codex-manager', model:'platform default', state:'active',
    pod:'sess-e41c-v9rn', region:'us-east-1', up:'12m', upMin:12, cpu:9, mem:226, memMax:2048, idleMin:0,
    turns:1, cwd:'/work', files:'—', cursor:'nextOffset=1730', firstLogin:true},
+  // codex-task — 로그인 자리가 플랫폼 풀에서 빌려 온다(AC-M2). 코드가 아니라 셸·파일 편집을 한다.
+  {id:'d5a2', name:'fix-invoice-bug', type:'codex-task', model:'model-a', state:'active',
+   pod:'sess-d5a2-k8vp', region:'us-east-1', up:'6m', upMin:6, cpu:14, mem:301, memMax:2048, idleMin:0,
+   turns:2, cwd:'/work/api', files:'invoice.go, marker.txt', cursor:'nextOffset=4820'},
   {id:'c83d', name:'doc-migration', type:'claude-code', model:'platform default', state:'snapshot',
    pod:'— reclaimed —', region:'us-east-1', up:'—', frozenAgo:'18m ago', checkpoint:'38 MB archive', reclaim:'1 vCPU · 2 GB',
    turns:12, cwd:'/work/docs', files:'42 files', cursor:'nextOffset=31408'}
@@ -652,9 +667,12 @@ function populate(s){
   document.getElementById('ws-console-pod').textContent = s.state==='snapshot' ? 'pod reclaimed' : 'pod/'+s.pod;
   document.getElementById('ws-console-type').textContent = s.type + ' session';
   document.getElementById('ws-input-ph').innerHTML = INPUT_PH[s.type] || INPUT_PH_DEFAULT;
-  document.getElementById('ws-codex-hint').style.display = (s.type==='codex-manager' && s.state!=='snapshot') ? '' : 'none';
+  const isCodexWorkload = CODEX_WORKLOAD_TYPES.includes(s.type);
+  const codexHint = document.getElementById('ws-codex-hint');
+  codexHint.style.display = (isCodexWorkload && s.state!=='snapshot') ? '' : 'none';
+  codexHint.textContent = CODEX_HINT[s.type] || codexHint.textContent;
   // codex 는 공급자 키가 없다 — 세션마다 ChatGPT 기기 로그인을 하고 그 로그인이 아카이브에 실린다 (AC-J3)
-  const isCodex = s.type==='codex-manager';
+  const isCodex = isCodexWorkload;
   document.getElementById('ws-login-row').style.display = isCodex ? '' : 'none';
   document.getElementById('ws-baseurl-row').style.display = isCodex ? 'none' : '';
   document.getElementById('ws-token-row').style.display = isCodex ? 'none' : '';
@@ -707,7 +725,7 @@ function populate(s){
 }
 // STP-conversation-carry · 대화 문맥 패널 (AC-E4)
 function paintContext(s){
-  const turns = s.type==='codex-manager' ? [
+  const turns = CODEX_WORKLOAD_TYPES.includes(s.type) ? [
     {n:'1', t:'which pods in the media namespace restarted today?'}
   ] : [
     {n:'1', t:'read invoice.go and tell me what the rounding bug is'},
