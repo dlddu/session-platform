@@ -370,10 +370,10 @@
   .guarantee b{color:var(--text-dim);font-weight:500}
 
   /* tenant picker (AC-K2 · AC-K4) — 테넌트가 하나라도 설정된 운영자에게만 보인다 */
-  .field .tenant-in{width:100%;height:40px;border-radius:10px;background:var(--ink-2);border:1px solid var(--line);
+  .field .tenant-in,.model-field .effort-in{width:100%;height:40px;border-radius:10px;background:var(--ink-2);border:1px solid var(--line);
     color:var(--text);padding:0 12px;font-family:"IBM Plex Mono",monospace;font-size:13px;color-scheme:dark}
-  .field .tenant-in:focus{outline:none;border-color:var(--active)}
-  .field .hint{display:block;margin-top:6px;font-size:11px;color:var(--text-faint)}
+  .field .tenant-in:focus,.model-field .effort-in:focus{outline:none;border-color:var(--active)}
+  .field .hint,.model-field .hint{display:block;margin-top:6px;font-size:11px;color:var(--text-faint)}
   .tenant-line{margin:-4px 0 16px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-faint)}
   .tenant-line b{font-family:"IBM Plex Mono",monospace;font-weight:600;color:var(--text);letter-spacing:0;text-transform:none}
 
@@ -526,10 +526,13 @@
             <button data-model="model-a" onclick="pickModel('model-a')">model-a</button>
             <button data-model="model-b" onclick="pickModel('model-b')">model-b</button>
           </div>
-          <!-- AC-E8 · AC-M4: 추론 수준은 /config 의 reasoningEfforts 가 빈 타입에서는 보이지 않는다 -->
+          <!-- AC-E8 · AC-M4: 추론 수준은 /config 의 reasoningEfforts 가 빈 타입에서는 보이지 않는다.
+               구현(web/src/screens/NewSession.tsx)은 네이티브 select + 힌트로 그린다 — 그려진 것을 그대로 따라간다
+               (네이티브 select 의 값은 구현의 .field select · 힌트는 .field-hint 와 같다). -->
           <div id="effort-field" style="display:none">
             <label style="display:block;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text-faint);margin:16px 0 9px">Reasoning effort</label>
-            <div class="seg" id="effort-seg"></div>
+            <select class="effort-in" id="effort-in" onchange="pickEffort(this.value)"></select>
+            <span class="hint">CLI default leaves the effort to the agent and its model.</span>
           </div>
           <div class="immutable">
             <span class="ic">
@@ -727,13 +730,14 @@ function renderEfforts(t){
   const list = EFFORTS[t] || [];
   draft.effort = '';
   document.getElementById('effort-field').style.display = list.length ? '' : 'none';
-  document.getElementById('effort-seg').innerHTML = ['', ...list].map(e =>
-    `<button class="${e===''?'sel':''}" data-effort="${e}" onclick="pickEffort('${e}')">${e===''?'CLI default':e}</button>`).join('');
+  // 첫 칸은 'CLI default'(값 생략) — 구현의 <option value="">CLI default</option> 와 같다.
+  document.getElementById('effort-in').innerHTML = ['', ...list].map(e =>
+    `<option value="${e}">${e===''?'CLI default':e}</option>`).join('');
 }
 function pickEffort(e){
   if(provBusy) return;
   draft.effort = e;
-  document.querySelectorAll('#effort-seg button').forEach(b=>b.classList.toggle('sel', b.dataset.effort===e));
+  document.getElementById('effort-in').value = e;
 }
 /* ---------- AC-K2 · AC-K4 · 테넌트 선택 ----------
    ?tenancy=none     테넌트 설정 없음 — 오늘과 똑같은 화면(칸 자체가 없다)
