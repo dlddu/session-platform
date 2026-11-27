@@ -494,6 +494,10 @@
             <div class="lc-row"><span class="k">Auto-archive at</span><span class="v">60 min idle</span></div>
             <div class="lc-row"><span class="k">Pod uptime</span><span class="v" id="ws-lc-up">—</span></div>
             <div class="lc-actions">
+              <!-- codex 전용 (AC-J7): 플랫폼 스킬을 다시 받는 길 — 자동 새로고침은 없다(운영자가 누른다) -->
+              <button class="b" id="ws-refresh-plugins" style="display:none" aria-busy="false"
+                title="Fetch the platform plugin skills again — the conversation is kept"
+                onclick="refreshPlugins()">Refresh plugin skills</button>
               <button class="b" id="ws-freeze-btn" onclick="freezeNow()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v10a1.5 1.5 0 0 0 1.5 1.5h11A1.5 1.5 0 0 0 19 19V9M10 13h4"/></svg>
                 Archive now
@@ -527,6 +531,20 @@ const CRED_TX_CODEX = 'No provider key is stored on the platform. The session si
 const INPUT_PH = {
   'minimax-code':'send a prompt — runs mcode exec once in the session pod',
   'codex-manager':'send a prompt — runs one Codex turn in the session pod'
+};
+// AC-J7 — codex 세션 전용 'Refresh plugin skills'. 운영자가 누르면 사이드카가 마켓플레이스를 한 번 더
+// 받는다(자동 새로고침은 없다 — PRD codex-workload AC-J7). 대화·로그인은 건드리지 않는다.
+// 라벨·title·대기 중 라벨·결과 알림 카피는 구현(web/src/screens/Workspace.tsx)과 1:1이다.
+// `?refresh=` 로 다른 결과를 골라 볼 수 있다 — unconfigured(기본) · upToDate · changed · busy · failed.
+// (구현은 API 응답에 따라 이 중 하나를 고른다: 마켓플레이스 없음 · 변화 없음 · 변화 있음 · 409 · 그 외 오류)
+const CODEX_TYPES = ['codex-manager','codex-task'];
+const REFRESH_BUSY_LABEL = 'Refreshing skills…';
+const PLUGIN_REFRESH_TOAST = {
+  unconfigured: 'This session has no plugin marketplace to refresh',
+  upToDate:     'Plugin skills are already up to date',
+  changed:      'Plugin skills refreshed — 1 added, 0 updated, 0 removed',
+  busy:         'Plugin skills refresh between turns — try again when the reply finishes',
+  failed:       'Could not refresh plugin skills: the marketplace could not be reached'
 };
 // 이 화면은 workloadType이 claude-code · minimax-code · codex인 에이전트 세션 전용이다 (shell 타입은 workspace.html)
 let sessions = [
@@ -653,6 +671,9 @@ function populate(s){
   document.getElementById('ws-console-type').textContent = s.type + ' session';
   document.getElementById('ws-input-ph').innerHTML = INPUT_PH[s.type] || INPUT_PH_DEFAULT;
   document.getElementById('ws-codex-hint').style.display = (s.type==='codex-manager' && s.state!=='snapshot') ? '' : 'none';
+  // codex 세션 전용 새로고침 CTA (AC-J7) — 동결(snapshot) 화면에는 살아 있는 세션 CTA가 없다
+  document.getElementById('ws-refresh-plugins').style.display =
+    (CODEX_TYPES.includes(s.type) && s.state!=='snapshot') ? '' : 'none';
   // codex 는 공급자 키가 없다 — 세션마다 ChatGPT 기기 로그인을 하고 그 로그인이 아카이브에 실린다 (AC-J3)
   const isCodex = s.type==='codex-manager';
   document.getElementById('ws-login-row').style.display = isCodex ? '' : 'none';
@@ -766,6 +787,7 @@ function promote(s){
   document.getElementById('ws-lc-idle').textContent='00:00 / 60:00';
   document.getElementById('ws-lc-up').textContent='0m';
   document.getElementById('ws-freeze-btn').style.display='';
+  document.getElementById('ws-refresh-plugins').style.display = CODEX_TYPES.includes(s.type) ? '' : 'none';
   document.getElementById('ws-vitals').style.display='';
   setGauge(s.cpu,s.mem,s.memMax);
   const tag=document.getElementById('ws-console-tag'); tag.style.display=''; tag.innerHTML='<span class="led"></span>agent ready';
@@ -787,6 +809,28 @@ function promote(s){
 function freezeNow(){
   toast('Session archived — pod reclaimed','ok');
   setTimeout(()=>location.href='index.html', 950);
+}
+// AC-J7 — codex 전용 새로고침. 누르면 마켓플레이스를 한 번 더 받는다(자동 새로고침은 없다).
+// 결과는 대화에도, 세션에도 남지 않고 알림 한 줄로만 보인다.
+let refreshing = false;
+function refreshOutcome(){
+  const q = new URLSearchParams(location.search).get('refresh');
+  return (q && Object.keys(PLUGIN_REFRESH_TOAST).includes(q)) ? q : 'unconfigured';
+}
+function refreshPlugins(){
+  const btn = document.getElementById('ws-refresh-plugins');
+  if(refreshing || !btn) return;
+  refreshing = true;
+  const label = btn.textContent;           // 라벨 정본은 마크업
+  const outcome = refreshOutcome();
+  btn.textContent = REFRESH_BUSY_LABEL;
+  btn.setAttribute('aria-busy','true');
+  setTimeout(()=>{
+    refreshing = false;
+    btn.textContent = label;
+    btn.setAttribute('aria-busy','false');
+    toast(PLUGIN_REFRESH_TOAST[outcome], (outcome==='busy'||outcome==='failed') ? 'warm' : 'ok');
+  }, 900);
 }
 function startWsTick(){
   setInterval(()=>{
