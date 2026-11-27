@@ -288,7 +288,7 @@ gitignored.
   the 1:1. The axis moved from acceptance criteria to test scenarios on
   2026-09-08, so the registry lists the scenarios that do not have a dedicated
   file yet; the reaper-driven idle→snapshot trigger
-  (`lifecycle.md#시나리오 1`) stays a registered exception, waiting on the same
+  (`lifecycle.md#시나리오 1`) stays a registered deferral, waiting on the same
   `TODO(policy)` as the idle-state read/write branches.
 - **Conflict (envtest)** (`make test-envtest`): an isolated nested module runs
   the ConfigMap adapter against a real kube-apiserver + etcd to assert AC-C1's
