@@ -15,9 +15,6 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// AC-J7: a refresh is a codex session's, brings the session active the way a
-// write does — a frozen one is restored first — and refuses anything else
-// before it reaches a pod.
 func TestRefreshPlugins(t *testing.T) {
 	ctx := context.Background()
 	ckpt := archive.NewStubCheckpointer(true)

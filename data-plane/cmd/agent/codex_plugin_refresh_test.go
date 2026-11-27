@@ -14,8 +14,6 @@ import (
 	"testing"
 )
 
-// refreshableCodexCLI is a codex CLI whose sidecar seed the test can change, as
-// a marketplace push followed by a refresh would.
 type refreshableCodexCLI struct {
 	mu         sync.Mutex
 	seed       []miniMaxSeedPlugin
@@ -62,9 +60,6 @@ func skillSeed(skills map[string]string) []miniMaxSeedPlugin {
 	return []miniMaxSeedPlugin{seedPlugin("p", files)}
 }
 
-// AC-J7: a refresh asks the sidecar to clone again, syncs the skills from the
-// new seed and reports what changed; when it cannot read a new seed it leaves
-// the session's skills alone instead of syncing them away.
 func TestCodexRefreshPlugins(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	sidecar := &refreshableCodexCLI{}
@@ -140,8 +135,6 @@ func TestPostCodexSidecarRefresh(t *testing.T) {
 	}
 }
 
-// AC-J7 on the agent: the route refreshes only between turns, leaves a line
-// in the transcript, and writes nothing into the next turn's prompt.
 func TestCodexPluginRefreshRoute(t *testing.T) {
 	sidecar := &refreshableCodexCLI{}
 	sidecar.set(skillSeed(map[string]string{"s": "v1\n"}), "rev-1")
@@ -222,9 +215,6 @@ func TestPluginRefreshUnsupported(t *testing.T) {
 	}
 }
 
-// AC-J7 on the agent: the running turn may refresh once, from loopback; the
-// transcript line lands after the turn's end marker, and a successful turn
-// that refreshed settles the note, while one that failed leaves it pending.
 func TestCodexPluginRefreshInTurn(t *testing.T) {
 	sidecar := &refreshableCodexCLI{}
 	sidecar.set(skillSeed(map[string]string{"s": "v1\n"}), "rev-1")
@@ -252,15 +242,12 @@ func TestCodexPluginRefreshInTurn(t *testing.T) {
 	}
 	lastPrompt := func(run recordedClaudeRun) string { return run.argv[len(run.argv)-1] }
 
-	// Outside a turn there is no caller to serve.
 	post(pluginRefreshTurnPath, http.StatusConflict)
 
 	writeViaHTTP(t, srv, "first", http.StatusOK)
 	receiveClaudeRun(t, runner.started)
 	waitClaudeIdle(t, c)
 
-	// A turn that refreshes and succeeds: one refresh, then the limit; the
-	// operator's route still waits for the turn.
 	sidecar.set(skillSeed(map[string]string{"s": "v2\n"}), "rev-2")
 	runner.release = make(chan struct{})
 	writeViaHTTP(t, srv, "please refresh", http.StatusOK)
@@ -288,7 +275,6 @@ func TestCodexPluginRefreshInTurn(t *testing.T) {
 	}
 	waitClaudeIdle(t, c)
 
-	// A turn that refreshes and then fails leaves nothing in the next prompt.
 	sidecar.set(skillSeed(map[string]string{"s": "v3\n"}), "rev-3")
 	runner.release = make(chan struct{})
 	runner.runErr = func(index int) error {

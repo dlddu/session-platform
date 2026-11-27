@@ -8,9 +8,6 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// AC-J7: POST /sessions/{id}/plugins/refresh is a codex session's own,
-// answers with the session and what changed, and is scoped like every other
-// session-id route — another tenant's session is not found.
 func TestPluginRefreshEndpoint(t *testing.T) {
 	srv := newTenantServer(t)
 

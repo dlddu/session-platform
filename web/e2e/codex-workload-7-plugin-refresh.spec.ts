@@ -1,5 +1,4 @@
 // 검증 시나리오: codex-workload.md#시나리오 7
-//
 // docs/prd/codex-workload.md AC-J7. kind SUT 의 codex 사이드카에는 마켓플레이스 토큰이 없으므로
 // 새로고침 결과는 「새로 받을 마켓플레이스가 없다」다 — 이 시나리오가 사는 것은 버튼 → control plane
 // → 세션 파드 에이전트 → 사이드카까지 한 번 도는 경로와, 그 버튼이 codex 세션에만 있다는 것이다.
