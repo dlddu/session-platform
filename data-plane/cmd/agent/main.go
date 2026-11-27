@@ -124,7 +124,7 @@ func main() {
 			logger.Error("unsafe agent credential configuration", "workload", workload, "err", err)
 			os.Exit(1)
 		}
-		runTimeout, err := durationEnv("CLAUDE_CODE_RUN_TIMEOUT", defaultClaudeRunTimeout)
+		runTimeout, err := claudeRunTimeoutFromEnv()
 		if err != nil {
 			logger.Error("invalid claude-code run timeout", "err", err)
 			os.Exit(1)
@@ -857,6 +857,15 @@ func durationEnv(k string, def time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("%s must be a positive duration, got %q", k, value)
 	}
 	return duration, nil
+}
+
+// claudeRunTimeoutFromEnv reads AC-E2's optional wall-clock cap on one
+// invocation, for every workload that runs turns through the claude worker.
+// Unset or empty means no cap — the turn runs until its own work, the user's
+// interruption or shutdown ends it. A set value must be a positive duration:
+// nonsense fails the boot rather than quietly installing a cap of its own.
+func claudeRunTimeoutFromEnv() (time.Duration, error) {
+	return durationEnv(claudeRunTimeoutEnv, 0)
 }
 
 // claudeAuth is how a Claude Code workload reaches its provider and what it

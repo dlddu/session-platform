@@ -69,8 +69,10 @@ interactive shell and Claude Code workloads.
   The turn's input stays open after its result while background tasks it
   started are still running, so they finish inside the turn and the model sees
   their completion. The runner sets no wait of its own and writes nothing
-  after the prompt: only the agent's turn timeout (`CLAUDE_CODE_RUN_TIMEOUT`)
-  ends a turn whose work keeps running. Closing earlier would kill the task
+  after the prompt: a turn whose work keeps running ends when that work ends,
+  when the user interrupts it, when the agent shuts down, or — only where a
+  deployment configured one — at `CLAUDE_CODE_RUN_TIMEOUT`.
+  Closing earlier would kill the task
   and make the next resumed turn open with a "stopped" notice glued to its
   prompt.
   `CLAUDE_CODE_EFFORT` (`low`, `medium`, `high`, `xhigh` or `max`, AC-E8) adds
@@ -86,9 +88,13 @@ interactive shell and Claude Code workloads.
   continues the most recent one, and a record whose transcript is gone starts
   over with a notice. A non-empty concrete
   `CLAUDE_CODE_MODEL` adds `--model` with that value as one argv element;
-  an empty value or the `platform-default` sentinel omits the model flag. Each
-  invocation is limited to 30 minutes by default; set
-  `CLAUDE_CODE_RUN_TIMEOUT` to another positive Go duration when needed. One
+  an empty value or the `platform-default` sentinel omits the model flag. An
+  invocation carries no wall-clock limit by default — a healthy turn runs
+  until its own work finishes, until the user interrupts it, or until the
+  agent shuts down. Set `CLAUDE_CODE_RUN_TIMEOUT` to a positive Go duration to
+  cap one; the capped turn is killed and reported `status=timeout`. Unset or
+  empty means no cap; a zero, negative or unparsable value refuses to start
+  rather than quietly installing a cap of its own. One
   prompt is limited to 1 MiB; an oversized write is not queued and returns 413.
   The pending queue is bounded to 64 prompts and 8 MiB; a new write that would
   exceed either bound returns 429 while already accepted prompts keep draining.
@@ -184,8 +190,9 @@ interactive shell and Claude Code workloads.
   for them. The wait is `CODEX_RUNNER_BACKGROUND_WAIT_MS` (default 10
   minutes); agents still running then are interrupted and reported as
   stopped.
-  All of it is one job, so the whole invocation, waits included, stays
-  under `CLAUDE_CODE_RUN_TIMEOUT`, and the next prompt waits in the queue.
+  All of it is one job, so the whole invocation, waits included, runs under
+  whatever `CLAUDE_CODE_RUN_TIMEOUT` the deployment set — by default none —
+  and the next prompt waits in the queue.
   The agent projects notices, finished `agent_message` text, a
   `· server.tool` line per MCP call (plus an `error:` line if it fails) and
   `error:` lines for failed turns, and drops everything else, including

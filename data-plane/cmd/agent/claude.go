@@ -71,8 +71,13 @@ const (
 	claudeTurnSentinel         = '\x1e'
 
 	claudeProcessGroupDrainTimeout      = 5 * time.Second
-	defaultClaudeRunTimeout             = 30 * time.Minute
 	defaultClaudeCheckpointDrainTimeout = 5 * time.Minute
+
+	// claudeRunTimeoutEnv is the optional wall-clock cap on one invocation
+	// (AC-E2). It has no default: a turn the pod did not cap runs until its
+	// own work, the user's interruption or shutdown ends it. A deployment
+	// that wants a cap sets this to a positive Go duration.
+	claudeRunTimeoutEnv = "CLAUDE_CODE_RUN_TIMEOUT"
 )
 
 var (
@@ -322,9 +327,12 @@ func newClaudeWorkload(cfg claudeConfig) (*claudeWorkload, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	// A zero or negative RunTimeout means no wall-clock cap, not "use a
+	// platform-picked one": the turn ends when its work, the user or
+	// shutdown ends it.
 	runTimeout := cfg.RunTimeout
-	if runTimeout <= 0 {
-		runTimeout = defaultClaudeRunTimeout
+	if runTimeout < 0 {
+		runTimeout = 0
 	}
 	runOutputLimit := cfg.RunOutputLimit
 	if runOutputLimit <= 0 {
@@ -588,7 +596,19 @@ func (c *claudeWorkload) runWorker() {
 				closeSteer = closePipe
 			}
 		}
-		runCtx, cancelRun := context.WithTimeout(c.ctx, c.runTimeout)
+		// Only a pod that configured a cap gives the turn a deadline. Without
+		// one the turn's context carries cancellation alone — from the
+		// workload's own shutdown or from whoever interrupts it — so a healthy
+		// turn is never cut off on a clock it did not ask for.
+		var (
+			runCtx    context.Context
+			cancelRun context.CancelFunc
+		)
+		if c.runTimeout > 0 {
+			runCtx, cancelRun = context.WithTimeout(c.ctx, c.runTimeout)
+		} else {
+			runCtx, cancelRun = context.WithCancel(c.ctx)
+		}
 		stopSlotWatch := c.watchAuthSlot()
 		err := c.runner.Run(runCtx, c.argv(prompt, resume, job.toolApprovals), runnerOptions{
 			Dir:    c.workDir,

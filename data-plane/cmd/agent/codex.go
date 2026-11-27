@@ -307,7 +307,7 @@ func newCodexWorkloadFromEnv(workload string, logger *slog.Logger, restoreMode b
 	if err != nil {
 		return nil, err
 	}
-	runTimeout, err := durationEnv("CLAUDE_CODE_RUN_TIMEOUT", defaultClaudeRunTimeout)
+	runTimeout, err := claudeRunTimeoutFromEnv()
 	if err != nil {
 		return nil, err
 	}

@@ -307,7 +307,7 @@ func newMiniMaxWorkloadFromEnv(logger *slog.Logger, restoreMode bool) (*claudeWo
 	if err := os.Setenv(miniMaxDisableEvalCaptureEnv, "1"); err != nil {
 		return nil, err
 	}
-	runTimeout, err := durationEnv("CLAUDE_CODE_RUN_TIMEOUT", defaultClaudeRunTimeout)
+	runTimeout, err := claudeRunTimeoutFromEnv()
 	if err != nil {
 		return nil, err
 	}
