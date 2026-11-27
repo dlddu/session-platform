@@ -106,6 +106,9 @@
   .kv dt{color:var(--text-faint)}
   .kv dd{margin:0;color:var(--text-dim)}
 
+  .actions{margin-top:18px;padding-top:14px;border-top:1px dashed var(--line-2)}
+  .actions .lab{margin-bottom:8px}
+
   .proto-bar{
     display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:18px;padding-top:14px;
     border-top:1px dashed var(--line-2);
@@ -349,6 +352,11 @@
         응답이 진행 중이면 받지 않습니다(409) — 끝난 뒤 다시 누릅니다.
       </div>
 
+      <div class="banner err" data-state="error" id="refresh-409" hidden>
+        응답이 진행 중이면 받지 않습니다 (409) — 새로받기를 거절했습니다.
+        응답이 끝난 뒤 다시 누르세요.
+      </div>
+
       <ul class="convo" id="convo-2">
         <li><span class="who">나</span>tokenizer 벤치를 돌리고 결과를 표로 정리해 줘</li>
         <li><span class="who">에이전트</span>3개 구현 벤치 완료. <span class="mono">bench/result.md</span> 에 표로 남겼습니다.</li>
@@ -369,6 +377,14 @@
         <dt>남아 있는 파일</dt><dd><span class="mono">bench/result.md</span> — 다음 실행이 이어 씁니다</dd>
       </dl>
 
+      <div class="actions" id="ws-actions">
+        <span class="lab">Actions</span>
+        <div class="row">
+          <button class="btn ghost" id="btn-refresh-plugins" type="button">Refresh plugin skills</button>
+          <span class="crumb">`codex` 세션 전용 — 다른 타입 세션에는 이 버튼이 없습니다</span>
+        </div>
+      </div>
+
       <p class="state-note" data-state="result" data-state-note hidden></p>
 
       <div class="proto-bar">
@@ -379,6 +395,7 @@
         <button id="br-codex-refresh" type="button"
                 data-branch-row="11"
                 data-branch-target="STP-conversation-carry">오래 쓰는 Codex 세션 — 플랫폼 스킬이 바뀌었다</button>
+        <button id="btn-refresh-busy" type="button">응답이 진행 중이다 (새로고침하면 409)</button>
       </div>
     </div>
 
@@ -586,8 +603,32 @@
     show('STP-conversation-carry');
   });
 
-  $('br-codex-refresh').addEventListener('click', function () {
-    $('ws-type').textContent = 'codex';
+  /* ---------- AC-J7 — 플랫폼 스킬 새로고침 (누르는 대상 버튼과 그 결과) ---------- */
+  var refreshBusy = false;
+
+  function renderRefreshBusy() {
+    $('btn-refresh-busy').textContent = refreshBusy
+      ? '응답이 끝났다 (새로고침 가능)'
+      : '응답이 진행 중이다 (새로고침하면 409)';
+  }
+
+  $('btn-refresh-busy').addEventListener('click', function () {
+    refreshBusy = !refreshBusy;
+    renderRefreshBusy();
+    if (!refreshBusy) $('refresh-409').hidden = true;
+    noteIn(this, refreshBusy
+      ? '지금은 응답이 진행 중이다 — 새로고침을 누르면 409로 거절됩니다.'
+      : '응답이 끝났다 — 이제 새로고침을 받을 수 있습니다.');
+  });
+
+  $('btn-refresh-plugins').addEventListener('click', function () {
+    if (refreshBusy) {
+      $('refresh-banner').hidden = true;
+      $('refresh-409').hidden = false;
+      noteIn(this, '거절됐습니다 (409) — 응답이 진행 중입니다. 끝난 뒤 다시 누르세요.');
+      return;
+    }
+    $('refresh-409').hidden = true;
     $('refresh-banner').hidden = false;
     if (!$('refresh-line')) {
       var li = document.createElement('li');
@@ -595,8 +636,15 @@
       li.innerHTML = '<span class="who">플랫폼</span>plugin skills refreshed at 74f4d945d768 — updated codex-session--k3s-connectivity-check';
       $('convo-2').appendChild(li);
     }
-    show('STP-conversation-carry');
+    noteIn(this, '플랫폼 스킬을 새로 받았습니다 — 대화는 그대로 두었습니다.');
   });
+
+  $('br-codex-refresh').addEventListener('click', function () {
+    $('ws-type').textContent = 'codex';
+    show('STP-conversation-carry');
+    noteIn(this, '플랫폼 스킬이 바뀌었습니다 — 작업 화면의 Refresh plugin skills를 눌러 직접 받으세요.');
+  });
+  renderRefreshBusy();
 
   $('btn-send-2').addEventListener('click', function () {
     var t = $('prompt-2').value.trim();

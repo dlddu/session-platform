@@ -476,6 +476,60 @@ describe('화면 식별자 (규약 10)', () => {
   });
 });
 
+/* ─────────────── AC-J7 — 플랫폼 스킬 새로고침 (규칙 5(i)3·5(e)) ─────────────── */
+
+// AC-J7 은 특정 여정·특정 화면(작업 화면)에만 요구되는 터치포인트다 —
+// 일반 축이 아니라 여정 1건의 요구이므로 여기서 여정 id 를 고정한다.
+// 근거: docs/user-journeys/JRN-agent-prompt-loop.md "4. 분기·예외 흐름" 11행(AC-J7).
+const AC_J7_JOURNEY = 'JRN-agent-prompt-loop';
+const AC_J7_STEP = 'STP-conversation-carry';
+
+describe('AC-J7 — 플랫폼 스킬 새로고침 (규칙 5(i)3·5(e))', () => {
+  it('작업 화면에 누르는 대상 버튼이 있고, 성공과 409 거절이 모두 도달 가능하다', async () => {
+    const file = path.join(PAGE_ROOT, AC_J7_JOURNEY, 'index.html');
+    const p = await browser.newPage();
+    await p.goto(`${pathToFileURL(file).href}#${AC_J7_STEP}`);
+
+    const screen = p.locator(`[data-step="${AC_J7_STEP}"] .screen[data-screen="agent-workspace"]`);
+    assert.equal(await screen.count(), 1, 'agent-workspace 화면 표면을 찾지 못했다');
+
+    // 규칙 5(i)3 — 여정 문서가 지명한 컨트롤이 그려져 있어야 한다.
+    const btn = screen.locator('#btn-refresh-plugins');
+    assert.equal(
+      await btn.count(),
+      1,
+      'agent-workspace 화면에 "Refresh plugin skills" 컨트롤이 없다 — AC-J7 터치포인트가 그려지지 않았다'
+    );
+    assert.equal(
+      (await btn.textContent()).trim(),
+      'Refresh plugin skills',
+      '컨트롤 라벨이 구현(web/src/screens/Workspace.tsx 의 ws-refresh-plugins)과 다르다'
+    );
+
+    // 규칙 5(e) — 정상 경로: 누르면 성공 상태(info)와 기록 한 줄이 남는다.
+    await btn.click();
+    assert.ok(
+      await p.locator('#refresh-banner').isVisible(),
+      '"Refresh plugin skills" 를 눌러도 성공 상태(info)가 보이지 않는다'
+    );
+    assert.equal(
+      await p.locator('#refresh-line').count(),
+      1,
+      '새로고침 뒤 대화 기록에 한 줄이 남지 않는다 — 여정 문서의 "무엇이 바뀌었는지 기록에 한 줄 남는다"가 그려지지 않았다'
+    );
+
+    // 규칙 5(e) — 예외 경로: 응답이 진행 중이면 409로 거절된다 (도달 가능한 별도 상태).
+    await p.locator('#btn-refresh-busy').click();
+    await btn.click();
+    assert.ok(
+      await p.locator('#refresh-409').isVisible(),
+      '409 거절 상태(error)가 도달 가능하다고 확인되지 않는다 — 배너 문구 서술만으로는 5(e) 를 만족하지 않는다'
+    );
+
+    await p.close();
+  });
+});
+
 describe('허브 동기화 (규칙 7) — docs/index.html', () => {
   for (const j of journeys) {
     it(`${j.id} 행이 실제 상태를 가리킨다`, () => {
