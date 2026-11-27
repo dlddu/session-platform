@@ -16,10 +16,7 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// authPoolEnv sizes one auth pool (docs/prd/agent-auth-pool.md, AC-N1).
 type authPoolEnv struct {
-	// slots is the pool size; 0 means no pool, and the type that needs one is
-	// then not offered.
 	slots        int
 	storageClass string
 	storageSize  string
@@ -44,7 +41,6 @@ func loadAuthPoolEnv(prefix, defaultSize string) (authPoolEnv, error) {
 	return cfg, nil
 }
 
-// pool builds the Lease-backed pool, or nil when it has no slots.
 func (c authPoolEnv) pool(client kubernetes.Interface, namespace, name string) (k8s.AuthPool, error) {
 	if c.slots == 0 {
 		return nil, nil
@@ -61,11 +57,10 @@ type codexTaskConfig struct {
 	image             string
 	credentialsSecret string
 	configConfigMap   string
-	// archiveEnabled is this type's own data-transfer gate (AC-M3).
-	archiveEnabled bool
-	defaultModel   string
-	models         []string
-	pool           authPoolEnv
+	archiveEnabled    bool
+	defaultModel      string
+	models            []string
+	pool              authPoolEnv
 }
 
 func loadCodexTaskConfig() (codexTaskConfig, error) {
@@ -92,12 +87,10 @@ func loadCodexTaskConfig() (codexTaskConfig, error) {
 	}, nil
 }
 
-// offered is AC-M1's rule: an image and at least one slot.
 func (c codexTaskConfig) offered() bool {
 	return c.image != "" && c.pool.slots > 0
 }
 
-// objects names this type's Secret and ConfigMap for the overlap check.
 func (c codexTaskConfig) objects() map[string]string {
 	return map[string]string{
 		"CODEX_TASK_CREDENTIALS_SECRET": c.credentialsSecret,
@@ -128,7 +121,6 @@ func codexTaskArchiveOption(cfg codexTaskConfig, client *agent.HTTPClient, store
 	return service.WithWorkloadCheckpointer(session.WorkloadTypeCodexTask, archive.NewAgentCheckpointer(client, store)), nil
 }
 
-// claudeAuthConfig is claude-code's provider auth choice (AC-E7).
 type claudeAuthConfig struct {
 	mode k8s.ClaudeCodeAuthMode
 	// subscriptionDefaultModel and subscriptionModels are claude-code's picker
@@ -158,7 +150,6 @@ func loadClaudeAuthConfig() (claudeAuthConfig, error) {
 	}, nil
 }
 
-// claudeCodeModelConfig is the picker claude-code offers under this auth mode.
 func (c claudeAuthConfig) claudeCodeModelConfig(gatewayDefault string, gatewayModels []string) (string, []string) {
 	if c.mode == k8s.ClaudeCodeAuthSubscription {
 		return c.subscriptionDefaultModel, c.subscriptionModels

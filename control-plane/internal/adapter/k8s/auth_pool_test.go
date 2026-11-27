@@ -67,7 +67,6 @@ func TestLeaseAuthPoolAcquireCreatesLeaseAndClaim(t *testing.T) {
 	if got := claim.Spec.Resources.Requests.Storage().String(); got != DefaultAuthSlotStorageSize {
 		t.Errorf("size = %s", got)
 	}
-	// Idempotent for the holder: a retried create keeps its slot.
 	if again, err := pool.Acquire(ctx, "s1", nil); err != nil || again != 0 {
 		t.Fatalf("second Acquire = %d, %v", again, err)
 	}
@@ -99,7 +98,6 @@ func TestLeaseAuthPoolReleaseRecordsStateAndKeepsClaim(t *testing.T) {
 	if err := pool.Release(ctx, "s1", &signedOut); err != nil {
 		t.Fatal(err)
 	}
-	// A signed-in slot outranks a lower-numbered signed-out one (AC-N2).
 	if s, err := pool.Acquire(ctx, "s3", nil); err != nil || s != 1 {
 		t.Fatalf("s3 = %d, %v, want the signed-in slot 1", s, err)
 	}
@@ -110,7 +108,6 @@ func TestLeaseAuthPoolReleaseRecordsStateAndKeepsClaim(t *testing.T) {
 	if _, err := cs.CoreV1().PersistentVolumeClaims("sessions").Get(ctx, "sessions-codex-task-auth-0", metav1.GetOptions{}); err != nil {
 		t.Errorf("release deleted the slot claim: %v", err)
 	}
-	// Releasing a slot one does not hold leaves the holder alone.
 	if err := pool.Release(ctx, "nobody", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -218,15 +215,12 @@ func TestMemoryAuthPoolMatchesLeasePoolRules(t *testing.T) {
 	}
 }
 
-// A slot kept by a failed release must not stay reclaimable while its holder
-// reuses it on restore: reuse renews the lease (AC-N2).
 func TestLeaseAuthPoolReusingHeldSlotRenewsIt(t *testing.T) {
 	pool, cs, clock := newTestPool(t, 1)
 	ctx := context.Background()
 	if _, err := pool.Acquire(ctx, "a", nil); err != nil {
 		t.Fatal(err)
 	}
-	// Hours pass with the release lost; the holder is frozen.
 	clock.t = clock.t.Add(3 * time.Hour)
 	frozen := func(_ context.Context, holder string) (bool, error) { return holder == "a", nil }
 
@@ -240,7 +234,6 @@ func TestLeaseAuthPoolReusingHeldSlotRenewsIt(t *testing.T) {
 	if lease.Spec.RenewTime == nil || !lease.Spec.RenewTime.Time.Equal(clock.t) {
 		t.Fatalf("renewTime = %v, want %v", lease.Spec.RenewTime, clock.t)
 	}
-	// While A's restore runs (A still frozen in the store), B must not win.
 	if _, err := pool.Acquire(ctx, "b", frozen); !errors.Is(err, session.ErrAuthPoolExhausted) {
 		t.Fatalf("B during A's restore: %v, want exhausted", err)
 	}
@@ -249,8 +242,6 @@ func TestLeaseAuthPoolReusingHeldSlotRenewsIt(t *testing.T) {
 	}
 }
 
-// One slot whose holder cannot be judged does not keep the session out of a
-// free one; the error surfaces only when nothing could be claimed.
 func TestLeaseAuthPoolSkipsSlotItCannotJudge(t *testing.T) {
 	pool, _, clock := newTestPool(t, 2)
 	ctx := context.Background()
@@ -267,8 +258,6 @@ func TestLeaseAuthPoolSkipsSlotItCannotJudge(t *testing.T) {
 	}
 }
 
-// A same-named lease without the pool labels is reported, and the next slot
-// is still used.
 func TestLeaseAuthPoolReportsUnlabelledLease(t *testing.T) {
 	pool, cs, _ := newTestPool(t, 2)
 	ctx := context.Background()

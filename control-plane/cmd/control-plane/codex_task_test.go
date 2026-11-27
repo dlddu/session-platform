@@ -53,7 +53,6 @@ func TestLoadClaudeAuthConfig(t *testing.T) {
 	}
 }
 
-// AC-E7: a subscription offers its own picker; the gateway keeps the shared one.
 func TestClaudeCodeModelConfigFollowsAuthMode(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SUBSCRIPTION_DEFAULT_MODEL", "sonnet")
 	t.Setenv("CLAUDE_CODE_SUBSCRIPTION_MODELS", `["opus","sonnet"]`)
@@ -85,8 +84,6 @@ func TestValidateCodexTaskConfigRefusesSharedObjects(t *testing.T) {
 	}
 }
 
-// AC-M1, AC-N1: a pooled type is offered only with a slot; claude-code takes
-// none in either auth mode (AC-E7).
 func TestOfferedWorkloadTypesNeedSlots(t *testing.T) {
 	offered := func(c config, w session.WorkloadType) bool { return slices.Contains(c.offeredWorkloadTypes(), w) }
 	task := config{codexTask: codexTaskConfig{image: "img"}}

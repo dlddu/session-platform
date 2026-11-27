@@ -25,7 +25,6 @@ func setClaudeGatewayEnv(t *testing.T) {
 	t.Setenv(claudeOAuthTokenEnv, "")
 }
 
-// AC-E7/E8's start rules.
 func TestClaudeAuthFromEnv(t *testing.T) {
 	t.Setenv(claudeEffortEnv, "")
 

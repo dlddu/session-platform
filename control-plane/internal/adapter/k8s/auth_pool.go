@@ -27,7 +27,6 @@ import (
 const (
 	// AuthPoolCodexTask and AuthPoolCodexChat name the pools. claude-code
 	// signs in with an OAuth token instead of a slot (AC-E7).
-	//
 	// The codex-manager pool keeps the name "codex-chat" the type carried
 	// before the 2026-11-17 rename: the name is the Lease and PVC name, so
 	// renaming it would strand the deployed slot holding the ChatGPT login and
@@ -58,7 +57,6 @@ const (
 	DefaultAuthPoolReclaimGrace = 10 * time.Minute
 )
 
-// AuthSlotLeaseName is slot i's Lease name.
 func AuthSlotLeaseName(pool string, slot int) string {
 	return pool + "-auth-" + strconv.Itoa(slot)
 }
@@ -87,7 +85,6 @@ type AuthPool interface {
 	Release(ctx context.Context, sessionID string, signedIn *bool) error
 }
 
-// AuthPoolConfig sizes one pool.
 type AuthPoolConfig struct {
 	Pool         string
 	Slots        int
@@ -110,7 +107,6 @@ type LeaseAuthPool struct {
 
 var _ AuthPool = (*LeaseAuthPool)(nil)
 
-// NewLeaseAuthPool validates the pool configuration.
 func NewLeaseAuthPool(client kubernetes.Interface, namespace string, cfg AuthPoolConfig) (*LeaseAuthPool, error) {
 	if cfg.Pool == "" {
 		return nil, errors.New("auth pool needs a name")
@@ -373,7 +369,6 @@ func (p *LeaseAuthPool) Release(ctx context.Context, sessionID string, signedIn 
 	return fmt.Errorf("release %s auth slot of session %s: lease kept changing", p.cfg.Pool, sessionID)
 }
 
-// leases maps slot index to lease for every lease of this pool.
 func (p *LeaseAuthPool) leases(ctx context.Context) (map[int]*coordinationv1.Lease, error) {
 	list, err := p.client.CoordinationV1().Leases(p.namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: LabelAuthPool + "=" + p.cfg.Pool,
@@ -436,7 +431,6 @@ func authStateRank(lease *coordinationv1.Lease) int {
 	}
 }
 
-// ClaudeCodeAuthMode selects claude-code's provider auth (AC-E7).
 type ClaudeCodeAuthMode string
 
 const (
@@ -463,7 +457,6 @@ func ParseClaudeCodeAuthMode(value string) (ClaudeCodeAuthMode, error) {
 	}
 }
 
-// WithClaudeCodeAuthMode selects claude-code's provider auth (AC-E7).
 func WithClaudeCodeAuthMode(mode ClaudeCodeAuthMode) Option {
 	return func(o *ClientOrchestrator) {
 		if mode != "" {
@@ -511,14 +504,12 @@ const (
 	// ManagerMonitorLaneEnvVar turns the manager's second lane on (AC-N11): the
 	// monitor that moves the work beside the parent that talks to the person,
 	// in the same pod. Keep in sync with data-plane/cmd/agent.
-	//
 	// It comes from the deployment's codex ConfigMap rather than from the
 	// session, for the reason the raw SQL opt-in does: it changes what a
 	// manager pod is, and a chat session cannot ask for a second lane of
 	// itself. Unset is a manager with one lane — every session created before
 	// the pair keeps behaving exactly as it did.
-	ManagerMonitorLaneEnvVar = "MANAGER_MONITOR_LANE"
-	// CodexManagerMonitorLaneConfigKey is that ConfigMap key.
+	ManagerMonitorLaneEnvVar         = "MANAGER_MONITOR_LANE"
 	CodexManagerMonitorLaneConfigKey = "manager-monitor-lane"
 	// ManagerMonitorStateDirEnvVar is where the monitor lane keeps its own
 	// conversation, HOME and managed config. It is on the pod's state volume
@@ -536,7 +527,6 @@ const (
 	// does not wait for a turn it did not start. The hop is the one the
 	// scheduler already makes (SchedulerAgentURLEnvVar): loopback, inside this
 	// pod, onto the lane's own queue.
-	//
 	// The address is unconditional — it is a fact about this pod's shape, not a
 	// decision — and the pair's opt-in travels beside it to decide whether the
 	// handover exists at all. That way an unpaired manager's sidecar simply has
@@ -550,12 +540,10 @@ const (
 	// which refuses any value but `debug`. Keep in sync with
 	// data-plane/cmd/agent. It comes from the deployment's codex ConfigMap, not
 	// from the session: a chat session cannot ask for raw SQL.
-	SessionDBRawSQLEnvVar = "SESSION_DB_RAW_SQL"
-	// CodexSessionDBRawSQLConfigKey is that ConfigMap key.
+	SessionDBRawSQLEnvVar         = "SESSION_DB_RAW_SQL"
 	CodexSessionDBRawSQLConfigKey = "session-db-raw-sql"
 )
 
-// CodexChatSessionDBMCPURL is the database MCP on the loopback sidecar.
 var CodexChatSessionDBMCPURL = K3SMCPProxyLoopbackURL + sessionDBMCPPath
 
 // authSlotSubPath is where the login lives inside a pool's slot: the root

@@ -1,8 +1,5 @@
 //go:build integration
 
-// AC-M1/AC-M4, AC-E7/AC-E8 and AC-N4/AC-N5 on the real client-go
-// orchestrator: the pods a codex-task session and a claude-code session in
-// either auth mode are submitted as.
 package integration_test
 
 import (
@@ -29,8 +26,6 @@ func onlyPod(t *testing.T, orch *k8s.ClientOrchestrator, pods func() []corev1.Po
 	return got[0]
 }
 
-// assertSlotMount checks AC-N4/L5: the slot PVC is the pod's only claim and
-// only the workload container mounts it.
 func assertSlotMount(t *testing.T, pod corev1.Pod, claim string) {
 	t.Helper()
 	var claims []string
@@ -115,8 +110,6 @@ func TestCodexTask_PodShape(t *testing.T) {
 	}
 }
 
-// AC-M4: a codex-task session that names no effort reads codex-task-config's
-// default.
 func TestCodexTask_DefaultEffortFromConfigMap(t *testing.T) {
 	orch, cs := newReadyOrchestrator(t,
 		k8s.WithWorkloadImage(session.WorkloadTypeCodexTask, codexImage),
@@ -239,8 +232,6 @@ func TestMiniMaxCode_RefusesEffort(t *testing.T) {
 	}
 }
 
-// A platform-default subscription session reads the subscription key, not the
-// gateway's model id, which a Claude subscription would refuse (AC-E7).
 func TestClaudeCode_SubscriptionPlatformDefaultReadsSubscriptionKey(t *testing.T) {
 	for _, tc := range []struct {
 		mode k8s.ClaudeCodeAuthMode

@@ -9,9 +9,6 @@ import (
 	"github.com/dlddu/session-platform/control-plane/internal/session"
 )
 
-// AC-L1: the create wire contract takes an optional plugin list, echoes it,
-// copies it to provisioning, and refuses anything that is not a valid
-// selection for the type before a pod exists.
 func TestCreateSessionPlugins(t *testing.T) {
 	srv, orch, _ := newServerWithOrchestrator()
 	defer srv.Close()
@@ -70,8 +67,6 @@ func TestCreateSessionPlugins(t *testing.T) {
 	}
 }
 
-// AC-L1: the selection is as immutable as the model — a snapshot keeps it and
-// the restore pod is provisioned with it, not with the type default.
 func TestPluginsSurviveSnapshotRestoreOverHTTP(t *testing.T) {
 	srv, orch, _ := newServerWithOrchestrator()
 	defer srv.Close()
@@ -110,7 +105,6 @@ func TestPluginsSurviveSnapshotRestoreOverHTTP(t *testing.T) {
 	}
 }
 
-// AC-L1: the config catalog tells clients which types take a plugin list.
 func TestConfigReportsTakesPlugins(t *testing.T) {
 	srv, _, _ := newServerWithOrchestrator()
 	defer srv.Close()

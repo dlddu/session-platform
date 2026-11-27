@@ -1,8 +1,5 @@
 //go:build integration
 
-// AC-L1 on the real client-go orchestrator: a session's plugin selection
-// reaches exactly the container that installs plugins for its type, and an
-// omitted selection leaves each type on its platform default.
 package integration_test
 
 import (

@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// AC-L1: an omitted plugin list keeps the type default, a given one replaces it
-// and must be a valid, non-empty, duplicate-free set on a type that loads
-// marketplace plugins.
 func TestNormalizePlugins(t *testing.T) {
 	tooMany := make([]string, MaxSessionPlugins+1)
 	for i := range tooMany {
