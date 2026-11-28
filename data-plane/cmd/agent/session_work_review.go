@@ -259,6 +259,7 @@ func reviewToolDefinitions() []map[string]any {
 		{
 			"name": taskReviewCompleteTool,
 			"description": "Completes a task that is in review, which is the only way out of review other than resuming. Every one of these has to hold: outcome.accepted is true (the final result was accepted), outcome.completion_criteria repeats the task's own criteria verbatim (so \"the criteria were met\" is about these criteria and not about what you remember — a mismatch is refused), outcome.remaining is empty, no request is still open on any turn, and no decision is left unapplied. " +
+				"It closes the open review rather than requiring one to have been closed already — the person accepting the result is what settles the decision they were asked about, and outcome.evidence has to say how that acceptance was observed. " +
 				"A task that records no completion criteria cannot be completed this way: write them with task_put first, because there is otherwise nothing to have met. " +
 				"The ordinary pre-approved path is untouched — a task that never needed anybody's judgement still goes planned → running → completed with task_put.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
@@ -267,9 +268,10 @@ func reviewToolDefinitions() []map[string]any {
 				"expected_book_version": integer(1),
 				"outcome": outcome(map[string]any{
 					"accepted":            map[string]any{"type": "boolean", "description": "The final result was accepted. Only true completes."},
+					"evidence":            map[string]any{"type": "string", "description": "How that acceptance was observed. Required — a submitted sentence, a deferral or an approval that was never applied is not an acceptance."},
 					"completion_criteria": map[string]any{"type": "string", "description": "The task's own completion_criteria, verbatim."},
 					"remaining":           map[string]any{"type": "string", "description": "What is left. Must be empty or absent."},
-				}, []string{"accepted", "completion_criteria"}),
+				}, []string{"accepted", "evidence", "completion_criteria"}),
 			}, "required": []string{"task_id", "request_id", "expected_version", "expected_book_version", "outcome"},
 				"additionalProperties": false},
 		},
@@ -315,6 +317,15 @@ func validateReviewTool(name string, a workArgs) error {
 	}
 	if a.Outcome.Accepted == nil || !*a.Outcome.Accepted {
 		return bad("outcome.accepted must be true — a result that was not accepted is not a completion")
+	}
+	// Named for the reason a resume names its confirmation: the acceptance is
+	// something only the person gave and only the monitor saw, so a completion
+	// that cannot say how it was observed is a claim rather than a record. It is
+	// also what separates a real acceptance from a permission somebody said they
+	// would grant and never applied.
+	if strings.TrimSpace(a.Outcome.Evidence) == "" {
+		return bad("outcome.evidence must name how the final acceptance was observed — " +
+			"a submitted sentence, a deferral or an approval that was never applied is not one")
 	}
 	if a.Outcome.CompletionCriteria == nil {
 		return bad("outcome.completion_criteria must repeat the task's own criteria verbatim")
@@ -483,9 +494,31 @@ func closeTaskReview(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time,
 	if err != nil {
 		return nil, err
 	}
-	if effective != workStatusReview {
+	details, err := readReviewDetails(ctx, tx, a.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	open, hasOpen := openReviewOf(details)
+	// A task leaves review when it is **at** review or when it still **carries**
+	// an open review — and the second is not the same sentence as the first.
+	//
+	// A stored request moves a task that was waiting on a person out of review
+	// and into `planned` in the transaction that stores it (receipt: the words
+	// arrived, nobody has picked them up yet; session_work_views.go). The
+	// decision it was waiting on is not settled by somebody sending a sentence,
+	// so the recorded review stays open — and the status byte no longer says
+	// `review`. Asking only the byte left the monitor with no way to close its
+	// own review once the person had answered: the two calls that carry the
+	// evidence both refused, measured on the combined tree.
+	//
+	// So the question is the record, not the word. That also means this is not
+	// a rule about `planned`: a task at any status that still carries an open
+	// review can be settled, and a task that carries none cannot — which is the
+	// old sentence, kept for every task that never had one.
+	if effective != workStatusReview && !hasOpen {
 		return nil, workFail("conflict", "this task is at "+effective+
-			" and only a task in review leaves review"+legacyBasisSuffix(task, basis))
+			" and carries no open review, and only a task in review leaves review"+
+			legacyBasisSuffix(task, basis))
 	}
 	// Checked here as well as in the conditional UPDATE below, so a caller
 	// holding a version the task has moved past is told that before anything
@@ -493,16 +526,23 @@ func closeTaskReview(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time,
 	if task.Version != *a.ExpectedVersion {
 		return nil, workFail("conflict", "expected_version does not match the task's current version")
 	}
-	details, err := readReviewDetails(ctx, tx, a.TaskID)
-	if err != nil {
-		return nil, err
-	}
-	open, hasOpen := openReviewOf(details)
+	// A completion closes the open review rather than requiring it to have been
+	// closed already — that is what completing *is*: the person accepted the
+	// result, so the decision they were asked about is settled by the same act.
+	//
+	// An earlier revision refused a completion while a review was open, meaning
+	// a formally opened review could only ever be completed by first resuming it
+	// — review → running → review → completed — and the only completions this
+	// code could actually reach were on tasks whose review nobody had recorded.
+	// Measured on the combined tree, which is where it showed: the receipt
+	// state is an open review by construction.
+	//
+	// What keeps an *unsettled* decision from completing is not this check but
+	// the four below plus the evidence the caller has to name: a submission
+	// alone leaves a request turn with no ended_at, an unapplied permission is
+	// one nobody can name a confirmation for, and an explanation or a deferral
+	// satisfies neither. None of them is a completion.
 	if to == workStatusCompleted {
-		if hasOpen {
-			return nil, workFail("conflict", "the decision this task is waiting on is not applied ("+
-				reviewSubjectLine(open)+"), so it stays in review — a completion cannot be claimed over an open question")
-		}
 		if err = requireCompletableTask(ctx, tx, task, a.Outcome); err != nil {
 			return nil, err
 		}
@@ -529,6 +569,11 @@ func closeTaskReview(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time,
 			"note": "no review was recorded on this task; the status was read from the stored word",
 		}
 	}
+	// Where it was when it was settled. For a task the receipt had moved to
+	// `planned` this is the only record that the decision was closed from the
+	// queue rather than from review, and it is a fact about this closing rather
+	// than about the review it closes — so it sits on the entry, not inside it.
+	entry["from_status"] = task.Status
 	details[workReviewHistoryKey] = appendReviewHistory(details[workReviewHistoryKey], entry)
 	delete(details, workReviewKey)
 	if _, err = swapWorkGuard(ctx, tx, a.TaskID, workGuardBook, *a.ExpectedBookVersion); err != nil {

@@ -281,6 +281,9 @@ func putWorkTask(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (an
 	if *a.ExpectedVersion == 0 || *a.ExpectedVersion != current.Version {
 		return nil, workFail("conflict", "expected_version does not match")
 	}
+	if err := refuseToOrphanAnOpenReview(ctx, tx, a.ID, status); err != nil {
+		return nil, err
+	}
 	task := workTask{
 		ID: a.ID, SessionID: a.Task.SessionID, Title: *a.Task.Title,
 		Description: a.Task.Description, CompletionCriteria: a.Task.CompletionCriteria,
@@ -345,6 +348,66 @@ func workTaskPutAnswer(task workTask, aliased bool) map[string]any {
 // contradicted that contract, and it refused the *new* word while letting the
 // legacy alias through — so `status: "blocked"` landed and `status: "review"`
 // did not, which is the reverse of what folding the two statuses was for.
+
+// refuseToOrphanAnOpenReview is the one thing a bare status write is stopped
+// from doing: walking away from a decision this slot has recorded and nobody
+// has settled.
+//
+// It is **not** the transition fence this file used to have, and the difference
+// is the whole point. That one asked "which status is this moving between" and
+// was wrong for it — the agreed contract has no transition constraint, and the
+// `completed` correction depends on there being none. This asks "is there an
+// open record that this write would leave behind", which is a question about
+// consistency rather than about permission:
+//
+//   - A task with no recorded review moves anywhere, as before. planned →
+//     running, running → completed, a `completed` put back to review, an older
+//     writer's alias — every one of those is untouched, because none of them
+//     orphans anything.
+//   - A task that **carries an open review** may not be written to running or
+//     completed by a bare put. Those two are the statuses that say the work
+//     moved on, and a task that reads as moved-on while holding an unsettled
+//     question hides that question from every reader: the status filter puts it
+//     with the work in flight, and the only record that somebody is waiting
+//     sits in bookkeeping nothing on the read path shows.
+//
+// Why those two and not every status: `planned` is where a stored request
+// legitimately puts such a task — received, nobody has picked it up, decision
+// still open (session_work_views.go) — and `review` is where it already is.
+// `unknown` is "this slot cannot say", and refusing a writer who is admitting
+// that would be insisting on a certainty nobody has.
+//
+// It is also not a dead end, which is what keeps it from being a gate. There
+// are two ways past it and both are honest: settle the review with the call
+// that carries the evidence (task_review_resume / task_review_complete), or —
+// if there is genuinely nothing to settle — replace the bookkeeping with
+// task_book_put, which is the parent's own lane and has always been how
+// `details` is written. What is refused is only doing neither.
+func refuseToOrphanAnOpenReview(ctx context.Context, tx *sql.Tx, taskID, status string) error {
+	if status != workStatusRunning && status != workStatusCompleted {
+		return nil
+	}
+	details, err := readReviewDetails(ctx, tx, taskID)
+	if errors.Is(err, errUnparseableBook) {
+		// Bookkeeping this image cannot read says nothing either way, and it is
+		// left exactly as it is elsewhere for the same reason. Refusing an
+		// ordinary status write on the strength of bytes nobody can parse would
+		// strand the task.
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	open, hasOpen := openReviewOf(details)
+	if !hasOpen {
+		return nil
+	}
+	return workFail("conflict", "this task carries an open review ("+reviewSubjectLine(open)+
+		") and task_put would leave it behind at "+status+" — a task that reads as moved on while "+
+		"somebody is still waiting hides the question from every reader. Settle it with "+
+		taskReviewResumeTool+" (naming what confirmed the decision) or "+taskReviewCompleteTool+
+		", or — if there is nothing to settle — replace the bookkeeping with "+taskBookPutTool)
+}
 
 // deleteWorkTask removes a task with its turns and retires the id. What a
 // migration preserved about the task (sp_work_task_legacy) is left: the parent's
