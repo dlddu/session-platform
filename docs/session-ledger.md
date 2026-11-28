@@ -477,8 +477,12 @@ to keep.
 
 Storing starts no turn, mints no claim, wakes nothing and restores no snapshot.
 It changes **one** thing beside the turn, and only for a task that was waiting
-on the person: a task in `review` is moved to `planned` in the same transaction
-that stored the request. `planned` here means *received, nobody has picked it up
+on the person: a task **shown as** `review` is moved to `planned` in the same
+transaction that stored the request. Shown, not stored — the eligibility is read
+from the answer the read path gives for that task (`readWorkTask`), which is the
+status a person is actually looking at, and it is judged **before** the store
+adds a turn of its own so that this transaction cannot be asking about a state
+it has already moved. `planned` here means *received, nobody has picked it up
 yet* — the request is an open turn, and the monitor still has to read what came
 back, weigh it against what it asked and against the permission the person
 actually holds, and only then assign the work. So:
@@ -489,10 +493,15 @@ actually holds, and only then assign the work. So:
 - `running` stays the monitor's to write, on a real hand-off. An acceptance, a
   hold, an explanation or an approval nobody applied moves nothing by itself and
   grants nothing on the strength of having been typed.
-- **Nothing else about the task moves.** A task that is `planned`, `running`,
-  `completed`, `unknown` — or `blocked`, which only its own path resolves — is
-  left as it is, so a request stored on work that is already running or finished
-  cannot send it backwards. A replay of an id already stored answers from the
+- **Nothing else about the task moves.** A task answered as `planned`,
+  `running`, `completed` or `unknown` is left as it is, so a request stored on
+  work that is already running or finished cannot send it backwards. A row an
+  older image stored under a word this image does not write follows the same
+  rule on the answer rather than on the byte: one that is read as a decision
+  somebody has to settle is received, and one that is read as a pre-approved
+  technical wait keeps running with only the request stored. **Which of the two
+  it is is not decided here** — this path asks the read path and copies none of
+  its classification. A replay of an id already stored answers from the
   turn that is there and never re-moves the status, which is what keeps a late
   retry of an answer the app never saw from pulling a task the monitor has since
   taken back into the queue.
