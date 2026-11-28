@@ -453,6 +453,22 @@ the slot does not have is **not found**, because an empty page reads as "nothing
 has happened yet" and would hide a wrong id. A read while the migration holds
 the database is a conflict rather than a half-copied page.
 
+A task's turns page can be read from either end. By default it is oldest first:
+`after_turn_id` is an exclusive lower bound and `next_cursor` is the page's
+newest id, which is the order a parent folding the record walks. Passing
+`before_turn_id` — **present even with no value** — asks for the same record
+newest first instead, which is what a screen that shows the latest exchange on
+top reads: the value is an exclusive *upper* bound, an empty or zero one means
+"from this task's newest turn", and `next_cursor` is then the page's *oldest*
+id to pass back as the next `before_turn_id`. Such a page carries
+`order: "desc"`, so a reader can tell a newest-first page from an oldest-first
+one it asked for and did not get — a deployment without the parameter ignores
+it, and reading that page as if it were reversed would put the oldest exchange
+where the latest belongs. Naming both bounds at once is refused rather than
+resolved. Either direction orders by turn id, which is the order the turns
+happened in: the id rises across the whole database, so there is no second sort
+key for a page boundary to tie on.
+
 New work's history **is** its turns: a task created after the cutover has no
 ledger history and none is invented for it, and a past management event is not
 dressed up as a turn. A migrated task keeps its ledger history on the ledger's

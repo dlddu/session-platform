@@ -1706,7 +1706,7 @@ func (s *Service) releaseAuthSlotBestEffort(workload session.WorkloadType, id st
 // workAgent is the agent capability behind the agreed work records (AC-N9).
 type workAgent interface {
 	WorkTasks(ctx context.Context, pod string, limit int, afterID, status, sessionID string) (session.WorkTaskPage, error)
-	WorkTurns(ctx context.Context, pod, taskID string, afterTurnID int64, limit int, openOnly bool) (session.WorkTurnPage, error)
+	WorkTurns(ctx context.Context, pod, taskID string, cursor session.WorkTurnCursor, limit int, openOnly bool) (session.WorkTurnPage, error)
 }
 
 // workReadable is the check every call on this path shares: the slot keeps work
@@ -1751,7 +1751,7 @@ func (s *Service) WorkTasks(
 
 // WorkTurns reads one keyset page of one task's turns (AC-N9).
 func (s *Service) WorkTurns(
-	ctx context.Context, id, taskID string, afterTurnID int64, limit int, openOnly bool,
+	ctx context.Context, id, taskID string, cursor session.WorkTurnCursor, limit int, openOnly bool,
 ) (session.WorkTurnPage, error) {
 	empty := session.WorkTurnPage{Turns: []session.WorkTurn{}}
 	if !workRecordID.MatchString(taskID) {
@@ -1761,5 +1761,5 @@ func (s *Service) WorkTurns(
 	if err != nil {
 		return empty, err
 	}
-	return agentW.WorkTurns(ctx, sess.Pod, taskID, afterTurnID, limit, openOnly)
+	return agentW.WorkTurns(ctx, sess.Pod, taskID, cursor, limit, openOnly)
 }

@@ -310,13 +310,19 @@ type workArgs struct {
 	Status              string         `json:"status,omitempty"`
 	AfterID             string         `json:"after_id,omitempty"`
 	AfterTurnID         *int64         `json:"after_turn_id,omitempty"`
-	Open                *bool          `json:"open,omitempty"`
-	Limit               int            `json:"limit,omitempty"`
-	OperationKey        string         `json:"operation_key,omitempty"`
-	OperationTarget     string         `json:"operation_target,omitempty"`
-	DispatchState       string         `json:"dispatch_state,omitempty"`
-	Observed            string         `json:"observed,omitempty"`
-	DryRun              *bool          `json:"dry_run,omitempty"`
+	// BeforeTurnID set — even to zero — asks for the page from the other end:
+	// the turns before it, newest first. Zero is "from the newest turn", so a
+	// reader that wants the latest exchanges does not have to walk the record
+	// to find where its last page starts. It is a pointer because its presence
+	// is what picks the direction, and nil is the original oldest-first page.
+	BeforeTurnID    *int64 `json:"before_turn_id,omitempty"`
+	Open            *bool  `json:"open,omitempty"`
+	Limit           int    `json:"limit,omitempty"`
+	OperationKey    string `json:"operation_key,omitempty"`
+	OperationTarget string `json:"operation_target,omitempty"`
+	DispatchState   string `json:"dispatch_state,omitempty"`
+	Observed        string `json:"observed,omitempty"`
+	DryRun          *bool  `json:"dry_run,omitempty"`
 	// Paths are the snapshot files a prune call names. They are the one
 	// argument in this area that is not a record id: deleting a backup is a
 	// file operation, and naming it exactly is what keeps it deliberate

@@ -55,16 +55,22 @@ func (c *HTTPClient) WorkTasks(
 	return page, nil
 }
 
-// WorkTurns reads one keyset page of one task's turns, oldest first. openOnly
-// narrows it to the turns that still need the parent.
+// WorkTurns reads one keyset page of one task's turns, from whichever end
+// cursor names. openOnly narrows it to the turns that still need the parent.
 func (c *HTTPClient) WorkTurns(
-	ctx context.Context, pod, taskID string, afterTurnID int64, limit int, openOnly bool,
+	ctx context.Context, pod, taskID string, cursor session.WorkTurnCursor, limit int, openOnly bool,
 ) (session.WorkTurnPage, error) {
 	page := session.WorkTurnPage{Turns: []session.WorkTurn{}}
 	query := url.Values{}
 	query.Set("task_id", taskID)
-	if afterTurnID > 0 {
-		query.Set("after_turn_id", strconv.FormatInt(afterTurnID, 10))
+	switch {
+	case cursor.Newest:
+		// Set even when it is zero: on this route the parameter's presence is
+		// what asks for the newest-first page, and zero is "from the newest
+		// turn".
+		query.Set("before_turn_id", strconv.FormatInt(cursor.Before, 10))
+	case cursor.After > 0:
+		query.Set("after_turn_id", strconv.FormatInt(cursor.After, 10))
 	}
 	if limit > 0 {
 		query.Set("limit", strconv.Itoa(limit))

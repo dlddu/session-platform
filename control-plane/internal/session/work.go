@@ -105,18 +105,44 @@ type WorkTaskPage struct {
 	NextCursor string           `json:"next_cursor"`
 }
 
-// WorkTurnPage is one keyset page of one task's turns, oldest id first.
-// TaskVersion is the version those turns were read against, so a caller that
-// then writes holds the value the slot will check.
+// WorkTurnCursor says which page of a task's turns to read, and from which end.
+//
+// Turn ids rise across the whole database, so ordering by id is ordering by
+// when the turns happened and there is no second key to tie on — which is what
+// lets the same record be paged from either end without a page boundary
+// landing differently than the order on screen.
+type WorkTurnCursor struct {
+	// After is an exclusive lower bound for the oldest-first page: zero starts
+	// at the task's oldest turn. It is what a parent folding a record walks.
+	After int64
+	// Newest asks for the newest-first page instead, which is what a screen
+	// that puts the latest exchange on top reads. Before is then an exclusive
+	// *upper* bound, and zero means "from the task's newest turn" — so the
+	// latest page is one call, not a walk to find where it begins.
+	Newest bool
+	Before int64
+}
+
+// WorkTurnPage is one keyset page of one task's turns. TaskVersion is the
+// version those turns were read against, so a caller that then writes holds the
+// value the slot will check.
 type WorkTurnPage struct {
 	TaskID      string `json:"task_id"`
 	TaskVersion int64  `json:"task_version"`
 	// Task travels with its turns, so a reader showing one task has its
 	// description and completion criteria beside the exchanges rather than
 	// needing a second call that could land on a different version.
-	Task       WorkTask   `json:"task"`
-	Turns      []WorkTurn `json:"turns"`
-	NextCursor int64      `json:"next_cursor,omitempty"`
+	Task  WorkTask   `json:"task"`
+	Turns []WorkTurn `json:"turns"`
+	// NextCursor continues the page in the direction it was read: the newest
+	// id on an oldest-first page, the oldest id on a newest-first one. It is
+	// empty on the last page.
+	NextCursor int64 `json:"next_cursor,omitempty"`
+	// Order is "desc" on a newest-first page and empty on the original
+	// oldest-first one. A reader that asked for newest-first and got a page
+	// without it is talking to a slot that does not have the parameter, and
+	// must not read that page as if it were reversed.
+	Order string `json:"order,omitempty"`
 }
 
 // WorkPageLimit bounds one page of either kind, matching the work records' own

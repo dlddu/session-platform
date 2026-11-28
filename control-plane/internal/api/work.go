@@ -38,36 +38,62 @@ func (a *API) listWorkTasks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page)
 }
 
-// listWorkTurns reads one keyset page of one task's turns, oldest first: what a
-// person said, what went to the session doing the work, that session's own
-// answer, the parent's explanation, its question and choices, the artifacts and
-// the times. open=true narrows it to the turns that still need the parent.
+// listWorkTurns reads one keyset page of one task's turns: what a person said,
+// what went to the session doing the work, that session's own answer, the
+// parent's explanation, its question and choices, the artifacts and the times.
+// open=true narrows it to the turns that still need the parent.
+//
+// The page comes oldest first by default, which is the order a parent folding
+// the record walks. before_turn_id — present even as zero — asks for it newest
+// first instead, for a screen that puts the latest exchange on top: zero is
+// "from the newest turn", so that screen's first page is one call rather than a
+// walk to the end of the record.
 func (a *API) listWorkTurns(w http.ResponseWriter, r *http.Request) {
 	if !a.authorizeSession(w, r) {
 		return
 	}
-	limit, err := workLimit(r.URL.Query().Get("limit"))
+	query := r.URL.Query()
+	limit, err := workLimit(query.Get("limit"))
 	if err != nil {
 		writeErr(w, err)
 		return
 	}
-	after := int64(0)
-	if raw := strings.TrimSpace(r.URL.Query().Get("after_turn_id")); raw != "" {
-		after, err = strconv.ParseInt(raw, 10, 64)
-		if err != nil || after < 0 {
+	var cursor session.WorkTurnCursor
+	if raw := strings.TrimSpace(query.Get("after_turn_id")); raw != "" {
+		cursor.After, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || cursor.After < 0 {
 			writeErr(w, fmt.Errorf("%w: after_turn_id must be a nonnegative number", session.ErrInvalidInput))
 			return
 		}
 	}
+	if query.Has("before_turn_id") {
+		// Both bounds at once is refused rather than resolved: they pick
+		// opposite ends of the record, and picking one for the caller would
+		// answer a page it did not ask for.
+		if cursor.After != 0 {
+			writeErr(w, fmt.Errorf("%w: after_turn_id and before_turn_id cannot be used together",
+				session.ErrInvalidInput))
+			return
+		}
+		cursor.Newest = true
+		if raw := strings.TrimSpace(query.Get("before_turn_id")); raw != "" {
+			cursor.Before, err = strconv.ParseInt(raw, 10, 64)
+			if err != nil || cursor.Before < 0 {
+				writeErr(w, fmt.Errorf("%w: before_turn_id must be a nonnegative number",
+					session.ErrInvalidInput))
+				return
+			}
+		}
+	}
 	openOnly := false
-	if raw := strings.TrimSpace(r.URL.Query().Get("open")); raw != "" {
+	if raw := strings.TrimSpace(query.Get("open")); raw != "" {
 		openOnly, err = strconv.ParseBool(raw)
 		if err != nil {
 			writeErr(w, fmt.Errorf("%w: open must be true or false", session.ErrInvalidInput))
 			return
 		}
 	}
-	page, err := a.mgr.WorkTurns(r.Context(), r.PathValue("id"), r.PathValue("taskID"), after, limit, openOnly)
+	page, err := a.mgr.WorkTurns(r.Context(), r.PathValue("id"), r.PathValue("taskID"), cursor, limit, openOnly)
 	if err != nil {
 		writeErr(w, err)
 		return

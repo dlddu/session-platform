@@ -140,7 +140,7 @@ type Manager interface {
 	// task's turns are its history: there is no separate history read, because
 	// a past management event was never a turn (AC-N10).
 	WorkTasks(ctx context.Context, id string, limit int, afterID, status, sessionID string) (WorkTaskPage, error)
-	WorkTurns(ctx context.Context, id, taskID string, afterTurnID int64, limit int, openOnly bool) (WorkTurnPage, error)
+	WorkTurns(ctx context.Context, id, taskID string, cursor WorkTurnCursor, limit int, openOnly bool) (WorkTurnPage, error)
 	// CreateWorkRequest stores one person's request as the next turn of a
 	// task. It writes no task field and starts no turn of the session's own:
 	// the parent finds it when it next reads the task's open turns (AC-N10).
