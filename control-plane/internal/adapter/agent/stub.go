@@ -275,11 +275,11 @@ func (c *StubClient) WorkTasks(
 }
 
 // WorkTurns pages WorkTurnRows the way the sidecar pages a task's turns: by
-// turn id, oldest first. A task the stub does not hold is not found rather than
-// an empty page — an empty page reads as "no turns yet" and would hide a wrong
-// id.
+// turn id, from whichever end the cursor names. A task the stub does not hold
+// is not found rather than an empty page — an empty page reads as "no turns
+// yet" and would hide a wrong id.
 func (c *StubClient) WorkTurns(
-	_ context.Context, _, taskID string, afterTurnID int64, limit int, openOnly bool,
+	_ context.Context, _, taskID string, cursor session.WorkTurnCursor, limit int, openOnly bool,
 ) (session.WorkTurnPage, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -302,8 +302,23 @@ func (c *StubClient) WorkTurns(
 	page := session.WorkTurnPage{
 		TaskID: taskID, TaskVersion: task.Version, Task: task, Turns: []session.WorkTurn{},
 	}
-	for _, turn := range c.WorkTurnRows[taskID] {
-		if turn.ID <= afterTurnID {
+	// The rows are held oldest first; a newest-first page walks them the other
+	// way, so both directions come off the same list in the order the slot
+	// would have returned them.
+	rows := c.WorkTurnRows[taskID]
+	if cursor.Newest {
+		page.Order = "desc"
+		rows = make([]session.WorkTurn, 0, len(c.WorkTurnRows[taskID]))
+		for i := len(c.WorkTurnRows[taskID]) - 1; i >= 0; i-- {
+			rows = append(rows, c.WorkTurnRows[taskID][i])
+		}
+	}
+	for _, turn := range rows {
+		if cursor.Newest {
+			if cursor.Before > 0 && turn.ID >= cursor.Before {
+				continue
+			}
+		} else if turn.ID <= cursor.After {
 			continue
 		}
 		if openOnly && (turn.Request == nil || turn.EndedAt != nil) {

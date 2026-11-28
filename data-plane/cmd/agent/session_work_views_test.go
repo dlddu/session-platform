@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 )
 
@@ -45,6 +46,8 @@ type workTurnsPage struct {
 		EndedAt     *string  `json:"ended_at"`
 		Origin      string   `json:"origin"`
 	} `json:"turns"`
+	NextCursor int64  `json:"next_cursor"`
+	Order      string `json:"order"`
 }
 
 type workTasksPage struct {
@@ -263,5 +266,111 @@ func TestWorkViewsNameTheOriginOfACarriedTurn(t *testing.T) {
 	// carried turn must not claim one.
 	if turns.Turns[0].Instruction != nil || turns.Turns[0].Response != nil {
 		t.Fatalf("a carried turn invented an instruction or a response: %+v", turns.Turns[0])
+	}
+}
+
+// The turn view pages the same record from either end. A reader that shows the
+// latest exchange first asks for before_turn_id and gets the newest turns in
+// one call — it never has to walk the record to find where its last page
+// starts — and the cursor then walks backwards to the oldest without repeating
+// or skipping a turn. The oldest-first default is untouched, because that is
+// what a parent folding the record reads.
+func TestWorkViewsPageTurnsFromEitherEnd(t *testing.T) {
+	s, _ := newTestSessionDB(t)
+	h := workViewHandler(t, s)
+	newWorkTask(t, s, "task-ends", "e1", map[string]any{"title": "양쪽 끝"})
+	ids := make([]int64, 0, 5)
+	for i := 1; i <= 5; i++ {
+		turn := mustWork(t, s, "turn_append", map[string]any{
+			"task_id": "task-ends", "request_id": "r" + strconv.Itoa(i), "expected_version": 1,
+			"turn": map[string]any{"request": "요청 " + strconv.Itoa(i)},
+		})["turn"].(map[string]any)
+		ids = append(ids, int64(turn["id"].(float64)))
+	}
+
+	read := func(query string) workTurnsPage {
+		t.Helper()
+		rec := workViewGet(t, h, sessionDBWorkTurnsPath, query)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("turns view %q = %d %s", query, rec.Code, rec.Body.String())
+		}
+		var page workTurnsPage
+		if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+			t.Fatalf("decode %s: %v", rec.Body.String(), err)
+		}
+		return page
+	}
+
+	// Oldest first is still the default and still says nothing about order.
+	asc := read("task_id=task-ends")
+	if len(asc.Turns) != 5 || asc.Turns[0].ID != ids[0] || asc.Order != "" {
+		t.Fatalf("the oldest-first default moved: %+v", asc)
+	}
+
+	// before_turn_id with no value is "from the newest turn".
+	desc := read("task_id=task-ends&before_turn_id=")
+	if desc.Order != "desc" {
+		t.Fatalf("a newest-first page did not say so: %+v", desc)
+	}
+	if len(desc.Turns) != 5 {
+		t.Fatalf("newest-first page = %+v", desc.Turns)
+	}
+	for i, turn := range desc.Turns {
+		if want := ids[len(ids)-1-i]; turn.ID != want {
+			t.Fatalf("newest-first turn %d = %d, want %d", i, turn.ID, want)
+		}
+	}
+
+	// Paging backwards two at a time reaches every turn exactly once, newest
+	// to oldest, and the last page offers no cursor.
+	seen := []int64{}
+	before := int64(0)
+	for page := 0; ; page++ {
+		if page == 5 {
+			t.Fatalf("paging backwards did not finish: %v", seen)
+		}
+		got := read("task_id=task-ends&limit=2&before_turn_id=" + strconv.FormatInt(before, 10))
+		if got.Order != "desc" {
+			t.Fatalf("page %d lost its order: %+v", page, got)
+		}
+		for _, turn := range got.Turns {
+			seen = append(seen, turn.ID)
+		}
+		if got.NextCursor == 0 {
+			break
+		}
+		// The cursor is the page's own oldest turn, so the next page starts
+		// below it rather than repeating it.
+		if got.NextCursor != got.Turns[len(got.Turns)-1].ID {
+			t.Fatalf("backwards cursor is not the page's oldest: %+v", got)
+		}
+		before = got.NextCursor
+	}
+	if len(seen) != 5 {
+		t.Fatalf("paging backwards saw %v, want all five once", seen)
+	}
+	for i, id := range seen {
+		if want := ids[len(ids)-1-i]; id != want {
+			t.Fatalf("backwards page %d = %d, want %d (saw %v)", i, id, want, seen)
+		}
+	}
+
+	// A bound of its own is exclusive, the way the forward one is.
+	bounded := read("task_id=task-ends&before_turn_id=" + strconv.FormatInt(ids[2], 10))
+	if len(bounded.Turns) != 2 || bounded.Turns[0].ID != ids[1] || bounded.Turns[1].ID != ids[0] {
+		t.Fatalf("an exclusive upper bound = %+v", bounded.Turns)
+	}
+
+	// Naming both ends is refused rather than resolved, and a negative or
+	// unparseable bound is refused the way the forward one is.
+	for _, query := range []string{
+		"task_id=task-ends&after_turn_id=1&before_turn_id=2",
+		"task_id=task-ends&before_turn_id=-1",
+		"task_id=task-ends&before_turn_id=lots",
+	} {
+		rec := workViewGet(t, h, sessionDBWorkTurnsPath, query)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s = %d, want 400", query, rec.Code)
+		}
 	}
 }

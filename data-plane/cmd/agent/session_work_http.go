@@ -198,6 +198,27 @@ func (s *sessionDB) serveWorkTurns(w http.ResponseWriter, r *http.Request) {
 		}
 		args.AfterTurnID = &after
 	}
+	if query.Has("before_turn_id") {
+		// Naming both bounds is refused rather than resolved: the two pick
+		// opposite ends of the record, and guessing which one a caller meant
+		// would hand back a page it did not ask for.
+		if args.AfterTurnID != nil {
+			writeWorkViewError(w, http.StatusBadRequest, "invalid_argument",
+				"after_turn_id and before_turn_id cannot be used together")
+			return
+		}
+		before := int64(0)
+		if raw := strings.TrimSpace(query.Get("before_turn_id")); raw != "" {
+			parsed, convErr := strconv.ParseInt(raw, 10, 64)
+			if convErr != nil || parsed < 0 {
+				writeWorkViewError(w, http.StatusBadRequest, "invalid_argument",
+					"before_turn_id must be a nonnegative number")
+				return
+			}
+			before = parsed
+		}
+		args.BeforeTurnID = &before
+	}
 	if raw := strings.TrimSpace(query.Get("open")); raw != "" {
 		open, convErr := strconv.ParseBool(raw)
 		if convErr != nil {

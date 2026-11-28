@@ -255,6 +255,12 @@ func (s *sessionDB) workTurnsView(ctx context.Context, a workArgs) (any, error) 
 		if next, ok := decoded["next_cursor"]; ok {
 			page["next_cursor"] = next
 		}
+		// The direction travels with the page for the same reason the cursor
+		// does: it says which end this page came from, so a reader cannot take
+		// an oldest-first page for the newest-first one it asked for.
+		if order, ok := decoded["order"]; ok {
+			page["order"] = order
+		}
 		return nil
 	})
 	if err != nil {

@@ -317,25 +317,54 @@ func patchWorkTurn(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (
 	return result, nil
 }
 
-// listWorkTurns pages a task's turns oldest first. open=true is the parent's
-// work queue: a turn carrying a request that has not ended yet.
+// listWorkTurns pages a task's turns from one end or the other. open=true is
+// the parent's work queue: a turn carrying a request that has not ended yet.
+//
+// Ascending (before_turn_id absent) is the original page and the one a parent
+// folding a task's record walks: after_turn_id is an exclusive lower bound and
+// next_cursor is the page's newest id, to pass back as the next after_turn_id.
+//
+// Descending (before_turn_id present) is the page a screen that puts the latest
+// exchange on top needs. before_turn_id is an exclusive *upper* bound and zero
+// means "from this task's newest turn", so the newest page is reachable without
+// walking the whole record to find where it starts. next_cursor is then the
+// page's *oldest* id, to pass back as the next before_turn_id. Either way a
+// page is ordered by id, which is the order the turns happened in — the id
+// rises across the whole database, so there is no second sort key to tie on.
 func listWorkTurns(ctx context.Context, tx *sql.Tx, a workArgs) (any, error) {
 	limit := a.Limit
 	if limit == 0 {
 		limit = workListLimitDefault
 	}
-	after := int64(0)
-	if a.AfterTurnID != nil {
-		after = *a.AfterTurnID
-	}
 	openOnly := 0
 	if a.Open != nil && *a.Open {
 		openOnly = 1
 	}
-	rows, err := tx.QueryContext(ctx,
-		"SELECT "+workTurnColumns+` FROM sp_work_turns
+	newest := a.BeforeTurnID != nil
+	bound := int64(0)
+	if newest {
+		bound = *a.BeforeTurnID
+	} else if a.AfterTurnID != nil {
+		bound = *a.AfterTurnID
+	}
+	// The two directions are two statements rather than one with a flag: the
+	// bound changes side and the order changes with it, and SQLite cannot take
+	// ORDER BY from a parameter.
+	query := "SELECT " + workTurnColumns + ` FROM sp_work_turns
 		 WHERE task_id=? AND id>? AND (?=0 OR (request IS NOT NULL AND ended_at IS NULL))
-		 ORDER BY id LIMIT ?`, a.TaskID, after, openOnly, limit+1)
+		 ORDER BY id LIMIT ?`
+	if newest {
+		// A zero bound is "no upper bound": the newest page, which is where a
+		// reader starts when it has no cursor yet.
+		query = "SELECT " + workTurnColumns + ` FROM sp_work_turns
+		 WHERE task_id=? AND (?=0 OR id<?) AND (?=0 OR (request IS NOT NULL AND ended_at IS NULL))
+		 ORDER BY id DESC LIMIT ?`
+	}
+	args := []any{a.TaskID, bound, openOnly, limit + 1}
+	if newest {
+		args = []any{a.TaskID, bound, bound, openOnly, limit + 1}
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -347,6 +376,9 @@ func listWorkTurns(ctx context.Context, tx *sql.Tx, a workArgs) (any, error) {
 		if scanErr != nil {
 			return nil, scanErr
 		}
+		// The extra row the limit asked for is not part of the page: it only
+		// says there is more, and the cursor is the last row that *is* in the
+		// page — the newest id going up, the oldest going down.
 		if len(turns) == limit {
 			next = turns[len(turns)-1].ID
 			break
@@ -366,6 +398,14 @@ func listWorkTurns(ctx context.Context, tx *sql.Tx, a workArgs) (any, error) {
 	result := map[string]any{"turns": turns, "turn_version": turnVersion}
 	if next != 0 {
 		result["next_cursor"] = next
+	}
+	if newest {
+		// The direction is on the page, so a reader can tell a newest-first
+		// page from an oldest-first one it asked for and did not get — a
+		// deployment that predates this parameter ignores it, and a page read
+		// top to bottom as if it were reversed would put the oldest exchange
+		// where the latest belongs.
+		result["order"] = "desc"
 	}
 	return result, nil
 }

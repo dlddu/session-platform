@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/dlddu/session-platform/control-plane/internal/adapter/agent"
@@ -252,5 +253,71 @@ func TestWorkRoutes_RefusalsAndScope(t *testing.T) {
 	}
 	if len(stub.WorkRequests) != 0 {
 		t.Fatalf("reading work stored something: %+v", stub.WorkRequests)
+	}
+}
+
+// before_turn_id reads the same record from the other end, which is what a
+// screen that puts the latest exchange on top needs: its first page is the
+// newest turns in one call, and paging back from that cursor reaches the oldest
+// without repeating or skipping one.
+func TestWorkTurns_NewestFirstPagesBackwardsWithoutWalkingTheRecord(t *testing.T) {
+	srv, stub := workServer(t)
+	workFixture(stub)
+	_, s := createRaw(t, srv.URL, map[string]any{"name": "newest", "workloadType": "codex-chat"})
+
+	// No bound at all is "from the newest turn" — the one call a screen makes
+	// when it has no cursor yet. The page says it is newest-first, so a reader
+	// cannot mistake it for the oldest-first page.
+	status, newest := getWorkTurns(t, srv, s.ID, "task-moved", "before_turn_id=")
+	if status != http.StatusOK || len(newest.Turns) != 2 {
+		t.Fatalf("newest-first page = %d %+v", status, newest)
+	}
+	if newest.Order != "desc" {
+		t.Fatalf("a newest-first page did not say so: %+v", newest)
+	}
+	if newest.Turns[0].ID != 2 || newest.Turns[1].ID != 1 {
+		t.Fatalf("newest-first page is not newest first: %+v", newest.Turns)
+	}
+
+	// One at a time: the cursor is the page's *oldest* id and continues
+	// backwards, so the pages read 2 then 1 and the last page offers no cursor.
+	status, first := getWorkTurns(t, srv, s.ID, "task-moved", "limit=1&before_turn_id=0")
+	if status != http.StatusOK || len(first.Turns) != 1 || first.Turns[0].ID != 2 {
+		t.Fatalf("first newest-first page = %d %+v", status, first)
+	}
+	if first.NextCursor != 2 || first.Order != "desc" {
+		t.Fatalf("backwards cursor = %+v", first)
+	}
+	status, second := getWorkTurns(t, srv, s.ID, "task-moved",
+		"limit=1&before_turn_id="+strconv.FormatInt(first.NextCursor, 10))
+	if status != http.StatusOK || len(second.Turns) != 1 || second.Turns[0].ID != 1 {
+		t.Fatalf("second newest-first page = %d %+v", status, second)
+	}
+	if second.NextCursor != 0 {
+		t.Fatalf("the oldest page still offered a cursor: %+v", second)
+	}
+
+	// The default is unchanged: without the parameter the page is oldest first
+	// and says nothing about order, which is what a parent folding the record
+	// walks.
+	status, oldest := getWorkTurns(t, srv, s.ID, "task-moved", "")
+	if status != http.StatusOK || oldest.Turns[0].ID != 1 || oldest.Order != "" {
+		t.Fatalf("the oldest-first default moved: %d %+v", status, oldest)
+	}
+
+	// open=true still narrows a newest-first page to the parent's queue.
+	status, open := getWorkTurns(t, srv, s.ID, "task-moved", "before_turn_id=&open=true")
+	if status != http.StatusOK || len(open.Turns) != 1 || open.Turns[0].ID != 2 {
+		t.Fatalf("open newest-first page = %d %+v", status, open)
+	}
+
+	// Naming both ends is refused rather than resolved, and a negative bound
+	// is refused the way the forward one is.
+	for _, query := range []string{
+		"after_turn_id=1&before_turn_id=2", "before_turn_id=-1", "before_turn_id=lots",
+	} {
+		if status, _ := getWorkTurns(t, srv, s.ID, "task-moved", query); status != http.StatusBadRequest {
+			t.Fatalf("%s = %d, want 400", query, status)
+		}
 	}
 }
