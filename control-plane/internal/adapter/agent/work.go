@@ -9,8 +9,12 @@
 // has no work when the truth is that this image cannot be asked.
 //
 // The write is a POST of a person's words, which the slot turns into the next
-// turn of a task. It is as passive as the reads: it starts no turn of the
-// session's own and wakes nothing.
+// turn of a task. It restores no snapshot and sends nothing into the person's
+// chat. What it can do, and says in its answer, is hand the task and the turn
+// to the session's own monitor lane when the task was waiting for a person's
+// judgement — a hop inside that pod, which this client neither makes nor needs
+// to know the shape of beyond relaying what came of it
+// (data-plane/cmd/agent/session_work_relay_wake.go).
 //
 // Keep the paths in sync with data-plane/cmd/agent (agentWorkTasksPath,
 // agentWorkTurnsPath, agentWorkRequestsPath).

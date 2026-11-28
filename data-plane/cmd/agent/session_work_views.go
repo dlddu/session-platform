@@ -42,8 +42,11 @@ func workOpenTurnsOf(ctx context.Context, tx *sql.Tx, taskID string) (workOpenTu
 
 // storeRequestAsTurn is the write side of the read path: a request a person
 // left outside the session becomes the next turn of that task. Nothing else
-// changes — no turn is started, nothing is woken, and the parent finds it the
-// next time it lists the task's open turns.
+// changes here — no turn is started and nothing is woken by this function.
+// Telling the monitor lane that a person has answered on a task that was
+// waiting for them is the route's own step, taken after this one commits
+// (session_work_relay_wake.go); every other request is found the next time the
+// records are read.
 //
 // Idempotency is the caller's own id: the same id with the same words answers
 // with the turn already appended, and the same id with different words is a

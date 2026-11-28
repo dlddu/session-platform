@@ -164,7 +164,42 @@ type WorkRequestInput struct {
 type WorkRequestStored struct {
 	Turn     WorkTurn `json:"turn"`
 	Replayed bool     `json:"replayed"`
+	// Relay is the handover to the manager's monitor lane, present only when
+	// there was one to make: a request on a task that was waiting for a
+	// person's judgement is handed to that lane at once, because it is the lane
+	// that stopped looking at the task for exactly that reason. Absent is "no
+	// handover was due" — an ordinary request, or a session running a single
+	// lane — and a reader must not show it as a failed one.
+	Relay *WorkRequestRelay `json:"relay,omitempty"`
 }
+
+// WorkRequestRelay is what became of that handover. It carries no receipt: a
+// receipt names a run of a lane inside the session's pod, and the reader of this
+// answer is outside the session.
+//
+// The three facts a caller can tell apart are deliberately separate: the
+// request is stored (this answer exists at all), the monitor has been given it
+// (Accepted), and the work is done (which only the turn ending says). A caller
+// that collapses them tells a person their request has been dealt with when it
+// has only been filed.
+type WorkRequestRelay struct {
+	// State is "accepted" when the lane took it — immediately if that lane was
+	// idle, queued behind its current turn if it was busy — or "pending" when
+	// the intent is recorded and the lane could not be reached. Pending is not
+	// lost: the record is durable and the monitor's own standing round reads
+	// the same turn.
+	State string `json:"state"`
+	// Attempts is how many hops this handover has taken, so a caller can tell a
+	// first delivery from a re-delivery after a lost acknowledgement.
+	Attempts int64 `json:"attempts"`
+}
+
+// The two states a handover is reported in. Keep in sync with
+// data-plane/cmd/agent (workRelayAccepted, workRelayPending).
+const (
+	WorkRelayAccepted = "accepted"
+	WorkRelayPending  = "pending"
+)
 
 // WorkStatuses is the task status domain, the ledger's own unchanged: a
 // migration that renamed a status would move work a person had already seen as

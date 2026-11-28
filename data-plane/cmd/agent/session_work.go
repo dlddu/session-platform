@@ -8,7 +8,8 @@
 // token and the outside action it recorded — sits in records of its own beside
 // them, each named for what it is: sp_work_task_book
 // (session_work_parent.go), sp_work_monitor (session_work_monitor.go),
-// sp_work_turn_claim and sp_work_turn_admin.
+// sp_work_request_wake (session_work_relay_wake.go), sp_work_turn_claim and
+// sp_work_turn_admin.
 //
 // The ledger these records came from is gone, and so is everything that moved
 // it: the migration, the rollback export, the retirement, the snapshot tools
@@ -111,6 +112,16 @@ CREATE TABLE IF NOT EXISTS sp_work_monitor (
 	note TEXT NOT NULL,
 	version INTEGER NOT NULL,
 	updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sp_work_request_wake (
+	turn_id INTEGER PRIMARY KEY,
+	task_id TEXT NOT NULL,
+	source_id TEXT NOT NULL,
+	state TEXT NOT NULL,
+	attempts INTEGER NOT NULL,
+	ticket TEXT NOT NULL,
+	recorded_at TEXT NOT NULL,
+	claimed_at TEXT NOT NULL
 );
 `
 
