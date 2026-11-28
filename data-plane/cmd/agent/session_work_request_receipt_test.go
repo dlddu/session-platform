@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -396,6 +397,78 @@ func TestWorkRequestReceiptHappensOnceUnderARace(t *testing.T) {
 	}
 	if got := taskTurnCount(t, s, "task-review"); got != 1 {
 		t.Fatalf("turns = %d, want one", got)
+	}
+}
+
+// The whole way in, over the real route: the control plane's POST body reaches
+// this slot's database and the task is received, and the retry of an answer the
+// caller never saw answers 200 without moving anything a second time.
+func TestWorkRequestReceiptOverTheSubmitRoute(t *testing.T) {
+	s, _ := newTestSessionDB(t)
+	h := workViewHandler(t, s)
+	newWorkTask(t, s, "task-review", "c1", map[string]any{"status": "review"})
+
+	post := func(body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, sessionDBWorkRequestsPath, strings.NewReader(body))
+		req.RemoteAddr = "127.0.0.1:54321"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	body := `{"id":"req-1","task_id":"task-review","text":"A 안으로 해 주세요","author":"user-7"}`
+
+	rec := post(body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("store answered %d: %s", rec.Code, rec.Body.String())
+	}
+	var stored struct {
+		Turn struct {
+			ID      int64   `json:"id"`
+			Request *string `json:"request"`
+			Origin  string  `json:"origin"`
+			EndedAt *string `json:"ended_at"`
+		} `json:"turn"`
+		Replayed bool `json:"replayed"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Replayed || stored.Turn.Request == nil || *stored.Turn.Request != "A 안으로 해 주세요" ||
+		stored.Turn.Origin != workTurnOriginAppRequest || stored.Turn.EndedAt != nil {
+		t.Fatalf("the answer is not the open turn the request became: %+v", stored)
+	}
+	status, version := taskStatusAndVersion(t, s, "task-review")
+	if status != "planned" || version != 2 {
+		t.Fatalf("status/version = %q/%d, want planned/2", status, version)
+	}
+
+	// The caller never saw the 201 and sends the same request again.
+	rec = post(body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("replay answered %d: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if !stored.Replayed {
+		t.Fatalf("the replay did not say so: %+v", stored)
+	}
+	nowStatus, nowVersion := taskStatusAndVersion(t, s, "task-review")
+	if nowStatus != status || nowVersion != version {
+		t.Fatalf("the replay moved the task again: %q/%d", nowStatus, nowVersion)
+	}
+	if got := taskTurnCount(t, s, "task-review"); got != 1 {
+		t.Fatalf("turns = %d, want one", got)
+	}
+
+	// A refusal over the same route leaves the task where the receipt put it.
+	rec = post(`{"id":"req-1","task_id":"task-review","text":"다른 본문","author":"user-7"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("same id different words answered %d: %s", rec.Code, rec.Body.String())
+	}
+	if again, v := taskStatusAndVersion(t, s, "task-review"); again != "planned" || v != version {
+		t.Fatalf("status/version = %q/%d after a refusal", again, v)
 	}
 }
 
