@@ -14,8 +14,18 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
+)
+
+const (
+	// workRequestReviewStatus is the status a stored request moves a task out
+	// of, and workRequestReceiptStatus the one it moves it into. Both are
+	// members of workStatuses (session_work.go) — this path invents no status
+	// and renames none; it only moves a task between two that already exist.
+	workRequestReviewStatus  = "review"
+	workRequestReceiptStatus = "planned"
 )
 
 // workOpenTurns is what a reader showing "somebody is waiting" asks for:
@@ -41,13 +51,22 @@ func workOpenTurnsOf(ctx context.Context, tx *sql.Tx, taskID string) (workOpenTu
 }
 
 // storeRequestAsTurn is the write side of the read path: a request a person
-// left outside the session becomes the next turn of that task. Nothing else
-// changes — no turn is started, nothing is woken, and the parent finds it the
-// next time it lists the task's open turns.
+// left outside the session becomes the next turn of that task. No turn is
+// started and nothing is woken, and the parent finds the request the next time
+// it lists the task's open turns.
+//
+// One thing beside the turn does change, and only for a task that was waiting
+// on the person: a task **shown as** `review` leaves it for `planned` in this
+// same transaction. Shown, not stored — the two differ for a row an older image
+// wrote (requestReceivesTheTask), and the eligibility is judged before this
+// store adds a turn of its own.
 //
 // Idempotency is the caller's own id: the same id with the same words answers
 // with the turn already appended, and the same id with different words is a
-// conflict rather than a second turn.
+// conflict rather than a second turn. The replay answers from the turn that is
+// already there and never reaches the status move below — a retry of an answer
+// the app never saw cannot pull a task the parent has since taken back into the
+// queue.
 //
 // choiceTurn, when given, is the turn whose choices the person picked from. The
 // rule is the turn records' own — only the latest turn's choices are current —
@@ -91,6 +110,15 @@ func storeRequestAsTurn(
 			return workTurnView{}, false, err
 		}
 	}
+	// Judged here, before a turn of this store's own exists. Whether this
+	// request is the receipt of an answer somebody was asked for is a fact about
+	// the task the person was looking at, and the next statement changes that
+	// task's latest turn — so asking afterwards would be asking about a state
+	// this transaction had already moved.
+	receives, err := requestReceivesTheTask(ctx, tx, task)
+	if err != nil {
+		return workTurnView{}, false, err
+	}
 	request := text
 	turn, err := insertWorkTurn(ctx, tx, taskID, &workTurnInput{Request: &request}, now)
 	if err != nil {
@@ -119,8 +147,124 @@ func storeRequestAsTurn(
 		"UPDATE sp_work_task_guard SET turn_version=turn_version+1 WHERE task_id=?", taskID); err != nil {
 		return workTurnView{}, false, err
 	}
+	// Written last, so the status moves only once the request is really stored:
+	// every check and every insert above has already succeeded, and a failure in
+	// any of them rolls back the move with the turn. What is written was decided
+	// before the insert; only the write waits.
+	if receives {
+		if err = receiveRequestOnReviewTask(ctx, tx, task, now); err != nil {
+			return workTurnView{}, false, err
+		}
+	}
 	view, err := workTurnViewOf(ctx, tx, turn)
 	return view, false, err
+}
+
+// receiveRequestOnReviewTask writes the receipt its caller already decided on:
+// a task that was waiting on a person leaves review for `planned` — "received,
+// nobody has picked it up yet". Whether it applies is requestReceivesTheTask's
+// question; this is only the write. The contract is docs/session-ledger.md,
+// "The one write, and the receipt it records"; what is here is why it is in
+// this transaction and what it leaves alone.
+//
+// The compare-and-swap is on the **stored** word and the version this
+// transaction read, even when what it was shown as came from evidence: on disk
+// is the only place another writer can have moved it.
+//
+// Why here rather than in the app: the request and the status are one fact. A
+// second call from the app could store the request and then fail to move the
+// task, and an app moving its own copy optimistically would be guessing about a
+// row only this slot owns — a late answer to that guess could paint `review`
+// back over a task the monitor had already taken. In one transaction neither is
+// possible.
+//
+// It touches nothing else: not the open question and the choices offered beside
+// it, not the task's description or completion criteria, not the parent's own
+// bookkeeping, and no other status. Somebody sending a sentence settles no
+// decision, so the account of what was asked has to survive into the monitor's
+// own handling of the answer, and `running` stays the monitor's to write on a
+// real hand-off.
+//
+// It also wakes nothing. Delivering "a request arrived" to the monitor's
+// existing lane is a separate concern that consumes this commit, and it has to
+// act on the stored turn rather than re-test for `review`: by then the status is
+// `planned`, and a second test would drop exactly the request it was told of.
+//
+// The version moves with the status because a status is a new state of the task
+// rather than an event on it — which is why touchWorkTask above leaves the
+// version alone for the turn itself. A monitor holding what it read before the
+// request landed is told to read again instead of writing over the receipt.
+func receiveRequestOnReviewTask(ctx context.Context, tx *sql.Tx, task workTask, now time.Time) error {
+	// The status this transaction read is in the WHERE clause beside the
+	// version, and the row count is checked rather than assumed — the same
+	// single-winner swap a task write is, so a move that matched nothing is
+	// reported as a lost race instead of passing for a move.
+	result, err := tx.ExecContext(ctx,
+		"UPDATE sp_work_tasks SET status=?,version=?,updated_at=? WHERE id=? AND version=? AND status=?",
+		workRequestReceiptStatus, task.Version+1, workNow(now), task.ID, task.Version, task.Status)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed != 1 {
+		return workFail("conflict", "this task moved while the request was being stored — read it again and send the request once")
+	}
+	return nil
+}
+
+// requestReceivesTheTask answers whether this store is the receipt of an answer
+// somebody was asked for. The question is about the status the person was
+// **shown**, not the word on disk: a slot can hold a status this image does not
+// write, and deciding on the byte would skip exactly the task somebody is
+// looking at as waiting on them.
+func requestReceivesTheTask(ctx context.Context, tx *sql.Tx, task workTask) (bool, error) {
+	shown, err := workStatusAsShown(ctx, tx, task)
+	if err != nil {
+		return false, err
+	}
+	return shown == workRequestReviewStatus, nil
+}
+
+// workStatusAsShown answers the status this task is shown as, by asking the
+// read path rather than by reading the byte or restating anybody's rules.
+//
+// readWorkTask is the answer the `db` tool, the sidecar views and the control
+// plane all serve, so its `status` is the word a person is looking at — which
+// is the only word a receipt may be decided on. Reusing it means this path
+// cannot drift from the screen, and it means the fold of a status word this
+// image does not write is read wherever that fold lives, with no copy of its
+// classification here.
+//
+// It is read as the JSON the answer is served as, on purpose: which struct
+// carries the status is the status domain's business — a tree that resolves an
+// older word answers with a richer record than one that does not — and naming
+// either of them here would tie this file to one of the two.
+func workStatusAsShown(ctx context.Context, tx *sql.Tx, task workTask) (string, error) {
+	answered, err := readWorkTask(ctx, tx, task.ID)
+	if err != nil {
+		return "", err
+	}
+	record, ok := answered.(map[string]any)
+	if !ok {
+		return "", errors.New("the work task read answered a shape this path cannot read")
+	}
+	encoded, err := json.Marshal(record["task"])
+	if err != nil {
+		return "", err
+	}
+	var shown struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(encoded, &shown); err != nil {
+		return "", err
+	}
+	if shown.Status == "" {
+		return "", errors.New("the work task read answered no status")
+	}
+	return shown.Status, nil
 }
 
 // checkRequestChoiceTurn refuses a pick from a screen the task has moved past.
