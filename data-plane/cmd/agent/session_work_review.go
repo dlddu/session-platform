@@ -482,6 +482,12 @@ func closeTaskReview(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time,
 		return nil, workFail("conflict", "this task is at "+effective+
 			" and only a task in review leaves review"+legacyBasisSuffix(task, basis))
 	}
+	// Checked here as well as in the conditional UPDATE below, so a caller
+	// holding a version the task has moved past is told that before anything
+	// is read or built on it. The UPDATE is still the swap that excludes.
+	if task.Version != *a.ExpectedVersion {
+		return nil, workFail("conflict", "expected_version does not match the task's current version")
+	}
 	details, err := readReviewDetails(ctx, tx, a.TaskID)
 	if err != nil {
 		return nil, err
@@ -525,9 +531,6 @@ func closeTaskReview(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time,
 	}
 	if err = writeReviewDetails(ctx, tx, a.TaskID, details); err != nil {
 		return nil, err
-	}
-	if task.Version != *a.ExpectedVersion {
-		return nil, workFail("conflict", "expected_version does not match the task's current version")
 	}
 	moved, err := setWorkTaskStatus(ctx, tx, task, to, now)
 	if err != nil {
