@@ -58,8 +58,12 @@ func TestLaneSurfaceSplitsReadsFromWrites(t *testing.T) {
 	parentTools := laneNames(t, db, parent)
 	monitorTools := laneNames(t, db, monitor)
 
+	// The three review moves are writes too — they write a task's status and the
+	// question on its turn, which is exactly what a person reads — so they
+	// belong to the lane that owns those rows (session_work_review.go, AC-N13).
 	writes := []string{"task_put", "task_delete", "turn_append", "turn_patch", "turn_dispatch",
-		taskBookPutTool, monitorPutTool, monitorDeleteTool}
+		taskBookPutTool, monitorPutTool, monitorDeleteTool,
+		taskReviewOpenTool, taskReviewResumeTool, taskReviewCompleteTool}
 	for _, name := range writes {
 		if containsString(parentTools, name) {
 			t.Errorf("the parent lane is offered %s; the monitor lane owns writing the records", name)
