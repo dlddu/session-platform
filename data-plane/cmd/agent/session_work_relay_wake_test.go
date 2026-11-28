@@ -736,3 +736,114 @@ func TestOnlyTheStatusesThatWaitOnAPersonAreHandedOver(t *testing.T) {
 		}
 	}
 }
+
+// wakeForceTaskStatus writes one task's status column straight out from under the
+// handover, which is the only honest way to stand up the next test here.
+//
+// The status move it imitates belongs to a change this branch does not contain —
+// a stored receipt taking the task off `review` — so there is no tool call on
+// this tree that performs it (`task_put` cannot cross the review boundary, by
+// AC-N13's design). Writing the column is therefore not a shortcut past a tool:
+// it is the only way to put the slot in the state the other change will produce,
+// without reimplementing that change here.
+func wakeForceTaskStatus(t *testing.T, db *sessionDB, taskID, status string) {
+	t.Helper()
+	handle, err := db.handle(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.workTx(context.Background(), handle, func(tx *sql.Tx) error {
+		result, execErr := tx.ExecContext(context.Background(),
+			"UPDATE sp_work_tasks SET status=? WHERE id=?", status, taskID)
+		if execErr != nil {
+			return execErr
+		}
+		// A silent no-op here would make the test prove the opposite of what it
+		// claims: the handover would land because the task never moved.
+		moved, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return rowsErr
+		}
+		if moved != 1 {
+			t.Fatalf("forcing %s to %q touched %d rows, want 1", taskID, status, moved)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAHandoverSurvivesTheReceiptMovingTheTaskOffReview is the seam this change
+// shares with the one that moves a task off `review` the moment a request's
+// receipt is stored. The two land in either order, and the request must not go
+// missing in any of them.
+//
+// The trap is that `review` is what makes a handover due, so a delivery path
+// that asked "is this task still waiting on a person?" at hop time would find
+// `planned` — the receipt's own doing — and drop the very request that caused it.
+// The decision therefore belongs to the store: the row is written inside the
+// storing transaction on the status read there, and from then on it is a debt to
+// be paid, not a question to re-ask. The hop re-reads the task and the turn
+// narrowly for the one thing that would make delivery wrong — the monitor having
+// already started the turn — and status is deliberately not among them.
+//
+// So the effective status before the store is what counts, the receipt may move
+// the task immediately afterwards, and the handover still arrives exactly once.
+func TestAHandoverSurvivesTheReceiptMovingTheTaskOffReview(t *testing.T) {
+	db, sidecar, lane := newWakeTestSlot(t)
+	wakeTestTask(t, db, "permission", "review")
+	// The lane is down for the first pass, which is what opens the window: the
+	// row stays owed while the task moves underneath it.
+	lane.set(func(l *stubLane) { l.refusal = http.StatusServiceUnavailable })
+
+	code, answer := storeRequestOverHTTP(t, sidecar, map[string]any{
+		"id": "app-req-1", "task_id": "permission", "text": "네, 그렇게 해 주세요", "author": "user-1",
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("storing = %d: %v", code, answer)
+	}
+	turnID := wakeStoredTurnID(t, answer)
+	if relay := wakeRelayOf(t, answer); relay["state"] != workRelayPending {
+		t.Fatalf("a refused handover = %v, want %s", relay, workRelayPending)
+	}
+	owed, found := wakeIntentRow(t, db, turnID)
+	if !found {
+		t.Fatal("the handover was decided away instead of being owed")
+	}
+
+	// The receipt lands and takes the task off review — the other change's work,
+	// after this one's transaction has committed.
+	wakeForceTaskStatus(t, db, "permission", "planned")
+	if taskAwaitsPersonsJudgement("planned") {
+		t.Fatal("this test assumes planned does not call for a handover")
+	}
+
+	// The lane comes back and the next person's request sweeps the owed one.
+	lane.set(func(l *stubLane) { l.refusal = 0 })
+	wakeTestTask(t, db, "second", "review")
+	if code, next := storeRequestOverHTTP(t, sidecar, map[string]any{
+		"id": "app-req-2", "task_id": "second", "text": "이것도요", "author": "user-1",
+	}); code != http.StatusCreated {
+		t.Fatalf("the second store = %d: %v", code, next)
+	}
+
+	carried := ""
+	for _, prompt := range lane.took() {
+		if strings.Contains(prompt, "delivery="+wakeDeliveryID(turnID)) {
+			if carried != "" {
+				t.Fatalf("the handover was carried more than once:\n%s\n%s", carried, prompt)
+			}
+			carried = prompt
+		}
+	}
+	if carried == "" {
+		t.Fatalf("the receipt moving the task off review lost the request: %v", lane.took())
+	}
+	if !strings.Contains(carried, "permission") {
+		t.Errorf("the handover does not name the task it is about:\n%s", carried)
+	}
+	delivered, _ := wakeIntentRow(t, db, turnID)
+	if delivered.State != workWakeDelivered {
+		t.Fatalf("the owed handover was not settled: %+v (was %+v)", delivered, owed)
+	}
+}
