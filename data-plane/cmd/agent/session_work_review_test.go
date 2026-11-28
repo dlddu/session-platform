@@ -967,3 +967,88 @@ func TestWorkUnreadableBookkeepingIsLeftAloneAndStillAnswers(t *testing.T) {
 		"outcome": map[string]any{"evidence": "e", "remaining": "r"},
 	}, "conflict")
 }
+
+// The three moves over the wire a model actually speaks: JSON-RPC `tools/call`
+// on the sidecar's own MCP address, with the request arriving on the sidecar's
+// loopback route in between. Everything else in this file reaches the tools one
+// layer in; this is here so "the real entry point" is a claim with a test
+// behind it rather than an assumption about the layer above.
+func TestWorkReviewMovesOverTheSidecarWire(t *testing.T) {
+	s, _ := newTestSessionDB(t)
+	h := workViewHandler(t, s)
+	call := func(name string, args map[string]any) (map[string]any, bool) {
+		t.Helper()
+		resp := sessionDBCall(t, h, "tools/call", map[string]any{"name": name, "arguments": args})
+		if resp.Error != nil {
+			t.Fatalf("%s: JSON-RPC error %+v", name, resp.Error)
+		}
+		result := resp.Result.(map[string]any)
+		text := result["content"].([]any)[0].(map[string]any)["text"].(string)
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(text), &decoded); err != nil {
+			t.Fatalf("%s: %v (%s)", name, err, text)
+		}
+		return decoded, result["isError"].(bool)
+	}
+	// The one tool list a model is offered carries all three moves.
+	listed := strings.Join(sessionDBToolNames(t, h), ",")
+	for _, name := range []string{taskReviewOpenTool, taskReviewResumeTool, taskReviewCompleteTool} {
+		if !strings.Contains(listed, name) {
+			t.Fatalf("%s is not on the offered surface: %s", name, listed)
+		}
+	}
+	criteria := "권한이 붙고 대조가 끝나면 끝"
+	if _, isErr := call("task_put", map[string]any{
+		"id": "task-wire", "request_id": "c1", "expected_version": 0,
+		"task": map[string]any{
+			"session_id": "worker-1", "title": "와이어로 도는 작업", "description": "d",
+			"completion_criteria": criteria, "status": workStatusRunning,
+		},
+	}); isErr {
+		t.Fatal("task_put over the wire failed")
+	}
+	appended, isErr := call("turn_append", map[string]any{
+		"task_id": "task-wire", "request_id": "t1", "expected_version": 1, "expected_turn_version": 1,
+		"turn": map[string]any{"instruction": "레포 읽기 권한을 확인한다"},
+	})
+	if isErr {
+		t.Fatalf("turn_append over the wire = %v", appended)
+	}
+	turnID := appended["turn"].(map[string]any)["id"]
+	opened, isErr := call(taskReviewOpenTool, map[string]any{
+		"task_id": "task-wire", "request_id": "open-1", "turn_id": turnID,
+		"expected_version": 1, "expected_turn_version": 2, "expected_book_version": 1,
+		"review": repoApproval(),
+	})
+	if isErr || opened["task"].(map[string]any)["status"] != workStatusReview {
+		t.Fatalf("open over the wire = %v", opened)
+	}
+	// A person's request arrives on the sidecar's own loopback route and makes
+	// the next turn without moving the status.
+	body, err := json.Marshal(workRequestBody{
+		ID: "req-wire", TaskID: "task-wire", Text: "더해 뒀습니다", Author: "silas",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, sessionDBWorkRequestsPath, strings.NewReader(string(body)))
+	req.RemoteAddr = "127.0.0.1:54321"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("request over the wire = %d %s", rec.Code, rec.Body.String())
+	}
+	read, _ := call("task_get", map[string]any{"id": "task-wire"})
+	if read["task"].(map[string]any)["status"] != workStatusReview {
+		t.Fatalf("the request moved the status: %v", read["task"])
+	}
+	version := read["task"].(map[string]any)["version"]
+	resumed, isErr := call(taskReviewResumeTool, map[string]any{
+		"task_id": "task-wire", "request_id": "resume-1",
+		"expected_version": version, "expected_book_version": read["book_version"],
+		"outcome": map[string]any{"evidence": "ls-remote 가 답한다", "remaining": "대조를 끝낸다"},
+	})
+	if isErr || resumed["task"].(map[string]any)["status"] != workStatusRunning {
+		t.Fatalf("resume over the wire = %v", resumed)
+	}
+}
