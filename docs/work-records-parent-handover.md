@@ -297,7 +297,9 @@ task_review_resume({task_id, request_id, expected_version, expected_book_version
 
 # review -> completed : 최종 결과 수락 + 원래 완료 기준 충족 + 남은 것 없음
 task_review_complete({task_id, request_id, expected_version, expected_book_version,
-    outcome: {accepted: true, completion_criteria: "<작업의 criteria 축자>"}})
+    outcome: {accepted: true,
+              evidence: "그 수락을 무엇으로 관측했는지",      # 제출·보류·설명은 수락이 아니다
+              completion_criteria: "<작업의 criteria 축자>"}})
 ```
 
 - **같은 승인을 두 번 만들지 않는다.** 같은 `target·scope·route` 를 다시 물으면
@@ -308,7 +310,22 @@ task_review_complete({task_id, request_id, expected_version, expected_book_versi
 - **보류·승인 미적용이면 review 다.** `evidence` 나 `remaining` 이 비면 resume
   은 거절되고 작업은 그대로 있다. 플랫폼은 바깥의 적용 여부를 볼 수 없으므로
   **확인을 이름으로 요구**하고 그것을 작업 옆에 남긴다 — 추측으로 옮기지 않는다.
-- **완료는 다섯 가지를 다 본다**: 수락 여부, 작업 자신의 완료 기준 **축자 일치**,
+- **리뷰를 떠나는 판정은 상태 낱말이 아니라 열린 기록이다.** 앱 요청이 저장되면
+  검토를 기다리던 작업은 같은 트랜잭션에서 `planned` 로 접수되지만(사람이 문장을
+  보낸 것으로 결정이 정리되지는 않으므로) 기록된 리뷰는 **열린 채 남는다**. 그래서
+  `task_review_resume`·`task_review_complete` 는 **at review 이거나 열린 리뷰를 든**
+  작업에서 돈다 — `planned` 에서도 근거를 실어 닫을 수 있고, 이력 항목의
+  `from_status` 가 큐에서 닫혔다는 것을 남긴다.
+- **열린 리뷰를 버려두고 지나갈 수 없다.** 열린 리뷰가 있는 작업에 `task_put` 으로
+  `running`·`completed` 를 쓰면 거절된다 — 「도는 중」으로 읽히는데 사람이 기다린다는
+  기록은 읽기 경로에 없는 곳에만 남기 때문이다. 전이 제약이 아니다(어느 상태에서
+  어디로가 아니라 **버려두고 갈 기록이 있는가**를 묻는다): `planned`·`review`·
+  `unknown` 은 거절되지 않고, 기록이 없는 작업은 전과 같이 어디로든 가며, 지나갈
+  길이 둘 있다 — 근거를 실은 두 호출로 닫거나 `task_book_put` 으로 기장을 교체한다.
+- **완료는 열린 리뷰를 닫는다** — 사용자가 결과를 수락하는 것이 곧 그 결정의
+  정리다. 대신 `outcome.evidence` 로 **그 수락을 무엇으로 관측했는지** 말해야 한다:
+  제출만·보류·설명·적용되지 않은 승인은 이름 붙일 수 없으므로 완료가 되지 않는다.
+- **완료는 다섯 가지를 다 본다**: 수락 여부와 그 **관측 근거**, 작업 자신의 완료 기준 **축자 일치**,
   남은 것 없음, `ended_at` 없는 요청 0, 미적용 결정 없음. 완료 기준이 적혀 있지
   않은 작업은 이 길로 완료되지 않는다 — `task_put` 으로 먼저 쓴다.
 - **이 셋은 울타리가 아니라 완전한 길이다.** `task_put` 은 도메인 안의 어떤 상태든

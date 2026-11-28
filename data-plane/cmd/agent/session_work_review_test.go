@@ -651,8 +651,15 @@ func TestWorkReviewIsOneApprovalFromPermissionToCompletion(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("request = %d %s", rec.Code, rec.Body.String())
 	}
-	if got := mustWork(t, s, "task_get", map[string]any{"id": "task-a"})["task"].(map[string]any)["status"]; got != workStatusReview {
-		t.Fatalf("a submitted request moved the task to %v on its own", got)
+	// The invariant is that a submission is not execution and not completion —
+	// not that the status byte stands still. A commit beside this one moves a
+	// task that was waiting on a person to the receipt status `planned` in the
+	// transaction that stores the request (#285, session_work_views.go), which
+	// is still nobody having picked the words up. Asserting the byte would make
+	// this test disagree with that commit about something it does not test.
+	submitted := mustWork(t, s, "task_get", map[string]any{"id": "task-a"})["task"].(map[string]any)["status"]
+	if submitted == workStatusRunning || submitted == workStatusCompleted {
+		t.Fatalf("a submitted request counted as execution: %v", submitted)
 	}
 
 	// A resume that names no confirmation is refused and the task stays in
@@ -664,8 +671,13 @@ func TestWorkReviewIsOneApprovalFromPermissionToCompletion(t *testing.T) {
 		"expected_version": version, "expected_book_version": bookVersion,
 		"outcome": map[string]any{"evidence": "  ", "remaining": "대조를 이어 간다"},
 	}, "invalid_argument")
-	if got := mustWork(t, s, "task_get", map[string]any{"id": "task-a"})["task"].(map[string]any)["status"]; got != workStatusReview {
-		t.Fatalf("a refused resume moved the task to %v", got)
+	// Again the invariant rather than the byte: a refused resume is not
+	// execution, and the decision it would not settle is still open.
+	if got := taskStatusOf(t, s, "task-a"); got == workStatusRunning || got == workStatusCompleted {
+		t.Fatalf("a refused resume counted as execution: %v", got)
+	}
+	if _, open := taskBookDetails(t, s, "task-a")[workReviewKey]; !open {
+		t.Fatalf("a refused resume closed the review")
 	}
 	// So is one that says nothing is left: that is a completion, not a resume.
 	wantWorkCode(t, s, taskReviewResumeTool, map[string]any{
@@ -1178,8 +1190,9 @@ func TestWorkReviewMovesOverTheSidecarWire(t *testing.T) {
 		t.Fatalf("request over the wire = %d %s", rec.Code, rec.Body.String())
 	}
 	read, _ := call("task_get", map[string]any{"id": "task-wire"})
-	if read["task"].(map[string]any)["status"] != workStatusReview {
-		t.Fatalf("the request moved the status: %v", read["task"])
+	// Not execution and not completion — see the note in the flow test above.
+	if got := read["task"].(map[string]any)["status"]; got == workStatusRunning || got == workStatusCompleted {
+		t.Fatalf("a submitted request counted as execution: %v", read["task"])
 	}
 	version := read["task"].(map[string]any)["version"]
 	resumed, isErr := call(taskReviewResumeTool, map[string]any{

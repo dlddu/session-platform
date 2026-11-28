@@ -421,6 +421,29 @@ tasks — every task, legacy rows included, answers to exactly one — so paging
 status after another sees every task once and no task twice, and the alias
 selects exactly what `review` does.
 
+**Leaving review is decided by the record, not by the word.** A stored request
+moves a task that was waiting on a person out of `review` and into `planned` in
+the transaction that stores it — received, nobody has picked it up yet — and
+somebody sending a sentence settles no decision, so the recorded review stays
+open while the status byte no longer says `review`. A task leaves review when it
+is **at** review *or* when it still **carries** an open review; a task that
+carries none cannot, which is the same sentence as before for every task that
+never had one. The history entry records `from_status`, so a decision closed out
+of the queue is distinguishable from one closed out of review.
+
+**And a bare status write may not walk away from an open review.** `task_put`
+writing `running` or `completed` over a task that carries one is refused: those
+two say the work moved on, and a task that reads as moved-on while holding an
+unsettled question hides it from every reader — the status filter files it with
+the work in flight and the only record that somebody is waiting sits in
+bookkeeping nothing on the read path shows. This is **not** a transition
+constraint: it asks whether this write would orphan a record, not which status
+it moves between. `planned` (where a stored request legitimately puts such a
+task), `review` and `unknown` are not refused, a task with no recorded review
+moves anywhere as before, and there are two honest ways past it — settle the
+review with the call that carries the evidence, or replace the bookkeeping with
+`task_book_put` if there is genuinely nothing to settle.
+
 **Entering and leaving review are their own calls**, because the status is the
 easy half:
 
@@ -428,7 +451,7 @@ easy half:
 | --- | --- | --- |
 | `task_review_open` | → review, from **any** status | the exact target, how far the decision reaches, the official approval route, a question the person can answer and what was observed — recorded on the turn the parent is in, in the same transaction. The question is stored verbatim. |
 | `task_review_resume` | review → running | `outcome.evidence` naming what confirmed the decision is in force, and `outcome.remaining` saying what is left. Either one missing is a refusal, and the task stays in review. |
-| `task_review_complete` | review → completed | `outcome.accepted` true, `outcome.completion_criteria` repeating the task's own criteria verbatim, nothing remaining, no turn with an unanswered request, and no unapplied decision. |
+| `task_review_complete` | → completed, closing the open review | `outcome.accepted` true, `outcome.evidence` naming how that acceptance was observed, `outcome.completion_criteria` repeating the task's own criteria verbatim, nothing remaining, and no turn with an unanswered request. It **closes** the open review rather than requiring one to have been closed already — the person accepting the result is what settles the decision they were asked about. |
 
 Asking the same thing twice is not a second review: a call naming the same
 target, scope and route while that review is open answers `already_open` and
