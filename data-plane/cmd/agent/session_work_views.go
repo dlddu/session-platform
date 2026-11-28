@@ -55,8 +55,10 @@ func workOpenTurnsOf(ctx context.Context, tx *sql.Tx, taskID string) (workOpenTu
 // it lists the task's open turns.
 //
 // One thing beside the turn does change, and only for a task that was waiting
-// on the person: a task in `review` leaves it for `planned` in this same
-// transaction (receiveRequestOnReviewTask).
+// on the person: a task **shown as** `review` leaves it for `planned` in this
+// same transaction. Shown, not stored — the two differ for a row an older image
+// wrote (requestReceivesTheTask), and the eligibility is judged before this
+// store adds a turn of its own.
 //
 // Idempotency is the caller's own id: the same id with the same words answers
 // with the turn already appended, and the same id with different words is a
@@ -107,6 +109,15 @@ func storeRequestAsTurn(
 			return workTurnView{}, false, err
 		}
 	}
+	// Judged here, before a turn of this store's own exists. Whether this
+	// request is the receipt of an answer somebody was asked for is a fact about
+	// the task the person was looking at, and the next statement changes that
+	// task's latest turn — so asking afterwards would be asking about a state
+	// this transaction had already moved.
+	receives, err := requestReceivesTheTask(ctx, tx, task)
+	if err != nil {
+		return workTurnView{}, false, err
+	}
 	request := text
 	turn, err := insertWorkTurn(ctx, tx, taskID, &workTurnInput{Request: &request}, now)
 	if err != nil {
@@ -135,21 +146,29 @@ func storeRequestAsTurn(
 		"UPDATE sp_work_task_guard SET turn_version=turn_version+1 WHERE task_id=?", taskID); err != nil {
 		return workTurnView{}, false, err
 	}
-	// Last, so the status moves only once the request is really stored: every
-	// check and every insert above has already succeeded, and a failure in any
-	// of them rolls back the move with the turn.
-	if err = receiveRequestOnReviewTask(ctx, tx, task, now); err != nil {
-		return workTurnView{}, false, err
+	// Written last, so the status moves only once the request is really stored:
+	// every check and every insert above has already succeeded, and a failure in
+	// any of them rolls back the move with the turn. What is written was decided
+	// before the insert; only the write waits.
+	if receives {
+		if err = receiveRequestOnReviewTask(ctx, tx, task, now); err != nil {
+			return workTurnView{}, false, err
+		}
 	}
 	view, err := workTurnViewOf(ctx, tx, turn)
 	return view, false, err
 }
 
-// receiveRequestOnReviewTask moves a task that was waiting on a person out of
-// `review` and into `planned` — "received, nobody has picked it up yet". The
-// contract is docs/session-ledger.md, "The one write, and the receipt it
-// records"; what is here is why it is in this transaction and what it leaves
-// alone.
+// receiveRequestOnReviewTask writes the receipt its caller already decided on:
+// a task that was waiting on a person leaves review for `planned` — "received,
+// nobody has picked it up yet". Whether it applies is requestReceivesTheTask's
+// question; this is only the write. The contract is docs/session-ledger.md,
+// "The one write, and the receipt it records"; what is here is why it is in
+// this transaction and what it leaves alone.
+//
+// The compare-and-swap is on the **stored** word and the version this
+// transaction read, even when what it was shown as came from evidence: on disk
+// is the only place another writer can have moved it.
 //
 // Why here rather than in the app: the request and the status are one fact. A
 // second call from the app could store the request and then fail to move the
@@ -175,9 +194,6 @@ func storeRequestAsTurn(
 // version alone for the turn itself. A monitor holding what it read before the
 // request landed is told to read again instead of writing over the receipt.
 func receiveRequestOnReviewTask(ctx context.Context, tx *sql.Tx, task workTask, now time.Time) error {
-	if task.Status != workRequestReviewStatus {
-		return nil
-	}
 	// The status this transaction read is in the WHERE clause beside the
 	// version, and the row count is checked rather than assumed — the same
 	// single-winner swap a task write is, so a move that matched nothing is
@@ -196,6 +212,29 @@ func receiveRequestOnReviewTask(ctx context.Context, tx *sql.Tx, task workTask, 
 		return workFail("conflict", "this task moved while the request was being stored — read it again and send the request once")
 	}
 	return nil
+}
+
+// requestReceivesTheTask answers whether this store is the receipt of an answer
+// somebody was asked for. The question is about the status the person was
+// **shown**, not the word on disk: a slot can hold a status this image does not
+// write, and deciding on the byte would skip exactly the task somebody is
+// looking at as waiting on them.
+func requestReceivesTheTask(ctx context.Context, tx *sql.Tx, task workTask) (bool, error) {
+	shown, err := workStatusAsShown(ctx, tx, task)
+	if err != nil {
+		return false, err
+	}
+	return shown == workRequestReviewStatus, nil
+}
+
+// workStatusAsShown is the only seam between the receipt and the reading of a
+// status word, and it holds no reading of its own. On this tree every status in
+// workStatuses is written by this image and answered as it stands, so the word
+// on disk is what is shown. Where an older word is folded, that reading belongs
+// to the status domain rather than here; this is where the receipt asks for it,
+// so there is one definition and no copy of its rules.
+func workStatusAsShown(_ context.Context, _ *sql.Tx, task workTask) (string, error) {
+	return task.Status, nil
 }
 
 // checkRequestChoiceTurn refuses a pick from a screen the task has moved past.
