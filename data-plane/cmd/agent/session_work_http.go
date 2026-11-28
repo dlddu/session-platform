@@ -153,7 +153,21 @@ func (s *sessionDB) storeWorkRequest(
 	var stored workTurnView
 	replayed := false
 	wake := false
+	paired := s.wakesMonitorLane()
 	err = s.workTx(ctx, db, func(tx *sql.Tx) error {
+		// Asked before the store, because storing is allowed to move the very
+		// status that decides this: a task shown as `review` is received as
+		// `planned` in this same transaction, and a question put afterwards
+		// would read that receipt and conclude nobody had been waiting — losing
+		// the request that proved somebody was. Skipped entirely when there is
+		// no lane to tell, so the ordinary single-lane pod pays nothing for it.
+		awaited := false
+		if paired {
+			var judgeErr error
+			if awaited, judgeErr = requestAwaitedPersonsJudgement(ctx, tx, body.TaskID); judgeErr != nil {
+				return judgeErr
+			}
+		}
 		var storeErr error
 		stored, replayed, storeErr = storeRequestAsTurn(
 			ctx, tx, body.ID, body.TaskID, body.Text, body.Author, body.ChoiceTurnID, now)
@@ -162,15 +176,12 @@ func (s *sessionDB) storeWorkRequest(
 		}
 		// The intent to tell the monitor lane is written in the same
 		// transaction as the turn, so a crash between the two cannot leave a
-		// request nobody was told about (session_work_relay_wake.go). The hop
-		// itself is afterwards: it is a network call, and this transaction
-		// holds the slot's only connection.
-		task, taskErr := loadWorkTask(ctx, tx, body.TaskID)
-		if taskErr != nil {
-			return taskErr
-		}
+		// request nobody was told about (session_work_relay_wake.go), and a
+		// store that fails takes the intent down with it. The hop itself is
+		// afterwards: it is a network call, and this transaction holds the
+		// slot's only connection.
 		wake, storeErr = noteRequestWake(
-			ctx, tx, body.ID, task, stored.workTurn, s.wakesMonitorLane(), now)
+			ctx, tx, body.ID, body.TaskID, awaited, stored.workTurn, paired, now)
 		return storeErr
 	})
 	if err != nil {

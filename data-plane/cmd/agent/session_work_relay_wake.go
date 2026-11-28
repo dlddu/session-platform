@@ -68,6 +68,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"time"
@@ -154,17 +155,73 @@ func taskAwaitsPersonsJudgement(status string) bool {
 	return status == "review" || status == "blocked"
 }
 
+// requestAwaitedPersonsJudgement answers whether the task a request is about to
+// be stored on was, at that moment, one its person was being waited on — which
+// is the only thing that makes a handover due.
+//
+// It must be asked **before** the request is stored, and that is the whole point
+// of it being its own function. Storing a request is allowed to move the very
+// status this question is about: a task shown as `review` is received as
+// `planned` in the same transaction (session_work_views.go). Asking afterwards
+// reads the receipt's own doing and concludes nobody was waiting — dropping
+// exactly the request that proved somebody was.
+//
+// The question is put to the **read path**, not to the status byte. readWorkTask
+// is what the `db` tool, the sidecar views and the control plane all answer
+// with, so its `status` is the word the person was actually looking at when they
+// pressed send, and a handover is owed for what they saw. It also means the
+// classification of a word this image does not itself write — an older row's
+// `blocked` standing either for a person's judgement or for a technical wait —
+// is resolved wherever that fold lives, and is not restated here. Where no fold
+// exists, the stored word is what is shown, and this asks the same question of
+// it.
+//
+// The status is read as the JSON the read path serves on purpose: which struct
+// carries it is the status domain's business, and a tree that resolves an older
+// word answers with a richer record than one that does not.
+func requestAwaitedPersonsJudgement(ctx context.Context, tx *sql.Tx, taskID string) (bool, error) {
+	answered, err := readWorkTask(ctx, tx, taskID)
+	if err != nil {
+		return false, err
+	}
+	record, ok := answered.(map[string]any)
+	if !ok {
+		return false, errors.New("the work task read answered a shape the handover cannot read")
+	}
+	encoded, err := json.Marshal(record["task"])
+	if err != nil {
+		return false, err
+	}
+	var shown struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(encoded, &shown); err != nil {
+		return false, err
+	}
+	if shown.Status == "" {
+		return false, errors.New("the work task read answered no status")
+	}
+	return taskAwaitsPersonsJudgement(shown.Status), nil
+}
+
 // noteRequestWake records the intent to hand one stored request over, inside the
 // transaction that stored it. It reports whether there is a handover to attempt.
+//
+// awaited is requestAwaitedPersonsJudgement's answer from **before** the store,
+// and this function does not second-guess it by re-reading the task: by the time
+// it runs, the status it would read may be the receipt of this very request.
+// That ordering is the fix for losing a request to its own receipt, and it is
+// why the decision arrives as an argument rather than as a row to look up.
 //
 // Nothing is recorded for a request that needs no handover, which is what makes
 // "no delivery" the default rather than a thing to remember to skip: no monitor
 // lane, a task that was not waiting on anybody, or a turn that has already been
 // dealt with.
 func noteRequestWake(
-	ctx context.Context, tx *sql.Tx, sourceID string, task workTask, turn workTurn, paired bool, now time.Time,
+	ctx context.Context, tx *sql.Tx, sourceID, taskID string,
+	awaited bool, turn workTurn, paired bool, now time.Time,
 ) (bool, error) {
-	if !paired || !taskAwaitsPersonsJudgement(task.Status) {
+	if !paired {
 		return false, nil
 	}
 	if turn.StartedAt != nil || turn.EndedAt != nil {
@@ -173,6 +230,16 @@ func noteRequestWake(
 		// already in hand.
 		return false, nil
 	}
+	if !awaited {
+		// Nobody was waiting, so none is owed — but a replay of the request
+		// that *was* owed one must still be answered with it. The first store
+		// of this id recorded the handover and, where a receipt moved the task,
+		// left it no longer awaiting judgement; re-sending that id then reads
+		// `planned` here and would otherwise answer as though there had never
+		// been a handover at all. The row, not the status, is the record.
+		_, found, err := readWakeIntent(ctx, tx, turn.ID)
+		return found, err
+	}
 	stamp := workNow(now)
 	// OR IGNORE, so a resend of the same request id finds the handover already
 	// recorded with its own attempt count rather than resetting it to a first
@@ -180,7 +247,7 @@ func noteRequestWake(
 	_, err := tx.ExecContext(ctx,
 		`INSERT INTO sp_work_request_wake (turn_id,task_id,source_id,state,attempts,ticket,recorded_at,claimed_at)
 		 VALUES (?,?,?,?,0,'',?,'') ON CONFLICT(turn_id) DO NOTHING`,
-		turn.ID, task.ID, sourceID, workWakePending, stamp)
+		turn.ID, taskID, sourceID, workWakePending, stamp)
 	return err == nil, err
 }
 

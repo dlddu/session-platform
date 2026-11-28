@@ -737,15 +737,27 @@ func TestOnlyTheStatusesThatWaitOnAPersonAreHandedOver(t *testing.T) {
 	}
 }
 
-// TestConcurrentRequestsOnOneTaskAreEachHandedOverExactlyOnce is the overlap a
-// person actually creates: two taps that land together, or an app retrying while
-// the first store is still in flight. Each distinct request becomes its own turn,
-// so each is its own handover — and none of them may go missing or arrive twice.
+// TestConcurrentRequestsOnOneTaskAreNeverLostAndNeverHandedOverTwice is the
+// overlap a person actually creates: two taps that land together, or an app
+// retrying while the first store is still in flight.
 //
-// The claim is what makes that true. It is a conditional update (`claimWakeIntent`),
-// so of two passes reaching for the same row only one changes it; the loser sees
-// no row to carry rather than sending a second prompt about one answer.
-func TestConcurrentRequestsOnOneTaskAreEachHandedOverExactlyOnce(t *testing.T) {
+// What must hold in every tree is that no request is lost and no turn is handed
+// over twice. How many handovers there are is deliberately **not** asserted,
+// because it is not this change's to decide: where storing a request also
+// receives the task off `review` (session_work_views.go), the first of a race
+// takes the task out of "waiting on a person" and the ones behind it are then
+// ordinary requests on a received task — which the approved contract says are
+// found by the monitor's own round, not woken for
+// (TestNothingIsHandedOverForARequestNobodyWasWaitingOn). Where nothing moves
+// the status, all of them are owed one. Both are correct, and an earlier version
+// of this test asserted the second as though it were the only answer — which
+// passed alone and failed the moment the two changes met.
+//
+// The claim is what rules out the duplicate half. It is a conditional update
+// (`claimWakeIntent`), so of two passes reaching for the same row only one
+// changes it; the loser sees no row to carry rather than sending a second prompt
+// about one answer.
+func TestConcurrentRequestsOnOneTaskAreNeverLostAndNeverHandedOverTwice(t *testing.T) {
 	db, sidecar, lane := newWakeTestSlot(t)
 	wakeTestTask(t, db, "permission", "review")
 
@@ -800,9 +812,11 @@ func TestConcurrentRequestsOnOneTaskAreEachHandedOverExactlyOnce(t *testing.T) {
 			senders, len(turns), senders)
 	}
 
-	// Every turn handed over exactly once, counted by the delivery id so a
-	// re-delivery of one request cannot pass for the delivery of another.
+	// No turn handed over twice, counted by the delivery id so a re-delivery of
+	// one request cannot pass for the delivery of another; and whatever was
+	// recorded is settled rather than left half done.
 	took := lane.took()
+	handed := 0
 	for turnID := range turns {
 		seen := 0
 		for _, prompt := range took {
@@ -810,28 +824,44 @@ func TestConcurrentRequestsOnOneTaskAreEachHandedOverExactlyOnce(t *testing.T) {
 				seen++
 			}
 		}
-		if seen != 1 {
-			t.Errorf("turn %d was handed over %d times, want exactly 1:\n%v", turnID, seen, took)
+		if seen > 1 {
+			t.Errorf("turn %d was handed over %d times, want at most 1:\n%v", turnID, seen, took)
 		}
-		if row, found := wakeIntentRow(t, db, turnID); !found || row.State != workWakeDelivered {
-			t.Errorf("turn %d's handover did not settle: %+v (found %v)", turnID, row, found)
+		row, found := wakeIntentRow(t, db, turnID)
+		if seen == 1 {
+			handed++
+			if !found || row.State != workWakeDelivered {
+				t.Errorf("turn %d was carried but its handover did not settle: %+v (found %v)",
+					turnID, row, found)
+			}
+			continue
+		}
+		// Not carried, so there must be no row claiming otherwise — a turn is
+		// either owed a handover and delivered one, or owed none at all.
+		if found {
+			t.Errorf("turn %d was never carried but holds a handover row: %+v", turnID, row)
 		}
 	}
-	if len(took) != senders {
-		t.Errorf("the lane was given %d prompts for %d requests: %v", len(took), senders, took)
+	if handed == 0 {
+		t.Errorf("a task that was waiting on a person took %d answers and told the monitor none: %v",
+			senders, took)
+	}
+	if len(took) != handed {
+		t.Errorf("the lane was given %d prompts for %d handed-over turns: %v", len(took), handed, took)
 	}
 }
 
-// wakeForceTaskStatus writes one task's status column straight out from under the
-// handover, which is the only honest way to stand up the next test here.
+// wakeAfterReceiptTaskRow leaves one task's status row exactly as a stored
+// receipt leaves it: moved off review, in place, with nothing else touched.
 //
-// The status move it imitates belongs to a change this branch does not contain —
-// a stored receipt taking the task off `review` — so there is no tool call on
-// this tree that performs it (`task_put` cannot cross the review boundary, by
-// AC-N13's design). Writing the column is therefore not a shortcut past a tool:
-// it is the only way to put the slot in the state the other change will produce,
-// without reimplementing that change here.
-func wakeForceTaskStatus(t *testing.T, db *sessionDB, taskID, status string) {
+// This is the *input state* of the unit under test below, not a reconstruction
+// of a contract after the fact. An earlier version of this file wrote this
+// column after the storing transaction had already committed and called that a
+// test of the receipt race; it was not, and it passed while the real
+// combination lost every request. The real sequencing — the receipt moving the
+// task inside the same transaction, before the handover is noted — belongs to
+// the other change and is verified by integrating the two trees, not here.
+func wakeAfterReceiptTaskRow(t *testing.T, db *sessionDB, taskID, status string) {
 	t.Helper()
 	handle, err := db.handle(context.Background())
 	if err != nil {
@@ -843,14 +873,12 @@ func wakeForceTaskStatus(t *testing.T, db *sessionDB, taskID, status string) {
 		if execErr != nil {
 			return execErr
 		}
-		// A silent no-op here would make the test prove the opposite of what it
-		// claims: the handover would land because the task never moved.
 		moved, rowsErr := result.RowsAffected()
 		if rowsErr != nil {
 			return rowsErr
 		}
 		if moved != 1 {
-			t.Fatalf("forcing %s to %q touched %d rows, want 1", taskID, status, moved)
+			t.Fatalf("moving %s to %q touched %d rows, want 1", taskID, status, moved)
 		}
 		return nil
 	}); err != nil {
@@ -858,77 +886,147 @@ func wakeForceTaskStatus(t *testing.T, db *sessionDB, taskID, status string) {
 	}
 }
 
-// TestAHandoverSurvivesTheReceiptMovingTheTaskOffReview is the seam this change
-// shares with the one that moves a task off `review` the moment a request's
-// receipt is stored. The two land in either order, and the request must not go
-// missing in any of them.
+// TestTheHandoverIsDecidedOnTheStatusTheRequestWasSentFrom pins the one thing
+// that made the real combination lose every request: the decision is an
+// argument, settled before the store, and noteRequestWake must not re-derive it
+// from a task row the store was allowed to move.
 //
-// The trap is that `review` is what makes a handover due, so a delivery path
-// that asked "is this task still waiting on a person?" at hop time would find
-// `planned` — the receipt's own doing — and drop the very request that caused it.
-// The decision therefore belongs to the store: the row is written inside the
-// storing transaction on the status read there, and from then on it is a debt to
-// be paid, not a question to re-ask. The hop re-reads the task and the turn
-// narrowly for the one thing that would make delivery wrong — the monitor having
-// already started the turn — and status is deliberately not among them.
-//
-// So the effective status before the store is what counts, the receipt may move
-// the task immediately afterwards, and the handover still arrives exactly once.
-func TestAHandoverSurvivesTheReceiptMovingTheTaskOffReview(t *testing.T) {
+// Storing a request on a task shown as `review` receives it as `planned` in the
+// same transaction. So by the time the handover is noted, the status reads
+// `planned` — and a function that asked again would drop exactly the request
+// that proved somebody had been waiting.
+func TestTheHandoverIsDecidedOnTheStatusTheRequestWasSentFrom(t *testing.T) {
 	db, sidecar, lane := newWakeTestSlot(t)
 	wakeTestTask(t, db, "permission", "review")
-	// The lane is down for the first pass, which is what opens the window: the
-	// row stays owed while the task moves underneath it.
-	lane.set(func(l *stubLane) { l.refusal = http.StatusServiceUnavailable })
-
 	code, answer := storeRequestOverHTTP(t, sidecar, map[string]any{
-		"id": "app-req-1", "task_id": "permission", "text": "네, 그렇게 해 주세요", "author": "user-1",
+		"id": "app-req-1", "task_id": "permission", "text": "네", "author": "user-1",
 	})
 	if code != http.StatusCreated {
 		t.Fatalf("storing = %d: %v", code, answer)
 	}
 	turnID := wakeStoredTurnID(t, answer)
-	if relay := wakeRelayOf(t, answer); relay["state"] != workRelayPending {
-		t.Fatalf("a refused handover = %v, want %s", relay, workRelayPending)
-	}
-	owed, found := wakeIntentRow(t, db, turnID)
-	if !found {
-		t.Fatal("the handover was decided away instead of being owed")
+	if took := lane.took(); len(took) != 1 {
+		t.Fatalf("the first store gave the lane %d prompts, want 1: %v", len(took), took)
 	}
 
-	// The receipt lands and takes the task off review — the other change's work,
-	// after this one's transaction has committed.
-	wakeForceTaskStatus(t, db, "permission", "planned")
-	if taskAwaitsPersonsJudgement("planned") {
-		t.Fatal("this test assumes planned does not call for a handover")
+	// The row now looks as a receipt leaves it. A second request on the same
+	// task is still owed its own handover, decided from what the person saw.
+	wakeAfterReceiptTaskRow(t, db, "permission", workRequestReceiptStatusForTest)
+	handle, err := db.handle(context.Background())
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	// The lane comes back and the next person's request sweeps the owed one.
-	lane.set(func(l *stubLane) { l.refusal = 0 })
-	wakeTestTask(t, db, "second", "review")
-	if code, next := storeRequestOverHTTP(t, sidecar, map[string]any{
-		"id": "app-req-2", "task_id": "second", "text": "이것도요", "author": "user-1",
-	}); code != http.StatusCreated {
-		t.Fatalf("the second store = %d: %v", code, next)
-	}
-
-	carried := ""
-	for _, prompt := range lane.took() {
-		if strings.Contains(prompt, "delivery="+wakeDeliveryID(turnID)) {
-			if carried != "" {
-				t.Fatalf("the handover was carried more than once:\n%s\n%s", carried, prompt)
-			}
-			carried = prompt
+	// awaited=true while the row says planned: the intent is still recorded,
+	// because the answer came from before the store. This is the regression.
+	var noted bool
+	if err := db.workTx(context.Background(), handle, func(tx *sql.Tx) error {
+		turn, loadErr := loadWorkTurn(context.Background(), tx, "permission", turnID)
+		if loadErr != nil {
+			return loadErr
 		}
+		// A turn of its own, so this is not the first store's row being found.
+		second, insertErr := insertWorkTurn(context.Background(), tx, "permission",
+			&workTurnInput{Request: strPtrForTest("두 번째")}, workClock())
+		if insertErr != nil {
+			return insertErr
+		}
+		_ = turn
+		var noteErr error
+		noted, noteErr = noteRequestWake(context.Background(), tx,
+			"app-req-2", "permission", true, second, true, workClock())
+		return noteErr
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if carried == "" {
-		t.Fatalf("the receipt moving the task off review lost the request: %v", lane.took())
+	if !noted {
+		t.Fatal("a handover decided before the store was dropped because the row " +
+			"had since been received — this is the bug the combination showed")
 	}
-	if !strings.Contains(carried, "permission") {
-		t.Errorf("the handover does not name the task it is about:\n%s", carried)
+
+	// awaited=false with no row of its own records nothing: a genuinely planned
+	// task nobody was waiting on must not be woken just because it is planned.
+	var ordinary bool
+	if err := db.workTx(context.Background(), handle, func(tx *sql.Tx) error {
+		third, insertErr := insertWorkTurn(context.Background(), tx, "permission",
+			&workTurnInput{Request: strPtrForTest("세 번째")}, workClock())
+		if insertErr != nil {
+			return insertErr
+		}
+		var noteErr error
+		ordinary, noteErr = noteRequestWake(context.Background(), tx,
+			"app-req-3", "permission", false, third, true, workClock())
+		return noteErr
+	}); err != nil {
+		t.Fatal(err)
 	}
-	delivered, _ := wakeIntentRow(t, db, turnID)
-	if delivered.State != workWakeDelivered {
-		t.Fatalf("the owed handover was not settled: %+v (was %+v)", delivered, owed)
+	if ordinary {
+		t.Error("a request nobody was waiting on was handed over")
+	}
+
+	// awaited=false on a turn that already has a row is a replay of a request
+	// that *was* owed one, and must still be answered with it.
+	var replayed bool
+	if err := db.workTx(context.Background(), handle, func(tx *sql.Tx) error {
+		turn, loadErr := loadWorkTurn(context.Background(), tx, "permission", turnID)
+		if loadErr != nil {
+			return loadErr
+		}
+		var noteErr error
+		replayed, noteErr = noteRequestWake(context.Background(), tx,
+			"app-req-1", "permission", false, turn, true, workClock())
+		return noteErr
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !replayed {
+		t.Error("a resend of the request that was handed over was answered as " +
+			"though there had never been a handover")
 	}
 }
+
+// TestTheAwaitedJudgementIsReadFromTheReadPathNotTheStoredByte pins where the
+// answer comes from. The read path is what the person was looking at, so a tree
+// that folds an older word into a current one is obeyed without this file
+// restating that fold — and a tree with no fold answers from the stored word,
+// which is then also what is shown.
+func TestTheAwaitedJudgementIsReadFromTheReadPathNotTheStoredByte(t *testing.T) {
+	db, _, _ := newWakeTestSlot(t)
+	waiting := map[string]bool{"review": true, "blocked": true}
+	handle, err := db.handle(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range workStatuses {
+		wakeTestTask(t, db, "t-"+status, "review")
+		wakeAfterReceiptTaskRow(t, db, "t-"+status, status)
+		var got bool
+		if err := db.workTx(context.Background(), handle, func(tx *sql.Tx) error {
+			var judgeErr error
+			got, judgeErr = requestAwaitedPersonsJudgement(context.Background(), tx, "t-"+status)
+			return judgeErr
+		}); err != nil {
+			t.Fatalf("%s: %v", status, err)
+		}
+		if got != waiting[status] {
+			t.Errorf("a task shown as %q awaited a person = %v, want %v", status, got, waiting[status])
+		}
+	}
+	// A task that is not there is an error, never a silent "nobody was waiting".
+	if err := db.workTx(context.Background(), handle, func(tx *sql.Tx) error {
+		_, judgeErr := requestAwaitedPersonsJudgement(context.Background(), tx, "nosuchtask")
+		if judgeErr == nil {
+			t.Error("a missing task answered instead of failing")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// workRequestReceiptStatusForTest is the status a receipt moves a task into. It
+// is spelled here rather than imported from the receipt change so that this
+// file builds on its own; the two are the same member of workStatuses.
+const workRequestReceiptStatusForTest = "planned"
+
+func strPtrForTest(s string) *string { return &s }
