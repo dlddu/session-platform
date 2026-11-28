@@ -196,10 +196,19 @@ const (
 	workSnapshotNameTries = 50
 )
 
-// workStatuses is the task status domain. It is the ledger's own domain
-// unchanged: a migration that renamed a status would move work a person had
-// already seen as blocked or completed.
-var workStatuses = []string{"planned", "running", "blocked", "review", "completed", "unknown"}
+// workStatuses is the task status domain. It is the ledger's own domain with
+// the two statuses that meant the same thing folded into one: `review` is where
+// a task sits when a person has to settle something, and `blocked` is no longer
+// one of these because it never said anything `review` did not
+// (session_work_review.go, AC-N13).
+//
+// Folding is not renaming. A rename would move work a person had already seen,
+// and nothing here does: `blocked` is still accepted on every input as an alias
+// of `review`, so an older writer and a saved filter keep working, and a row an
+// older image stored under the word is resolved on the way out from evidence
+// that is already beside it rather than rewritten on disk. No status is added
+// in its place — a second name for one fact is what this removes.
+var workStatuses = []string{workStatusPlanned, workStatusRunning, workStatusReview, workStatusCompleted, "unknown"}
 
 func isWorkStatus(s string) bool {
 	for _, candidate := range workStatuses {
@@ -335,6 +344,12 @@ type workArgs struct {
 	// internal management state, not a field of the agreed turn
 	// (session_work_turns.go).
 	ClaimToken string `json:"claim_token,omitempty"`
+	// Review is the decision a person has to settle, as the monitor records it
+	// when it moves a task into review; Outcome is how that review ends. Both
+	// live in the parent's own bookkeeping beside the task rather than in the
+	// agreed records (session_work_review.go).
+	Review  *workReviewInput   `json:"review,omitempty"`
+	Outcome *workReviewOutcome `json:"outcome,omitempty"`
 }
 
 var workTools = []string{
@@ -347,6 +362,12 @@ var workTools = []string{
 	// became tasks. They used to be rows in the ledger; they are a record of
 	// their own now (session_work_monitor.go).
 	monitorGetTool, monitorListTool, monitorPutTool, monitorDeleteTool,
+	// The three moves into and out of the one status a person's judgement puts
+	// a task in. They are their own calls rather than a status a task_put could
+	// write, because the status is the easy half: what makes a review real is
+	// the question, the route and the evidence landing with it
+	// (session_work_review.go).
+	taskReviewOpenTool, taskReviewResumeTool, taskReviewCompleteTool,
 }
 
 // workLedgerWrites are the calls that change the work records a person reads —
@@ -359,7 +380,10 @@ func isWorkLedgerWrite(name string) bool {
 		taskBookPutTool, monitorPutTool, monitorDeleteTool:
 		return true
 	}
-	return false
+	// The review moves write a task's status and the question on its turn,
+	// which is exactly what a person reads, so they belong to the lane that
+	// owns those rows (session_work_review.go).
+	return isReviewTool(name)
 }
 
 // workRemovedTools names what to call instead of a tool that is gone. The
@@ -435,7 +459,7 @@ func isWorkMutation(name string) bool {
 		taskBookPutTool, monitorPutTool, monitorDeleteTool:
 		return true
 	}
-	return false
+	return isReviewTool(name)
 }
 
 // migrateWork creates this namespace transactionally on first use and refuses a
@@ -662,6 +686,8 @@ func (s *sessionDB) work(ctx context.Context, caller workCaller, name string, a 
 		result, err = putWorkLegacy(ctx, tx, a, now)
 	case monitorGetTool, monitorListTool, monitorPutTool, monitorDeleteTool:
 		result, err = runMonitorTool(ctx, tx, name, a, now)
+	case taskReviewOpenTool, taskReviewResumeTool, taskReviewCompleteTool:
+		result, err = runReviewTool(ctx, tx, name, a, now)
 	default:
 		return nil, workFail("invalid_argument", "unknown work tool")
 	}

@@ -52,7 +52,7 @@ func workToolDefinitions(lane string) []map[string]any {
 		},
 		{
 			"name":        "task_list",
-			"description": "Tasks on this slot, id-keyset ordered. Filters: status, session_id (the literal \"none\" selects the unassigned ones), after_id, limit (1..100, default 20). Pass next_cursor unchanged as after_id; an empty cursor means done. A page is not a snapshot, so dedupe by id.",
+			"description": "Tasks on this slot, id-keyset ordered. Filters: status, session_id (the literal \"none\" selects the unassigned ones), after_id, limit (1..100, default 20). Pass next_cursor unchanged as after_id; an empty cursor means done — a page that comes back short with a cursor is not the end. A page is not a snapshot, so dedupe by id. status=\"blocked\" is accepted and selects the same work as \"review\", so a filter saved while that was a status still finds it. A task an older image stored as blocked answers with the status it resolves to plus stored_status and status_basis, so the resolution can be checked.",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
 				"status": str(), "session_id": str(), "after_id": str(), "limit": limit,
 			}, "required": []string{}, "additionalProperties": false},
@@ -67,7 +67,7 @@ func workToolDefinitions(lane string) []map[string]any {
 					"title":               str(),
 					"description":         map[string]any{"type": "string", "description": "What the task is for and what it requires."},
 					"completion_criteria": map[string]any{"type": "string", "description": "How this task will be known to be done."},
-					"status":              map[string]any{"type": "string", "description": "planned, running, blocked, review, completed or unknown."},
+					"status":              map[string]any{"type": "string", "description": "planned, running, review, completed or unknown. review is the one status a person's judgement puts a task in, and it is not written here — " + taskReviewOpenTool + " moves a task there with the question, the route and the basis, and " + taskReviewResumeTool + "/" + taskReviewCompleteTool + " are the two ways out. The older word \"blocked\" is still accepted and stored as review, so a writer that predates this keeps working."},
 				}, "required": []string{"session_id", "title", "description", "completion_criteria", "status"}, "additionalProperties": false},
 			}, "required": []string{"id", "request_id", "expected_version", "task"}, "additionalProperties": false},
 		},
@@ -126,6 +126,11 @@ func workToolDefinitions(lane string) []map[string]any {
 // (session_work.go, workRemovedTools).
 func workSurfaceTail(lane string) []map[string]any {
 	tail := append(taskBookToolDefinitions(), monitorToolDefinitions()...)
+	// The three moves into and out of review sit after the records' own calls
+	// and before the handover: they are about one task's status, so a reader
+	// meets them having already met the task calls they build on
+	// (session_work_review.go).
+	tail = append(tail, reviewToolDefinitions()...)
 	return append(tail, laneHandoverToolDefinitions(lane)...)
 }
 
@@ -148,6 +153,9 @@ func validateWork(name string, a workArgs) error {
 			return bad("task_id must be 1..128 letters, digits, _ or -")
 		}
 	}
+	if isReviewTool(name) {
+		return validateReviewTool(name, a)
+	}
 	if name == "task_list" {
 		if a.Limit < 0 || a.Limit > workListLimitMax {
 			return bad("invalid pagination")
@@ -155,8 +163,9 @@ func validateWork(name string, a workArgs) error {
 		if a.AfterID != "" && !workID.MatchString(a.AfterID) {
 			return bad("invalid after_id")
 		}
-		if a.Status != "" && !isWorkStatus(a.Status) {
-			return bad("status must be " + strings.Join(workStatuses, ", "))
+		if _, known := workStatusFilter(a.Status); !known {
+			return bad("status must be " + strings.Join(workStatuses, ", ") +
+				" (\"" + workStatusBlockedLegacy + "\" is accepted too and selects " + workStatusReview + ")")
 		}
 		if a.SessionID != "" && a.SessionID != "none" && !workID.MatchString(a.SessionID) {
 			return bad("session_id must be 1..128 letters, digits, _ or - (or \"none\")")
@@ -267,7 +276,9 @@ func validateWorkTaskInput(task *workTaskInput) error {
 			return bad(fmt.Sprintf("%s must be at most %d characters", field, workTextMax))
 		}
 	}
-	if task.Status == nil || !isWorkStatus(*task.Status) {
+	// The legacy word is accepted here and nowhere stored: putWorkTask turns it
+	// into review, and the answer says so (session_work_review.go).
+	if task.Status == nil || (!isWorkStatus(*task.Status) && *task.Status != workStatusBlockedLegacy) {
 		return bad("status must be " + strings.Join(workStatuses, ", "))
 	}
 	return nil

@@ -84,11 +84,14 @@ func sessionDBLaneHandler(db *sessionDB, caller workCaller) http.Handler {
 // answered with what is true instead rather than being listed.
 //
 // The order says what each group is: the agreed records first, then the
-// parent's own bookkeeping beside a task, then its monitoring loops.
+// parent's own bookkeeping beside a task, then its monitoring loops, then the
+// three moves into and out of the one status a person's judgement owns
+// (session_work_review.go, AC-N13).
 const workToolNames = "task_get,task_list,task_put,task_delete," +
 	"turn_append,turn_patch,turn_list,turn_dispatch," +
 	"task_book_get,task_book_put," +
-	"monitor_get,monitor_list,monitor_put,monitor_delete"
+	"monitor_get,monitor_list,monitor_put,monitor_delete," +
+	"task_review_open,task_review_resume,task_review_complete"
 
 // sessionDBToolNames is what the model is offered by one sidecar.
 func sessionDBToolNames(t *testing.T, h http.Handler) []string {

@@ -1738,9 +1738,9 @@ func (s *Service) WorkTasks(
 	ctx context.Context, id string, limit int, afterID, status, sessionID string,
 ) (session.WorkTaskPage, error) {
 	empty := session.WorkTaskPage{Tasks: []session.WorkTaskRecord{}}
-	if status != "" && !session.IsWorkStatus(status) {
-		return empty, fmt.Errorf("%w: status must be one of %s",
-			session.ErrInvalidInput, strings.Join(session.WorkStatuses, ", "))
+	if status != "" && !session.IsWorkStatusFilter(status) {
+		return empty, fmt.Errorf("%w: status must be one of %s (%q is accepted too and selects review)",
+			session.ErrInvalidInput, strings.Join(session.WorkStatuses, ", "), session.WorkStatusBlockedLegacy)
 	}
 	sess, agentW, err := s.workReadable(ctx, id)
 	if err != nil {

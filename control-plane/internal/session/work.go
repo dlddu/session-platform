@@ -49,6 +49,15 @@ type WorkTask struct {
 	Version            int64   `json:"version"`
 	CreatedAt          *string `json:"created_at"`
 	UpdatedAt          *string `json:"updated_at"`
+	// StoredStatus is the word the slot actually holds, carried only when Status
+	// is not it — which today means a task an older image wrote as `blocked`,
+	// whose status the slot resolved from evidence beside it. StatusBasis names
+	// the field that decided. Both are absent for every task written since, and
+	// neither is a column of the agreed record: they are here so that a
+	// resolution made about somebody's work can be checked rather than taken on
+	// trust (AC-N13).
+	StoredStatus string `json:"stored_status,omitempty"`
+	StatusBasis  string `json:"status_basis,omitempty"`
 }
 
 // WorkChoice is one sentence a turn offers for the next one. It is a sentence
@@ -166,10 +175,22 @@ type WorkRequestStored struct {
 	Replayed bool     `json:"replayed"`
 }
 
-// WorkStatuses is the task status domain, the ledger's own unchanged: a
-// migration that renamed a status would move work a person had already seen as
-// blocked or completed.
-var WorkStatuses = []string{"planned", "running", "blocked", "review", "completed", "unknown"}
+// WorkStatuses is the task status domain: the ledger's own with the two
+// statuses that meant one thing folded into one. `review` is where a task sits
+// when a person has to settle something, and `blocked` is not here because it
+// never said anything `review` did not (AC-N13).
+//
+// Folding is not renaming, and no status is added in its place. Keep in step
+// with the slot's own domain (data-plane/cmd/agent/session_work.go,
+// workStatuses) — a status the slot writes and this filter refuses would be
+// work nobody out here can select.
+var WorkStatuses = []string{"planned", "running", "review", "completed", "unknown"}
+
+// WorkStatusBlockedLegacy is the word an older image wrote for what `review`
+// now holds. It is accepted on every filter as an alias and is in no domain
+// list: a filter somebody saved while it was a status still finds the work it
+// was saved to find.
+const WorkStatusBlockedLegacy = "blocked"
 
 // IsWorkStatus reports whether raw is a status the work records use. A filter
 // outside the domain is refused rather than answered with an empty page, which
@@ -181,4 +202,17 @@ func IsWorkStatus(raw string) bool {
 		}
 	}
 	return false
+}
+
+// IsWorkStatusFilter reports whether raw is a status filter this API accepts:
+// the domain, or the legacy alias.
+//
+// The alias is deliberately **not** resolved here, and the caller's own word is
+// what travels to the slot. A slot running an image older than this one still
+// has `blocked` as a status of its own, and sending it `review` instead would
+// miss exactly the rows the caller asked for; sending its own word back gets
+// the right answer out of either image. The slot this image talks to resolves
+// the alias itself (data-plane/cmd/agent/session_work_review.go).
+func IsWorkStatusFilter(raw string) bool {
+	return raw == WorkStatusBlockedLegacy || IsWorkStatus(raw)
 }
