@@ -458,6 +458,60 @@ ledger history and none is invented for it, and a past management event is not
 dressed up as a turn. A migrated task keeps its ledger history on the ledger's
 own `/ledger/events` route, which is where a reader goes for it.
 
+#### The one write, and the receipt it records
+
+A reader outside the session has one write: a person's request about one task,
+which becomes that task's **next turn**. The sidecar serves
+`POST /session-db/work/requests` (loopback only), the agent relays it, and the
+control plane exposes
+`POST /api/v1/sessions/{id}/work/tasks/{taskID}/requests` with
+`{id, text, author, choice_turn_id?}`. The task is in the path, so a body cannot
+aim a request at another task; the author is the storing caller's own derivation
+from the boundary that authenticated the person, and like a task's `session_id`
+it is bookkeeping that grants nothing. The caller's id is the idempotency key:
+the same id with the same words answers with the turn already appended (200),
+and the same id with different words is a `conflict` rather than a second turn.
+A pick carries the turn it was offered on, and a pick from a turn the task has
+moved past is refused as `stale_choice` so the words the person typed are theirs
+to keep.
+
+Storing starts no turn, mints no claim, wakes nothing and restores no snapshot.
+It changes **one** thing beside the turn, and only for a task that was waiting
+on the person: a task in `review` is moved to `planned` in the same transaction
+that stored the request. `planned` here means *received, nobody has picked it up
+yet* — the request is an open turn, and the monitor still has to read what came
+back, weigh it against what it asked and against the permission the person
+actually holds, and only then assign the work. So:
+
+- The new turn id and the new status **commit together or not at all**. There is
+  no state in which a task was received but the request was not, and a refusal
+  anywhere in the store leaves the task exactly where it was.
+- `running` stays the monitor's to write, on a real hand-off. An acceptance, a
+  hold, an explanation or an approval nobody applied moves nothing by itself and
+  grants nothing on the strength of having been typed.
+- **Nothing else about the task moves.** A task that is `planned`, `running`,
+  `completed`, `unknown` — or `blocked`, which only its own path resolves — is
+  left as it is, so a request stored on work that is already running or finished
+  cannot send it backwards. A replay of an id already stored answers from the
+  turn that is there and never re-moves the status, which is what keeps a late
+  retry of an answer the app never saw from pulling a task the monitor has since
+  taken back into the queue.
+- The question the person was asked, the choices offered beside it, the turn it
+  was asked on and the task's own description and completion criteria are
+  **untouched**, and so is the parent's own bookkeeping. Somebody sending a
+  sentence settles no decision, so the account of what was asked and why has to
+  survive into the monitor's own handling of the answer.
+- The task's `version` moves with the status, because a status is a new state of
+  the task rather than an event on it (a turn alone moves `updated_at` and the
+  turn lane's counter, not the version). A monitor holding the version it read
+  before the request landed is therefore told to read again instead of writing a
+  status over the receipt.
+
+Delivering "a request arrived" to the monitor's existing lane is a separate
+concern that consumes this commit. It has to act on the stored turn rather than
+re-test the task for `review`: by the time it runs the status is `planned`, and
+a second test would drop exactly the request it was told about.
+
 `turn_dispatch` records what the parent is about to do outside this database
 before it does it (`operation_key`, `operation_target`, `dispatch_state`
 `intended` → `dispatched`). It is bookkeeping beside the turn, not a turn field,
