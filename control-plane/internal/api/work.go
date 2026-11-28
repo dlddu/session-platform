@@ -93,9 +93,11 @@ type createWorkRequestReq struct {
 //
 // It writes no task field: the slot appends a turn, so a request arriving while
 // the session is updating that same task cannot take the update out from under
-// it. It starts no turn of the session's own and wakes nothing — the answer says
-// the request is on the slot and waiting, never that it has been dealt with,
-// which only the parent can say by working the turn.
+// it. It starts no turn of the person's own conversation and restores no
+// snapshot. The answer never says the request has been dealt with — only the
+// turn ending says that — and it distinguishes a second thing from the first:
+// whether the slot was able to hand the task and turn to its monitor lane,
+// which it does when the task was waiting for a person's judgement.
 //
 // The author is the caller's own derivation from whatever boundary
 // authenticated the person; like a task's owner it is bookkeeping, and nothing

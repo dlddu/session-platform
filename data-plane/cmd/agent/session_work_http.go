@@ -55,10 +55,17 @@ type workRequestBody struct {
 
 // serveWorkRequests stores one person's request as the next turn of a task.
 //
-// It starts no turn of the session's own, wakes nothing and restores no
-// snapshot: the parent finds it the next time it lists the task's open turns.
+// It restores no snapshot and starts no turn of the *person's* conversation:
+// the request is a turn of the work, not a message in the chat. One thing it
+// does do, in the one case where there is somebody to tell: a request on a task
+// that was waiting for a person's judgement is handed to this manager's monitor
+// lane at once, because that is the lane that stopped looking at the task
+// precisely because it was waiting (session_work_relay_wake.go). Every other
+// request is found the next time the records are read, as before.
+//
 // Idempotency is the caller's own id — the same id with the same words answers
-// with the turn already appended.
+// with the turn already appended, and with the handover that was already made
+// rather than a second one.
 func (s *sessionDB) serveWorkRequests(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -78,7 +85,7 @@ func (s *sessionDB) serveWorkRequests(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), sessionDBCallTimeout)
 	defer cancel()
-	stored, replayed, err := s.storeWorkRequest(ctx, body, workClock())
+	stored, replayed, relay, err := s.storeWorkRequest(ctx, body, workClock())
 	if err != nil {
 		var known workError
 		if errors.As(err, &known) {
@@ -98,51 +105,81 @@ func (s *sessionDB) serveWorkRequests(w http.ResponseWriter, r *http.Request) {
 	if replayed {
 		status = http.StatusOK
 	}
+	answer := map[string]any{"turn": stored, "replayed": replayed}
+	if relay != nil {
+		// Only present when there was a monitor lane to tell. Absent means no
+		// handover was due, which a reader must not show as a failed one.
+		answer["relay"] = relay
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(map[string]any{"turn": stored, "replayed": replayed}); err != nil {
+	if err := json.NewEncoder(w).Encode(answer); err != nil {
 		s.logger.Info("work request reply could not be written", "err", err)
 	}
 }
 
 // storeWorkRequest validates the request and appends it in one transaction, so
 // the turn and the record of where it came from commit together.
+//
+// The third answer is the handover to this manager's monitor lane, when there
+// was one to make: a request on a task that was waiting for a person's
+// judgement is the one case where the slot has somebody to tell, and it tells
+// them once, here (session_work_relay_wake.go). It is nil when no handover was
+// due, which is every other request and every pod that runs a single lane.
 func (s *sessionDB) storeWorkRequest(
 	ctx context.Context, body workRequestBody, now time.Time,
-) (workTurnView, bool, error) {
+) (workTurnView, bool, *workRequestRelay, error) {
 	if !workID.MatchString(body.ID) {
-		return workTurnView{}, false, workFail("invalid_argument", "id must be 1..128 letters, digits, _ or -")
+		return workTurnView{}, false, nil, workFail("invalid_argument", "id must be 1..128 letters, digits, _ or -")
 	}
 	if !workID.MatchString(body.TaskID) {
-		return workTurnView{}, false, workFail("invalid_argument", "task_id must be 1..128 letters, digits, _ or -")
+		return workTurnView{}, false, nil, workFail("invalid_argument", "task_id must be 1..128 letters, digits, _ or -")
 	}
 	text := strings.TrimSpace(body.Text)
 	if text == "" || len(body.Text) > workTurnTextMax {
-		return workTurnView{}, false, workFail("invalid_argument",
+		return workTurnView{}, false, nil, workFail("invalid_argument",
 			"text must be a person's words, at most 65536 characters")
 	}
 	if len(body.Author) > workTitleMax {
-		return workTurnView{}, false, workFail("invalid_argument", "author too long")
+		return workTurnView{}, false, nil, workFail("invalid_argument", "author too long")
 	}
 	if body.ChoiceTurnID != nil && (*body.ChoiceTurnID < 1 || *body.ChoiceTurnID > requestSafeInt) {
-		return workTurnView{}, false, workFail("invalid_argument", "choice_turn_id must be a turn id")
+		return workTurnView{}, false, nil, workFail("invalid_argument", "choice_turn_id must be a turn id")
 	}
 	db, err := s.handle(ctx)
 	if err != nil {
-		return workTurnView{}, false, err
+		return workTurnView{}, false, nil, err
 	}
 	var stored workTurnView
 	replayed := false
+	wake := false
 	err = s.workTx(ctx, db, func(tx *sql.Tx) error {
 		var storeErr error
 		stored, replayed, storeErr = storeRequestAsTurn(
 			ctx, tx, body.ID, body.TaskID, body.Text, body.Author, body.ChoiceTurnID, now)
+		if storeErr != nil {
+			return storeErr
+		}
+		// The intent to tell the monitor lane is written in the same
+		// transaction as the turn, so a crash between the two cannot leave a
+		// request nobody was told about (session_work_relay_wake.go). The hop
+		// itself is afterwards: it is a network call, and this transaction
+		// holds the slot's only connection.
+		task, taskErr := loadWorkTask(ctx, tx, body.TaskID)
+		if taskErr != nil {
+			return taskErr
+		}
+		wake, storeErr = noteRequestWake(
+			ctx, tx, body.ID, task, stored.workTurn, s.wakesMonitorLane(), now)
 		return storeErr
 	})
 	if err != nil {
-		return workTurnView{}, false, err
+		return workTurnView{}, false, nil, err
 	}
-	return stored, replayed, nil
+	if !wake {
+		return stored, replayed, nil, nil
+	}
+	return stored, replayed, s.relayRequestWake(ctx, stored.ID), nil
 }
 
 // serveWorkTasks answers one keyset page of work tasks, reusing the same
