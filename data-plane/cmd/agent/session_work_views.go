@@ -14,6 +14,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -227,14 +228,43 @@ func requestReceivesTheTask(ctx context.Context, tx *sql.Tx, task workTask) (boo
 	return shown == workRequestReviewStatus, nil
 }
 
-// workStatusAsShown is the only seam between the receipt and the reading of a
-// status word, and it holds no reading of its own. On this tree every status in
-// workStatuses is written by this image and answered as it stands, so the word
-// on disk is what is shown. Where an older word is folded, that reading belongs
-// to the status domain rather than here; this is where the receipt asks for it,
-// so there is one definition and no copy of its rules.
-func workStatusAsShown(_ context.Context, _ *sql.Tx, task workTask) (string, error) {
-	return task.Status, nil
+// workStatusAsShown answers the status this task is shown as, by asking the
+// read path rather than by reading the byte or restating anybody's rules.
+//
+// readWorkTask is the answer the `db` tool, the sidecar views and the control
+// plane all serve, so its `status` is the word a person is looking at — which
+// is the only word a receipt may be decided on. Reusing it means this path
+// cannot drift from the screen, and it means the fold of a status word this
+// image does not write is read wherever that fold lives, with no copy of its
+// classification here.
+//
+// It is read as the JSON the answer is served as, on purpose: which struct
+// carries the status is the status domain's business — a tree that resolves an
+// older word answers with a richer record than one that does not — and naming
+// either of them here would tie this file to one of the two.
+func workStatusAsShown(ctx context.Context, tx *sql.Tx, task workTask) (string, error) {
+	answered, err := readWorkTask(ctx, tx, task.ID)
+	if err != nil {
+		return "", err
+	}
+	record, ok := answered.(map[string]any)
+	if !ok {
+		return "", errors.New("the work task read answered a shape this path cannot read")
+	}
+	encoded, err := json.Marshal(record["task"])
+	if err != nil {
+		return "", err
+	}
+	var shown struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(encoded, &shown); err != nil {
+		return "", err
+	}
+	if shown.Status == "" {
+		return "", errors.New("the work task read answered no status")
+	}
+	return shown.Status, nil
 }
 
 // checkRequestChoiceTurn refuses a pick from a screen the task has moved past.

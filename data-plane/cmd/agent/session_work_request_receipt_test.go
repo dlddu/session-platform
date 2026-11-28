@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -46,6 +47,67 @@ func decodeWorkTasksPage(t *testing.T, rec *httptest.ResponseRecorder, into *wor
 	if err := json.Unmarshal(rec.Body.Bytes(), into); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// apiAnswerFor reads what the formal task page answers for one task: the status
+// a person is shown, the version beside it and how many turns it has. It is the
+// same route the control plane calls, so these are the values a screen gets —
+// which is what the receipt has to agree with.
+func apiAnswerFor(t *testing.T, h http.Handler, id string) (string, int64, int64) {
+	t.Helper()
+	var page workTasksPage
+	decodeWorkTasksPage(t, workViewGet(t, h, sessionDBWorkTasksPath, "limit=100"), &page)
+	for _, row := range page.Tasks {
+		if row.Task.ID == id {
+			return row.Task.Status, row.Task.Version, row.TurnsTotal
+		}
+	}
+	t.Fatalf("task %s is not on the task page", id)
+	return "", 0, 0
+}
+
+// workRequestTaskDetail is the task record the turn route carries beside the
+// turns, as a reader decodes it. It is declared here rather than shared so that
+// a field moving on the server is a failure in this test, and so that neither
+// this test nor the page shape has to name the struct the server answers with.
+type workRequestTaskDetail struct {
+	Status             string  `json:"status"`
+	Description        *string `json:"description"`
+	CompletionCriteria *string `json:"completion_criteria"`
+}
+
+// apiTaskDetailFor reads that record over the same route the detail pane does.
+func apiTaskDetailFor(t *testing.T, h http.Handler, id string) workRequestTaskDetail {
+	t.Helper()
+	rec := workViewGet(t, h, sessionDBWorkTurnsPath, "task_id="+id)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the turn view answered %d: %s", rec.Code, rec.Body.String())
+	}
+	var page struct {
+		TaskID string                `json:"task_id"`
+		Task   workRequestTaskDetail `json:"task"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if page.TaskID != id {
+		t.Fatalf("the turn view answered for %q, asked for %q", page.TaskID, id)
+	}
+	return page.Task
+}
+
+// apiTurnsFor reads one task's turns over the same route the detail pane does.
+func apiTurnsFor(t *testing.T, h http.Handler, id string) workTurnsPage {
+	t.Helper()
+	rec := workViewGet(t, h, sessionDBWorkTurnsPath, "task_id="+id)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("the turn view answered %d: %s", rec.Code, rec.Body.String())
+	}
+	var page workTurnsPage
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	return page
 }
 
 func taskTurnCount(t *testing.T, s *sessionDB, taskID string) int64 {
@@ -108,13 +170,18 @@ func TestWorkRequestOnAReviewTaskIsReceivedAsPlanned(t *testing.T) {
 	}
 }
 
-// Only the status a person was asked to settle moves. Everything else — work
-// already running, work already finished, and the word an older writer still
-// uses — is left exactly as it is, so a request can never send a task
-// backwards.
+// Only the status a person was asked to settle moves. Work already running and
+// work already finished are left exactly as they are, so a request can never
+// send a task backwards.
+//
+// The statuses this image writes are listed here. The word an older writer
+// still uses is not dropped from the invariants — it moved to the test below,
+// where it is seeded the way a slot actually holds it and the expectation comes
+// from what the API answers, because what that word is shown as depends on the
+// tree this runs on.
 func TestWorkRequestLeavesEveryOtherStatusAlone(t *testing.T) {
 	s, _ := newTestSessionDB(t)
-	for i, status := range []string{"planned", "running", "completed", "unknown", "blocked"} {
+	for i, status := range []string{"planned", "running", "completed", "unknown"} {
 		taskID := "task-" + status
 		newWorkTask(t, s, taskID, "c"+status, map[string]any{"status": status})
 		_, version := taskStatusAndVersion(t, s, taskID)
@@ -133,6 +200,162 @@ func TestWorkRequestLeavesEveryOtherStatusAlone(t *testing.T) {
 		if got := taskTurnCount(t, s, taskID); got != 1 {
 			t.Fatalf("[%s] turns = %d", status, got)
 		}
+	}
+}
+
+// seedOldImageRow writes a task row carrying a status word straight to disk,
+// which is the only way to get one this image does not write. task_put cannot
+// stand in for it: on a tree that folds the older word, a put stores the folded
+// one, and then the row under test is not the row a slot actually holds.
+func seedOldImageRow(t *testing.T, s *sessionDB, id, status string) {
+	t.Helper()
+	workExec(t, s,
+		`INSERT INTO sp_work_tasks
+		 (id,session_id,title,description,completion_criteria,status,version,created_at,updated_at)
+		 VALUES (?,?,?,?,?,?,1,'2026-11-01T00:00:00Z','2026-11-01T00:00:00Z')`,
+		id, "worker-1", "옛 이미지가 적은 작업 "+id, "목적과 요구", "PR 이 머지되면 끝", status)
+}
+
+// seedOldImageBook writes the parent's own bookkeeping beside such a row, the
+// way an older image left it. It is the evidence a reader's answer is built
+// from; this test never says what that answer should be.
+func seedOldImageBook(t *testing.T, s *sessionDB, id string, details map[string]any) {
+	t.Helper()
+	encoded, err := json.Marshal(details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workExec(t, s,
+		`INSERT INTO sp_work_task_book (task_id,stage,owner,sessions,details) VALUES (?,?,?,'[]',?)
+		 ON CONFLICT(task_id) DO UPDATE SET details=excluded.details`,
+		id, "진행", "silas", string(encoded))
+}
+
+func storedWordOf(t *testing.T, s *sessionDB, id string) string {
+	t.Helper()
+	status, _ := taskStatusAndVersion(t, s, id)
+	return status
+}
+
+// A request on a row an older image left behind follows **what the API answers
+// for it**, not the word on disk.
+//
+// That is one assertion with two true outcomes, and it is written that way on
+// purpose: whether a stored `blocked` row answers as `blocked` or is resolved
+// from the evidence beside it belongs to the status domain, and this test is
+// true on a tree that resolves it and on one that does not. What it fixes is
+// the part that is this path's own — the receipt follows the answer a person is
+// looking at, the stored word is what the swap compares on, and nothing else
+// about the task moves either way.
+func TestWorkRequestOnAnOldImagesRowFollowsWhatTheApiAnswers(t *testing.T) {
+	s, _ := newTestSessionDB(t)
+	h := workViewHandler(t, s)
+	// The namespace first, so the rows land in a database this image has already
+	// opened — which is what a slot that has been served looks like.
+	newWorkTask(t, s, "live-one", "c0", map[string]any{"status": "running"})
+
+	// A decision somebody recorded and nobody settled, with the question and the
+	// choices on the turn it was asked on.
+	seedOldImageRow(t, s, "old-review", "blocked")
+	seedOldImageBook(t, s, "old-review", map[string]any{
+		"review": map[string]any{
+			"target": "dlddu/x#1", "scope": "이 PR 하나", "route": "review/manual-approval",
+			"question": "승인할까요?", "basis": "필수 체크가 사람 승인입니다", "applied": false,
+		},
+	})
+	version, turnVersion := turnCursor(t, s, "old-review")
+	mustWork(t, s, "turn_append", map[string]any{
+		"task_id": "old-review", "request_id": "seed-1",
+		"expected_version": version, "expected_turn_version": turnVersion,
+		"turn": map[string]any{
+			"question":    "승인할까요?",
+			"explanation": "권한이 없어 더 나아가지 못했습니다",
+			"choices": []map[string]any{
+				{"label": "승인", "request_text": "승인했어요"},
+				{"label": "보류", "request_text": "조금 더 보고 결정할게요"},
+			},
+		},
+	})
+	// A pre-approved technical wait, stated with the three facts such a wait has.
+	seedOldImageRow(t, s, "old-wait", "blocked")
+	seedOldImageBook(t, s, "old-wait", map[string]any{
+		"technical_wait": map[string]any{
+			"owner": "ci", "due": "2026-11-28T10:00:00Z",
+			"retry": map[string]any{"when": "confirmed failure", "max": 1},
+		},
+	})
+	// A row whose bookkeeping says nothing at all.
+	seedOldImageRow(t, s, "old-silent", "blocked")
+
+	for _, id := range []string{"old-review", "old-wait", "old-silent"} {
+		shown, version, turns := apiAnswerFor(t, h, id)
+		storedBefore := storedWordOf(t, s, id)
+		bookBefore := workRow(t, s, "SELECT details FROM sp_work_task_book WHERE task_id=?", id)
+
+		if _, _, err := storeWorkRequest(t, s, "req-"+id, id, "이렇게 해 주세요", nil); err != nil {
+			t.Fatalf("[%s] store: %v", id, err)
+		}
+
+		afterShown, afterVersion, afterTurns := apiAnswerFor(t, h, id)
+		if afterTurns != turns+1 {
+			t.Fatalf("[%s] turns = %d, want %d — the request is a turn either way", id, afterTurns, turns+1)
+		}
+		if shown == workRequestReviewStatus {
+			// The person was looking at a task waiting on them, so this is its
+			// receipt: one move, and the stored word is what it was swapped from.
+			if afterShown != workRequestReceiptStatus {
+				t.Fatalf("[%s] answered %q before and %q after, want %q",
+					id, shown, afterShown, workRequestReceiptStatus)
+			}
+			if afterVersion != version+1 {
+				t.Fatalf("[%s] version = %d, want %d — one move", id, afterVersion, version+1)
+			}
+			if storedWordOf(t, s, id) != workRequestReceiptStatus {
+				t.Fatalf("[%s] the swap did not land on the stored row", id)
+			}
+		} else {
+			// Nobody was asked anything, so only the request is stored.
+			if afterShown != shown || afterVersion != version {
+				t.Fatalf("[%s] answered %q/%d before and %q/%d after — a request moved work nobody was asked about",
+					id, shown, version, afterShown, afterVersion)
+			}
+			if storedWordOf(t, s, id) != storedBefore {
+				t.Fatalf("[%s] the stored word was rewritten", id)
+			}
+		}
+		// Either way the parent's own bookkeeping is untouched: the evidence the
+		// answer was built from is still there to be read.
+		if bookAfter := workRow(t, s,
+			"SELECT details FROM sp_work_task_book WHERE task_id=?", id); fmt.Sprint(bookAfter) != fmt.Sprint(bookBefore) {
+			t.Fatalf("[%s] the bookkeeping moved: %v -> %v", id, bookBefore, bookAfter)
+		}
+		t.Logf("%-11s answered %-8s -> %-8s  version %d -> %d  turns %d -> %d  stored %q -> %q",
+			id, shown, afterShown, version, afterVersion, turns, afterTurns,
+			storedBefore, storedWordOf(t, s, id))
+	}
+
+	// What was asked survives on the row that was received, and the turn it was
+	// asked on is not closed by somebody answering it.
+	asked := apiTurnsFor(t, h, "old-review").Turns[0]
+	if asked.Question == nil || *asked.Question != "승인할까요?" || len(asked.Choices) != 2 || asked.EndedAt != nil {
+		t.Fatalf("the question, its choices and its turn did not survive: %+v", asked)
+	}
+	if details := workRow(t, s,
+		"SELECT details FROM sp_work_task_book WHERE task_id=?", "old-review"); details == nil ||
+		!strings.Contains(fmt.Sprint(details["details"]), "review/manual-approval") {
+		t.Fatalf("the recorded review and its route were dropped: %v", details)
+	}
+
+	// A refused store makes no transition on such a row either: the same id with
+	// different words is a conflict, and the task stays where the API had it.
+	shownNow, versionNow, turnsNow := apiAnswerFor(t, h, "old-review")
+	_, _, err := storeWorkRequest(t, s, "req-old-review", "old-review", "다른 본문", nil)
+	var known workError
+	if !asWorkError(err, &known) || known.Code != "conflict" {
+		t.Fatalf("same id different words = %v, want conflict", err)
+	}
+	if a, b, c := apiAnswerFor(t, h, "old-review"); a != shownNow || b != versionNow || c != turnsNow {
+		t.Fatalf("a refusal moved something: %q/%d/%d -> %q/%d/%d", shownNow, versionNow, turnsNow, a, b, c)
 	}
 }
 
@@ -320,6 +543,7 @@ func TestWorkRequestReceiptIsScopedToItsOwnTask(t *testing.T) {
 // them — so sending a sentence settles nothing by itself.
 func TestWorkRequestReceiptKeepsWhatWasAsked(t *testing.T) {
 	s, _ := newTestSessionDB(t)
+	h := workViewHandler(t, s)
 	newWorkTask(t, s, "task-review", "c1", map[string]any{"status": "review"})
 	version, turnVersion := turnCursor(t, s, "task-review")
 	asked := mustWork(t, s, "turn_append", map[string]any{
@@ -343,16 +567,14 @@ func TestWorkRequestReceiptKeepsWhatWasAsked(t *testing.T) {
 	if status, _ := taskStatusAndVersion(t, s, "task-review"); status != "planned" {
 		t.Fatalf("status = %q, want planned", status)
 	}
-	page, err := s.workTurnsView(context.Background(), workArgs{TaskID: "task-review"})
-	if err != nil {
-		t.Fatal(err)
+	// Read over the route rather than by naming the struct the view carries:
+	// which record a task page answers with is the status domain's business, and
+	// what this test is about is the fields a person reads.
+	detail := apiTaskDetailFor(t, h, "task-review")
+	if detail.Description == nil || detail.CompletionCriteria == nil {
+		t.Fatalf("the task lost what it is for: %+v", detail)
 	}
-	decoded := page.(map[string]any)
-	task := decoded["task"].(workTask)
-	if task.Description == nil || task.CompletionCriteria == nil {
-		t.Fatalf("the task lost what it is for: %+v", task)
-	}
-	turns := decoded["turns"].([]workTurnView)
+	turns := apiTurnsFor(t, h, "task-review").Turns
 	if len(turns) != 2 {
 		t.Fatalf("turns = %d, want the question and the answer", len(turns))
 	}
