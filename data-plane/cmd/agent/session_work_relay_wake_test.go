@@ -737,6 +737,91 @@ func TestOnlyTheStatusesThatWaitOnAPersonAreHandedOver(t *testing.T) {
 	}
 }
 
+// TestConcurrentRequestsOnOneTaskAreEachHandedOverExactlyOnce is the overlap a
+// person actually creates: two taps that land together, or an app retrying while
+// the first store is still in flight. Each distinct request becomes its own turn,
+// so each is its own handover — and none of them may go missing or arrive twice.
+//
+// The claim is what makes that true. It is a conditional update (`claimWakeIntent`),
+// so of two passes reaching for the same row only one changes it; the loser sees
+// no row to carry rather than sending a second prompt about one answer.
+func TestConcurrentRequestsOnOneTaskAreEachHandedOverExactlyOnce(t *testing.T) {
+	db, sidecar, lane := newWakeTestSlot(t)
+	wakeTestTask(t, db, "permission", "review")
+
+	const senders = 4
+	type outcome struct {
+		code int
+		body map[string]any
+	}
+	results := make([]outcome, senders)
+	var wg sync.WaitGroup
+	for i := 0; i < senders; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			// Posted by hand rather than through the helper: that one fails the
+			// test from inside the goroutine, which is not allowed. Everything
+			// here is collected and asserted on the test's own goroutine.
+			encoded, err := json.Marshal(map[string]any{
+				"id": fmt.Sprintf("app-req-%d", i), "task_id": "permission",
+				"text": fmt.Sprintf("동시 요청 %d", i), "author": "user-1",
+			})
+			if err != nil {
+				results[i] = outcome{code: -1}
+				return
+			}
+			resp, err := http.Post(
+				sidecar.URL+sessionDBWorkRequestsPath, "application/json", bytes.NewReader(encoded))
+			if err != nil {
+				results[i] = outcome{code: -1}
+				return
+			}
+			defer resp.Body.Close()
+			var answer map[string]any
+			raw, _ := io.ReadAll(resp.Body)
+			if len(raw) > 0 {
+				_ = json.Unmarshal(raw, &answer)
+			}
+			results[i] = outcome{code: resp.StatusCode, body: answer}
+		}(i)
+	}
+	wg.Wait()
+
+	turns := map[int64]bool{}
+	for i, got := range results {
+		if got.code != http.StatusCreated {
+			t.Fatalf("concurrent store %d = %d: %v", i, got.code, got.body)
+		}
+		turns[wakeStoredTurnID(t, got.body)] = true
+	}
+	if len(turns) != senders {
+		t.Fatalf("%d concurrent requests became %d turns, want %d — one was lost or merged",
+			senders, len(turns), senders)
+	}
+
+	// Every turn handed over exactly once, counted by the delivery id so a
+	// re-delivery of one request cannot pass for the delivery of another.
+	took := lane.took()
+	for turnID := range turns {
+		seen := 0
+		for _, prompt := range took {
+			if strings.Contains(prompt, "delivery="+wakeDeliveryID(turnID)) {
+				seen++
+			}
+		}
+		if seen != 1 {
+			t.Errorf("turn %d was handed over %d times, want exactly 1:\n%v", turnID, seen, took)
+		}
+		if row, found := wakeIntentRow(t, db, turnID); !found || row.State != workWakeDelivered {
+			t.Errorf("turn %d's handover did not settle: %+v (found %v)", turnID, row, found)
+		}
+	}
+	if len(took) != senders {
+		t.Errorf("the lane was given %d prompts for %d requests: %v", len(took), senders, took)
+	}
+}
+
 // wakeForceTaskStatus writes one task's status column straight out from under the
 // handover, which is the only honest way to stand up the next test here.
 //
