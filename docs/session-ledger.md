@@ -426,7 +426,7 @@ easy half:
 
 | Call | Moves | Will not do it without |
 | --- | --- | --- |
-| `task_review_open` | planned/running → review | the exact target, how far the decision reaches, the official approval route, a question the person can answer and what was observed — recorded on the turn the parent is in, in the same transaction. The question is stored verbatim. |
+| `task_review_open` | → review, from **any** status | the exact target, how far the decision reaches, the official approval route, a question the person can answer and what was observed — recorded on the turn the parent is in, in the same transaction. The question is stored verbatim. |
 | `task_review_resume` | review → running | `outcome.evidence` naming what confirmed the decision is in force, and `outcome.remaining` saying what is left. Either one missing is a refusal, and the task stays in review. |
 | `task_review_complete` | review → completed | `outcome.accepted` true, `outcome.completion_criteria` repeating the task's own criteria verbatim, nothing remaining, no turn with an unanswered request, and no unapplied decision. |
 
