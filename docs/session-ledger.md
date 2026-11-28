@@ -337,10 +337,11 @@ preserved verbatim beside it.
 
 `sp_work_tasks` — `id`, `session_id` (null means unassigned), `title`,
 `description`, `completion_criteria`, `status`, `version`, `created_at`,
-`updated_at` (null means never recorded). Status is the ledger's own domain
-unchanged — `planned`, `running`, `blocked`, `review`, `completed`, `unknown`:
-a migration that renamed a status would move work a person had already seen as
-blocked or completed.
+`updated_at` (null means never recorded). Status is `planned`, `running`,
+`review`, `completed`, `unknown` — the ledger's own domain with the two
+statuses that said one thing folded into one. See
+[The one status a person's judgement owns](#the-one-status-a-persons-judgement-owns)
+for what happened to `blocked` and why nothing was renamed.
 
 `sp_work_turns` — `id`, `task_id`, `session_seq`, `request` (the person's words,
 verbatim), `instruction` (what the parent passed to the session doing the work),
@@ -356,6 +357,158 @@ the agreed columns only. `response` is never a summary the parent wrote; that is
 rather than all at once. Text bounds exist for the reason the ledger's do: a
 slot's storage budget is shared with the session's own archive, so one task
 cannot be an attachment.
+
+### The one status a person's judgement owns
+
+`review` is where a task sits when a person has to settle something. There used
+to be two statuses for that — `blocked` and `review` — and they said the same
+thing: the work has reached something only the person can decide. Two names for
+one fact cost twice. A reader had to ask for both to see everything waiting on
+them, and a writer had to guess which one the other side would filter on. So
+there is one, and **no third name was introduced in its place**: no "waiting",
+no "held", no second chip beside it.
+
+Folding is not renaming, and no row on disk was rewritten. `blocked` became two
+things:
+
+- **An alias on input.** A `status` filter, a `task_put`, the HTTP `?status=`
+  query and the control plane's own filter all accept it and read it as
+  `review`. A writer running an older image keeps working and a filter somebody
+  saved while that was a status still finds the work it was saved to find.
+  Nothing is stored under the word — `task_put` answers with
+  `alias_applied: "blocked"` so the writer knows what landed.
+- **A classification on output.** A row an older image wrote as `blocked` keeps
+  its byte, and its status is resolved on the way out from evidence that is
+  already beside it. It is never answered as `blocked`, never answered as
+  `unknown`, and never left out of a page. The stored word and what decided
+  travel with it as `stored_status` and `status_basis`, so the resolution can be
+  checked rather than taken on trust. There is no migration, no schema change
+  and no new table.
+
+**The resolution is not a blanket mapping.** One word covered two different
+things, and flattening them either invents a decision for a person who has none
+to make, or quietly resumes work nobody approved. In order:
+
+1. Two statements that disagree → `review`. A disagreement is not a tie to
+   break.
+2. A recorded, unsettled decision (`details.review`) → `review`.
+3. A question on a turn nobody has closed → `review`. What the person was
+   actually shown is plainer evidence than any bookkeeping.
+4. A `details.technical_wait` that is not the shape a wait has to be → `review`,
+   and the basis says what is missing.
+5. A `details.technical_wait` that states all three facts a wait has — `owner`,
+   `due` and a `retry` condition — → `running`. This is the only way to
+   `running`.
+6. Silence → `review`. This is the ambiguous case: nothing is resumed on the
+   strength of a row that explains nothing, no question is invented for it, and
+   the basis says there was none.
+
+Prose is not a statement, a string that reads like an approval is not one, and a
+malformed statement is reported rather than guessed at — the rule the
+cancellation backfill follows, for the same reason.
+
+**The status filter selects on the status a reader sees.** That cannot be one
+SQL predicate without the query and the resolution drifting apart, so the query
+selects every row that could resolve to the asked-for status and the resolution
+runs over what comes back. Which means the page is cut *after* the resolution,
+never before: a post-pass over an already-cut page would hand back short pages
+and silently drop the rows it skipped, so the read keeps going until the page is
+full or the candidates run out. The cursor is still an id and still moves
+forward only, so resuming after it re-reads the skipped rows and skips them
+again rather than stepping over work. A page cut short by the scan bound comes
+back **with** a cursor, never with an empty one. The statuses partition the
+tasks — every task, legacy rows included, answers to exactly one — so paging one
+status after another sees every task once and no task twice, and the alias
+selects exactly what `review` does.
+
+**Leaving review is decided by the record, not by the word.** A stored request
+moves a task that was waiting on a person out of `review` and into `planned` in
+the transaction that stores it — received, nobody has picked it up yet — and
+somebody sending a sentence settles no decision, so the recorded review stays
+open while the status byte no longer says `review`. A task leaves review when it
+is **at** review *or* when it still **carries** an open review; a task that
+carries none cannot, which is the same sentence as before for every task that
+never had one. The history entry records `from_status`, so a decision closed out
+of the queue is distinguishable from one closed out of review.
+
+**And a bare status write may not walk away from an open review.** `task_put`
+writing `running` or `completed` over a task that carries one is refused: those
+two say the work moved on, and a task that reads as moved-on while holding an
+unsettled question hides it from every reader — the status filter files it with
+the work in flight and the only record that somebody is waiting sits in
+bookkeeping nothing on the read path shows. This is **not** a transition
+constraint: it asks whether this write would orphan a record, not which status
+it moves between. `planned` (where a stored request legitimately puts such a
+task), `review` and `unknown` are not refused, a task with no recorded review
+moves anywhere as before, and there are two honest ways past it — settle the
+review with the call that carries the evidence, or replace the bookkeeping with
+`task_book_put` if there is genuinely nothing to settle.
+
+**Entering and leaving review are their own calls**, because the status is the
+easy half:
+
+| Call | Moves | Will not do it without |
+| --- | --- | --- |
+| `task_review_open` | → review, from **any** status | the exact target, how far the decision reaches, the official approval route, a question the person can answer and what was observed — recorded on the turn the parent is in, in the same transaction. The question is stored verbatim. |
+| `task_review_resume` | review → running | `outcome.evidence` naming what confirmed the decision is in force, and `outcome.remaining` saying what is left. Either one missing is a refusal, and the task stays in review. |
+| `task_review_complete` | → completed, closing the open review | `outcome.accepted` true, `outcome.evidence` naming how that acceptance was observed, `outcome.completion_criteria` repeating the task's own criteria verbatim, nothing remaining, and no turn with an unanswered request. It **closes** the open review rather than requiring one to have been closed already — the person accepting the result is what settles the decision they were asked about. |
+
+Asking the same thing twice is not a second review: a call naming the same
+target, scope and route while that review is open answers `already_open` and
+writes nothing — no counter moves — so a retry, or a fresh request from the
+person about the same decision, never stacks approvals. That is settled *before*
+any counter is taken, so a parent holding stale counters cannot stack one by
+racing. A different decision while one is open is a conflict: a person holds one
+open decision per task. running → review is a single write; it passes through no
+other status on the way.
+
+These three are the **complete** path into and out of `review` — the one that
+carries the evidence — and **not a fence around a bare status write**. A task
+record is a full replacement under version CAS and **the status value has no
+transition constraint**, because the correction below depends on that: a task
+recorded `completed` when the person had in fact decided nothing is put back to
+`review` once they say so and the monitor checks the turns. No arrow is drawn
+for it because it is not a normal transition, and a gate on `task_put` would
+make it reachable only by first writing a state that never happened. So
+`task_put` writes the status it is given, and `task_review_open` accepts **any**
+source status including `completed` — a correction is precisely the move that
+has to carry the person's statement and the monitor's check, so refusing the
+call that records them would leave only the write that loses them. What the
+three add is the record that makes the status mean something; a `review` written
+bare is a task whose decision nobody recorded, which is exactly what a reader is
+then shown.
+
+**The ordinary pre-approved path is untouched** — a task that never needed
+anybody's judgement still goes planned → running → completed with `task_put`
+alone. And registration synthesizes nothing beside the task: one `task_put`
+writes the task row and its receipt, and every other record in the namespace
+stays empty, so there is no flag anywhere that could read as "this task may not
+start".
+
+Three things stay separate: pressing an offered choice fills a draft (it is a
+sentence, not a permission), submitting it becomes the next turn and changes no
+task field, and the monitor reading what came back and confirming the
+prerequisites is the call above. A pre-approved technical wait — a CI run in
+flight, a retry the policy already allows — stays `running`, because it is
+nobody's question; its owner, due and retry condition live in
+`details.technical_wait`, written through `task_book_put`, whose lane moves
+neither the task's version nor the turn lane's.
+
+What a review replaces is kept rather than overwritten: the previous review goes
+onto `details.review_history` with the confirmation beside it, and for a legacy
+row the stored word and the field that read it go there too — otherwise the only
+account of why the task was ever held would be erased by the move. No call here
+touches a turn's `request`, `instruction`, `response`, `explanation` or
+`ended_at`. Bookkeeping this image cannot parse as JSON is left exactly as it is
+and a write through it is refused: it may be the only copy of something.
+
+**What this does not claim.** The platform cannot see whether an approval was
+really applied out there. What it does is require the confirmation to be named,
+keep the named confirmation beside the task, and never move the task on a guess.
+The same honesty applies across versions: the control plane does **not** resolve
+the alias, and the caller's own word is what travels to the slot — a slot running
+an older image still has `blocked` as a status of its own, and sending it
+`review` instead would miss exactly the rows the caller asked for.
 
 ### API
 
@@ -447,8 +600,11 @@ dispatch state is on this path** — what the parent handed to another system is
 its own bookkeeping and has never been part of what a person reads.
 
 The pages are keyset like the ledger's, a page size out of range is refused
-rather than clamped, and a status outside the domain is refused rather than
-answered with an empty page. A task with no turns answers an empty page; a task
+rather than clamped, and a status outside the domain *and* the one accepted alias
+is refused rather than answered with an empty page. A task record whose status
+had to be resolved carries `stored_status` and `status_basis` on this path too,
+so the reading can be checked from outside the session
+([The one status a person's judgement owns](#the-one-status-a-persons-judgement-owns)). A task with no turns answers an empty page; a task
 the slot does not have is **not found**, because an empty page reads as "nothing
 has happened yet" and would hide a wrong id. A read while the migration holds
 the database is a conflict rather than a half-copied page.

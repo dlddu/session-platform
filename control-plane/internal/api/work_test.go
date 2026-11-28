@@ -27,9 +27,13 @@ func workFixture(stub *agent.StubClient) {
 			TurnsTotal: 0,
 		},
 		{
+			// A task a slot running an older image wrote as `blocked`. The slot
+			// resolved it, and what it holds plus what decided travel with it so
+			// that a reader out here can check the reading (AC-N13).
 			Task: session.WorkTask{
 				ID: "task-moved", SessionID: str("worker-now"), Title: "옮겨 온 작업",
-				Status: "blocked", Version: 3,
+				Status: "review", Version: 3,
+				StoredStatus: session.WorkStatusBlockedLegacy, StatusBasis: "details.review",
 			},
 			TurnsTotal: 2, Migrated: true,
 			LatestTurn: &session.WorkTurn{
@@ -226,10 +230,25 @@ func TestWorkRoutes_RefusalsAndScope(t *testing.T) {
 	if status, _ := getWorkTurns(t, srv, s.ID, "task-moved", "open=maybe"); status != http.StatusBadRequest {
 		t.Fatalf("open=maybe was accepted")
 	}
-	// status filters that are in the domain are answered.
-	if status, page := getWorkTasks(t, srv, s.ID, "status=blocked"); status != http.StatusOK ||
+	// status filters that are in the domain are answered, and the one status a
+	// person's judgement puts a task in carries what the slot holds and what
+	// read it that way.
+	if status, page := getWorkTasks(t, srv, s.ID, "status=review"); status != http.StatusOK ||
 		len(page.Tasks) != 1 || page.Tasks[0].Task.ID != "task-moved" {
 		t.Fatalf("status filter = %d %+v", status, page)
+	} else if page.Tasks[0].Task.StoredStatus != session.WorkStatusBlockedLegacy ||
+		page.Tasks[0].Task.StatusBasis != "details.review" {
+		t.Fatalf("the resolution did not reach the reader: %+v", page.Tasks[0].Task)
+	}
+	// The older word is a filter this API still accepts — a filter somebody
+	// saved while it was a status is not answered with a 400 — and the caller's
+	// own word is what travels, because a slot on an older image still has it as
+	// a status of its own.
+	if status, _ := getWorkTasks(t, srv, s.ID, "status="+session.WorkStatusBlockedLegacy); status != http.StatusOK {
+		t.Fatalf("the legacy status filter = %d, want 200", status)
+	}
+	if session.IsWorkStatus(session.WorkStatusBlockedLegacy) {
+		t.Fatalf("the folded word is still in the domain: %v", session.WorkStatuses)
 	}
 	// session_id="none" is how a caller asks for the unassigned ones.
 	if status, page := getWorkTasks(t, srv, s.ID, "session_id=worker-1"); status != http.StatusOK ||

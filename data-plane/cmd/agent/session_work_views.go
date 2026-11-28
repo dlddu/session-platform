@@ -141,10 +141,10 @@ func checkRequestChoiceTurn(ctx context.Context, tx *sql.Tx, task workTask, choi
 // knows the ledger still holds history and parent bookkeeping about it — a task
 // created after the cutover has neither and is not shown as if it did.
 type workTaskView struct {
-	Task       workTask      `json:"task"`
-	TurnsTotal int64         `json:"turns_total"`
-	LatestTurn *workTurnView `json:"latest_turn,omitempty"`
-	Migrated   bool          `json:"migrated,omitempty"`
+	Task       workTaskAnswer `json:"task"`
+	TurnsTotal int64          `json:"turns_total"`
+	LatestTurn *workTurnView  `json:"latest_turn,omitempty"`
+	Migrated   bool           `json:"migrated,omitempty"`
 }
 
 // workTurnView is one turn with where it came from. Origin is empty for a turn
@@ -173,7 +173,7 @@ func (s *sessionDB) workTasksView(ctx context.Context, a workArgs) (any, error) 
 			return listErr
 		}
 		decoded := listed.(map[string]any)
-		tasks := decoded["tasks"].([]workTask)
+		tasks := decoded["tasks"].([]workTaskAnswer)
 		views := make([]workTaskView, 0, len(tasks))
 		for _, task := range tasks {
 			view, viewErr := workTaskViewOf(ctx, tx, task)
@@ -191,7 +191,7 @@ func (s *sessionDB) workTasksView(ctx context.Context, a workArgs) (any, error) 
 	return page, nil
 }
 
-func workTaskViewOf(ctx context.Context, tx *sql.Tx, task workTask) (workTaskView, error) {
+func workTaskViewOf(ctx context.Context, tx *sql.Tx, task workTaskAnswer) (workTaskView, error) {
 	total, latest, err := workTurnTail(ctx, tx, task.ID)
 	if err != nil {
 		return workTaskView{}, err
@@ -249,8 +249,15 @@ func (s *sessionDB) workTurnsView(ctx context.Context, a workArgs) (any, error) 
 		// description and completion criteria beside the exchanges, and a second
 		// call for them could land on a different version than these turns were
 		// read against.
+		// The task travels resolved, the same way it does on the task page: a
+		// reader showing one task's exchanges must not see a different status
+		// than the list it came from.
+		answer, answerErr := resolveWorkTaskAnswer(ctx, tx, task)
+		if answerErr != nil {
+			return answerErr
+		}
 		page = map[string]any{
-			"task_id": task.ID, "task_version": task.Version, "task": task, "turns": views,
+			"task_id": task.ID, "task_version": task.Version, "task": answer, "turns": views,
 		}
 		if next, ok := decoded["next_cursor"]; ok {
 			page["next_cursor"] = next

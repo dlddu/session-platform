@@ -13,7 +13,7 @@
 | --- | --- | --- |
 | 작업 전체 발견 | `ledger_list` | `task_list` (상태·세션 필터, 키셋) |
 | 작업 하나 읽기 | `ledger_get` | `task_get`(`turns_total`·`latest_turn` 포함) |
-| 작업 만들기·갱신 | `ledger_put` | `task_put` |
+| 작업 만들기·갱신 | `ledger_put` | `task_put` (단, `review` 를 드나드는 것은 §8-1 의 세 호출) |
 | 작업 지우기 | `ledger_delete` | `task_delete` |
 | 사람 요청 발견 | `ledger_requests_list` | `turn_list({open:true})` |
 | 요청 접수 | `ledger_requests_claim` | `turn_patch` 로 `started_at` 쓰기 = 접수, 응답의 `claim_token` 보관(§3) |
@@ -53,12 +53,21 @@
 
 ```
 task_list({limit: 100})                  # 전체. next_cursor 를 after_id 로 이어 읽는다
-task_list({status: "blocked"})           # 막힌 것만
+task_list({status: "review"})            # 사람이 판단해야 하는 것만
+task_list({status: "blocked"})           # 같은 집합. 옛 낱말은 받아들여지는 별칭이다
 task_list({session_id: "none"})          # 배정되지 않은 것만 ("none" 은 리터럴)
 ```
 
+- **상태는 `planned`·`running`·`review`·`completed`·`unknown` 다섯이다.**
+  `blocked` 는 상태가 아니고 **입력의 별칭**이다 — 필터와 `task_put` 에서 받아
+  `review` 로 읽히고, 그 말로 저장되는 행은 없다(`task_put` 의 답이
+  `alias_applied` 로 말해 준다). 옛 이미지가 그 말로 적어 둔 행은 읽을 때
+  근거로 갈려 `review` 또는 `running` 으로 답하고, 저장된 낱말과 무엇이 그렇게
+  읽었는지가 `stored_status`·`status_basis` 로 함께 온다(§8-1).
 - 페이지는 **스냅샷이 아니다** — id 로 dedupe 하고, `next_cursor` 가 빈
-  문자열일 때만 끝이다.
+  문자열일 때만 끝이다. **짧게 온 페이지도 커서가 있으면 끝이 아니다** —
+  상태 판정이 섞인 페이지는 스캔 상한에서 끊길 수 있고, 그때 빈 커서 대신
+  커서를 준다.
 - `task_get({id})` 는 `turns_total` 과 `latest_turn` 을 함께 준다. 사람이
   무언가 물어봤는지 알려고 턴 목록을 따로 읽을 필요가 없다.
 - **모니터 행은 `task_list` 에 없다.** 그것은 부모의 기장이고 작업이 아니다
@@ -260,3 +269,92 @@ work_legacy_put({task_id, request_id,
   이 저장소 밖이며, 이 세션에서 하지 않았다.
 - 슬롯 저장소에서의 스냅샷 복원 리허설은 주장하지 않는다 — 격리 fixture DB
   왕복만 검증했다(세션 원장 계약 §「Verification and rollout boundary」).
+
+## 8-1. 사람이 판단하는 상태는 `review` 하나다 (AC-N13)
+
+`blocked` 와 `review` 는 같은 사실을 두 이름으로 말하고 있었다. 하나로 접었고
+(`review`), **대신 세운 새 상태·새 칩은 없다**. 옛 낱말은 §2 의 별칭이고,
+옛 이미지가 적어 둔 행은 읽을 때 근거로 갈린다 — 디스크는 고치지 않는다.
+
+### 상태를 바꿀 때 부르는 것
+
+```
+# running -> review : 사람이 결정해야 할 것이 생겼다. 같은 논리 턴에 기록하고 옮긴다.
+task_review_open({task_id, request_id, turn_id: <지금 쓰고 있는 턴>,
+    expected_version, expected_turn_version, expected_book_version,
+    review: {
+      target:   "dlddu/session-platform",            # 정확한 대상. 분류가 아니다
+      scope:    "contents:read 한 레포, 이 작업 동안만",
+      route:    "저장소 소유자가 App 설치 범위에 레포를 더한다",   # 공식 승인 경로
+      question: "...읽기 권한을 더해 주시겠습니까? ...",          # 축자 저장된다
+      basis:    "git ls-remote 가 403 이고 설치 범위에 이 레포가 없다",
+      choices:  [{label, request_text}, ...]          # 초안용. 권한이 아니다
+    }})
+
+# review -> running : 내용을 확인하고 실제 적용·전제·이어갈 일을 확인한 뒤
+task_review_resume({task_id, request_id, expected_version, expected_book_version,
+    outcome: {evidence: "무엇으로 확인했는지", remaining: "남은 일"}})
+
+# review -> completed : 최종 결과 수락 + 원래 완료 기준 충족 + 남은 것 없음
+task_review_complete({task_id, request_id, expected_version, expected_book_version,
+    outcome: {accepted: true,
+              evidence: "그 수락을 무엇으로 관측했는지",      # 제출·보류·설명은 수락이 아니다
+              completion_criteria: "<작업의 criteria 축자>"}})
+```
+
+- **같은 승인을 두 번 만들지 않는다.** 같은 `target·scope·route` 를 다시 물으면
+  `already_open: true` 로 **아무것도 쓰이지 않는다**(카운터·version 불변) — 다른
+  `request_id` 여도, 사람이 새 요청을 남긴 뒤여도. 열린 승인이 있는데 **다른**
+  결정을 물으면 `conflict` 다. 판정은 카운터를 집기 전에 하므로 낡은 값을 쥔
+  경합도 승인을 쌓지 못한다.
+- **보류·승인 미적용이면 review 다.** `evidence` 나 `remaining` 이 비면 resume
+  은 거절되고 작업은 그대로 있다. 플랫폼은 바깥의 적용 여부를 볼 수 없으므로
+  **확인을 이름으로 요구**하고 그것을 작업 옆에 남긴다 — 추측으로 옮기지 않는다.
+- **리뷰를 떠나는 판정은 상태 낱말이 아니라 열린 기록이다.** 앱 요청이 저장되면
+  검토를 기다리던 작업은 같은 트랜잭션에서 `planned` 로 접수되지만(사람이 문장을
+  보낸 것으로 결정이 정리되지는 않으므로) 기록된 리뷰는 **열린 채 남는다**. 그래서
+  `task_review_resume`·`task_review_complete` 는 **at review 이거나 열린 리뷰를 든**
+  작업에서 돈다 — `planned` 에서도 근거를 실어 닫을 수 있고, 이력 항목의
+  `from_status` 가 큐에서 닫혔다는 것을 남긴다.
+- **열린 리뷰를 버려두고 지나갈 수 없다.** 열린 리뷰가 있는 작업에 `task_put` 으로
+  `running`·`completed` 를 쓰면 거절된다 — 「도는 중」으로 읽히는데 사람이 기다린다는
+  기록은 읽기 경로에 없는 곳에만 남기 때문이다. 전이 제약이 아니다(어느 상태에서
+  어디로가 아니라 **버려두고 갈 기록이 있는가**를 묻는다): `planned`·`review`·
+  `unknown` 은 거절되지 않고, 기록이 없는 작업은 전과 같이 어디로든 가며, 지나갈
+  길이 둘 있다 — 근거를 실은 두 호출로 닫거나 `task_book_put` 으로 기장을 교체한다.
+- **완료는 열린 리뷰를 닫는다** — 사용자가 결과를 수락하는 것이 곧 그 결정의
+  정리다. 대신 `outcome.evidence` 로 **그 수락을 무엇으로 관측했는지** 말해야 한다:
+  제출만·보류·설명·적용되지 않은 승인은 이름 붙일 수 없으므로 완료가 되지 않는다.
+- **완료는 다섯 가지를 다 본다**: 수락 여부와 그 **관측 근거**, 작업 자신의 완료 기준 **축자 일치**,
+  남은 것 없음, `ended_at` 없는 요청 0, 미적용 결정 없음. 완료 기준이 적혀 있지
+  않은 작업은 이 길로 완료되지 않는다 — `task_put` 으로 먼저 쓴다.
+- **이 셋은 울타리가 아니라 완전한 길이다.** `task_put` 은 도메인 안의 어떤 상태든
+  **그대로 쓴다** — 작업 레코드는 전체 교체 + version CAS 이고 상태 값에 **전이 제약이
+  없다**(목표 상태 문서의 「`completed` 의 정정」이 그 성질에 기댄다). 셋이 더하는 것은
+  상태가 뜻을 갖게 하는 **기록**이고, 울타리 없이 쓴 `review` 는 아무도 결정을 기록하지
+  않은 작업이라 화면에도 「묻는 것: 미기록」으로 보인다. 판단이 필요 없던 **기승인 정상
+  경로는 planned → running → completed 그대로**다.
+- **잘못 적힌 `completed` 는 한 번의 `task_review_open` 으로 정정한다.** 사용자가 결정한
+  적이 없는데 완료로 적힌 작업은, 사용자의 정정 진술과 모니터의 턴 대조를 `review.basis`
+  에 실어 그 호출로 `review` 로 되돌린다 — `task_review_open` 은 **출발 상태를 가리지
+  않으므로** 없던 `running` 을 한 번 거치지 않아도 된다. 턴은 손대지 않는다.
+- **세 가지는 별개다**: 선택지를 누르는 것(초안 채움) → 사용자가 제출(요청 경로로
+  **턴 하나**, 상태 불변) → 모니터가 읽고 확인한 뒤 `task_review_resume`.
+- **기술 대기는 running 에 머문다.** CI 진행 중이거나 정책상 재시도 가능한 대기는
+  아무에게도 질문이 아니다. 그 근거는 `task_book_put` 의 `details` 에
+  `technical_wait: {owner, due, retry}` 로 **세 가지를 전부** 적는다 — 셋이 다
+  있는 구조화된 statement 만 옛 `blocked` 행을 `running` 으로 읽는다. 하나라도
+  빠지거나 산문이면 `review` 로 읽히고 근거가 무엇이 없는지 말해 준다.
+- **보존**: 덮는 승인 기록은 `details.review_history` 에 **누적**되고, 레거시 행을
+  resume/complete 하면 **저장된 낱말과 그 근거**가 그 항목에 들어간다. 턴의
+  `request`·`instruction`·`response`·`explanation`·`ended_at` 은 어느 호출도
+  건드리지 않는다. 읽을 수 없는 JSON 기장은 덮지 않고 거절한다.
+
+### 스킬이 바꿀 것
+
+| 스킬이 바꿀 것 | 무엇으로 | 플랫폼 근거 |
+| --- | --- | --- |
+| `status: "blocked"` 를 쓰던 자리 | 지우지 않아도 동작한다(별칭). 새로 쓰는 코드는 `review` | `data-plane/cmd/agent/session_work_review.go` |
+| 상태 분기에서 `blocked`·`review` 를 둘 다 보던 자리 | `review` 하나. `stored_status` 가 있으면 옛 행이라는 뜻이고 `status_basis` 가 판정 근거다 | 같은 파일 |
+| `task_put` 으로 review 를 쓰던 자리 | `task_review_open`·`task_review_resume`·`task_review_complete` | 같은 파일 |
+| CI·재시도 대기를 막힌 것으로 적던 자리 | `running` 유지 + `details.technical_wait: {owner, due, retry}` | `session_work_parent.go` |
