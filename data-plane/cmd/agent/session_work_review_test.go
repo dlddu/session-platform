@@ -173,37 +173,164 @@ func TestWorkStatusDomainFoldsBlockedIntoReview(t *testing.T) {
 	if rec := workViewGet(t, h, sessionDBWorkTasksPath, "status=held"); rec.Code != http.StatusBadRequest {
 		t.Fatalf("view status=held = %d", rec.Code)
 	}
-	// task_put may not cross the boundary in either direction. The refusals
-	// name the call that does the job.
+	// task_put has no transition constraint, in either direction, and the new
+	// word is not treated worse than the legacy alias: both land.
 	newWorkTask(t, s, "task-running", "c2", map[string]any{"status": workStatusRunning})
-	_, code := workCall(t, s, "task_put", map[string]any{
+	intoReview := mustWork(t, s, "task_put", map[string]any{
 		"id": "task-running", "request_id": "to-review", "expected_version": 1,
 		"task": map[string]any{
 			"session_id": "worker-1", "title": "t", "description": "d",
 			"completion_criteria": "c", "status": workStatusReview,
 		},
 	})
-	if code != "conflict" {
-		t.Fatalf("task_put into review = %q, want conflict", code)
+	if intoReview["task"].(map[string]any)["status"] != workStatusReview {
+		t.Fatalf("task_put into review = %v", intoReview)
 	}
-	decoded, code := workCall(t, s, "task_put", map[string]any{
+	if _, named := intoReview["alias_applied"]; named {
+		t.Fatalf("the new word was reported as an alias: %v", intoReview)
+	}
+	outOfReview := mustWork(t, s, "task_put", map[string]any{
 		"id": "task-old-writer", "request_id": "out-of-review", "expected_version": 1,
 		"task": map[string]any{
 			"session_id": "worker-1", "title": "t", "description": "d",
 			"completion_criteria": "c", "status": workStatusCompleted,
 		},
 	})
-	if code != "conflict" || !strings.Contains(decoded["error"].(string), taskReviewCompleteTool) {
-		t.Fatalf("task_put out of review = %q %v", code, decoded)
+	if outOfReview["task"].(map[string]any)["status"] != workStatusCompleted {
+		t.Fatalf("task_put out of review = %v", outOfReview)
 	}
-	// Staying in review while other fields change is not a transition.
-	mustWork(t, s, "task_put", map[string]any{
-		"id": "task-old-writer", "request_id": "retitle", "expected_version": 1,
+	// A review written bare records no decision, which is the whole difference
+	// between it and the call that carries one — and it is what a reader is
+	// then shown rather than something hidden.
+	if details := taskBookDetails(t, s, "task-running"); len(details) != 0 {
+		t.Fatalf("a bare review wrote bookkeeping: %v", details)
+	}
+}
+
+// Registration synthesizes nothing beside the task: no flag that prohibits
+// execution, no record that has to be cleared, no approval for ordinary work.
+// And planned → running takes task_put alone.
+//
+// This is here because it is the thing most easily broken by accident — the
+// review calls could grow into a gate on every status write, as an earlier
+// revision of task_put in fact did. A general feature addition must get none of
+// that.
+func TestWorkRegistrationSynthesizesNoExecutionGate(t *testing.T) {
+	s, _ := newTestSessionDB(t)
+	newWorkTask(t, s, "task-feature", "reg-1", map[string]any{"status": workStatusPlanned})
+
+	// Exactly two rows exist: the task and its receipt. Every other record in
+	// the namespace is still empty, so there is nothing a reader could take for
+	// "this task may not start".
+	for table, want := range map[string]int64{
+		"sp_work_tasks": 1, "sp_work_receipts": 1,
+		"sp_work_task_book": 0, "sp_work_task_guard": 0, "sp_work_task_origin": 0,
+		"sp_work_turns": 0, "sp_work_turn_claim": 0, "sp_work_turn_admin": 0,
+		"sp_work_turn_origin": 0, "sp_work_monitor": 0, "sp_work_retired": 0,
+	} {
+		if got := workRow(t, s, "SELECT count(*) AS n FROM "+table)["n"].(int64); got != want {
+			t.Fatalf("%s has %d rows after one registration, want %d", table, got, want)
+		}
+	}
+	// The row itself says only what the caller wrote.
+	task := mustWork(t, s, "task_get", map[string]any{"id": "task-feature"})["task"].(map[string]any)
+	if task["status"] != workStatusPlanned {
+		t.Fatalf("registered as %v", task["status"])
+	}
+	for _, field := range []string{"stored_status", "status_basis", "alias_applied"} {
+		if _, named := task[field]; named {
+			t.Fatalf("registration synthesized %q: %v", field, task)
+		}
+	}
+	// planned → running needs no second call, no approval and no token: the
+	// answer carries the task and nothing else.
+	moved := mustWork(t, s, "task_put", map[string]any{
+		"id": "task-feature", "request_id": "reg-2", "expected_version": 1,
 		"task": map[string]any{
-			"session_id": "worker-1", "title": "제목만 고친다", "description": "d",
-			"completion_criteria": "c", "status": workStatusReview,
+			"session_id": "worker-1", "title": "작업 '하나'", "description": "목적과 요구",
+			"completion_criteria": "PR 이 머지되면 끝", "status": workStatusRunning,
 		},
 	})
+	if len(moved) != 1 || moved["task"].(map[string]any)["status"] != workStatusRunning {
+		t.Fatalf("planned → running = %v", moved)
+	}
+	// And so does running → completed, for work that never needed a judgement.
+	done := mustWork(t, s, "task_put", map[string]any{
+		"id": "task-feature", "request_id": "reg-3", "expected_version": 2,
+		"task": map[string]any{
+			"session_id": "worker-1", "title": "작업 '하나'", "description": "목적과 요구",
+			"completion_criteria": "PR 이 머지되면 끝", "status": workStatusCompleted,
+		},
+	})
+	if done["task"].(map[string]any)["status"] != workStatusCompleted {
+		t.Fatalf("running → completed = %v", done)
+	}
+	// No tool on the offered surface asks for an authorization argument; the
+	// only approval-shaped object belongs to the three calls that are about a
+	// person's decision.
+	for _, tool := range workToolDefinitions(laneMonitor) {
+		schema := tool["inputSchema"].(map[string]any)
+		required, _ := schema["required"].([]string)
+		for _, name := range required {
+			if strings.Contains(name, "authoriz") || strings.Contains(name, "execution") {
+				t.Fatalf("%v requires %q", tool["name"], name)
+			}
+		}
+		if name, _ := tool["name"].(string); !isReviewTool(name) {
+			properties := schema["properties"].(map[string]any)
+			if _, named := properties["review"]; named {
+				t.Fatalf("%s offers a review argument", name)
+			}
+		}
+	}
+}
+
+// The correction the owner's target-state document names: a task recorded
+// `completed` when the person had in fact decided nothing goes back to review —
+// in one call, carrying their statement and the monitor's check. It is not a
+// normal transition, which is why no arrow is drawn for it; what matters is
+// that the evidence is not lost on the way.
+func TestWorkCompletedIsCorrectedBackIntoReviewInOneCall(t *testing.T) {
+	s, _ := newTestSessionDB(t)
+	newWorkTask(t, s, "task-a", "c1", map[string]any{"status": workStatusRunning})
+	// The monitor delivered an investigation result and wrote completed without
+	// the person having decided anything.
+	mustWork(t, s, "turn_append", map[string]any{
+		"task_id": "task-a", "request_id": "t1",
+		"turn": map[string]any{
+			"instruction": "조사만 한다", "response": "조사 결과",
+			"explanation": "결과를 전달했다", "ended_at": "2026-11-28T09:00:00Z",
+		},
+	})
+	mustWork(t, s, "task_put", map[string]any{
+		"id": "task-a", "request_id": "done-early", "expected_version": 1,
+		"task": map[string]any{
+			"session_id": "worker-1", "title": "작업 '하나'", "description": "목적과 요구",
+			"completion_criteria": "PR 이 머지되면 끝", "status": workStatusCompleted,
+		},
+	})
+	// The person says they never decided. The monitor checks the turns and puts
+	// it back — through the call that records what it is asking, not a bare
+	// status write.
+	corrected := openOneReview(t, s, "task-a", "correction", map[string]any{
+		"target": "조사 결과를 완료로 적은 작업", "scope": "이 작업 하나의 상태 정정",
+		"route": "사용자의 정정 진술 + 모니터의 턴 기록 대조",
+		"question": "조사 결과를 보셨고 아직 결정하지 않으셨다고 하셨습니다 — " +
+			"어느 쪽으로 이어갈까요?",
+		"basis": "턴 기록에 사용자의 수락·보류가 없는데 완료로 적혀 있었다",
+	})
+	if corrected["task"].(map[string]any)["status"] != workStatusReview {
+		t.Fatalf("correction = %v", corrected["task"])
+	}
+	if got := corrected["review"].(map[string]any)["basis"]; got == "" {
+		t.Fatalf("the correction lost its basis: %v", corrected["review"])
+	}
+	// The turns are untouched: the result that was delivered is still the
+	// record of what happened.
+	turns := mustWork(t, s, "turn_list", map[string]any{"task_id": "task-a"})["turns"].([]any)
+	if first := turns[0].(map[string]any); first["response"] != "조사 결과" || first["ended_at"] == nil {
+		t.Fatalf("the correction rewrote the turns: %v", first)
+	}
 }
 
 // A slot an older image wrote resolves each of its `blocked` rows from evidence

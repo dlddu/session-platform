@@ -439,10 +439,28 @@ racing. A different decision while one is open is a conflict: a person holds one
 open decision per task. running → review is a single write; it passes through no
 other status on the way.
 
-`task_put` may not cross that boundary in either direction and names these calls
-when it refuses. Everything else about it is unchanged, and **the ordinary
-pre-approved path is untouched** — a task that never needed anybody's judgement
-still goes planned → running → completed with `task_put` alone.
+These three are the **complete** path into and out of `review` — the one that
+carries the evidence — and **not a fence around a bare status write**. A task
+record is a full replacement under version CAS and **the status value has no
+transition constraint**, because the correction below depends on that: a task
+recorded `completed` when the person had in fact decided nothing is put back to
+`review` once they say so and the monitor checks the turns. No arrow is drawn
+for it because it is not a normal transition, and a gate on `task_put` would
+make it reachable only by first writing a state that never happened. So
+`task_put` writes the status it is given, and `task_review_open` accepts **any**
+source status including `completed` — a correction is precisely the move that
+has to carry the person's statement and the monitor's check, so refusing the
+call that records them would leave only the write that loses them. What the
+three add is the record that makes the status mean something; a `review` written
+bare is a task whose decision nobody recorded, which is exactly what a reader is
+then shown.
+
+**The ordinary pre-approved path is untouched** — a task that never needed
+anybody's judgement still goes planned → running → completed with `task_put`
+alone. And registration synthesizes nothing beside the task: one `task_put`
+writes the task row and its receipt, and every other record in the namespace
+stays empty, so there is no flag anywhere that could read as "this task may not
+start".
 
 Three things stay separate: pressing an offered choice fills a draft (it is a
 sentence, not a permission), submitting it becomes the next turn and changes no

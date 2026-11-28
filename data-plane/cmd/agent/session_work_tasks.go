@@ -257,9 +257,6 @@ func putWorkTask(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (an
 		if *a.ExpectedVersion != 0 {
 			return nil, workFail("not_found", "task not found")
 		}
-		if status == workStatusReview && !aliased {
-			return nil, reviewNeedsItsOwnCall("a task cannot be created in review")
-		}
 		var retired int
 		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM sp_work_retired WHERE id=?", a.ID).Scan(&retired); err != nil {
 			return nil, err
@@ -283,9 +280,6 @@ func putWorkTask(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) (an
 	}
 	if *a.ExpectedVersion == 0 || *a.ExpectedVersion != current.Version {
 		return nil, workFail("conflict", "expected_version does not match")
-	}
-	if err := checkWorkStatusMove(ctx, tx, current, status, aliased); err != nil {
-		return nil, err
 	}
 	task := workTask{
 		ID: a.ID, SessionID: a.Task.SessionID, Title: *a.Task.Title,
@@ -325,53 +319,32 @@ func workTaskPutAnswer(task workTask, aliased bool) map[string]any {
 	return answer
 }
 
-// checkWorkStatusMove is the one thing task_put may not do to a status: cross
-// the boundary of the status a person's judgement owns.
+// The status a task_put writes is the status it writes. There is deliberately
+// **no transition constraint** here, and that is the agreed contract rather
+// than an omission.
 //
-// Everything else is untouched, deliberately — a task that never needed
-// anybody's judgement still goes planned → running → completed with task_put
-// and no new call, which is the ordinary pre-approved path and the one most
-// work takes. What is refused is a bare status write that would either put a
-// person in front of a decision nobody recorded, or take one out from under
-// them: entering review without the question, the route and the basis is a
-// status that means nothing, and leaving it without the confirmation and the
-// completion checks is the review having been for nothing
-// (session_work_review.go).
+// The owner's own target-state document says so in as many words — the record
+// is a full replacement under version CAS and the status value has no
+// transition constraint — and it says why: the correction it names depends on
+// it. A task written `completed` when the person had in fact decided nothing is
+// put back to `review` once they say so and the monitor checks the turns. That
+// is not a normal transition, which is why no arrow is drawn for it, and a gate
+// here would make it reachable only by first writing a state that never
+// happened.
 //
-// The legacy word is the exception on the way in and only on the way in: an
-// older writer sending `blocked` gets review, because the alternative is its
-// write failing. It records no question, which is exactly what the read path
-// then reports about the task.
-func checkWorkStatusMove(ctx context.Context, tx *sql.Tx, current workTask, status string, aliased bool) error {
-	was, basis, err := resolveWorkStatus(ctx, tx, current)
-	if err != nil {
-		return err
-	}
-	if was == status {
-		return nil
-	}
-	if status == workStatusReview && !aliased {
-		return reviewNeedsItsOwnCall("a task at " + was + " does not move to review with task_put")
-	}
-	if was == workStatusReview {
-		return reviewIsLeftByItsOwnCall(current, basis, status)
-	}
-	return nil
-}
-
-func reviewNeedsItsOwnCall(what string) error {
-	return workFail("conflict", what+" — "+taskReviewOpenTool+
-		" is how it gets there, because what makes review mean anything is the exact target, the scope, "+
-		"the official approval route, the question a person can answer and what you saw, landing with the status")
-}
-
-func reviewIsLeftByItsOwnCall(current workTask, basis, status string) error {
-	return workFail("conflict", "this task is in review"+legacyBasisSuffix(current, basis)+
-		", and task_put does not move it to "+status+" — "+taskReviewResumeTool+
-		" resumes it once the decision is confirmed in force and there is work left, and "+
-		taskReviewCompleteTool+" completes it once the result is accepted, the task's own criteria are met and "+
-		"nothing is left. A status written over a review is the review having been for nothing")
-}
+// What carries the *evidence* is a call of its own rather than a fence
+// (session_work_review.go): task_review_open records the exact target, the
+// scope, the official route, the question and the basis in the same
+// transaction as the status, and the two closing calls require the named
+// confirmation and the completion checks. Those are the **complete** path into
+// and out of the one status a person's judgement owns — not a wall around the
+// bare write. A `review` written bare is a task whose decision nobody
+// recorded, and that is exactly what a reader is then shown: nothing asked.
+//
+// An earlier revision of this file did fence it, and was wrong twice over. It
+// contradicted that contract, and it refused the *new* word while letting the
+// legacy alias through — so `status: "blocked"` landed and `status: "review"`
+// did not, which is the reverse of what folding the two statuses was for.
 
 // deleteWorkTask removes a task with its turns and retires the id. What a
 // migration preserved about the task (sp_work_task_legacy) is left: the parent's

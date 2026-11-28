@@ -45,14 +45,21 @@
 // the cancellation backfill follows, for the same reason: this runs over work a
 // person already has.
 //
-// The three moves:
+// The three moves. They are the **complete** path into and out of `review` —
+// the one that carries the evidence — and not a fence around a bare status
+// write: the agreed contract is that a task record is a full replacement under
+// version CAS with no transition constraint on the status value, because the
+// correction it names (a task written `completed` when nobody had decided
+// anything, put back to `review`) depends on that (session_work_tasks.go). So
+// task_put still writes any status in the domain; what these add is the record
+// that makes the status mean something.
 //
-//	task_review_open      planned/running -> review. Records, in one
-//	                      transaction, the exact target, the scope, the official
-//	                      approval route, the question a person can answer and
-//	                      the basis for asking — and asks it on the turn the
-//	                      parent is already in. Asking the same thing twice is
-//	                      not a second review.
+//	task_review_open      -> review, from whatever the task is at. Records, in
+//	                      one transaction, the exact target, the scope, the
+//	                      official approval route, the question a person can
+//	                      answer and the basis for asking — and asks it on the
+//	                      turn the parent is already in. Asking the same thing
+//	                      twice is not a second review.
 //	task_review_resume    review -> running. Only with the confirmation named,
 //	                      and only when there is work left. An approval that is
 //	                      not applied leaves the task in review.
@@ -214,8 +221,9 @@ func reviewToolDefinitions() []map[string]any {
 	return []map[string]any{
 		{
 			"name": taskReviewOpenTool,
-			"description": "Moves a planned or running task to review because something has come up that only the person can settle, and records it on the turn you are in: the exact target, how far the decision reaches, the official approval route, the question they can answer and what you saw that made it necessary. " +
+			"description": "Moves a task to review because something has come up that only the person can settle, and records it on the turn you are in: the exact target, how far the decision reaches, the official approval route, the question they can answer and what you saw that made it necessary. " +
 				"One call, one transaction — the question and the status cannot land apart. " +
+				"It takes a task at any status, including completed: a task recorded as finished when the person had in fact decided nothing belongs back in review, and this is the call that carries their statement and your check rather than a bare status write that would lose both. " +
 				"Asking the same thing again is not a second review: a call naming the same target, scope and route while that review is still open answers already_open and writes nothing, so a retry or a fresh request from the person never stacks approvals. A different decision while one is open is a conflict. " +
 				"This is not for a technical wait. A CI run in flight or a retry the policy already allows is not a question for anybody — it stays running, with its owner, due and retry recorded in " +
 				taskBookPutTool + " under details." + workTechnicalWaitKey + ".",
@@ -383,16 +391,13 @@ func openTaskReview(ctx context.Context, tx *sql.Tx, a workArgs, now time.Time) 
 	if err != nil {
 		return nil, err
 	}
-	effective, _, err := resolveWorkStatus(ctx, tx, task)
-	if err != nil {
-		return nil, err
-	}
-	switch effective {
-	case workStatusPlanned, workStatusRunning, workStatusReview:
-	default:
-		return nil, workFail("conflict", "a task at "+effective+
-			" has no decision to put in front of anybody; move it with task_put first")
-	}
+	// Any status may be the one before this. There is no source this refuses,
+	// deliberately: the correction the owner's target-state document names is a
+	// task sitting at `completed` with no decision ever recorded, and the whole
+	// point of that correction is that it carries the person's own statement and
+	// the monitor's check — which is this call's arguments. Refusing `completed`
+	// here would send that correction through a bare status write, losing the
+	// evidence on the one move that exists to preserve it.
 	details, err := readReviewDetails(ctx, tx, a.TaskID)
 	if err != nil {
 		return nil, err
